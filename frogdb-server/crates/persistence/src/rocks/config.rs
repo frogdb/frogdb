@@ -91,6 +91,18 @@ impl RocksConfig {
             ..Self::default()
         }
     }
+
+    /// The compaction rate limit as RocksDB wants it: bytes per second, or
+    /// `None` for unlimited.
+    ///
+    /// The MB→bytes conversion lives here rather than inline at the `Options`
+    /// call site because `rocksdb::Options` is write-only — nothing can read
+    /// back the rate it was handed, so a wrong conversion at the call site is
+    /// unobservable. As a named function it is asserted directly.
+    pub(crate) fn compaction_rate_limit_bytes_per_sec(&self) -> Option<i64> {
+        self.compaction_rate_limit_mb
+            .map(|mb| mb as i64 * 1024 * 1024)
+    }
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CompressionType {
@@ -114,6 +126,9 @@ impl CompressionType {
         match s.to_lowercase().as_str() {
             "none" => Self::None,
             "snappy" => Self::Snappy,
+            // Redundant with the fallback arm — `Self::default()` is `Lz4` — but
+            // kept explicit so the default can move without silently retiring the
+            // name operators actually write in their config files.
             "lz4" => Self::Lz4,
             "zstd" => Self::Zstd,
             _ => Self::default(),
@@ -222,6 +237,25 @@ mod tests {
         assert!(rocks.create_if_missing);
     }
 
+    /// The MB/s knob reaches RocksDB as bytes/s. `Options` has no getter for
+    /// the rate limiter, so this conversion is only ever checked here.
+    #[test]
+    fn compaction_rate_limit_converts_megabytes_to_bytes_per_second() {
+        let limited = RocksConfig {
+            compaction_rate_limit_mb: Some(50),
+            ..RocksConfig::default()
+        };
+        assert_eq!(
+            limited.compaction_rate_limit_bytes_per_sec(),
+            Some(52_428_800)
+        );
+        let unlimited = RocksConfig {
+            compaction_rate_limit_mb: None,
+            ..RocksConfig::default()
+        };
+        assert_eq!(unlimited.compaction_rate_limit_bytes_per_sec(), None);
+    }
+
     /// `compaction_rate_limit_mb == 0` encodes to `None` (unlimited).
     #[test]
     fn from_persistence_zero_rate_limit_is_none() {
@@ -265,5 +299,17 @@ mod tests {
             CompressionType::from_config_str("bogus"),
             CompressionType::default()
         );
+    }
+
+    /// Background compaction/flush parallelism is sized from the machine, not
+    /// pinned to a constant: a fixed `1` would serialize compaction on every
+    /// host regardless of how many cores it has.
+    #[test]
+    fn background_jobs_default_is_sized_from_the_machine() {
+        let cores = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1);
+        assert!(cores >= 1, "parallelism is never zero");
+        assert_eq!(RocksConfig::default().max_background_jobs, cores as i32);
     }
 }

@@ -223,3 +223,66 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod vectorset_bound_tests {
+    use super::*;
+
+    /// A vector-set header with no projection matrix and no elements. The four
+    /// HNSW parameters are the only variables — everything after them is the
+    /// minimum a well-formed payload needs.
+    fn vs_header(dim: u32, original_dim: u32, m: u32, ef: u32) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.push(0); // metric: Cosine
+        p.push(0); // quantization: NoQuant
+        for v in [dim, original_dim, m, ef] {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        p.extend_from_slice(&0u64.to_le_bytes()); // next_id
+        p.extend_from_slice(&0u64.to_le_bytes()); // uid
+        p.extend_from_slice(&0u32.to_le_bytes()); // projection matrix length
+        p.extend_from_slice(&0u32.to_le_bytes()); // element count
+        p
+    }
+
+    fn refusal(payload: &[u8]) -> String {
+        match deserialize_vectorset(payload) {
+            Err(SerializationError::InvalidPayload(msg)) => msg,
+            other => panic!("expected an InvalidPayload refusal, got {other:?}"),
+        }
+    }
+
+    /// Either dimension field alone is enough to refuse the payload, and the
+    /// refusal happens in the *decoder's* guard — before an HNSW index is
+    /// allocated for a dimension a corrupt or hostile payload invented. Reaching
+    /// `from_parts` instead would allocate first and report a different error.
+    #[test]
+    fn an_oversized_dimension_is_refused_by_the_pre_allocation_guard() {
+        let too_big = (VectorSetValue::MAX_DIM + 1) as u32;
+
+        let msg = refusal(&vs_header(too_big, 4, 16, 200));
+        assert!(
+            msg.contains("dimension too large") && msg.contains(&format!("dim={too_big}")),
+            "the guard must name the offending dimension, got: {msg}"
+        );
+
+        let msg = refusal(&vs_header(4, too_big, 16, 200));
+        assert!(
+            msg.contains("dimension too large") && msg.contains(&format!("original_dim={too_big}")),
+            "a REDUCE'd set's original dimension is bounded too, got: {msg}"
+        );
+    }
+
+    /// The bound is inclusive: a set at exactly `MAX_DIM` is creatable, so it
+    /// must also reload. An off-by-one here makes the largest legal vector set
+    /// unloadable — silent key loss on the next snapshot restore.
+    #[test]
+    fn the_largest_legal_dimension_still_loads() {
+        let max = VectorSetValue::MAX_DIM as u32;
+        let vs = deserialize_vectorset(&vs_header(max, max, 16, 200))
+            .expect("a set at the maximum dimension must reload");
+        assert_eq!(vs.dim(), VectorSetValue::MAX_DIM);
+        assert_eq!(vs.original_dim(), VectorSetValue::MAX_DIM);
+        assert_eq!(vs.card(), 0);
+    }
+}

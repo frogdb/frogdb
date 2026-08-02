@@ -1338,3 +1338,38 @@ async fn test_failed_save_leaves_no_duration_and_nothing_in_flight() {
     assert!(stats.last_duration.is_some());
     assert!(stats.current_save_elapsed().is_none());
 }
+
+/// The same live-cadence seam as `test_noop_coordinator_periodic_interval_seam`,
+/// through the *real* coordinator: `CONFIG SET save`/`snapshot-interval` writes
+/// through the trait object and the periodic task reads it back. A coordinator
+/// that answered from its own construction-time copy of `SnapshotConfig` would
+/// keep saving on the old cadence forever.
+#[test]
+fn test_rocks_coordinator_periodic_interval_seam() {
+    let db = TempDir::new().unwrap();
+    let store = std::sync::Arc::new(make_store(db.path()));
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+
+    let coord: std::sync::Arc<dyn SnapshotCoordinator> =
+        coordinator(store, snap.path(), data.path());
+    assert_eq!(
+        coord.periodic_interval_secs(),
+        0,
+        "the configured interval seeds the scheduler"
+    );
+
+    coord.set_periodic_interval_secs(900);
+    assert_eq!(
+        coord.periodic_interval_secs(),
+        900,
+        "a live change is observed by the next read"
+    );
+
+    coord.set_periodic_interval_secs(0);
+    assert_eq!(
+        coord.periodic_interval_secs(),
+        0,
+        "and disabling the cadence is a change like any other"
+    );
+}

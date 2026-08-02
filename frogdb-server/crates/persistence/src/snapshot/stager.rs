@@ -252,31 +252,96 @@ impl SnapshotStager {
     /// ([`crate::fs_seam`]). A symlink's target is stored in the inode, so
     /// there is nothing to `sync_file` here — the directory entry is the whole
     /// payload.
-    #[cfg(unix)]
+    ///
+    /// One function with the platform split *inside* it, matching
+    /// [`crate::fs_seam::RealFs::symlink`]: two `#[cfg]`-gated definitions would
+    /// leave the off-host one unreachable by every test on this host. The
+    /// closing `sync_dir` is common to both arms — it is the barrier that makes
+    /// the repoint durable either way.
     fn update_latest_symlink(
         fs: &dyn SnapshotFs,
         sd: &std::path::Path,
         sn: &str,
     ) -> Result<(), SnapshotError> {
         let ll = sd.join("latest");
-        let tl = sd.join(".latest.tmp");
-        let _ = std::fs::remove_file(&tl);
-        fs.symlink(Path::new(sn), &tl)?;
-        fs.rename(&tl, &ll)?;
+        #[cfg(unix)]
+        {
+            let tl = sd.join(".latest.tmp");
+            let _ = std::fs::remove_file(&tl);
+            fs.symlink(Path::new(sn), &tl)?;
+            fs.rename(&tl, &ll)?;
+        }
+        // No symlink without elevated privileges on Windows: the target name is
+        // written as a plain file, the same fallback `SnapshotFs::symlink` uses.
+        #[cfg(not(unix))]
+        {
+            fs.write(&ll, sn.as_bytes())?;
+            fs.sync_file(&ll)?;
+        }
         fs.sync_dir(sd)?;
         Ok(())
     }
+}
 
-    #[cfg(not(unix))]
-    fn update_latest_symlink(
-        fs: &dyn SnapshotFs,
-        sd: &std::path::Path,
-        sn: &str,
-    ) -> Result<(), SnapshotError> {
-        let ll = sd.join("latest");
-        fs.write(&ll, sn.as_bytes())?;
-        fs.sync_file(&ll)?;
-        fs.sync_dir(sd)?;
-        Ok(())
+#[cfg(test)]
+mod guard_and_sizing_tests {
+    use super::*;
+
+    /// `commit()` is the whole difference between a promoted snapshot and a
+    /// reclaimed one, so it is asserted directly rather than only through
+    /// [`SnapshotStager::run`]: after `run` the staging path has already been
+    /// renamed away, which makes an uncommitted `Drop` a no-op there.
+    #[test]
+    fn a_committed_guard_leaves_the_staging_dir_in_place() {
+        let root = tempfile::TempDir::new().unwrap();
+        let staged = root.path().join(".snapshot_7.tmp");
+        std::fs::create_dir(&staged).unwrap();
+        TmpDirGuard::new(&staged).commit();
+        assert!(
+            staged.exists(),
+            "a committed guard must not reclaim the dir it handed over"
+        );
+    }
+
+    #[test]
+    fn a_dropped_guard_reclaims_the_staging_dir_and_its_contents() {
+        let root = tempfile::TempDir::new().unwrap();
+        let staged = root.path().join(".snapshot_7.tmp");
+        std::fs::create_dir_all(staged.join("checkpoint")).unwrap();
+        std::fs::write(staged.join("checkpoint/000001.sst"), b"xyz").unwrap();
+        drop(TmpDirGuard::new(&staged));
+        assert!(
+            !staged.exists(),
+            "an uncommitted guard must reclaim the whole staging subtree"
+        );
+    }
+
+    /// The recorded snapshot size is the checkpoint's *total* byte count, summed
+    /// across nesting levels — the number an operator reads back out of
+    /// `metadata.json`. Pinned exactly, so neither the recursion nor the
+    /// accumulation can drift.
+    #[test]
+    fn the_recorded_size_is_the_exact_recursive_byte_total() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cp = root.path().join("checkpoint");
+        std::fs::create_dir_all(cp.join("nested/deeper")).unwrap();
+        std::fs::write(cp.join("CURRENT"), b"0123456789").unwrap();
+        std::fs::write(cp.join("nested/000001.sst"), b"1234567").unwrap();
+        std::fs::write(cp.join("nested/deeper/OPTIONS"), b"abc").unwrap();
+        assert_eq!(SnapshotStager::calculate_dir_size(&cp).unwrap(), 20);
+    }
+
+    #[test]
+    fn a_missing_or_empty_checkpoint_sizes_as_zero() {
+        let root = tempfile::TempDir::new().unwrap();
+        let empty = root.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert_eq!(SnapshotStager::calculate_dir_size(&empty).unwrap(), 0);
+        // A path that is not a directory is skipped rather than erroring — the
+        // caller (`finalize_metadata`) treats size as best-effort.
+        assert_eq!(
+            SnapshotStager::calculate_dir_size(&root.path().join("absent")).unwrap(),
+            0
+        );
     }
 }

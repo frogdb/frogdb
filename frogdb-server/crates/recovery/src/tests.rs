@@ -776,3 +776,136 @@ fn expired_keys_count_as_decoded_so_one_bad_key_does_not_refuse() {
     assert_eq!(recovered.stats.keys_expired_skipped, 1);
     assert_eq!(recovered.stats.keys_failed, 1);
 }
+
+/// Build recovery inputs with the warm tier switched on, for the tiered-storage
+/// half of the "is this database readable at all" predicate.
+fn warm_inputs_for<'a>(
+    cfg: &'a PersistenceConfig,
+    repl: &'a ReplicationConfigSection,
+    cluster: &'a ClusterConfigSection,
+    num_shards: usize,
+) -> RecoveryInputs<'a> {
+    RecoveryInputs {
+        data_dir: &cfg.data_dir,
+        persistence: cfg,
+        replication: repl,
+        cluster,
+        num_shards,
+        warm_enabled: true,
+        metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
+    }
+}
+
+// FM-PERSISTENCE-045
+/// A database whose *only* decodable value lives in the warm tier is still a
+/// readable database. A tiered deployment can legitimately have a hot CF that
+/// holds nothing this build can decode while the data itself sits warm, so the
+/// refusal predicate counts warm-tier hits — dropping that term would condemn a
+/// perfectly restorable database.
+#[test]
+fn warm_tier_only_decode_does_not_refuse_start() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    {
+        let rocks = RocksStore::open_with_warm(&db_dir, 2, &RocksConfig::default(), true).unwrap();
+        // Hot tier: nothing but bytes recovery cannot decode.
+        rocks.put(0, b"bad", b"not a serialized value").unwrap();
+        // Warm tier: one perfectly good value.
+        let value = Value::string("tiered out");
+        let metadata = KeyMetadata::new(value.memory_size());
+        rocks
+            .put_warm(0, b"warmkey", &serialize(&value, &metadata))
+            .unwrap();
+        rocks.flush().unwrap();
+    }
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, 2);
+
+    let recovered = recover(&inputs).expect("a decodable warm-tier key means the db is readable");
+    assert_eq!(recovered.stats.keys_loaded, 0, "hot tier decoded nothing");
+    assert_eq!(recovered.stats.keys_failed, 1);
+    assert_eq!(
+        recovered.stats.warm_keys_loaded, 1,
+        "the warm key is what makes this database readable"
+    );
+}
+
+// FM-PERSISTENCE-045
+/// A warm entry shadowed by a hot copy is dropped as stale — but it *decoded*,
+/// so it counts toward the readability predicate just like a key that decoded
+/// and was then dropped as expired. Losing that term would let a database with
+/// one good key, its stale warm shadow, and one corrupt key refuse to boot.
+#[test]
+fn stale_warm_entry_counts_as_decoded() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    {
+        let rocks = RocksStore::open_with_warm(&db_dir, 2, &RocksConfig::default(), true).unwrap();
+        let value = Value::string("hot wins");
+        let metadata = KeyMetadata::new(value.memory_size());
+        let encoded = serialize(&value, &metadata);
+        // Same key in both tiers: the hot copy wins, the warm one is stale.
+        rocks.put(0, b"shadowed", &encoded).unwrap();
+        rocks.put_warm(0, b"shadowed", &encoded).unwrap();
+        rocks.put(0, b"bad", b"not a serialized value").unwrap();
+        rocks.flush().unwrap();
+    }
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, 2);
+
+    let recovered = recover(&inputs).expect("a stale-but-decoded warm key still counts");
+    assert_eq!(recovered.stats.keys_loaded, 1);
+    assert_eq!(recovered.stats.keys_failed, 1);
+    assert_eq!(
+        recovered.stats.warm_keys_stale, 1,
+        "the warm shadow decoded and was then dropped for the hot copy"
+    );
+    assert_eq!(recovered.stats.warm_keys_loaded, 0);
+}
+
+// FM-PERSISTENCE-037
+/// The tolerant half of phase 4 has a positive half: a well-formed
+/// `functions.fdb` comes back as the `(name, source)` pairs the wiring layer
+/// registers. Downgrading every read to "no functions" would make a valid
+/// library disappear as silently as a corrupt one.
+#[test]
+fn persisted_functions_are_restored() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+
+    let code = "#!lua name=greetlib\nredis.register_function('hi', function() return 'hi' end)";
+    let mut registry = frogdb_core::FunctionRegistry::new();
+    registry
+        .load_library(
+            frogdb_core::FunctionLibrary::new("greetlib".to_string(), code.to_string()),
+            false,
+        )
+        .expect("library loads into a fresh registry");
+    frogdb_core::save_to_file(&registry, &db_dir.join("functions.fdb"))
+        .expect("functions.fdb written");
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        1,
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+
+    let recovered = recover(&inputs).expect("a valid functions.fdb is not fatal");
+    assert_eq!(
+        recovered.functions,
+        vec![("greetlib".to_string(), code.to_string())],
+        "the stored library must survive recovery, not be silently dropped"
+    );
+}

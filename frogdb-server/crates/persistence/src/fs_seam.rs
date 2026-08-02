@@ -56,16 +56,21 @@ impl SnapshotFs for RealFs {
         std::fs::rename(from, to)
     }
 
-    #[cfg(unix)]
+    /// One function with the platform split *inside* it, rather than two
+    /// `#[cfg]`-gated definitions: only the arm for the host platform is ever
+    /// compiled, so a second definition would be code no test on this host can
+    /// reach or refute.
     fn symlink(&self, target: &Path, link: &Path) -> io::Result<()> {
-        std::os::unix::fs::symlink(target, link)
-    }
-
-    #[cfg(not(unix))]
-    fn symlink(&self, target: &Path, link: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
         // No symlink without elevated privileges on Windows; the caller's
         // non-unix path writes the target name as a plain file instead.
-        self.write(link, target.to_string_lossy().as_bytes())
+        #[cfg(not(unix))]
+        {
+            self.write(link, target.to_string_lossy().as_bytes())
+        }
     }
 
     fn sync_file(&self, path: &Path) -> io::Result<()> {
@@ -178,5 +183,56 @@ impl SnapshotFs for RecordingFs {
         RealFs.sync_dir(path)?;
         self.record(FsOp::SyncDir(path.to_path_buf()));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Whether an fsync reached the platter is not observable here, but whether
+    /// it was *attempted against a real object* is: both sync methods open the
+    /// path first, so a path that is not there comes back as an error. A
+    /// version that answered `Ok(())` unconditionally would let a publisher
+    /// report a durable checkpoint it never touched.
+    #[test]
+    fn real_fs_syncs_fail_on_a_path_that_is_not_there() {
+        let tmp = TempDir::new().unwrap();
+        assert!(
+            RealFs.sync_file(&tmp.path().join("no-such-file")).is_err(),
+            "fsync of a missing file must not report success"
+        );
+        assert!(
+            RealFs.sync_dir(&tmp.path().join("no-such-dir")).is_err(),
+            "fsync of a missing directory must not report success"
+        );
+
+        // The same calls against real objects succeed, so the assertions above
+        // are about the missing path and not about the methods never working.
+        let file = tmp.path().join("f");
+        RealFs.write(&file, b"x").unwrap();
+        RealFs.sync_file(&file).unwrap();
+        RealFs.sync_dir(tmp.path()).unwrap();
+    }
+
+    /// `symlink` has to leave behind a name that resolves to the target — the
+    /// `latest` pointer a snapshot reader follows.
+    #[test]
+    fn real_fs_symlink_creates_a_name_that_resolves_to_the_target() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("snapshot_00001");
+        std::fs::create_dir(&target).unwrap();
+        RealFs.write(&target.join("metadata.json"), b"{}").unwrap();
+
+        let link = tmp.path().join("latest");
+        RealFs.symlink(&target, &link).unwrap();
+
+        assert!(link.exists(), "the link must exist");
+        assert_eq!(
+            std::fs::read(link.join("metadata.json")).unwrap(),
+            b"{}",
+            "and it must resolve to the target directory's contents"
+        );
     }
 }

@@ -337,4 +337,206 @@ mod tests {
         // The failed write is not recorded (it did not happen).
         assert_eq!(log.effects().len(), 1);
     }
+
+    /// A failed write must not consume a write index either, or every later
+    /// index-based injection would be off by one against the production
+    /// rollback path it mirrors.
+    #[tokio::test]
+    async fn a_failed_write_does_not_consume_its_write_index() {
+        let sink = FakeWalSink::with_failure(0, FakeFailure::AtWriteIndex(0));
+        let log = sink.log();
+        assert!(
+            sink.write_set(b"a", &Value::string("1"), &meta())
+                .await
+                .is_err()
+        );
+        // Still write-index 0, so the injection fires again.
+        assert!(sink.write_delete(b"b").await.is_err());
+        assert!(log.effects().is_empty());
+        assert_eq!(sink.sequence(), 0, "a refused write assigns no sequence");
+    }
+
+    /// Predicate injection selects by key, not just by position.
+    #[tokio::test]
+    async fn predicate_failure_selects_by_key() {
+        let sink = FakeWalSink::with_failure(
+            0,
+            FakeFailure::Predicate(Arc::new(|_idx, key| key == Some(&b"poison"[..]))),
+        );
+        let log = sink.log();
+        sink.write_delete(b"fine").await.unwrap();
+        assert!(sink.write_delete(b"poison").await.is_err());
+        sink.write_delete(b"also-fine").await.unwrap();
+        assert_eq!(
+            log.effects()
+                .iter()
+                .map(|e| e.key.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec![b"fine".to_vec(), b"also-fine".to_vec()]
+        );
+    }
+
+    /// Sequences mirror `RocksWalWriter`'s discipline: 1-based and assigned
+    /// only by writes. A marker carries the sequence current at the time it was
+    /// recorded, which is what makes "this flush covers writes up to N"
+    /// checkable.
+    #[tokio::test]
+    async fn writes_assign_sequences_and_markers_only_observe_them() {
+        let sink = FakeWalSink::new(3);
+        let log = sink.log();
+        assert_eq!(
+            sink.write_set(b"a", &Value::string("1"), &meta())
+                .await
+                .unwrap(),
+            1,
+            "sequences are 1-based"
+        );
+        assert_eq!(sink.write_merge(b"h", &[(1, 2)], &meta()).await.unwrap(), 2);
+        sink.flush_async().await.unwrap();
+        assert_eq!(sink.write_clear().await.unwrap(), 3);
+        sink.flush_through(3).await.unwrap();
+
+        let kinds: Vec<_> = log.effects().iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                WalEffectKind::Set,
+                WalEffectKind::Merge,
+                WalEffectKind::FlushAsync,
+                WalEffectKind::Clear,
+                WalEffectKind::FlushThrough,
+            ]
+        );
+        let seqs: Vec<_> = log.effects().iter().map(|e| e.seq).collect();
+        assert_eq!(
+            seqs,
+            vec![1, 2, 2, 3, 3],
+            "the flush at index 2 sees sequence 2, not 3"
+        );
+        assert_eq!(
+            log.effects().iter().map(|e| e.order).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4],
+            "order counts every effect, markers included"
+        );
+
+        assert_eq!(sink.sequence(), 3);
+        assert_eq!(
+            sink.durable_sequence(),
+            3,
+            "the fake is synchronously durable"
+        );
+        assert_eq!(sink.shard_id(), 3);
+        let stats = sink.lag_stats();
+        assert_eq!(stats.shard_id, 3);
+        assert_eq!(stats.sequence, 3);
+        assert_eq!(stats.committed_sequence, 3);
+        assert_eq!(stats.pending_ops, 0);
+        assert!(stats.last_flush_ok);
+    }
+
+    /// `groups()` is what a transaction test asserts atomicity with: one inner
+    /// `Vec` per *outermost* group, holding that group's writes and nothing
+    /// else. Writes outside any group are not a group of their own, and a
+    /// nested group does not open a second one.
+    #[tokio::test]
+    async fn groups_collect_the_writes_of_each_outermost_group() {
+        let sink = FakeWalSink::new(0);
+        let log = sink.log();
+
+        sink.write_delete(b"loose").await.unwrap();
+
+        sink.begin_group().await.unwrap();
+        sink.write_set(b"t1", &Value::string("v"), &meta())
+            .await
+            .unwrap();
+        sink.begin_group().await.unwrap();
+        sink.write_delete(b"t2").await.unwrap();
+        sink.end_group().await.unwrap();
+        sink.write_delete(b"t3").await.unwrap();
+        sink.end_group().await.unwrap();
+
+        sink.begin_group().await.unwrap();
+        sink.write_delete(b"u1").await.unwrap();
+        sink.end_group().await.unwrap();
+
+        let groups = log.groups().unwrap();
+        let keys: Vec<Vec<Vec<u8>>> = groups
+            .iter()
+            .map(|g| g.iter().map(|e| e.key.clone().unwrap()).collect())
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                vec![b"t1".to_vec(), b"t2".to_vec(), b"t3".to_vec()],
+                vec![b"u1".to_vec()],
+            ],
+            "the nested group folds into its parent; the loose write is in no group"
+        );
+    }
+
+    /// Unbalanced group markers are a bug in the code under test, so they are
+    /// reported rather than silently repaired.
+    #[tokio::test]
+    async fn unbalanced_group_markers_are_reported() {
+        let sink = FakeWalSink::new(0);
+        let log = sink.log();
+        sink.begin_group().await.unwrap();
+        sink.write_delete(b"k").await.unwrap();
+        assert!(
+            log.groups().unwrap_err().contains("unclosed"),
+            "a group left open is an error"
+        );
+
+        let sink = FakeWalSink::new(0);
+        let log = sink.log();
+        sink.end_group().await.unwrap();
+        assert!(
+            log.groups().unwrap_err().contains("no open group"),
+            "a close with no open is an error"
+        );
+    }
+
+    /// `assert_write_order` has to be able to fail: it is the only thing
+    /// standing between a reordered WAL log and a green test.
+    #[test]
+    fn out_of_order_writes_are_rejected() {
+        let log = FakeWalLog::default();
+        log.0.lock().unwrap().extend([
+            RecordedWalEffect {
+                order: 5,
+                kind: WalEffectKind::Set,
+                key: Some(b"a".to_vec()),
+                seq: 1,
+            },
+            // A flush out of order is not a write, so it is ignored...
+            RecordedWalEffect {
+                order: 0,
+                kind: WalEffectKind::FlushAsync,
+                key: None,
+                seq: 1,
+            },
+            // ...but a write out of order is the violation.
+            RecordedWalEffect {
+                order: 4,
+                kind: WalEffectKind::Delete,
+                key: Some(b"b".to_vec()),
+                seq: 2,
+            },
+        ]);
+        let err = log.assert_write_order().unwrap_err();
+        assert!(err.contains("out-of-order"), "unexpected message: {err}");
+        // The violation reported is the *write* pair, not the interleaved
+        // flush: a marker never participates in write ordering, so a checker
+        // that treated every effect as a write would blame the flush here and
+        // then blame flushes in real logs, where they are legitimately
+        // interleaved.
+        assert!(
+            err.contains("Delete") && err.contains("Set"),
+            "the offending pair must be the two writes: {err}"
+        );
+        assert!(
+            !err.contains("FlushAsync"),
+            "a flush is not a write and must not be blamed: {err}"
+        );
+    }
 }

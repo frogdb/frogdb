@@ -125,3 +125,94 @@ pub struct WalLagStats {
     pub shard_id: usize,
     pub last_flush_timestamp_ms: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The numeric encoding is the wire between `CONFIG SET
+    /// wal-failure-policy` and every shard's `AtomicU8`: a writer stores
+    /// `as_u8`, a reader recovers it with `from_u8`, and the two must agree
+    /// or a live policy change silently flips to the other policy.
+    // FM-PERSISTENCE-006
+    #[test]
+    fn the_atomic_encoding_round_trips_and_distinguishes_the_policies() {
+        for policy in [WalFailurePolicy::Continue, WalFailurePolicy::Rollback] {
+            assert_eq!(WalFailurePolicy::from_u8(policy.as_u8()), policy);
+            assert_eq!(WalFailurePolicy::from(u8::from(policy)), policy);
+        }
+        assert_ne!(
+            WalFailurePolicy::Continue.as_u8(),
+            WalFailurePolicy::Rollback.as_u8(),
+            "the two policies must not share an encoding"
+        );
+        assert_eq!(
+            WalFailurePolicy::default(),
+            WalFailurePolicy::Continue,
+            "continue is the default policy"
+        );
+    }
+
+    /// Unknown bytes decode to the default rather than to `Rollback`:
+    /// a torn or uninitialised flag must not start refusing writes.
+    // FM-PERSISTENCE-006
+    #[test]
+    fn an_unknown_encoding_decodes_to_continue() {
+        for v in [0u8, 2, 3, 17, 255] {
+            assert_eq!(
+                WalFailurePolicy::from_u8(v),
+                WalFailurePolicy::Continue,
+                "byte {v} must not decode to rollback"
+            );
+        }
+    }
+
+    /// The config strings are the operator-facing names, and
+    /// `frogdb_config::persistence::WAL_FAILURE_POLICIES` validates against
+    /// them, so the two directions must compose.
+    // FM-PERSISTENCE-006
+    #[test]
+    fn config_strings_round_trip_and_only_rollback_selects_rollback() {
+        for policy in [WalFailurePolicy::Continue, WalFailurePolicy::Rollback] {
+            assert_eq!(
+                WalFailurePolicy::from_config_str(policy.as_config_str()),
+                policy
+            );
+        }
+        assert_eq!(WalFailurePolicy::Continue.as_config_str(), "continue");
+        assert_eq!(WalFailurePolicy::Rollback.as_config_str(), "rollback");
+        assert_eq!(
+            WalFailurePolicy::from_config_str("ROLLBACK"),
+            WalFailurePolicy::Rollback,
+            "the config parse is case-insensitive"
+        );
+        for junk in ["", "continue ", "roll", "rollbacks", "1"] {
+            assert_eq!(
+                WalFailurePolicy::from_config_str(junk),
+                WalFailurePolicy::Continue,
+                "{junk:?} must not select rollback"
+            );
+        }
+    }
+
+    /// Defaults are a durability decision, not an arbitrary constant: an
+    /// unconfigured WAL fsyncs on a timer rather than never (`Async`) or on
+    /// every write (`Sync`).
+    #[test]
+    fn the_default_durability_mode_is_periodic_one_second() {
+        let DurabilityMode::Periodic { interval_ms } = DurabilityMode::default() else {
+            panic!("the default durability mode must be periodic");
+        };
+        assert_eq!(interval_ms, 1000);
+
+        let cfg = WalConfig::default();
+        assert!(matches!(cfg.mode, DurabilityMode::Periodic { .. }));
+        assert_eq!(cfg.batch_size_threshold, 4 * 1024 * 1024);
+        assert_eq!(cfg.batch_timeout_ms, 10);
+        assert_eq!(cfg.channel_capacity, 8192);
+        assert!(
+            cfg.batch_size_threshold_handle.is_none(),
+            "a default config owns no shared handle — the writer mints its own"
+        );
+    }
+}

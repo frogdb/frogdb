@@ -36,8 +36,10 @@ fn instant_to_unix_ms(instant: Instant, clock: ClaimClock) -> u64 {
 /// anchored to `clock`. Inverse of [`instant_to_unix_ms`].
 ///
 /// A time far enough in the past that it would predate the monotonic clock's
-/// origin clamps to `clock.now` (via `checked_sub`) rather than panicking, exactly
-/// as the [`ClaimClock`] `IDLE`/`TIME` paths do.
+/// origin goes through `checked_sub`, so it resolves to some earlier instant (or
+/// falls back to `clock.now`) rather than panicking — exactly as the
+/// [`ClaimClock`] `IDLE`/`TIME` paths do. How far back an `Instant` can represent
+/// is platform-defined; only the no-panic guarantee is ours.
 fn unix_ms_from_clock(unix_ms: u64, clock: ClaimClock) -> Instant {
     if unix_ms >= clock.unix_ms {
         clock.now + Duration::from_millis(unix_ms - clock.unix_ms)
@@ -496,5 +498,101 @@ mod tests {
             deserialize_stream(&payload),
             Err(SerializationError::InvalidPayload(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod clock_and_idempotency_tests {
+    use bytes::Bytes;
+
+    use super::*;
+
+    fn clock_at(unix_ms: u64) -> ClaimClock {
+        ClaimClock {
+            now: Instant::now(),
+            unix_ms,
+        }
+    }
+
+    /// A persisted delivery time is a wall-clock stamp; recovering it means
+    /// re-anchoring it to *this* process's monotonic origin, offset by the exact
+    /// distance between the two wall-clock readings. Getting the sign or the
+    /// magnitude wrong silently rewrites every PEL entry's idle time, which is
+    /// what `XAUTOCLAIM`/`XCLAIM min-idle-time` decide on.
+    #[test]
+    fn a_persisted_stamp_re_anchors_at_its_exact_distance_from_the_clock() {
+        let clock = clock_at(1_000_000);
+
+        assert_eq!(
+            unix_ms_from_clock(1_000_500, clock),
+            clock.now + Duration::from_millis(500),
+            "a stamp in the future of the sample is that far ahead of `now`"
+        );
+        assert_eq!(
+            unix_ms_from_clock(999_500, clock),
+            clock.now - Duration::from_millis(500),
+            "and one in the past is that far behind it"
+        );
+        assert_eq!(
+            unix_ms_from_clock(1_000_000, clock),
+            clock.now,
+            "a stamp at the sample is the sample"
+        );
+        let ancient = clock_at(u64::MAX);
+        assert!(
+            unix_ms_from_clock(0, ancient) <= ancient.now,
+            "a distance no monotonic clock can reach back resolves to the past, not a panic"
+        );
+    }
+
+    /// The idempotency block is optional on the wire *and* in memory: a stream
+    /// that never recorded a key must come back with no idempotency state at
+    /// all, not an empty one. `XADD ... IDEMPOTENT` distinguishes the two —
+    /// `idempotency()` is an `Option`, and materializing it on every reload
+    /// would give every restored stream a dedup set it never had.
+    #[test]
+    fn idempotency_state_survives_only_when_there_was_some() {
+        let plain = stream_with_one_entry();
+        let back = round_trip_stream(&plain);
+        assert!(
+            back.idempotency().is_none(),
+            "a stream with no recorded keys must not gain an empty dedup set"
+        );
+
+        let mut with_keys = stream_with_one_entry();
+        let mut idem = IdempotencyState::new();
+        idem.record(Bytes::from_static(b"req-1"));
+        idem.record(Bytes::from_static(b"req-2"));
+        with_keys.set_idempotency(idem);
+        // A consumer group after the idempotency block: if the reader stops
+        // short of the recorded keys, everything past them decodes as garbage.
+        with_keys
+            .create_group(Bytes::from_static(b"g"), StreamId::new(0, 0), None)
+            .unwrap();
+
+        let back = round_trip_stream(&with_keys);
+        let idem = back.idempotency().expect("recorded keys must survive");
+        assert_eq!(idem.len(), 2);
+        assert!(back.has_idempotency_key(b"req-1"));
+        assert!(back.has_idempotency_key(b"req-2"));
+        assert!(!back.has_idempotency_key(b"req-3"));
+        assert!(
+            back.get_group(b"g").is_some(),
+            "the fields after the idempotency block must still line up"
+        );
+    }
+
+    fn stream_with_one_entry() -> StreamValue {
+        let mut s = StreamValue::new();
+        let _ = s.add(
+            StreamIdSpec::Explicit(StreamId::new(1, 1)),
+            vec![(Bytes::from_static(b"f"), Bytes::from_static(b"v"))],
+        );
+        s
+    }
+
+    fn round_trip_stream(stream: &StreamValue) -> StreamValue {
+        let (_, payload) = serialize_stream(stream);
+        deserialize_stream(&payload).expect("round-trip deserialization must succeed")
     }
 }

@@ -124,3 +124,127 @@ pub(crate) fn detect_and_reset(
     }
     dropped
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Records every counter call, including one carrying zero — the
+    /// difference between "reported nothing" and "reported a loss of zero
+    /// records", which is exactly what the never-false-alarm guarantee is
+    /// about.
+    #[derive(Default)]
+    struct RecordingRecorder {
+        counters: Mutex<Vec<(String, u64)>>,
+    }
+
+    impl MetricsRecorder for RecordingRecorder {
+        fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+            self.counters
+                .lock()
+                .unwrap()
+                .push((name.to_string(), value));
+        }
+        fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+        fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    }
+
+    impl RecordingRecorder {
+        fn calls(&self) -> Vec<(String, u64)> {
+            self.counters.lock().unwrap().clone()
+        }
+    }
+
+    const COUNTER: &str = "frogdb_wal_recovery_dropped_records_total";
+
+    // FM-PERSISTENCE-035
+    /// The watermark is a plain decimal `u64` in a file whose name no RocksDB
+    /// cleanup pattern matches, and every unreadable form of it means "no
+    /// watermark" rather than a bogus one.
+    #[test]
+    fn the_watermark_file_round_trips_and_degrades_to_none() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(read(tmp.path()), None, "a fresh database has no watermark");
+
+        write(tmp.path(), 4_294_967_296).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(FILE_NAME)).unwrap(),
+            "4294967296",
+            "the body is the decimal sequence, nothing else"
+        );
+        assert_eq!(read(tmp.path()), Some(4_294_967_296));
+        assert!(
+            !tmp.path().join(format!("{FILE_NAME}.tmp")).exists(),
+            "the temp file is renamed away, not left behind"
+        );
+
+        std::fs::write(tmp.path().join(FILE_NAME), "not a number").unwrap();
+        assert_eq!(read(tmp.path()), None, "garbage parses as absent");
+        std::fs::write(tmp.path().join(FILE_NAME), "-5").unwrap();
+        assert_eq!(read(tmp.path()), None, "so does a negative");
+    }
+
+    // FM-PERSISTENCE-035
+    /// A recovery that reached the watermark — or exactly matched it — lost
+    /// nothing, and must raise *nothing at all*. Reporting a loss of zero
+    /// records is still an alarm on a dashboard that counts events.
+    #[test]
+    fn a_recovery_that_reaches_the_watermark_reports_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let metrics = RecordingRecorder::default();
+
+        // No prior watermark: nothing to compare against.
+        assert_eq!(detect_and_reset(tmp.path(), 100, &metrics), 0);
+        assert!(metrics.calls().is_empty());
+        assert_eq!(
+            read(tmp.path()),
+            Some(100),
+            "and the first open baselines the watermark"
+        );
+
+        // Recovery landed exactly on the watermark.
+        assert_eq!(detect_and_reset(tmp.path(), 100, &metrics), 0);
+        assert!(
+            metrics.calls().is_empty(),
+            "an exact match is a clean recovery, not a zero-record loss"
+        );
+
+        // Recovery ran past it (normal: writes since the last sync).
+        assert_eq!(detect_and_reset(tmp.path(), 150, &metrics), 0);
+        assert!(metrics.calls().is_empty());
+        assert_eq!(read(tmp.path()), Some(150));
+    }
+
+    // FM-PERSISTENCE-035
+    /// A recovery that stopped *below* the watermark dropped exactly the
+    /// difference, reports it once, and then re-baselines so the next open does
+    /// not re-report the same loss forever.
+    #[test]
+    fn a_short_recovery_reports_the_gap_once_and_re_baselines() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), 500).unwrap();
+        let metrics = RecordingRecorder::default();
+
+        assert_eq!(
+            detect_and_reset(tmp.path(), 480, &metrics),
+            20,
+            "20 sequence numbers of acknowledged writes vanished"
+        );
+        assert_eq!(metrics.calls(), vec![(COUNTER.to_string(), 20)]);
+        assert_eq!(
+            read(tmp.path()),
+            Some(480),
+            "the watermark is re-baselined to what actually recovered"
+        );
+
+        // Same database, next boot: the loss is history, not news.
+        assert_eq!(detect_and_reset(tmp.path(), 480, &metrics), 0);
+        assert_eq!(
+            metrics.calls().len(),
+            1,
+            "the same loss must not be re-reported on every subsequent open"
+        );
+    }
+}

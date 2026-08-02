@@ -186,10 +186,12 @@ impl RocksStore {
         // durable-sync watermark in [`wal_watermark`], which emits a metric + log
         // when recovery lands below the last synced sequence.
         db_opts.set_wal_recovery_mode(DBRecoveryMode::PointInTime);
-        if let Some(rate_mb) = config.compaction_rate_limit_mb {
-            db_opts.set_ratelimiter(rate_mb as i64 * 1024 * 1024, 100_000, 10);
+        if let Some(bytes_per_sec) = config.compaction_rate_limit_bytes_per_sec() {
+            db_opts.set_ratelimiter(bytes_per_sec, 100_000, 10);
         }
         let mut block_opts = BlockBasedOptions::default();
+        // `> 0` and `>= 0` are indistinguishable here: a zero-bit policy emits no
+        // filter block, so installing one is the same as not installing one.
         if config.bloom_filter_bits > 0 {
             block_opts.set_bloom_filter(config.bloom_filter_bits as f64, false);
         }
@@ -678,7 +680,8 @@ fn full_value_merge(
 /// Partial RocksDB merge callback: combine several operands (no base) into one.
 /// Delegates to [`crate::partial_merge_hll_deltas`], which returns `None` — so
 /// RocksDB falls back to the full merge — when any operand is a full value or
-/// undecodable.
+/// undecodable. The whole callback is therefore an optimization: a version that
+/// always returned `None` would produce identical reads, only more slowly.
 fn partial_value_merge(
     _key: &[u8],
     _existing: Option<&[u8]>,

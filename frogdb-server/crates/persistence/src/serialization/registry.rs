@@ -569,6 +569,11 @@ mod tests {
                     "{marker:?} sample encoded to {got_marker:?}"
                 );
 
+                assert!(
+                    !payload.is_empty(),
+                    "{marker:?} sample encoded to an empty payload"
+                );
+
                 // 2. decode inverts encode.
                 let back = (decode_for(marker))(&payload)
                     .unwrap_or_else(|e| panic!("{marker:?} decode failed: {e}"));
@@ -577,6 +582,33 @@ mod tests {
                     back.key_type(),
                     "{marker:?} changed key_type through value round-trip"
                 );
+
+                // 2b. And it inverts it *content and all*. `Value` has no
+                // `PartialEq`, so the comparison is the encoding's own fixed
+                // point: re-encoding what came back must reproduce the same
+                // bytes. A decode that drops fields, loses precision, or hands
+                // back an empty container of the right type passes the
+                // `key_type` check above and fails here.
+                let (re_marker, re_payload) = super::super::serialize_value(&back);
+                assert_eq!(re_marker, marker, "{marker:?} re-encoded to {re_marker:?}");
+                if marker == TypeMarker::HashWithFieldExpiry {
+                    // This payload carries an absolute wall-clock deadline
+                    // derived from a monotonic `Instant` at encode time, so
+                    // re-encoding it moves the bytes by however many
+                    // milliseconds passed. Length still has to match, and the
+                    // deadline itself is asserted with a tolerance in
+                    // `hash_with_field_expiry_preserves_ttl`.
+                    assert_eq!(
+                        re_payload.len(),
+                        payload.len(),
+                        "{marker:?} changed payload length through decode → encode"
+                    );
+                } else {
+                    assert_eq!(
+                        re_payload, payload,
+                        "{marker:?} did not survive decode → encode byte for byte"
+                    );
+                }
 
                 // 3. full serialize/deserialize round-trip including the header.
                 let bytes = serialize(&value, &KeyMetadata::new(value.memory_size()));
@@ -627,6 +659,31 @@ mod tests {
         with_ttl.set_field_expiry(b"f", Instant::now() + Duration::from_secs(60));
         let (m, _) = super::super::serialize_value(&Value::Hash(with_ttl));
         assert_eq!(m, TypeMarker::HashWithFieldExpiry);
+    }
+
+    /// The property the registry's order-independence claim rests on: for any
+    /// value, *exactly one* codec's encode half answers `Some`. Two codecs
+    /// claiming the same value would make the marker a function of the table's
+    /// order (the shared-variant pairs `StringInt`/`StringRaw` and
+    /// `Hash`/`HashWithFieldExpiry` are one reordering away from silently
+    /// swapping), and zero claimants would make `serialize_value` unable to
+    /// encode it at all.
+    #[test]
+    fn exactly_one_codec_claims_each_value() {
+        for &marker in TypeMarker::ALL {
+            for value in samples_for(marker) {
+                let claimants: Vec<TypeMarker> = REGISTRY
+                    .iter()
+                    .filter(|codec| (codec.encode)(&value).is_some())
+                    .map(|codec| codec.marker)
+                    .collect();
+                assert_eq!(
+                    claimants,
+                    vec![marker],
+                    "{marker:?} sample claimed by {claimants:?}"
+                );
+            }
+        }
     }
 
     /// The per-field expiry hash (marker 11) must preserve its field TTL through a

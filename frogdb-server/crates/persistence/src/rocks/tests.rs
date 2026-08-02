@@ -1316,3 +1316,382 @@ fn wal_recovery_mode_is_pinned_to_point_in_time() {
     let pinned = rocksdb::DBRecoveryMode::PointInTime;
     assert!(matches!(pinned, rocksdb::DBRecoveryMode::PointInTime));
 }
+
+/// A stand-in for a WAL writer's `FlushOutcomes`: it reports a committed
+/// sequence and records whatever `durable_sync` publishes back to it.
+struct FakeSyncTarget {
+    committed: std::sync::atomic::AtomicU64,
+    synced: std::sync::atomic::AtomicU64,
+}
+
+impl FakeSyncTarget {
+    fn new(committed: u64) -> Arc<Self> {
+        Arc::new(Self {
+            committed: std::sync::atomic::AtomicU64::new(committed),
+            synced: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+    fn synced(&self) -> u64 {
+        self.synced.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl DurableSyncTarget for FakeSyncTarget {
+    fn committed_sequence(&self) -> u64 {
+        self.committed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn publish_synced_through(&self, seq: u64) {
+        self.synced
+            .fetch_max(seq, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+// FM-PERSISTENCE-043
+/// An out-of-band `durable_sync` has to reach *every* registered writer, not
+/// merely the most recent one: the store is the only thing that knows the fsync
+/// covered all shards, so a watermark it fails to publish to is a shard that
+/// under-reports its durability forever.
+#[test]
+fn durable_sync_publishes_the_flushed_sequence_to_every_registered_writer() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+
+    let a = FakeSyncTarget::new(7);
+    let b = FakeSyncTarget::new(11);
+    s.register_sync_target(&(a.clone() as Arc<dyn DurableSyncTarget>));
+    s.register_sync_target(&(b.clone() as Arc<dyn DurableSyncTarget>));
+    assert_eq!(a.synced(), 0, "nothing is durable before the sync");
+
+    s.put(0, b"k", b"v").unwrap();
+    s.durable_sync().unwrap();
+
+    assert_eq!(a.synced(), 7, "the first writer's watermark must advance");
+    assert_eq!(b.synced(), 11, "and so must the second's");
+}
+
+/// Registration holds `Weak` references, and both the register path and the
+/// sync path prune the ones whose writer is gone — otherwise a store outliving
+/// many short-lived writers accumulates them without bound.
+#[test]
+fn dead_sync_targets_are_reaped_on_register_and_on_sync() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 1, &RocksConfig::default()).unwrap();
+
+    {
+        let gone = FakeSyncTarget::new(1);
+        s.register_sync_target(&(gone.clone() as Arc<dyn DurableSyncTarget>));
+    }
+    let live = FakeSyncTarget::new(2);
+    s.register_sync_target(&(live.clone() as Arc<dyn DurableSyncTarget>));
+    assert_eq!(
+        s.sync_targets.lock().unwrap().len(),
+        1,
+        "registering must drop the entry whose writer was dropped, and keep the live one"
+    );
+
+    drop(live);
+    s.durable_sync().unwrap();
+    assert_eq!(
+        s.sync_targets.lock().unwrap().len(),
+        0,
+        "syncing must reap the now-dead entry too"
+    );
+}
+
+/// Live entries in a shard's active memtable — the observable that separates
+/// "handed to RocksDB" from "written out to an SST".
+fn active_memtable_entries(s: &RocksStore, shard: usize) -> u64 {
+    let cf = s.cf_handle(shard).unwrap();
+    s.db.property_int_value_cf(&cf, "rocksdb.num-entries-active-mem-table")
+        .unwrap()
+        .unwrap()
+}
+
+/// The crash-recovery harness leans on `sync_wal` to force a durable point
+/// before it kills the process; a version that returned `Ok(())` without
+/// flushing would make every crash test pass for the wrong reason. The
+/// post-condition is per shard, not just the first one.
+#[test]
+fn sync_wal_flushes_every_shard_memtable() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 3, &RocksConfig::default()).unwrap();
+    for shard in 0..3 {
+        s.put(shard, b"k", b"v").unwrap();
+        assert!(
+            active_memtable_entries(&s, shard) > 0,
+            "shard {shard} should hold an unflushed write"
+        );
+    }
+
+    s.sync_wal().unwrap();
+
+    for shard in 0..3 {
+        assert_eq!(
+            active_memtable_entries(&s, shard),
+            0,
+            "shard {shard} memtable must be flushed, not just the first"
+        );
+        assert_eq!(s.get(shard, b"k").unwrap(), Some(b"v".to_vec()));
+    }
+}
+
+/// `commit_raw_batch` is the one seam the crash-atomicity tests write through,
+/// and it must apply *both* op kinds to the shard each op names — a batch that
+/// silently committed nothing would turn those tests into no-ops.
+#[test]
+fn commit_raw_batch_applies_puts_and_deletes_to_the_shard_each_op_names() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+    s.put(1, b"doomed", b"v").unwrap();
+
+    s.commit_raw_batch(
+        &[
+            RawBatchOp::Put {
+                shard: 0,
+                key: b"fresh",
+                value: b"v0",
+            },
+            RawBatchOp::Put {
+                shard: 1,
+                key: b"also_fresh",
+                value: b"v1",
+            },
+            RawBatchOp::Delete {
+                shard: 1,
+                key: b"doomed",
+            },
+        ],
+        &WriteOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(s.get(0, b"fresh").unwrap(), Some(b"v0".to_vec()));
+    assert_eq!(s.get(1, b"also_fresh").unwrap(), Some(b"v1".to_vec()));
+    assert_eq!(s.get(1, b"doomed").unwrap(), None, "the delete applied too");
+    assert_eq!(
+        s.get(0, b"also_fresh").unwrap(),
+        None,
+        "ops land in the shard they name, not the first one"
+    );
+}
+
+// FM-PERSISTENCE-014
+/// Operands that reach an SST with no base value in the same memtable are
+/// folded by the *partial* merge callback before the base is ever consulted.
+/// The fold has to be a real HLL union: an operand that combines wrongly is
+/// only visible after the base rejoins it at read time.
+#[test]
+fn hll_operands_flushed_without_their_base_still_read_back_merged() {
+    use crate::serialization::{deserialize, serialize, serialize_hll_delta};
+    use frogdb_types::hyperloglog::HyperLogLogValue;
+    use frogdb_types::types::{KeyMetadata, Value};
+
+    let dir = TempDir::new().unwrap();
+    let meta = KeyMetadata::new(1);
+    let mut reference = HyperLogLogValue::new();
+    for i in 0..200u32 {
+        reference.add(&i.to_le_bytes());
+    }
+    let rocks = RocksStore::open(dir.path(), 1, &RocksConfig::default()).unwrap();
+    rocks
+        .put(
+            0,
+            b"hll",
+            &serialize(&Value::HyperLogLog(reference.clone()), &meta),
+        )
+        .unwrap();
+    // Push the base out to an SST so the operands below flush on their own.
+    rocks.flush().unwrap();
+
+    for batch in 0..3u32 {
+        let mut pairs = Vec::new();
+        for i in 0..400u32 {
+            let x = 1_000 + batch * 400 + i;
+            if let Some(p) = reference.add_tracked(&x.to_le_bytes()) {
+                pairs.push(p);
+            }
+        }
+        rocks
+            .merge(0, b"hll", &serialize_hll_delta(&pairs, &meta))
+            .unwrap();
+    }
+    // A memtable holding only operands: this flush is what invokes the partial
+    // merge callback.
+    rocks.flush().unwrap();
+
+    let got = rocks.get(0, b"hll").unwrap().unwrap();
+    let (value, _) = deserialize(&got).unwrap();
+    let Value::HyperLogLog(h) = value else {
+        panic!("wrong type")
+    };
+    assert_eq!(
+        h.count_no_cache(),
+        reference.count_no_cache(),
+        "partially merged operands must union, not overwrite or truncate"
+    );
+}
+
+/// Capacity of the block cache the data column families were opened with.
+fn block_cache_capacity(s: &RocksStore) -> u64 {
+    let cf = s.cf_handle(0).unwrap();
+    s.db.property_int_value_cf(&cf, "rocksdb.block-cache-capacity")
+        .unwrap()
+        .unwrap()
+}
+
+/// Total bloom-filter bytes across a shard's SSTs, parsed out of RocksDB's
+/// aggregated table properties.
+fn filter_bytes(s: &RocksStore) -> u64 {
+    let cf = s.cf_handle(0).unwrap();
+    let props =
+        s.db.property_value_cf(&cf, "rocksdb.aggregated-table-properties")
+            .unwrap()
+            .unwrap();
+    props
+        .split(';')
+        .find_map(|f| f.trim().strip_prefix("filter block size="))
+        .unwrap_or_else(|| panic!("no filter block size in {props}"))
+        .parse()
+        .unwrap()
+}
+
+/// The `block_cache_size` knob has to reach RocksDB, and `0` has to mean "leave
+/// RocksDB's own default alone" rather than "a cache that holds nothing" — a
+/// zero-capacity cache would re-read a block from the SST on every lookup.
+#[test]
+fn block_cache_size_is_honoured_and_zero_leaves_the_rocksdb_default() {
+    let t = TempDir::new().unwrap();
+    let sized = RocksStore::open(
+        t.path(),
+        1,
+        &RocksConfig {
+            block_cache_size: 4 * 1024 * 1024,
+            ..RocksConfig::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        block_cache_capacity(&sized),
+        4 * 1024 * 1024,
+        "the configured cache size must be the cache's capacity"
+    );
+    drop(sized);
+
+    let t2 = TempDir::new().unwrap();
+    let unset = RocksStore::open(
+        t2.path(),
+        1,
+        &RocksConfig {
+            block_cache_size: 0,
+            ..RocksConfig::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        block_cache_capacity(&unset) > 0,
+        "0 means 'no override', never a cache with no room in it"
+    );
+}
+
+/// The `bloom_filter_bits` knob has to reach the table builder: with it on, the
+/// SSTs carry a filter block; with it at `0` they carry none. A guard that
+/// fired on the wrong side would either drop the filters silently (every point
+/// lookup pays a disk read) or build a zero-bit filter nobody asked for.
+#[test]
+fn bloom_filter_bits_is_honoured_and_zero_builds_no_filter() {
+    fn write_and_flush(s: &RocksStore) {
+        for i in 0..200u32 {
+            s.put(0, format!("key{i:04}").as_bytes(), b"v").unwrap();
+        }
+        s.flush().unwrap();
+    }
+
+    let t = TempDir::new().unwrap();
+    let with_bloom = RocksStore::open(
+        t.path(),
+        1,
+        &RocksConfig {
+            bloom_filter_bits: 10,
+            ..RocksConfig::default()
+        },
+    )
+    .unwrap();
+    write_and_flush(&with_bloom);
+    assert!(
+        filter_bytes(&with_bloom) > 0,
+        "a configured bloom filter must be built into the SST"
+    );
+    drop(with_bloom);
+
+    let t2 = TempDir::new().unwrap();
+    let without = RocksStore::open(
+        t2.path(),
+        1,
+        &RocksConfig {
+            bloom_filter_bits: 0,
+            ..RocksConfig::default()
+        },
+    )
+    .unwrap();
+    write_and_flush(&without);
+    assert_eq!(
+        filter_bytes(&without),
+        0,
+        "0 bits means no filter block at all"
+    );
+}
+
+/// The search-metadata sidecar is its own namespace: what the shims write there
+/// is invisible to the main tier and to every other shard, and each shim
+/// addresses the tier its name claims. Untagged — the sidecar's *contents* are
+/// the search engine's business; what is pinned here is the addressing.
+#[test]
+fn search_meta_shims_address_their_own_tier_and_shard() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 2, &RocksConfig::default()).unwrap();
+
+    s.put_search_meta(0, b"idx", b"schema").unwrap();
+    assert_eq!(
+        s.get_search_meta(0, b"idx").unwrap(),
+        Some(b"schema".to_vec()),
+        "a sidecar write must read back byte for byte"
+    );
+    assert_eq!(
+        s.get(0, b"idx").unwrap(),
+        None,
+        "and must not appear in the main tier under the same key"
+    );
+    assert_eq!(
+        s.get_search_meta(1, b"idx").unwrap(),
+        None,
+        "nor in another shard's sidecar"
+    );
+
+    // The reverse direction: a main-tier write under the same key does not
+    // shadow or overwrite the sidecar entry.
+    s.put(0, b"idx", b"main").unwrap();
+    assert_eq!(
+        s.get_search_meta(0, b"idx").unwrap(),
+        Some(b"schema".to_vec())
+    );
+
+    s.put_search_meta(0, b"other", b"x").unwrap();
+    assert_eq!(s.iter_search_meta(0).unwrap().count(), 2);
+    assert_eq!(s.iter_search_meta(1).unwrap().count(), 0);
+
+    s.delete_search_meta(0, b"idx").unwrap();
+    assert_eq!(
+        s.get_search_meta(0, b"idx").unwrap(),
+        None,
+        "a sidecar delete must remove the entry"
+    );
+    assert_eq!(
+        s.get_search_meta(0, b"other").unwrap(),
+        Some(b"x".to_vec()),
+        "and only that entry"
+    );
+    assert!(
+        s.get_search_meta(2, b"idx").is_err(),
+        "a shard id past the end is an error, not an empty read"
+    );
+}

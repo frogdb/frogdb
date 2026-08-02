@@ -54,6 +54,16 @@ pub(super) fn serialize_bloom_filter(bf: &BloomFilterValue) -> (TypeMarker, Vec<
         payload.extend_from_slice(bits_bytes);
     }
 
+    // The pre-size is only a `Vec::with_capacity` hint, so a wrong formula is
+    // invisible in release — the vector reallocs and the bytes come out the same.
+    // Asserting it makes the formula part of the contract the round-trip tests
+    // already exercise, instead of a comment that silently rots when the wire
+    // format gains a field.
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::Bloom, payload)
 }
 
@@ -99,6 +109,11 @@ pub(super) fn serialize_cuckoo_filter(cf: &CuckooFilterValue) -> (TypeMarker, Ve
         }
     }
 
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::Cuckoo, payload)
 }
 
@@ -136,6 +151,11 @@ pub(super) fn serialize_tdigest(td: &TDigestValue) -> (TypeMarker, Vec<u8>) {
         payload.extend_from_slice(&c.weight.to_le_bytes());
     }
 
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::TDigest, payload)
 }
 
@@ -166,6 +186,11 @@ pub(super) fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (TypeMarker, Vec<
             payload.push(*value);
         }
 
+        debug_assert_eq!(
+            payload.len(),
+            payload_size,
+            "pre-sized payload does not match the bytes written"
+        );
         (TypeMarker::HyperLogLog, payload)
     } else if let Some(registers) = hll.as_dense() {
         // Dense encoding
@@ -177,6 +202,11 @@ pub(super) fn serialize_hyperloglog(hll: &HyperLogLogValue) -> (TypeMarker, Vec<
         // Raw registers
         payload.extend_from_slice(registers.as_slice());
 
+        debug_assert_eq!(
+            payload.len(),
+            1 + HLL_DENSE_SIZE,
+            "a dense HLL payload is the encoding byte plus a fixed register array"
+        );
         (TypeMarker::HyperLogLog, payload)
     } else {
         // Shouldn't happen, but fallback to empty sparse
@@ -446,6 +476,11 @@ fn build_hll_delta_payload(pairs: &[(u16, u8)]) -> Vec<u8> {
         payload.extend_from_slice(&index.to_le_bytes());
         payload.push(*value);
     }
+    debug_assert_eq!(
+        payload.len(),
+        1 + 4 + pairs.len() * 3,
+        "pre-sized delta payload does not match the bytes written"
+    );
     payload
 }
 
@@ -500,6 +535,11 @@ fn reframe_with_header(header_src: &[u8], payload: &[u8]) -> Option<Vec<u8>> {
     out.extend_from_slice(&header_src[..16]);
     out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     out.extend_from_slice(payload);
+    debug_assert_eq!(
+        out.len(),
+        HEADER_SIZE + payload.len(),
+        "a re-framed value is a full header plus the new payload"
+    );
     Some(out)
 }
 
@@ -807,5 +847,465 @@ mod hll_delta_tests {
         let op = serialize_hll_delta(&[(7, 3)], &meta);
         assert_eq!(op[0], TypeMarker::HyperLogLog.as_byte());
         assert_eq!(op[HEADER_SIZE], HLL_DELTA_ENCODING);
+    }
+}
+
+/// Every probabilistic decoder reads an element *count* off the wire before it
+/// allocates for it, so each one carries a guard that refuses a count the
+/// remaining bytes could not possibly hold. These tests drive the guards from
+/// both sides: a hostile count must be refused with the arithmetic the error
+/// reports, and a payload that fits *exactly* must still decode — an
+/// off-by-one in the other direction turns a legitimate value into corruption.
+#[cfg(test)]
+mod alloc_guard_tests {
+    use super::*;
+
+    /// `[error_rate f64][expansion u32][non_scaling u8][num_layers u32]` + tail.
+    fn bloom_payload(num_layers: u32, tail: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&0.01f64.to_le_bytes());
+        p.extend_from_slice(&2u32.to_le_bytes());
+        p.push(0);
+        p.extend_from_slice(&num_layers.to_le_bytes());
+        p.extend_from_slice(tail);
+        p
+    }
+
+    /// `[bucket_size u8][max_iterations u16][expansion u32][delete_count u64][num_layers u32]` + tail.
+    fn cuckoo_payload(num_layers: u32, tail: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.push(1);
+        p.extend_from_slice(&20u16.to_le_bytes());
+        p.extend_from_slice(&2u32.to_le_bytes());
+        p.extend_from_slice(&0u64.to_le_bytes());
+        p.extend_from_slice(&num_layers.to_le_bytes());
+        p.extend_from_slice(tail);
+        p
+    }
+
+    /// Five `f64` header fields, then the two counts, then the centroid data.
+    fn tdigest_payload(num_centroids: u32, num_unmerged: u32, tail: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        for f in [100.0f64, 1.0, 9.0, 4.0, 2.0] {
+            p.extend_from_slice(&f.to_le_bytes());
+        }
+        p.extend_from_slice(&num_centroids.to_le_bytes());
+        p.extend_from_slice(&num_unmerged.to_le_bytes());
+        p.extend_from_slice(tail);
+        p
+    }
+
+    fn centroid_bytes(pairs: &[(f64, f64)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (mean, weight) in pairs {
+            out.extend_from_slice(&mean.to_le_bytes());
+            out.extend_from_slice(&weight.to_le_bytes());
+        }
+        out
+    }
+
+    /// A layer count that 27 trailing bytes cannot cover is refused *before*
+    /// the allocation, and the error states how many bytes the claim needed
+    /// (header already consumed + 28 per claimed layer) against how many
+    /// arrived — not a generic "bad payload".
+    #[test]
+    fn a_bloom_layer_count_the_payload_cannot_cover_is_refused_with_its_arithmetic() {
+        let payload = bloom_payload(5, &[0u8; 27]);
+        let err = deserialize_bloom_filter(&payload).expect_err("5 layers cannot fit in 27 bytes");
+        let SerializationError::Truncated { expected, actual } = err else {
+            panic!("expected a truncation, got {err:?}");
+        };
+        assert_eq!(actual, payload.len(), "the error reports the bytes it had");
+        assert_eq!(
+            expected,
+            17 + 5 * 28,
+            "the claim needs the consumed header plus a minimal layer each"
+        );
+    }
+
+    /// The guard is `>`, not `>=`: a payload holding exactly the bytes its
+    /// layer count needs is legitimate and must decode, fields intact.
+    #[test]
+    fn a_bloom_payload_that_fits_exactly_still_decodes() {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&3u32.to_le_bytes()); // k
+        tail.extend_from_slice(&7u64.to_le_bytes()); // count
+        tail.extend_from_slice(&64u64.to_le_bytes()); // capacity
+        tail.extend_from_slice(&8u64.to_le_bytes()); // bits_len
+        tail.push(0b1010_0101);
+        assert_eq!(tail.len(), 29, "one minimal layer plus a byte of bits");
+
+        let bf = deserialize_bloom_filter(&bloom_payload(1, &tail)).expect("an exact fit decodes");
+
+        assert_eq!(bf.error_rate(), 0.01);
+        assert_eq!(bf.expansion(), 2);
+        assert!(!bf.is_non_scaling());
+        assert_eq!(bf.num_layers(), 1);
+        let layer = &bf.layers()[0];
+        assert_eq!(layer.k(), 3);
+        assert_eq!(layer.count(), 7);
+        assert_eq!(layer.capacity(), 64);
+        assert_eq!(layer.size_bits(), 8);
+        assert_eq!(layer.bits_as_bytes(), &[0b1010_0101]);
+    }
+
+    /// Same guard, cuckoo's 25-byte minimal layer.
+    #[test]
+    fn a_cuckoo_layer_count_the_payload_cannot_cover_is_refused_with_its_arithmetic() {
+        let payload = cuckoo_payload(5, &[0u8; 24]);
+        let err = deserialize_cuckoo_filter(&payload).expect_err("5 layers cannot fit in 24 bytes");
+        let SerializationError::Truncated { expected, actual } = err else {
+            panic!("expected a truncation, got {err:?}");
+        };
+        assert_eq!(actual, payload.len());
+        assert_eq!(expected, 19 + 5 * 25);
+    }
+
+    #[test]
+    fn a_cuckoo_payload_that_fits_exactly_still_decodes() {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&1u64.to_le_bytes()); // num_buckets
+        tail.push(1); // bucket_size
+        tail.extend_from_slice(&1u64.to_le_bytes()); // count
+        tail.extend_from_slice(&8u64.to_le_bytes()); // capacity
+        tail.extend_from_slice(&0xBEEFu16.to_le_bytes()); // the one fingerprint
+        assert_eq!(tail.len(), 27, "one minimal layer plus one fingerprint");
+
+        let cf =
+            deserialize_cuckoo_filter(&cuckoo_payload(1, &tail)).expect("an exact fit decodes");
+
+        assert_eq!(cf.num_layers(), 1);
+        let layer = &cf.layers()[0];
+        assert_eq!(layer.num_buckets(), 1);
+        assert_eq!(layer.bucket_size(), 1);
+        assert_eq!(layer.buckets().len(), 1);
+        assert_eq!(layer.buckets()[0], vec![0xBEEFu16]);
+    }
+
+    /// A bucket size of zero paired with a positive bucket count is the
+    /// pathological case: every bucket reads as empty, so the fingerprint
+    /// region has no size and the count can be arbitrarily large for free.
+    /// It is refused. A layer with *no* buckets and no bucket size is a
+    /// different thing — a legitimately empty layer — and still decodes.
+    #[test]
+    fn a_cuckoo_layer_with_buckets_but_no_bucket_size_is_refused() {
+        let mut hostile = Vec::new();
+        hostile.extend_from_slice(&1u64.to_le_bytes()); // num_buckets
+        hostile.push(0); // bucket_size
+        hostile.extend_from_slice(&0u64.to_le_bytes()); // count
+        hostile.extend_from_slice(&8u64.to_le_bytes()); // capacity
+        let err = deserialize_cuckoo_filter(&cuckoo_payload(1, &hostile))
+            .expect_err("buckets with no bucket size must be refused");
+        let SerializationError::InvalidPayload(msg) = err else {
+            panic!("expected an invalid payload, got {err:?}");
+        };
+        assert!(msg.contains("bucket size"), "{msg}");
+
+        let mut empty = Vec::new();
+        empty.extend_from_slice(&0u64.to_le_bytes()); // num_buckets
+        empty.push(0); // bucket_size
+        empty.extend_from_slice(&0u64.to_le_bytes()); // count
+        empty.extend_from_slice(&0u64.to_le_bytes()); // capacity
+        let cf = deserialize_cuckoo_filter(&cuckoo_payload(1, &empty))
+            .expect("an empty layer is not a hostile one");
+        assert_eq!(cf.num_layers(), 1);
+        assert_eq!(cf.layers()[0].num_buckets(), 0);
+    }
+
+    /// The per-layer fingerprint guard compares against the bytes that remain
+    /// for the *whole* payload, so a layer followed by more layers has far more
+    /// remaining than it needs. Only "needs more than is left" is an error;
+    /// "needs less" is the normal case for every layer but the last.
+    #[test]
+    fn a_cuckoo_layer_may_need_fewer_bytes_than_the_payload_has_left() {
+        fn layer(fingerprint: u16) -> Vec<u8> {
+            let mut l = Vec::new();
+            l.extend_from_slice(&1u64.to_le_bytes()); // num_buckets
+            l.push(1); // bucket_size
+            l.extend_from_slice(&1u64.to_le_bytes()); // count
+            l.extend_from_slice(&8u64.to_le_bytes()); // capacity
+            l.extend_from_slice(&fingerprint.to_le_bytes());
+            l
+        }
+        let mut tail = layer(0x1111);
+        tail.extend_from_slice(&layer(0x2222));
+
+        let cf = deserialize_cuckoo_filter(&cuckoo_payload(2, &tail))
+            .expect("two layers decode, the first with bytes to spare");
+
+        assert_eq!(cf.num_layers(), 2);
+        assert_eq!(cf.layers()[0].buckets()[0], vec![0x1111u16]);
+        assert_eq!(
+            cf.layers()[1].buckets()[0],
+            vec![0x2222u16],
+            "the layers are read in order, not merged"
+        );
+    }
+
+    /// The t-digest guard sizes *both* arrays at once — centroids plus
+    /// unmerged, 16 bytes each — so a claim covering only one of them is still
+    /// refused, and refused as an `InvalidPayload` naming the centroid region
+    /// rather than as whatever the reader would have hit further in.
+    #[test]
+    fn a_tdigest_centroid_claim_larger_than_the_payload_is_refused() {
+        let payload = tdigest_payload(3, 2, &[0u8; 32]);
+        let err = deserialize_tdigest(&payload).expect_err("5 centroids need 80 bytes, not 32");
+        let SerializationError::InvalidPayload(msg) = err else {
+            panic!("expected an invalid payload, got {err:?}");
+        };
+        assert!(
+            msg.contains("centroid"),
+            "the message must name the region that came up short: {msg}"
+        );
+    }
+
+    /// Exactly enough bytes for both arrays decodes, and the two arrays are
+    /// read in order rather than merged: the last three pairs are `unmerged`.
+    #[test]
+    fn a_tdigest_payload_that_fits_exactly_still_decodes() {
+        let centroids = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)];
+        let unmerged = [(7.0, 8.0), (9.0, 10.0)];
+        let mut tail = centroid_bytes(&centroids);
+        tail.extend_from_slice(&centroid_bytes(&unmerged));
+        assert_eq!(tail.len(), 5 * 16, "exactly the bytes the counts claim");
+
+        let td = deserialize_tdigest(&tdigest_payload(3, 2, &tail)).expect("an exact fit decodes");
+
+        assert_eq!(td.compression(), 100.0);
+        assert_eq!(
+            td.centroids()
+                .iter()
+                .map(|c| (c.mean, c.weight))
+                .collect::<Vec<_>>(),
+            centroids.to_vec()
+        );
+        assert_eq!(
+            td.unmerged()
+                .iter()
+                .map(|c| (c.mean, c.weight))
+                .collect::<Vec<_>>(),
+            unmerged.to_vec(),
+            "the unmerged buffer is the tail of the payload, not part of the centroids"
+        );
+    }
+
+    /// A digest that carries *merged* centroids as well as an unmerged tail
+    /// re-serializes to exactly the bytes it was decoded from. A freshly built
+    /// `TDigestValue` only ever fills the unmerged buffer, so without this the
+    /// `centroids().len() * 16` term of the pre-sized payload is never
+    /// exercised and a wrong figure there rots silently (the `debug_assert_eq!`
+    /// on the written length is the only place a bad capacity is observable).
+    #[test]
+    fn a_digest_with_merged_centroids_round_trips_at_its_pre_sized_length() {
+        let centroids = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)];
+        let unmerged = [(7.0, 8.0), (9.0, 10.0)];
+        let mut tail = centroid_bytes(&centroids);
+        tail.extend_from_slice(&centroid_bytes(&unmerged));
+        let payload = tdigest_payload(3, 2, &tail);
+
+        let td = deserialize_tdigest(&payload).expect("the fixture decodes");
+        assert_eq!(td.centroids().len(), 3, "the merged array is populated");
+        assert_eq!(td.unmerged().len(), 2, "and so is the unmerged tail");
+
+        let (marker, bytes) = serialize_tdigest(&td);
+        assert_eq!(marker, TypeMarker::TDigest);
+        assert_eq!(
+            bytes.len(),
+            8 * 5 + 4 + 4 + 5 * 16,
+            "header, both counts, then 16 bytes per centroid across both arrays"
+        );
+        assert_eq!(bytes, payload, "the encoding is byte-identical");
+    }
+}
+
+/// The two framing helpers the HLL merge operator runs on every merge. Both
+/// take *borrowed* bytes straight off RocksDB and both answer with `Option`,
+/// so an off-by-one at either boundary turns a valid merge into a dropped one
+/// (RocksDB treats a `None` merge result as a failed merge, not as a no-op).
+#[cfg(test)]
+mod frame_boundary_tests {
+    use super::*;
+
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        build_frame(TypeMarker::HyperLogLog, &KeyMetadata::new(1), payload)
+    }
+
+    /// A header with nothing after it is a *well-formed* frame carrying an
+    /// empty payload — the boundary is "shorter than a header", not "no longer
+    /// than a header".
+    #[test]
+    fn a_header_with_an_empty_payload_is_a_valid_frame() {
+        let f = frame(&[]);
+        assert_eq!(f.len(), HEADER_SIZE);
+        assert_eq!(
+            framed_payload(&f),
+            Some(&[][..]),
+            "an empty payload is a payload"
+        );
+        assert_eq!(
+            framed_payload(&f[..HEADER_SIZE - 1]),
+            None,
+            "one byte short of a header is not a frame"
+        );
+    }
+
+    /// The declared payload length delimits the value: a frame that ends
+    /// exactly on it is complete, one byte less is truncated, and trailing
+    /// bytes belong to whoever framed the buffer.
+    #[test]
+    fn the_declared_length_delimits_the_payload_exactly() {
+        let f = frame(b"abc");
+        assert_eq!(framed_payload(&f), Some(&b"abc"[..]));
+        assert_eq!(
+            framed_payload(&f[..f.len() - 1]),
+            None,
+            "a payload cut short is not readable"
+        );
+
+        let mut with_tail = f.clone();
+        with_tail.extend_from_slice(b"not mine");
+        assert_eq!(
+            framed_payload(&with_tail),
+            Some(&b"abc"[..]),
+            "surplus bytes are not part of the value"
+        );
+    }
+
+    /// Re-framing copies the first 16 header bytes verbatim — marker, flags,
+    /// expiry, LFU — and rewrites only the payload length. Sixteen bytes is
+    /// exactly enough to do that; fifteen is not.
+    #[test]
+    fn re_framing_keeps_the_metadata_and_rewrites_only_the_length() {
+        let f = frame(b"abc");
+        let out = reframe_with_header(&f, b"wxyz").expect("a full frame is a valid header source");
+        assert_eq!(&out[..16], &f[..16], "the metadata half is copied verbatim");
+        assert_eq!(
+            u64::from_le_bytes(out[16..24].try_into().unwrap()),
+            4,
+            "the length is the new payload's"
+        );
+        assert_eq!(&out[HEADER_SIZE..], b"wxyz");
+
+        assert!(
+            reframe_with_header(&f[..16], b"wxyz").is_some(),
+            "sixteen bytes is exactly the metadata half, so it is enough"
+        );
+        assert!(
+            reframe_with_header(&f[..15], b"wxyz").is_none(),
+            "fifteen bytes cannot supply the metadata half"
+        );
+    }
+}
+
+/// Top-K and CMS both size a `depth * width * 8` region off two wire counts,
+/// which is the largest attacker-controlled allocation in the codec. Their
+/// guards get the same two-sided treatment as the filters above.
+#[cfg(test)]
+mod sketch_guard_tests {
+    use super::*;
+
+    /// `[k u32][width u32][depth u32][decay f64]` + tail.
+    fn topk_payload(k: u32, width: u32, depth: u32, tail: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&k.to_le_bytes());
+        p.extend_from_slice(&width.to_le_bytes());
+        p.extend_from_slice(&depth.to_le_bytes());
+        p.extend_from_slice(&0.9f64.to_le_bytes());
+        p.extend_from_slice(tail);
+        p
+    }
+
+    /// `[width u32][depth u32][count u64]` + tail.
+    fn cms_payload(width: u32, depth: u32, tail: &[u8]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&width.to_le_bytes());
+        p.extend_from_slice(&depth.to_le_bytes());
+        p.extend_from_slice(&42u64.to_le_bytes());
+        p.extend_from_slice(tail);
+        p
+    }
+
+    /// A million-by-million sketch claimed by a 28-byte payload is refused
+    /// before the allocation, and the error's arithmetic is the claim, not the
+    /// bytes that happen to be left.
+    #[test]
+    fn a_topk_bucket_region_larger_than_the_payload_is_refused_with_its_arithmetic() {
+        let payload = topk_payload(5, 1000, 1000, &[0u8; 8]);
+        let err = deserialize_topk(&payload).expect_err("a 8 MB bucket claim cannot be honoured");
+        let SerializationError::Truncated { expected, actual } = err else {
+            panic!("expected a truncation, got {err:?}");
+        };
+        assert_eq!(actual, payload.len());
+        assert_eq!(
+            expected,
+            20 + 1000 * 1000 * 8,
+            "the claim is the consumed header plus the buckets it demands"
+        );
+    }
+
+    /// The bucket region legitimately ends *before* the payload does — the heap
+    /// follows it — so "needs fewer bytes than remain" is the normal case.
+    #[test]
+    fn a_topk_payload_with_room_to_spare_decodes() {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&7u32.to_le_bytes()); // fingerprint
+        tail.extend_from_slice(&3u32.to_le_bytes()); // counter
+        tail.extend_from_slice(&0u32.to_le_bytes()); // heap_len
+
+        let tk = deserialize_topk(&topk_payload(5, 1, 1, &tail)).expect("one bucket, empty heap");
+
+        assert_eq!(tk.k(), 5);
+        assert_eq!(tk.width(), 1);
+        assert_eq!(tk.depth(), 1);
+        assert_eq!(tk.decay(), 0.9);
+        assert_eq!(tk.buckets_raw(), vec![vec![(7u32, 3u32)]]);
+        assert!(tk.heap_items().is_empty());
+    }
+
+    /// A bucket region that consumes the payload exactly leaves no heap length
+    /// behind it, which is a truncation *after* the guard, not at it. The guard
+    /// must let it through: reporting a shortfall of zero bytes here would be a
+    /// truncation error that claims it needed nothing more than it had.
+    #[test]
+    fn a_topk_payload_whose_buckets_consume_it_fails_on_the_missing_heap() {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&7u32.to_le_bytes());
+        tail.extend_from_slice(&3u32.to_le_bytes());
+        let payload = topk_payload(5, 1, 1, &tail);
+
+        let err = deserialize_topk(&payload).expect_err("the heap length is missing");
+        let SerializationError::Truncated { expected, actual } = err else {
+            panic!("expected a truncation, got {err:?}");
+        };
+        assert_eq!(actual, payload.len());
+        assert_eq!(
+            expected,
+            payload.len() + 4,
+            "what is missing is the heap-length prefix, not bucket bytes"
+        );
+    }
+
+    #[test]
+    fn a_cms_counter_region_larger_than_the_payload_is_refused_with_its_arithmetic() {
+        let payload = cms_payload(1000, 1000, &[0u8; 8]);
+        let err = deserialize_cms(&payload).expect_err("a 8 MB counter claim cannot be honoured");
+        let SerializationError::Truncated { expected, actual } = err else {
+            panic!("expected a truncation, got {err:?}");
+        };
+        assert_eq!(actual, payload.len());
+        assert_eq!(expected, 16 + 1000 * 1000 * 8);
+    }
+
+    /// A CMS payload is header + counters with nothing after it, so a valid one
+    /// sits exactly on the guard's boundary and must still decode.
+    #[test]
+    fn a_cms_payload_that_fits_exactly_still_decodes() {
+        let cms = deserialize_cms(&cms_payload(1, 1, &99u64.to_le_bytes()))
+            .expect("an exact fit decodes");
+
+        assert_eq!(cms.width(), 1);
+        assert_eq!(cms.depth(), 1);
+        assert_eq!(cms.count(), 42);
+        assert_eq!(cms.counters_raw(), vec![vec![99u64]]);
     }
 }

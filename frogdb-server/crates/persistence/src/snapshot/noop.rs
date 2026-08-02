@@ -72,6 +72,10 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
     fn stats(&self) -> SnapshotStats {
         self.stats.read().unwrap().clone()
     }
+    // Indistinguishable from a bare `false` by construction: every no-op save
+    // claims and releases the slot inside one synchronous call, so no observer
+    // can catch the scheduler mid-run. Delegating anyway keeps the answer
+    // correct if the no-op ever gains real work.
     fn in_progress(&self) -> bool {
         self.scheduler.in_progress()
     }

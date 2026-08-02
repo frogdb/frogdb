@@ -267,7 +267,7 @@ impl FlushOutcomes {
     /// the commit actually used: only an fsynced commit may advance the durable
     /// watermark, and an fsync of the shared WAL file covers every earlier
     /// unsynced batch too, so the store is a high-water mark for both.
-    fn record_success(&self, max_seq: u64, synced: bool) {
+    pub(super) fn record_success(&self, max_seq: u64, synced: bool) {
         self.committed_seq.store(max_seq, Ordering::Release);
         if synced {
             // `fetch_max`, not `store`: `publish_synced_through` writes this
@@ -437,7 +437,7 @@ impl<S: WriteSink> FlushEngine<S> {
         self.batch_size
     }
 
-    fn since_last_flush(&self) -> Duration {
+    pub(super) fn since_last_flush(&self) -> Duration {
         self.last_flush.elapsed()
     }
 
@@ -481,7 +481,11 @@ impl<S: WriteSink> FlushEngine<S> {
 
     /// Whether the staged batch has met a flush trigger — size threshold or
     /// batch timeout — *and* is allowed to commit (no open group).
-    fn should_flush(&self, batch_size_threshold: usize, batch_timeout: Duration) -> bool {
+    pub(super) fn should_flush(
+        &self,
+        batch_size_threshold: usize,
+        batch_timeout: Duration,
+    ) -> bool {
         !self.in_group()
             && (self.staged_size() >= batch_size_threshold
                 || self.since_last_flush() >= batch_timeout)
@@ -489,7 +493,7 @@ impl<S: WriteSink> FlushEngine<S> {
 
     /// Stage one entry. A staging failure (CF handle missing — effectively
     /// unreachable) is recorded as a lost entry rather than silently skipped.
-    fn apply(&mut self, entry: WalEntry) {
+    pub(super) fn apply(&mut self, entry: WalEntry) {
         // A clear is a flush barrier, not a batchable entry: it drains the
         // current batch, then range-deletes the shard in its own committed
         // batch. Handled separately so the range bound sees every lower-seq
@@ -612,7 +616,7 @@ impl<S: WriteSink> FlushEngine<S> {
     /// failure records the loss (counters, highest failed
     /// sequence, rate-limited log). Returns the commit result so an explicit
     /// flush can report it to its waiter.
-    fn flush(&mut self) -> std::io::Result<()> {
+    pub(super) fn flush(&mut self) -> std::io::Result<()> {
         if self.sink.staged_len() == 0 {
             return Ok(());
         }
@@ -743,6 +747,13 @@ pub(super) fn flush_thread_loop<S: WriteSink>(
                 // open group keeps draining past the threshold: the batch is
                 // already uncommittable, and stopping here would only park the
                 // group's tail in the channel until the next timeout.
+                //
+                // The `in_group()` disjunct is a latency term only, which is why
+                // no test can kill a mutant that weakens it to `&&`: mid-group
+                // flushing is already suppressed in `should_flush`, and the
+                // disconnect arm drains whatever is left, so dropping the
+                // disjunct changes how many channel round-trips a group costs,
+                // never which entries share a batch.
                 while engine.in_group() || engine.staged_size() < batch_size_threshold {
                     match rx.try_recv() {
                         Ok(WalCommand::Write(e)) => engine.apply(e),

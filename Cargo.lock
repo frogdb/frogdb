@@ -1786,6 +1786,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

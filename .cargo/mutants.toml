@@ -21,9 +21,22 @@ exclude_globs = [
 # Never mutate observability plumbing: a survivor there is noise, not a
 # correctness gap. Patterns match cargo-mutants' mutant names, which use
 # fully-qualified forms like `<impl std::fmt::Display for X>::fmt` and
-# `Type::record_outcome`.
+# `Type::record_gauge`.
+#
+# The metric sinks are named individually rather than as a `::record_` prefix:
+# that prefix also swallowed real state machines whose method names happen to
+# start the same way — `FlushOutcomes::record_success` (the committed-vs-synced
+# watermark split, FM-PERSISTENCE-043), `SnapshotStats::record_failure`
+# (FM-PERSISTENCE-022), `RocksStore::record_wal_watermark` (FM-PERSISTENCE-035),
+# `FailureDetector::record_success`. Excluding those is not noise reduction, it
+# is a blind spot in the middle of the specced behavior.
 exclude_re = [
-    "::record_",
+    # `CfTier::label` exists only to name the tier in two `error!` fields; no
+    # caller branches on it.
+    "CfTier::label",
+    "::record_gauge",
+    "::record_histogram",
+    "::record_command_latency_ms",
     "::metric_label",
     "impl std::fmt::Debug",
     "impl std::fmt::Display",

@@ -318,6 +318,46 @@ mod tests {
         assert_eq!(count_persisted_shards(&[]), 0);
     }
 
+    // FM-PERSISTENCE-031
+    /// Warm-tier *detection* has the same shape as the shard count: exact
+    /// `tiered_warm_<digits>`. A family that only looks warm — the bare prefix,
+    /// or a non-numeric suffix — must not trip the mismatch guard, or a
+    /// database with an unrelated `tiered_warm_meta` family could never be
+    /// opened warm-off. And a persisted set with no `default` must not have one
+    /// invented for it: opening a column family that is not there fails the
+    /// open.
+    #[test]
+    fn warm_detection_needs_a_numeric_suffix_and_default_is_not_invented() {
+        let existing = svec(&[
+            "shard_0",
+            "shard_1",
+            "tiered_warm_",
+            "tiered_warm_meta",
+            "search_meta_0",
+            "search_meta_1",
+        ]);
+        let m = ColumnFamilyManifest::reconcile("/db", &existing, 2, false).unwrap();
+        assert!(
+            m.warm_names().is_empty(),
+            "neither name is a warm data family"
+        );
+        assert_eq!(
+            m.required().collect::<Vec<_>>(),
+            ["shard_0", "shard_1", "search_meta_0", "search_meta_1"],
+            "no persisted `default` means none in the open list"
+        );
+
+        // The same list plus one genuinely warm family does trip the guard, so
+        // the assertion above is about the suffix and not about the guard being
+        // dead.
+        let mut with_real = existing.clone();
+        with_real.push("tiered_warm_0".to_string());
+        assert!(matches!(
+            ColumnFamilyManifest::reconcile("/db", &with_real, 2, false),
+            Err(RocksError::WarmTierMismatch { .. })
+        ));
+    }
+
     fn svec(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
     }

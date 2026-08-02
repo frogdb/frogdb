@@ -41,11 +41,21 @@ pub struct DatasetEntry {
 /// Append one entry to a dataset blob.
 pub fn append_entry(out: &mut Vec<u8>, key: &[u8], value: &Value, metadata: &KeyMetadata) {
     let entry = serialize(value, metadata);
-    out.reserve(8 + key.len() + entry.len());
+    // Two u32 length prefixes plus the two byte runs. Reserving is only a hint,
+    // so a wrong figure here is invisible at runtime; asserting it against what
+    // was actually appended keeps the figure honest as the framing changes.
+    let framed_len = 8 + key.len() + entry.len();
+    out.reserve(framed_len);
+    let before = out.len();
     out.extend_from_slice(&(key.len() as u32).to_le_bytes());
     out.extend_from_slice(key);
     out.extend_from_slice(&(entry.len() as u32).to_le_bytes());
     out.extend_from_slice(&entry);
+    debug_assert_eq!(
+        out.len() - before,
+        framed_len,
+        "the reservation must match the framed entry"
+    );
 }
 
 /// Read a dataset blob back into its entries.
@@ -149,11 +159,19 @@ mod tests {
     #[test]
     fn truncated_blob_is_an_error() {
         let blob = entry_blob(&[("a", "1", None), ("b", "2", None)]);
-        for cut in [1, 3, 7, blob.len() - 1] {
+        // `4` is the boundary case: the length prefix ends exactly at the end
+        // of the buffer, so the header itself is intact and it is the *chunk*
+        // that is missing.
+        for cut in [1, 3, 4, 7, blob.len() - 1] {
             let err = read_entries(&blob[..cut]).expect_err("truncation must not decode");
+            let SerializationError::Truncated { expected, actual } = err else {
+                panic!("cut {cut}: unexpected error {err:?}");
+            };
+            assert_eq!(actual, cut, "cut {cut}: the error names the bytes it had");
             assert!(
-                matches!(err, SerializationError::Truncated { .. }),
-                "cut {cut}: unexpected error {err:?}"
+                expected > actual,
+                "cut {cut}: a truncation must need *more* bytes than it has, got \
+                 expected={expected} actual={actual}"
             );
         }
     }

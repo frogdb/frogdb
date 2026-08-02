@@ -488,4 +488,42 @@ mod tests {
         assert!(rocks.get_warm(0, b"dup").unwrap().is_none());
         assert!(rocks.get_warm(0, b"warm_expired").unwrap().is_none());
     }
+
+    // FM-PERSISTENCE-033
+    /// An undecodable value is counted, not fatal — and counted on *both*
+    /// tiers, since a tiered deployment can have bit-rot in either column
+    /// family. `bytes_loaded` is asserted exactly because it is the only
+    /// evidence the corrupt bytes were read at all: a counter that never
+    /// accumulates would make a scan of unreadable data look like a scan of an
+    /// empty database.
+    #[test]
+    fn undecodable_values_are_counted_on_both_tiers() {
+        let tmp = TempDir::new().unwrap();
+        let rocks =
+            RocksStore::open_with_warm(tmp.path(), 1, &RocksConfig::default(), true).unwrap();
+
+        let good = serialize(&Value::string("readable"), &KeyMetadata::new(8));
+        rocks.put(0, b"good", &good).unwrap();
+        // Not a serialized value: too short to even carry a header.
+        rocks.put(0, b"hot_rot", b"garbage").unwrap();
+        rocks.put_warm(0, b"warm_rot", b"also garbage").unwrap();
+
+        let mut sink = MockSink::default();
+        let mut stats = recover_shard_into(&rocks, 0, &mut sink).unwrap();
+        assert_eq!(stats.keys_loaded, 1, "the one good key survives");
+        assert_eq!(stats.keys_failed, 1, "the hot-tier corruption is counted");
+        assert_eq!(
+            stats.bytes_loaded,
+            (good.len() + b"garbage".len()) as u64,
+            "every byte the hot scan read is accounted for, corrupt ones included"
+        );
+
+        recover_warm_shard_into(&rocks, 0, &mut sink, &mut stats).unwrap();
+        assert_eq!(
+            stats.keys_failed, 2,
+            "the warm-tier corruption adds to the same counter"
+        );
+        assert_eq!(stats.warm_keys_loaded, 0);
+        assert_eq!(sink.hot.len(), 1, "recovery continued past both bad values");
+    }
 }

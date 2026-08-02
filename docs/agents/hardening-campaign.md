@@ -10,20 +10,29 @@ rationale: `.scratch/hardening/` (specs, issues, metrics).
 |---|---|---|
 | 0 | Enablement (freeze, gating, recipes, frogdb-net) | **done** (2026-07-31) |
 | 1 | Transactions / VLL | **LOCKED** (2026-08-01) — mutation gate 90%, both crates at 100% |
-| 2 | Persistence / recovery | pending — next |
-| 3 | Replication runtime | pending |
+| 2 | Persistence / recovery | **LOCKED** (2026-08-02) — mutation gate 85%, frogdb-persistence 99.1%, frogdb-recovery 100% |
+| 3 | Replication runtime | pending — next |
 | 4 | Cluster runtime | pending |
 
 Each area goes through: **extract → failure-mode spec → close known bugs → mutation-test →
 fill gaps → lock**. Areas are strictly serial, one PR per step.
 
-**Locked area rules (txn: frogdb-txn + frogdb-vll):** the failure-mode specs
-(`.scratch/hardening/specs/{txn,vll}-failure-modes.md`, header `Status: LOCKED`) are the
-contract — behavior changes there are spec-first, and `just lint-failure-modes` enforces
-spec↔test agreement on every commit. Before pushing changes that touch a locked crate, run
-`just mutants-diff <crate>` (CI is manual-only, so this is a push-discipline rule, not a CI
-gate; full runs: `just mutants <crate>` + `just mutants-gate <crate> 0.90`). Boundary ADR:
-`docs/adr/0002-txn-orchestration-behind-txnhost-seam.md`.
+**Locked area rules.** Locked crates so far: **txn** — `frogdb-txn` + `frogdb-vll` (gate
+`0.90`) — and **persistence** — `frogdb-persistence` + `frogdb-recovery` (gate `0.85`). The
+failure-mode specs (`.scratch/hardening/specs/{txn,vll,persistence}-failure-modes.md`, header
+`Status: LOCKED`) are the contract — behavior changes there are spec-first, and
+`just lint-failure-modes` enforces spec↔test agreement on every commit. Before pushing changes
+that touch a locked crate, run `just mutants-diff <crate>` (CI is manual-only, so this is a
+push-discipline rule, not a CI gate; full runs: `just mutants <crate>` +
+`just mutants-gate <crate> <the crate's gate>`). Boundary ADRs:
+`docs/adr/0002-txn-orchestration-behind-txnhost-seam.md`,
+`docs/adr/0003-persistence-durability-seams.md`.
+
+A surviving mutant that no test can kill is documented *at the code*, with a comment saying why
+the mutation is unobservable — never with a blanket skip. The persistence lock carries five such
+equivalents (RocksDB option knobs whose two forms produce identical reads, a match arm that is
+redundant with its own fallback, a `NoopSnapshotCoordinator` accessor with no state to report,
+and a drain-loop disjunct that costs channel round-trips rather than batch contents).
 
 ## Out of scope — do not touch during the campaign
 

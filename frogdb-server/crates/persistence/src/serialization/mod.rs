@@ -108,6 +108,11 @@ pub(crate) fn build_frame(marker: TypeMarker, metadata: &KeyMetadata, payload: &
     // Payload
     result.extend_from_slice(payload);
 
+    debug_assert_eq!(
+        result.len(),
+        HEADER_SIZE + payload.len(),
+        "every persisted frame is exactly the fixed header plus its payload"
+    );
     result
 }
 
@@ -634,5 +639,93 @@ mod unit_tests {
         let hll2 = value2.as_hyperloglog().unwrap();
         assert!(hll2.is_sparse());
         assert_eq!(hll2.count_no_cache(), 0);
+    }
+
+    /// `safe_capacity` is the only thing standing between a hostile length
+    /// prefix and a multi-gigabyte `Vec::with_capacity`, so its arithmetic is
+    /// asserted directly rather than inferred from the decoders that call it.
+    /// The contract: never more than `count`, and never more elements than the
+    /// remaining bytes could possibly hold.
+    #[test]
+    fn safe_capacity_is_bounded_by_what_the_remaining_bytes_can_hold() {
+        // Believable count: returned as-is.
+        assert_eq!(safe_capacity(3, 8, 1024), 3);
+        // Hostile count: clamped to `available / min_element`, not honoured.
+        assert_eq!(safe_capacity(usize::MAX, 8, 80), 10);
+        // The clamp is a floor division — a partial trailing element does not
+        // buy capacity for a whole one.
+        assert_eq!(safe_capacity(100, 8, 79), 9);
+        // Not enough bytes for a single element: allocate nothing.
+        assert_eq!(safe_capacity(100, 8, 0), 0);
+        // A zero-size element carries no information about how many can fit,
+        // so the count passes through — and, load-bearingly, the division is
+        // never reached with a zero divisor.
+        assert_eq!(safe_capacity(7, 0, 0), 7);
+    }
+
+    /// The header's `payload_len` delimits the value; bytes after it belong to
+    /// whoever framed the buffer. Deserializing a value out of a longer buffer
+    /// must succeed on the delimited prefix rather than treating the surplus as
+    /// evidence of corruption.
+    #[test]
+    fn deserialize_reads_the_delimited_prefix_and_ignores_trailing_bytes() {
+        let value = Value::string("hello");
+        let mut data = serialize(&value, &KeyMetadata::new(5));
+        let exact_len = data.len();
+        data.extend_from_slice(b"trailing garbage nobody asked for");
+
+        let (recovered, _) = deserialize(&data).expect("a longer buffer is not a truncated one");
+        assert_eq!(recovered.as_string().unwrap().as_bytes().as_ref(), b"hello");
+        // And the delimiter really is `payload_len`: the same bytes minus one
+        // are short of the declared payload and must be refused.
+        assert!(matches!(
+            deserialize(&data[..exact_len - 1]),
+            Err(SerializationError::Truncated { .. })
+        ));
+    }
+
+    // FM-PERSISTENCE-036
+    /// The header encodes "no expiry" as `-1`, which makes `0` — the unix epoch,
+    /// and also what `instant_to_unix_ms` returns for any deadline too old to
+    /// represent — a real deadline that has already passed. Decoding it as "no
+    /// expiry" would bring the key back from disk immortal, undoing an
+    /// expiration that had already happened.
+    #[test]
+    fn the_epoch_decodes_as_a_passed_deadline_not_as_never_expires() {
+        let mut data = serialize(&Value::string("x"), &KeyMetadata::new(1));
+        assert_eq!(
+            i64::from_le_bytes(data[2..10].try_into().unwrap()),
+            -1,
+            "the no-expiry sentinel is -1, so 0 is not free to mean the same thing"
+        );
+        let (_, metadata) = deserialize(&data).unwrap();
+        assert!(metadata.expires_at.is_none(), "-1 is 'no expiry'");
+
+        data[2..10].copy_from_slice(&0i64.to_le_bytes());
+        let (_, metadata) = deserialize(&data).unwrap();
+        let expires_at = metadata
+            .expires_at
+            .expect("the epoch is a deadline, not the absence of one");
+        assert!(
+            expires_at <= Instant::now(),
+            "and it is a deadline that has already passed"
+        );
+    }
+
+    /// A `payload_len` larger than the buffer is refused as `Truncated` before
+    /// any slicing happens — the check exists so a bad length prefix cannot
+    /// become an out-of-bounds slice.
+    #[test]
+    fn deserialize_refuses_a_payload_len_past_the_end_of_the_buffer() {
+        let mut data = vec![0u8; HEADER_SIZE + 4];
+        data[0] = 1; // string marker
+        data[16..24].copy_from_slice(&64u64.to_le_bytes()); // claims 64 payload bytes
+        match deserialize(&data) {
+            Err(SerializationError::Truncated { expected, actual }) => {
+                assert_eq!(expected, HEADER_SIZE + 64);
+                assert_eq!(actual, HEADER_SIZE + 4);
+            }
+            other => panic!("expected Truncated, got {other:?}"),
+        }
     }
 }

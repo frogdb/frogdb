@@ -1,6 +1,7 @@
 //! Tests for WAL module.
 use super::flush::{
-    FlushEngine, FlushOutcomes, WalCommand, WalEntry, WalLagAtomics, WriteSink, flush_thread_loop,
+    FlushEngine, FlushOutcomes, RocksSink, WalCommand, WalEntry, WalLagAtomics, WriteSink,
+    current_timestamp_ms, flush_thread_loop,
 };
 use super::*;
 use crate::rocks::RocksConfig;
@@ -1611,4 +1612,732 @@ async fn test_wal_adopts_shared_batch_size_threshold_handle() {
         m,
     );
     assert_eq!(solo.batch_size_threshold(), 2048);
+}
+
+// ============================================================================
+// RocksSink — the production WriteSink, driven directly
+// ============================================================================
+//
+// The engine tests above substitute an in-memory sink, so the production seam's
+// own contract (staging is visible, a commit consumes the batch, and only an
+// fsync'd commit moves the durable-sync watermark) is asserted here against a
+// real store.
+
+/// Staging is observable through `staged_len`, and a commit consumes the batch
+/// whatever its durability — the engine's `staged_len() == 0` early return is
+/// what keeps an empty flush from touching RocksDB at all.
+#[test]
+fn rocks_sink_reports_its_staged_batch_and_a_commit_consumes_it() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap());
+    let mut sink = RocksSink::new(rocks.clone(), 0);
+    assert_eq!(sink.staged_len(), 0, "a fresh sink has nothing staged");
+    sink.stage_put(b"a", b"1").unwrap();
+    assert_eq!(sink.staged_len(), 1);
+    sink.stage_delete(b"b").unwrap();
+    assert_eq!(sink.staged_len(), 2, "every staged op counts, deletes too");
+    sink.commit(false).unwrap();
+    assert_eq!(
+        sink.staged_len(),
+        0,
+        "the batch leaves the sink on commit, success or not"
+    );
+    assert_eq!(rocks.get(0, b"a").unwrap().as_deref(), Some(&b"1"[..]));
+}
+
+// FM-PERSISTENCE-035
+/// Only a `sync = true` commit has fsync'd through its sequence, so only that
+/// commit may advance the persisted durable-sync watermark. Recording it after
+/// an async commit would claim durability the data does not have, and the next
+/// open would read a watermark the WAL cannot reach.
+#[test]
+fn only_a_synced_rocks_sink_commit_records_the_durable_watermark() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap());
+    let mut sink = RocksSink::new(rocks.clone(), 0);
+    let baseline = crate::rocks::wal_watermark::read(rocks.path());
+    assert_eq!(
+        baseline,
+        Some(0),
+        "opening an empty store re-baselines the watermark at sequence 0"
+    );
+
+    sink.stage_put(b"async", b"1").unwrap();
+    sink.commit(false).unwrap();
+    assert!(
+        rocks.latest_sequence_number() > 0,
+        "the async commit did advance the RocksDB sequence"
+    );
+    assert_eq!(
+        crate::rocks::wal_watermark::read(rocks.path()),
+        baseline,
+        "an async commit is not individually durable and must not advance the watermark"
+    );
+
+    sink.stage_put(b"synced", b"2").unwrap();
+    sink.commit(true).unwrap();
+    assert_eq!(
+        crate::rocks::wal_watermark::read(rocks.path()),
+        Some(rocks.latest_sequence_number()),
+        "a synced commit records the sequence its fsync covered"
+    );
+}
+
+/// Merges are staged as RocksDB merge operands, not puts: the folded value the
+/// CF's merge operator produces is what a later read must see. A sink that
+/// silently dropped merge operands would lose every HLL delta.
+#[test]
+fn rocks_sink_stages_merge_operands_that_the_merge_operator_folds() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap());
+    let mut sink = RocksSink::new(rocks.clone(), 0);
+    let md = KeyMetadata::new(0);
+    let first = crate::serialization::serialize_hll_delta(&[(7, 3)], &md);
+    let second = crate::serialization::serialize_hll_delta(&[(11, 5)], &md);
+    sink.stage_merge(b"hll", &first).unwrap();
+    sink.stage_merge(b"hll", &second).unwrap();
+    sink.commit(true).unwrap();
+
+    let stored = rocks
+        .get(0, b"hll")
+        .unwrap()
+        .expect("the merged value must exist");
+    assert_eq!(
+        stored,
+        crate::serialization::merge_hll_serialized(None, &[&first, &second]).unwrap(),
+        "the stored value is both operands folded in order"
+    );
+}
+
+/// `current_timestamp_ms` stamps `last_flush_timestamp_ms`, which operators read
+/// as "when did this shard last flush". It must be wall-clock milliseconds since
+/// the unix epoch — a constant would make every shard look permanently stale (or
+/// permanently fresh) to the staleness math built on it.
+#[test]
+fn current_timestamp_ms_is_wall_clock_millis_since_the_epoch() {
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let before = now();
+    let stamped = current_timestamp_ms();
+    let after = now();
+    assert!(
+        before <= stamped && stamped <= after,
+        "expected {before} <= {stamped} <= {after}"
+    );
+}
+
+/// The batch timeout is a real elapsed-time trigger, not a formality: a partial
+/// batch that has been waiting longer than the timeout must meet the trigger the
+/// next time the engine evaluates it, even though it is nowhere near the size
+/// threshold. Driven on the engine directly because the flush thread's own
+/// `recv_timeout` arm would cut the batch anyway, hiding whether this trigger
+/// works at all.
+#[test]
+fn a_partial_batch_older_than_the_timeout_meets_the_flush_trigger() {
+    let mut engine = FlushEngine::new(
+        TestSink {
+            staged: Vec::new(),
+            committed: Arc::new(Mutex::new(Vec::new())),
+            fail_commits: Arc::new(AtomicUsize::new(0)),
+            fail_stages: Arc::new(AtomicUsize::new(0)),
+        },
+        0,
+        &DurabilityMode::Async,
+        Arc::new(WalLagAtomics {
+            pending_ops: AtomicUsize::new(0),
+            pending_bytes: AtomicUsize::new(0),
+            last_flush_timestamp_ms: AtomicU64::new(0),
+        }),
+        Arc::new(FlushOutcomes::new()),
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+    engine.apply(WalEntry::Put {
+        seq: 1,
+        key: Bytes::from_static(b"k"),
+        value: vec![0u8; 8],
+        size_estimate: 8,
+    });
+    assert!(
+        !engine.should_flush(1024 * 1024, Duration::from_secs(3600)),
+        "a young batch far under the threshold must keep batching"
+    );
+    let waited = Duration::from_millis(30);
+    std::thread::sleep(waited);
+    assert!(
+        engine.since_last_flush() >= waited,
+        "elapsed time must be measured, not assumed"
+    );
+    assert!(
+        engine.should_flush(1024 * 1024, Duration::from_millis(5)),
+        "a batch older than the timeout is cut even though it is under the threshold"
+    );
+}
+
+/// `confirm_durable_through`'s last line of defense: an `Ok` flush with no
+/// overlapping recorded failure must still not confirm a sequence the engine
+/// never committed. Getting the comparison backwards would turn the check into
+/// its own opposite — silently confirming exactly the unconfirmable case.
+#[test]
+fn a_committed_sequence_below_the_target_is_refused_even_after_an_ok_flush() {
+    let outcomes = FlushOutcomes::new();
+    let err = outcomes
+        .confirm_durable_through(0, 5, Ok(()))
+        .expect_err("committed 0 cannot confirm target 5");
+    assert!(
+        err.to_string().contains("below confirmation target 5"),
+        "unexpected error: {err}"
+    );
+    // Reaching the target confirms; overshooting it confirms too.
+    outcomes.record_success(5, false);
+    outcomes.confirm_durable_through(0, 5, Ok(())).unwrap();
+    outcomes.confirm_durable_through(0, 4, Ok(())).unwrap();
+}
+
+/// `RocksStore::durable_sync` reads each registered target's committed sequence
+/// and publishes it back as that target's synced sequence, so a
+/// `DurableSyncTarget` that misreported its committed sequence would publish a
+/// durability claim for the wrong point in the log.
+#[test]
+fn durable_sync_publishes_the_targets_own_committed_sequence() {
+    let tmp = TempDir::new().unwrap();
+    let rocks = crate::rocks::RocksStore::open(tmp.path(), 1, &RocksConfig::default()).unwrap();
+    let outcomes = Arc::new(FlushOutcomes::new());
+    outcomes.record_success(7, false);
+    assert_eq!(
+        outcomes.durable_sequence(),
+        0,
+        "an async commit is committed, not synced"
+    );
+    let target: Arc<dyn crate::rocks::DurableSyncTarget> = outcomes.clone();
+    rocks.register_sync_target(&target);
+    rocks.durable_sync().unwrap();
+    assert_eq!(
+        outcomes.durable_sequence(),
+        7,
+        "the out-of-band sync publishes exactly what the target had committed"
+    );
+}
+
+// ============================================================================
+// RocksWalWriter — the enqueue half
+// ============================================================================
+
+/// Poll `cond` until it holds, or fail after `label` never came true. Batching
+/// is handed to a separate thread, so the observable effects of an enqueue are
+/// eventually-consistent with the call that produced them.
+async fn wait_for(label: &str, mut cond: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("timed out waiting for {label}");
+}
+
+fn staging_writer(rocks: Arc<crate::rocks::RocksStore>, shard: usize) -> RocksWalWriter {
+    RocksWalWriter::new(
+        rocks,
+        shard,
+        WalConfig {
+            mode: DurabilityMode::Async,
+            // Huge threshold + far-off timeout: nothing auto-flushes, so what
+            // the enqueue side accounted for stays observable.
+            batch_size_threshold: 100 * 1024 * 1024,
+            batch_timeout_ms: 600_000,
+            ..Default::default()
+        },
+        Arc::new(NoopMetricsRecorder::new()),
+    )
+}
+
+/// Every enqueue assigns the next sequence (1-based) and charges the pending
+/// gauges the bytes its entry will occupy. `pending_bytes` is what the
+/// size-threshold trigger and the `wal_pending_bytes` metric are computed from,
+/// so an estimate that is off by a factor or a term retunes batching and
+/// misreports lag at the same time.
+#[tokio::test]
+async fn each_enqueue_assigns_the_next_sequence_and_charges_its_own_size() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let wal = staging_writer(rocks, 0);
+    let md = KeyMetadata::new(1);
+
+    let value = Value::string("v1");
+    assert_eq!(wal.write_set(b"k1", &value, &md).await.unwrap(), 1);
+    let mut expected = b"k1".len() + serialize(&value, &md).len() + 32;
+    wait_for("the set to be staged", || {
+        wal.lag_stats().pending_bytes == expected
+    })
+    .await;
+
+    assert_eq!(wal.write_delete(b"delete-me").await.unwrap(), 2);
+    expected += b"delete-me".len() + 32;
+    wait_for("the delete to be staged", || {
+        wal.lag_stats().pending_bytes == expected
+    })
+    .await;
+
+    assert_eq!(wal.write_merge(b"hll", &[(7, 3)], &md).await.unwrap(), 3);
+    expected += b"hll".len() + crate::serialization::serialize_hll_delta(&[(7, 3)], &md).len() + 32;
+    wait_for("the merge to be staged", || {
+        wal.lag_stats().pending_bytes == expected
+    })
+    .await;
+
+    let stats = wal.lag_stats();
+    assert_eq!(stats.pending_ops, 3, "three entries are buffered");
+    assert_eq!(stats.sequence, 3, "the writer assigned three sequences");
+
+    // A clear takes the next sequence like any other entry, but it is a flush
+    // barrier: it drains everything staged before it rather than joining the
+    // batch, so the pending gauges fall to zero behind it.
+    assert_eq!(wal.write_clear().await.unwrap(), 4);
+    wait_for("the clear barrier to drain the buffer", || {
+        wal.lag_stats().pending_ops == 0
+    })
+    .await;
+    assert_eq!(wal.lag_stats().pending_bytes, 0);
+}
+
+/// A merge enqueued through the writer must reach the store as a merge operand
+/// the CF's operator folds — the on-disk half of `PFADD`'s durability.
+#[tokio::test]
+async fn a_merge_enqueued_through_the_writer_lands_folded() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let wal = staging_writer(rocks.clone(), 0);
+    let md = KeyMetadata::new(1);
+    assert_eq!(wal.write_merge(b"hll", &[(7, 3)], &md).await.unwrap(), 1);
+    wal.flush_async().await.unwrap();
+    let stored = rocks
+        .get(0, b"hll")
+        .unwrap()
+        .expect("the merged value must be on disk");
+    assert_eq!(
+        stored,
+        crate::serialization::merge_hll_serialized(
+            None,
+            &[&crate::serialization::serialize_hll_delta(&[(7, 3)], &md)]
+        )
+        .unwrap()
+    );
+}
+
+// FM-PERSISTENCE-001
+/// The group markers are what make a multi-key command atomic in storage. With
+/// the threshold at one byte every write would otherwise be cut into its own
+/// batch; inside a group nothing may commit until the group closes.
+#[tokio::test]
+async fn a_writer_group_suppresses_the_size_trigger_until_it_closes() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let wal = RocksWalWriter::new(
+        rocks.clone(),
+        0,
+        WalConfig {
+            mode: DurabilityMode::Async,
+            // One byte: every ungrouped write trips the size trigger at once.
+            batch_size_threshold: 1,
+            batch_timeout_ms: 600_000,
+            ..Default::default()
+        },
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+    let md = KeyMetadata::new(1);
+
+    wal.begin_group().await.unwrap();
+    wal.write_set(b"g1", &Value::string("a"), &md)
+        .await
+        .unwrap();
+    wal.write_set(b"g2", &Value::string("b"), &md)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        rocks.get(0, b"g1").unwrap().is_none() && rocks.get(0, b"g2").unwrap().is_none(),
+        "an open group must hold both writes back despite the 1-byte threshold"
+    );
+
+    wal.end_group().await.unwrap();
+    wait_for("the closed group to commit", || {
+        rocks.get(0, b"g1").unwrap().is_some()
+    })
+    .await;
+    assert!(
+        rocks.get(0, b"g2").unwrap().is_some(),
+        "the group commits as one batch, not one key at a time"
+    );
+}
+
+/// `flush_through` is the acknowledge path: it must actually drain the buffer
+/// before confirming, or a client would be told its write is durable while it
+/// sits in the flush thread's queue.
+#[tokio::test]
+async fn flush_through_drains_the_buffer_before_it_confirms() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let wal = staging_writer(rocks.clone(), 0);
+    let md = KeyMetadata::new(1);
+    let after = wal.sequence();
+    wal.write_set(b"acked", &Value::string("v"), &md)
+        .await
+        .unwrap();
+    wal.flush_through(after).await.unwrap();
+    assert!(
+        rocks.get(0, b"acked").unwrap().is_some(),
+        "the confirmed write must be in the store by the time flush_through returns"
+    );
+    assert_eq!(wal.lag_stats().pending_ops, 0, "the buffer was drained");
+}
+
+/// The writer's sequence accessors are the ones `INFO persistence` and the
+/// replication acknowledgement path read. In `sync` mode a committed batch is
+/// also an fsynced one, so both watermarks land on the last sequence written —
+/// and each writer reports the shard it was built for.
+#[tokio::test]
+async fn sync_mode_accessors_report_the_writers_own_shard_and_watermarks() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
+    let wal = RocksWalWriter::new(
+        rocks,
+        2,
+        WalConfig {
+            mode: DurabilityMode::Sync,
+            ..Default::default()
+        },
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+    assert_eq!(wal.shard_id(), 2, "the writer reports its own shard");
+    let md = KeyMetadata::new(1);
+    wal.write_set(b"s1", &Value::string("a"), &md)
+        .await
+        .unwrap();
+    wal.write_set(b"s2", &Value::string("b"), &md)
+        .await
+        .unwrap();
+    wal.flush_async().await.unwrap();
+    assert_eq!(wal.sequence(), 2);
+    assert_eq!(
+        wal.committed_sequence(),
+        2,
+        "both entries reached storage together"
+    );
+    assert_eq!(
+        wal.durable_sequence(),
+        2,
+        "a sync-mode commit is fsynced, so the durable watermark follows it"
+    );
+}
+
+// ============================================================================
+// Flush-thread batching boundary and failure logging
+// ============================================================================
+
+/// Pre-load every command into the channel *before* the flush thread starts, so
+/// the opportunistic drain loop sees a full queue and its stopping condition is
+/// deterministic rather than a race with the producer.
+fn run_preloaded(
+    cmds: Vec<WalCommand>,
+    batch_size_threshold: usize,
+) -> (Vec<Vec<TestOp>>, Arc<FlushOutcomes>) {
+    let committed = Arc::new(Mutex::new(Vec::new()));
+    let sink = TestSink {
+        staged: Vec::new(),
+        committed: Arc::clone(&committed),
+        fail_commits: Arc::new(AtomicUsize::new(0)),
+        fail_stages: Arc::new(AtomicUsize::new(0)),
+    };
+    let outcomes = Arc::new(FlushOutcomes::new());
+    let engine = FlushEngine::new(
+        sink,
+        0,
+        &DurabilityMode::Async,
+        Arc::new(WalLagAtomics {
+            pending_ops: AtomicUsize::new(0),
+            pending_bytes: AtomicUsize::new(0),
+            last_flush_timestamp_ms: AtomicU64::new(0),
+        }),
+        Arc::clone(&outcomes),
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+    let (tx, rx) = flume::bounded(64);
+    for cmd in cmds {
+        tx.send(cmd).unwrap();
+    }
+    drop(tx); // the loop drains, then commits whatever is left, then returns
+    let handle = std::thread::spawn(move || {
+        flush_thread_loop(
+            rx,
+            engine,
+            Arc::new(AtomicUsize::new(batch_size_threshold)),
+            // Long enough that the timeout trigger never participates.
+            Duration::from_secs(3600),
+        );
+    });
+    handle.join().unwrap();
+    let batches = committed.lock().unwrap().clone();
+    (batches, outcomes)
+}
+
+// FM-PERSISTENCE-001
+/// The drain loop packs queued entries into the current batch *until* the batch
+/// reaches the size threshold — not one past it, and not one entry per batch.
+/// The boundary is exact: with four equal entries and a threshold of three, the
+/// first committed batch holds exactly three.
+#[test]
+fn the_drain_loop_stops_packing_exactly_at_the_size_threshold() {
+    let entry = |seq: u64, key: &'static [u8]| {
+        WalCommand::Write(WalEntry::Put {
+            seq,
+            key: Bytes::from_static(key),
+            value: vec![0u8; 10],
+            size_estimate: 10,
+        })
+    };
+    let (batches, _) = run_preloaded(
+        vec![
+            entry(1, b"a"),
+            entry(2, b"b"),
+            entry(3, b"c"),
+            entry(4, b"d"),
+        ],
+        30,
+    );
+    let sizes: Vec<usize> = batches.iter().map(|b| b.len()).collect();
+    assert_eq!(
+        sizes,
+        vec![3, 1],
+        "three entries fill the threshold exactly; the fourth waits for the next batch"
+    );
+}
+
+// FM-PERSISTENCE-001
+/// An entry that on its own overshoots the threshold *ends* its batch. The
+/// drain condition packs while the batch is still under the limit, so flipping
+/// it to "while over the limit" is not a harmless swap: it would turn every
+/// oversized write into a magnet that pulls the whole queue into one batch.
+#[test]
+fn an_oversized_entry_closes_its_batch_instead_of_pulling_the_queue_in() {
+    let entry = |seq: u64, key: &'static [u8]| {
+        WalCommand::Write(WalEntry::Put {
+            seq,
+            key: Bytes::from_static(key),
+            value: vec![0u8; 100],
+            size_estimate: 100,
+        })
+    };
+    let (batches, _) = run_preloaded(
+        vec![
+            entry(1, b"a"),
+            entry(2, b"b"),
+            entry(3, b"c"),
+            entry(4, b"d"),
+        ],
+        30,
+    );
+    let sizes: Vec<usize> = batches.iter().map(|b| b.len()).collect();
+    assert_eq!(
+        sizes,
+        vec![1, 1, 1, 1],
+        "each entry is already over the threshold, so none of them drains the next in"
+    );
+}
+
+/// Flush failures can recur every batch timeout, so only the first in each
+/// interval is logged at full severity — but that first one must be logged, and
+/// the ones it suppresses must still be visible at `DEBUG`. Driven on the engine
+/// directly: the capturing subscriber is thread-local, and the flush thread is
+/// not this thread.
+#[test]
+fn repeated_flush_failures_log_once_at_error_and_then_at_debug() {
+    #[derive(Clone, Default)]
+    struct LevelCapture(Arc<Mutex<Vec<tracing::Level>>>);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LevelCapture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            self.0.lock().unwrap().push(*event.metadata().level());
+        }
+    }
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let capture = LevelCapture::default();
+    let fail_commits = Arc::new(AtomicUsize::new(2));
+    let mut engine = FlushEngine::new(
+        TestSink {
+            staged: Vec::new(),
+            committed: Arc::new(Mutex::new(Vec::new())),
+            fail_commits: Arc::clone(&fail_commits),
+            fail_stages: Arc::new(AtomicUsize::new(0)),
+        },
+        0,
+        &DurabilityMode::Async,
+        Arc::new(WalLagAtomics {
+            pending_ops: AtomicUsize::new(0),
+            pending_bytes: AtomicUsize::new(0),
+            last_flush_timestamp_ms: AtomicU64::new(0),
+        }),
+        Arc::new(FlushOutcomes::new()),
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+    let put = |seq: u64| WalEntry::Put {
+        seq,
+        key: Bytes::from_static(b"k"),
+        value: vec![0u8; 4],
+        size_estimate: 4,
+    };
+    {
+        let _guard =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(capture.clone()));
+        engine.apply(put(1));
+        assert!(engine.flush().is_err(), "the first commit was made to fail");
+        engine.apply(put(2));
+        assert!(engine.flush().is_err(), "and so was the second");
+    }
+    let levels = capture.0.lock().unwrap().clone();
+    assert_eq!(
+        levels
+            .iter()
+            .filter(|l| **l == tracing::Level::ERROR)
+            .count(),
+        1,
+        "the first failure is logged loudly, the second is rate-limited: {levels:?}"
+    );
+    assert!(
+        levels.contains(&tracing::Level::DEBUG),
+        "the suppressed failure is still recorded at DEBUG: {levels:?}"
+    );
+}
+
+/// Everything the shard task touches goes through `dyn WalSink`, so the trait
+/// impl's delegation is itself load-bearing: a method that answered from thin
+/// air instead of forwarding would be invisible to every test that holds the
+/// concrete writer.
+#[tokio::test]
+async fn the_wal_sink_trait_object_forwards_every_method_to_the_writer() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 4, &RocksConfig::default()).unwrap());
+    let writer = Arc::new(RocksWalWriter::new(
+        rocks.clone(),
+        2,
+        WalConfig {
+            mode: DurabilityMode::Sync,
+            batch_size_threshold: 100 * 1024 * 1024,
+            batch_timeout_ms: 600_000,
+            ..Default::default()
+        },
+        Arc::new(NoopMetricsRecorder::new()),
+    ));
+    let sink: Arc<dyn WalSink> = writer.clone();
+    let md = KeyMetadata::new(1);
+
+    assert_eq!(sink.shard_id(), 2);
+    assert_eq!(sink.sequence(), 0);
+
+    // A group's writes travel the same channel and commit together.
+    sink.begin_group().await.unwrap();
+    assert_eq!(
+        sink.write_set(b"t1", &Value::string("a"), &md)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(sink.write_merge(b"hll", &[(7, 3)], &md).await.unwrap(), 2);
+    assert_eq!(sink.write_delete(b"t1").await.unwrap(), 3);
+    sink.end_group().await.unwrap();
+    assert_eq!(sink.sequence(), 3, "three sequences were assigned");
+
+    sink.flush_async().await.unwrap();
+    assert!(
+        rocks.get(2, b"t1").unwrap().is_none(),
+        "the delete inside the group landed with it"
+    );
+    assert!(
+        rocks.get(2, b"hll").unwrap().is_some(),
+        "the merge inside the group landed too"
+    );
+    assert_eq!(
+        sink.durable_sequence(),
+        3,
+        "sync mode fsyncs what it commits"
+    );
+
+    // `flush_through` confirms the range written after the captured sequence.
+    let after = sink.sequence();
+    assert_eq!(sink.write_clear().await.unwrap(), 4);
+    sink.flush_through(after).await.unwrap();
+    assert!(
+        rocks.get(2, b"hll").unwrap().is_none(),
+        "the clear that flush_through confirmed really ran"
+    );
+    let stats = sink.lag_stats();
+    assert_eq!(stats.shard_id, 2);
+    assert_eq!(stats.sequence, 4);
+}
+
+// FM-PERSISTENCE-001
+/// The group markers only *do* anything if the trait impl forwards them, and a
+/// trait method that answered `Ok(())` without forwarding is invisible under a
+/// generous batch threshold — everything lands anyway at the closing flush.
+/// Pinned at a one-byte threshold instead: the open group is the only thing
+/// holding the two writes back, and the close is the only thing releasing them.
+#[tokio::test]
+async fn the_trait_objects_group_markers_reach_the_writer() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+    let writer = Arc::new(RocksWalWriter::new(
+        rocks.clone(),
+        0,
+        WalConfig {
+            mode: DurabilityMode::Async,
+            batch_size_threshold: 1,
+            batch_timeout_ms: 600_000,
+            ..Default::default()
+        },
+        Arc::new(NoopMetricsRecorder::new()),
+    ));
+    let sink: Arc<dyn WalSink> = writer.clone();
+    let md = KeyMetadata::new(1);
+
+    sink.begin_group().await.unwrap();
+    sink.write_set(b"tg1", &Value::string("a"), &md)
+        .await
+        .unwrap();
+    sink.write_set(b"tg2", &Value::string("b"), &md)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        rocks.get(0, b"tg1").unwrap().is_none() && rocks.get(0, b"tg2").unwrap().is_none(),
+        "a group opened through the trait object must hold both writes back"
+    );
+
+    sink.end_group().await.unwrap();
+    wait_for(
+        "the group closed through the trait object to commit",
+        || rocks.get(0, b"tg1").unwrap().is_some(),
+    )
+    .await;
+    assert!(
+        rocks.get(0, b"tg2").unwrap().is_some(),
+        "the group commits as one batch, not one key at a time"
+    );
 }

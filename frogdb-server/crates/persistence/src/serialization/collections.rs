@@ -22,6 +22,16 @@ pub(super) fn serialize_sorted_set(zset: &SortedSetValue) -> (TypeMarker, Vec<u8
         payload.extend_from_slice(&member);
     }
 
+    // The pre-size is only a `Vec::with_capacity` hint, so a wrong formula is
+    // invisible in release — the vector reallocs and the bytes come out the same.
+    // Asserting it makes the formula part of the contract the round-trip tests
+    // already exercise, instead of a comment that silently rots when the wire
+    // format gains a field.
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::SortedSet, payload)
 }
 
@@ -49,6 +59,11 @@ pub(super) fn serialize_hash(hash: &HashValue) -> (TypeMarker, Vec<u8>) {
         payload.extend_from_slice(&value);
     }
 
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::Hash, payload)
 }
 
@@ -87,6 +102,11 @@ pub(super) fn serialize_hash_with_field_expiry(hash: &HashValue) -> (TypeMarker,
         }
     }
 
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::HashWithFieldExpiry, payload)
 }
 
@@ -109,6 +129,11 @@ pub(super) fn serialize_list(list: &ListValue) -> (TypeMarker, Vec<u8>) {
         payload.extend_from_slice(&elem);
     }
 
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::List, payload)
 }
 
@@ -131,6 +156,11 @@ pub(super) fn serialize_set(set: &SetValue) -> (TypeMarker, Vec<u8>) {
         payload.extend_from_slice(&member);
     }
 
+    debug_assert_eq!(
+        payload.len(),
+        payload_size,
+        "pre-sized payload does not match the bytes written"
+    );
     (TypeMarker::Set, payload)
 }
 
