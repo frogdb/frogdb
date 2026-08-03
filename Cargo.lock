@@ -1625,6 +1625,7 @@ dependencies = [
 name = "frogdb-cluster"
 version = "0.1.0"
 dependencies = [
+ "frogdb-protocol",
  "futures",
  "openraft",
  "parking_lot",

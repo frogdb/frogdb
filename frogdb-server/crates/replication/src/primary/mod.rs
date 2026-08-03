@@ -34,7 +34,7 @@ use crate::tracker::ReplicationTrackerImpl;
 use crate::wait_coordinator::WaitCoordinator;
 
 pub use replay::{BacklogTtl, FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
-pub use ring_buffer::{BacklogConfig, ReplicationRingBuffer};
+pub use ring_buffer::{BacklogConfig, BacklogTruncated, ReplicationRingBuffer};
 
 /// Injected work that must complete before a `FULLRESYNC` checkpoint is cut.
 ///

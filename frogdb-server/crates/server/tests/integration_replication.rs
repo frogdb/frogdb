@@ -960,13 +960,83 @@ async fn test_large_value_replication(#[case] persistence: bool) {
 
     // Verify on replica
     let get_response = replica.send("GET", &["large_key"]).await;
-    if let Response::Bulk(Some(value)) = get_response {
-        assert_eq!(
-            value.len(),
-            large_value.len(),
-            "Large value should be fully replicated"
-        );
-    }
+    let Response::Bulk(Some(value)) = &get_response else {
+        panic!("replica must serve the replicated value, got: {get_response:?}");
+    };
+    assert_eq!(
+        value.len(),
+        large_value.len(),
+        "Large value should be fully replicated"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// FM-REPLICATION-011
+/// A value the connection layer accepts crosses the replication link.
+///
+/// The one-time proof of round-2 issue 69: the frame codec used to cap a
+/// payload at 64 MB while the connection layer accepted 512 MB, so a `SET` in
+/// between was committed on the primary and then emitted as a frame the
+/// replica's decoder refused — the link dropped, the backlog re-sent the same
+/// frame on reconnect, and it never recovered. 70 MB is inside the old gap, so
+/// this fails as a hang (`WAIT` never acks) and then as a wedge
+/// (`master_link_status` flapping) against the pre-fix codec.
+///
+/// In-memory only, and a single case rather than the persistence matrix: the
+/// wedge is a wire-size property, and 70 MB is already the most memory any test
+/// in this file moves.
+#[tokio::test]
+async fn a_value_over_the_old_frame_ceiling_replicates_without_wedging_the_link() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    // Above the 64 MB frame ceiling, below the 512 MB bulk ceiling: the exact
+    // band the two constants used to disagree over.
+    let value = "x".repeat(70 * 1024 * 1024);
+
+    assert_ok(&primary.send("SET", &["wedge_key", &value]).await);
+
+    let acked = wait_for_replication(&primary, 30_000).await;
+    assert_eq!(
+        acked, 1,
+        "the replica must ack a write the connection layer accepted; 0 means the frame never crossed"
+    );
+
+    let get = replica.send("GET", &["wedge_key"]).await;
+    let Response::Bulk(Some(replicated)) = &get else {
+        panic!("replica must serve the replicated value, got: {get:?}");
+    };
+    assert_eq!(
+        replicated.len(),
+        value.len(),
+        "the replicated value must be whole, not truncated by the frame length cast"
+    );
+    assert!(
+        replicated.iter().all(|&b| b == b'x'),
+        "the replicated value must be the bytes that were written"
+    );
+
+    // The wedge is a reconnect storm, not a single dropped frame: the link has
+    // to still be up after the write, and the primary has to still count the
+    // replica.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let replica_info = parse_info_replication(&replica.send("INFO", &["replication"]).await)
+        .expect("INFO replication must parse");
+    assert_eq!(
+        replica_info.get("master_link_status").map(String::as_str),
+        Some("up"),
+        "the link must survive the large frame, got: {replica_info:?}"
+    );
+
+    let primary_info = parse_info_replication(&primary.send("INFO", &["replication"]).await)
+        .expect("INFO replication must parse");
+    assert_eq!(
+        primary_info.get("connected_slaves").map(String::as_str),
+        Some("1"),
+        "the primary must still hold the replica link, got: {primary_info:?}"
+    );
 
     replica.shutdown().await;
     primary.shutdown().await;

@@ -1,4 +1,4 @@
-use crate::primary::ring_buffer::ReplicationRingBuffer;
+use crate::primary::ring_buffer::{BacklogTruncated, ReplicationRingBuffer};
 use bytes::Bytes;
 
 /// Build a primary handler with an enabled split-brain backlog for the
@@ -110,7 +110,10 @@ fn broadcast_gate_stays_open_while_backlog_can_resume() {
         after_drop > before_drop,
         "an unreplicated write must still advance the offset"
     );
-    let tail = handler.replay.extract_backlog(before_drop, after_drop);
+    let tail = handler
+        .replay
+        .extract_backlog(before_drop, after_drop)
+        .expect("the resume point is still inside the window");
     assert_eq!(
         tail.len(),
         1,
@@ -334,22 +337,90 @@ fn test_ring_buffer_oldest_offset_tracks_eviction() {
 #[test]
 fn test_ring_buffer_extract_backlog_is_contiguous_and_bounded() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+    // Arm at 0 so the whole range is inside the window; without this the first
+    // push opens the window at its own *start* offset (10 - len("cmd1")).
+    rb.arm_start(0);
     rb.push(10, 0, Bytes::from("cmd1"));
     rb.push(20, 0, Bytes::from("cmd2"));
     rb.push(30, 0, Bytes::from("cmd3"));
     rb.push(40, 0, Bytes::from("cmd4"));
     // (start, end] — exclusive lower, inclusive upper.
-    let tail = rb.extract_backlog(10, 30);
+    let tail = rb.extract_backlog(10, 30).expect("inside the window");
     assert_eq!(
         tail,
         vec![(20, 0, Bytes::from("cmd2")), (30, 0, Bytes::from("cmd3"))]
     );
     // start == end yields an empty (caught-up) tail.
-    assert!(rb.extract_backlog(40, 40).is_empty());
+    assert!(
+        rb.extract_backlog(40, 40)
+            .expect("inside the window")
+            .is_empty()
+    );
     // Whole tail above start.
-    let all = rb.extract_backlog(0, 40);
+    let all = rb.extract_backlog(0, 40).expect("inside the window");
     assert_eq!(all.len(), 4);
     assert!(all.windows(2).all(|w| w[0].0 < w[1].0));
+}
+
+/// The eviction check is on the extraction, not only on the grant: a resume
+/// point the window no longer covers is an error, never a shorter vector.
+///
+/// Pre-fix this returned the three retained entries and dropped `(0, 10]` on the
+/// floor — the caller could not tell that apart from "the replica was already
+/// caught up on that range".
+// FM-REPLICATION-012
+#[test]
+fn an_evicted_resume_point_is_refused_not_truncated() {
+    let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
+    rb.arm_start(0);
+    rb.push(10, 0, Bytes::from("cmd1"));
+    rb.push(20, 0, Bytes::from("cmd2"));
+    rb.push(30, 0, Bytes::from("cmd3"));
+    // The fourth push evicts `cmd1` and raises the floor to where it ended.
+    rb.push(40, 0, Bytes::from("cmd4"));
+    assert_eq!(rb.start_offset(), Some(10));
+
+    assert_eq!(
+        rb.extract_backlog(0, 40),
+        Err(BacklogTruncated {
+            requested: 0,
+            floor: Some(10)
+        }),
+        "a resume below the floor must be refused, not served short"
+    );
+    // The boundary is inclusive: a replica sitting exactly on the floor is the
+    // lowest resume the window can still serve.
+    let tail = rb
+        .extract_backlog(10, 40)
+        .expect("floor == start is servable");
+    assert_eq!(
+        tail.iter().map(|(o, _, _)| *o).collect::<Vec<_>>(),
+        vec![20, 30, 40]
+    );
+}
+
+/// A window that was closed (a TTL free, a stint boundary) refuses every
+/// extraction rather than answering with the empty tail of a caught-up replica.
+// FM-REPLICATION-012
+#[test]
+fn a_closed_window_refuses_every_extraction() {
+    let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
+    rb.arm_start(0);
+    rb.push(10, 0, Bytes::from("cmd1"));
+    rb.reset();
+
+    for requested in [0, 5, 9] {
+        assert_eq!(
+            rb.extract_backlog(requested, 10),
+            Err(BacklogTruncated {
+                requested,
+                floor: None
+            }),
+            "an unarmed window claims no history at all"
+        );
+    }
+    // ... except for the empty range, which needs no history to serve.
+    assert_eq!(rb.extract_backlog(10, 10), Ok(Vec::new()));
 }
 
 #[tokio::test]

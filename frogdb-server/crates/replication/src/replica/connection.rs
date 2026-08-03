@@ -230,23 +230,26 @@ impl ReplicaConnection {
                 let new_offset: u64 = parts[2].parse().map_err(|_| {
                     io::Error::new(io::ErrorKind::InvalidData, "invalid offset in FULLRESYNC")
                 })?;
-                // A full resync replaces this node's history wholesale, so any
-                // failover window it carried is dropped with it — serving a
-                // `+CONTINUE` against the old id afterwards would ship a tail
-                // from the *new* history (Redis: `clearReplicationId2`).
-                self.state
-                    .write()
-                    .adopt_replication_history(new_repl_id.clone());
-                // Rewind to 0 rather than adopting the granted offset here. The
-                // granted offset describes the dataset that is about to arrive,
-                // and this node does not hold it yet: if the payload never
-                // lands (socket dies, checksum mismatch, install fails), an
-                // adopted offset would let the *next* reconnect ask for a
-                // partial resync from a position this node's stale keyspace
-                // never reached — and be granted `+CONTINUE`, silently forking.
-                // At 0 the reconnect sends `PSYNC ? -1` and retries the full
-                // resync, which is the only safe answer. The granted offset is
-                // adopted by the receive path once the dataset is installed.
+                // Neither half of the granted history — id nor offset — is
+                // adopted here. A `+FULLRESYNC` line promises a dataset; until
+                // that dataset is installed this node still holds the *previous*
+                // primary's keyspace, and claiming the new id over it would
+                // advertise a history it cannot serve and drop the failover
+                // window (`secondary_id`/`secondary_offset`) that describes the
+                // data it is still holding. Both receive paths adopt the id from
+                // the payload's own trailer once the install succeeds, which is
+                // where Redis adopts it too: `slaveTryPartialResynchronization`
+                // only parks the granted id in the cached-master field, and
+                // `readSyncBulkPayload` does `memcpy(server.replid, ...)` +
+                // `clearReplicationId2()` after the RDB loads (round-2 issue 51).
+                //
+                // The offset still rewinds to 0, because the head this node
+                // reached under the old history is about to be replaced: if the
+                // payload never lands (socket dies, checksum mismatch, install
+                // fails), a retained head would let the next reconnect ask for a
+                // partial resync from a position the incoming dataset defines
+                // and be granted `+CONTINUE`, silently forking. At 0 the
+                // reconnect sends `PSYNC ? -1` and retries the full resync.
                 if !self.offsets.reset_to(0) {
                     // A promotion froze the heads (or a newer stream took them)
                     // while this sync was in flight: this connection no longer
@@ -1109,6 +1112,218 @@ mod tests {
         );
     }
 
+    /// Round-2 issue 51: a `+FULLRESYNC` line is a *promise* of a dataset, not
+    /// the dataset. Until the payload is installed this node still holds the
+    /// previous primary's keyspace, so it must still claim the previous
+    /// history — id and failover window both — and its next reconnect must ask
+    /// for a position that history actually reached.
+    ///
+    /// Redis is the precedent: `slaveTryPartialResynchronization` parks the
+    /// granted id in `server.master_replid` (a *cached-master* field, not the
+    /// node's own history), and only `readSyncBulkPayload`, after the RDB is
+    /// loaded, runs `memcpy(server.replid, server.master->replid, ...)` followed
+    /// by `clearReplicationId2()`.
+    ///
+    /// Every row is a way the promise goes unkept, and the table spans both
+    /// sides of the parse: rows that fail before the grant is understood keep
+    /// the live head (nothing about this node changed), rows that fail after it
+    /// have already rewound to 0 so the retry is a full resync.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn a_full_sync_that_never_delivers_a_dataset_leaves_the_old_history_alone() {
+        const GRANTED_ID: &str = "0123456789012345678901234567890123456789";
+        const OLD_ID: &str = "old-primary-replid-aaaaaaaaaaaaaaaaaaaa";
+        const PRE_FAILOVER_ID: &str = "pre-failover-replid-bbbbbbbbbbbbbbbbbbb";
+
+        /// One way the grant goes unkept: what the primary sends after the
+        /// PSYNC request, how the failure reads, and the `(id, offset)` the
+        /// *next* reconnect must therefore request.
+        struct Unkept {
+            case: &'static str,
+            reply: Vec<u8>,
+            fingerprint: &'static str,
+            next_request: (String, i64),
+        }
+
+        let cases = vec![
+            Unkept {
+                case: "the socket dies on the grant",
+                reply: format!("+FULLRESYNC {GRANTED_ID} 4242\r\n").into_bytes(),
+                fingerprint: "connection closed",
+                next_request: ("?".to_string(), -1),
+            },
+            Unkept {
+                case: "the envelope names a payload this node cannot install",
+                reply: format!("+FULLRESYNC {GRANTED_ID} 4242\r\n$88\r\n").into_bytes(),
+                fingerprint: "unsupported FULLRESYNC payload marker",
+                next_request: ("?".to_string(), -1),
+            },
+            Unkept {
+                case: "the envelope line is not a payload at all",
+                reply: format!("+FULLRESYNC {GRANTED_ID} 4242\r\n+OK\r\n").into_bytes(),
+                fingerprint: "expected a checkpoint or dataset marker",
+                next_request: ("?".to_string(), -1),
+            },
+            Unkept {
+                case: "the grant carries no offset",
+                reply: format!("+FULLRESYNC {GRANTED_ID}\r\n").into_bytes(),
+                fingerprint: "malformed FULLRESYNC response",
+                next_request: (OLD_ID.to_string(), 900),
+            },
+            Unkept {
+                case: "the granted offset is not a number",
+                reply: format!("+FULLRESYNC {GRANTED_ID} nine\r\n").into_bytes(),
+                fingerprint: "invalid offset in FULLRESYNC",
+                next_request: (OLD_ID.to_string(), 900),
+            },
+            Unkept {
+                case: "the primary refuses the sync outright",
+                reply: b"-ERR Can't SYNC while loading the dataset\r\n".to_vec(),
+                fingerprint: "PSYNC error",
+                next_request: (OLD_ID.to_string(), 900),
+            },
+        ];
+
+        for Unkept {
+            case,
+            reply,
+            fingerprint,
+            next_request: expected_request,
+        } in cases
+        {
+            let (mut client, server) = tokio::io::duplex(64 * 1024);
+            let mut st = ReplicationState::new();
+            st.replication_id = OLD_ID.to_string();
+            // A failover window this node can still serve `+CONTINUE` against:
+            // it describes the dataset it is holding right now, and a sync that
+            // never lands does not invalidate it.
+            st.secondary_id = Some(PRE_FAILOVER_ID.to_string());
+            st.secondary_offset = 700;
+            let state = Arc::new(RwLock::new(st));
+            let offsets = ReplicaOffset::new(
+                state.clone(),
+                Arc::new(AtomicU64::new(900)),
+                AppliedOffset::detached(900),
+            );
+            let mut conn = ReplicaConnection {
+                stream: Box::new(server),
+                _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+                state: state.clone(),
+                connection_state: ConnectionState::Connected,
+                data_dir: PathBuf::from("/tmp/frogdb-test"),
+                offsets: offsets.clone(),
+                link_up: Arc::new(AtomicBool::new(false)),
+                ack_interval: Duration::from_secs(1),
+                snapshot_installer: None,
+                pending_stream_bytes: BytesMut::new(),
+            };
+
+            // Script the whole reply up front, then close the write half so
+            // every row ends in EOF rather than a hang. The request itself fits
+            // in the duplex buffer, so `psync` never blocks on a reader.
+            client.write_all(&reply).await.unwrap();
+            client.shutdown().await.unwrap();
+
+            let err =
+                conn.psync().await.err().unwrap_or_else(|| {
+                    panic!("[{case}] a sync with no dataset behind it must fail")
+                });
+            assert!(err.to_string().contains(fingerprint), "[{case}] got: {err}");
+
+            let state = state.read();
+            assert_eq!(
+                state.replication_id, OLD_ID,
+                "[{case}] the node still holds the old keyspace, so it still claims the old history"
+            );
+            assert_eq!(
+                state.secondary_id.as_deref(),
+                Some(PRE_FAILOVER_ID),
+                "[{case}] the failover window describes the dataset this node is still serving"
+            );
+            assert_eq!(state.secondary_offset, 700, "[{case}] window boundary");
+            assert_ne!(
+                offsets.current(),
+                4242,
+                "[{case}] the granted offset belongs to a dataset that never arrived"
+            );
+            assert_eq!(
+                psync_request_args(&state.replication_id, offsets.current()),
+                expected_request,
+                "[{case}] the reconnect must ask from a position this node reached"
+            );
+            assert_ne!(
+                conn.connection_state,
+                ConnectionState::Streaming,
+                "[{case}] the link must not come up"
+            );
+        }
+    }
+
+    /// The other half of round-2 issue 51, one layer down: the grant was well
+    /// formed and the transfer started, then the socket died mid-file. The
+    /// payload's trailer — the only thing that carries the primary's id — never
+    /// arrived, so there is nothing to adopt and the node keeps the history that
+    /// matches the keyspace it still has.
+    // FM-REPLICATION-001
+    #[tokio::test]
+    async fn a_checkpoint_that_dies_mid_transfer_leaves_the_old_history_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = vec![
+            ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
+            ("000042.sst".to_string(), (0u8..=200).collect()),
+        ];
+        let body = encode_checkpoint_body(&files, "primary-replid", 4242).await;
+        // Cut mid-transfer: the first file's header is on the wire, the rest of
+        // the payload and the whole trailer are not.
+        let truncated = &body[..body.len() / 3];
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let mut st = ReplicationState::new();
+        st.replication_id = "old-primary-replid".to_string();
+        st.secondary_id = Some("pre-failover-replid".to_string());
+        st.secondary_offset = 700;
+        let state = Arc::new(RwLock::new(st));
+        // 0 because `psync` already rewound the live head when it took the grant.
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(0)),
+            AppliedOffset::detached(0),
+        );
+        let link_up = Arc::new(AtomicBool::new(false));
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state: state.clone(),
+            connection_state: ConnectionState::Syncing,
+            data_dir: tmp.path().join("db"),
+            offsets: offsets.clone(),
+            link_up: link_up.clone(),
+            ack_interval: Duration::from_secs(1),
+            snapshot_installer: None,
+            pending_stream_bytes: BytesMut::new(),
+        };
+        client.write_all(truncated).await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let err = conn
+            .receive_checkpoint(files.len())
+            .await
+            .expect_err("a truncated checkpoint must fail the sync");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "got: {err}");
+
+        let state = state.read();
+        assert_eq!(state.replication_id, "old-primary-replid");
+        assert_eq!(state.secondary_id.as_deref(), Some("pre-failover-replid"));
+        assert_eq!(state.secondary_offset, 700);
+        assert_eq!(
+            psync_request_args(&state.replication_id, offsets.current()),
+            ("?".to_string(), -1),
+            "the retry is a full resync, not a resume against a dataset that never landed"
+        );
+        assert_ne!(conn.connection_state, ConnectionState::Streaming);
+        assert!(!link_up.load(Ordering::Acquire));
+    }
+
     // ---- receive -> stream continuity (issue 01) --------------------------
 
     /// The live WAL frames a primary streams while its full-sync payload is
@@ -1119,7 +1334,7 @@ mod tests {
         let mut advance = 0u64;
         for (i, payload) in payloads.iter().enumerate() {
             let frame = ReplicationFrame::new(i as u64, Bytes::copy_from_slice(payload));
-            wire.extend_from_slice(&frame.encode());
+            wire.extend_from_slice(&frame.encode().unwrap());
             advance += payload.len() as u64;
         }
         (wire, advance)

@@ -171,12 +171,45 @@ impl ReplicationRingBuffer {
     ///
     /// The replay sibling of [`Self::extract_divergent_writes`]: same
     /// `offset > start` filter, but bounded above by `end` so a caller never
-    /// streams past the offset it promised the replica. Only reached after the
-    /// lower-bound (eviction) check has confirmed `start >= oldest_offset()`, so
-    /// the returned range is contiguous from `start` with no silent truncation.
-    /// Non-destructive.
-    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, u16, Bytes)> {
+    /// streams past the offset it promised the replica.
+    ///
+    /// **Contiguity is checked here, not assumed.** The caller's eviction check
+    /// runs at PSYNC *grant* time, and a resume is streamed much later — after a
+    /// checkpoint cut and a whole file transfer — so the window can close under
+    /// it. The floor is therefore re-read under the entries lock (the same lock
+    /// [`Self::push`] holds while it evicts and raises the floor) and a request
+    /// that no longer starts inside the window is an [`BacklogTruncated`] error
+    /// rather than a silently shorter vector: a short tail is indistinguishable
+    /// from "nothing to replay", and the caller would seed the resume position
+    /// from the last frame it *did* send, leaving the replica permanently
+    /// missing the evicted range while its offset looks contiguous (round-2
+    /// issue 52). Non-destructive.
+    pub fn extract_backlog(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<(u64, u16, Bytes)>, BacklogTruncated> {
         let entries = self.entries.lock();
+        // Under the lock: the floor rises only in `push`, which holds it, so
+        // this pairs the window check with the contents it describes.
+        let floor = match self.start.load(Ordering::Acquire) {
+            UNARMED => None,
+            armed => Some(armed as u64),
+        };
+        match floor {
+            Some(floor) if floor <= start => {}
+            // An empty range has nothing to truncate: a caught-up replica, and
+            // the fresh-primary full sync whose snapshot offset *is* the head,
+            // both ask for `(x, x]` and are served by the payload itself. The
+            // window only has to cover a range that actually carries writes.
+            _ if start >= end => return Ok(Vec::new()),
+            floor => {
+                return Err(BacklogTruncated {
+                    requested: start,
+                    floor,
+                });
+            }
+        }
         let tail: Vec<(u64, u16, Bytes)> = entries
             .iter()
             .filter(|cmd| cmd.offset > start && cmd.offset <= end)
@@ -187,6 +220,29 @@ impl ReplicationRingBuffer {
             "backlog must be offset-ordered for replay (got {:?})",
             tail.iter().map(|(o, _, _)| *o).collect::<Vec<_>>()
         );
-        tail
+        debug_assert!(
+            tail.first().is_none_or(|(offset, _, _)| *offset > start),
+            "replay tail must begin strictly after the resume point"
+        );
+        Ok(tail)
     }
+}
+
+/// The backlog no longer holds the offset a replay was asked to start from.
+///
+/// Returned by [`ReplicationRingBuffer::extract_backlog`] when eviction (or a
+/// TTL free, or a stint boundary) has raised the window floor above `requested`
+/// since the resume was granted. The only correct answer is to abandon the
+/// resume and let the replica come back for a full sync — streaming the short
+/// tail would hand it a hole it can never detect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the replication backlog no longer covers offset {requested} (window floor: {})",
+    match floor { Some(f) => f.to_string(), None => "unarmed".to_string() }
+)]
+pub struct BacklogTruncated {
+    /// The offset the replay was asked to resume from.
+    pub requested: u64,
+    /// The window floor now, or `None` if the window has been closed entirely.
+    pub floor: Option<u64>,
 }

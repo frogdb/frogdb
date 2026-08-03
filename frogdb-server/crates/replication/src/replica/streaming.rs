@@ -322,7 +322,10 @@ mod tests {
         /// Put one frame on the wire, as the primary's broadcast would.
         async fn send(&mut self, sequence: u64, payload: Bytes) {
             let frame = ReplicationFrame::new(sequence, payload);
-            self.primary.write_all(&frame.encode()).await.unwrap();
+            self.primary
+                .write_all(&frame.encode().unwrap())
+                .await
+                .unwrap();
         }
 
         async fn next_ack(&mut self) -> u64 {
