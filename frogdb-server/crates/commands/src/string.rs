@@ -11,6 +11,7 @@
 //! - MSETEX - multi-set with expiry and NX/XX
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, ExecutionStrategy, Expiry, KeyAccessFlag, KeySpec, KeyspaceEventFlags,
@@ -18,7 +19,7 @@ use frogdb_core::{
     StoreTypedFamilyExt, StringValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::utils::{
     ExpiryErr, ExpiryUnit, checked_expire_value, format_float, parse_f64, parse_i64, parse_u64,
@@ -493,12 +494,12 @@ impl Command for GetexCommand {
                 // EX is a seconds unit: guard the secs*1000 conversion
                 // (Redis getExpireMillisecondsOrReply, UNIT_SECONDS).
                 let seconds = checked_expire_value(raw, true, ExpiryErr::Named("getex"))?;
-                let expires_at = Instant::now() + Duration::from_secs(seconds);
+                let expires_at = clock::now() + Duration::from_secs(seconds);
                 ctx.store.set_expiry(key, expires_at);
             } else if parser.try_flag(b"PX") {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
                 let ms = checked_expire_value(raw, false, ExpiryErr::Named("getex"))?;
-                let expires_at = Instant::now() + Duration::from_millis(ms);
+                let expires_at = clock::now() + Duration::from_millis(ms);
                 ctx.store.set_expiry(key, expires_at);
             } else if parser.try_flag(b"EXAT") {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
@@ -507,7 +508,7 @@ impl Command for GetexCommand {
                 let target = UNIX_EPOCH + Duration::from_secs(ts);
                 let now = SystemTime::now();
                 if let Ok(duration) = target.duration_since(now) {
-                    ctx.store.set_expiry(key, Instant::now() + duration);
+                    ctx.store.set_expiry(key, clock::now() + duration);
                 }
             } else if parser.try_flag(b"PXAT") {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
@@ -515,7 +516,7 @@ impl Command for GetexCommand {
                 let target = UNIX_EPOCH + Duration::from_millis(ts);
                 let now = SystemTime::now();
                 if let Ok(duration) = target.duration_since(now) {
-                    ctx.store.set_expiry(key, Instant::now() + duration);
+                    ctx.store.set_expiry(key, clock::now() + duration);
                 }
             } else if parser.try_flag(b"PERSIST") {
                 ctx.store.persist(key);

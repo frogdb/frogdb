@@ -9,6 +9,7 @@
 //! - HGETDEL, HGETEX, HSETEX - Redis 8.0 atomic hash operations
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, HashValue, KeySpec, KeyspaceEventFlags, ListpackThresholds, LookupSpec,
@@ -1075,7 +1076,7 @@ fn execute_hexpire_common(
         };
 
         // If expires_at is in the past, delete the field
-        if expires_at <= Instant::now() {
+        if expires_at <= clock::now() {
             actions.push(FieldAction::Delete);
             results.push(Response::Integer(2));
             continue;
@@ -1243,7 +1244,7 @@ impl Command for HexpireCommand {
                 if secs <= 0 {
                     return None;
                 }
-                Some(Instant::now() + Duration::from_secs(secs as u64))
+                Some(clock::now() + Duration::from_secs(secs as u64))
             },
             |secs| secs <= 0,
         )
@@ -1289,7 +1290,7 @@ impl Command for HpexpireCommand {
                 if ms <= 0 {
                     return None;
                 }
-                Some(Instant::now() + Duration::from_millis(ms as u64))
+                Some(clock::now() + Duration::from_millis(ms as u64))
             },
             |ms| ms <= 0,
         )
@@ -1416,7 +1417,7 @@ impl Command for HttlCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_httl_common(ctx, args, |expires_at| {
-            let now = Instant::now();
+            let now = clock::now();
             if expires_at <= now {
                 return -2;
             }
@@ -1456,7 +1457,7 @@ impl Command for HpttlCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         execute_httl_common(ctx, args, |expires_at| {
-            let now = Instant::now();
+            let now = clock::now();
             if expires_at <= now {
                 return -2;
             }
@@ -1653,14 +1654,14 @@ fn parse_field_expiry_option(
             // uses the quoted '<cmd>' shape from t_hash.c parseExpireTime.
             let secs = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
             hfe_resolve_abs_ms(secs as i64, true, now_unix_ms(), cmd)?;
-            let instant = Instant::now() + Duration::from_secs(secs);
+            let instant = clock::now() + Duration::from_secs(secs);
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"PX" => {
             let val = args.get(offset + 1).ok_or(CommandError::SyntaxError)?;
             let ms = checked_expire_value(parse_i64(val)?, false, ExpiryErr::Unnamed)?;
             hfe_resolve_abs_ms(ms as i64, false, now_unix_ms(), cmd)?;
-            let instant = Instant::now() + Duration::from_millis(ms);
+            let instant = clock::now() + Duration::from_millis(ms);
             Ok((FieldExpiryAction::SetExpiry(instant), 2))
         }
         b"EXAT" => {

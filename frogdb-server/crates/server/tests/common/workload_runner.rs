@@ -121,9 +121,10 @@ pub fn run_workload_capturing(
         ..SimConfig::default()
     });
 
+    let seed = workload.seed;
     if fake_persistence {
         sim.host(SERVER_HOST, move || {
-            real_frogdb_server_fake_persistence(num_shards)
+            real_frogdb_server_fake_persistence(num_shards, seed)
         });
     } else {
         sim.host(SERVER_HOST, move || real_frogdb_server(num_shards));

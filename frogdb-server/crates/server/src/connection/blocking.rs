@@ -4,12 +4,16 @@
 //! - BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, XREAD, XREADGROUP
 //! - WAIT - Wait for replication acknowledgment
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{BlockingMsg, BlockingOp, UnblockMode, UnregisterAck, shard_for_key};
 use frogdb_protocol::Response;
 use tokio::sync::oneshot;
+// Blocking deadlines live on the timer's clock, not the OS clock: they are compared
+// against `tokio::time::Instant::now()` on the shard and slept on with `sleep_until`,
+// and under a paused runtime (turmoil) the two clocks diverge immediately.
+use tokio::time::Instant;
 
 use crate::connection::ConnectionHandler;
 use crate::connection::util::convert_blocking_op;

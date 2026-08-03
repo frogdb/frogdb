@@ -14,6 +14,8 @@ pub mod replication_helpers;
 pub mod repro;
 pub mod response_helpers;
 #[cfg(feature = "turmoil")]
+pub mod run_digest;
+#[cfg(feature = "turmoil")]
 pub mod sim_harness;
 #[cfg(feature = "turmoil")]
 pub mod sim_helpers;

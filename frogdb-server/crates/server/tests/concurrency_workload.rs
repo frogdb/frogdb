@@ -57,7 +57,7 @@ fn write_repro_for(
     ops_per_client: usize,
     num_shards: usize,
 ) -> PathBuf {
-    let path = repro_path(seed);
+    let path = repro_path(seed, profile, ops_per_client);
     let repro = ReproFile {
         seed,
         profile,
@@ -385,6 +385,92 @@ fn replay_repro() {
         path,
         report.violations
     );
+}
+
+/// The harness's core contract: a run is a pure function of
+/// `(seed, profile, num_clients, ops_per_client, num_shards)`.
+///
+/// Everything else in this file checks that a run *satisfies its invariants*; these tests
+/// check that a run *is the same run twice*. Without that, a seed sweep's verdict is a
+/// sample rather than a fact: a "failing seed" cannot be replayed, a passing seed proves
+/// nothing about the next execution of the same seed, and a bisection over checker output
+/// is measuring scheduling noise. See
+/// `.scratch/concurrency-testing/issues/open/14-workload-harness-not-reproducible.md` and
+/// the determinism audit it links.
+///
+/// Both runs happen in one process, back to back, so the only thing that can differ is
+/// state the harness itself carries across runs (process-global counters, unseeded RNG,
+/// hash-map iteration order, real-clock readings taken under a paused virtual clock).
+mod determinism {
+    use super::*;
+    use crate::common::run_digest::{assert_digests_equal, run_digest};
+
+    /// Generate and run the same configuration twice, then require byte-identical digests.
+    ///
+    /// The workload is regenerated (not cloned) for the second run so workload *generation*
+    /// is covered too, not only execution.
+    fn assert_run_is_reproducible(
+        seed: u64,
+        profile: Profile,
+        num_clients: usize,
+        ops_per_client: usize,
+        num_shards: usize,
+    ) {
+        let label = format!("seed {seed} ({profile:?}, {ops_per_client} ops/client)");
+
+        let first = Workload::generate(seed, profile, num_clients, ops_per_client);
+        let digest_a = run_digest(&run_workload_capturing(&first, num_shards, true));
+
+        let second = Workload::generate(seed, profile, num_clients, ops_per_client);
+        let digest_b = run_digest(&run_workload_capturing(&second, num_shards, true));
+
+        // Guard against a vacuous pass: two empty digests are trivially equal, which would
+        // let a harness that silently recorded nothing satisfy this test forever.
+        assert!(
+            digest_a.len() > ops_per_client,
+            "{label}: digest has only {} lines — the run recorded almost nothing, so \
+             comparing it proves nothing",
+            digest_a.len()
+        );
+
+        assert_digests_equal(&label, &digest_a, &digest_b);
+    }
+
+    // These were `#[ignore]`d on arrival, per the audit's R0 note: the assertion has to exist
+    // before the remediation steps have a pass/fail signal, but a red test in `just concurrency`
+    // would block every unrelated change until the last step lands. Each is un-ignored by the
+    // step that makes it pass.
+    //
+    // The two profiles that generate streams are still ignored, for a cause no in-scope step
+    // addresses: `XADD *` mints its ID from `SystemTime::now()`, and nothing in the codebase
+    // virtualizes wall-clock time, so every stream entry carries a real-time millisecond into
+    // the reply. That is audit item A15; the ignore lifts when a virtual wall clock exists.
+
+    /// Mixed: the broadest command vocabulary (all six type families), including the
+    /// TTL-bearing commands whose expiry decisions read the clock.
+    #[test]
+    #[ignore = "A15: `XADD *` mints stream IDs from the real wall clock; see determinism audit"]
+    fn run_is_reproducible_mixed_seed_0() {
+        assert_run_is_reproducible(0, Profile::Mixed, 4, 30, 2);
+    }
+
+    /// MultiWaiter: concurrent blocking pops on shared keys. The wake order is decided by
+    /// waiter registration and timeout expiry, i.e. entirely by the clock and the shard
+    /// event loop's scheduling — the configuration whose invariant verdict was observed to
+    /// flap run to run. Generates no streams, so it is free of the wall-clock ID problem
+    /// and holds the line for R3 (blocking deadlines) and R4 (expiry clock).
+    #[test]
+    fn run_is_reproducible_multiwaiter_seed_10() {
+        assert_run_is_reproducible(10, Profile::MultiWaiter, 4, 30, 2);
+    }
+
+    /// TxHeavy at a longer script length: WATCH/EXEC version checks plus enough sim time
+    /// for TTLs to actually elapse, so the active-expiry cycle participates in the run.
+    #[test]
+    #[ignore = "A15: `XADD *` mints stream IDs from the real wall clock; see determinism audit"]
+    fn run_is_reproducible_txheavy_seed_3() {
+        assert_run_is_reproducible(3, Profile::TxHeavy, 4, 60, 2);
+    }
 }
 
 /// Pinned regressions: one named test per confirmed bug, carrying its

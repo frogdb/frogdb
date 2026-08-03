@@ -8,3 +8,28 @@ linker = "x86_64-linux-gnu-gcc"
 # Requires: brew install lld@20
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld@20/bin/ld64.lld"]
+
+# `tokio_unstable`, workspace-wide.
+#
+# Required by the deterministic-simulation suites: turmoil only calls
+# `tokio::runtime::Builder::rng_seed()` (which pins `select!` branch choice, i.e. the whole
+# point of a seeded simulation) and `unhandled_panic(ShutdownRuntime)` (which turns a panic
+# inside a simulated host into a test failure instead of a silently dead host) when this cfg
+# is set. Those calls live inside turmoil's own crate, so the flag must reach the entire
+# dependency graph, not just our crates — which is what a `.cargo/config.toml` rustflags entry
+# does and a per-recipe `RUSTFLAGS` export also does, at the cost of a second, divergent copy
+# of the whole build cache for whoever runs that recipe.
+#
+# Set here as `cfg(all())` (matches every target) rather than `[build] rustflags` because
+# `[build] rustflags` is *replaced*, not merged, by a matching `[target.<triple>] rustflags` —
+# the `aarch64-apple-darwin` linker entry above would silently drop it on every Apple Silicon
+# machine. `target.cfg(...)` and `target.<triple>` rustflags are joined, so both apply
+# (verified: a probe build shows `--cfg` and the `-fuse-ld` link-arg on the same rustc
+# invocation).
+#
+# Applying it to every build, rather than only the simulation recipes, is deliberate: one
+# build cache instead of two, and the flag only widens tokio's available API surface — it does
+# not change the behaviour of the tokio APIs the server already uses. `just test-coz` needed
+# the same flag and previously exported it per-recipe; it now inherits this one.
+[target.'cfg(all())']
+rustflags = ["--cfg", "tokio_unstable"]

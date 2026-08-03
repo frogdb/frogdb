@@ -229,7 +229,7 @@ impl ChaosConfigExt for ChaosConfig {
             std::time::Duration::ZERO
         } else {
             use rand::RngExt;
-            let jitter = rand::rng().random_range(0..=self.jitter_ms);
+            let jitter = self.with_rng(|rng| rng.random_range(0..=self.jitter_ms));
             std::time::Duration::from_millis(jitter)
         }
     }
@@ -259,7 +259,7 @@ impl ChaosConfigExt for ChaosConfig {
             return true;
         }
         use rand::RngExt;
-        rand::rng().random::<f64>() < self.connection_reset_probability
+        self.with_rng(|rng| rng.random::<f64>()) < self.connection_reset_probability
     }
 
     fn has_failure_injection(&self) -> bool {

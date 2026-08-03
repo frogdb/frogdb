@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardQueueLatency};
 
@@ -174,7 +174,7 @@ impl ShardWorker {
         );
 
         // Disjoint-field borrow: `self.expiry` and `self.store` are distinct fields.
-        let result = self.expiry.run_cycle(&mut self.store, Instant::now());
+        let result = self.expiry.run_cycle(&mut self.store, crate::clock::now());
         // The sweep reaps last-hash-field deaths and hash-field reaps through the
         // *same* `purge_expired_hash_fields` seam a lazy read uses, so it also
         // fills the store's lazily-emptied buffer, lazily-shrunk buffer, and

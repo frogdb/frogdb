@@ -483,7 +483,13 @@ pub enum BlockingMsg {
         /// Channel to send the response when data is available.
         response_tx: oneshot::Sender<Response>,
         /// Deadline for the blocking operation (None = indefinite).
-        deadline: Option<Instant>,
+        ///
+        /// Deliberately a [`tokio::time::Instant`] rather than the `std::time::Instant`
+        /// used by `enqueued_at` above: this value is *compared against a timer*, so it has
+        /// to be on the timer's clock (see [`crate::shard::wait_queue::WaitEntry::deadline`]).
+        /// `enqueued_at` only ever feeds a queue-latency metric, which wants real elapsed
+        /// time.
+        deadline: Option<tokio::time::Instant>,
         /// Protocol version of the blocked client (for RESP3-aware formatting).
         protocol_version: ProtocolVersion,
     },

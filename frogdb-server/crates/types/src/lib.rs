@@ -6,6 +6,7 @@
 pub mod args;
 pub mod bitmap;
 pub mod bloom;
+pub mod clock;
 pub mod cms;
 pub mod cuckoo;
 pub mod error;

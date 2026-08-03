@@ -11,7 +11,8 @@
 
 #![allow(dead_code)] // generator surface is used piecemeal across scenario modules
 
-use std::time::Instant;
+// Blocking deadlines are on the timer clock (see `BlockingMsg::BlockWait`).
+use tokio::time::Instant;
 
 use bytes::Bytes;
 use frogdb_protocol::ParsedCommand;

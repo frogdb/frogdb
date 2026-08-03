@@ -1,8 +1,7 @@
-use std::time::Instant;
-
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 
 use frogdb_types::metrics::definitions::{
     BlockedClients, BlockedMigrationMoved, BlockedSatisfiedTotal, BlockedTimeoutTotal,
@@ -272,6 +271,10 @@ impl ShardWorker {
         }
 
         let kind = strat.kind();
+        // One clock reading for the whole satisfaction pass. Re-sampling per iteration made
+        // the deadline fast-path below depend on how long the *earlier* iterations took, so
+        // two runs that differ only in scheduling could skip a different set of waiters.
+        let now = Instant::now();
         while self.wait_queue.has_waiters_for_kind(key, kind) {
             match strat.check_key(&mut self.store, key) {
                 KeyReady::No => break,
@@ -300,7 +303,7 @@ impl ShardWorker {
             // closed by restoring the consumed data on send failure — see the
             // `Err` arm and [`Restore`] — so no element is ever popped and
             // delivered to nobody.
-            if entry.deadline.is_some_and(|d| d <= Instant::now()) {
+            if entry.deadline.is_some_and(|d| d <= now) {
                 continue;
             }
 
@@ -1948,9 +1951,10 @@ mod tests {
         let mut v = Value::list();
         v.as_list_mut().unwrap().push_back(Bytes::from_static(b"x"));
         worker.store.set(key.clone(), v);
-        worker
-            .store
-            .set_expiry(b"k", Instant::now() - std::time::Duration::from_secs(60));
+        worker.store.set_expiry(
+            b"k",
+            std::time::Instant::now() - std::time::Duration::from_secs(60),
+        );
         assert!(worker.store.contains(b"k"));
 
         let version_before = worker.get_key_version(b"k");

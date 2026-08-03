@@ -5,13 +5,27 @@
 
 use bytes::Bytes;
 use ordered_float::OrderedFloat;
-use rand::{Rng, RngExt};
+use rand::rngs::SmallRng;
+use rand::{Rng, RngExt, SeedableRng};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 
 const NIL: u32 = u32::MAX;
 const MAX_LEVEL: usize = 32;
 const P: f64 = 0.25;
+
+/// Seed for every list's level generator.
+///
+/// Node levels are drawn from a geometric distribution to keep the list
+/// balanced; nothing about the draw depends on the data, and no client can
+/// observe an individual node's level. What a client *can* observe is the total
+/// — `MEMORY USAGE`, `INFO memory`, and the memory-conservation checker all
+/// read `memory_size()`, which counts one `Link` per level. Drawing from the
+/// process-global generator therefore made a sorted set's reported size differ
+/// between two otherwise identical runs, which is the one thing the
+/// generated-workload harness is not allowed to do. A fixed seed keeps the
+/// distribution and gives every run the same structure.
+const LEVEL_SEED: u64 = 0x5C1D_71C5_7EED_0001;
 
 /// Size of a single skip list `Node` in bytes (exposed for DEBUG STRUCTSIZE).
 pub const NODE_SIZE: usize = std::mem::size_of::<Node>();
@@ -25,6 +39,8 @@ pub struct SkipList {
     tail: u32,
     length: usize,
     level: usize,
+    /// Per-list level generator (see [`LEVEL_SEED`]).
+    rng: SmallRng,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +99,7 @@ impl SkipList {
             tail: NIL,
             length: 0,
             level: 1,
+            rng: SmallRng::seed_from_u64(LEVEL_SEED),
         }
     }
 
@@ -137,8 +154,6 @@ impl SkipList {
     /// Insert a (score, member) pair. Returns false if the exact pair already exists.
     #[allow(clippy::needless_range_loop)]
     pub fn insert(&mut self, score: OrderedFloat<f64>, member: Bytes) -> bool {
-        let mut rng = rand::rng();
-
         // update[i] = last node at level i before the insertion point
         // rank[i]   = cumulative rank at that node
         let mut update = [0u32; MAX_LEVEL];
@@ -165,7 +180,7 @@ impl SkipList {
             update[i] = x;
         }
 
-        let lvl = random_level(&mut rng);
+        let lvl = random_level(&mut self.rng);
 
         // Grow skip list level if needed
         if lvl > self.level {

@@ -446,7 +446,7 @@ impl KeyMetadata {
     pub fn new(memory_size: usize) -> Self {
         Self {
             expires_at: None,
-            last_access: Instant::now(),
+            last_access: crate::clock::now(),
             lfu_counter: 5, // New keys start at 5 (not immediately evicted)
             memory_size,
         }
@@ -455,13 +455,13 @@ impl KeyMetadata {
     /// Check if the key is expired.
     pub fn is_expired(&self) -> bool {
         self.expires_at
-            .map(|exp| exp <= Instant::now())
+            .map(|exp| exp <= crate::clock::now())
             .unwrap_or(false)
     }
 
     /// Update last access time.
     pub fn touch(&mut self) {
-        self.last_access = Instant::now();
+        self.last_access = crate::clock::now();
     }
 }
 
@@ -498,7 +498,7 @@ pub enum Expiry {
 impl Expiry {
     /// Convert to an absolute Instant for storage.
     pub fn to_instant(&self) -> Option<Instant> {
-        let now = Instant::now();
+        let now = crate::clock::now();
         let system_now = SystemTime::now();
 
         match self {

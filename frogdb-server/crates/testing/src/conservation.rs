@@ -327,6 +327,22 @@ impl WaiterRegistrationOrder {
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    /// Every recorded `(key, client_id) -> registration_seq` in a canonical order.
+    ///
+    /// The backing map is a `HashMap` with per-process seeded hashing, so its iteration
+    /// order is not reproducible even between two runs in the same process. Callers that
+    /// need a stable rendering (run-to-run digests, failure messages) must go through this
+    /// accessor rather than iterating the map.
+    pub fn sorted_entries(&self) -> Vec<(Bytes, u64, u64)> {
+        let mut out: Vec<(Bytes, u64, u64)> = self
+            .map
+            .iter()
+            .map(|((key, client), seq)| (key.clone(), *client, *seq))
+            .collect();
+        out.sort_unstable();
+        out
+    }
 }
 
 /// How much of a history the exact FIFO checker was actually able to judge.

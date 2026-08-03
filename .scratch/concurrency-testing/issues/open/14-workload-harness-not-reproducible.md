@@ -105,16 +105,27 @@ in the filename.
 
 ## Acceptance criteria
 
-- [ ] Two runs of the same `Workload` (same seed/profile/clients/ops/shards) produce byte-identical
+- [x] Two runs of the same `Workload` (same seed/profile/clients/ops/shards) produce byte-identical
       histories, in-process and across processes. Pin it with a test that runs one workload twice
       and asserts the histories are equal — this is the harness's core contract and nothing else
       currently checks it.
-- [ ] The nondeterminism source(s) are identified and named in this issue (hash iteration order /
+      **Test: `concurrency_workload::determinism::run_is_reproducible_*`. Holds for
+      seed 10 / MultiWaiter — in-process and across three separate processes. The two
+      stream-generating cases stay `#[ignore]`d: `XADD *` mints its ID from `SystemTime::now()`
+      (audit A15) and nothing virtualizes wall-clock time; that is a separate piece of work.**
+- [x] The nondeterminism source(s) are identified and named in this issue (hash iteration order /
       real clock / tokio select), not just papered over.
-- [ ] `--cfg tokio_unstable` is set for turmoil test builds (via `.cargo/config.toml` or the `just`
+      **All three suspects confirmed, plus two the issue did not list: unseeded chaos injection and
+      unseeded skiplist level heights (observable through `memory_size()`). Enumerated as 59 sites
+      in `.scratch/concurrency-testing/audit/determinism-audit-2026-08-02.md`.**
+- [x] `--cfg tokio_unstable` is set for turmoil test builds (via `.cargo/config.toml` or the `just`
       recipes), so turmoil can seed tokio's RNG and forward host panics as test failures.
-- [ ] Repro files are keyed by `(seed, profile, ops)`.
+      **`.cargo/config.toml`, `[target.'cfg(all())']` so it joins rather than replaces any
+      per-target rustflags.**
+- [x] Repro files are keyed by `(seed, profile, ops)`.
 - [ ] Once deterministic: re-verify issue 11's findings and re-pin the surviving classes by seed.
+      **Blocked on the profiles that matter still being non-reproducible (A15). Issue stays open
+      for this criterion.**
 
 ## References
 
@@ -129,3 +140,23 @@ in the filename.
   exhaustive product-code determinism audit: 59 class-A sites, all three suspects above confirmed
   plus unseeded chaos injection and hash-order in client-visible replies, with a cheapest-first
   remediation order (R0–R12) mapped onto the acceptance criteria.
+
+## Progress (2026-08-02)
+
+Audit: `.scratch/concurrency-testing/audit/determinism-audit-2026-08-02.md` — 59 nondeterminism
+sites, classified, with a remediation order R0–R12. Steps R0–R4 have landed; §6.1 of the audit
+carries the measured before/after digest table.
+
+| Commit | Step | What |
+|---|---|---|
+| `12cca673` | R0, R1, R2 | The run-twice assertion + digest helper; `repro_path(seed, profile, ops)`; `--cfg tokio_unstable`; seeded chaos injector |
+| `b48fd3a7` | R3 | Blocking deadlines moved to the timer's clock end to end (`server/connection/blocking*`, `core/shard/{blocking,wait_queue,message}`) |
+| `00dfb0ab` | R4 | One `frogdb_types::clock::now()` seam for the whole expiry domain; the active-expiry budget stops measuring real CPU time; `expiry.rs` takes a single paired `Instant`/`SystemTime` sample |
+| `faaf7f2d` | (not in the plan) | Seeded skiplist level heights — the audit had filed this class B, but the height is observable through `memory_size()`, and it was the last divergence in the MultiWaiter digest |
+
+Not started: R5–R11 (clock-seam lint + mechanical sweep, `biased;` select loops, seeded command
+RNG, hash-order determinism, `spawn_blocking`/thread inlining, `frogdb-net` bypasses).
+
+**The remaining blocker for criterion 5 is A15**, filed as issue 17: `XADD *` mints stream IDs from
+`SystemTime::now()`, and no virtual wall clock exists in the codebase, so every profile that
+generates streams (Mixed, TxHeavy) still produces a different history per run.

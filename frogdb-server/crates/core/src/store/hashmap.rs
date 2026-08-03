@@ -539,9 +539,11 @@ impl HashMapStore {
     /// touch `lazily_purged`, and fires no expiry effects — the next read
     /// (`check_and_delete_expired`) or active-expiry sweep performs the actual
     /// expiry through the normal seams, exactly as a naturally-elapsed TTL would.
-    /// This keeps the command a pure timestamp rewrite so sim tests can drive
-    /// deterministic expiry under turmoil's virtual clock (real-clock TTLs would
-    /// otherwise require a `std::thread::sleep`).
+    /// This keeps the command a pure timestamp rewrite, so a sim test can make a
+    /// key expire without waiting for a TTL to elapse. The backdated deadline is
+    /// computed from [`frogdb_types::clock::now`], the same clock every expiry
+    /// comparison reads, so it is a *past* deadline on whichever clock the
+    /// runtime is using — including a paused one.
     ///
     /// A key with no TTL is left untouched and reported via
     /// [`BackdateExpiryResult::NoExpiry`]; a missing key via
@@ -555,7 +557,7 @@ impl HashMapStore {
         }
         // `Instant - Duration` panics on monotonic-clock underflow; saturate to
         // `now` for an absurdly large `ms` (still <= now, so still expired).
-        let now = Instant::now();
+        let now = crate::clock::now();
         let deadline = now.checked_sub(Duration::from_millis(ms)).unwrap_or(now);
         entry.metadata.expires_at = Some(deadline);
         self.expiry_index.set(Bytes::copy_from_slice(key), deadline);
@@ -1389,7 +1391,7 @@ impl Store for HashMapStore {
 
     fn purge_expired_hash_fields(&mut self, key: &[u8]) -> usize {
         // Get the hash value and remove expired fields
-        let now = Instant::now();
+        let now = crate::clock::now();
 
         // Size snapshot for inline reconciliation: this path mutates the value
         // without going through `get_mut()`'s deferred-refresh mechanism. If a
@@ -1540,7 +1542,7 @@ impl Store for HashMapStore {
     fn idle_time(&self, key: &[u8]) -> Option<Duration> {
         self.data
             .get(key)
-            .map(|e| Instant::now().duration_since(e.metadata.last_access))
+            .map(|e| crate::clock::now().duration_since(e.metadata.last_access))
     }
 
     fn update_lfu_counter(&mut self, key: &[u8], log_factor: u8) {
@@ -1552,7 +1554,7 @@ impl Store for HashMapStore {
 
     fn get_lfu_value(&self, key: &[u8], decay_time: u64) -> Option<u8> {
         self.data.get(key).map(|e| {
-            let minutes_since = Instant::now()
+            let minutes_since = crate::clock::now()
                 .duration_since(e.metadata.last_access)
                 .as_secs()
                 / 60;

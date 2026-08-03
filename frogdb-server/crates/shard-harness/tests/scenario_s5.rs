@@ -148,11 +148,12 @@ async fn s5_ttl_arm_drains_xreadgroup_to_nogroup_after_f1_fix() {
 ///
 /// Real-path (turmoil) note: unlike the DEL / active-expiry arms, this outcome is
 /// not cleanly expressible over a live connection — proving the pre-fix non-drain
-/// required observing the waiter fall through to its BLOCK *timeout*, whose
-/// deadline is a real `std::time::Instant` slept on via
-/// `tokio::time::sleep_until` — a real->virtual `Instant` conversion whose
-/// resolution under turmoil's virtual clock is undefined. The shard driver
-/// observes the drain directly and deterministically.
+/// required observing the waiter fall through to its BLOCK *timeout*, and a
+/// timeout observed over the network is a race against the sweep rather than a
+/// statement about the drain. (The deadline itself is now a
+/// `tokio::time::Instant` end-to-end, so it is at least well-defined under a
+/// paused clock.) The shard driver observes the drain directly and
+/// deterministically.
 #[tokio::test]
 async fn regression_gap1_lazy_read_drains_xreadgroup() {
     let mut d = ShardDriver::new(1);

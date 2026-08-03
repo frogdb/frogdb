@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use frogdb_types::metrics::definitions::{
     EvictionBytesTotal, EvictionKeysTotal, EvictionOomTotal, EvictionSamplesTotal,
     TieredBytesSpilled, TieredSpills,
@@ -157,7 +155,7 @@ impl ShardWorker {
     /// and differ only in sampling scope.
     fn sample_with_ranker<R: EvictionRanker>(&mut self, volatile_only: bool, ranker: &R) {
         let samples = self.eviction.maxmemory_samples();
-        let now = Instant::now();
+        let now = crate::clock::now();
 
         let keys = if volatile_only {
             self.store.sample_volatile_keys(samples)
