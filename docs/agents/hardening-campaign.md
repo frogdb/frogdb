@@ -11,7 +11,7 @@ rationale: `.scratch/hardening/` (specs, issues, metrics).
 | 0 | Enablement (freeze, gating, recipes, frogdb-net) | **done** (2026-07-31) |
 | 1 | Transactions / VLL | **LOCKED** (2026-08-01) — mutation gate 90%, both crates at 100% |
 | 2 | Persistence / recovery | **LOCKED** (2026-08-02) — mutation gate 85%, frogdb-persistence 99.1%, frogdb-recovery 100% |
-| 3 | Replication runtime | pending — next |
+| 3 | Replication runtime | **in progress** — extracted (`docs/adr/0004-replication-runtime-seams.md`); spec at FM-REPLICATION-001..043; 8 bugs filed (issues 12-19); baselines `frogdb-replication` 74.7%, `frogdb-replication-runtime` 50.0% |
 | 4 | Cluster runtime | pending |
 
 Each area goes through: **extract → failure-mode spec → close known bugs → mutation-test →
