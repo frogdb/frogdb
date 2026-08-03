@@ -101,6 +101,7 @@ impl ShardWorker {
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
             master_link_up: self.identity.master_link_up(),
+            master_sync_error: self.identity.master_sync_error(),
         }
     }
 

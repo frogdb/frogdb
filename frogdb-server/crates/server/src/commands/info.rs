@@ -30,9 +30,9 @@ use frogdb_protocol::Response;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use frogdb_replication::SyncCountersSnapshot;
+use frogdb_replication::{BacklogGeometry, SyncCountersSnapshot};
 
-use crate::info::{ReplicaLine, sync_counter_fields};
+use crate::info::{backlog_geometry_fields, sync_counter_fields};
 use crate::latency_test;
 use frogdb_cluster::version_gate;
 
@@ -399,27 +399,66 @@ pub(crate) fn build_stats_info(sync: SyncCountersSnapshot) -> String {
     info
 }
 
+/// The `repl_backlog_*` block, rendered from the one shared field list the
+/// connection-level renderer also uses (FM-REPLICATION-059).
+///
+/// A free function taking the geometry — rather than reaching into `ctx` — so a
+/// unit test can compare this renderer's four lines against the other's for the
+/// same state, which is the check that would have caught the hardcoded pair
+/// (issue 20).
+pub(crate) fn build_backlog_info(geometry: BacklogGeometry) -> String {
+    backlog_geometry_fields(geometry)
+        .into_iter()
+        .map(|(name, value)| format!("{name}:{value}\r\n"))
+        .collect()
+}
+
+/// The replica-only `master_link_status` / `master_sync_error` block, rendered
+/// from the one shared field list the connection-level renderer also uses
+/// (FM-REPLICATION-061).
+///
+/// A free function taking the two values — rather than reaching into `ctx` —
+/// for the same reason [`build_backlog_info`] is one: a unit test can compare
+/// this renderer's lines against the other's for the same state.
+pub(crate) fn build_replica_link_info(master_link_up: bool, sync_error: Option<&str>) -> String {
+    crate::info::replica_link_fields(master_link_up, sync_error)
+        .into_iter()
+        .map(|(name, value)| format!("{name}:{value}\r\n"))
+        .collect()
+}
+
 fn build_replication_info(ctx: &CommandContext) -> String {
+    // Read before the role branch: the backlog capacity is a property of this
+    // node's config, not of the role it is currently running, and the offset is
+    // the node's one counter in either role.
+    let backlog = ctx
+        .replication_tracker
+        .map_or_else(Default::default, |tracker| tracker.backlog_geometry());
+    let node_repl_offset = ctx
+        .replication_tracker
+        .map_or(0, |tracker| tracker.current_offset());
     // Gate on the live role, not on the tracker's presence: the tracker is wired
     // at boot for every role (so a runtime promotion has live primary seams), so
     // its presence says nothing about whether this node is currently a primary.
     // Same rule the connection-level INFO handler follows.
     if let Some(tracker) = ctx.replication_tracker.filter(|_| !ctx.is_replica) {
-        let replicas = tracker.get_streaming_replicas();
+        // One feed for both INFO renderers, and `connected_slaves` is the count
+        // of the lines it yields — so the count and the list are one projection
+        // whatever phases the registry holds (FM-REPLICATION-060).
+        let replicas = crate::info::rendered_replicas(tracker);
         let repl_offset = tracker.current_offset();
-        let connected_slaves = replicas.len();
 
         let mut info = format!(
             "# Replication\r\n\
              role:master\r\n\
              connected_slaves:{}\r\n",
-            connected_slaves
+            replicas.len()
         );
 
         // One `slaveN:` spelling for both INFO renderers — see
         // [`ReplicaLine::render`] (FM-REPLICATION-049).
         for (i, replica) in replicas.iter().enumerate() {
-            info.push_str(&ReplicaLine::from_replica(replica).render(i));
+            info.push_str(&replica.render(i));
             info.push_str("\r\n");
         }
 
@@ -430,16 +469,11 @@ fn build_replication_info(ctx: &CommandContext) -> String {
              master_replid:{}\r\n\
              master_replid2:0000000000000000000000000000000000000000\r\n\
              master_repl_offset:{}\r\n\
-             second_repl_offset:-1\r\n\
-             repl_backlog_active:{}\r\n\
-             repl_backlog_size:1048576\r\n\
-             repl_backlog_first_byte_offset:0\r\n\
-             repl_backlog_histlen:{}\r\n\r\n",
-            repl_id,
-            repl_offset,
-            if connected_slaves > 0 { 1 } else { 0 },
-            repl_offset,
+             second_repl_offset:-1\r\n",
+            repl_id, repl_offset,
         ));
+        info.push_str(&build_backlog_info(backlog));
+        info.push_str("\r\n");
 
         info
     } else {
@@ -460,9 +494,9 @@ fn build_replication_info(ctx: &CommandContext) -> String {
             if let Some(port) = ctx.master_port {
                 info.push_str(&format!("master_port:{}\r\n", port));
             }
-            info.push_str(&format!(
-                "master_link_status:{}\r\n",
-                if ctx.master_link_up { "up" } else { "down" }
+            info.push_str(&build_replica_link_info(
+                ctx.master_link_up,
+                ctx.master_sync_error.as_deref(),
             ));
         }
 
@@ -471,14 +505,12 @@ fn build_replication_info(ctx: &CommandContext) -> String {
              master_failover_state:no-failover\r\n\
              master_replid:{}\r\n\
              master_replid2:0000000000000000000000000000000000000000\r\n\
-             master_repl_offset:0\r\n\
-             second_repl_offset:-1\r\n\
-             repl_backlog_active:0\r\n\
-             repl_backlog_size:1048576\r\n\
-             repl_backlog_first_byte_offset:0\r\n\
-             repl_backlog_histlen:0\r\n\r\n",
-            repl_id,
+             master_repl_offset:{}\r\n\
+             second_repl_offset:-1\r\n",
+            repl_id, node_repl_offset,
         ));
+        info.push_str(&build_backlog_info(backlog));
+        info.push_str("\r\n");
 
         info
     }

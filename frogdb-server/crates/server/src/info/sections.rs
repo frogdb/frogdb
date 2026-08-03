@@ -10,7 +10,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frogdb_cluster::version_gate;
 use frogdb_core::histogram::KeysizeType;
 
-use super::{InfoSection, InfoSources, SectionWriter, sync_counter_fields};
+use super::{
+    InfoSection, InfoSources, SectionWriter, backlog_geometry_fields, replica_link_fields,
+    sync_counter_fields,
+};
 
 /// The standard section registry, in canonical order.
 pub(super) fn all_sections() -> Vec<Box<dyn InfoSection>> {
@@ -431,23 +434,25 @@ impl InfoSection for ReplicationSection {
                 .field("master_replid", &replid)
                 .field("master_replid2", replid2)
                 .field("master_repl_offset", r.repl_offset)
-                .field("second_repl_offset", second_repl_offset)
-                .field(
-                    "repl_backlog_active",
-                    u8::from(!primary.replicas.is_empty()),
-                )
-                .field("repl_backlog_size", 1048576)
-                .field("repl_backlog_first_byte_offset", 0)
-                .field("repl_backlog_histlen", r.repl_offset);
+                .field("second_repl_offset", second_repl_offset);
+            // Geometry, not literals, and through the one shared list the
+            // shard-local renderer also uses (FM-REPLICATION-059).
+            for (name, value) in backlog_geometry_fields(r.backlog) {
+                w.field(name, value);
+            }
         } else {
             w.field("role", if r.is_replica { "slave" } else { "master" });
             if r.is_replica {
                 w.field_opt("master_host", r.master_host.as_deref())
-                    .field_opt("master_port", r.master_port)
-                    .field(
-                        "master_link_status",
-                        if r.master_link_up { "up" } else { "down" },
-                    );
+                    .field_opt("master_port", r.master_port);
+                // The link status and, only when the stream gave up, why —
+                // through the one shared list the shard-local renderer also
+                // uses (FM-REPLICATION-061).
+                for (name, value) in
+                    replica_link_fields(r.master_link_up, r.master_sync_error.as_deref())
+                {
+                    w.field(name, value);
+                }
             }
             w.field("connected_slaves", 0)
                 .field("master_failover_state", "no-failover")
@@ -458,11 +463,14 @@ impl InfoSection for ReplicationSection {
                 // freeze if promoted. Matches Redis, which keeps one
                 // `master_repl_offset` counter across both roles.
                 .field("master_repl_offset", r.repl_offset)
-                .field("second_repl_offset", second_repl_offset)
-                .field("repl_backlog_active", 0)
-                .field("repl_backlog_size", 1048576)
-                .field("repl_backlog_first_byte_offset", 0)
-                .field("repl_backlog_histlen", 0);
+                .field("second_repl_offset", second_repl_offset);
+            // Same list on the replica branch: the capacity is this node's
+            // config whatever role it runs, and an unarmed window renders
+            // `active:0` with a first byte offset and histlen of 0 by
+            // projection rather than by literal.
+            for (name, value) in backlog_geometry_fields(r.backlog) {
+                w.field(name, value);
+            }
         }
         w.finish()
     }
@@ -1127,7 +1135,8 @@ mod tests {
     fn a_slave_line_is_projected_from_the_replica_not_from_literals() {
         use frogdb_replication::Phase;
 
-        let line = ReplicaLine::from_replica(&streaming_replica(7001));
+        let line = ReplicaLine::from_replica(&streaming_replica(7001))
+            .expect("a streaming replica renders a line");
         assert_eq!(line.port, 7001, "the announced port, not 0");
         assert_eq!(line.state, ReplicaState::Online);
         assert_eq!(
@@ -1140,20 +1149,139 @@ mod tests {
         // what tells an operator the link is not yet usable for WAIT.
         let mut mid_sync = streaming_replica(7001);
         mid_sync.phase = Phase::StreamingCheckpoint;
-        let line = ReplicaLine::from_replica(&mid_sync);
+        let line = ReplicaLine::from_replica(&mid_sync).expect("a syncing replica renders a line");
         assert_eq!(line.state, ReplicaState::SendBulk);
         assert!(line.render(2).contains("state=send_bulk"), "{line:?}");
 
-        // Every phase maps to a state; none may render as `online` by default.
+        // Every phase maps to a state or to no line at all; none may render as
+        // `online` by default.
         for (phase, expected) in [
-            (Phase::Connecting, ReplicaState::WaitBgsave),
-            (Phase::PreparingCheckpoint, ReplicaState::WaitBgsave),
-            (Phase::StreamingCheckpoint, ReplicaState::SendBulk),
-            (Phase::Streaming, ReplicaState::Online),
-            (Phase::Disconnecting, ReplicaState::Offline),
+            (Phase::Connecting, Some(ReplicaState::WaitBgsave)),
+            (Phase::PreparingCheckpoint, Some(ReplicaState::WaitBgsave)),
+            (Phase::StreamingCheckpoint, Some(ReplicaState::SendBulk)),
+            (Phase::Streaming, Some(ReplicaState::Online)),
+            // No Redis spelling: the line is dropped (FM-REPLICATION-060).
+            (Phase::Disconnecting, None),
         ] {
-            assert_eq!(ReplicaState::from(phase), expected, "{phase:?}");
+            assert_eq!(ReplicaState::from_phase(phase), expected, "{phase:?}");
         }
+    }
+
+    /// A tracker holding one replica per requested phase, registered in the
+    /// order given so the ids ascend with the phases.
+    fn tracker_with_phases(
+        phases: &[frogdb_replication::Phase],
+    ) -> std::sync::Arc<frogdb_replication::ReplicationTrackerImpl> {
+        let tracker = frogdb_replication::ReplicationTrackerImpl::new_arc();
+        for (i, phase) in phases.iter().enumerate() {
+            let address = format!("127.0.0.1:{}", 54321 + i as u16).parse().unwrap();
+            let session = tracker.register_announced_replica(
+                address,
+                frogdb_replication::ReplicaAnnouncement {
+                    listening_port: 7000 + i as u16,
+                    ..Default::default()
+                },
+            );
+            session.force_phase_for_test(*phase);
+        }
+        tracker
+    }
+
+    // FM-REPLICATION-060
+    /// A replica being fed its checkpoint is *rendered*, as `send_bulk`. It is
+    /// the situation an operator opens `INFO replication` to see, and both
+    /// renderers used to feed from `get_streaming_replicas()`, so such a
+    /// replica appeared in no `slaveN:` line and in no `connected_slaves` count
+    /// — absent, not misreported (issue 21).
+    #[test]
+    fn a_replica_being_fed_a_checkpoint_is_rendered_as_send_bulk() {
+        use frogdb_replication::Phase;
+
+        let tracker = tracker_with_phases(&[Phase::StreamingCheckpoint]);
+        let lines = crate::info::rendered_replicas(&tracker);
+        assert_eq!(lines.len(), 1, "a syncing replica must be rendered");
+        assert_eq!(lines[0].state, ReplicaState::SendBulk);
+        assert!(lines[0].render(0).contains("state=send_bulk"), "{lines:?}");
+    }
+
+    // FM-REPLICATION-043
+    // FM-REPLICATION-060
+    /// `connected_slaves` is the count of rendered lines over the wider feed:
+    /// every replica in a phase Redis names, whatever its phase. The count and
+    /// the line list are one projection (FM-REPLICATION-043), so they cannot
+    /// drift regardless of which phases the registry holds.
+    #[test]
+    fn connected_slaves_counts_every_rendered_line() {
+        use frogdb_replication::Phase;
+
+        let tracker = tracker_with_phases(&[
+            Phase::Connecting,
+            Phase::PreparingCheckpoint,
+            Phase::StreamingCheckpoint,
+            Phase::Streaming,
+        ]);
+        let replicas = crate::info::rendered_replicas(&tracker);
+        assert_eq!(replicas.len(), 4, "every named phase is rendered");
+        assert_eq!(
+            replicas.iter().map(|l| l.state).collect::<Vec<_>>(),
+            vec![
+                ReplicaState::WaitBgsave,
+                ReplicaState::WaitBgsave,
+                ReplicaState::SendBulk,
+                ReplicaState::Online,
+            ],
+            "registry order is attach order, and each line states its own phase"
+        );
+
+        let mut src = sources();
+        src.replication.primary = Some(PrimarySnapshot { replicas });
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("connected_slaves:4\r\n"), "{out}");
+        let rendered = out.lines().filter(|l| l.starts_with("slave")).count();
+        assert_eq!(
+            rendered, 4,
+            "the count and the line count are one projection: {out}"
+        );
+    }
+
+    // FM-REPLICATION-060
+    /// The one phase that stays filtered. Redis's `genInfoSectionDict` emits a
+    /// line only for `wait_bgsave` / `send_bulk` / `online` and skips a slave in
+    /// any other state; `Disconnecting` is FrogDB's fourth phase and has no
+    /// Redis spelling, so it is dropped at the render boundary rather than
+    /// given the invented `offline` state it used to carry.
+    #[test]
+    fn a_disconnecting_replica_is_not_rendered() {
+        use frogdb_replication::Phase;
+
+        let tracker = tracker_with_phases(&[Phase::Streaming, Phase::Disconnecting]);
+        let lines = crate::info::rendered_replicas(&tracker);
+        assert_eq!(lines.len(), 1, "the tearing-down replica is dropped");
+        assert_eq!(lines[0].state, ReplicaState::Online);
+        assert_eq!(
+            lines[0].port, 7000,
+            "the surviving line is the first replica"
+        );
+    }
+
+    // FM-REPLICATION-060
+    /// The feed is ordered, so two consecutive `INFO` calls against an
+    /// unchanged registry render the same `slaveN:` indices. The registry is a
+    /// `HashMap`, whose iteration order is not stable across renders — an
+    /// operator watching `slave0:` would otherwise see it hop between replicas.
+    #[test]
+    fn rendered_replicas_are_ordered_by_attach() {
+        use frogdb_replication::Phase;
+
+        let tracker = tracker_with_phases(&[Phase::Streaming; 8]);
+        let ports = |lines: &[ReplicaLine]| lines.iter().map(|l| l.port).collect::<Vec<_>>();
+        let first = crate::info::rendered_replicas(&tracker);
+        assert_eq!(ports(&first), (7000..7008).collect::<Vec<u16>>());
+        assert_eq!(
+            ports(&crate::info::rendered_replicas(&tracker)),
+            ports(&first),
+            "the order must not depend on hash iteration"
+        );
     }
 
     // FM-REPLICATION-043, FM-REPLICATION-049
@@ -1166,7 +1294,7 @@ mod tests {
 
         let mut replica = streaming_replica(7001);
         replica.last_ack_time = Instant::now() - Duration::from_secs(4);
-        let line = ReplicaLine::from_replica(&replica);
+        let line = ReplicaLine::from_replica(&replica).expect("a streaming replica renders");
         assert_eq!(line.lag_secs, 4);
         assert!(line.render(0).ends_with(",lag=4"), "{line:?}");
     }
@@ -1215,6 +1343,50 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-058
+    /// After `CONFIG RESETSTAT` both renderers report zeros — read through the
+    /// tracker, the way the live server reads them, so the reset is observed at
+    /// the wire format and not only at the counter.
+    #[test]
+    fn both_info_renderers_report_zeros_after_the_counters_are_reset() {
+        use frogdb_core::ReplicationTrackerImpl;
+        use frogdb_replication::SyncOutcome;
+
+        let tracker = ReplicationTrackerImpl::new();
+        tracker.record_sync_outcome(SyncOutcome::PartialRefused);
+        tracker.record_sync_outcome(SyncOutcome::PartialOk);
+        tracker.record_sync_outcome(SyncOutcome::FullResyncRequested);
+        tracker.reset_sync_counters();
+
+        let sync = tracker.sync_counters();
+        let mut src = sources();
+        src.replication.sync = sync;
+
+        let expected = vec![
+            "sync_full:0".to_string(),
+            "sync_partial_ok:0".to_string(),
+            "sync_partial_err:0".to_string(),
+        ];
+        let sync_lines = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| line.starts_with("sync_"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let connection_level = render(&StatsSection, &src);
+        assert_eq!(
+            sync_lines(&connection_level),
+            expected,
+            "{connection_level}"
+        );
+        assert_eq!(
+            sync_lines(&crate::commands::info::build_stats_info(sync)),
+            expected
+        );
+    }
+
     // FM-REPLICATION-050
     /// A primary that has served no PSYNC reports all three at zero, and the
     /// zero is live rather than printed: nudging one counter away from zero
@@ -1237,6 +1409,143 @@ mod tests {
         assert!(out.contains("sync_partial_err:0\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-059
+    /// The size reported is the one the backlog was built with, in both
+    /// renderers. The pre-fix render printed Redis's 1 MiB default regardless,
+    /// so an operator could not use the field to confirm a tuned
+    /// `backlog-max-mb` had landed — the only reason to read it.
+    #[test]
+    fn the_backlog_size_reported_is_the_configured_one() {
+        use frogdb_replication::primary::ReplicationRingBuffer;
+
+        // A cap that is neither the Redis default nor the FrogDB default, so a
+        // literal of either shape fails this.
+        let ring = ReplicationRingBuffer::new(64, 3_145_728);
+        let geometry = ring.geometry(0);
+
+        let mut src = sources();
+        src.replication.backlog = geometry;
+        let connection_level = render(&ReplicationSection, &src);
+        assert!(
+            connection_level.contains("repl_backlog_size:3145728\r\n"),
+            "{connection_level}"
+        );
+        assert!(
+            !connection_level.contains("repl_backlog_size:1048576\r\n"),
+            "the 1 MiB literal must be gone: {connection_level}"
+        );
+
+        let shard_local = crate::commands::info::build_backlog_info(geometry);
+        assert!(
+            shard_local.contains("repl_backlog_size:3145728\r\n"),
+            "{shard_local}"
+        );
+    }
+
+    // FM-REPLICATION-059
+    /// The reported first byte offset is the armed eviction floor — the offset
+    /// below which a partial resync is refused (FM-REPLICATION-014). The
+    /// pre-fix `0` said the backlog serves from the beginning of history, which
+    /// is the opposite of what the floor means, and it is the field an operator
+    /// reads when diagnosing "why is every reconnect full-resyncing".
+    #[test]
+    fn the_first_byte_offset_reported_is_the_armed_floor() {
+        use bytes::Bytes;
+        use frogdb_replication::primary::ReplicationRingBuffer;
+
+        // Two entries of capacity; a third evicts the first and raises the
+        // floor to where the evicted entry ended.
+        let ring = ReplicationRingBuffer::new(2, 1024 * 1024);
+        ring.push(10, 0, Bytes::from("0123456789"));
+        ring.push(20, 0, Bytes::from("0123456789"));
+        ring.push(30, 0, Bytes::from("0123456789"));
+        let floor = ring.start_offset().expect("pushes arm the window");
+        assert_eq!(floor, 10, "eviction raised the floor");
+
+        let mut src = sources();
+        src.replication.backlog = ring.geometry(30);
+        src.replication.repl_offset = 30;
+        let out = render(&ReplicationSection, &src);
+        assert!(
+            out.contains(&format!("repl_backlog_first_byte_offset:{floor}\r\n")),
+            "{out}"
+        );
+        assert!(out.contains("repl_backlog_active:1\r\n"), "{out}");
+        // The window covers `(floor, head]`, so the two numbers must add up to
+        // the head rather than each being reported from a different instant.
+        assert!(out.contains("repl_backlog_histlen:20\r\n"), "{out}");
+    }
+
+    // FM-REPLICATION-059
+    /// The twin of `both_info_renderers_report_the_same_sync_counters`: the
+    /// four `repl_backlog_*` fields were literals in *both* renderers, so the
+    /// check that matters is that one state renders identically through both.
+    #[test]
+    fn both_info_renderers_report_the_same_backlog_geometry() {
+        use frogdb_replication::BacklogGeometry;
+
+        let geometry = BacklogGeometry {
+            active: true,
+            size_bytes: 5_242_880,
+            first_byte_offset: 4096,
+            histlen: 512,
+        };
+        let mut src = sources();
+        src.replication.backlog = geometry;
+
+        let backlog_lines = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| line.starts_with("repl_backlog_"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let connection_level = render(&ReplicationSection, &src);
+        assert_eq!(
+            backlog_lines(&connection_level),
+            vec![
+                "repl_backlog_active:1".to_string(),
+                "repl_backlog_size:5242880".to_string(),
+                "repl_backlog_first_byte_offset:4096".to_string(),
+                "repl_backlog_histlen:512".to_string(),
+            ],
+            "{connection_level}"
+        );
+        assert_eq!(
+            backlog_lines(&connection_level),
+            backlog_lines(&crate::commands::info::build_backlog_info(geometry)),
+            "the two INFO renderers must agree for the same state"
+        );
+    }
+
+    // FM-REPLICATION-059
+    /// A replica reports its node's configured capacity with no window open —
+    /// the replica branch had the same two literals as the primary one, and it
+    /// is the branch an operator reads while deciding whether a reconnect will
+    /// be partial.
+    #[test]
+    fn a_replica_reports_its_configured_capacity_with_no_window() {
+        use frogdb_replication::BacklogGeometry;
+
+        let mut src = sources();
+        src.replication.is_replica = true;
+        src.replication.backlog = BacklogGeometry {
+            active: false,
+            size_bytes: 2_097_152,
+            first_byte_offset: 0,
+            histlen: 0,
+        };
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("role:slave\r\n"), "{out}");
+        assert!(out.contains("repl_backlog_active:0\r\n"), "{out}");
+        assert!(out.contains("repl_backlog_size:2097152\r\n"), "{out}");
+        assert!(
+            out.contains("repl_backlog_first_byte_offset:0\r\n"),
+            "{out}"
+        );
+    }
+
     // FM-REPLICATION-043
     #[test]
     fn replication_primary_renders_slave_lines() {
@@ -1251,6 +1560,16 @@ mod tests {
             }],
         });
         src.replication.repl_offset = 100;
+        // `repl_backlog_active` follows the backlog's own window, not the
+        // replica count: a primary can have a replica attached and no window
+        // (the backlog disabled or TTL-freed), and a window with no replica
+        // attached (FM-REPLICATION-059).
+        src.replication.backlog = frogdb_replication::BacklogGeometry {
+            active: true,
+            size_bytes: 1024,
+            first_byte_offset: 0,
+            histlen: 100,
+        };
         let out = render(&ReplicationSection, &src);
         assert!(out.contains("role:master\r\n"), "{out}");
         assert!(out.contains("connected_slaves:1\r\n"), "{out}");
@@ -1376,5 +1695,99 @@ mod tests {
         // Rendered exactly once, straight from the accumulator — a duplicate
         // line would mean a stub anchor plus a patched copy survived.
         assert_eq!(out.matches("keyspace_hits:").count(), 1, "{out}");
+    }
+    // FM-REPLICATION-061
+    /// A stream that gave up says so in the field an operator reads, and names
+    /// both sides of the disagreement. Before this the only record was a log
+    /// line printed once per reconnect attempt: `INFO` showed
+    /// `master_link_status:down`, indistinguishable from a primary that is
+    /// merely restarting, so the node looked like it was catching up when it
+    /// had in fact stopped trying (issue 23).
+    #[test]
+    fn a_replica_that_gave_up_names_the_mismatch_in_info() {
+        let mut src = sources();
+        src.replication.is_replica = true;
+        src.replication.master_host = Some("10.0.0.1".to_string());
+        src.replication.master_port = Some(6380);
+        src.replication.master_link_up = false;
+        src.replication.master_sync_error = Some(
+            "shard-count mismatch: the primary's checkpoint was written with 4 shard(s), \
+             this node is configured for 2"
+                .to_string(),
+        );
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("master_link_status:down\r\n"), "{out}");
+        let line = out
+            .lines()
+            .find(|l| l.starts_with("master_sync_error:"))
+            .unwrap_or_else(|| panic!("no master_sync_error line: {out}"));
+        assert!(
+            line.contains("with 4 shard(s)") && line.contains("configured for 2"),
+            "the field must name both sides — neither node's own config shows the \
+             disagreement: {line}"
+        );
+    }
+
+    // FM-REPLICATION-061
+    /// A link that is down but still retrying renders **no** `master_sync_error`
+    /// at all. The field's presence is the whole signal ("this needs a human"),
+    /// so rendering it empty, or with a placeholder, on every transient
+    /// disconnect would make it worthless for alerting.
+    #[test]
+    fn a_link_that_is_merely_down_renders_no_sync_error() {
+        let mut src = sources();
+        src.replication.is_replica = true;
+        src.replication.master_host = Some("10.0.0.1".to_string());
+        src.replication.master_port = Some(6380);
+        src.replication.master_link_up = false;
+        src.replication.master_sync_error = None;
+        let out = render(&ReplicationSection, &src);
+        assert!(out.contains("master_link_status:down\r\n"), "{out}");
+        assert!(
+            !out.contains("master_sync_error"),
+            "an absent refusal must render no line at all: {out}"
+        );
+    }
+
+    // FM-REPLICATION-061
+    /// Both renderers report the same link block for the same state — including
+    /// the refusal. A node whose clients saw `master_sync_error` but whose
+    /// `redis.call('INFO')` did not (or the reverse) is the split this repo has
+    /// now hit three times (FM-REPLICATION-043, -059, -060).
+    #[test]
+    fn both_renderers_report_the_same_replica_link_block() {
+        let link_lines = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| {
+                    line.starts_with("master_link_status") || line.starts_with("master_sync_error")
+                })
+                .map(str::to_string)
+                .collect()
+        };
+
+        for (link_up, refusal) in [
+            (true, None),
+            (false, None),
+            (
+                false,
+                Some("warm-tier mismatch: this node has tiered-storage.enabled = false"),
+            ),
+        ] {
+            let mut src = sources();
+            src.replication.is_replica = true;
+            src.replication.master_host = Some("10.0.0.1".to_string());
+            src.replication.master_port = Some(6380);
+            src.replication.master_link_up = link_up;
+            src.replication.master_sync_error = refusal.map(str::to_string);
+
+            let connection_level = render(&ReplicationSection, &src);
+            let shard_local = crate::commands::info::build_replica_link_info(link_up, refusal);
+            assert_eq!(
+                link_lines(&connection_level),
+                link_lines(&shard_local),
+                "the two INFO renderers must agree for link_up={link_up}, refusal={refusal:?}"
+            );
+        }
     }
 }

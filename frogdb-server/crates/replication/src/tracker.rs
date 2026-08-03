@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
+use crate::primary::ring_buffer::{BacklogGeometry, ReplicationRingBuffer};
 use crate::replica_session::{
     Phase, ReplicaAnnouncement, ReplicaInfo, ReplicaSession, ack_age_secs,
 };
@@ -72,6 +73,18 @@ pub struct ReplicationTrackerImpl {
     /// cares about is how often replicas *had* to resync, and the sessions that
     /// resynced are long gone.
     sync_counters: SyncCounters,
+
+    /// The replication backlog, published here by
+    /// [`crate::primary::PrimaryReplicationHandler::new`] so `INFO
+    /// replication` can read the live window in either role.
+    ///
+    /// Kept here for the same reason [`Self::sync_counters`] is: the tracker is
+    /// the one object both INFO renderers reach (FM-REPLICATION-050), and the
+    /// shard-local renderer has no route to the handler at all. `None` only
+    /// before publication (and in unit tests that build a bare tracker), which
+    /// reads as "this node has no backlog" — the honest answer for a tracker
+    /// that never got one.
+    backlog: RwLock<Option<Arc<ReplicationRingBuffer>>>,
 }
 
 impl Default for ReplicationTrackerImpl {
@@ -90,6 +103,7 @@ impl ReplicationTrackerImpl {
             ack_notify,
             lag_disconnect_times: RwLock::new(HashMap::new()),
             sync_counters: SyncCounters::default(),
+            backlog: RwLock::new(None),
         }
     }
 
@@ -175,13 +189,23 @@ impl ReplicationTrackerImpl {
         self.replicas.read().get(&replica_id).map(|s| s.snapshot())
     }
 
-    /// Snapshots of all registered replicas (any phase).
+    /// Snapshots of all registered replicas (any phase), in attach order.
+    ///
+    /// This is the feed `INFO replication` renders `slaveN:` lines from
+    /// (FM-REPLICATION-060), which is why the order matters: the registry is a
+    /// `HashMap`, so without the sort two consecutive `INFO` calls against an
+    /// unchanged set of replicas could number the same replica `slave0:` and
+    /// `slave2:`. Replica ids are handed out by a monotonic counter, so sorting
+    /// by id *is* attach order.
     pub fn get_all_replicas(&self) -> Vec<ReplicaInfo> {
-        self.replicas
+        let mut replicas: Vec<ReplicaInfo> = self
+            .replicas
             .read()
             .values()
             .map(|s| s.snapshot())
-            .collect()
+            .collect();
+        replicas.sort_unstable_by_key(|r| r.id);
+        replicas
     }
 
     /// Snapshots of replicas currently in the live-streaming phase.
@@ -191,12 +215,18 @@ impl ReplicationTrackerImpl {
     /// listing all read this one accessor, so "which replicas count and what
     /// have they acknowledged" has a single definition.
     pub fn get_streaming_replicas(&self) -> Vec<ReplicaInfo> {
-        self.replicas
+        let mut replicas: Vec<ReplicaInfo> = self
+            .replicas
             .read()
             .values()
             .filter(|s| matches!(s.phase(), Phase::Streaming))
             .map(|s| s.snapshot())
-            .collect()
+            .collect();
+        // Same reason as [`Self::get_all_replicas`]: `ROLE`'s replica array is
+        // positional on the wire, so hash order would reshuffle it between two
+        // calls that observed no change at all.
+        replicas.sort_unstable_by_key(|r| r.id);
+        replicas
     }
 
     /// Whether *any* replica is currently in the live-streaming phase.
@@ -309,6 +339,41 @@ impl ReplicationTrackerImpl {
     /// consistent triple, for `INFO`.
     pub fn sync_counters(&self) -> SyncCountersSnapshot {
         self.sync_counters.snapshot()
+    }
+
+    /// Publish the replication backlog so `INFO replication` can report its
+    /// real geometry.
+    ///
+    /// Called once, from [`crate::primary::PrimaryReplicationHandler::new`],
+    /// which owns the ring. Re-publishing replaces the handle rather than
+    /// panicking: a node can build a second handler (test wiring, and the
+    /// cluster's per-shard init), and the newest ring is the one INFO should
+    /// describe.
+    pub fn publish_backlog(&self, backlog: Arc<ReplicationRingBuffer>) {
+        *self.backlog.write() = Some(backlog);
+    }
+
+    /// The backlog window as INFO reports it, measured against this tracker's
+    /// live offset so the pair cannot describe different instants.
+    ///
+    /// All-zero when no backlog has been published — see [`Self::backlog`].
+    pub fn backlog_geometry(&self) -> BacklogGeometry {
+        let current = self.current_offset();
+        self.backlog
+            .read()
+            .as_ref()
+            .map(|backlog| backlog.geometry(current))
+            .unwrap_or_default()
+    }
+
+    /// Zero the three resync counters — `CONFIG RESETSTAT`.
+    ///
+    /// Deliberately narrower than "reset the tracker": the registered replicas,
+    /// the offset, and the lag-disconnect history are live state describing the
+    /// stream *right now*, and an operator resetting statistics is not asking to
+    /// forget who is attached. Only the three lifetime tallies move.
+    pub fn reset_sync_counters(&self) {
+        self.sync_counters.reset();
     }
 
     /// Record that a replica was proactively disconnected due to lag.
@@ -444,6 +509,28 @@ mod tests {
         assert_eq!(tracker.count_acked(101), 0);
         tracker.record_ack(session.id(), 200);
         assert_eq!(tracker.count_acked(200), 1);
+    }
+
+    // FM-REPLICATION-058
+    /// `CONFIG RESETSTAT` reaches the counters through the tracker, and stops
+    /// there: the attached replicas and the stream offset are live state, not
+    /// statistics, and survive the reset.
+    #[test]
+    fn resetting_the_sync_counters_leaves_the_replica_registry_and_offset_alone() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.set_offset(1000);
+        tracker.record_ack(session.id(), 800);
+        tracker.record_sync_outcome(SyncOutcome::PartialRefused);
+        assert_eq!(tracker.sync_counters().full, 1);
+
+        tracker.reset_sync_counters();
+
+        assert_eq!(tracker.sync_counters(), SyncCountersSnapshot::default());
+        assert_eq!(tracker.replica_count(), 1);
+        assert_eq!(tracker.current_offset(), 1000);
+        assert_eq!(tracker.replica_lag(session.id()), Some(200));
     }
 
     // FM-REPLICATION-043

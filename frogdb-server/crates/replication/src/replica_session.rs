@@ -108,7 +108,7 @@ impl ReplicaCapabilities {
 /// [`crate::tracker::ReplicationTrackerImpl::register_announced_replica`] at
 /// the PSYNC handoff, so a session is never registered with a placeholder
 /// identity that INFO could observe.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplicaAnnouncement {
     /// The port the replica itself serves on — Redis's `slave_listening_port`,
     /// and what `INFO replication` / `ROLE` report so an operator or an
@@ -117,6 +117,17 @@ pub struct ReplicaAnnouncement {
     pub listening_port: u16,
     /// The capabilities it claims.
     pub capabilities: ReplicaCapabilities,
+    /// The replica's FrogDB binary version, as sent by `REPLCONF
+    /// frogdb-version` (`CARGO_PKG_VERSION` on the replica).
+    ///
+    /// `None` means **unknown**, and unknown is not the same as old-and-fine:
+    /// it is what a peer that never sent the option produces, which is any
+    /// replica predating the option *and* any non-FrogDB peer. A consumer that
+    /// gates on versions must therefore treat `None` as blocking; treating it
+    /// as satisfied is how a version gate fails open. Deliberately kept as the
+    /// raw announced string rather than a parsed semver: this is a record of
+    /// what the peer *said*, and a peer can say anything.
+    pub version: Option<String>,
 }
 
 impl ReplicaAnnouncement {
@@ -127,18 +138,21 @@ impl ReplicaAnnouncement {
         match option {
             AnnouncedOption::ListeningPort(port) => self.listening_port = port,
             AnnouncedOption::Capabilities(caps) => self.capabilities = caps,
+            AnnouncedOption::Version(version) => self.version = Some(version),
         }
     }
 }
 
 /// A single `REPLCONF` option that describes the replica rather than acting on
 /// the link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnouncedOption {
     /// `REPLCONF listening-port <port>`.
     ListeningPort(u16),
     /// `REPLCONF capa <cap> [<cap> …]`.
     Capabilities(ReplicaCapabilities),
+    /// `REPLCONF frogdb-version <version>` — the replica's binary version.
+    Version(String),
 }
 
 /// Why an announcing `REPLCONF` could not be read.
@@ -156,6 +170,12 @@ pub enum AnnouncementError {
     InvalidPortEncoding,
     /// `listening-port` whose value is valid UTF-8 but not a `u16`.
     InvalidPort,
+    /// `frogdb-version` with no value.
+    MissingVersion,
+    /// `frogdb-version` whose value is not valid UTF-8. There is no
+    /// "invalid version *number*" twin: the version is recorded verbatim and
+    /// never parsed here, so the only way it can fail is by not being text.
+    InvalidVersionEncoding,
 }
 
 impl AnnouncedOption {
@@ -197,6 +217,12 @@ impl AnnouncedOption {
                     &named,
                 ))))
             }
+            "frogdb-version" => {
+                let raw = args.get(1).ok_or(AnnouncementError::MissingVersion)?;
+                let version = std::str::from_utf8(raw)
+                    .map_err(|_| AnnouncementError::InvalidVersionEncoding)?;
+                Ok(Some(Self::Version(version.to_string())))
+            }
             _ => Ok(None),
         }
     }
@@ -228,6 +254,8 @@ pub struct ReplicaInfo {
     pub connected_at: Instant,
     pub phase: Phase,
     pub capabilities: ReplicaCapabilities,
+    /// What the replica announced over `REPLCONF frogdb-version`, verbatim.
+    /// `None` is **unknown**, not "old" — see [`ReplicaAnnouncement::version`].
     pub replica_version: Option<String>,
 }
 
@@ -284,6 +312,9 @@ struct SessionInner {
     last_ack_time: Instant,
     listening_port: u16,
     capabilities: ReplicaCapabilities,
+    /// Seeded from the announcement at construction, exactly like the port and
+    /// the capabilities — there is no setter, so it cannot be observed in a
+    /// placeholder state (FM-REPLICATION-049).
     replica_version: Option<String>,
     /// Set once the checkpoint dir has been created and is owed cleanup.
     sync_checkpoint_path: Option<PathBuf>,
@@ -345,7 +376,7 @@ impl ReplicaSession {
                 last_ack_time: now,
                 listening_port: announcement.listening_port,
                 capabilities: announcement.capabilities,
-                replica_version: None,
+                replica_version: announcement.version,
                 sync_checkpoint_path: None,
                 sync_total_bytes: 0,
                 sync_started_at: None,
@@ -380,6 +411,8 @@ impl ReplicaSession {
     pub fn capabilities(&self) -> ReplicaCapabilities {
         self.inner.read().capabilities
     }
+    /// The replica's announced FrogDB version, or `None` for a peer that never
+    /// announced one — unknown, which a version gate must treat as blocking.
     pub fn replica_version(&self) -> Option<String> {
         self.inner.read().replica_version.clone()
     }
@@ -1414,6 +1447,107 @@ mod tests {
         assert!(
             announcement.capabilities.psync2,
             "a port announcement must not clear capabilities"
+        );
+    }
+
+    // FM-REPLICATION-049
+    /// The third announcing option. The replica has always sent `REPLCONF
+    /// frogdb-version` on every handshake; the primary parsed it, logged it and
+    /// dropped it, so `ReplicaInfo::replica_version` was `None` for every
+    /// replica that ever connected (issue 22). It rides the same announcement
+    /// as the other two.
+    #[test]
+    fn a_replica_that_announced_its_version_is_recorded_with_it() {
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(
+            parse_announcement(&["frogdb-version", "0.1.0"])
+                .expect("a well-formed version parses")
+                .expect("frogdb-version describes the replica"),
+        );
+        assert_eq!(announcement.version.as_deref(), Some("0.1.0"));
+
+        let session = ReplicaSession::announced(1, addr(), announcement);
+        assert_eq!(session.replica_version().as_deref(), Some("0.1.0"));
+        assert_eq!(
+            session.snapshot().replica_version.as_deref(),
+            Some("0.1.0"),
+            "the announced version must survive into the ReplicaInfo consumers read"
+        );
+    }
+
+    // FM-REPLICATION-049
+    /// A peer that never announced a version is recorded as **unknown**, and
+    /// unknown must stay distinguishable from any real version: it is what a
+    /// replica predating the option and any non-FrogDB peer both produce, so a
+    /// gate that reads it as satisfied fails open.
+    #[test]
+    fn a_replica_that_announced_no_version_is_recorded_as_unknown() {
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(AnnouncedOption::ListeningPort(7001));
+
+        let session = ReplicaSession::announced(1, addr(), announcement);
+        assert_eq!(
+            session.replica_version(),
+            None,
+            "no announcement means unknown, never a default version string"
+        );
+        assert_eq!(session.snapshot().replica_version, None);
+    }
+
+    // FM-REPLICATION-049
+    /// The overwrite-only-its-own-kind rule extends to the third option: a
+    /// re-announced version must not clear the port or the capabilities, and a
+    /// re-announced port must not clear the version.
+    #[test]
+    fn re_announcing_the_version_does_not_clear_the_port_or_capabilities() {
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(AnnouncedOption::ListeningPort(7001));
+        announcement.absorb(AnnouncedOption::Capabilities(ReplicaCapabilities {
+            eof: true,
+            psync2: true,
+        }));
+        announcement.absorb(AnnouncedOption::Version("0.1.0".to_string()));
+        announcement.absorb(AnnouncedOption::Version("0.2.0".to_string()));
+
+        assert_eq!(
+            announcement.version.as_deref(),
+            Some("0.2.0"),
+            "the later version wins"
+        );
+        assert_eq!(announcement.listening_port, 7001);
+        assert!(announcement.capabilities.eof && announcement.capabilities.psync2);
+
+        announcement.absorb(AnnouncedOption::ListeningPort(7002));
+        assert_eq!(
+            announcement.version.as_deref(),
+            Some("0.2.0"),
+            "a port announcement must not clear the version"
+        );
+    }
+
+    // FM-REPLICATION-049
+    /// A `frogdb-version` that cannot be read is refused at the option, like an
+    /// unreadable port — the connection stays open and the replica may carry on
+    /// to `PSYNC` (FM-REPLICATION-018).
+    #[test]
+    fn an_unreadable_frogdb_version_is_refused() {
+        assert_eq!(
+            parse_announcement(&["frogdb-version"]),
+            Err(AnnouncementError::MissingVersion)
+        );
+        assert_eq!(
+            AnnouncedOption::parse(&[
+                Bytes::from_static(b"frogdb-version"),
+                Bytes::from_static(&[0xFF, 0xFE]),
+            ]),
+            Err(AnnouncementError::InvalidVersionEncoding)
+        );
+        // Anything that *is* text is recorded verbatim: this records what the
+        // peer said, and a peer can say anything.
+        assert_eq!(
+            parse_announcement(&["FROGDB-VERSION", "not-a-semver"]).unwrap(),
+            Some(AnnouncedOption::Version("not-a-semver".to_string())),
+            "the subcommand is case-insensitive and the value is not validated"
         );
     }
 
@@ -3079,6 +3213,7 @@ mod tests {
                 eof: true,
                 psync2: true,
             },
+            version: Some("0.1.0".to_string()),
         };
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
@@ -3118,6 +3253,11 @@ mod tests {
             "the registry must carry the announced port, not 0"
         );
         assert!(replicas[0].capabilities.psync2);
+        assert_eq!(
+            replicas[0].replica_version.as_deref(),
+            Some("0.1.0"),
+            "the registry must carry the announced version, not None (issue 22)"
+        );
 
         drop(client);
         let _ = task.await.unwrap();

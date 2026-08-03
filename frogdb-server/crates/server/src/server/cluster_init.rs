@@ -1059,6 +1059,10 @@ mod tests {
         fn master_link_up(&self) -> bool {
             false
         }
+
+        fn sync_refusal(&self) -> Option<String> {
+            None
+        }
     }
 
     fn addr(s: &str) -> SocketAddr {

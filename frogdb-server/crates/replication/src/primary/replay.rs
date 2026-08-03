@@ -115,7 +115,11 @@ impl BacklogTtl {
 /// backlog contains and what offsets it can still serve.
 pub struct PartialSyncReplay {
     /// The backlog of recent RESP-encoded commands keyed by their *end* offset.
-    backlog: ReplicationRingBuffer,
+    ///
+    /// Held by `Arc` so the ring itself — not a copy of its numbers — can be
+    /// published to the replication tracker for INFO to read
+    /// ([`Self::backlog_handle`]).
+    backlog: Arc<ReplicationRingBuffer>,
     /// Whether the backlog is populated. When `false`, [`Self::record`] is a
     /// no-op and every grant falls back to a full resync ([`FullResyncReason::Disabled`]).
     enabled: bool,
@@ -177,10 +181,24 @@ impl PartialSyncReplay {
     /// constructed (so accessors are infallible); writes are gated on `enabled`.
     pub fn new(config: &BacklogConfig) -> Self {
         Self {
-            backlog: ReplicationRingBuffer::new(config.max_entries, config.max_bytes),
+            backlog: Arc::new(ReplicationRingBuffer::new(
+                config.max_entries,
+                config.max_bytes,
+            )),
             enabled: config.enabled,
             ttl: Arc::new(BacklogTtl::new(config.ttl_secs)),
         }
+    }
+
+    /// The ring itself, for a consumer that must read the *live* window rather
+    /// than a value copied at wiring time.
+    ///
+    /// Handed out as an `Arc` for the same reason [`Self::backlog_ttl`] is: the
+    /// replication tracker is the one object both INFO renderers reach in either
+    /// role (FM-REPLICATION-050), so the geometry is published to it once at
+    /// construction and read live from there (FM-REPLICATION-059).
+    pub fn backlog_handle(&self) -> Arc<ReplicationRingBuffer> {
+        self.backlog.clone()
     }
 
     /// The live TTL seam. Handed out as an `Arc` so `ConfigManager` can retune

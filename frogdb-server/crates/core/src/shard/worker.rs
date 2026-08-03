@@ -327,6 +327,7 @@ impl ShardWorker {
             master_host: self.identity.master_host(),
             master_port: self.identity.master_port(),
             master_link_up: self.identity.master_link_up(),
+            master_sync_error: self.identity.master_sync_error(),
             json_limits: self.json_limits,
             effects: Default::default(),
         }
@@ -911,7 +912,7 @@ mod command_context_tests {
         let mut worker = minimal_worker();
         worker.set_is_replica(true);
         let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
-        worker.set_role_controller(Arc::new(FixedRoleController(Some(target), true)));
+        worker.set_role_controller(Arc::new(FixedRoleController::new(Some(target), true)));
 
         let ctx = worker.command_context(42, ProtocolVersion::Resp2);
         assert!(ctx.is_replica, "built context must report replica role");

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::offset::ReplicaOffset;
 use super::payload_reader::PayloadReader;
-use super::{FullSyncPayload, SnapshotInstaller};
+use super::{FullSyncPayload, InstallError, SnapshotInstaller};
 use parking_lot::RwLock;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -132,6 +132,11 @@ pub struct ReplicaConnection {
     /// wiring that has no shards, which degrades to the staged-for-next-boot
     /// behaviour (warned about in [`Self::receive_checkpoint`]).
     pub(crate) snapshot_installer: Option<SnapshotInstaller>,
+    /// Shared with the owning [`super::ReplicaReplicationHandler`]: the latch
+    /// this connection sets when an install comes back
+    /// [`InstallError::Incompatible`], which is what stops the reconnect loop
+    /// and what INFO reports (issue 23).
+    pub(crate) sync_refusal: Arc<RwLock<Option<String>>>,
     /// Live stream bytes a full-sync payload read pulled off the socket past
     /// the trailer, parked here by [`PayloadReader`] until
     /// [`Self::take_pending_stream_bytes`] seeds the streaming decoder with
@@ -416,7 +421,9 @@ impl ReplicaConnection {
     /// offset is adopted only after the install succeeds, so the replica never
     /// advertises (or streams deltas onto) a keyspace that never took the base
     /// snapshot. An install failure rewinds the offset to 0, which makes the
-    /// next reconnect send `PSYNC ? -1` and retry the whole full resync.
+    /// next reconnect send `PSYNC ? -1` and retry the whole full resync — unless
+    /// the installer refused the payload outright ([`InstallError::Incompatible`]),
+    /// in which case there is no next reconnect: see [`Self::install_payload`].
     ///
     /// **Receive → stream continuity.** The transport loop runs on
     /// [`Self::payload_reader`], not a bare `BufReader`, so the live frames the
@@ -475,6 +482,14 @@ impl ReplicaConnection {
     /// Hand the received dataset to the injected installer, rewinding the offset
     /// on failure so the next reconnect asks for a fresh full resync instead of
     /// streaming deltas onto a keyspace that never adopted the base snapshot.
+    ///
+    /// Two failures, two behaviours. A [`InstallError::Transient`] one is the
+    /// case above: rewind, drop the link, reconnect, ask again. An
+    /// [`InstallError::Incompatible`] one cannot be fixed by asking again — the
+    /// primary would cut and ship another whole checkpoint for a payload this
+    /// node refuses identically — so it is latched into the shared
+    /// `sync_refusal`, which stops the reconnect loop and surfaces in INFO
+    /// (issue 23).
     async fn install_payload(&mut self, payload: FullSyncPayload) -> io::Result<()> {
         let Some(installer) = self.snapshot_installer.clone() else {
             match &payload {
@@ -495,15 +510,32 @@ impl ReplicaConnection {
             }
             return Ok(());
         };
-        if let Err(e) = installer(payload).await {
-            tracing::error!(error = %e, "Failed to install the full-resync dataset into the live keyspace");
-            // Best effort: if the stream was retired meanwhile, the heads belong
-            // to whoever retired it and the rewind is neither possible nor
-            // needed.
-            let _ = self.offsets.reset_to(0);
-            return Err(e);
+        match installer(payload).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                // Latch the terminal case *before* returning: the reconnect loop
+                // reads this to decide whether the failure is worth another full
+                // checkpoint, and INFO reads it for as long as the node stays
+                // stuck (issue 23).
+                if let InstallError::Incompatible { detail } = &err {
+                    tracing::error!(
+                        detail = %detail,
+                        "Refusing the full-resync dataset: this node can never install it"
+                    );
+                    *self.sync_refusal.write() = Some(detail.clone());
+                } else {
+                    tracing::error!(
+                        error = %err,
+                        "Failed to install the full-resync dataset into the live keyspace"
+                    );
+                }
+                // Best effort: if the stream was retired meanwhile, the heads belong
+                // to whoever retired it and the rewind is neither possible nor
+                // needed.
+                let _ = self.offsets.reset_to(0);
+                Err(err.into())
+            }
         }
-        Ok(())
     }
 
     pub(crate) async fn read_ok_response(&mut self) -> io::Result<()> {
@@ -534,7 +566,7 @@ mod tests {
     use crate::replica::offset::{AppliedOffset, ReplicaOffset};
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
 
     #[test]
     fn psync_request_args_asks_full_resync_when_never_synced() {
@@ -580,6 +612,7 @@ mod tests {
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
         };
 
@@ -632,6 +665,7 @@ mod tests {
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
         };
 
@@ -762,6 +796,7 @@ mod tests {
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: installer,
+            sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
         };
 
@@ -834,7 +869,7 @@ mod tests {
                     };
                     seen.lock().unwrap().push((dir, offsets.current()));
                     Ok(())
-                }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+                }) as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
             }) as SnapshotInstaller
         };
 
@@ -863,8 +898,11 @@ mod tests {
     async fn receive_checkpoint_install_failure_rewinds_offset_for_full_resync() {
         let tmp = tempfile::tempdir().unwrap();
         let failing = Arc::new(|_payload: FullSyncPayload| {
-            Box::pin(async { Err(io::Error::other("shard install failed")) })
-                as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+            Box::pin(async {
+                Err(InstallError::Transient(io::Error::other(
+                    "shard install failed",
+                )))
+            }) as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
         }) as SnapshotInstaller;
 
         let mut f = checkpoint_fixture(tmp.path(), 4242, Some(failing)).await;
@@ -977,6 +1015,7 @@ mod tests {
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: installer,
+            sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
         };
 
@@ -1023,7 +1062,7 @@ mod tests {
                     let at = offsets.expect("offsets wired").current();
                     seen.lock().unwrap().push((blobs, at));
                     Ok(())
-                }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+                }) as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
             }) as SnapshotInstaller;
             let f = dataset_fixture(tmp.path(), blobs.clone(), 4242, false, Some(recorder)).await;
             *observed.lock().unwrap() = Some(f.offsets.clone());
@@ -1082,7 +1121,8 @@ mod tests {
             let installed = installed.clone();
             Arc::new(move |_payload: FullSyncPayload| {
                 installed.store(true, Ordering::Release);
-                Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+                Box::pin(async { Ok(()) })
+                    as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
             }) as SnapshotInstaller
         };
 
@@ -1134,6 +1174,7 @@ mod tests {
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
         };
 
@@ -1276,6 +1317,7 @@ mod tests {
                 link_up: Arc::new(AtomicBool::new(false)),
                 ack_interval: Duration::from_secs(1),
                 snapshot_installer: None,
+                sync_refusal: Arc::new(RwLock::new(None)),
                 pending_stream_bytes: BytesMut::new(),
             };
 
@@ -1361,6 +1403,7 @@ mod tests {
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
             snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
         };
         client.write_all(truncated).await.unwrap();
@@ -1461,7 +1504,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (tail, advance) = live_frame_tail(&[b"*1\r\n$4\r\nPING\r\n"]);
         let installer = Arc::new(|_payload: FullSyncPayload| {
-            Box::pin(async { Ok(()) }) as Pin<Box<dyn Future<Output = io::Result<()>> + Send>>
+            Box::pin(async { Ok(()) })
+                as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
         }) as SnapshotInstaller;
 
         let mut f = dataset_fixture_with_tail(
@@ -1479,6 +1523,197 @@ mod tests {
 
         assert_eq!(frames, vec![Bytes::from_static(b"*1\r\n$4\r\nPING\r\n")]);
         assert_eq!(f.offsets.current(), 4242 + advance);
+    }
+
+    // ---- terminal install refusals (issue 23) -----------------------------
+
+    /// An installer that classifies every payload the same way.
+    fn classifying_installer(refuse: bool) -> SnapshotInstaller {
+        Arc::new(move |_payload: FullSyncPayload| {
+            let err = if refuse {
+                InstallError::Incompatible {
+                    detail: "shard-count mismatch: the primary's checkpoint was written with 2 \
+                             shard(s), this node is configured for 1"
+                        .to_string(),
+                }
+            } else {
+                InstallError::Transient(io::Error::other("shard install failed"))
+            };
+            Box::pin(async move { Err(err) })
+                as Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
+        }) as SnapshotInstaller
+    }
+
+    // FM-REPLICATION-061
+    /// An install this node can never accept latches the refusal the reconnect
+    /// loop reads; an ordinary install failure does not, so the two stay
+    /// distinguishable *after* the connection that learned it is gone. Before
+    /// this, both were the same `io::Error` and the only record of the
+    /// difference was a log line that scrolled past once per attempt.
+    #[tokio::test]
+    async fn an_incompatible_install_latches_the_refusal_and_a_transient_one_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let mut f = checkpoint_fixture(tmp.path(), 4242, Some(classifying_installer(true))).await;
+        let refusal = f.conn.sync_refusal.clone();
+        let err = f.conn.receive_checkpoint(f.file_count).await.unwrap_err();
+        let latched = refusal.read().clone().expect("the refusal must be latched");
+        assert!(
+            latched.contains("with 2 shard(s)") && latched.contains("configured for 1"),
+            "the latched reason must name both sides: {latched}"
+        );
+        assert!(
+            err.to_string().contains("full resync refused"),
+            "the wire error must say it was refused, not merely that it failed: {err}"
+        );
+        assert_eq!(
+            f.offsets.current(),
+            0,
+            "still rewound: nothing was installed"
+        );
+        assert!(!f.link_up.load(Ordering::Acquire));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut f = checkpoint_fixture(tmp.path(), 4242, Some(classifying_installer(false))).await;
+        let refusal = f.conn.sync_refusal.clone();
+        f.conn.receive_checkpoint(f.file_count).await.unwrap_err();
+        assert!(
+            refusal.read().is_none(),
+            "an ordinary install failure must stay retryable"
+        );
+    }
+
+    /// A primary that answers the handshake and ships a live dataset, over an
+    /// in-memory duplex. Every dial is counted, so a test asserts what the
+    /// reconnect loop *did* rather than how long it slept.
+    ///
+    /// It writes its whole script up front and never reads: the replica's three
+    /// handshake commands plus `PSYNC` are a few hundred bytes against a 64 KiB
+    /// duplex, so nothing blocks. The client halves are parked in the returned
+    /// `Vec` — a dropped one turns the replica's ACK writes into a broken pipe
+    /// instead of the clean close under test.
+    #[allow(clippy::type_complexity)]
+    fn scripted_primary_factory() -> (
+        crate::replica::ConnectFactory,
+        Arc<AtomicUsize>,
+        Arc<std::sync::Mutex<Vec<tokio::io::DuplexStream>>>,
+    ) {
+        let dials = Arc::new(AtomicUsize::new(0));
+        let parked: Arc<std::sync::Mutex<Vec<tokio::io::DuplexStream>>> = Arc::default();
+        let counter = dials.clone();
+        let keep = parked.clone();
+        let factory: crate::replica::ConnectFactory = Arc::new(move |_addr| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let keep = keep.clone();
+            Box::pin(async move {
+                let (mut client, server) = tokio::io::duplex(64 * 1024);
+                let body =
+                    encode_dataset_body(&[b"shard-zero".to_vec()], "primary-replid", 99, false)
+                        .await;
+                let mut script: Vec<u8> = Vec::new();
+                // Three `REPLCONF`s, then the granted full resync.
+                script.extend_from_slice(b"+OK\r\n+OK\r\n+OK\r\n");
+                script.extend_from_slice(b"+FULLRESYNC primary-replid 99\r\n");
+                CheckpointStreamCodec::write_snapshot_prelude(&mut script, 1)
+                    .await
+                    .unwrap();
+                script.extend_from_slice(&body);
+                client.write_all(&script).await.unwrap();
+                keep.lock().unwrap().push(client);
+                Ok(Box::new(server) as crate::BoxedStream)
+            })
+        });
+        (factory, dials, parked)
+    }
+
+    /// Build a handler whose primary is the scripted one above.
+    #[allow(clippy::type_complexity)]
+    fn handler_over_scripted_primary(
+        tmp: &std::path::Path,
+        installer: SnapshotInstaller,
+    ) -> (
+        Arc<crate::replica::ReplicaReplicationHandler>,
+        Arc<AtomicUsize>,
+        Arc<std::sync::Mutex<Vec<tokio::io::DuplexStream>>>,
+    ) {
+        let (factory, dials, parked) = scripted_primary_factory();
+        let (mut handler, _rx) = crate::replica::ReplicaReplicationHandler::new(
+            "127.0.0.1:6379".parse().unwrap(),
+            6380,
+            crate::identity::ReplicationIdentity::detached(ReplicationState::new()),
+            tmp.join("state.json"),
+            tmp.join("db"),
+        );
+        handler.set_connect_factory(factory);
+        handler.set_snapshot_installer(installer);
+        (Arc::new(handler), dials, parked)
+    }
+
+    // FM-REPLICATION-061
+    /// Issue 23: a full resync this node can never install is asked for
+    /// **once**. Before the fix the loop treated it like any other error —
+    /// reconnect, make the primary cut and ship another whole checkpoint, fail
+    /// identically, forever — so a misconfigured pair burned the *primary's*
+    /// disk and network for as long as it stayed misconfigured.
+    #[tokio::test]
+    async fn a_geometry_mismatch_is_refused_once_and_not_retried() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (handler, dials, _parked) =
+            handler_over_scripted_primary(tmp.path(), classifying_installer(true));
+
+        let result = tokio::time::timeout(Duration::from_secs(5), handler.start())
+            .await
+            .expect("the loop must give up rather than keep retrying");
+
+        assert!(result.is_err(), "giving up is an error, not a clean stop");
+        assert_eq!(
+            dials.load(Ordering::SeqCst),
+            1,
+            "the primary must be asked for exactly one full resync"
+        );
+        let refusal = handler
+            .sync_refusal()
+            .expect("INFO must be able to say why");
+        assert!(
+            refusal.contains("shard-count mismatch"),
+            "the operator surface must name the cause: {refusal}"
+        );
+        assert!(
+            !handler.link_up(),
+            "the link stays down until an operator intervenes"
+        );
+    }
+
+    // FM-REPLICATION-061
+    /// The terminal path must not swallow the ordinary case: an install that
+    /// merely failed is retried exactly as before and latches nothing — down
+    /// with no `master_sync_error` is "still trying", which is a different
+    /// state from "given up" and must stay distinguishable.
+    #[tokio::test]
+    async fn a_transient_install_failure_is_still_retried() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (handler, dials, _parked) =
+            handler_over_scripted_primary(tmp.path(), classifying_installer(false));
+
+        let runner = {
+            let handler = handler.clone();
+            tokio::spawn(async move { handler.start().await })
+        };
+        // The first backoff is 100ms and doubles; two dials inside this window
+        // is enough to show the loop is not latching, without asserting a rate.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let dialed = dials.load(Ordering::SeqCst);
+        handler.stop();
+        let _ = tokio::time::timeout(Duration::from_secs(5), runner).await;
+
+        assert!(
+            dialed >= 2,
+            "a retryable install failure must keep reconnecting, got {dialed} dial(s)"
+        );
+        assert!(
+            handler.sync_refusal().is_none(),
+            "nothing was refused, so nothing must be latched"
+        );
     }
 
     /// A sync that transferred no live tail must not leave phantom bytes in the

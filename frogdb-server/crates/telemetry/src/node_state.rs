@@ -81,6 +81,10 @@ pub struct NodeStateSnapshot {
     /// Whether the replication link to the primary is connected and
     /// streaming (from shard identity; identical across all shards).
     pub master_link_up: bool,
+    /// Why the inbound replication stream gave up, if it did (from shard
+    /// identity; identical across all shards). Rendered as INFO's
+    /// `master_sync_error`.
+    pub master_sync_error: Option<String>,
     /// Per-shard rows, in shard order.
     pub per_shard: Vec<ShardState>,
 }
@@ -114,6 +118,10 @@ impl NodeStateSnapshot {
             self.master_port = snap.master_port;
         }
         self.master_link_up = snap.master_link_up;
+        // Last shard wins, like `master_link_up`: both are derived live from
+        // the one node-wide role controller, so every shard reports the same
+        // answer and folding is a copy, not a merge.
+        self.master_sync_error = snap.master_sync_error.clone();
         self.per_shard.push(ShardState {
             shard_id: snap.shard_id,
             keys: snap.memory.keys,
@@ -234,6 +242,7 @@ mod tests {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            master_sync_error: None,
         }
     }
 

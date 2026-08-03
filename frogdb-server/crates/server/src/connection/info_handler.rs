@@ -13,7 +13,7 @@ use frogdb_protocol::Response;
 use crate::connection::ConnectionHandler;
 use crate::info::{
     BaselineSnapshot, ClientsSnapshot, InfoBuilder, InfoSources, LatencySnapshot,
-    MemoryConfigSnapshot, PersistenceSnapshot, PrimarySnapshot, RateLimitSnapshot, ReplicaLine,
+    MemoryConfigSnapshot, PersistenceSnapshot, PrimarySnapshot, RateLimitSnapshot,
     ReplicationSnapshot, SectionSelector, gather_shard_snapshot,
 };
 
@@ -125,11 +125,11 @@ impl ConnectionHandler {
             .as_ref()
             .filter(|_| !is_replica)
             .map(|tracker| PrimarySnapshot {
-                replicas: tracker
-                    .get_streaming_replicas()
-                    .iter()
-                    .map(ReplicaLine::from_replica)
-                    .collect(),
+                // Every registered replica in a phase Redis names, not only the
+                // streaming ones: a replica being fed its checkpoint used to be
+                // absent from both the lines and the count
+                // (FM-REPLICATION-060).
+                replicas: crate::info::rendered_replicas(tracker),
             });
         // One offset counter per node, whatever role is running: the tracker's
         // atomic is the node's replication identity offset, advanced by the
@@ -148,16 +148,27 @@ impl ConnectionHandler {
             .replication_tracker
             .as_ref()
             .map_or_else(Default::default, |tracker| tracker.sync_counters());
+        // Reported in every role, from the ring the primary handler published at
+        // construction: the capacity is a property of this node's config, and
+        // the window is what PSYNC would actually grant a `+CONTINUE` over
+        // (FM-REPLICATION-059).
+        let backlog = self
+            .cluster
+            .replication_tracker
+            .as_ref()
+            .map_or_else(Default::default, |tracker| tracker.backlog_geometry());
         let replication = ReplicationSnapshot {
             is_replica,
             node_id: self.cluster.node_id,
             replication_id,
             primary,
             sync,
+            backlog,
             repl_offset,
             master_host: shards.master_host.clone(),
             master_port: shards.master_port,
             master_link_up: shards.master_link_up,
+            master_sync_error: shards.master_sync_error.clone(),
             secondary_window,
         };
 

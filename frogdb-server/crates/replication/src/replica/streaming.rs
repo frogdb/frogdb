@@ -297,6 +297,7 @@ mod tests {
                 link_up: Arc::new(AtomicBool::new(true)),
                 ack_interval: CADENCE,
                 snapshot_installer: None,
+                sync_refusal: Arc::new(RwLock::new(None)),
                 pending_stream_bytes: BytesMut::new(),
             };
             let (frame_tx, frames) = mpsc::channel(16);

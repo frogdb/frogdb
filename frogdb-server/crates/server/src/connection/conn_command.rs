@@ -127,6 +127,7 @@ impl ConnectionHandler {
             admin.config_manager.max_clients(),
             cluster.is_cluster_mode(),
         )
+        .with_replication_tracker(cluster.replication_tracker.as_deref())
     }
 
     /// Build the [`ConnCtx`] a connection command declared it needs, selecting
@@ -331,8 +332,10 @@ async fn config_set(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 ///
 /// Broadcasts a reset to all shard workers (latency monitor, slow query log,
 /// peak memory), then clears the server-wide call counts, error stats, and
-/// `INFO`-facing latency histograms, and rebases the operator-visible
-/// keyspace hit/miss counters (Prometheus `_total` counters stay monotonic).
+/// `INFO`-facing latency histograms, rebases the operator-visible keyspace
+/// hit/miss counters (Prometheus `_total` counters stay monotonic), and zeroes
+/// the three PSYNC-outcome counters `INFO stats` renders as
+/// `sync_full`/`sync_partial_ok`/`sync_partial_err` (FM-REPLICATION-058).
 async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
     // Await-and-discard: the replies are only a barrier confirming every shard
     // reset its stats. Bounded by the shared deadline (was unbounded).
@@ -343,6 +346,12 @@ async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
     ctx.client_registry.error_stats.reset();
     ctx.latency_histograms.reset();
     ctx.keyspace_stats.reset();
+    // Whatever role this node is running: the counters are one lifetime tally
+    // per node, and the tracker is the one object both INFO renderers read them
+    // from (FM-REPLICATION-050).
+    if let Some(tracker) = ctx.replication_tracker {
+        tracker.reset_sync_counters();
+    }
     Response::ok()
 }
 
@@ -535,6 +544,10 @@ mod tests {
                 10000,
                 false,
             )
+            // Mirrors `base_ctx`: the tracker rides the ambient view, so a
+            // fixture that populated `cluster.replication_tracker` exercises the
+            // same wiring production does.
+            .with_replication_tracker(self.cluster.replication_tracker.as_deref())
             .with_username("default")
         }
     }
@@ -576,6 +589,44 @@ mod tests {
     #[tokio::test]
     async fn config_resetstat_with_no_shards_is_ok() {
         let fx = Fixture::new();
+        let resp = ConfigConnCommand
+            .execute(&mut fx.ctx(), &[arg("RESETSTAT")])
+            .await;
+        assert_eq!(resp, Response::ok());
+    }
+
+    // FM-REPLICATION-058
+    /// The three `INFO stats` resync counters are server statistics like any
+    /// other: RESETSTAT has to zero them, or an operator who reset the stats
+    /// after a resync storm keeps reading the storm's totals as if they were
+    /// new.
+    #[tokio::test]
+    async fn config_resetstat_zeroes_the_sync_counters() {
+        use frogdb_replication::{SyncCountersSnapshot, SyncOutcome};
+
+        let tracker = std::sync::Arc::new(frogdb_core::ReplicationTrackerImpl::new());
+        tracker.record_sync_outcome(SyncOutcome::PartialRefused);
+        tracker.record_sync_outcome(SyncOutcome::PartialOk);
+        assert_ne!(tracker.sync_counters(), SyncCountersSnapshot::default());
+
+        let mut fx = Fixture::new();
+        fx.cluster.replication_tracker = Some(tracker.clone());
+
+        let resp = ConfigConnCommand
+            .execute(&mut fx.ctx(), &[arg("RESETSTAT")])
+            .await;
+
+        assert_eq!(resp, Response::ok());
+        assert_eq!(tracker.sync_counters(), SyncCountersSnapshot::default());
+    }
+
+    // FM-REPLICATION-058
+    /// A node with no replication tracker at all (standalone) still answers
+    /// RESETSTAT — the counters are an optional source, not a required one.
+    #[tokio::test]
+    async fn config_resetstat_without_a_replication_tracker_is_ok() {
+        let fx = Fixture::new();
+        assert!(fx.cluster.replication_tracker.is_none());
         let resp = ConfigConnCommand
             .execute(&mut fx.ctx(), &[arg("RESETSTAT")])
             .await;

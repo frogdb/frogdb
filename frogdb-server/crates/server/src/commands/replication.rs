@@ -37,6 +37,12 @@ pub(crate) fn announcement_error(err: AnnouncementError) -> CommandError {
         AnnouncementError::InvalidPort => CommandError::InvalidArgument {
             message: "invalid port number".to_string(),
         },
+        AnnouncementError::MissingVersion => CommandError::WrongArity {
+            command: "replconf frogdb-version",
+        },
+        AnnouncementError::InvalidVersionEncoding => CommandError::InvalidArgument {
+            message: "invalid version encoding".to_string(),
+        },
     }
 }
 
@@ -276,7 +282,7 @@ impl Command for ReplconfCommand {
             // by a script. The same parser runs so validation and the reply are
             // identical on both paths; only the recording is missing, and it is
             // logged rather than silently dropped.
-            "listening-port" | "capa" => {
+            "listening-port" | "capa" | "frogdb-version" => {
                 let option = AnnouncedOption::parse(args).map_err(announcement_error)?;
                 tracing::debug!(
                     ?option,
@@ -346,25 +352,6 @@ impl Command for ReplconfCommand {
             "rdb-filter-only" => {
                 // Request filtered RDB transfer
                 tracing::debug!("REPLCONF rdb-filter-only");
-                Ok(Response::ok())
-            }
-
-            "frogdb-version" => {
-                // Replica announcing its FrogDB binary version (for rolling upgrades).
-                // The replication tracker stores this so the primary can check all
-                // replica versions during finalization.
-                if args.len() < 2 {
-                    return Err(CommandError::WrongArity {
-                        command: "replconf frogdb-version",
-                    });
-                }
-                let version =
-                    std::str::from_utf8(&args[1]).map_err(|_| CommandError::InvalidArgument {
-                        message: "invalid version encoding".to_string(),
-                    })?;
-                tracing::debug!(version = %version, "REPLCONF frogdb-version");
-                // Version will be stored in replica connection state by the
-                // connection handler (similar to listening-port and capa).
                 Ok(Response::ok())
             }
 
@@ -768,6 +755,18 @@ mod tests {
         assert_eq!(
             announcement_error(AnnouncementError::InvalidPort).to_string(),
             "ERR invalid port number"
+        );
+        // The two `frogdb-version` shapes keep the wire text the hand-rolled
+        // arm produced before the option joined the announcement parser.
+        assert!(matches!(
+            announcement_error(AnnouncementError::MissingVersion),
+            CommandError::WrongArity {
+                command: "replconf frogdb-version"
+            }
+        ));
+        assert_eq!(
+            announcement_error(AnnouncementError::InvalidVersionEncoding).to_string(),
+            "ERR invalid version encoding"
         );
     }
 

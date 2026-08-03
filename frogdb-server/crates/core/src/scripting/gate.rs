@@ -56,6 +56,7 @@ use super::bindings::{
 use super::lua_vm::ExecutionState;
 use crate::command::{CommandContext, ExecutionStrategy, ScriptWriteRecord};
 use crate::registry::CommandRegistry;
+use crate::replication::ReplicationTrackerImpl;
 use crate::shard::message::ScriptingMsg;
 use crate::shard::{ShardSender, shard_for_key, slot_for_key};
 use crate::store::Store;
@@ -301,6 +302,17 @@ pub(crate) struct ScriptInvoker<'a> {
     master_host: Option<String>,
     master_port: Option<u16>,
     master_link_up: bool,
+    master_sync_error: Option<String>,
+    /// The node's replication tracker, propagated so a sub-command reads the
+    /// same replication facts a direct command does. Without it every
+    /// tracker-backed reader inside a script rendered the "no replication
+    /// configured" defaults — `redis.call('INFO','replication')` reported
+    /// `connected_slaves:0`, `master_repl_offset:0`, zeroed sync counters and a
+    /// zeroed backlog geometry on a primary with live replicas, `ROLE` reported
+    /// offset 0 with no replicas, and `WAIT` reported 0 acks
+    /// (FM-REPLICATION-059). Owned as an `Arc` clone because the sub-command
+    /// context borrows it for its own, shorter lifetime.
+    replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
     /// Configured JSON document limits (max depth / max size), propagated so a
     /// `redis.call('JSON.SET', ...)` inside a script enforces the same caps as a
     /// direct command instead of silently falling back to defaults.
@@ -335,6 +347,8 @@ impl<'a> ScriptInvoker<'a> {
             master_host: ctx.master_host.clone(),
             master_port: ctx.master_port,
             master_link_up: ctx.master_link_up,
+            master_sync_error: ctx.master_sync_error.clone(),
+            replication_tracker: ctx.replication_tracker.cloned(),
             json_limits: ctx.json_limits,
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
@@ -449,6 +463,12 @@ impl CommandInvoker for ScriptInvoker<'_> {
         ctx.master_host = self.master_host.clone();
         ctx.master_port = self.master_port;
         ctx.master_link_up = self.master_link_up;
+        ctx.master_sync_error = self.master_sync_error.clone();
+        // Propagate the replication tracker for the same reason: it is the one
+        // object every replication reader (INFO, ROLE, WAIT, CLUSTER INFO)
+        // consults, and a sub-command context without it reports "replication
+        // is not configured" defaults on a node where it is.
+        ctx.replication_tracker = self.replication_tracker.as_ref();
         // Propagate the configured JSON limits so scripted JSON writes enforce
         // the same caps as direct commands (the fresh sub-command context would
         // otherwise default them).
@@ -777,6 +797,8 @@ mod tests {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            master_sync_error: None,
+            replication_tracker: None,
             json_limits: crate::JsonLimits::default(),
             store: RefCell::<&mut dyn Store>::new(store),
             script_writes: RefCell::new(writes),
@@ -817,6 +839,46 @@ mod tests {
             _args: &[Bytes],
         ) -> Result<Response, crate::error::CommandError> {
             Ok(Response::Integer(if ctx.is_replica { 1 } else { 0 }))
+        }
+    }
+
+    /// Reports the replication offset the sub-command context can see, or `-1`
+    /// when it sees no tracker at all — the shape every tracker-backed reader
+    /// (INFO replication, ROLE, WAIT, CLUSTER INFO) collapses to when the
+    /// context drops the tracker.
+    struct TrackerProbe;
+
+    impl crate::command::Command for TrackerProbe {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{Arity, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__TRACKERPROBE",
+                arity: Arity::Fixed(0),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            Ok(Response::Integer(
+                ctx.replication_tracker
+                    .map_or(-1, |tracker| tracker.current_offset() as i64),
+            ))
         }
     }
 
@@ -973,6 +1035,8 @@ mod tests {
             master_host: Some("primary.example".to_string()),
             master_port: Some(6390),
             master_link_up: true,
+            master_sync_error: None,
+            replication_tracker: None,
             json_limits: crate::JsonLimits::default(),
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
@@ -986,6 +1050,70 @@ mod tests {
             Response::Integer(1) => {}
             other => panic!("sub-command must observe replica identity, got {other:?}"),
         }
+    }
+
+    /// A sub-command must see the node's replication tracker. Without it every
+    /// tracker-backed reader inside a script renders the "no replication
+    /// configured" defaults — a scripted `INFO replication` on a primary with
+    /// live replicas reported `connected_slaves:0`, `master_repl_offset:0` and
+    /// an all-zero backlog geometry.
+    // FM-REPLICATION-059
+    #[test]
+    fn run_local_propagates_the_replication_tracker() {
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(TrackerProbe);
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        tracker.set_offset(4242);
+
+        let mut writes = Vec::new();
+        let invoker = ScriptInvoker {
+            registry: &registry,
+            shard_senders: Arc::new(vec![]),
+            shard_id: 0,
+            num_shards: 1,
+            conn_id: 1,
+            protocol_version: ProtocolVersion::Resp2,
+            is_replica: false,
+            is_replica_flag: None,
+            master_host: None,
+            master_port: None,
+            master_link_up: false,
+            master_sync_error: None,
+            replication_tracker: Some(Arc::clone(&tracker)),
+            json_limits: crate::JsonLimits::default(),
+            store: RefCell::<&mut dyn Store>::new(&mut store),
+            script_writes: RefCell::new(&mut writes),
+        };
+        let gate = open_gate();
+
+        let resp = gate
+            .dispatch(&invoker, &[part("__TRACKERPROBE")])
+            .expect("probe dispatch should run locally");
+        assert_eq!(
+            resp,
+            Response::Integer(4242),
+            "the sub-command must read the node's live replication offset, \
+             not the no-tracker default"
+        );
+    }
+
+    /// The complementary case: a node with no tracker still reports the
+    /// absence honestly rather than panicking on the propagated `None`.
+    // FM-REPLICATION-059
+    #[test]
+    fn run_local_without_a_tracker_sees_none() {
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(TrackerProbe);
+        let mut writes = Vec::new();
+        let invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
+        let gate = open_gate();
+        let resp = gate
+            .dispatch(&invoker, &[part("__TRACKERPROBE")])
+            .expect("probe dispatch should run locally");
+        assert_eq!(resp, Response::Integer(-1));
     }
 
     /// The complementary case: on a primary the same seam reports `:0`.

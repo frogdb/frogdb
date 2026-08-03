@@ -1,6 +1,6 @@
 # `REPLCONF frogdb-version` is parsed, answered `+OK`, and discarded
 
-Status: needs-triage
+Status: done
 Type: bug (dead field / lying comment)
 Severity: likelihood 3/3 (every replica sends it on every handshake), consequence 2/3 (the
 rolling-upgrade version check it exists to feed has no data; the field reads `None` for every
@@ -74,3 +74,61 @@ believes it is being enforced.
 FM-REPLICATION-049 covers the announcement recording for `listening-port` and `capa` and its
 NOT-observable half is written in terms of those two. Closing this issue extends that row to the
 third option (or adds a row for the version gate itself, if the gate turns out to be real).
+
+## Resolution
+
+Fixed as far as this issue reaches: the **writer** now exists. FM-REPLICATION-049 extended to the
+third option (Trigger, Observable, NOT-observable, Invariant, Outcome variant, Forced by, Bug refs)
+— no new row, because it is the same failure mode on the same mechanism.
+
+- `frogdb-server/crates/replication/src/replica_session.rs` — `ReplicaAnnouncement.version:
+  Option<String>`, `AnnouncedOption::Version(String)` with a `frogdb-version` parse arm,
+  `AnnouncementError::{MissingVersion, InvalidVersionEncoding}`, and `ReplicaSession::announced`
+  seeding `replica_version` from the announcement instead of hardcoding `None`.
+- `frogdb-server/crates/server/src/commands/replication.rs` — the hand-rolled `"frogdb-version"`
+  arm and its lying comment are **deleted**; the subcommand joins `"listening-port" | "capa"` on
+  the shared parser, and `announcement_error` maps the two new variants to the exact wire text the
+  deleted arm produced.
+- No change was needed in `connection/dispatch.rs`: the handshake stage already absorbs whatever
+  `AnnouncedOption::parse` returns, so the option started being recorded the moment the parser knew
+  it. Wire behaviour is unchanged (`+OK`; same two errors) — what changed is that the value survives.
+
+**Remedy step 1** taken as written (the existing `ReplicaAnnouncement`, no second path).
+**Step 2** taken (comment deleted).
+**Step 3**: absent version is `None` = *unknown*, documented on `ReplicaAnnouncement::version`,
+`ReplicaInfo::replica_version` and `ReplicaSession::replica_version()`, and pinned by
+`a_replica_that_announced_no_version_is_recorded_as_unknown`. The spec states that a consumer must
+treat unknown as blocking and that defaulting it (to `"0.0.0"`, `""`, or the primary's own version)
+is a second way to fail open.
+
+**Step 4 — the gate does not exist, so this is issue 27.** `ClusterCommand::FinalizeUpgrade`
+validates the **raft topology's** node versions, not the replicas attached over `PSYNC`, and
+`version_gate::is_gate_active` keys on the cluster's finalized `active_version`. Neither reads a
+replica announcement, and a non-cluster primary-replica pair is covered by no gate at all. Filed as
+`.scratch/hardening/issues/open/27-no-gate-reads-the-announced-replica-version.md`, with the design
+choice written up under an Open question heading (extend `FinalizeUpgrade` vs. a replication-level
+readiness surface, plus whether unknown blocks with no override).
+
+### Divergences worth naming
+
+- `ReplicaAnnouncement` and `AnnouncedOption` lost their `Copy` derive (they carry a `String` now)
+  and are `Clone` instead. The one by-value handoff site (`connection.rs:833`, which consumes
+  `self`) was unaffected.
+- The version is stored **verbatim and unparsed** — deliberately not a `semver::Version`. This
+  records what the peer said, and a peer can say anything; validating at the handshake would make a
+  malformed version an announcement error rather than a fact the gate gets to refuse.
+
+### Tests
+
+Red-first (the API did not exist, so these were compile-red; the end-to-end assertion below was a
+genuine assertion-red once the type existed).
+
+- `a_replica_that_announced_its_version_is_recorded_with_it`
+- `a_replica_that_announced_no_version_is_recorded_as_unknown`
+- `re_announcing_the_version_does_not_clear_the_port_or_capabilities`
+- `an_unreadable_frogdb_version_is_refused` (missing value, non-UTF-8, case-insensitive subcommand,
+  and a non-semver value recorded verbatim)
+- `a_psync_carries_the_announcement_into_the_registry` extended: the announcement now carries a
+  version and the registered `ReplicaInfo` is asserted to hold it (this is the assertion that was
+  red against the old `replica_version: None` hardcode)
+- `announcement_errors_keep_their_wire_shape` extended with the two new error mappings

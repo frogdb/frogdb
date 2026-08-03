@@ -34,7 +34,7 @@ use crate::keyspace_stats::KeyspaceStats;
 use crate::latency_histogram::CommandLatencyHistograms;
 use crate::registry::CommandRegistry;
 use crate::shard::ShardSender;
-use crate::{AclManager, AuthenticatedUser};
+use crate::{AclManager, AuthenticatedUser, ReplicationTrackerImpl};
 
 /// A boxed, `Send` future — the object-safe return type for the async methods on
 /// the connection-command seam.
@@ -687,6 +687,16 @@ pub struct ConnCtx<'a> {
     /// provider; the read-only dispatch path layers the live one via
     /// [`with_status`](Self::with_status).
     pub status: &'a dyn StatusProvider,
+    /// The node's replication tracker, when one is wired (every node that can
+    /// track downstream replicas has one, whatever role it is currently
+    /// running; `None` in standalone mode and in fixtures). Named directly, like
+    /// [`CommandContext::replication_tracker`](crate::command::CommandContext),
+    /// rather than behind a bespoke provider: it is already a core type and the
+    /// connection commands that need it need the object, not one verb.
+    ///
+    /// Currently read by CONFIG RESETSTAT, which zeroes the three PSYNC-outcome
+    /// counters it owns.
+    pub replication_tracker: Option<&'a ReplicationTrackerImpl>,
     /// Scripting/function entry points (EVAL/EVALSHA/SCRIPT/FCALL/FUNCTION).
     /// Read-only: the executor / function registry / cross-shard EVAL
     /// coordinator all live behind [`ScriptingProvider`].
@@ -785,6 +795,7 @@ impl<'a> ConnCtx<'a> {
             username: "",
             info: NOOP_INFO,
             status: NOOP_STATUS,
+            replication_tracker: None,
             scripting: NOOP_SCRIPTING,
             hot_shards: None,
             conn_state: None,
@@ -835,6 +846,18 @@ impl<'a> ConnCtx<'a> {
     /// collector-backed provider.
     pub fn with_status(mut self, status: &'a dyn StatusProvider) -> Self {
         self.status = status;
+        self
+    }
+
+    /// Layer the node's replication tracker onto the ambient view (CONFIG
+    /// RESETSTAT). Ambient rather than a capability slot: it is shared,
+    /// interior-mutable state, so every dispatch path can carry it and no
+    /// borrow is exclusive.
+    pub fn with_replication_tracker(
+        mut self,
+        replication_tracker: Option<&'a ReplicationTrackerImpl>,
+    ) -> Self {
+        self.replication_tracker = replication_tracker;
         self
     }
 

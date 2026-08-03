@@ -122,6 +122,15 @@ impl ShardIdentity {
             .is_some_and(|c| c.master_link_up())
     }
 
+    /// Why the inbound replication stream gave up, if it did, for INFO's
+    /// `master_sync_error`. Derived live from the same
+    /// [`RoleController`](crate::command::RoleController) as `master_link_up`.
+    /// `None` with no controller wired, and on a link that is merely down and
+    /// still retrying.
+    pub(crate) fn master_sync_error(&self) -> Option<String> {
+        self.role_controller.as_ref()?.sync_refusal()
+    }
+
     fn primary_target(&self) -> Option<std::net::SocketAddr> {
         self.role_controller.as_ref()?.primary_target()
     }
@@ -936,6 +945,10 @@ pub struct InfoShardSnapshot {
     /// Whether the replication link to the primary is connected and
     /// streaming (mirrors `RoleController::master_link_up`).
     pub master_link_up: bool,
+    /// Why the inbound replication stream gave up, if it did (mirrors
+    /// `RoleController::sync_refusal`). `None` on a link that is merely down
+    /// and still retrying.
+    pub master_sync_error: Option<String>,
 }
 
 /// Response for VLL queue info query.
@@ -1293,8 +1306,27 @@ mod cluster_tests {
     }
 }
 
+/// A [`RoleController`](crate::command::RoleController) that answers with
+/// whatever it was built with, so a test can assert that a surface *derives*
+/// from the controller instead of keeping its own copy.
 #[cfg(test)]
-pub(crate) struct FixedRoleController(pub Option<std::net::SocketAddr>, pub bool);
+pub(crate) struct FixedRoleController {
+    pub primary: Option<std::net::SocketAddr>,
+    pub link_up: bool,
+    pub refusal: Option<String>,
+}
+
+#[cfg(test)]
+impl FixedRoleController {
+    /// A controller that has refused nothing — the ordinary case.
+    pub(crate) fn new(primary: Option<std::net::SocketAddr>, link_up: bool) -> Self {
+        Self {
+            primary,
+            link_up,
+            refusal: None,
+        }
+    }
+}
 
 #[cfg(test)]
 impl crate::command::RoleController for FixedRoleController {
@@ -1303,10 +1335,13 @@ impl crate::command::RoleController for FixedRoleController {
     }
     fn request_demote(&self, _primary: std::net::SocketAddr) {}
     fn primary_target(&self) -> Option<std::net::SocketAddr> {
-        self.0
+        self.primary
     }
     fn master_link_up(&self) -> bool {
-        self.1
+        self.link_up
+    }
+    fn sync_refusal(&self) -> Option<String> {
+        self.refusal.clone()
     }
 }
 
@@ -1344,7 +1379,7 @@ mod identity_tests {
     fn master_address_derives_from_role_controller() {
         let mut id = ShardIdentity::new(0, 1, false);
         let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
-        id.set_role_controller(Arc::new(FixedRoleController(Some(target), false)));
+        id.set_role_controller(Arc::new(FixedRoleController::new(Some(target), false)));
         assert_eq!(id.master_host().as_deref(), Some("10.0.0.5"));
         assert_eq!(id.master_port(), Some(6390));
     }
@@ -1358,6 +1393,42 @@ mod identity_tests {
         assert_eq!(id.master_port(), None);
     }
 
+    // FM-REPLICATION-061
+    /// The refusal is derived live from the role controller too, and is a
+    /// *separate* fact from the link being down: a down-and-retrying link
+    /// reports no refusal, and only a controller that has given up does.
+    /// Copying it per shard would let one shard answer `INFO` with a stale
+    /// "still trying" after the stream gave up.
+    #[test]
+    fn master_sync_error_derives_from_role_controller() {
+        let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
+
+        let mut retrying = ShardIdentity::new(0, 1, true);
+        retrying.set_role_controller(Arc::new(FixedRoleController::new(Some(target), false)));
+        assert_eq!(
+            retrying.master_sync_error(),
+            None,
+            "a link that is down but still retrying has refused nothing"
+        );
+
+        let mut refused = ShardIdentity::new(0, 1, true);
+        refused.set_role_controller(Arc::new(FixedRoleController {
+            primary: Some(target),
+            link_up: false,
+            refusal: Some("shard-count mismatch: 4 vs 2".to_string()),
+        }));
+        assert_eq!(
+            refused.master_sync_error().as_deref(),
+            Some("shard-count mismatch: 4 vs 2")
+        );
+
+        assert_eq!(
+            ShardIdentity::new(0, 1, true).master_sync_error(),
+            None,
+            "no controller wired -> nothing to report, not a fabricated reason"
+        );
+    }
+
     /// `master_link_up` is derived the same way as `master_host`/`master_port`
     /// — live from the role controller — and must not be conflated with
     /// merely having a target: a replica can know its primary's address while
@@ -1366,11 +1437,11 @@ mod identity_tests {
     fn master_link_up_derives_from_role_controller() {
         let mut id = ShardIdentity::new(0, 1, false);
         let target: std::net::SocketAddr = "10.0.0.5:6390".parse().unwrap();
-        id.set_role_controller(Arc::new(FixedRoleController(Some(target), true)));
+        id.set_role_controller(Arc::new(FixedRoleController::new(Some(target), true)));
         assert!(id.master_link_up());
 
         let mut down = ShardIdentity::new(0, 1, false);
-        down.set_role_controller(Arc::new(FixedRoleController(Some(target), false)));
+        down.set_role_controller(Arc::new(FixedRoleController::new(Some(target), false)));
         assert!(!down.master_link_up());
     }
 

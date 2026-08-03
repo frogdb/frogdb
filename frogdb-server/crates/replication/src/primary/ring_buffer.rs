@@ -36,6 +36,38 @@ impl Default for BacklogConfig {
     }
 }
 
+/// The backlog's shape as `INFO replication` reports it, read as one triple so
+/// the three fields cannot describe different instants of the same ring.
+///
+/// Every field is derived, never configured-and-forgotten: `size_bytes` is the
+/// byte cap the ring was actually built with, and the other three come off the
+/// live window. Rendered as `repl_backlog_active`, `repl_backlog_size`,
+/// `repl_backlog_first_byte_offset` and `repl_backlog_histlen` by both INFO
+/// renderers, through one shared field list (FM-REPLICATION-059).
+///
+/// `Default` is the honest reading for a node with no backlog at all: no
+/// window, no capacity, nothing retained.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BacklogGeometry {
+    /// Whether a resume window is open — the same predicate PSYNC grants a
+    /// `+CONTINUE` on ([`super::PartialSyncReplay::has_resume_history`]), not
+    /// "some replica is attached".
+    pub active: bool,
+    /// Byte cap the ring was built with, from `replication.backlog-max-mb`.
+    /// Reported whether or not the backlog is enabled or armed: it is the
+    /// capacity an operator tuned, and reporting the default back at them is
+    /// the bug this field exists to answer (issue 20).
+    pub size_bytes: u64,
+    /// Lowest offset a `+CONTINUE` may resume from — Redis `repl_backlog_off`.
+    /// `0` when no window is open, which is also what Redis prints for an
+    /// absent backlog.
+    pub first_byte_offset: u64,
+    /// Bytes of command stream the window still covers: `current_offset -
+    /// first_byte_offset`, so `first_byte_offset + histlen` is the head. `0`
+    /// when no window is open.
+    pub histlen: u64,
+}
+
 struct BufferedCommand {
     offset: u64,
     /// Origin shard the command executed on, carried so a backlog-replayed frame
@@ -109,6 +141,28 @@ impl ReplicationRingBuffer {
         match self.start.load(Ordering::Acquire) {
             UNARMED => None,
             armed => Some(armed as u64),
+        }
+    }
+
+    /// The window as INFO reports it, measured against `current_offset` (the
+    /// node's live replication offset).
+    ///
+    /// Read here rather than assembled at the render site so the reported floor
+    /// is *the* floor `extract_backlog` refuses below (FM-REPLICATION-014): the
+    /// two cannot drift, because there is only one of them.
+    pub fn geometry(&self, current_offset: u64) -> BacklogGeometry {
+        let first_byte_offset = self.start_offset();
+        BacklogGeometry {
+            active: first_byte_offset.is_some(),
+            size_bytes: self.max_bytes as u64,
+            first_byte_offset: first_byte_offset.unwrap_or(0),
+            // `saturating_sub` because the floor is armed from a recovered or
+            // promoted offset that can momentarily sit above the live counter
+            // (the same race `ReplicationTrackerImpl::replica_lag` saturates
+            // for); a window "longer than the stream" is not reportable.
+            histlen: first_byte_offset
+                .map(|floor| current_offset.saturating_sub(floor))
+                .unwrap_or(0),
         }
     }
 

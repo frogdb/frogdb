@@ -381,6 +381,116 @@ fn ring_buffer_push_into_an_unarmed_buffer_opens_the_window_at_the_entry_start()
     );
 }
 
+// FM-REPLICATION-059
+/// Constructing the handler publishes its ring to the tracker, so the object
+/// both INFO renderers reach can answer for the backlog without a route to the
+/// handler. Live, not copied: a write moves the reported window.
+#[test]
+fn the_handler_publishes_its_backlog_to_the_tracker() {
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    let published = handler.tracker.backlog_geometry();
+    assert_eq!(
+        published.size_bytes,
+        64 * 1024 * 1024,
+        "the tracker must report the cap the handler's ring was built with, \
+         not a default"
+    );
+    assert!(!published.active, "nothing armed it yet");
+
+    let offset = push_write(&handler, "k", "v");
+    let after = handler.tracker.backlog_geometry();
+    assert!(after.active, "the write opened the window");
+    assert_eq!(
+        after.first_byte_offset + after.histlen,
+        offset,
+        "first_byte_offset + histlen must land on the live head"
+    );
+}
+
+// FM-REPLICATION-059
+/// The geometry INFO renders is read off the ring, not off a default: the byte
+/// cap is the one the ring was built with, and the reported floor is the floor
+/// `extract_backlog` refuses below.
+#[test]
+fn backlog_geometry_reports_the_configured_cap_and_the_armed_floor() {
+    let rb = ReplicationRingBuffer::new(100, 4096);
+    let unarmed = rb.geometry(0);
+    assert!(!unarmed.active, "an unarmed ring claims no window");
+    assert_eq!(unarmed.first_byte_offset, 0);
+    assert_eq!(unarmed.histlen, 0);
+    assert_eq!(
+        unarmed.size_bytes, 4096,
+        "capacity is reported even with no window open — it is the number an \
+         operator tuned"
+    );
+
+    rb.arm_start(1000);
+    let armed = rb.geometry(1500);
+    assert!(armed.active);
+    assert_eq!(armed.first_byte_offset, 1000);
+    assert_eq!(
+        armed.histlen, 500,
+        "first_byte_offset + histlen == the head"
+    );
+    assert_eq!(armed.size_bytes, 4096);
+}
+
+// FM-REPLICATION-059
+/// Eviction raises the reported first byte offset, because it raises the one
+/// floor there is (FM-REPLICATION-014). The pre-fix render printed `0` here,
+/// which claims the backlog can serve from the beginning of history — exactly
+/// the claim the floor exists to deny.
+#[test]
+fn backlog_geometry_first_byte_offset_follows_eviction() {
+    let rb = ReplicationRingBuffer::new(2, 1024 * 1024);
+    rb.push(10, 0, Bytes::from("0123456789"));
+    assert_eq!(rb.geometry(10).first_byte_offset, 0);
+
+    rb.push(20, 0, Bytes::from("0123456789"));
+    rb.push(30, 0, Bytes::from("0123456789"));
+
+    let geometry = rb.geometry(30);
+    assert_eq!(
+        geometry.first_byte_offset,
+        rb.start_offset().expect("armed"),
+        "INFO must report the same floor a `+CONTINUE` is judged against"
+    );
+    assert_eq!(geometry.first_byte_offset, 10);
+    assert_eq!(geometry.histlen, 20);
+}
+
+// FM-REPLICATION-059
+/// A reset closes the window, so the geometry stops claiming one — while still
+/// reporting the capacity, which is config and did not change.
+#[test]
+fn backlog_geometry_after_a_reset_claims_no_window() {
+    let rb = ReplicationRingBuffer::new(100, 8192);
+    rb.arm_start(1000);
+    rb.push(1010, 0, Bytes::from("cmd1"));
+    assert!(rb.geometry(1010).active);
+
+    rb.reset();
+
+    let geometry = rb.geometry(1010);
+    assert!(!geometry.active);
+    assert_eq!(geometry.first_byte_offset, 0);
+    assert_eq!(geometry.histlen, 0);
+    assert_eq!(geometry.size_bytes, 8192);
+}
+
+// FM-REPLICATION-059
+/// A floor armed above the live offset (a promotion that armed from a recovered
+/// position before the counter caught up) reports an empty window, never a
+/// window longer than the stream.
+#[test]
+fn backlog_geometry_histlen_never_underflows() {
+    let rb = ReplicationRingBuffer::new(100, 1024);
+    rb.arm_start(5000);
+    assert_eq!(rb.geometry(10).histlen, 0);
+}
+
 // FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_oldest_offset_tracks_eviction() {

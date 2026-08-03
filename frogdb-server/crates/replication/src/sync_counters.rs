@@ -115,11 +115,22 @@ impl SyncCounters {
         }
     }
 
-    // No `reset()` yet: `CONFIG RESETSTAT` cannot reach the replication tracker
-    // (`ConnCtx` carries no handle to it), and Redis does zero these three in
-    // `resetServerStats`. Adding the method without the caller would be dead
-    // code claiming a capability the server does not have — the divergence is
-    // filed as issue 24 instead.
+    /// Zero all three counters — what `CONFIG RESETSTAT` does to them, matching
+    /// Redis's `resetServerStats`.
+    ///
+    /// Three separate `Relaxed` stores, so a reader racing the reset can see a
+    /// half-zeroed triple, and a `record` racing it can be lost or survive. That
+    /// is the same race Redis has (three plain assignments outside any lock) and
+    /// is acceptable for exactly the same reason [`Self::snapshot`] is: an
+    /// operator issuing RESETSTAT is declaring the previous values uninteresting,
+    /// so which side of the boundary a concurrent `PSYNC` lands on cannot mislead
+    /// anyone. This is the *only* operation that moves these counters backwards;
+    /// absent it they are monotone.
+    pub fn reset(&self) {
+        self.full.store(0, Ordering::Relaxed);
+        self.partial_ok.store(0, Ordering::Relaxed);
+        self.partial_err.store(0, Ordering::Relaxed);
+    }
 }
 
 /// One read of [`SyncCounters`], as `INFO` reports them.
@@ -190,6 +201,47 @@ mod tests {
                 full: 1,
                 partial_ok: 1,
                 partial_err: 0
+            }
+        );
+    }
+
+    // FM-REPLICATION-058
+    /// `CONFIG RESETSTAT` zeroes every one of the three, not a subset: an
+    /// operator who reset the stats and then sees `sync_full:4` would read it as
+    /// four full resyncs *since the reset*.
+    #[test]
+    fn reset_zeroes_all_three_counters() {
+        let counters = SyncCounters::default();
+        counters.record(SyncOutcome::PartialRefused); // full + partial_err
+        counters.record(SyncOutcome::PartialOk); // partial_ok
+        assert_eq!(
+            counters.snapshot(),
+            SyncCountersSnapshot {
+                full: 1,
+                partial_ok: 1,
+                partial_err: 1
+            }
+        );
+
+        counters.reset();
+        assert_eq!(counters.snapshot(), SyncCountersSnapshot::default());
+    }
+
+    // FM-REPLICATION-058
+    /// The reset rebases the counters; it does not disable them. A resync after
+    /// a RESETSTAT has to count from the new zero.
+    #[test]
+    fn counters_keep_counting_after_a_reset() {
+        let counters = SyncCounters::default();
+        counters.record(SyncOutcome::FullResyncRequested);
+        counters.reset();
+        counters.record(SyncOutcome::PartialRefused);
+        assert_eq!(
+            counters.snapshot(),
+            SyncCountersSnapshot {
+                full: 1,
+                partial_ok: 0,
+                partial_err: 1
             }
         );
     }

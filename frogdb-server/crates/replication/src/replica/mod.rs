@@ -75,10 +75,66 @@ pub enum FullSyncPayload {
 ///
 /// An `Err` is fatal to the sync attempt: the caller rewinds its offset to 0 so
 /// the next reconnect asks for a fresh full resync rather than streaming deltas
-/// onto a keyspace that never adopted the base snapshot.
+/// onto a keyspace that never adopted the base snapshot. Whether the *link* then
+/// retries is decided by which [`InstallError`] came back.
 pub type SnapshotInstaller = Arc<
-    dyn Fn(FullSyncPayload) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync,
+    dyn Fn(FullSyncPayload) -> Pin<Box<dyn Future<Output = Result<(), InstallError>> + Send>>
+        + Send
+        + Sync,
 >;
+
+/// Why a full-resync install failed, in the only distinction the reconnect loop
+/// can act on: *would trying again help?*
+///
+/// The default is [`InstallError::Transient`] — `From<io::Error>` produces it,
+/// so an installer that has not thought about the question keeps the retrying
+/// behaviour it always had, and only a deliberate classification can stop the
+/// link. That direction matters: mistaking a transient error for a terminal one
+/// strands a replica that would have synced.
+#[derive(Debug)]
+pub enum InstallError {
+    /// Something went wrong that a later attempt could get past: a disk error, a
+    /// shard that was mid-shutdown, a corrupt transfer. The link reconnects and
+    /// asks for another full resync, backing off between attempts.
+    Transient(io::Error),
+    /// This node can *never* install a payload from this primary, however many
+    /// times it is shipped: the two disagree about the on-disk layout (shard
+    /// count, warm tier). Retrying costs the primary a full checkpoint cut and a
+    /// full transfer per attempt and cannot succeed, so the link stops and waits
+    /// for an operator (see `ReplicaReplicationHandler::sync_refusal`).
+    ///
+    /// `detail` is written for the operator and reaches INFO verbatim: it must
+    /// name *both* sides of the disagreement, because the whole failure is that
+    /// two nodes were configured differently and neither one alone shows it.
+    Incompatible { detail: String },
+}
+
+impl From<io::Error> for InstallError {
+    fn from(err: io::Error) -> Self {
+        Self::Transient(err)
+    }
+}
+
+impl From<InstallError> for io::Error {
+    fn from(err: InstallError) -> Self {
+        match err {
+            InstallError::Transient(err) => err,
+            InstallError::Incompatible { detail } => io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("full resync refused: {detail}"),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transient(err) => write!(f, "{err}"),
+            Self::Incompatible { detail } => write!(f, "full resync refused: {detail}"),
+        }
+    }
+}
 
 /// Default connection factory: plain TCP.
 pub fn plain_tcp_connect_factory() -> ConnectFactory {
@@ -137,6 +193,16 @@ pub struct ReplicaReplicationHandler {
     /// wired: the checkpoint is staged for the next boot only, which is the
     /// pre-issue-61 behaviour and is warned about loudly at sync time.
     snapshot_installer: Option<SnapshotInstaller>,
+    /// Set once, by the connection, when an install came back
+    /// [`InstallError::Incompatible`]: the reason this node can never accept a
+    /// full resync from this primary. Latched rather than cleared on reconnect
+    /// because there is no reconnect — the loop stops on it — and because it is
+    /// what INFO reports for as long as the node stays in that state.
+    ///
+    /// Shared with each [`ReplicaConnection`] this handler builds, for the same
+    /// reason `link_up` is: the connection is the only thing that learns the
+    /// fact, and the readers (the loop, INFO) outlive it.
+    sync_refusal: Arc<RwLock<Option<String>>>,
 }
 
 /// Default spontaneous-ACK cadence when config supplies nothing (1s, matching
@@ -187,6 +253,7 @@ impl ReplicaReplicationHandler {
             link_up: Arc::new(AtomicBool::new(false)),
             ack_interval: DEFAULT_ACK_INTERVAL,
             snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
         };
         (handler, frame_rx)
     }
@@ -215,6 +282,22 @@ impl ReplicaReplicationHandler {
     /// and after the link drops while the reconnect loop backs off.
     pub fn link_up(&self) -> bool {
         self.link_up.load(Ordering::Acquire)
+    }
+
+    /// Why this replica gave up on its primary, if it did.
+    ///
+    /// `Some(reason)` means a full resync came back
+    /// [`InstallError::Incompatible`] and the reconnect loop has stopped: the
+    /// link will stay down until an operator fixes the configuration and
+    /// re-issues `REPLICAOF` (or restarts the node). The string names both sides
+    /// of the disagreement and is what INFO's `master_sync_error` reports, so an
+    /// operator does not have to catch the one log line that scrolled past.
+    ///
+    /// `None` on every ordinary replica, including one that is merely
+    /// disconnected and retrying — "down" and "given up" are different states
+    /// and `master_link_status:down` alone cannot tell them apart.
+    pub fn sync_refusal(&self) -> Option<String> {
+        self.sync_refusal.read().clone()
     }
 
     /// Persist the replica's replication identity + offset to the state file.
@@ -336,6 +419,27 @@ impl ReplicaReplicationHandler {
                                 _ = tokio::time::sleep(backoff) => {}
                             }
                         }
+                        // The sync failed in a way no later attempt can get
+                        // past: the two nodes disagree about the on-disk layout,
+                        // and every retry costs the primary a full checkpoint
+                        // cut and a full transfer for a payload this node will
+                        // refuse identically (issue 23). Stop, and let INFO and
+                        // the operator's next `REPLICAOF` take it from here — an
+                        // unsatisfiable operation must not be retried on a
+                        // timer.
+                        Err(e) if self.sync_refusal().is_some() => {
+                            let reason = self.sync_refusal().unwrap_or_default();
+                            tracing::error!(
+                                primary = %self.primary_addr,
+                                reason = %reason,
+                                error = %e,
+                                "Full resync refused: this node cannot install this primary's \
+                                 dataset and is giving up. The link stays down (INFO \
+                                 master_sync_error) until the configuration is corrected and \
+                                 REPLICAOF is re-issued, or the node is restarted."
+                            );
+                            return Err(e);
+                        }
                         Err(e) => {
                             tracing::warn!(error = %e, backoff_ms = backoff.as_millis(), "Replication connection failed, retrying");
                             tokio::select! {
@@ -372,6 +476,7 @@ impl ReplicaReplicationHandler {
             link_up: self.link_up.clone(),
             ack_interval: self.ack_interval,
             snapshot_installer: self.snapshot_installer.clone(),
+            sync_refusal: self.sync_refusal.clone(),
             pending_stream_bytes: bytes::BytesMut::new(),
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or

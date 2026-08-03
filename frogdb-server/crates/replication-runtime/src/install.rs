@@ -34,19 +34,19 @@
 //! the warm tier**, where the live-dataset path does not. A staged checkpoint is
 //! opened as a RocksDB with *this* node's `cluster.shard_count` and
 //! `tiered_storage.enabled`, and `ColumnFamilyManifest::reconcile` refuses a DB
-//! whose persisted column families disagree. The refusal is loud and nothing is
-//! installed (see
-//! `a_checkpoint_this_node_cannot_read_is_refused_and_touches_no_shard`) —
-//! silently installing a subset would be worse. The *retry* is a defect and not
-//! a limitation, though: the replica reconnects, the primary cuts and ships
-//! another checkpoint, and the install fails identically, forever. Filed as
-//! `.scratch/hardening/issues/open/23-a-geometry-mismatched-replica-full-resyncs-forever.md`.
+//! whose persisted column families disagree. That refusal is returned as
+//! [`InstallError::Incompatible`], which is terminal: no later attempt can get
+//! past a disagreement about the on-disk layout, so the replica stops asking
+//! instead of making the primary cut and ship a fresh checkpoint on a timer
+//! (issue 23). Every other failure stays [`InstallError::Transient`] and is
+//! retried as before.
 
 use std::io;
 use std::path::Path;
 
 use bytes::Bytes;
 use frogdb_config::Config;
+use frogdb_core::persistence::rocks::RocksError;
 use frogdb_core::persistence::{RocksConfig, RocksStore, deserialize, recover_shard_into};
 use frogdb_core::shard::shard_for_key;
 use frogdb_core::sync::Arc;
@@ -54,7 +54,7 @@ use frogdb_core::{
     KeyMetadata, KeyType, ReplicationMsg, ShardSender, SnapshotEntry, Value,
     persistence::RestoreSink,
 };
-use frogdb_replication::replica::{FullSyncPayload, SnapshotInstaller};
+use frogdb_replication::replica::{FullSyncPayload, InstallError, SnapshotInstaller};
 use std::collections::HashSet;
 use std::time::Instant;
 use tokio::sync::oneshot;
@@ -117,13 +117,13 @@ impl LiveSnapshotInstaller {
     ///
     /// The install ordering and its per-shard (not cross-shard) atomicity are
     /// identical to [`Self::install`]; see that method's note.
-    async fn install_dataset(&self, blobs: Vec<Vec<u8>>) -> io::Result<()> {
+    async fn install_dataset(&self, blobs: Vec<Vec<u8>>) -> Result<(), InstallError> {
         let start = Instant::now();
         let num_shards = self.shard_senders.len();
         if num_shards == 0 {
-            return Err(io::Error::other(
+            return Err(InstallError::Transient(io::Error::other(
                 "no shards wired: cannot install a live-dataset full resync",
-            ));
+            )));
         }
 
         // Decoding a whole keyspace is CPU-bound; keep it off the runtime for
@@ -176,7 +176,7 @@ impl LiveSnapshotInstaller {
     /// keep being served, from the pre-install snapshot, until their own shard
     /// swaps. The install completes before the replica adopts the snapshot's
     /// offset, so no *replicated* write can observe the half-installed state.
-    async fn install(&self, staged_dir: &Path) -> io::Result<()> {
+    async fn install(&self, staged_dir: &Path) -> Result<(), InstallError> {
         let start = Instant::now();
         let num_shards = self.shard_senders.len();
         let dir = staged_dir.to_path_buf();
@@ -239,9 +239,9 @@ fn read_snapshot(
     num_shards: usize,
     rocks_config: &RocksConfig,
     warm_enabled: bool,
-) -> io::Result<Vec<Vec<SnapshotEntry>>> {
+) -> Result<Vec<Vec<SnapshotEntry>>, InstallError> {
     let rocks = RocksStore::open_with_warm(staged_dir, num_shards, rocks_config, warm_enabled)
-        .map_err(|e| io::Error::other(format!("failed to open staged checkpoint: {e}")))?;
+        .map_err(|e| classify_open_failure(e, num_shards, warm_enabled))?;
 
     let mut per_shard = Vec::with_capacity(num_shards);
     for shard_id in 0..num_shards {
@@ -254,6 +254,47 @@ fn read_snapshot(
         per_shard.push(sink.entries);
     }
     Ok(per_shard)
+}
+
+/// Decide whether a failure to open the staged checkpoint is worth another
+/// full resync.
+///
+/// Two of RocksDB's open failures are *structural*: the checkpoint's column
+/// families say it was written by a node with a different shard count, or with
+/// the warm tier in the other position. Neither is a property of this attempt —
+/// the primary would cut and ship an identical checkpoint next time, and this
+/// node would refuse it identically — so they are the terminal case (issue 23).
+/// Everything else (a busy LOCK file, a torn transfer, an I/O error) can differ
+/// on the next attempt and stays transient, which is also the safe default: a
+/// transient failure mistaken for a terminal one strands a replica that would
+/// have synced.
+///
+/// The `detail` names **both** sides, because the failure is a disagreement
+/// between two nodes and neither one's config alone shows it. It is written for
+/// the operator: it reaches `INFO replication`'s `master_sync_error` verbatim.
+fn classify_open_failure(err: RocksError, num_shards: usize, warm_enabled: bool) -> InstallError {
+    match err {
+        RocksError::ShardCountMismatch { persisted, .. } => InstallError::Incompatible {
+            detail: format!(
+                "shard-count mismatch: the primary's checkpoint was written with {persisted} \
+                 shard(s), this node is configured for {num_shards}. Replication between nodes \
+                 with different shard counts requires them to agree; reconfigure this node to \
+                 cluster.shard-count = {persisted} and restart, or replicate from a primary with \
+                 {num_shards}."
+            ),
+        },
+        RocksError::WarmTierMismatch { .. } => InstallError::Incompatible {
+            detail: format!(
+                "warm-tier mismatch: the primary's checkpoint carries tiered-storage column \
+                 families, this node has tiered-storage.enabled = {warm_enabled}. Set \
+                 tiered-storage.enabled = true on this node and restart, or replicate from a \
+                 primary that runs without the warm tier."
+            ),
+        },
+        other => InstallError::Transient(io::Error::other(format!(
+            "failed to open staged checkpoint: {other}"
+        ))),
+    }
 }
 
 /// Collects a shard's snapshot entries in iteration order.
@@ -687,12 +728,19 @@ mod tests {
     }
 
     // FM-REPLICATION-053
+    // FM-REPLICATION-061
     /// A checkpoint this node cannot read is refused **loudly**, and no shard is
     /// touched. Two shapes reach here in production — a staged directory that is
     /// not a database at all, and one whose layout this node cannot adopt (a
     /// different shard count, or a warm tier this node has disabled). Every one
     /// of them must fail the sync rather than install what could be read: an
     /// install is a replace, so a partial read is `FLUSHALL` plus a subset.
+    ///
+    /// The two are refused differently, which is the whole of issue 23: an
+    /// unopenable directory might open on the next attempt, a layout
+    /// disagreement never will. The classification is asserted here, at the seam
+    /// that makes it, and the reconnect loop's half of the contract is asserted
+    /// in `frogdb-replication` (`a_geometry_mismatch_is_refused_once_and_not_retried`).
     #[tokio::test]
     async fn a_checkpoint_this_node_cannot_read_is_refused_and_touches_no_shard() {
         // Not a database.
@@ -704,6 +752,11 @@ mod tests {
         let err = install(FullSyncPayload::StagedCheckpoint(not_a_dir))
             .await
             .expect_err("an unopenable checkpoint must fail the install");
+        assert!(
+            matches!(err, InstallError::Transient(_)),
+            "a directory that is not a database says nothing about the two nodes' \
+             configuration, so the next attempt may well succeed: got {err}"
+        );
         assert!(
             err.to_string().contains("failed to open staged checkpoint"),
             "got {err}"
@@ -734,9 +787,13 @@ mod tests {
         ))
         .await
         .expect_err("a checkpoint with another shard count must fail the install");
+        let InstallError::Incompatible { detail } = &err else {
+            panic!("a shard-count disagreement can never be fixed by retrying: got {err}")
+        };
         assert!(
-            err.to_string().contains("failed to open staged checkpoint"),
-            "got {err}"
+            detail.contains("written with 2 shard(s)") && detail.contains("configured for 1"),
+            "the operator has to see both sides — neither node's config alone shows the \
+             disagreement: {detail}"
         );
         assert!(shards.untouched(0));
 
@@ -760,9 +817,12 @@ mod tests {
         ))
         .await
         .expect_err("a warm-tier checkpoint must not be half-installed on a hot-only node");
+        let InstallError::Incompatible { detail } = &err else {
+            panic!("a warm-tier disagreement can never be fixed by retrying: got {err}")
+        };
         assert!(
-            err.to_string().contains("failed to open staged checkpoint"),
-            "got {err}"
+            detail.contains("tiered-storage.enabled = false"),
+            "the detail must name this node's side of the toggle: {detail}"
         );
         assert!(shards.untouched(0));
     }

@@ -57,8 +57,8 @@ pub use fullsync::FullSyncMetadata;
 pub use identity::{ReplicationIdentity, SharedReplicationState};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
-    BacklogConfig, BacklogTtl, DivergenceRecord, FunctionSnapshotHook, LagThresholdConfig,
-    LagThresholds, PreCheckpointHook, PrimaryReplicationHandler,
+    BacklogConfig, BacklogGeometry, BacklogTtl, DivergenceRecord, FunctionSnapshotHook,
+    LagThresholdConfig, LagThresholds, PreCheckpointHook, PrimaryReplicationHandler,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{

@@ -54,6 +54,11 @@ pub trait ReplicaStream: Send {
     /// (connected, past PSYNC, streaming WAL frames). See
     /// [`crate::replication::ReplicaReplicationHandler::link_up`].
     fn link_up(&self) -> bool;
+
+    /// Why this stream gave up, if it did: the detail of a full resync this
+    /// node can never install. See
+    /// [`crate::replication::ReplicaReplicationHandler::sync_refusal`].
+    fn sync_refusal(&self) -> Option<String>;
 }
 
 /// The replication half of a role transition.
@@ -258,6 +263,25 @@ impl RoleManager {
         false
     }
 
+    /// Why the inbound stream gave up, if it did — read from whichever of the
+    /// boot handler / runtime stream is the active connection, in the same
+    /// order and for the same reason as [`Self::link_up`].
+    ///
+    /// A refusal is latched by the stream that hit it, so it survives the
+    /// connection that learned it and stays readable until the stream itself is
+    /// replaced (`demote()` to a new target) or dropped (`promote()`). That is
+    /// deliberate: the condition it reports is a configuration disagreement,
+    /// which outlives any one connection attempt.
+    pub fn sync_refusal(&self) -> Option<String> {
+        if !self.is_replica() {
+            return None;
+        }
+        if let Some(handler) = &self.boot_replica_handler {
+            return handler.sync_refusal();
+        }
+        self.stream.as_ref()?.sync_refusal()
+    }
+
     /// Role Promotion: become a writable primary. Stops any inbound stream
     /// (runtime-demotion or boot-spawned), mints a fresh replication identity,
     /// and clears the flag. Idempotent.
@@ -328,9 +352,18 @@ impl RoleManager {
     /// (fenced *before* the stream starts so no client write races the
     /// transition), ends any primary stint, tears down any existing stream, and
     /// opens a new one. Idempotent per target: re-demoting to the same primary
-    /// is a no-op.
+    /// is a no-op — **unless the current stream has given up** on a full resync
+    /// it can never install, in which case the same target is a real retry.
+    /// That is the operator's only way back after a refusal short of a restart:
+    /// they fix the configuration disagreement and re-issue the identical
+    /// `REPLICAOF host port`, and a node that answered "no-op: already
+    /// replicating" to it would stay down forever with its config now correct
+    /// (issue 23).
     pub fn demote(&mut self, primary: SocketAddr) {
-        if self.is_replica() && self.primary_target == Some(primary) {
+        if self.is_replica()
+            && self.primary_target == Some(primary)
+            && self.sync_refusal().is_none()
+        {
             tracing::debug!(primary = %primary, "Role Demotion no-op: already replicating");
             return;
         }
@@ -408,6 +441,15 @@ impl RoleManagerHandle {
         self.inner.lock().expect("role manager poisoned").link_up()
     }
 
+    /// Why the inbound stream gave up, if it did. See
+    /// [`RoleManager::sync_refusal`].
+    pub fn sync_refusal(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .expect("role manager poisoned")
+            .sync_refusal()
+    }
+
     /// Adopt a boot-spawned replica handler so a later `promote()`/`demote()`
     /// also stops its reconnect loop. See
     /// [`RoleManager::register_boot_replica_handler`].
@@ -438,6 +480,10 @@ impl frogdb_core::RoleController for RoleManagerHandle {
 
     fn master_link_up(&self) -> bool {
         self.link_up()
+    }
+
+    fn sync_refusal(&self) -> Option<String> {
+        RoleManagerHandle::sync_refusal(self)
     }
 }
 
@@ -731,6 +777,10 @@ impl ReplicaStream for RealReplicaStream {
     fn link_up(&self) -> bool {
         self.handler.link_up()
     }
+
+    fn sync_refusal(&self) -> Option<String> {
+        self.handler.sync_refusal()
+    }
 }
 
 impl Drop for RealReplicaStream {
@@ -758,10 +808,15 @@ mod tests {
     /// A fake stream whose `Drop` records that it was stopped.
     struct FakeStream {
         stops: Arc<AtomicUsize>,
+        /// What this stream reports as its terminal refusal, if any.
+        refusal: Option<String>,
     }
     impl ReplicaStream for FakeStream {
         fn link_up(&self) -> bool {
             false
+        }
+        fn sync_refusal(&self) -> Option<String> {
+            self.refusal.clone()
         }
     }
     impl Drop for FakeStream {
@@ -776,12 +831,15 @@ mod tests {
     struct FakeStreamer {
         started: Mutex<Vec<SocketAddr>>,
         stops: Arc<AtomicUsize>,
+        /// Handed to every stream this streamer starts.
+        refusal: Option<String>,
     }
     impl ReplicaStreamer for FakeStreamer {
         fn start(&self, primary: SocketAddr) -> Box<dyn ReplicaStream> {
             self.started.lock().unwrap().push(primary);
             Box::new(FakeStream {
                 stops: self.stops.clone(),
+                refusal: self.refusal.clone(),
             })
         }
     }
@@ -1272,12 +1330,92 @@ mod tests {
         fn link_up(&self) -> bool {
             self.0
         }
+        fn sync_refusal(&self) -> Option<String> {
+            None
+        }
     }
     struct FixedLinkStreamer(bool);
     impl ReplicaStreamer for FixedLinkStreamer {
         fn start(&self, _primary: SocketAddr) -> Box<dyn ReplicaStream> {
             Box::new(FixedLinkStream(self.0))
         }
+    }
+
+    /// A manager whose every stream reports the same terminal refusal.
+    fn manager_with_refusal(reason: &str) -> (RoleManager, Arc<FakeStreamer>) {
+        let streamer = Arc::new(FakeStreamer {
+            refusal: Some(reason.to_string()),
+            ..Default::default()
+        });
+        let flag = Arc::new(AtomicBool::new(false));
+        (RoleManager::new(flag, streamer.clone(), None), streamer)
+    }
+
+    // FM-REPLICATION-061
+    /// The refusal reaches the role controller INFO reads, through the same
+    /// active-stream selection `link_up` uses — and is gone once the node is a
+    /// primary, whose inbound stream no longer exists to have refused anything.
+    #[test]
+    fn sync_refusal_reads_through_the_active_stream() {
+        let (mut mgr, _streamer) = manager_with_refusal("shard-count mismatch: 4 vs 2");
+        assert_eq!(
+            mgr.sync_refusal(),
+            None,
+            "a node that is not a replica has no inbound stream to report on"
+        );
+
+        mgr.demote(addr("127.0.0.1:7000"));
+        assert_eq!(
+            mgr.sync_refusal().as_deref(),
+            Some("shard-count mismatch: 4 vs 2")
+        );
+
+        mgr.promote().unwrap();
+        assert_eq!(
+            mgr.sync_refusal(),
+            None,
+            "promotion drops the stream, so there is nothing left to have refused"
+        );
+    }
+
+    // FM-REPLICATION-061
+    /// After a refusal, the *same* `REPLICAOF host port` must open a fresh
+    /// stream. It is the operator's documented way back: fix the shard count or
+    /// the warm-tier toggle, re-point the node at the same primary. The
+    /// idempotence no-op answered "already replicating" and left the node down
+    /// forever with its configuration now correct (issue 23).
+    #[test]
+    fn re_demoting_to_the_same_primary_retries_a_refused_stream() {
+        let (mut mgr, streamer) = manager_with_refusal("warm-tier mismatch");
+        let primary = addr("127.0.0.1:7000");
+
+        mgr.demote(primary);
+        mgr.demote(primary);
+
+        assert_eq!(
+            *streamer.started.lock().unwrap(),
+            vec![primary, primary],
+            "a refused stream must be replaced, not deduplicated away"
+        );
+    }
+
+    // FM-REPLICATION-061
+    /// The no-op still holds when nothing was refused: a repeated `REPLICAOF`
+    /// at the same target must not tear down a healthy stream and force a
+    /// resync. Only the refused state is exempt.
+    #[test]
+    fn re_demoting_to_the_same_primary_is_still_a_no_op_when_nothing_was_refused() {
+        let (mut mgr, streamer) = manager(false);
+        let primary = addr("127.0.0.1:7000");
+
+        mgr.demote(primary);
+        mgr.demote(primary);
+
+        assert_eq!(
+            *streamer.started.lock().unwrap(),
+            vec![primary],
+            "an unrefused stream must survive a repeated REPLICAOF"
+        );
     }
 
     #[test]

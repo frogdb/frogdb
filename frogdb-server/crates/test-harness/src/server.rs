@@ -112,6 +112,12 @@ pub struct TestServerConfig {
     /// exceeds 10k commands still qualify for a partial resync (`+CONTINUE`)
     /// instead of falling back to a full resync.
     pub replication_backlog_size: Option<usize>,
+    /// Override `replication.backlog-max-mb` (the backlog's byte cap — the
+    /// value `INFO replication` reports as `repl_backlog_size`, Redis's
+    /// bytes-only `repl-backlog-size`). `None` keeps the server default (64).
+    /// Set it to something other than the default when a test needs to prove
+    /// the reported capacity is the configured one (FM-REPLICATION-059).
+    pub replication_backlog_max_mb: Option<usize>,
     /// Override `replication.split-brain-log-enabled` (whether a demoted
     /// primary's divergent writes are written to an audit file). `None` keeps
     /// the server default (`true`). This is log-only: it must not change
@@ -238,6 +244,7 @@ impl Clone for TestServerConfig {
             replication_ack_interval_ms: self.replication_ack_interval_ms,
             replication_replica_write_timeout_ms: self.replication_replica_write_timeout_ms,
             replication_backlog_size: self.replication_backlog_size,
+            replication_backlog_max_mb: self.replication_backlog_max_mb,
             replication_split_brain_log_enabled: self.replication_split_brain_log_enabled,
             replication_min_replicas_to_write: self.replication_min_replicas_to_write,
             replication_min_replicas_timeout_ms: self.replication_min_replicas_timeout_ms,
@@ -515,6 +522,9 @@ impl TestServer {
         }
         if let Some(v) = test_config.replication_replica_write_timeout_ms {
             config.replication.replica_write_timeout_ms = v;
+        }
+        if let Some(v) = test_config.replication_backlog_max_mb {
+            config.replication.backlog_max_mb = v;
         }
         if let Some(v) = test_config.replication_backlog_size {
             config.replication.backlog_size = v;

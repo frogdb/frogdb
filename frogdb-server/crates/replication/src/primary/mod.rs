@@ -35,7 +35,7 @@ use crate::tracker::ReplicationTrackerImpl;
 use crate::wait_coordinator::WaitCoordinator;
 
 pub use replay::{BacklogTtl, FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
-pub use ring_buffer::{BacklogConfig, BacklogTruncated, ReplicationRingBuffer};
+pub use ring_buffer::{BacklogConfig, BacklogGeometry, BacklogTruncated, ReplicationRingBuffer};
 
 /// Injected work that must complete before a `FULLRESYNC` checkpoint is cut.
 ///
@@ -244,6 +244,11 @@ impl PrimaryReplicationHandler {
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
         let replay = PartialSyncReplay::new(&backlog_config);
+        // The tracker is the one object both INFO renderers reach in either role
+        // (FM-REPLICATION-050), and the shard-local renderer has no route to
+        // this handler at all — so the ring is published there once, live, and
+        // INFO reports the window PSYNC actually grants from (FM-REPLICATION-059).
+        tracker.publish_backlog(replay.backlog_handle());
         let offsets = Arc::new(OffsetCoordinator::new(tracker.clone(), &identity));
         let wait = WaitCoordinator::new(offsets.clone(), tracker.clone());
         let lag_thresholds = Arc::new(LagThresholds::new(

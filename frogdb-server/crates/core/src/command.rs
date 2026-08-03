@@ -289,6 +289,18 @@ pub trait RoleController: Send + Sync {
     /// connection state rather than a hardcoded literal, so an operator can
     /// trust it to actually go `down` when the link breaks.
     fn master_link_up(&self) -> bool;
+
+    /// Why the inbound stream **gave up**, if it did: the detail of a full
+    /// resync this node can never install (a shard-count or warm-tier
+    /// disagreement with the primary's checkpoint), latched until an operator
+    /// re-points the node or restarts it.
+    ///
+    /// `None` in every other state, including a link that is merely down and
+    /// still retrying. That distinction is the whole point: `master_link_status`
+    /// alone cannot tell "reconnecting" from "will never connect again", and
+    /// only the second one needs a human. Rendered as INFO's
+    /// `master_sync_error`.
+    fn sync_refusal(&self) -> Option<String>;
 }
 
 /// Trait for checking if the local node can form a quorum.
@@ -1297,6 +1309,11 @@ pub struct CommandContext<'a> {
     /// [`RoleController::master_link_up`].
     pub master_link_up: bool,
 
+    /// Why the inbound replication stream gave up, when it did, for INFO's
+    /// `master_sync_error`. `None` while the link is up, and also while it is
+    /// down but still retrying. See [`RoleController::sync_refusal`].
+    pub master_sync_error: Option<String>,
+
     /// Document limits (max nesting depth / max byte size) enforced by JSON
     /// command handlers when parsing untrusted input. Sourced from the server's
     /// `[json]` config section at context construction (see the shard worker's
@@ -1340,6 +1357,7 @@ impl<'a> CommandContext<'a> {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            master_sync_error: None,
             json_limits: JsonLimits::default(),
             effects: CommandEffects::default(),
         }

@@ -266,6 +266,9 @@ mod tests {
             fn link_up(&self) -> bool {
                 false
             }
+            fn sync_refusal(&self) -> Option<String> {
+                None
+            }
         }
         struct NoopStreamer;
         impl ReplicaStreamer for NoopStreamer {
@@ -325,6 +328,9 @@ mod tests {
             fn link_up(&self) -> bool {
                 false
             }
+            fn sync_refusal(&self) -> Option<String> {
+                None
+            }
         }
         struct NoopStreamer;
         impl ReplicaStreamer for NoopStreamer {
@@ -366,6 +372,9 @@ mod tests {
         impl ReplicaStream for NoopStream {
             fn link_up(&self) -> bool {
                 false
+            }
+            fn sync_refusal(&self) -> Option<String> {
+                None
             }
         }
         struct NoopStreamer;

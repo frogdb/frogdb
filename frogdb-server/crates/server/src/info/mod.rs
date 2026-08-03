@@ -29,7 +29,7 @@ use frogdb_core::{
     ClusterState, CommandLatencyHistograms, MetricsRecorder, ServerCommandStats, ShardSender,
 };
 use frogdb_protocol::Response;
-use frogdb_replication::{Phase, ReplicaInfo, SyncCountersSnapshot};
+use frogdb_replication::{BacklogGeometry, Phase, ReplicaInfo, SyncCountersSnapshot};
 use frogdb_telemetry::definitions::{CommandsTotal, WalBytes, WalWrites};
 use frogdb_telemetry::{NodeStateSnapshot, ShardScatterError};
 use tracing::warn;
@@ -263,11 +263,14 @@ impl RateLimitSnapshot {
 
 /// What a `slaveN:` line's `state=` field reports.
 ///
-/// Redis names three states (`wait_bgsave`, `send_bulk`, `online`) and *omits*
-/// the whole line for any replica in none of them. FrogDB reports `offline`
-/// instead of omitting, because `connected_slaves` is rendered from the same
-/// list: dropping a line would leave the count and the lines disagreeing, which
-/// is the one thing FM-REPLICATION-043 forbids.
+/// Exactly Redis's three states (`wait_bgsave`, `send_bulk`, `online`). Redis
+/// *omits* the whole line for a slave in none of them, and so does FrogDB: the
+/// fourth phase FrogDB has (`Disconnecting`) maps to no state, so
+/// [`ReplicaState::from_phase`] returns `None` and the replica is dropped at the
+/// render boundary (FM-REPLICATION-060). `connected_slaves` is the count of the
+/// lines that survive that boundary, so the count and the list still cannot
+/// disagree — the invariant FM-REPLICATION-043 actually protects — while the
+/// invented `offline` spelling no longer reaches a client.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ReplicaState {
     /// Handshake accepted, checkpoint not started.
@@ -278,8 +281,6 @@ pub enum ReplicaState {
     /// up enough to satisfy WAIT.
     #[default]
     Online,
-    /// Tearing down.
-    Offline,
 }
 
 impl ReplicaState {
@@ -289,20 +290,21 @@ impl ReplicaState {
             Self::WaitBgsave => "wait_bgsave",
             Self::SendBulk => "send_bulk",
             Self::Online => "online",
-            Self::Offline => "offline",
         }
     }
-}
 
-impl From<Phase> for ReplicaState {
-    fn from(phase: Phase) -> Self {
+    /// The state Redis would report for this phase, or `None` for a phase Redis
+    /// has no word for — the caller must then render no line at all.
+    pub fn from_phase(phase: Phase) -> Option<Self> {
         match phase {
             // A replica that has not yet been told which sync it is getting is
             // in the same position as a Redis replica waiting for the fork.
-            Phase::Connecting | Phase::PreparingCheckpoint => Self::WaitBgsave,
-            Phase::StreamingCheckpoint => Self::SendBulk,
-            Phase::Streaming => Self::Online,
-            Phase::Disconnecting => Self::Offline,
+            Phase::Connecting | Phase::PreparingCheckpoint => Some(Self::WaitBgsave),
+            Phase::StreamingCheckpoint => Some(Self::SendBulk),
+            Phase::Streaming => Some(Self::Online),
+            // Tearing down: Redis skips such a slave, and inventing a spelling
+            // for it put a state on the wire no Redis client knows.
+            Phase::Disconnecting => None,
         }
     }
 }
@@ -323,19 +325,23 @@ pub struct ReplicaLine {
 }
 
 impl ReplicaLine {
-    /// Project a live session snapshot onto the line INFO renders.
+    /// Project a live session snapshot onto the line INFO renders, or `None`
+    /// for a replica in a phase Redis has no state for (FM-REPLICATION-060).
     ///
     /// Every field is read off the same [`ReplicaInfo`], so no two fields of a
     /// `slaveN:` line can describe different instants, and none of them is a
-    /// literal.
-    pub fn from_replica(replica: &ReplicaInfo) -> Self {
-        Self {
+    /// literal. The `None` arm is the *only* filter between the registry and
+    /// the wire: both renderers feed from every registered replica and let this
+    /// projection decide, so the set of lines and `connected_slaves` are one
+    /// decision made once.
+    pub fn from_replica(replica: &ReplicaInfo) -> Option<Self> {
+        Some(Self {
             ip: replica.address.ip().to_string(),
             port: replica.listening_port,
-            state: replica.phase.into(),
+            state: ReplicaState::from_phase(replica.phase)?,
             offset: replica.acked_offset,
             lag_secs: replica.lag_secs(),
-        }
+        })
     }
 
     /// Render this line as `slave<index>:…`, without a trailing terminator.
@@ -369,10 +375,73 @@ pub fn sync_counter_fields(sync: SyncCountersSnapshot) -> [(&'static str, u64); 
     ]
 }
 
+/// The four `repl_backlog_*` fields of `INFO replication`, in Redis's order.
+///
+/// Shared by both INFO renderers for the same reason [`sync_counter_fields`] is:
+/// these four were literals in *both* of them (`repl_backlog_size:1048576`,
+/// `repl_backlog_first_byte_offset:0`), and a fix applied to one renderer and
+/// forgotten in the other is the shape this list makes impossible
+/// (FM-REPLICATION-059).
+pub fn backlog_geometry_fields(geometry: BacklogGeometry) -> [(&'static str, u64); 4] {
+    [
+        ("repl_backlog_active", u64::from(geometry.active)),
+        ("repl_backlog_size", geometry.size_bytes),
+        ("repl_backlog_first_byte_offset", geometry.first_byte_offset),
+        ("repl_backlog_histlen", geometry.histlen),
+    ]
+}
+
+/// The replica-only link fields of `INFO replication`, in render order.
+///
+/// Two fields, one list, for the same reason [`backlog_geometry_fields`] is one
+/// list: `master_link_status` was rendered from a duplicated literal in each
+/// renderer, and `master_sync_error` is the field an operator is told to alert
+/// on — a node that reported it to clients but not to `redis.call('INFO')`
+/// (or the reverse) would be exactly the half-fix this campaign keeps finding
+/// (FM-REPLICATION-061).
+///
+/// `master_sync_error` is emitted **only when present**: absent means "not
+/// given up", which is the common case, and an empty-valued field would read
+/// as an error that happened rather than as one that did not.
+pub fn replica_link_fields(
+    master_link_up: bool,
+    sync_error: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut fields = vec![(
+        "master_link_status",
+        if master_link_up { "up" } else { "down" }.to_string(),
+    )];
+    if let Some(reason) = sync_error {
+        fields.push(("master_sync_error", reason.to_string()));
+    }
+    fields
+}
+
+/// The `slaveN:` feed both INFO renderers use: every registered replica, in
+/// attach order, projected through [`ReplicaLine::from_replica`] — which drops
+/// the ones in a phase Redis has no state for (FM-REPLICATION-060).
+///
+/// Both renderers used to call `get_streaming_replicas()` instead, so a replica
+/// being fed its checkpoint right now — the case an operator opens `INFO
+/// replication` to see — appeared in no `slaveN:` line and in no
+/// `connected_slaves` count at all. That filter is *not* moved here as a
+/// narrower one: it stays where it belongs, on the acked-offset projection
+/// `WAIT`, `ROLE` and the quorum checker read, which is a different question
+/// ("who has acknowledged this offset") that must not widen with the render.
+pub fn rendered_replicas(tracker: &frogdb_replication::ReplicationTrackerImpl) -> Vec<ReplicaLine> {
+    tracker
+        .get_all_replicas()
+        .iter()
+        .filter_map(ReplicaLine::from_replica)
+        .collect()
+}
+
 /// Primary-role replication state (present when this node tracks replicas).
 #[derive(Debug, Clone, Default)]
 pub struct PrimarySnapshot {
-    /// Streaming replicas, one per `slaveN:` line.
+    /// The replicas this node renders, one per `slaveN:` line — every
+    /// registered replica in a phase Redis names, not only the streaming ones
+    /// (FM-REPLICATION-060).
     pub replicas: Vec<ReplicaLine>,
 }
 
@@ -393,6 +462,12 @@ pub struct ReplicationSnapshot {
     /// one triple so the three fields cannot describe different instants.
     /// Reported in `INFO stats`, not `INFO replication`, as in Redis.
     pub sync: SyncCountersSnapshot,
+    /// The replication backlog's live shape — capacity, whether a resume window
+    /// is open, and where it starts. Read off the tracker (which the backlog is
+    /// published to at construction) in *both* roles: the configured capacity is
+    /// a property of the node, not of the role it happens to be running, and a
+    /// replica reports it with `active:0` exactly as Redis does.
+    pub backlog: BacklogGeometry,
     /// Live replication offset of this node, whatever role it is running.
     ///
     /// Rendered as `master_repl_offset`. On a primary this is the last offset
@@ -410,6 +485,17 @@ pub struct ReplicationSnapshot {
     /// streaming, when running as a replica. Rendered as
     /// `master_link_status:up`/`down`.
     pub master_link_up: bool,
+    /// Why the inbound stream **gave up**, when it did: the detail of a full
+    /// resync this node can never install. Rendered as `master_sync_error`,
+    /// and only on a replica.
+    ///
+    /// Absent while the link is up, and also while it is down but still
+    /// retrying — `master_link_status:down` on its own means "no data arriving
+    /// right now", which is usually transient. This field is what says the node
+    /// has stopped trying and needs a human. FrogDB-specific: Redis has no
+    /// equivalent because it has no structural refusal to report (its RDB is
+    /// partitioning-agnostic).
+    pub master_sync_error: Option<String>,
     /// Failover-continuity window: the previous primary's replication id
     /// (rendered as `master_replid2`) paired with the offset boundary up to
     /// which it stays valid for PSYNC (rendered as `second_repl_offset`).
@@ -860,6 +946,7 @@ mod tests {
             master_host: None,
             master_port: None,
             master_link_up: false,
+            master_sync_error: None,
         }
     }
 
