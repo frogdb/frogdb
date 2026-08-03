@@ -335,6 +335,20 @@ impl ReplicaSession {
         self.set_phase(phase);
     }
 
+    /// Test-only: pretend the last ACK landed `by` ago.
+    ///
+    /// The freshness gates ([`crate::ack_is_fresh`] and its callers) compare
+    /// `last_ack_time.elapsed()` against a window. Without this hook a test for
+    /// "a replica that has gone silent" would have to *sleep* the window, which
+    /// makes the window a lower bound on suite runtime and makes the assertion
+    /// racy on a loaded machine. Backdating the instant instead makes staleness
+    /// exact and instantaneous.
+    #[doc(hidden)]
+    pub fn backdate_last_ack_for_test(&self, by: Duration) {
+        let mut inner = self.inner.write();
+        inner.last_ack_time = Instant::now() - by;
+    }
+
     /// Drive the session to completion.
     ///
     /// This is the single owner of the session lifecycle. It dispatches to

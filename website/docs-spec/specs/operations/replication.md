@@ -45,8 +45,13 @@ Clustering) or manual `CLUSTER FAILOVER` — there is NO external orchestrator.
 - `role` (default `"standalone"`; one of standalone/primary/replica)
 - `primary-host` (`""`, required when role=replica), `primary-port` (6379)
 - `min-replicas-to-write` (0 = disabled), `min-replicas-timeout-ms` (5000) —
-  NOTE from source: after the timeout the write still proceeds with fewer acks;
-  describe the real semantics, don't overstate it as a hard quorum.
+  NOTE from source: `min-replicas-timeout-ms` is an ACK-*freshness window*, not a
+  wait timeout. A write is refused outright with `-NOREPLICAS` when fewer than N
+  replicas are streaming and have ACKed within the window; nothing waits and no
+  write proceeds with fewer acks. `0` disables the freshness filter entirely
+  (Redis's `min-replicas-max-lag 0`). Two CONFIG names reach it: the lossless
+  `min-replicas-max-lag-ms`, and Redis's seconds-valued `min-replicas-max-lag`,
+  which rounds a sub-second window *up* to 1 rather than reporting `0`.
 - `ack-interval-ms` (1000), `fullsync-timeout-secs` (300),
   `fullsync-max-memory-mb` (512, rejects FULLRESYNC if exceeded)
 - `state-file` (`replication_state.json`, holds repl ID + offset)

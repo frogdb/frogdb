@@ -45,6 +45,12 @@ Phase 3 hardening pass so that no source file in the area is unspecced. In id or
   fences, and the one registry `INFO`/`ROLE` render from
   (`frogdb-replication/src/tracker.rs`, `frogdb-server/src/commands/{wait,info}.rs`).
 
+Scope, part four — rows added by closing a filed bug (044-), each naming its issue in `Bug refs`.
+These are not a separate area; they are the rows a fix had to write because the behavior it
+established was not previously specced anywhere: what a checkpoint file *name* may be (044), the
+ceiling on a reconstructed replicated `MULTI` (045), and the round trip of the `min-replicas-to-write`
+freshness window (046).
+
 Adjacent specs: the boot-time half of a full sync — installing a staged checkpoint and adopting the
 replication id/offset it carries — lives in
 [Persistence — failure modes](persistence-failure-modes.md) (FM-PERSISTENCE-027, -038, -039).
@@ -708,8 +714,8 @@ claimed by this row. See the GAPS note filed with this fragment.
 
 **Not covered here.** The malformed shapes named in "NOT observable" — a nested `MULTI`
 (`apply.rs:381-389`) and an `EXEC` with no open group (`apply.rs:416-421`) — are implemented and
-correct but have no forcing test; they are filed as gaps rather than claimed here. The *unbounded*
-growth of an open group is Bug B above.
+correct but have no forcing test; they are filed as gaps rather than claimed here. The growth of an
+open group is bounded by FM-REPLICATION-045, which also owns the disposition a breach takes.
 
 ---
 
@@ -723,11 +729,12 @@ growth of an open group is Bug B above.
 | Invariant | `CheckpointStreamCodec` owns both directions of the grammar, so an encoder change that is not matched by its inverse fails the round-trip. `parse_dollar_len(line, ctx, max)` (`fullsync.rs:351`) is the one length parser — `MAX_CHECKPOINT_NAME_LEN` and `MAX_CHECKPOINT_METADATA_LEN`, both 64 KiB — and `parse_file_count` the one count parser (`MAX_CHECKPOINT_FILE_COUNT`, 1e6); both reject non-numeric input and over-bound values before any buffer is sized from them. Every body read is `read_exact(n + 2)`, so a stream that ends early is `UnexpectedEof` rather than a short body silently accepted. The trailer is split on `:` and rejected unless it yields exactly four fields with a 32-byte checksum. Markers themselves are FM-REPLICATION-001's; this row owns everything downstream of them. |
 | Outcome variant | `io::ErrorKind::{InvalidData, UnexpectedEof}` on the sync |
 | Forced by | `test_checkpoint_codec_round_trip`, `test_checkpoint_codec_golden_bytes`, `test_checkpoint_codec_zero_file_prelude`, `test_parse_file_count_rejects_garbage`, `test_read_prelude_rejects_bad_marker`, `test_read_file_header_non_numeric_len`, `test_read_file_header_oversized_name_len`, `test_read_file_header_truncated_name`, `test_read_metadata_wrong_field_count`, `test_read_metadata_oversized_len`, `test_read_metadata_truncated_body`, `prop_file_header_sequence_round_trips` |
-| Bug refs | Bug A above (the name's *contents* are unvalidated; this row bounds only its length) |
+| Bug refs | — (the name's *contents* are FM-REPLICATION-044's; this row bounds only its length) |
 
 **Bounded is not validated.** This row covers the length prefixes and the truncation behaviour. It
-deliberately does **not** claim that a file name is safe to use as a path — that is Bug A, and the
-row should be extended to name its regression tests once the validation lands.
+deliberately does **not** claim that a file name is safe to use as a path — that is
+FM-REPLICATION-044, which validates the name's shape at the same codec boundary, immediately after
+the length bound this row pins.
 
 ---
 
@@ -822,7 +829,7 @@ not acked. The cost is latency under a mixed write load, not correctness.
 | NOT observable | **A fresh primary fencing itself before it ever had a replica** — the shape that appears when arming is dropped or is inferred from config instead of latched from the tracker: a standalone node with the flag on refuses every write from boot, which is a total outage caused by a safety feature. **Arming inherited across a demotion** — a node demoted and later re-promoted would fence the fresh primary on its predecessor's history; `reset_arming` on demotion is what prevents it. **A fence that grants a grace period when the toggle is flipped on**: arming is tracked even while fencing is *disabled*, so enabling it on a primary that has already served replicas fences immediately rather than waiting to re-arm — the opposite behavior gives the operator a window in which the flag is on and does nothing. **A stale replica counted as quorum**: a session still in `Streaming` whose last ACK is older than the freshness window is a dead link that has not been reaped yet, and counting it is indistinguishable from having no replica at all. **A per-write `Vec` allocation** on this path — it runs on every write command, and the existence-only check exists for that reason. |
 | Invariant | `ReplicationQuorumChecker::has_quorum()` is ordered cheapest-first and short-circuits: one relaxed load for the toggle, then `arm_if_streaming()` (a single relaxed load once latched; it touches the tracker only while still unarmed, and then through the allocation-free `has_streaming_replica()`), then `!fencing \|\| !armed -> true`, and only an armed+enabled checker pays `count_fresh_streaming_replicas() >= 1`. Freshness is `r.last_ack_time.elapsed() < freshness_timeout`, with the window **loaded per check** rather than captured at construction — that is what makes `CONFIG SET` live. `armed` is a latch set by any replica reaching `Phase::Streaming` and cleared only by `reset_arming()` on demotion. `write_fence_reason()` is `fence_engaged().then_some(FENCE_REASON)`, sharing the same predicate as the write gate, so the status report cannot claim a fence state the write path is not in. The refusal itself lives in `ConnectionHandler::run_pre_checks` (`guards.rs`), third in the ladder — READONLY -> MISCONF -> **CLUSTERDOWN** -> NOREPLICAS -> NOADMIN -> ACL — and is gated on `CommandFlags::WRITE` read from `get_entry` (all registered commands, not just shard commands). Config validation requires `replica-freshness-timeout-ms >= 3 x ack-interval-ms`, so the window cannot be tuned below the cadence it measures. |
 | Outcome variant | `CLUSTERDOWN The cluster is down (quorum lost, writes rejected)`; `WriteFenceReporter::write_fence_reason() == Some("replica quorum lost")` |
-| Forced by | `unarmed_allows_writes`, `armed_with_fresh_replica_allows_writes`, `armed_with_stale_replica_rejects_writes`, `armed_with_no_replicas_rejects_writes`, `arming_transition`, `self_fence_toggle_is_live`, `freshness_timeout_is_live`, `empty_tracker_never_fences`, `test_self_fence_engages_on_replica_loss`, `test_self_fence_recovers_after_replica_reconnect`, `test_self_fence_unarmed_allows_writes`, `test_cluster_primary_writes_without_replicas` |
+| Forced by | `unarmed_allows_writes`, `armed_with_fresh_replica_allows_writes`, `armed_with_stale_replica_rejects_writes`, `armed_with_no_replicas_rejects_writes`, `arming_transition`, `self_fence_toggle_is_live`, `freshness_timeout_is_live`, `empty_tracker_never_fences`, `test_self_fence_engages_on_replica_loss`, `test_self_fence_recovers_after_replica_reconnect`, `test_self_fence_unarmed_allows_writes`, `test_cluster_primary_writes_without_replicas`, `write_fence_reason_is_reported_only_while_fenced` |
 | Bug refs | — (no open issue; the Lua/EXEC bound is tracked under `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md`) |
 
 **Redis has no equivalent, and the wording says so.** `CLUSTERDOWN` is surfaced here on a
@@ -831,9 +838,8 @@ not acked. The cost is latency under a mixed write load, not correctness.
 `test_self_fence_engages_on_replica_loss` with a comment saying exactly that, so any reword is
 deliberate.
 
-**The status-endpoint claim in the Observable cell is deliberately not forced here.** Its only test,
-`write_fence_reason_is_reported_only_while_fenced`, lives in `frogdb-telemetry`, which is not an
-eligible crate — see GAP-7.
+**The status-endpoint claim in the Observable cell is forced from `frogdb-telemetry`**, by
+`write_fence_reason_is_reported_only_while_fenced` — the crate became eligible when GAP-7 closed.
 
 **Gate bounds (documented, pinned by tests that must be flipped when they close).** Both fences fire
 only in `run_pre_checks`, which covers direct writes and `MULTI` *queue* time. Writes issued from
@@ -852,7 +858,7 @@ asserts the *bypass*, so closing the gap is a visible spec edit.
 | NOT observable | **Writes accepted with `min-replicas-to-write N` set and no replicas**, i.e. the gate inheriting the self-fence's arming latch: that would make the knob a no-op on exactly the node it exists to protect (a primary that has never yet had a replica) and is the single most damaging way to get this wrong, because the config reads as enabled. **A stale replica counted as good**: `min-replicas-max-lag` exists to exclude a session whose link is dead but whose teardown has not run, and ignoring it turns the gate into a bare connected-count check. **The value read once at boot** — a `CONFIG SET` that logs success and changes nothing is worse than a rejected `CONFIG SET`. **The tracker read on non-write commands**, or the config read before the WRITE-flag check: this is the hot path, and a `GET` must not pay for a replication policy. **`min-replicas-max-lag 0` excluding everybody** rather than disabling the freshness filter — Redis's 0 means "no lag check", and inverting it fences a healthy primary. |
 | Invariant | The gate is the fourth rung of `run_pre_checks`, immediately after the self-fence (Redis runs `writeCommandsDeniedByDiskError` then its `NOREPLICAS` check in the same relative order). It is entered only for commands whose `get_entry` flags contain `CommandFlags::WRITE`, and only then is `min_replicas_to_write()` read; the tracker walk happens only when that value is `> 0`. "Good" is `ReplicationTrackerImpl::count_good_replicas(max_lag)`, derived from the same `get_streaming_replicas()` projection `WAIT` counts (FM-REPLICATION-039), filtered by `max_lag.is_zero() \|\| r.last_ack_time.elapsed() < max_lag` — the `is_zero()` disjunct *is* Redis's `min-replicas-max-lag 0` semantics, expressed as a disabled filter rather than a zero-length window. Both values come from `ConfigManager` on every check, which is what makes the knobs live. A missing tracker (`replication_tracker == None`, a build with no replication wiring) yields 0 good replicas — the safe direction: refuse rather than assume. Replica apply traffic can never reach this ladder: the replication executor sends `CoreMsg::Execute` straight to the shards under `REPLICA_INTERNAL_CONN_ID` and never builds a `PreDispatchView`, the same carve-out Redis makes with its "unless coming from our master" clause. |
 | Outcome variant | `NOREPLICAS Not enough good replicas to write.` |
-| Forced by | `test_min_replicas_to_write_rejects_without_replicas`, `test_min_replicas_to_write_gate_tracks_replica_health`, `test_min_replicas_to_write_config_set_live`, `test_get_streaming_replicas` |
+| Forced by | `test_min_replicas_to_write_rejects_without_replicas`, `test_min_replicas_to_write_gate_tracks_replica_health`, `test_min_replicas_to_write_config_set_live`, `test_get_streaming_replicas`, `count_good_replicas_excludes_a_stale_replica_but_zero_disables_the_check`, `count_good_replicas_ignores_non_streaming_replicas`, `noreplicas_still_fires_after_a_replica_goes_silent` |
 | Bug refs | `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md` (the shared Lua bypass) |
 
 ---
@@ -875,18 +881,71 @@ asserts the *bypass*, so closing the gap is a visible spec edit.
 
 ---
 
+## FM-REPLICATION-044 — a checkpoint file name is one path component, or the frame is refused
+
+| Field | Value |
+|---|---|
+| Trigger | Reading a per-file header out of a `$FROGDB_CHECKPOINT` / `$FROGDB_SNAPSHOT` envelope whose name is not a bare file name: an absolute path (`/etc/authorized_keys`), a traversal (`../../frogdb.conf`, `a/../../b`), a nested name (`a/b`), the empty string, `.` or `..`, a form that normalizes to another (`CURRENT/`, `CURRENT/.`), or bytes that are not valid UTF-8. The primary is remote input on this path — a replica does a full sync against whatever answered its `PSYNC`, and the name is used *before* any checksum has been verified. |
+| Observable | The sync fails with `io::ErrorKind::InvalidData` at the header, and the replica retries on its normal reconnect backoff still serving its previous keyspace. Nothing is written: not at the escape target, not under the staging directory, not even the staging directory's own creation for that file. Legal names — `CURRENT`, `000042.sst`, `MANIFEST-000005`, and awkward-but-single-component ones like `..sneaky` — decode unchanged and land directly in the staging dir. |
+| NOT observable | **A name that resolves outside the staging directory.** `Path::join` discards its receiver entirely when the argument is absolute and climbs out of it on `..`, so a single hostile header turned a replica's checkpoint receive into an arbitrary file write as the server user — the replica dials the primary, so nothing but the address is authenticated. **A name that is written before it is validated.** The transport loop writes each file to disk as it is framed and only checks the combined checksum after the whole envelope has landed, so a refusal that happens at verification time happens one filesystem too late; the check has to be at the codec boundary or it is not a check. **Two distinct wire names folding to the same checksum input.** The name is part of the combined-checksum coverage (`CheckpointChecksum::update_file` hashes the name bytes as sent), so any decode that is not injective breaks the coverage: `String::from_utf8_lossy` mapped every invalid byte to U+FFFD, and `Path::components()` normalizes `CURRENT`, `CURRENT/` and `CURRENT/.` to one component — either way two different wire names land on one staged file while hashing different bytes, which is a checksum the sender and receiver can disagree on by construction. |
+| Invariant | `checkpoint_file_name(name)` (`fullsync.rs`) is the single rule: the name must decompose to exactly one `std::path::Component::Normal` **and** re-encode to itself, the second half being what rejects the normalizing forms the first half would let through. `CheckpointStreamCodec::read_file_header` decodes the name with `std::str::from_utf8` — not lossily — and passes it through that rule before returning a `CheckpointFileHeader`, so an escaping name never reaches a caller. `receive_to_file(reader, dir, name, …)` takes the directory and the name separately and re-applies the same rule before joining, which makes containment a property of the function rather than of every caller that builds a path; `receive_checkpoint_files` therefore no longer joins anything itself. The `MAX_CHECKPOINT_NAME_LEN` bound of FM-REPLICATION-035 still runs first, before the buffer is sized. |
+| Outcome variant | `io::ErrorKind::InvalidData` on the sync |
+| Forced by | `read_file_header_refuses_names_that_are_not_one_component`, `receive_to_file_refuses_a_name_that_escapes_its_directory`, `receiver_refuses_a_file_name_that_escapes_the_staging_dir` |
+| Bug refs | `.scratch/hardening/issues/done/12-checkpoint-file-names-are-not-validated.md` (Bug A in FM-REPLICATION-035's tail) |
+
+**Names, not paths.** The checkpoint envelope has no directory concept: RocksDB checkpoint files are
+flat, and the receiver stages them flat. Nothing is lost by refusing every shape that is not a bare
+name, and admitting even one of them would put the burden of containment back on each call site.
+
+---
+
+## FM-REPLICATION-045 — an unterminated replicated MULTI is bounded and abandoned, never accumulated
+
+| Field | Value |
+|---|---|
+| Trigger | A replicated `MULTI` whose `EXEC` never arrives on the same history: a primary bug, a corrupted or truncated frame stream, or a peer deliberately opening a group and streaming commands into it forever. The replica cannot decline to read the stream, so the group grows with every frame. Sharpened by the two shapes that breach different axes — millions of tiny commands, and a handful of very large values. |
+| Observable | The group is dropped once it outgrows either ceiling, an `error`-level line names the group's size, both limits and the running abandoned count, `ReplicaTxnBound::abandoned` moves, and the link is ended: every later claim on that history is refused, nothing after the breach reaches a shard, and the connection rewinds so its reconnect can only be answered `+FULLRESYNC`. The abandoned group's bytes are never claimed, so the applied head still describes only data this node holds. A large but legal transaction — up to and including one sitting exactly on both ceilings — still applies as one atomic group on its tagged shard and claims its whole byte span. |
+| NOT observable | **Unbounded growth of the buffered group.** `PendingTxn::commands` had no ceiling, so a `MULTI` with no `EXEC` pinned every subsequent frame for the life of the link until the replica OOMed — taking its read traffic and its failover candidacy with it, from a peer that authenticated nothing beyond answering the `PSYNC`. **Only one axis bounded.** A command count alone leaves a few `proto-max-bulk-len`-sized values unbounded in bytes; a byte total alone leaves millions of tiny commands unbounded in the per-command bookkeeping that dwarfs their payloads — either half on its own is a bound an attacker picks around. **A breach resumed with `+CONTINUE`.** The group's frames were consumed from the stream but never claimed, so the applied head no longer names a position the primary can resume from: a partial resync would either redeliver the same unterminated group forever or splice the surviving half of a transaction into the keyspace. **A breach that only logs.** The pre-existing nested-`MULTI` and stray-`EXEC` guards discard a group and carry on, which is right for a malformed *shape*; a group too large to hold is a link that cannot be trusted to close anything, so it takes the same disposition an admitted divergence takes. **A count that depends on log level** — the increment lives outside the `tracing::error!` argument list, because a disabled event does not evaluate its fields. |
+| Invariant | `ReplicaTxnBound` (`apply.rs`) holds both ceilings and the abandoned counter, shared behind an `Arc` so the count is the node's rather than one link's. `exceeded(commands, bytes)` is checked immediately after each frame is pushed onto the open group, and is a strict `>` on both axes — the limits name the largest group that still applies. On breach the consume loop drops the group, counts it, and calls `ReplicaApplyStint::admit_divergence(epoch)`, the same latch a failed apply uses (FM-REPLICATION-010): further claims return `Claim::Stale`, and the connection woken through `AppliedOffset::divergence` runs `abandon_diverged_link`, which resets the received head to 0 so `psync_request_args` sends `PSYNC ? -1`. Both ceilings come from config (`replication.replica_txn_max_commands`, default 1e6; `replication.replica_txn_max_bytes`, default 1 GiB), and `ReplicationConfigSection::validate` rejects 0 on either — there is no "0 = unlimited" reading, since an unlimited bound is the bug itself. |
+| Outcome variant | n/a (internal; surfaces as an `error` log, a moved abandoned counter, and a forced full resync) |
+| Forced by | `an_unterminated_multi_is_abandoned_at_the_command_ceiling`, `an_unterminated_multi_is_abandoned_at_the_byte_ceiling`, `a_large_transaction_under_the_bound_still_applies_atomically` , `zero_replicated_txn_ceilings_are_rejected` |
+| Bug refs | `.scratch/hardening/issues/done/13-an-unterminated-multi-grows-without-bound.md` (Bug B in FM-REPLICATION-034's tail) |
+
+**Why full and not partial.** Reusing the divergence latch buys the forced `+FULLRESYNC` for free
+rather than inventing a second teardown, and it is the only correct answer: an abandoned group's
+bytes were consumed but never claimed, so there is no offset a `+CONTINUE` could legitimately resume
+from. Redis bounds the analogous replica-side accumulation with `client-query-buffer-limit` and
+kills the link on breach; this is the same instinct applied to the reconstructed group rather than
+the socket buffer.
+
+---
+
+---
+
+## FM-REPLICATION-046 — the freshness window survives a CONFIG round trip, and `0` disables by decision
+
+| Field | Value |
+|---|---|
+| Trigger | Any read-back-and-reapply of the `min-replicas-to-write` freshness window: `CONFIG GET min-replicas-max-lag` followed by `CONFIG SET min-replicas-max-lag <that value>` — the shape every config dump/restore, every desired-state reconciler diffing GET output, and every operator copying a value from `CONFIG GET` performs. Sharpest when the stored window is sub-second, because the TOML field (`replication.min-replicas-timeout-ms`) is milliseconds while Redis's parameter name is seconds; `min_replicas_config()` in the fence tests uses 500 ms, so the project's own test deployments sit inside the sharp case. Also triggered by a seconds value large enough that its millisecond form overflows `u64`, and by an operator setting the window to `0` on purpose. |
+| Observable | Both spellings reach the same live window and both are honoured immediately. `min-replicas-max-lag-ms` is the native unit and round-trips exactly at every magnitude. `min-replicas-max-lag` is Redis's seconds-valued spelling and rounds **up**: a 500 ms window reports `1`, and every non-zero sub-second window reports `1` rather than `0`, so the round trip may widen the window but never switches the filter off. Reapplying a reported value leaves the `NOREPLICAS` gate armed — a replica that has gone silent past the window is still refused entry to the good count afterwards. A seconds value whose millisecond form would overflow is rejected at validation with the live window untouched, while the largest expressible window (`u64::MAX / 1000` seconds) is accepted. `0` on either spelling stores `0`, reads back `0`, and disables the freshness check so that every streaming replica counts however long it has been silent — Redis's documented `min-replicas-max-lag 0`. Only the millisecond row participates in `CONFIG REWRITE`, so the file keeps the exact window regardless of which name was used to set it. |
+| NOT observable | **A round trip that silently widens the window to "off"**: reporting a 500 ms window as `0` and then accepting that `0` back is indistinguishable from an explicit disable, so the `NOREPLICAS` gate degrades from "N replicas ACKed recently" to "N replicas are attached" without a log line, a warning, or a changed config value — the operator's dump matches the running config exactly, and the guarantee is gone. **A stale session counted as good**: the window exists precisely to exclude a replica whose link is dead but whose teardown has not run, and any path that reaches a zero window by accident (truncation, an unchecked wrap, a default) collapses that filter. **An overflowing multiplication**: `secs * 1000` unchecked wraps an absurd-but-legal seconds value into an arbitrary small window — and lands on exactly `0`, i.e. disabled, for any multiple of 2^64/1000 — so the most extreme value an operator can type produces the least protective behaviour. **Two registry rows writing the same TOML key**: an alias that named `replication.min-replicas-timeout-ms` alongside the millisecond row would make `CONFIG REWRITE` emit two values for one key, and since the seconds view rounds, the losing writer would silently retune the operator's file. **`0` excluding everybody** rather than disabling the filter — inverting the sentinel fences a healthy primary (shared with FM-REPLICATION-042). **A boundary that only a wall clock can see**: the freshness comparison must be assertable without racing `Instant::elapsed()`, or `<` versus `<=` is untestable by construction. |
+| Invariant | The window is stored once, in milliseconds, as `replication.min-replicas-timeout-ms`, and is served under two CONFIG names with two different lifecycles. `min-replicas-max-lag-ms` is the derived row: it owns the TOML field, so it is the only spelling `CONFIG REWRITE` persists, and its `get`/`apply` are the identity on milliseconds. `min-replicas-max-lag` is a **virtual** registry row (`section: None, field: None`), which is what keeps it out of `ConfigManager::config_updates()` and therefore out of the rewrite path; its value type is `MinReplicasMaxLagSecs`, whose `from_millis` is `div_ceil(1000)` (round up, so no non-zero window can report as disabled) and whose `to_millis` is `checked_mul(1000)` (so overflow is a validation error, not a wrap). `validate` is `to_millis().map(|_| ())`, which means the rejection happens before `apply` touches the runtime cell. The freshness comparison itself is `frogdb_replication::ack_is_fresh(ack_age, window)` — a pure predicate over an age, not over a clock — and it is the single spelling of the boundary for both write gates: `count_good_replicas` (this row) and `ReplicationQuorumChecker::count_fresh_streaming_replicas` (FM-REPLICATION-041). The boundary is strict: an ACK exactly `window` old is stale. The zero sentinel lives at exactly one place, the `max_lag.is_zero()` disjunct in `count_good_replicas`, ordered first so the disable short-circuits the clock read; `ack_is_fresh` itself never encodes it, and `replica-freshness-timeout-ms` (which rejects `0` at validation) does not have it. |
+| Outcome variant | No new wire outcome. `CONFIG SET min-replicas-max-lag <overflowing>` answers `ERR Invalid value for 'min-replicas-max-lag': too large: the window is stored in milliseconds and would overflow`; the gate's own outcome remains `NOREPLICAS Not enough good replicas to write.` |
+| Forced by | `min_replicas_max_lag_round_trips_without_losing_a_sub_second_window`, `min_replicas_max_lag_zero_is_an_explicit_disable_on_both_spellings`, `min_replicas_max_lag_rejects_a_seconds_value_that_overflows_millis`, `noreplicas_still_fires_after_a_replica_goes_silent`, `count_good_replicas_excludes_a_stale_replica_but_zero_disables_the_check`, `count_good_replicas_ignores_non_streaming_replicas`, `ack_is_fresh_excludes_an_ack_exactly_at_the_window` |
+| Bug refs | `.scratch/hardening/issues/done/18-min-replicas-max-lag-cannot-round-trip-a-sub-second-window.md` (fixed); closes GAP-1 and GAP-4 |
+
+---
+
 # GAPS — behavior nothing forces (do not name a test; these need one written)
 
-**GAP-1 — `count_good_replicas`'s freshness filter has no unit test.**
-`frogdb-server/crates/replication/src/tracker.rs:172-177`. The `max_lag.is_zero()` disjunct (Redis's
-`min-replicas-max-lag 0` = disable the check) and the strict `<` boundary are only exercised
-end-to-end through `test_min_replicas_to_write_*`, which never sets a zero window and never pins the
-boundary. A mutant flipping `is_zero()` to `!is_zero()`, or `<` to `<=`, survives every unit test in
-the crate.
-*Test that should exist:* `count_good_replicas_zero_max_lag_disables_the_freshness_filter` in
-`tracker.rs`, alongside `count_good_replicas_excludes_a_replica_past_the_window` — three sessions
-(one fresh streaming, one stale streaming, one syncing) asserting 2/1/0 for `Duration::ZERO`, a
-window longer than the stale gap, and a window shorter than it.
+**GAP-1 — CLOSED** by FM-REPLICATION-046. The freshness filter is forced by
+`count_good_replicas_excludes_a_stale_replica_but_zero_disables_the_check`,
+`count_good_replicas_ignores_non_streaming_replicas` and
+`ack_is_fresh_excludes_an_ack_exactly_at_the_window`. The gap predicted the `<`→`<=` mutant would
+survive every unit test in the crate, and it was right for a reason worth keeping: the comparison
+sat on a live `Instant::elapsed()` line, so **no** test could separate `<` from `<=` without landing
+exactly on the window. The boundary was extracted into the pure `ack_is_fresh(ack_age, window)`
+predicate, which both write gates now share, and is asserted on an age rather than a clock.
 
 **GAP-2 — `INFO replication` reports `state=online` for every replica, including ones that are not.**
 `frogdb-server/crates/server/src/info/sections.rs:426`. The literal is safe *today* only because
@@ -910,7 +969,16 @@ integration assertion in `test_info_replication_shows_all_replicas` that a repli
 stalled reports a non-zero `lag`. Requires plumbing `last_ack_time` (or a precomputed `lag_secs`)
 into `ReplicaLine`.
 
-**GAP-4 — a sub-second `min-replicas-timeout-ms` round-trips through `CONFIG` as 0, which silently *disables* the lag filter.**
+**GAP-4 — CLOSED** by FM-REPLICATION-046. Of the three remedies this gap offered, the fix takes two
+together: the millisecond field is exposed under its own CONFIG name (`min-replicas-max-lag-ms`,
+exact at every magnitude) and the Redis-spelled seconds view rounds **up**, so a round trip may
+widen the window but can never report a live window as `0`. Rejecting sub-second values — the third
+remedy — was **not** taken: it would break the project's own `min_replicas_config()` fence tests and
+every deployment with a sub-second TOML value. The original write-up follows.
+
+<details><summary>Original GAP-4 (kept for the reasoning)</summary>
+
+**A sub-second `min-replicas-timeout-ms` round-trips through `CONFIG` as 0, which silently *disables* the lag filter.**
 `frogdb-server/crates/server/src/runtime_config.rs:2028-2046` — `get` is
 `min_replicas_timeout_ms / 1000` and `apply` is `secs * 1000`, integer arithmetic in both directions.
 A config file with `min-replicas-timeout-ms = 500` (the value `min_replicas_config()` uses in the
@@ -924,6 +992,8 @@ Full write-up under `<!-- BUGS -->` at the top of this fragment.
 `runtime_config.rs` — set the TOML field to 500 ms, `CONFIG GET`, `CONFIG SET` the result back,
 assert the effective window is not 0 (either by rejecting sub-second values, by rounding up to 1 s,
 or by exposing the ms field directly).
+
+</details>
 
 **GAP-5 — no test asserts that `WAIT` can never return more than the number of connected replicas.**
 `frogdb-server/crates/replication/src/tracker.rs:146-153` + `210-215`. Every existing test asserts a
@@ -944,15 +1014,14 @@ defensible (the role change is the more important fact) but it is a contract nob
 `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races` in
 `wait_coordinator.rs` or `integration_replication.rs`.
 
-**GAP-7 — `write_fence_reason` is reported by a crate the FM lint cannot see.**
-The only test of the status-endpoint fence field,
-`write_fence_reason_is_reported_only_while_fenced`, lives in
-`frogdb-server/crates/telemetry/src/status.rs:1380`, and `frogdb-telemetry` is **not** in
-`NEXTEST_CRATES` (`scripts/failure-modes.py:53-62`) — so it cannot legally appear in a `Forced by`
-cell, and it has therefore been left out of FM-REPLICATION-041's cell, whose Observable half claims
-the status-endpoint behavior unforced. Fix: either add `frogdb-telemetry` to `NEXTEST_CRATES`, or
-move the assertion into an eligible crate (e.g. an integration test in `frogdb-server` that scrapes
-the status endpoint while fenced and while healthy), then add the test to FM-REPLICATION-041.
+**GAP-7 — CLOSED.** `write_fence_reason`'s only test,
+`write_fence_reason_is_reported_only_while_fenced`
+(`frogdb-server/crates/telemetry/src/status.rs`), was uncitable because `frogdb-telemetry` was not
+in `NEXTEST_CRATES`, leaving FM-REPLICATION-041's status-endpoint claim unforced. `frogdb-telemetry`
+and `frogdb-config` are now both eligible (`scripts/failure-modes.py`), and the test is named in
+FM-REPLICATION-041's `Forced by`. The second crate was added for the same reason: config
+`validate()` tests are the forcing tests for every "rejected at boot" clause, and they all live in
+`frogdb-config`.
 
 ---
 
@@ -1013,7 +1082,8 @@ by the tests named above, so a change here is a visible spec edit rather than a 
 | FM-REPLICATION-037 | An unreachable `numreplicas` blocks to the deadline | Same (Redis blocks) | Matched deliberately, and recorded because Dragonfly diverges: it early-exits once every currently-tracked replica has acked. Rejected — a replica may be mid-attach, so the early answer is to a different question. Pinned by an *elapsed-time lower bound* assertion, not just the return value. |
 | FM-REPLICATION-037 | Cluster mode has no `WAIT` special case: per-node, never redirects, no server-side fan-out | Per-shard, keyless, no redirect | Same contract. Noted because the cluster-wide guarantee a client usually wants (`ALL_SHARDS` + `AGG_MIN`) is deliberately left client-side; FrogDB will not fan a `WAIT` out across shards. `WAITAOF` is a stub. |
 | FM-REPLICATION-041 | A replica-loss fence that answers `-CLUSTERDOWN` on a **non-cluster** primary, armed by the first streaming replica | No equivalent; Redis would answer `-NOREPLICAS` via `min-replicas-to-write`, or accept the write | A FrogDB-only safety net for the "was replicated, now is not" case that `min-replicas-to-write` handles only if the operator set it in advance. The `CLUSTERDOWN` wording outside cluster mode is the known wart, pinned by an exact-string assertion so a reword is intentional. |
-| FM-REPLICATION-042 | `min-replicas-max-lag` accepts and reports **seconds** (Redis parity) but is stored as `min-replicas-timeout-ms` in TOML, default **5 s** | `min-replicas-max-lag`, seconds, default **10** | The unit conversion lives on `MinReplicasMaxLagSecs::to_toml_value` next to the parameter's own definition. The halved default and the lossy sub-second round trip are both live divergences — see GAP-4 / BUG-1. |
+| FM-REPLICATION-042 | The ACK-freshness window is stored as `replication.min-replicas-timeout-ms` in TOML, default **5 s** | `min-replicas-max-lag`, seconds, default **10** | The halved default remains a live divergence (a tighter window refuses writes sooner than Redis would); the lossy sub-second round trip that used to accompany it is fixed — see FM-REPLICATION-046. |
+| FM-REPLICATION-046 | Two CONFIG names for one window: `min-replicas-max-lag-ms` (native, exact) and `min-replicas-max-lag` (Redis parity, seconds, rounds **up**). Only the `-ms` name is persisted by `CONFIG REWRITE` | One name, `min-replicas-max-lag`, seconds only; sub-second windows are inexpressible | Redis's unit is a historical wart that cannot express the windows FrogDB's own deployments use, and a seconds-only surface makes `CONFIG GET`/`SET` lossy for them. Keeping the Redis spelling preserves compatibility for tooling that knows only that name; adding the `-ms` spelling makes the value round-trippable. Rounding up rather than truncating is what keeps the lossy direction *safe*: a widened window still filters, a truncated one (`0`) disables the gate. |
 | FM-REPLICATION-042 | Both write fences gate direct writes and `MULTI` **queue** time only; Lua-internal writes and queued-then-`EXEC`'d writes are not gated | Redis's `NOREPLICAS` check runs in `processCommand`, so scripts are gated through their own `scriptPrepareForRun` deny path | A known, pinned bound — `test_self_fence_does_not_gate_lua_writes` asserts the *bypass*, so closing it is a visible spec edit. Uniform enforcement belongs at the shard/script write seam (`.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md`). |
 | FM-REPLICATION-043 | `slaveN:` reports `state=online` and `lag=0` as literals; `repl_backlog_size:1048576` and `repl_backlog_first_byte_offset:0` likewise | Real per-replica state (`wait_bgsave`/`send_bulk`/`online`) and real seconds-since-ACK; real backlog geometry | Not a design decision — see GAP-2/GAP-3. `replica_lag_secs` already computes exactly what Redis's `lag` field means and is already consumed by the proactive-disconnect policy. |
 | FM-REPLICATION-043 | Proactive lag disconnect on `replication-lag-threshold-bytes` / `-secs`, with an address-keyed reconnect cooldown; both default 0 (off) | `client-output-buffer-limit slave <hard> <soft> <soft-seconds>` — a buffer-size limit, not an offset/time lag limit | Different mechanism, same goal. FrogDB's broadcast fan-out is not a per-client output buffer, so the natural measure is the replica's acked-offset lag and its ACK silence. The cooldown is keyed by `SocketAddr` because replica ids change on every reconnect. |

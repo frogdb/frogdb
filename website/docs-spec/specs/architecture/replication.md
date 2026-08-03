@@ -164,9 +164,11 @@ Structure (H2/H3 outline):
 
 ## Write quorum and fencing
 - `WAIT numreplicas timeout` → `wait_for_acks`, returns the ack count, never
-  errors. `min-replicas-to-write` / `min-replicas-timeout-ms` config semantics
-  (verify what actually enforces them). `ReplicationQuorumChecker` fencing →
-  `-CLUSTERDOWN` when armed and no fresh streaming replica. No `-NOREPL`.
+  errors. `min-replicas-to-write` / `min-replicas-timeout-ms` are enforced in
+  `run_pre_checks` (`connection/guards.rs`), not by `WAIT`: a WRITE-flagged
+  command is rejected with `-NOREPLICAS` when fewer than N replicas are
+  streaming with an ACK newer than the freshness window. `ReplicationQuorumChecker`
+  fencing → `-CLUSTERDOWN` when armed and no fresh streaming replica.
 
 ## Split-brain handling
 - After a partition heals, a demoted former-primary's divergent writes (captured

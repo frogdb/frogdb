@@ -115,8 +115,9 @@ pub struct TestServerConfig {
     /// Override `replication.min-replicas-to-write` (Redis `NOREPLICAS` gate:
     /// refuse writes with fewer than N good replicas). `None` keeps the default 0.
     pub replication_min_replicas_to_write: Option<u32>,
-    /// Override `replication.min-replicas-max-lag` (ms), the good-replica ACK
-    /// freshness window for `min-replicas-to-write`. `None` keeps the default.
+    /// Override `replication.min-replicas-timeout-ms` (CONFIG name
+    /// `min-replicas-max-lag-ms`), the good-replica ACK freshness window for
+    /// `min-replicas-to-write`. `None` keeps the default.
     pub replication_min_replicas_timeout_ms: Option<u64>,
 
     // --- Cluster ---

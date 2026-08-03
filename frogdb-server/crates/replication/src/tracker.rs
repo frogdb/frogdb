@@ -19,6 +19,28 @@ use tokio::sync::broadcast;
 
 use crate::replica_session::{Phase, ReplicaInfo, ReplicaSession};
 
+/// Whether an ACK that landed `ack_age` ago is still inside a freshness
+/// `window`.
+///
+/// The one place the "recently ACKing" comparison is spelled. Both write gates
+/// ask it: [`ReplicationTrackerImpl::count_good_replicas`] for Redis's
+/// `min-replicas-max-lag`, and the self-fence's
+/// `ReplicationQuorumChecker::count_fresh_streaming_replicas` for
+/// `replica-freshness-timeout-ms`. Two gates measuring the same thing must not
+/// be able to disagree about where its boundary is.
+///
+/// The comparison is strict, and the age is a *parameter* rather than a clock
+/// read inside: an ACK exactly `window` old is stale, which is what makes a
+/// zero window mean "nothing is ever fresh" instead of "everything is" — and
+/// therefore why `min-replicas-max-lag 0` needs the explicit disable disjunct in
+/// [`ReplicationTrackerImpl::count_good_replicas`] rather than falling out of
+/// the arithmetic. Taking the age in is what makes that boundary testable at
+/// all; `Instant::elapsed()` can be sampled but never made to land exactly on
+/// the window.
+pub fn ack_is_fresh(ack_age: Duration, window: Duration) -> bool {
+    ack_age < window
+}
+
 /// Registry of replica sessions and cross-replica replication state.
 pub struct ReplicationTrackerImpl {
     /// Per-replica sessions keyed by id.
@@ -166,13 +188,21 @@ impl ReplicationTrackerImpl {
     }
 
     /// Count streaming replicas whose last ACK is within `max_lag` — the "good"
-    /// replicas for Redis's `min-replicas-to-write` gate. A `max_lag` of zero
-    /// disables the freshness filter (every streaming replica counts), matching
-    /// Redis's `min-replicas-max-lag 0` semantics.
+    /// replicas for Redis's `min-replicas-to-write` gate.
+    ///
+    /// A `max_lag` of zero counts every streaming replica, however long it has
+    /// been silent. That is a *decision*, not a degenerate-duration guard: Redis
+    /// documents `min-replicas-max-lag 0` as "no lag check", and inverting it
+    /// (excluding everybody, which is what a bare [`ack_is_fresh`] would do at a
+    /// zero window) would fence a healthy primary. Because the sentinel is
+    /// load-bearing, no CONFIG path may reach it by accident — the seconds-valued
+    /// `min-replicas-max-lag` rounds a sub-second window *up* rather than
+    /// truncating it to `0`.
     pub fn count_good_replicas(&self, max_lag: Duration) -> u32 {
         self.get_streaming_replicas()
             .iter()
-            .filter(|r| max_lag.is_zero() || r.last_ack_time.elapsed() < max_lag)
+            // The disable check is first, so it short-circuits the clock read.
+            .filter(|r| max_lag.is_zero() || ack_is_fresh(r.last_ack_time.elapsed(), max_lag))
             .count() as u32
     }
 
@@ -550,6 +580,82 @@ mod tests {
         s2.force_phase_for_test(Phase::Streaming);
         // Cooldown still applies — same address, fresh id.
         assert!(tracker.is_in_lag_cooldown(s2.id(), Duration::from_secs(60)));
+    }
+
+    // FM-REPLICATION-046
+    /// The freshness boundary is exclusive: an ACK exactly `window` old is
+    /// already stale.
+    ///
+    /// Asserted on the pure predicate rather than through a live
+    /// `Instant::elapsed()`, because a wall clock cannot be made to land exactly
+    /// on the window — which is why the `<` inside the two counters used to be
+    /// an unkillable mutant. With the comparison extracted, `<` vs `<=` is a
+    /// one-line behavioural difference this test sees.
+    #[test]
+    fn ack_is_fresh_excludes_an_ack_exactly_at_the_window() {
+        let window = Duration::from_millis(500);
+        assert!(ack_is_fresh(Duration::from_millis(499), window));
+        assert!(
+            !ack_is_fresh(window, window),
+            "an ACK exactly `window` old has aged out; `<=` here would keep a \
+             replica 'good' for one extra tick at every boundary"
+        );
+        assert!(!ack_is_fresh(Duration::from_millis(501), window));
+        // A brand-new ACK is fresh under any non-zero window, and nothing is
+        // fresh under a zero window — the disable is the *caller's* job, so this
+        // predicate must not smuggle it in.
+        assert!(ack_is_fresh(Duration::ZERO, Duration::from_nanos(1)));
+        assert!(!ack_is_fresh(Duration::ZERO, Duration::ZERO));
+    }
+
+    // FM-REPLICATION-046 FM-REPLICATION-042
+    /// `count_good_replicas` filters on ACK freshness at a real window, and
+    /// treats a zero window as Redis's documented "no lag check" disable rather
+    /// than as "nothing is fresh".
+    ///
+    /// The stale replica is backdated rather than slept, so the window stays a
+    /// window and the test stays instant.
+    #[test]
+    fn count_good_replicas_excludes_a_stale_replica_but_zero_disables_the_check() {
+        let tracker = ReplicationTrackerImpl::new();
+
+        let fresh = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        fresh.force_phase_for_test(Phase::Streaming);
+        let stale = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
+        stale.force_phase_for_test(Phase::Streaming);
+        stale.backdate_last_ack_for_test(Duration::from_secs(3600));
+
+        let window = Duration::from_millis(500);
+        assert_eq!(
+            tracker.count_good_replicas(window),
+            1,
+            "a replica silent for an hour is not a good replica at a 500ms window"
+        );
+        assert_eq!(
+            tracker.count_good_replicas(Duration::ZERO),
+            2,
+            "`min-replicas-max-lag 0` disables the lag check (Redis parity), so \
+             every streaming replica counts however long it has been silent"
+        );
+
+        // A fresh ACK rehabilitates the stale replica without touching config.
+        tracker.record_ack(stale.id(), 1);
+        assert_eq!(tracker.count_good_replicas(window), 2);
+    }
+
+    // FM-REPLICATION-046 FM-REPLICATION-042
+    /// Only *streaming* replicas can be good, freshness notwithstanding: a
+    /// handshaking replica with a brand-new `last_ack_time` must not satisfy
+    /// `min-replicas-to-write`.
+    #[test]
+    fn count_good_replicas_ignores_non_streaming_replicas() {
+        let tracker = ReplicationTrackerImpl::new();
+        let handshaking = tracker.register_replica(test_addr());
+        assert_eq!(handshaking.phase(), Phase::Connecting);
+        assert_eq!(tracker.count_good_replicas(Duration::from_millis(500)), 0);
+        assert_eq!(tracker.count_good_replicas(Duration::ZERO), 0);
+        handshaking.force_phase_for_test(Phase::Streaming);
+        assert_eq!(tracker.count_good_replicas(Duration::from_millis(500)), 1);
     }
 
     #[test]

@@ -126,6 +126,8 @@ self-fence-on-replica-loss = true
 replica-freshness-timeout-ms = 3000
 backlog-ttl-secs = 3600
 replica-write-timeout-ms = 5000
+replica-txn-max-commands = 1000000
+replica-txn-max-bytes = 1073741824
 
 [slowlog]
 log-slower-than = 10000

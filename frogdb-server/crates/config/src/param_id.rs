@@ -4,7 +4,7 @@
 //! by *mutability* — the one fact that decides which server-side lifecycle
 //! serves it:
 //!
-//! - [`MutableParamId`] — the 74 runtime-mutable parameters (60 real
+//! - [`MutableParamId`] — the 76 runtime-mutable parameters (62 real
 //!   `ConfigParam` lifecycles + 14 Redis-compat no-ops). Served by the server's
 //!   `build_typed_params`.
 //! - [`ImmutableParamId`] — the 45 restart-required parameters. Served by the
@@ -98,6 +98,12 @@ param_id_enum! {
         ScatterGatherTimeoutMs => "scatter-gather-timeout-ms",
         // === Replication family ===
         MinReplicasToWrite => "min-replicas-to-write",
+        // The ACK-freshness window, twice: `-ms` is the native unit backing the
+        // TOML field, and the bare (seconds) name is Redis's spelling served as
+        // a rounding view over the same runtime cell. Two identities because
+        // they are two wire names with two different parse/render lifecycles,
+        // not one name with a synonym.
+        MinReplicasMaxLagMs => "min-replicas-max-lag-ms",
         MinReplicasMaxLag => "min-replicas-max-lag",
         // === Slowlog family ===
         SlowlogLogSlowerThan => "slowlog-log-slower-than",
@@ -339,8 +345,10 @@ mod tests {
         // the 3 new `hotshards-*` rows) + 1 added by the hot-shard hardening
         // round (`hotshards-enabled`) + 1 added by the replication hardening
         // round (`repl-backlog-ttl`) + 1 added by the persistence hardening
-        // round (`stop-writes-on-save-error`).
-        assert_eq!(MutableParamId::ALL.len(), 75);
+        // round (`stop-writes-on-save-error`) + 1 added by the replication
+        // hardening round's issue 18 (`min-replicas-max-lag-ms`, the native
+        // millisecond unit behind Redis's seconds-valued `min-replicas-max-lag`).
+        assert_eq!(MutableParamId::ALL.len(), 76);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params

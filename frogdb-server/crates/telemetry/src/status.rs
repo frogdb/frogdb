@@ -1376,6 +1376,7 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-041
     #[tokio::test]
     async fn write_fence_reason_is_reported_only_while_fenced() {
         let recorder = Arc::new(PrometheusRecorder::new());

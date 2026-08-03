@@ -195,19 +195,58 @@ impl ToTomlValue for OptionalPathValue {
 
 /// The `min-replicas-max-lag` runtime value, in seconds.
 ///
-/// CONFIG GET/SET operate in seconds (Redis compatibility), but the backing
-/// TOML field is `min-replicas-timeout-ms` (milliseconds). Wrapping the
-/// seconds value in this distinct type -- rather than a bare `u64` -- lets
-/// [`ToTomlValue`] carry the seconds->ms conversion as part of *this
-/// parameter's own type*, alongside its `parse`/`get`/`apply`/`render` in
-/// [`ConfigManager::build_typed_params`], instead of the file writer having to
-/// special-case this one parameter by name.
-#[derive(Debug, Clone, Copy)]
+/// Redis spells the ACK-freshness window in seconds; FrogDB stores it in
+/// milliseconds (`replication.min-replicas-timeout-ms`) and serves that native
+/// unit losslessly under its own name, `min-replicas-max-lag-ms`. This type is
+/// the Redis-compatible *view* of the same runtime cell, and exists so that both
+/// conversions -- and, crucially, their rounding directions -- live on the type
+/// rather than being spelled out inside the parameter's closures.
+///
+/// The rounding is asymmetric on purpose. [`Self::from_millis`] rounds **up**,
+/// so a sub-second window reads back as `1` rather than `0`. A truncating
+/// `/1000` reported `0`, and `0` is not a narrower window: it is Redis's
+/// "disable the lag check" sentinel, which `count_good_replicas` honours by
+/// counting every streaming replica however long it has been silent. One CONFIG
+/// GET/SET round trip -- a config dump-and-restore, or any read-modify-write
+/// tooling -- therefore used to turn the `NOREPLICAS` gate's freshness filter
+/// *off* rather than merely lose precision. Rounding up can only widen the
+/// reported window to the next whole second; it can never disable it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MinReplicasMaxLagSecs(u64);
 
+impl MinReplicasMaxLagSecs {
+    /// The seconds view of a stored millisecond window, rounded **up**: any
+    /// non-zero window reports at least `1`, and only a genuinely disabled
+    /// window (`0` ms) reports `0`.
+    fn from_millis(ms: u64) -> Self {
+        Self(ms.div_ceil(1000))
+    }
+
+    /// The millisecond window this many seconds denotes.
+    ///
+    /// Fallible rather than saturating: clamping an absurd input would store a
+    /// window the operator did not ask for, and this one gates writes.
+    fn to_millis(self) -> Result<u64, ConfigError> {
+        self.0
+            .checked_mul(1000)
+            .ok_or_else(|| ConfigError::InvalidValue {
+                param: "min-replicas-max-lag".to_string(),
+                message: "too large: the window is stored in milliseconds and would overflow"
+                    .to_string(),
+            })
+    }
+}
+
 impl ToTomlValue for MinReplicasMaxLagSecs {
+    /// Never actually invoked: `min-replicas-max-lag` is a virtual registry row
+    /// (`section: None, field: None`) because the millisecond spelling owns the
+    /// TOML field, so `ConfigManager::config_updates` filters it out before any
+    /// renderer runs -- which is exactly what stops CONFIG REWRITE writing the
+    /// rounded seconds view over the operator's exact millisecond value.
+    /// Implemented anyway (through the same conversion `apply` uses) so the type
+    /// satisfies the [`TomlRenderable`] bound every typed param carries.
     fn to_toml_value(&self) -> Option<TomlValue> {
-        self.0.saturating_mul(1000).to_toml_value()
+        self.to_millis().ok()?.to_toml_value()
     }
 }
 
@@ -2012,15 +2051,43 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
+            // The ACK-freshness window backing the `NOREPLICAS` gate, served
+            // under two names. This one is the native millisecond unit: it maps
+            // 1:1 onto the `replication.min-replicas-timeout-ms` TOML field, so
+            // it is the row CONFIG REWRITE persists and the only spelling that
+            // round-trips a sub-second window exactly. `0` disables the
+            // freshness filter (Redis's `min-replicas-max-lag 0` meaning), so it
+            // stays a legal value here rather than being validated away.
+            MinReplicasMaxLagMs => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "min-replicas-max-lag-ms".to_string(),
+                        message: "must be a non-negative integer (milliseconds)".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::replication::DEFAULT_MIN_REPLICAS_TIMEOUT_MS,
+                get: |mgr| mgr.runtime.read().unwrap().min_replicas_timeout_ms,
+                apply: |mgr, ms| {
+                    mgr.runtime.write().unwrap().min_replicas_timeout_ms = ms;
+                    info!(
+                        min_replicas_max_lag_ms = ms,
+                        "min-replicas-max-lag-ms updated"
+                    );
+                    Ok(())
+                },
+                render: |ms| ms.to_string(),
+                propagation: Propagation::None,
+            }),
+            // ...and this one is Redis's seconds spelling of the very same
+            // runtime cell. Both conversions (and the rounding-up that keeps a
+            // GET/SET round trip from reporting a sub-second window as the
+            // "disabled" `0`) live on `MinReplicasMaxLagSecs`; `validate`
+            // rejects a seconds value too large to express in milliseconds
+            // before `apply` can be reached with it.
             MinReplicasMaxLag => Box::new(ConfigParam::<MinReplicasMaxLagSecs, ConfigManager> {
                 name: id.name(),
-                // Redis reports/accepts this in seconds; stored internally in ms.
-                // `get`/`render` round-trip in seconds; `apply` converts to ms.
-                // The seconds->ms conversion needed to persist this into the
-                // `min-replicas-timeout-ms` TOML field lives on
-                // `MinReplicasMaxLagSecs::to_toml_value`, right next to this
-                // parameter's own definition, rather than as a name check in
-                // the file writer.
                 parse: |s| {
                     s.parse::<u64>().map(MinReplicasMaxLagSecs).map_err(|_| {
                         ConfigError::InvalidValue {
@@ -2029,21 +2096,23 @@ impl ConfigManager {
                         }
                     })
                 },
-                validate: ConfigParam::no_validate,
+                validate: |secs, _| secs.to_millis().map(|_| ()),
                 default: || {
-                    MinReplicasMaxLagSecs(
-                        frogdb_config::replication::DEFAULT_MIN_REPLICAS_TIMEOUT_MS / 1000,
+                    MinReplicasMaxLagSecs::from_millis(
+                        frogdb_config::replication::DEFAULT_MIN_REPLICAS_TIMEOUT_MS,
                     )
                 },
                 get: |mgr| {
-                    MinReplicasMaxLagSecs(
-                        mgr.runtime.read().unwrap().min_replicas_timeout_ms / 1000,
+                    MinReplicasMaxLagSecs::from_millis(
+                        mgr.runtime.read().unwrap().min_replicas_timeout_ms,
                     )
                 },
-                apply: |mgr, MinReplicasMaxLagSecs(secs)| {
-                    mgr.runtime.write().unwrap().min_replicas_timeout_ms = secs * 1000;
+                apply: |mgr, secs| {
+                    let ms = secs.to_millis()?;
+                    mgr.runtime.write().unwrap().min_replicas_timeout_ms = ms;
                     info!(
-                        min_replicas_max_lag_secs = secs,
+                        min_replicas_max_lag_secs = secs.0,
+                        min_replicas_max_lag_ms = ms,
                         "min-replicas-max-lag updated"
                     );
                     Ok(())
@@ -3405,8 +3474,11 @@ impl ConfigManager {
     }
 
     /// Maximum replica ACK lag (ms) for a replica to count as "good" toward
-    /// [`Self::min_replicas_to_write`] (Redis `min-replicas-max-lag`, kept in
-    /// ms internally).
+    /// [`Self::min_replicas_to_write`]. The native unit, served on the wire as
+    /// `min-replicas-max-lag-ms`; Redis's seconds-valued `min-replicas-max-lag`
+    /// is a rounding view over this same cell. `0` disables the freshness check
+    /// rather than excluding everybody — see
+    /// `ReplicationTrackerImpl::count_good_replicas`.
     pub fn min_replicas_timeout_ms(&self) -> u64 {
         self.runtime.read().unwrap().min_replicas_timeout_ms
     }
@@ -4380,11 +4452,132 @@ min-replicas-timeout-ms = 5000
         assert_eq!(v.as_str(), Some("allkeys-lru"));
     }
 
+    /// The value CONFIG GET reports for `name`, or a panic naming the miss.
+    fn config_get_one(manager: &ConfigManager, name: &str) -> String {
+        manager
+            .value_of(name)
+            .unwrap_or_else(|| panic!("`{name}` must be a live CONFIG parameter"))
+    }
+
+    // FM-REPLICATION-046
+    /// A sub-second freshness window survives a CONFIG GET / CONFIG SET round
+    /// trip on Redis's seconds-valued spelling.
+    ///
+    /// This is the bug the whole row exists for: the seconds view used to
+    /// truncate, so `CONFIG GET min-replicas-max-lag` on a 500ms window reported
+    /// `0` and echoing that value back stored a window of zero — which
+    /// `count_good_replicas` reads as *disable the freshness check entirely*.
+    /// One innocent round trip therefore turned the `NOREPLICAS` gate into a
+    /// bare "is anything still attached" count. Rounding up keeps the window a
+    /// window; the millisecond spelling keeps it exact.
+    #[test]
+    fn min_replicas_max_lag_round_trips_without_losing_a_sub_second_window() {
+        let manager = ConfigManager::new(&test_config());
+        manager.set("min-replicas-max-lag-ms", "500").unwrap();
+
+        // The seconds view rounds *up*: a 500ms window reads as 1s, never 0.
+        assert_eq!(config_get_one(&manager, "min-replicas-max-lag"), "1");
+        assert_eq!(config_get_one(&manager, "min-replicas-max-lag-ms"), "500");
+
+        // Echoing the reported value back is the round trip an operator (or a
+        // config-management tool diffing GET against a desired state) performs.
+        // It may widen the window — seconds cannot express 500ms — but it must
+        // never disable the check.
+        let reported = config_get_one(&manager, "min-replicas-max-lag");
+        manager.set("min-replicas-max-lag", &reported).unwrap();
+        assert_eq!(manager.min_replicas_timeout_ms(), 1000);
+        assert_ne!(
+            manager.min_replicas_timeout_ms(),
+            0,
+            "a round trip must never silently widen the window to 'off'"
+        );
+
+        // Every sub-second window rounds up to a real one, including 1ms.
+        for ms in [1_u64, 250, 499, 999] {
+            manager
+                .set("min-replicas-max-lag-ms", &ms.to_string())
+                .unwrap();
+            assert_eq!(
+                config_get_one(&manager, "min-replicas-max-lag"),
+                "1",
+                "{ms}ms must report as 1s, not 0s"
+            );
+        }
+
+        // The millisecond spelling round-trips exactly, at any magnitude.
+        for ms in ["1", "500", "5000", "86400000"] {
+            manager.set("min-replicas-max-lag-ms", ms).unwrap();
+            assert_eq!(config_get_one(&manager, "min-replicas-max-lag-ms"), ms);
+        }
+
+        // Whole seconds are unchanged by the rounding.
+        manager.set("min-replicas-max-lag-ms", "5000").unwrap();
+        assert_eq!(config_get_one(&manager, "min-replicas-max-lag"), "5");
+    }
+
+    // FM-REPLICATION-046
+    /// `0` still means "disable the lag check" — the Redis-documented meaning —
+    /// and is reachable only by asking for it explicitly.
+    #[test]
+    fn min_replicas_max_lag_zero_is_an_explicit_disable_on_both_spellings() {
+        let manager = ConfigManager::new(&test_config());
+
+        manager.set("min-replicas-max-lag", "0").unwrap();
+        assert_eq!(manager.min_replicas_timeout_ms(), 0);
+        assert_eq!(config_get_one(&manager, "min-replicas-max-lag"), "0");
+        assert_eq!(config_get_one(&manager, "min-replicas-max-lag-ms"), "0");
+
+        manager.set("min-replicas-max-lag-ms", "500").unwrap();
+        assert_eq!(manager.min_replicas_timeout_ms(), 500);
+        manager.set("min-replicas-max-lag-ms", "0").unwrap();
+        assert_eq!(manager.min_replicas_timeout_ms(), 0);
+    }
+
+    // FM-REPLICATION-046
+    /// A seconds value whose millisecond form overflows `u64` is rejected at
+    /// validation, leaving the live window untouched.
+    ///
+    /// The seconds→ms conversion is a multiplication by 1000; unchecked, the
+    /// wrap lands on an arbitrary small window (or exactly `0`, i.e. disabled)
+    /// for values that are merely absurd rather than malicious.
+    #[test]
+    fn min_replicas_max_lag_rejects_a_seconds_value_that_overflows_millis() {
+        let manager = ConfigManager::new(&test_config());
+        manager.set("min-replicas-max-lag-ms", "500").unwrap();
+
+        let err = manager
+            .set("min-replicas-max-lag", &u64::MAX.to_string())
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("overflow"),
+            "expected an overflow rejection, got: {err}"
+        );
+        assert_eq!(
+            manager.min_replicas_timeout_ms(),
+            500,
+            "a rejected CONFIG SET must not disturb the live window"
+        );
+
+        // The largest expressible window is accepted rather than rejected by a
+        // conservative bound.
+        let max_secs = u64::MAX / 1000;
+        manager
+            .set("min-replicas-max-lag", &max_secs.to_string())
+            .unwrap();
+        assert_eq!(manager.min_replicas_timeout_ms(), max_secs * 1000);
+    }
+
     #[test]
     fn to_toml_value_min_replicas_max_lag_converts_seconds_to_ms() {
-        // The unit conversion now lives on `MinReplicasMaxLagSecs` itself,
-        // rather than as a name check in the file writer.
+        // The unit conversion lives on `MinReplicasMaxLagSecs` itself, rather
+        // than as a name check in the file writer. The renderer is unreachable
+        // in practice (the seconds row is virtual, so CONFIG REWRITE goes
+        // through `min-replicas-max-lag-ms`), but it must still agree with
+        // `apply` if it is ever reached.
         assert_eq!(toml(MinReplicasMaxLagSecs(10)).as_integer(), Some(10_000));
+        // An overflowing seconds value renders nothing rather than saturating
+        // into a window nobody asked for.
+        assert!(MinReplicasMaxLagSecs(u64::MAX).to_toml_value().is_none());
     }
 
     #[test]

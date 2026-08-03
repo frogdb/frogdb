@@ -1235,6 +1235,78 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-046 FM-REPLICATION-042
+    /// The `min-replicas-to-write` gate rejects writes once its only replica
+    /// stops ACKing, and keeps rejecting them after the freshness window has
+    /// been round-tripped through CONFIG.
+    ///
+    /// Two things are load-bearing here and neither had a test. First, the gate
+    /// counts *good* replicas, not attached ones: a session that is still in
+    /// `Streaming` but silent past the window must not satisfy the quorum.
+    /// Second, `CONFIG GET min-replicas-max-lag` followed by `CONFIG SET` of the
+    /// reported value — what any config-management tool does on every
+    /// reconciliation — must leave that filter armed. The seconds view used to
+    /// truncate a sub-second window to `0`, and `0` is the disable sentinel, so
+    /// the round trip silently degraded the gate into a mere "is anything still
+    /// attached" count and the silent replica was counted as good again.
+    #[test]
+    fn noreplicas_still_fires_after_a_replica_goes_silent() {
+        let mut fx = ViewFixture::new(None);
+        let tracker = Arc::new(frogdb_core::ReplicationTrackerImpl::new());
+        let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        session.force_phase_for_test(frogdb_core::replication::Phase::Streaming);
+        fx.cluster.replication_tracker = Some(Arc::clone(&tracker));
+
+        fx.config_manager.set("min-replicas-to-write", "1").unwrap();
+        fx.config_manager
+            .set("min-replicas-max-lag-ms", "500")
+            .unwrap();
+
+        // A freshly ACKing replica satisfies the gate.
+        assert!(
+            fx.view().run_pre_checks("SET", &[]).is_none(),
+            "a fresh streaming replica must satisfy min-replicas-to-write"
+        );
+
+        // The replica goes silent for an hour without disconnecting.
+        session.backdate_last_ack_for_test(Duration::from_secs(3600));
+        let expect_noreplicas =
+            |fx: &mut ViewFixture, when: &str| match fx.view().run_pre_checks("SET", &[]) {
+                Some(Response::Error(msg)) => assert!(
+                    msg.starts_with(b"NOREPLICAS"),
+                    "expected NOREPLICAS {when}, got: {}",
+                    String::from_utf8_lossy(&msg)
+                ),
+                other => panic!("expected NOREPLICAS {when}, got: {other:?}"),
+            };
+        expect_noreplicas(&mut fx, "once the replica goes silent");
+
+        // Reads are unaffected — the gate is write-only.
+        assert!(fx.view().run_pre_checks("GET", &[]).is_none());
+
+        // The CONFIG round trip on Redis's seconds-valued spelling.
+        let reported = fx
+            .config_manager
+            .get("min-replicas-max-lag")
+            .into_iter()
+            .find(|(name, _)| name == "min-replicas-max-lag")
+            .expect("min-replicas-max-lag must be a live CONFIG parameter")
+            .1;
+        assert_ne!(reported, "0", "a 500ms window must not report as disabled");
+        fx.config_manager
+            .set("min-replicas-max-lag", &reported)
+            .unwrap();
+        expect_noreplicas(&mut fx, "after a CONFIG GET/SET round trip");
+
+        // And the disable is still reachable when an operator asks for it.
+        fx.config_manager.set("min-replicas-max-lag", "0").unwrap();
+        assert!(
+            fx.view().run_pre_checks("SET", &[]).is_none(),
+            "`min-replicas-max-lag 0` disables the freshness filter, so the \
+             silent replica counts as good again"
+        );
+    }
+
     #[test]
     fn test_replica_rejects_write_allows_read() {
         let mut fx = ViewFixture::new(None);

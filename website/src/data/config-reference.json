@@ -717,8 +717,8 @@
           "name": "min-replicas-timeout-ms",
           "type": "integer",
           "default": 5000,
-          "description": "Timeout for min_replicas_to_write in milliseconds.\nIf replicas don't acknowledge within this time, the write still succeeds\nbut returns with fewer acknowledged replicas.",
-          "config_param": "min-replicas-max-lag",
+          "description": "ACK-freshness window for [`Self::min_replicas_to_write`], in\nmilliseconds: a streaming replica counts as \"good\" only while its last\nACK is newer than this. `0` disables the freshness check entirely (every\nstreaming replica counts), which is Redis's documented\n`min-replicas-max-lag 0` meaning and is deliberately kept.\n\nMilliseconds is the native unit and the one CONFIG name\n`min-replicas-max-lag-ms` serves losslessly. Redis's seconds-valued\n`min-replicas-max-lag` is registered separately as a virtual alias over\nthis same value; it is the *alias* that rounds, so this field — the one\nCONFIG REWRITE persists — always holds the exact window.",
+          "config_param": "min-replicas-max-lag-ms",
           "mutable": true
         },
         {
@@ -760,6 +760,18 @@
           "description": "Freshness timeout for replica ACKs (ms).\nIf no replica ACKs within this window, the primary fences itself.\nShould be >= 3x ack_interval_ms to tolerate missed ACKs.",
           "config_param": "replica-freshness-timeout-ms",
           "mutable": true
+        },
+        {
+          "name": "replica-txn-max-bytes",
+          "type": "integer",
+          "default": 1073741824,
+          "description": "Most stream bytes one buffered replicated `MULTI` may account for, the\nbyte-sized half of [`Self::replica_txn_max_commands`]. Needed separately\nbecause a few very large values breach memory long before the command\ncount does."
+        },
+        {
+          "name": "replica-txn-max-commands",
+          "type": "integer",
+          "default": 1000000,
+          "description": "Most commands a replica buffers for one replicated `MULTI` before it\ngives up on the `EXEC` that would close it.\n\nA group is held in memory until its `EXEC` arrives, so a primary that\nnever sends one would otherwise grow the replica's buffer without limit.\nOn breach the group is dropped and the link is forced back through a full\nresync. Sized to sit far above any real transaction — a group this long\nis a broken stream, not a big one."
         },
         {
           "name": "replica-write-timeout-ms",

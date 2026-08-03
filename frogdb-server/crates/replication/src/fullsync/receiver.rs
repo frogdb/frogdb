@@ -23,11 +23,16 @@ use tokio::io::AsyncBufRead;
 /// re-reading the files.
 ///
 /// Creates `incoming` unconditionally up front (`fs::create_dir_all`). This is
-/// load-bearing for `file_count == 0`: [`receive_to_file`] self-creates only
-/// each file's *parent* ([`fullsync::receive_to_file`]), so with zero files no
-/// dir would otherwise exist and the stager's `fs::rename(incoming ->
-/// staged.dir())` would fail. Do NOT rely on per-file parent creation to make
-/// the scratch dir.
+/// load-bearing for `file_count == 0`: only [`receive_to_file`] creates the dir
+/// otherwise ([`fullsync::receive_to_file`]), and with zero files it is never
+/// called, so no dir would exist and the stager's `fs::rename(incoming ->
+/// staged.dir())` would fail. Do NOT rely on per-file creation to make the
+/// scratch dir.
+///
+/// Every file lands *directly* in `incoming`: the wire name is a single path
+/// component ([`CheckpointStreamCodec::read_file_header`] refuses anything else)
+/// and [`receive_to_file`] joins it onto `incoming` itself, so no name the
+/// primary sends can place a file elsewhere.
 ///
 /// [`fullsync::receive_to_file`]: crate::fullsync::receive_to_file
 pub async fn receive_checkpoint_files<R: AsyncBufRead + Unpin>(
@@ -44,8 +49,7 @@ pub async fn receive_checkpoint_files<R: AsyncBufRead + Unpin>(
         // Framing (per-file header) via the codec; the payload bytes still flow
         // through `receive_to_file`, which computes the per-file hash.
         let header = CheckpointStreamCodec::read_file_header(reader).await?;
-        let file_path = incoming.join(&header.name);
-        let checksum = receive_to_file(reader, &file_path, header.size, None).await?;
+        let checksum = receive_to_file(reader, incoming, &header.name, header.size, None).await?;
         total_bytes += header.size;
         combined.update_file(&header.name, &checksum);
         tracing::debug!(file = i + 1, filename = %header.name, size = header.size, checksum = %hex::encode(&checksum[..8]), "Received checkpoint file");
@@ -140,6 +144,47 @@ mod tests {
             .unwrap();
         assert_eq!(metadata.replication_offset, 123);
         assert!(incoming.is_dir(), "incoming scratch dir must exist");
+    }
+
+    // FM-REPLICATION-044
+    /// A hostile primary naming a checkpoint file `../…` or `/…` is refused
+    /// while the transport loop is still framing, so the escape target is never
+    /// created — the loop writes each file before any checksum is verified, so
+    /// the refusal has to happen here or not at all.
+    #[tokio::test]
+    async fn receiver_refuses_a_file_name_that_escapes_the_staging_dir() {
+        let dir = tempdir().unwrap();
+        let incoming = dir.path().join("checkpoint_incoming");
+        let escape_target = dir.path().join("escaped.txt");
+        let absolute_target = dir.path().join("absolute.txt");
+
+        for name in [
+            "../escaped.txt".to_string(),
+            absolute_target.to_string_lossy().into_owned(),
+            "sub/nested.txt".to_string(),
+        ] {
+            // Hand-framed: `write_file_header` would happily encode these, but
+            // going through the encoder would hide which side does the refusing.
+            let payload = b"pwned".to_vec();
+            let mut buf = format!("${}\r\n{}\r\n$5\r\n", name.len(), name).into_bytes();
+            buf.extend_from_slice(&payload);
+            let mut cursor = std::io::Cursor::new(buf);
+
+            let err = receive_checkpoint_files(&mut cursor, &incoming, 1)
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "name {name:?}");
+        }
+
+        assert!(!escape_target.exists(), "`..` must not write outside");
+        assert!(!absolute_target.exists(), "absolute name must not write");
+        assert!(!incoming.join("sub").exists(), "nested name must not write");
+        // The staging dir itself is created up front, but nothing landed in it.
+        let mut entries = tokio::fs::read_dir(&incoming).await.unwrap();
+        assert!(
+            entries.next_entry().await.unwrap().is_none(),
+            "no file may be staged from a refused header"
+        );
     }
 
     // FM-REPLICATION-036

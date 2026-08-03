@@ -273,7 +273,17 @@ impl CheckpointStreamCodec {
         // `name_len + 2` also consumes the trailing `\r\n`.
         let mut name_buf = vec![0u8; name_len + 2];
         r.read_exact(&mut name_buf).await?;
-        let name = String::from_utf8_lossy(&name_buf[..name_len]).to_string();
+        // Decoded strictly, not lossily: `from_utf8_lossy` maps every invalid
+        // byte to U+FFFD, so two distinct wire names would decode to the same
+        // `String` — same staging path, different bytes folded into the
+        // combined checksum.
+        let name = std::str::from_utf8(&name_buf[..name_len]).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint file name is not valid UTF-8",
+            )
+        })?;
+        let name = checkpoint_file_name(name)?.to_string();
 
         let mut size_line = String::new();
         r.read_line(&mut size_line).await?;
@@ -343,6 +353,35 @@ impl CheckpointChecksum {
         let mut checksum = [0u8; 32];
         checksum.copy_from_slice(&self.hasher.finalize());
         checksum
+    }
+}
+
+/// Validate a wire-supplied checkpoint file *name*, returning it unchanged.
+///
+/// The name arrives from the primary and is joined onto the replica's staging
+/// directory before a single checksum has been verified, so on the replica it is
+/// remote input on the *write* path: [`Path::join`] discards the staging
+/// directory entirely for `/etc/authorized_keys` and climbs out of it for
+/// `../../frogdb.conf`. A checkpoint file name is a name, never a path, so the
+/// rule is exact — it must decompose to one [`std::path::Component::Normal`] and
+/// re-encode to itself.
+///
+/// The round-trip half of that rule carries as much weight as the component
+/// count: `components()` normalizes, so `CURRENT`, `CURRENT/` and `CURRENT/.`
+/// all yield the single component `CURRENT`. Accepting them would let three
+/// distinct wire names land on one staged file while folding three *different*
+/// byte strings into the combined checksum, which
+/// [`CheckpointChecksum::update_file`] computes over the name as sent.
+fn checkpoint_file_name(name: &str) -> io::Result<&str> {
+    let mut components = Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(only)), None) if only == std::ffi::OsStr::new(name) => {
+            Ok(name)
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "checkpoint file name must be a single path component",
+        )),
     }
 }
 
@@ -418,18 +457,25 @@ pub async fn stream_file_to_writer<W: AsyncWriteExt + Unpin>(
     Ok(total_written)
 }
 
-/// Receive `expected_size` bytes from `reader` into a file at `path`,
-/// computing a SHA256 checksum and optionally accumulating progress.
+/// Receive `expected_size` bytes from `reader` into `dir`/`name`, computing a
+/// SHA256 checksum and optionally accumulating progress.
+///
+/// Takes the directory and the file name separately, and re-validates the name
+/// through [`checkpoint_file_name`], so a received file cannot land outside
+/// `dir` no matter how the caller obtained the name. The codec already rejects
+/// an escaping name at the wire boundary; keeping the rule here too makes
+/// containment a property of this function instead of a property every caller
+/// has to preserve while building a path.
 pub async fn receive_to_file<R: AsyncReadExt + Unpin>(
     reader: &mut R,
-    path: &Path,
+    dir: &Path,
+    name: &str,
     expected_size: u64,
     progress: Option<&AtomicU64>,
 ) -> io::Result<[u8; 32]> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-    let file = File::create(path).await?;
+    let path = dir.join(checkpoint_file_name(name)?);
+    fs::create_dir_all(dir).await?;
+    let file = File::create(&path).await?;
     let mut writer = BufWriter::new(file);
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -535,7 +581,14 @@ mod tests {
 
         let dst = dir.path().join("dst.bin");
         let recv = async {
-            receive_to_file(&mut reader, &dst, payload.len() as u64, Some(recv_ref)).await
+            receive_to_file(
+                &mut reader,
+                dir.path(),
+                "dst.bin",
+                payload.len() as u64,
+                Some(recv_ref),
+            )
+            .await
         };
 
         let (sent, received) = tokio::join!(send, recv);
@@ -850,6 +903,88 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
+    /// Frame one file header with an arbitrary (possibly non-UTF-8) name, the
+    /// way a hostile primary could. `write_file_header` cannot express these —
+    /// its name is a `String` — so the bytes are laid out by hand.
+    fn raw_file_header(name: &[u8], size: u64) -> Vec<u8> {
+        let mut buf = format!("${}\r\n", name.len()).into_bytes();
+        buf.extend_from_slice(name);
+        buf.extend_from_slice(b"\r\n");
+        buf.extend_from_slice(format!("${size}\r\n").as_bytes());
+        buf
+    }
+
+    // FM-REPLICATION-044
+    /// Every name shape that is not exactly one normal path component is refused
+    /// at the codec boundary, before the receiver ever joins it onto the staging
+    /// directory. Each shape is checked on its own so a partial fix cannot pass:
+    /// absolute paths and `..` escape the staging dir, nested names put files in
+    /// unexpected subtrees, and the empty / normalizing / non-UTF-8 forms alias
+    /// two distinct wire names onto one staged path while folding different
+    /// bytes into the combined checksum.
+    #[tokio::test]
+    async fn read_file_header_refuses_names_that_are_not_one_component() {
+        let hostile: &[(&str, &[u8])] = &[
+            ("absolute", b"/etc/authorized_keys"),
+            ("parent traversal", b"../../frogdb.conf"),
+            ("embedded traversal", b"a/../../b"),
+            ("nested", b"a/b"),
+            ("empty", b""),
+            ("current dir", b"."),
+            ("bare parent", b".."),
+            ("trailing slash", b"CURRENT/"),
+            ("normalizing suffix", b"CURRENT/."),
+            ("invalid utf-8", &[b'C', 0xff, 0xfe, b'T']),
+        ];
+        for (label, name) in hostile {
+            let mut cursor = std::io::Cursor::new(raw_file_header(name, 4));
+            let err = match CheckpointStreamCodec::read_file_header(&mut cursor).await {
+                Ok(header) => panic!("{label} name must be refused, decoded {header:?}"),
+                Err(err) => err,
+            };
+            assert_eq!(
+                err.kind(),
+                io::ErrorKind::InvalidData,
+                "{label} name must be InvalidData"
+            );
+        }
+
+        // The shapes that *are* legal still decode unchanged.
+        for name in ["CURRENT", "000042.sst", "MANIFEST-000005", "..sneaky"] {
+            let mut cursor = std::io::Cursor::new(raw_file_header(name.as_bytes(), 4));
+            let header = CheckpointStreamCodec::read_file_header(&mut cursor)
+                .await
+                .unwrap_or_else(|e| panic!("{name} must be accepted: {e}"));
+            assert_eq!(header.name, name);
+            assert_eq!(header.size, 4);
+        }
+    }
+
+    // FM-REPLICATION-044
+    /// The containment rule is `receive_to_file`'s own, not something the caller
+    /// has to preserve: handed an escaping name directly it refuses before
+    /// creating anything, so no bytes land outside the directory it was given.
+    #[tokio::test]
+    async fn receive_to_file_refuses_a_name_that_escapes_its_directory() {
+        let dir = tempdir().unwrap();
+        let incoming = dir.path().join("incoming");
+        let outside = dir.path().join("escaped.txt");
+
+        for name in ["../escaped.txt", "/tmp/escaped.txt", "sub/escaped.txt", ""] {
+            let mut reader = std::io::Cursor::new(b"payload".to_vec());
+            let err = receive_to_file(&mut reader, &incoming, name, 7, None)
+                .await
+                .expect_err("escaping name must be refused");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "name {name:?}");
+        }
+
+        assert!(!outside.exists(), "no file may land outside the target dir");
+        assert!(
+            !incoming.exists(),
+            "a refused name must not even create the target dir"
+        );
+    }
+
     // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_metadata_wrong_field_count() {
@@ -889,8 +1024,11 @@ mod tests {
         /// against future format edits (proposal 56's property test).
         #[test]
         fn prop_file_header_sequence_round_trips(
+            // Names are single path components by contract, so the strategy
+            // generates only those: non-empty, and never leading with `.` so it
+            // cannot emit `.` or `..`.
             headers in proptest::collection::vec(
-                ("[a-zA-Z0-9._-]{0,64}", proptest::prelude::any::<u64>()).prop_map(
+                ("[a-zA-Z0-9_-][a-zA-Z0-9._-]{0,63}", proptest::prelude::any::<u64>()).prop_map(
                     |(name, size)| CheckpointFileHeader { name, size },
                 ),
                 0..8usize,

@@ -24,7 +24,7 @@
 //! mock applier, with no full server required.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use bytes::BytesMut;
 use frogdb_protocol::ParsedCommand;
@@ -132,6 +132,86 @@ pub fn parse_frame_payload(payload: &[u8]) -> Result<ParsedCommand, String> {
     }
 }
 
+/// Default ceiling on the commands a replica buffers for one replicated
+/// `MULTI` before giving up on its `EXEC`. Comfortably above any transaction a
+/// real workload sends — a `MULTI` this long is a broken stream, not a big one.
+pub const DEFAULT_REPLICA_TXN_MAX_COMMANDS: usize = 1_000_000;
+
+/// Default ceiling on the stream bytes one buffered group may account for.
+pub const DEFAULT_REPLICA_TXN_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// How large a replicated `MULTI` group this replica will reconstruct before it
+/// stops waiting for the `EXEC` that closes it, and how many groups have
+/// breached that.
+///
+/// The group is held in memory: `MULTI` opens it, every frame that follows is
+/// pushed onto it, and only `EXEC` hands it to a shard and frees it. A primary
+/// whose `EXEC` never arrives — a bug, a corrupted stream, a hostile peer —
+/// therefore pins every subsequent frame for the life of the link, and a replica
+/// cannot decline to read the stream. Unbounded, that is an availability bug:
+/// the replica OOMs and takes its share of the read traffic (and its
+/// failover-candidate role) with it. Redis bounds the analogous replica-side
+/// accumulation with `client-query-buffer-limit`; this is the same instinct
+/// applied to the reconstructed group rather than the socket buffer.
+///
+/// Both axes are load-bearing. A command ceiling alone leaves a handful of
+/// `proto-max-bulk-len`-sized values unbounded in bytes; a byte ceiling alone
+/// leaves millions of tiny commands unbounded in the `Vec<ParsedCommand>`
+/// bookkeeping that dwarfs their payloads.
+///
+/// Shared behind an `Arc` so the abandoned count outlives the consume loop and
+/// can be read by whoever reports replica health.
+#[derive(Debug)]
+pub struct ReplicaTxnBound {
+    max_commands: usize,
+    max_bytes: u64,
+    abandoned: AtomicU64,
+}
+
+impl Default for ReplicaTxnBound {
+    fn default() -> Self {
+        Self::new(
+            DEFAULT_REPLICA_TXN_MAX_COMMANDS,
+            DEFAULT_REPLICA_TXN_MAX_BYTES,
+        )
+    }
+}
+
+impl ReplicaTxnBound {
+    pub fn new(max_commands: usize, max_bytes: u64) -> Self {
+        Self {
+            max_commands,
+            max_bytes,
+            abandoned: AtomicU64::new(0),
+        }
+    }
+
+    pub fn max_commands(&self) -> usize {
+        self.max_commands
+    }
+
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes
+    }
+
+    /// Whether a group of `commands` commands spanning `bytes` has outgrown
+    /// either axis. A group sitting exactly *on* a limit is still legal — the
+    /// limits name the largest group that still applies.
+    fn exceeded(&self, commands: usize, bytes: u64) -> bool {
+        commands > self.max_commands || bytes > self.max_bytes
+    }
+
+    /// Count one abandoned group, returning the new total.
+    fn record_abandoned(&self) -> u64 {
+        self.abandoned.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Groups abandoned for outgrowing the bound since this replica started.
+    pub fn abandoned(&self) -> u64 {
+        self.abandoned.load(Ordering::Relaxed)
+    }
+}
+
 /// In-progress `MULTI … EXEC` reconstruction: the origin shard captured at
 /// `MULTI` and the inner commands accumulated until `EXEC`.
 struct PendingTxn {
@@ -223,6 +303,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
     is_replica_flag: Arc<AtomicBool>,
     replication_state: Option<Arc<RwLock<ReplicationState>>>,
     stint: ReplicaApplyStint,
+    txn_bound: Arc<ReplicaTxnBound>,
 ) {
     tracing::info!("Replica frame consumer started");
 
@@ -426,6 +507,36 @@ pub async fn consume_frames<A: ReplicaApplier>(
                     // bytes ride with the group until EXEC.
                     txn.commands.push(cmd);
                     txn.bytes += frame_bytes;
+                    let (commands, bytes) = (txn.commands.len(), txn.bytes);
+                    if txn_bound.exceeded(commands, bytes) {
+                        // The `EXEC` is not coming. Drop the group — its bytes
+                        // stay unclaimed, as for any group that never reached a
+                        // shard — and end the history, the same disposition an
+                        // admitted divergence gets: further claims are refused
+                        // and the connection rewinds so its reconnect can only
+                        // be answered `+FULLRESYNC`. A `+CONTINUE` would resume
+                        // inside the very group that could not be completed.
+                        pending = None;
+                        errors += 1;
+                        // Counted outside the `error!` — a `tracing` macro does
+                        // not evaluate its fields when the event is disabled,
+                        // which would make the counter depend on log level.
+                        let abandoned_total = txn_bound.record_abandoned();
+                        stint.admit_divergence(epoch);
+                        tracing::error!(
+                            commands,
+                            bytes,
+                            max_commands = txn_bound.max_commands(),
+                            max_bytes = txn_bound.max_bytes(),
+                            abandoned_total,
+                            shard = frame.shard_id,
+                            sequence = frame.sequence,
+                            epoch = epoch,
+                            "Replicated MULTI outgrew its bound with no EXEC in \
+                             sight; abandoning the group and forcing the link \
+                             back through a full resync."
+                        );
+                    }
                 } else {
                     // Bare command: a group of one on its tagged shard, claimed
                     // on the way in for the same reason as a transaction.
@@ -445,6 +556,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
         frames_processed = frames_processed,
         errors = errors,
         discarded = discarded,
+        oversized_groups_abandoned = txn_bound.abandoned(),
         "Replica frame consumer shutting down"
     );
 }
@@ -457,7 +569,6 @@ mod tests {
     use crate::replica::offset::ReplicaOffset;
     use bytes::Bytes;
     use std::sync::Mutex;
-    use std::sync::atomic::AtomicU64;
 
     /// Records each applied group as `(shard_id, [command names])`, and can be
     /// told to reject a specific command name to exercise divergence surfacing.
@@ -532,7 +643,19 @@ mod tests {
     /// Drive the consume loop over `frames` and return the applied offset it
     /// reached (the frames' total stream bytes when everything applies).
     async fn drive(frames: Vec<ReplicationFrame>, applier: Arc<MockApplier>) -> u64 {
-        let (tx, rx) = mpsc::channel(64);
+        drive_bounded(frames, applier, Arc::new(ReplicaTxnBound::default()))
+            .await
+            .0
+    }
+
+    /// `drive` with an explicit group bound, reporting the applied offset and
+    /// the applied head so a test can check what the bound did to the history.
+    async fn drive_bounded(
+        frames: Vec<ReplicationFrame>,
+        applier: Arc<MockApplier>,
+        bound: Arc<ReplicaTxnBound>,
+    ) -> (u64, AppliedOffset) {
+        let (tx, rx) = mpsc::channel(1024);
         for f in frames {
             tx.send(live(f)).await.unwrap();
         }
@@ -540,8 +663,8 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(true));
         let applied = AppliedOffset::detached(0);
         let stint = applied.begin_replica_stint();
-        consume_frames(rx, SharedApplier(applier), flag, None, stint).await;
-        applied.current()
+        consume_frames(rx, SharedApplier(applier), flag, None, stint, bound).await;
+        (applied.current(), applied)
     }
 
     // FM-REPLICATION-034
@@ -658,7 +781,15 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(true));
         let recorded = applier.clone();
         let consumer = tokio::spawn(async move {
-            consume_frames(rx, SharedApplier(recorded), flag, None, stint).await
+            consume_frames(
+                rx,
+                SharedApplier(recorded),
+                flag,
+                None,
+                stint,
+                Arc::new(ReplicaTxnBound::default()),
+            )
+            .await
         });
 
         tx.send(live(frame_on(0, 1, "DEL", &["k"]))).await.unwrap();
@@ -703,7 +834,15 @@ mod tests {
         let recorded = applier.clone();
         let stint = applied.begin_replica_stint();
         let consumer = tokio::spawn(async move {
-            consume_frames(rx, SharedApplier(recorded), flip, None, stint).await;
+            consume_frames(
+                rx,
+                SharedApplier(recorded),
+                flip,
+                None,
+                stint,
+                Arc::new(ReplicaTxnBound::default()),
+            )
+            .await;
         });
 
         // Frame 1 is applied while the node is still a replica.
@@ -748,6 +887,104 @@ mod tests {
         assert_eq!(applied, 0, "an unfinished group claims no applied data");
     }
 
+    // ---- an unterminated MULTI is bounded (issue 13) ----------------------
+
+    /// A `MULTI` opened on shard 1 followed by `count` inner `SET`s and no
+    /// `EXEC` — the shape of a primary that never closes the group.
+    fn unterminated_multi(count: usize, value: &str) -> Vec<ReplicationFrame> {
+        let mut frames = vec![frame_on(1, 0, "MULTI", &[])];
+        frames.extend(
+            (0..count).map(|i| frame_on(1, i as u64 + 1, "SET", &[&format!("k{i}"), value])),
+        );
+        frames
+    }
+
+    // FM-REPLICATION-045
+    /// Issue 13: the reconstructed group used to grow for as long as the primary
+    /// withheld the `EXEC`, so a stream that never closed its `MULTI` pinned
+    /// every following frame until the replica died. The command ceiling stops
+    /// it: the group is dropped, the history ends, and nothing after it applies.
+    #[tokio::test]
+    async fn an_unterminated_multi_is_abandoned_at_the_command_ceiling() {
+        let bound = Arc::new(ReplicaTxnBound::new(4, u64::MAX));
+        let mut frames = unterminated_multi(6, "v");
+        // A bare command after the breach: it must not apply — the history is
+        // over until a resync installs a new one.
+        frames.push(frame_on(0, 99, "SET", &["after", "1"]));
+
+        let applier = Arc::new(MockApplier::default());
+        let (offset, applied) = drive_bounded(frames, applier.clone(), bound.clone()).await;
+
+        assert_eq!(bound.abandoned(), 1, "the breach must be counted");
+        assert!(
+            applier.groups.lock().unwrap().is_empty(),
+            "an abandoned group must not reach a shard, in whole or in part"
+        );
+        assert_eq!(
+            offset, 0,
+            "an abandoned group's bytes were never applied and must not be claimed"
+        );
+        assert!(
+            applied.has_diverged(),
+            "the breach must end the history so the link is forced back through a \
+             full resync, not resumed with +CONTINUE inside the broken group"
+        );
+    }
+
+    // FM-REPLICATION-045
+    /// The byte axis is independently enforced: a handful of very large values
+    /// breaches it long before the command ceiling is anywhere near.
+    #[tokio::test]
+    async fn an_unterminated_multi_is_abandoned_at_the_byte_ceiling() {
+        let big = "x".repeat(4096);
+        let bound = Arc::new(ReplicaTxnBound::new(usize::MAX, 8192));
+
+        let applier = Arc::new(MockApplier::default());
+        let (offset, applied) =
+            drive_bounded(unterminated_multi(8, &big), applier.clone(), bound.clone()).await;
+
+        assert_eq!(
+            bound.abandoned(),
+            1,
+            "the byte ceiling must fire on its own"
+        );
+        assert!(applier.groups.lock().unwrap().is_empty());
+        assert_eq!(offset, 0);
+        assert!(applied.has_diverged());
+    }
+
+    // FM-REPLICATION-045
+    /// The bound names the largest group that still *works*: a long but legal
+    /// transaction sitting exactly on both ceilings applies atomically, as one
+    /// group, and claims its whole byte span. Without this the fix could "pass"
+    /// by refusing every transaction.
+    #[tokio::test]
+    async fn a_large_transaction_under_the_bound_still_applies_atomically() {
+        let commands = 512;
+        let mut frames = unterminated_multi(commands, "v");
+        frames.push(frame_on(1, commands as u64 + 1, "EXEC", &[]));
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
+        // Exactly on both ceilings: the group's own size, and the bytes it
+        // accounts for at the moment the last inner command is buffered (the
+        // EXEC frame's bytes are added after the check, at claim time).
+        let inner_bytes: u64 = frames[..frames.len() - 1]
+            .iter()
+            .map(|f| f.stream_advance())
+            .sum();
+        let bound = Arc::new(ReplicaTxnBound::new(commands, inner_bytes));
+
+        let applier = Arc::new(MockApplier::default());
+        let (offset, applied) = drive_bounded(frames, applier.clone(), bound.clone()).await;
+
+        assert_eq!(bound.abandoned(), 0, "a legal group must not be abandoned");
+        assert!(!applied.has_diverged());
+        let groups = applier.groups.lock().unwrap();
+        assert_eq!(groups.len(), 1, "the group must apply as ONE atomic unit");
+        assert_eq!(groups[0].0, 1, "on the shard the MULTI was tagged with");
+        assert_eq!(groups[0].1.len(), commands, "with every inner command");
+        assert_eq!(offset, total, "the whole group's byte span is claimed");
+    }
+
     // ---- frames that outlive their history (issue 06) ---------------------
 
     /// The resync harness: the stint the consumer claims through, the
@@ -774,7 +1011,15 @@ mod tests {
     ) -> Vec<(u16, Vec<String>)> {
         let applier = Arc::new(MockApplier::default());
         let flag = Arc::new(AtomicBool::new(true));
-        consume_frames(rx, SharedApplier(applier.clone()), flag, None, stint).await;
+        consume_frames(
+            rx,
+            SharedApplier(applier.clone()),
+            flag,
+            None,
+            stint,
+            Arc::new(ReplicaTxnBound::default()),
+        )
+        .await;
         applier.groups.lock().unwrap().clone()
     }
 
@@ -928,7 +1173,15 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(true));
         let recorded = applier.clone();
         let consumer = tokio::spawn(async move {
-            consume_frames(rx, SharedApplier(recorded), flag, None, stint).await
+            consume_frames(
+                rx,
+                SharedApplier(recorded),
+                flag,
+                None,
+                stint,
+                Arc::new(ReplicaTxnBound::default()),
+            )
+            .await
         });
         (tx, applier, gate, entered, consumer)
     }

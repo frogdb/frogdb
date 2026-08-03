@@ -5,9 +5,9 @@
 //! server's write gate (`commands/guards.rs`) to reject writes with
 //! CLUSTERDOWN — fencing the primary during partitions.
 
-use frogdb_core::ReplicationTrackerImpl;
 use frogdb_core::command::QuorumChecker;
 use frogdb_core::metrics::WriteFenceReporter;
+use frogdb_core::{ReplicationTrackerImpl, ack_is_fresh};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -117,12 +117,18 @@ impl ReplicationQuorumChecker {
 
     /// Count streaming replicas whose last ACK is within the freshness timeout.
     /// The window is loaded here, per check, not captured at construction.
+    ///
+    /// The comparison itself lives in [`ack_is_fresh`] so the self-fence and the
+    /// `min-replicas-to-write` gate cannot drift apart on where the boundary
+    /// falls, and so the boundary is assertable without racing a wall clock.
+    /// Unlike `count_good_replicas`, a zero window here is *not* a disable
+    /// sentinel: `replica-freshness-timeout-ms` rejects `0` at validation.
     fn count_fresh_streaming_replicas(&self) -> usize {
         let freshness_timeout = self.freshness_timeout();
         self.tracker
             .get_streaming_replicas()
             .iter()
-            .filter(|r| r.last_ack_time.elapsed() < freshness_timeout)
+            .filter(|r| ack_is_fresh(r.last_ack_time.elapsed(), freshness_timeout))
             .count()
     }
 
@@ -229,11 +235,13 @@ mod tests {
         session.force_phase_for_test(Phase::Streaming);
         tracker.record_ack(session.id(), 100);
 
-        // Use a tiny freshness timeout so the replica is immediately stale
-        let checker = ReplicationQuorumChecker::new(tracker, true, Duration::from_nanos(1));
-        // First call arms the checker (streaming replica exists)
-        // But the replica is already stale
-        std::thread::sleep(Duration::from_millis(1));
+        // A realistic window with a backdated ACK, rather than a 1ns window plus
+        // a sleep: the staleness is exact, the test is instant, and the window
+        // under test is one an operator could actually configure.
+        session.backdate_last_ack_for_test(Duration::from_secs(3600));
+        let checker = ReplicationQuorumChecker::new(tracker, true, Duration::from_millis(500));
+        // The first call also arms the checker (a streaming replica exists), but
+        // that replica's last ACK is already outside the window.
         assert!(!checker.has_quorum());
         assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
     }

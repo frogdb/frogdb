@@ -59,6 +59,8 @@ NEXTEST_CRATES = [
     "frogdb-core",
     "frogdb-replication",
     "frogdb-replication-runtime",
+    "frogdb-config",
+    "frogdb-telemetry",
 ]
 
 # Feature-gated suites a row may also name, listed separately because their

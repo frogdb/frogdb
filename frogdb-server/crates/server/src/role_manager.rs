@@ -481,6 +481,10 @@ pub struct RealReplicaStreamer {
     /// keyspace has forked from the new master's and must be replaced rather
     /// than staged for a reboot that may never come.
     snapshot_installer: frogdb_replication::replica::SnapshotInstaller,
+    /// Ceiling on a reconstructed replicated `MULTI`, shared across every stream
+    /// this streamer starts so the abandoned count is the node's, not one
+    /// link's (issue 13).
+    txn_bound: Arc<frogdb_replication::ReplicaTxnBound>,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -535,6 +539,10 @@ impl RealReplicaStreamer {
             shared_offset,
             ack_interval_ms: config.replication.ack_interval_ms,
             snapshot_installer,
+            txn_bound: Arc::new(frogdb_replication::ReplicaTxnBound::new(
+                config.replication.replica_txn_max_commands,
+                config.replication.replica_txn_max_bytes,
+            )),
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
@@ -658,8 +666,17 @@ impl ReplicaStreamer for RealReplicaStreamer {
         // frozen/retired through the applied offset.
         let executor = ReplicaCommandExecutor::new(self.shard_senders.clone(), self.num_shards);
         let flag = self.is_replica_flag.clone();
+        let txn_bound = self.txn_bound.clone();
         let consumer = crate::net::spawn(async move {
-            consume_frames(frame_rx, executor, flag, replication_state, stint).await;
+            consume_frames(
+                frame_rx,
+                executor,
+                flag,
+                replication_state,
+                stint,
+                txn_bound,
+            )
+            .await;
         });
 
         tracing::info!(primary = %primary, "Runtime replica stream started");
@@ -1107,6 +1124,7 @@ mod tests {
                 false,
             )
             .into_installer(),
+            txn_bound: Arc::new(frogdb_replication::ReplicaTxnBound::default()),
             #[cfg(not(feature = "turmoil"))]
             tls: None,
         }

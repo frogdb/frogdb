@@ -229,6 +229,21 @@ pub const VIRTUAL_PARAMS: &[ConfigParamInfo] = &[
         mutable: true,
         noop: true,
     },
+    // Redis's seconds-valued spelling of `replication.min-replicas-timeout-ms`.
+    // Virtual rather than derived because the field already has a derived row
+    // (`min-replicas-max-lag-ms`, the native millisecond unit), and a *second*
+    // row naming the same `section`/`field` would make `config_updates` emit two
+    // conflicting writes for one TOML key on CONFIG REWRITE — the seconds view
+    // rounds, so the last writer would silently retune the operator's file. With
+    // `field: None` the alias is a pure live-value view: CONFIG GET/SET reach the
+    // same runtime cell, and only the millisecond row persists it.
+    ConfigParamInfo {
+        name: "min-replicas-max-lag",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: false,
+    },
 ];
 
 /// Look up a single derived row by CONFIG name within a section's `PARAMS`.
@@ -306,7 +321,7 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         ));
         rows.push(pick(
             ReplicationConfigSection::PARAMS,
-            "min-replicas-max-lag",
+            "min-replicas-max-lag-ms",
         ));
         // slowlog (all three rows, contiguous and in field order)
         rows.extend_from_slice(SlowlogConfig::PARAMS);
@@ -499,6 +514,15 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         rows.push(pick(SnapshotConfig::PARAMS, "stop-writes-on-save-error"));
         rows.push(pick(RecoveryConfig::PARAMS, "recovery-on-decode-failure"));
 
+        // --- replication hardening round (issue 18): Redis's seconds-valued
+        // `min-replicas-max-lag`, appended last so the golden snapshot's first
+        // 121 rows stay byte-identical. The millisecond row above (position 14,
+        // renamed from this name) owns the TOML field; this virtual row is the
+        // compat view over the same live value, and rounds *up* so a CONFIG
+        // GET/SET round trip can never report a sub-second window as `0` (which
+        // Redis reads as "disable the lag check"). ---
+        rows.extend_from_slice(&VIRTUAL_PARAMS[25..26]); // min-replicas-max-lag
+
         rows
     });
 
@@ -608,7 +632,7 @@ mod tests {
             noop: false,
         },
         ConfigParamInfo {
-            name: "min-replicas-max-lag",
+            name: "min-replicas-max-lag-ms",
             section: Some("replication"),
             field: Some("min-replicas-timeout-ms"),
             mutable: true,
@@ -1372,6 +1396,13 @@ mod tests {
             mutable: false,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "min-replicas-max-lag",
+            section: None,
+            field: None,
+            mutable: true,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1410,8 +1441,11 @@ mod tests {
         // (`hotshards-enabled`), giving 118. The replication hardening round
         // appended the backlog's idle TTL (`repl-backlog-ttl`), giving 119. The
         // persistence hardening round appended 2 (`stop-writes-on-save-error`
-        // mutable, `recovery-on-decode-failure` immutable), giving 121.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 121);
+        // mutable, `recovery-on-decode-failure` immutable), giving 121. Issue 18
+        // appended the virtual, mutable `min-replicas-max-lag` (Redis's seconds
+        // spelling; the derived row at position 14 was renamed in place to
+        // `min-replicas-max-lag-ms`, adding no row of its own), giving 122.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 122);
     }
 
     #[test]

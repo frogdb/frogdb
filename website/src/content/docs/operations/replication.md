@@ -45,8 +45,8 @@ The full key set and defaults:
 | `role` | `standalone` | `standalone`, `primary`, or `replica`. |
 | `primary-host` | `""` | Primary to connect to; required when `role = "replica"`. |
 | `primary-port` | `6379` | Primary port for a replica. |
-| `min-replicas-to-write` | `0` | Replicas that must acknowledge a write before it returns success (`0` disables). |
-| `min-replicas-timeout-ms` | `5000` | How long a write waits for those acknowledgements. |
+| `min-replicas-to-write` | `0` | Good replicas required before a write is accepted (`0` disables). |
+| `min-replicas-timeout-ms` | `5000` | ACK-freshness window that decides which replicas count as good (`0` disables the freshness check). |
 | `ack-interval-ms` | `1000` | How often a replica sends `REPLCONF ACK`. |
 | `state-file` | `replication_state.json` | Persists the replication ID and offset for partial-sync recovery. |
 | `connect-timeout-ms` | `5000` | Replica-to-primary connect timeout. |
@@ -67,7 +67,11 @@ See the [Configuration reference](/reference/configuration/) for the authoritati
 
 ## Write quorum (`min-replicas-to-write`)
 
-When `min-replicas-to-write` is greater than zero, a write on the primary waits for that many replicas to acknowledge before it returns success. The wait is bounded by `min-replicas-timeout-ms`. This is a best-effort durability signal, not a hard quorum: if the timeout elapses before enough replicas acknowledge, **the write still proceeds** and returns with however many acknowledgements it received. Use it to reduce the window of unreplicated writes, not as a guarantee that a write reached N replicas.
+When `min-replicas-to-write` is greater than zero, the primary refuses a write with `-NOREPLICAS Not enough good replicas to write.` unless at least that many replicas are **good** at the moment the write arrives. Nothing waits: the check is made before the command runs, and a write that passes it is still replicated asynchronously. This bounds how many replicas were healthy when the write was accepted; it is not a guarantee that the write reached them.
+
+A replica is good when it is streaming *and* its last `REPLCONF ACK` is newer than `min-replicas-timeout-ms`. That window is the freshness filter, not a timeout to wait out — a replica whose link is dead but whose teardown has not run yet stops counting as soon as its ACKs age past it. Setting it to `0` disables the freshness check entirely, so every streaming replica counts however long it has been silent (this is Redis's `min-replicas-max-lag 0` meaning).
+
+At runtime the same window is reachable under two CONFIG names: `min-replicas-max-lag-ms`, which is the native unit and round-trips exactly, and `min-replicas-max-lag`, Redis's seconds-valued spelling. The seconds view rounds *up*, so a 500 ms window reports as `1` — never as `0`, which would read back as "disabled". Prefer the `-ms` spelling for anything sub-second or for automation that diffs `CONFIG GET` against a desired state.
 
 Self-fencing is a separate, stricter guard. With `self-fence-on-replica-loss` enabled (the default), a primary that stops receiving fresh ACKs from all of its replicas within `replica-freshness-timeout-ms` rejects further writes rather than accepting writes it cannot replicate — the case that would otherwise produce a diverging "zombie" primary during a partition. Keep `replica-freshness-timeout-ms` at least `3 × ack-interval-ms`; the server logs a warning at startup otherwise, because a tighter window causes spurious rejections.
 

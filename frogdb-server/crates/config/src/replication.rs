@@ -37,11 +37,19 @@ pub struct ReplicationConfigSection {
     #[param(mutable)]
     pub min_replicas_to_write: u32,
 
-    /// Timeout for min_replicas_to_write in milliseconds.
-    /// If replicas don't acknowledge within this time, the write still succeeds
-    /// but returns with fewer acknowledged replicas.
+    /// ACK-freshness window for [`Self::min_replicas_to_write`], in
+    /// milliseconds: a streaming replica counts as "good" only while its last
+    /// ACK is newer than this. `0` disables the freshness check entirely (every
+    /// streaming replica counts), which is Redis's documented
+    /// `min-replicas-max-lag 0` meaning and is deliberately kept.
+    ///
+    /// Milliseconds is the native unit and the one CONFIG name
+    /// `min-replicas-max-lag-ms` serves losslessly. Redis's seconds-valued
+    /// `min-replicas-max-lag` is registered separately as a virtual alias over
+    /// this same value; it is the *alias* that rounds, so this field — the one
+    /// CONFIG REWRITE persists — always holds the exact window.
     #[serde(default = "default_min_replicas_timeout_ms")]
-    #[param(mutable, name = "min-replicas-max-lag")]
+    #[param(mutable, name = "min-replicas-max-lag-ms")]
     pub min_replicas_timeout_ms: u64,
 
     /// ACK interval - how often replicas send ACKs to primary (milliseconds).
@@ -150,6 +158,28 @@ pub struct ReplicationConfigSection {
     #[param(skip)]
     // skip: borderline: internal replica-stream write timeout Redis folds into repl-timeout
     pub replica_write_timeout_ms: u64,
+
+    /// Most commands a replica buffers for one replicated `MULTI` before it
+    /// gives up on the `EXEC` that would close it.
+    ///
+    /// A group is held in memory until its `EXEC` arrives, so a primary that
+    /// never sends one would otherwise grow the replica's buffer without limit.
+    /// On breach the group is dropped and the link is forced back through a full
+    /// resync. Sized to sit far above any real transaction — a group this long
+    /// is a broken stream, not a big one.
+    #[serde(default = "default_replica_txn_max_commands")]
+    #[param(skip)]
+    // skip: internal replica-side MULTI reconstruction ceiling; no Redis analogue
+    pub replica_txn_max_commands: usize,
+
+    /// Most stream bytes one buffered replicated `MULTI` may account for, the
+    /// byte-sized half of [`Self::replica_txn_max_commands`]. Needed separately
+    /// because a few very large values breach memory long before the command
+    /// count does.
+    #[serde(default = "default_replica_txn_max_bytes")]
+    #[param(skip)]
+    // skip: internal replica-side MULTI reconstruction ceiling; no Redis analogue
+    pub replica_txn_max_bytes: u64,
 }
 
 fn default_replication_role() -> String {
@@ -171,6 +201,10 @@ pub const DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS: u64 = 3000;
 pub const DEFAULT_REPLICA_WRITE_TIMEOUT_MS: u64 = 5000;
 /// Redis's `repl-backlog-ttl` default: one hour with no replicas.
 pub const DEFAULT_BACKLOG_TTL_SECS: u64 = 3600;
+/// Mirrors `frogdb_replication::DEFAULT_REPLICA_TXN_MAX_COMMANDS`.
+pub const DEFAULT_REPLICA_TXN_MAX_COMMANDS: usize = 1_000_000;
+/// Mirrors `frogdb_replication::DEFAULT_REPLICA_TXN_MAX_BYTES` — 1 GiB.
+pub const DEFAULT_REPLICA_TXN_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 
 fn default_primary_port() -> u16 {
     DEFAULT_PRIMARY_PORT
@@ -236,6 +270,14 @@ fn default_backlog_ttl_secs() -> u64 {
     DEFAULT_BACKLOG_TTL_SECS
 }
 
+fn default_replica_txn_max_commands() -> usize {
+    DEFAULT_REPLICA_TXN_MAX_COMMANDS
+}
+
+fn default_replica_txn_max_bytes() -> u64 {
+    DEFAULT_REPLICA_TXN_MAX_BYTES
+}
+
 impl Default for ReplicationConfigSection {
     fn default() -> Self {
         Self {
@@ -260,6 +302,8 @@ impl Default for ReplicationConfigSection {
             replica_freshness_timeout_ms: default_replica_freshness_timeout_ms(),
             replica_write_timeout_ms: default_replica_write_timeout_ms(),
             backlog_ttl_secs: default_backlog_ttl_secs(),
+            replica_txn_max_commands: default_replica_txn_max_commands(),
+            replica_txn_max_bytes: default_replica_txn_max_bytes(),
         }
     }
 }
@@ -302,6 +346,17 @@ impl ReplicationConfigSection {
         // stale, fencing writes permanently.
         if self.replica_freshness_timeout_ms == 0 {
             anyhow::bail!("replication.replica_freshness_timeout_ms must be > 0");
+        }
+
+        // A zero ceiling would abandon every replicated transaction, including
+        // the legitimate ones — a disabled bound is the bug this exists to fix,
+        // so there is no "0 = unlimited" reading of these.
+        if self.replica_txn_max_commands == 0 {
+            anyhow::bail!("replication.replica_txn_max_commands must be > 0");
+        }
+
+        if self.replica_txn_max_bytes == 0 {
+            anyhow::bail!("replication.replica_txn_max_bytes must be > 0");
         }
 
         let recommended_minimum = self.ack_interval_ms.saturating_mul(3);
@@ -347,6 +402,33 @@ mod tests {
         assert!(config.primary_host.is_empty());
         assert_eq!(config.primary_port, DEFAULT_PRIMARY_PORT);
         assert_eq!(config.min_replicas_to_write, 0);
+    }
+
+    // FM-REPLICATION-045
+    #[test]
+    fn zero_replicated_txn_ceilings_are_rejected() {
+        // A ceiling of 0 abandons every replicated transaction, legal ones
+        // included — "unlimited" is the bug these exist to close, so neither
+        // axis may be read that way.
+        for (label, config) in [
+            (
+                "replica_txn_max_commands",
+                ReplicationConfigSection {
+                    replica_txn_max_commands: 0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "replica_txn_max_bytes",
+                ReplicationConfigSection {
+                    replica_txn_max_bytes: 0,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let err = config.validate().unwrap_err();
+            assert!(err.to_string().contains(label), "{label}: {err}");
+        }
     }
 
     #[test]

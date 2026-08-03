@@ -432,6 +432,10 @@ impl Server {
             // Spawn frame consumer task (applies replicated commands to shards)
             let executor = ReplicaCommandExecutor::new(shard_senders, num_shards);
             let is_replica_for_consumer = self.is_replica_flag.clone();
+            let txn_bound = std::sync::Arc::new(frogdb_replication::ReplicaTxnBound::new(
+                self.config.replication.replica_txn_max_commands,
+                self.config.replication.replica_txn_max_bytes,
+            ));
             let frame_consumer_handle = spawn(async move {
                 consume_frames(
                     frame_rx,
@@ -439,6 +443,7 @@ impl Server {
                     is_replica_for_consumer,
                     replication_state,
                     stint,
+                    txn_bound,
                 )
                 .await;
             });

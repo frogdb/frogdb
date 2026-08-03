@@ -44,7 +44,9 @@ pub mod state;
 pub mod tracker;
 pub mod wait_coordinator;
 
-pub use apply::{ApplyError, ReplicaApplier, StreamedFrame, consume_frames, parse_frame_payload};
+pub use apply::{
+    ApplyError, ReplicaApplier, ReplicaTxnBound, StreamedFrame, consume_frames, parse_frame_payload,
+};
 pub use frame::{
     CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
     serialize_command_to_resp,
@@ -62,7 +64,7 @@ pub use state::{
     ReplicationState, StagedReplicationMetadata, consume_staged_replication_metadata,
     discard_staged_full_sync, read_staged_replication_metadata,
 };
-pub use tracker::ReplicationTrackerImpl;
+pub use tracker::{ReplicationTrackerImpl, ack_is_fresh};
 pub use wait_coordinator::{AckSolicitor, RoleFence, WaitCoordinator, WaitVerdict};
 
 use bytes::Bytes;
