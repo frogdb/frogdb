@@ -238,7 +238,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-turmoil-features lint-turmoil lint-failure-modes
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1147,6 +1147,38 @@ lint-metrics-chokepoint:
         exit 1
     fi
     echo "OK: metric emission goes through the typed handles"
+
+# Gate: exactly one float renderer in the workspace (issue 55).
+#
+# `INCRBYFLOAT`/`HINCRBYFLOAT` store the string they render, so the renderer is
+# on both the reply path and the store path. When those were two different
+# implementations, `SET k 0; INCRBYFLOAT k 0.1` replied `0.1` and stored
+# `0.10000000000000001` — and the stored spelling, not the reply, is what the
+# WAL persists and what crosses the replication link, so a replica that
+# re-derived the value disagreed with the primary. Five copies had drifted.
+# The one definition lives in frogdb-protocol, the crate every renderer on that
+# path already depends on; everyone else re-exports it.
+lint-format-float:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    crates="{{server-dir}}/crates"
+    canonical="protocol/src/format.rs"
+    hits=$(grep -rn 'fn format_float' --include='*.rs' "$crates" || true)
+    extra=$(echo "$hits" | grep -v "$canonical" || true)
+    if [ -n "$extra" ]; then
+        echo "ERROR: format_float is defined outside frogdb-protocol:" >&2
+        echo "$extra" >&2
+        echo >&2
+        echo "       Re-export the canonical renderer instead:" >&2
+        echo "       pub use frogdb_protocol::format_float;" >&2
+        exit 1
+    fi
+    count=$(echo "$hits" | grep -c "$canonical" || true)
+    if [ "$count" -ne 1 ]; then
+        echo "ERROR: expected exactly 1 format_float definition in $canonical, found $count" >&2
+        exit 1
+    fi
+    echo "OK: one float renderer, in frogdb-protocol"
 
 # =============================================================================
 # Build/test execution mode

@@ -24,3 +24,9 @@ frogdb-vll.workspace = true
 bytes.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 proptest.workspace = true
+
+[dev-dependencies]
+# `eviction_spill_failure` opens a real RocksStore to reach a genuine
+# `SpillError::Rocks` (see that file's header). RocksDB is already in this
+# crate's graph via frogdb-core, so this only adds the temp-dir helper.
+tempfile.workspace = true

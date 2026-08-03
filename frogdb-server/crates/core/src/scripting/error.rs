@@ -11,7 +11,11 @@ pub enum ScriptError {
     NoScript,
 
     /// Script execution timed out.
-    #[error("ERR BUSY Lua script running. Allow up to {timeout_ms}ms for it to finish.")]
+    ///
+    /// The RESP error code is `BUSY`, not `ERR`: clients (and the documented
+    /// error table in the architecture glossary) switch on the first word, and
+    /// `ERR BUSY ...` presents `ERR` as the code with `BUSY` demoted to prose.
+    #[error("BUSY Lua script running. Allow up to {timeout_ms}ms for it to finish.")]
     Timeout { timeout_ms: u64 },
 
     /// Script exceeded memory limit.

@@ -3,11 +3,10 @@
 use bytes::Bytes;
 use frogdb_core::{RwLockExt, ScriptingMsg};
 use frogdb_protocol::Response;
-use std::path::PathBuf;
 use tokio::sync::oneshot;
-use tracing::warn;
 
 use crate::connection::ConnectionHandler;
+use crate::function_store::FunctionStore;
 use crate::slot_migration::SlotValidator;
 
 impl ConnectionHandler {
@@ -83,13 +82,13 @@ impl ConnectionHandler {
         let subcommand_str = String::from_utf8_lossy(&subcommand);
 
         match subcommand_str.as_ref() {
-            "LOAD" => self.handle_function_load(&args[1..]).await,
+            "LOAD" => self.handle_function_load(&args[1..]),
             "LIST" => self.handle_function_list(&args[1..]),
             "DELETE" => self.handle_function_delete(&args[1..]),
             "FLUSH" => self.handle_function_flush(&args[1..]),
             "STATS" => self.handle_function_stats(),
             "DUMP" => self.handle_function_dump(),
-            "RESTORE" => self.handle_function_restore(&args[1..]).await,
+            "RESTORE" => self.handle_function_restore(&args[1..]),
             "KILL" => self.handle_function_kill().await,
             "HELP" => self.handle_function_help(),
             _ => Response::error(format!(
@@ -100,52 +99,8 @@ impl ConnectionHandler {
     }
 
     /// Handle FUNCTION LOAD [REPLACE] code.
-    async fn handle_function_load(&self, args: &[Bytes]) -> Response {
-        if args.is_empty() {
-            return Response::error("ERR wrong number of arguments for 'function|load' command");
-        }
-
-        // Check for REPLACE option
-        let (replace, code) = if args.len() == 1 {
-            (false, &args[0])
-        } else if args.len() == 2 && args[0].to_ascii_uppercase() == b"REPLACE".as_slice() {
-            (true, &args[1])
-        } else {
-            return Response::error("ERR Unknown option given");
-        };
-
-        let code_str = match std::str::from_utf8(code) {
-            Ok(s) => s,
-            Err(_) => return Response::error("ERR library code must be valid UTF-8"),
-        };
-
-        // Load the library
-        let library = match frogdb_core::load_library(code_str) {
-            Ok(lib) => lib,
-            Err(e) => return Response::error(e.to_string()),
-        };
-
-        let library_name = library.name.clone();
-
-        // Register in the global registry
-        {
-            let mut registry = match self.admin.function_registry.try_write_err() {
-                Ok(r) => r,
-                Err(_) => return Response::error("ERR internal lock contention"),
-            };
-            match registry.load_library(library, replace) {
-                Ok(_) => {}
-                Err(frogdb_core::FunctionError::LibraryAlreadyExists { name }) => {
-                    return Response::error(format!("ERR Library '{}' already exists", name));
-                }
-                Err(e) => return Response::error(e.to_string()),
-            }
-        }
-
-        // Persist to disk
-        self.persist_functions();
-
-        Response::bulk(Bytes::from(library_name))
+    fn handle_function_load(&self, args: &[Bytes]) -> Response {
+        self.mutate_functions("LOAD", args, |store| store.load(args))
     }
 
     /// Handle FUNCTION LIST [LIBRARYNAME pattern] [WITHCODE].
@@ -246,59 +201,12 @@ impl ConnectionHandler {
 
     /// Handle FUNCTION DELETE library-name.
     fn handle_function_delete(&self, args: &[Bytes]) -> Response {
-        if args.is_empty() {
-            return Response::error("ERR wrong number of arguments for 'function|delete' command");
-        }
-
-        let library_name = match std::str::from_utf8(&args[0]) {
-            Ok(s) => s,
-            Err(_) => return Response::error("ERR library name must be valid UTF-8"),
-        };
-
-        {
-            let mut registry = match self.admin.function_registry.try_write_err() {
-                Ok(r) => r,
-                Err(_) => return Response::error("ERR internal lock contention"),
-            };
-            match registry.delete_library(library_name) {
-                Ok(()) => {}
-                Err(e) => return Response::error(e.to_string()),
-            }
-        }
-
-        // Persist to disk
-        self.persist_functions();
-
-        Response::ok()
+        self.mutate_functions("DELETE", args, |store| store.delete(args))
     }
 
     /// Handle FUNCTION FLUSH [ASYNC|SYNC].
     fn handle_function_flush(&self, args: &[Bytes]) -> Response {
-        // Parse optional ASYNC|SYNC argument (we ignore it for now)
-        if !args.is_empty() {
-            let mode = args[0].to_ascii_uppercase();
-            if mode.as_slice() != b"ASYNC" && mode.as_slice() != b"SYNC" {
-                return Response::error("ERR FUNCTION FLUSH only supports SYNC|ASYNC option");
-            }
-            if args.len() > 1 {
-                return Response::error(
-                    "ERR unknown subcommand or wrong number of arguments for 'flush'. Try FUNCTION HELP.",
-                );
-            }
-        }
-
-        {
-            let mut registry = match self.admin.function_registry.try_write_err() {
-                Ok(r) => r,
-                Err(_) => return Response::error("ERR internal lock contention"),
-            };
-            registry.flush();
-        }
-
-        // Persist to disk (empty state)
-        self.persist_functions();
-
-        Response::ok()
+        self.mutate_functions("FLUSH", args, |store| store.flush(args))
     }
 
     /// Handle FUNCTION STATS.
@@ -356,71 +264,8 @@ impl ConnectionHandler {
     }
 
     /// Handle FUNCTION RESTORE payload [APPEND|REPLACE|FLUSH].
-    async fn handle_function_restore(&self, args: &[Bytes]) -> Response {
-        if args.is_empty() {
-            return Response::error("ERR wrong number of arguments for 'function|restore' command");
-        }
-
-        let payload = &args[0];
-
-        if args.len() > 2 {
-            return Response::error(
-                "ERR unknown subcommand or wrong number of arguments for 'restore'. Try FUNCTION HELP.",
-            );
-        }
-
-        let policy = if args.len() > 1 {
-            match frogdb_core::RestorePolicy::from_str(&String::from_utf8_lossy(&args[1])) {
-                Ok(p) => p,
-                Err(e) => return Response::error(e.to_string()),
-            }
-        } else {
-            frogdb_core::RestorePolicy::Append
-        };
-
-        // Parse the dump
-        let libraries = match frogdb_core::restore_libraries(payload) {
-            Ok(libs) => libs,
-            Err(e) => return Response::error(e.to_string()),
-        };
-
-        // Apply based on policy
-        {
-            let mut registry = match self.admin.function_registry.try_write_err() {
-                Ok(r) => r,
-                Err(_) => return Response::error("ERR internal lock contention"),
-            };
-
-            if policy == frogdb_core::RestorePolicy::Flush {
-                registry.flush();
-            }
-
-            let replace = policy == frogdb_core::RestorePolicy::Replace;
-
-            for (name, code) in libraries {
-                let library = match frogdb_core::load_library(&code) {
-                    Ok(lib) => lib,
-                    Err(e) => {
-                        return Response::error(format!(
-                            "ERR Failed to load library '{}': {}",
-                            name, e
-                        ));
-                    }
-                };
-
-                if let Err(e) = registry.load_library(library, replace) {
-                    return Response::error(format!(
-                        "ERR Failed to restore library '{}': {}",
-                        name, e
-                    ));
-                }
-            }
-        }
-
-        // Persist to disk
-        self.persist_functions();
-
-        Response::ok()
+    fn handle_function_restore(&self, args: &[Bytes]) -> Response {
+        self.mutate_functions("RESTORE", args, |store| store.restore(args))
     }
 
     /// Handle FUNCTION HELP.
@@ -467,24 +312,71 @@ impl ConnectionHandler {
         Response::Array(help)
     }
 
-    /// Persist functions to disk if persistence is enabled.
-    fn persist_functions(&self) {
-        if !self.admin.config_manager.persistence_enabled() {
+    /// Mutating access to the process-wide registry, shared with the replica
+    /// apply path so the two can not diverge (see [`FunctionStore`]).
+    fn function_store(&self) -> FunctionStore {
+        FunctionStore::new(
+            self.admin.function_registry.clone(),
+            self.admin.config_manager.clone(),
+        )
+    }
+
+    /// Run a registry mutation and, if it succeeded, propagate the command
+    /// verbatim to replicas.
+    ///
+    /// Propagation is *after* the local mutation and *only* on success, which is
+    /// the same order every write in this server uses: a command that was
+    /// refused here must not be replayed on a replica that might accept it.
+    /// Redis propagates these four verbatim for the same reason — the library
+    /// source is the state, so re-running the command is a faithful description
+    /// of the change.
+    fn mutate_functions(
+        &self,
+        subcommand: &'static str,
+        args: &[Bytes],
+        mutate: impl FnOnce(&FunctionStore) -> Response,
+    ) -> Response {
+        // A replica's registry is its primary's, applied off the stream. Letting
+        // a client write it directly is exactly the divergence propagation was
+        // added to close: the library would live on this node only, until the
+        // primary's next FUNCTION command overwrote or failed to overwrite it.
+        //
+        // The generic gate in `guards.rs` cannot do this: it keys off the
+        // registry's `CommandFlags::WRITE`, and FUNCTION is one container
+        // command whose subcommands split between writes (these four) and reads
+        // (LIST/STATS/DUMP/HELP). Redis flags them individually — `function|load`
+        // carries `write`, `function|list` does not — and rejects the writers on
+        // a read-only replica with exactly this error.
+        if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
+            return Response::error("READONLY You can't write against a read only replica.");
+        }
+
+        // Mutation and propagation happen under one lock so their order can not
+        // invert against a concurrent full resync's whole-registry snapshot (see
+        // `function_store::propagation_order`).
+        let _order = crate::function_store::propagation_order();
+        let response = mutate(&self.function_store());
+        if matches!(response, Response::Error(_) | Response::BlobError(_)) {
+            return response;
+        }
+        self.propagate_function_command(subcommand, args);
+        response
+    }
+
+    /// Broadcast `FUNCTION <subcommand> <args...>` on the control channel.
+    ///
+    /// Untagged ([`frogdb_replication::CONTROL_SHARD`]) because the function
+    /// registry is process-wide, not per-shard: routing it to a shard would make
+    /// a replica's libraries depend on which shard the frame happened to carry,
+    /// and on the two nodes having the same shard count.
+    fn propagate_function_command(&self, subcommand: &'static str, args: &[Bytes]) {
+        let Some(handler) = self.cluster.primary_replication_handler.as_ref() else {
             return;
-        }
-
-        let path = PathBuf::from(self.admin.config_manager.data_dir()).join("functions.fdb");
-        let registry = match self.admin.function_registry.try_read_err() {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, "Failed to acquire function registry lock for persistence");
-                return;
-            }
         };
-
-        if let Err(e) = frogdb_core::save_to_file(&registry, &path) {
-            warn!(error = %e, "Failed to persist functions to disk");
-        }
+        let mut frame_args = Vec::with_capacity(args.len() + 1);
+        frame_args.push(Bytes::from_static(subcommand.as_bytes()));
+        frame_args.extend_from_slice(args);
+        handler.broadcast_control_command("FUNCTION", &frame_args);
     }
 
     /// Handle FUNCTION KILL - terminate a running read-only function.

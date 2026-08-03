@@ -59,6 +59,13 @@ a replicated frame into exactly one shard message (051), and the two install pat
 lands through — a live dataset re-partitioned onto this node's shards (052) and a staged RocksDB
 checkpoint installed shard-for-shard with its warm tier materialized (053).
 
+Scope, part six — the control lane (FM-REPLICATION-054..057): process-wide state that lives *beside*
+the keyspace and therefore has no shard to be tagged with. Today that is the function registry
+(`frogdb-server/src/function_store.rs`, `frogdb-core/src/scripting/functions`), carried as
+`CONTROL_SHARD`-tagged frames the replica applies through `ControlApplier`
+(`frogdb-replication/src/apply.rs`), plus the full-resync hook that seeds a fresh replica
+(`frogdb-replication/src/replica_session.rs`). Rows stop at what a client of either node can call.
+
 Adjacent specs: the boot-time half of a full sync — installing a staged checkpoint and adopting the
 replication id/offset it carries — lives in
 [Persistence — failure modes](persistence-failure-modes.md) (FM-PERSISTENCE-027, -038, -039).
@@ -1219,6 +1226,73 @@ FM-REPLICATION-041's `Forced by`. The second crate was added for the same reason
 
 ---
 
+## FM-REPLICATION-054 — a state-changing FUNCTION subcommand crosses the link, and only those
+
+| Field | Value |
+|---|---|
+| Trigger | A client runs `FUNCTION LOAD`, `DELETE`, `FLUSH` or `RESTORE` on a primary that already has a replica attached. The function registry is process-wide state that lives beside the keyspace — one `SharedFunctionRegistry` per node, persisted to its own `functions.fdb` — so nothing about the write path that carries keys touches it. |
+| Observable | The replica ends up with the same libraries: `FCALL_RO` of a replicated function answers on the replica, `FUNCTION LIST` shows the library, and a `FUNCTION DELETE` of one library removes exactly that one and leaves the others callable. |
+| NOT observable | **A primary and its replica disagreeing about which libraries exist** — the whole bug (issue 48): no `FUNCTION` subcommand was ever propagated, so every replica answered "Function not found" for every library its primary held, and `FCALL` after a failover failed permanently. Nor the near misses: a read-only subcommand (`LIST`, `DUMP`, `STATS`, `HELP`, `KILL`) generating a frame, which would put a client's `FUNCTION LIST` into the offset stream and make `WAIT` account for it; a failed mutation (bad shebang, duplicate library without `REPLACE`) propagating anyway; a `DELETE` applied as a flush. |
+| Invariant | One owner, one gate, one lane. `FunctionStore` is the sole mutator of the registry — the connection handlers and the replica's apply loop call the same four methods — so "what replicates" and "what a replica applies" cannot drift into two lists; `MUTATING_SUBCOMMANDS` is that list, and it is the same constant the propagation check reads. Propagation is *post-hoc*: `mutate_functions` runs the mutation first and returns early on `Response::Error`/`BlobError`, so only an effect that actually happened is broadcast (Redis's verbatim propagation of `FUNCTION` has the same shape). The frame is tagged `CONTROL_SHARD` (`u16::MAX`) rather than a real shard id, because the registry is per-process: shard-tagging would make the frame undeliverable the moment the two nodes' shard counts differ. The replica applies it through `ControlApplier`, a *synchronous* trait invoked inline in the consume loop, so a control frame can neither be reordered against the surrounding write stream nor block it on someone else's I/O; a rejected apply is a divergence (`ApplyError::ControlRejected`), not a skipped frame. |
+| Outcome variant | `ApplyError::ControlRejected`; frames tagged `CONTROL_SHARD` |
+| Forced by | `a_function_loaded_on_the_primary_reaches_an_attached_replica`, `function_delete_removes_one_library_on_the_replica_and_keeps_the_rest`, `only_the_four_state_changing_subcommands_replicate` |
+| Bug refs | `.scratch/testing-improvements-round2/issues` (issue 48 — this row is its outcome) |
+
+**Not covered here.** `FCALL` effects are *not* propagated as function calls: a script's writes
+already replicate as their individual effects through the ordinary write path, which is what makes a
+non-deterministic function safe. This row covers the library definitions only.
+
+---
+
+## FM-REPLICATION-055 — a full resync carries the primary's whole function registry
+
+| Field | Value |
+|---|---|
+| Trigger | A replica attaches to a primary that already holds libraries — every library loaded before the link existed is invisible to the steady-state stream, and a restart of an existing replica reaches the same state. Sharpened by a replica that booted with its *own* `functions.fdb` holding libraries the primary does not have. |
+| Observable | After the sync the replica can call the primary's pre-existing libraries, and holds exactly the primary's set — a library only the replica had is gone, the same wholesale-replacement rule the keyspace half of a full sync follows (FM-REPLICATION-002). |
+| NOT observable | A replica reporting `master_link_status:up` while missing libraries the primary has held since before it attached; a half-installed registry (some libraries replaced, others not) visible to an `FCALL` racing the install; the registry state depending on which of a concurrent client mutation and a full sync happened to reach the wire first. |
+| Invariant | The registry rides the link as a replicated command, not as part of the payload envelope: a `function_snapshot_hook` on the primary broadcasts one whole-registry `FUNCTION RESTORE <dump> FLUSH` frame, invoked *after* `handle_full` captures `snapshot_offset` and therefore inside the `(snapshot_offset, current]` range `start_streaming` replays before the live tail — the one window a post-capture broadcast is guaranteed to land in. The policy is `FLUSH` (not `APPEND`/`REPLACE`) so the replica converges on the primary's exact set rather than the union; `FunctionStore::restore` performs the flush and the loads under a single write lock, so no intermediate set is observable. Ordering against concurrent client mutations is a process-global `PROPAGATION_ORDER` mutex held across *mutate-then-broadcast* on the client path and across *snapshot-then-broadcast* on the sync path, which is what stops a snapshot read before a `LOAD` from being broadcast after that `LOAD`'s own frame and silently erasing it. |
+| Outcome variant | n/a (rides the replayed backlog window; surfaces as the replica's `FUNCTION LIST`) |
+| Forced by | `a_replica_that_full_syncs_receives_the_primarys_existing_libraries` |
+| Bug refs | `.scratch/testing-improvements-round2/issues` (issue 48 — this row is its outcome) |
+
+**Why not in the payload.** `FullSyncMetadata` is a strict four-part colon-joined trailer, and the
+file list in the `$FROGDB_CHECKPOINT` envelope is staged for RocksDB to open — neither has room for
+an unrelated blob, and the `LiveDataset` branch has no file list at all. Carrying the registry as a
+replicated command instead means one mechanism serves both sync flavours and the steady-state
+stream, at the cost of the dump being re-sent on every resync (bounded by the library set, which is
+operator-authored and small).
+
+---
+
+## FM-REPLICATION-056 — a promoted replica keeps the libraries it replicated
+
+| Field | Value |
+|---|---|
+| Trigger | `REPLICAOF NO ONE` (or an automatic failover) on a replica that received libraries over the link. |
+| Observable | The promoted node serves them as a primary: `FCALL` — the write-capable entry point, not only `FCALL_RO` — of a replicated function answers on the new primary. |
+| NOT observable | Libraries vanishing at promotion, which is what made the missing propagation dangerous rather than merely incomplete: a failover would silently drop every library and every `FCALL` against them. Nor libraries that only work while the node is a replica. |
+| Invariant | A replicated `FUNCTION` frame is applied into the node's *own* `SharedFunctionRegistry` and persisted to its own `functions.fdb` by the same `FunctionStore` a client mutation would use — there is no replica-only shadow copy and no borrowed state on the link, so promotion is a role change with nothing to migrate. |
+| Outcome variant | n/a |
+| Forced by | `a_promoted_replica_keeps_the_libraries_it_replicated` |
+| Bug refs | `.scratch/testing-improvements-round2/issues` (issue 48 — this row is its outcome) |
+
+---
+
+## FM-REPLICATION-057 — a replica refuses client-driven registry mutations
+
+| Field | Value |
+|---|---|
+| Trigger | A client sends `FUNCTION LOAD` / `DELETE` / `FLUSH` / `RESTORE` directly to a replica. |
+| Observable | `-READONLY You can't write against a read only replica.`, the same reply a write to a replica's keyspace gets. Read subcommands (`LIST`, `DUMP`, `STATS`, `HELP`) are still served. |
+| NOT observable | A library existing on a replica that its primary has never seen — invisible upstream, surviving until some later `FUNCTION` frame happened to overwrite it, and promotable into the authoritative set by a failover. Nor the opposite over-correction: the whole `FUNCTION` container being refused on a replica, which would break `FUNCTION LIST` on the node an operator inspects most. |
+| Invariant | The gate is per-subcommand, checked in `mutate_functions` against the same `is_replica` flag the keyspace write path uses, and it sits *before* the `PROPAGATION_ORDER` lock and the mutation, so a refused call touches nothing. It cannot be expressed as a command flag: `FUNCTION_SPEC` carries only `CommandFlags::NOSCRIPT` (the container has read subcommands), so the generic `WRITE`-flag gate in `guards.rs` never fires for it — which is exactly why the hole existed. Redis draws the same line at the same place, flagging `function|load` as a write while `function|list` is not. |
+| Outcome variant | `-READONLY` |
+| Forced by | `a_client_can_not_load_a_function_on_a_replica` |
+| Bug refs | `.scratch/testing-improvements-round2/issues` (issue 48 — found while fixing it) |
+
+---
+
 ## Redis deviations
 
 Deliberate or known differences from Redis 8.x replication semantics on this path. Each is pinned
@@ -1262,3 +1336,4 @@ by the tests named above, so a change here is a visible spec edit rather than a 
 | FM-REPLICATION-043 | `repl_backlog_size:1048576` and `repl_backlog_first_byte_offset:0` are hardcoded | Real backlog geometry — the configured size and the first offset the backlog can serve | Not a design decision, and not yet closed. `slaveN:`'s `state` and `lag` literals were the other half of this and are fixed (FM-REPLICATION-049); the backlog geometry has no plumbing yet, and `first_byte_offset:0` in particular contradicts the armed floor FM-REPLICATION-014 specifies. |
 | FM-REPLICATION-049 | A replica in the `Disconnecting` phase renders `state=offline` | Redis has three states (`wait_bgsave`, `send_bulk`, `online`) and `genInfoSectionDict` skips a slave whose state is none of them, emitting no line for it | FrogDB has a fourth phase and `connected_slaves` must equal the `slaveN:` line count (FM-REPLICATION-043 forbids the two disagreeing), so dropping the line is not available. `offline` is the honest spelling and is the one word an operator can act on; a Redis-parity client parsing states it does not know will see an unfamiliar value rather than a missing line. **Latent today**: both renderers feed `get_streaming_replicas()`, so no non-`online` state — including this one — actually reaches a client, and this deviation only becomes observable if issue 21 widens the feed. |
 | FM-REPLICATION-043 | Proactive lag disconnect on `replication-lag-threshold-bytes` / `-secs`, with an address-keyed reconnect cooldown; both default 0 (off) | `client-output-buffer-limit slave <hard> <soft> <soft-seconds>` — a buffer-size limit, not an offset/time lag limit | Different mechanism, same goal. FrogDB's broadcast fan-out is not a per-client output buffer, so the natural measure is the replica's acked-offset lag and its ACK silence. The cooldown is keyed by `SocketAddr` because replica ids change on every reconnect. |
+| FM-REPLICATION-055 | A syncing replica gets the function registry as a replicated `FUNCTION RESTORE <dump> FLUSH` command inside the replayed backlog window | The libraries ride the RDB itself (`function` aux payload), so they arrive with the dataset | FrogDB's registry is not in the keyspace and not in RocksDB — it is its own `functions.fdb` beside the data dir — and the full-sync envelope has no slot for an unrelated blob. Using the frame lane instead means one mechanism covers both sync flavours and the steady-state stream. Cost: the dump is re-sent on every resync, and it lands *just after* the dataset rather than atomically with it, so a window of a few milliseconds exists where a synced replica has the keys but not the libraries. |

@@ -429,8 +429,14 @@ impl Server {
                 }
             });
 
-            // Spawn frame consumer task (applies replicated commands to shards)
-            let executor = ReplicaCommandExecutor::new(shard_senders, num_shards);
+            // Spawn frame consumer task (applies replicated commands to shards).
+            // The control seam carries the process-wide state that has no shard
+            // to route to — the function-library registry (issue 48).
+            let executor = ReplicaCommandExecutor::new(shard_senders, num_shards)
+                .with_control_applier(Arc::new(crate::function_store::FunctionStore::new(
+                    self.function_registry.clone(),
+                    self.config_manager.clone(),
+                )));
             let is_replica_for_consumer = self.is_replica_flag.clone();
             let txn_bound = std::sync::Arc::new(frogdb_replication::ReplicaTxnBound::new(
                 self.config.replication.replica_txn_max_commands,

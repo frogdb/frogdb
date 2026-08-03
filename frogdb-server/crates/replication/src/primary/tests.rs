@@ -41,7 +41,7 @@ fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicati
 /// live offset.
 #[cfg(test)]
 fn push_write(handler: &crate::primary::PrimaryReplicationHandler, key: &str, val: &str) -> u64 {
-    handler.broadcast_command(
+    handler.broadcast_control_command(
         "SET",
         &[Bytes::from(key.to_string()), Bytes::from(val.to_string())],
     )

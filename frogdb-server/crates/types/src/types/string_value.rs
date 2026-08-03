@@ -330,25 +330,11 @@ impl std::fmt::Display for IncrementError {
 
 impl std::error::Error for IncrementError {}
 
-/// Format a float for Redis compatibility.
+/// The canonical float renderer, re-exported for this module's neighbours.
 ///
-/// Redis uses specific formatting rules:
-/// - No trailing zeros after decimal point
-/// - Scientific notation for very large/small numbers
-pub(super) fn format_float(f: f64) -> String {
-    // Handle special cases
-    if f == 0.0 {
-        return "0".to_string();
-    }
-
-    // Check if it's a whole number
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        return format!("{:.0}", f);
-    }
-
-    // Use standard formatting, then trim trailing zeros
-    let s = format!("{:.17}", f);
-    let s = s.trim_end_matches('0');
-    let s = s.trim_end_matches('.');
-    s.to_string()
-}
+/// `INCRBYFLOAT`/`HINCRBYFLOAT` store the *rendered* string, so the bytes this
+/// produces are what a later `GET` returns, what the WAL persists and what
+/// crosses the replication link. That makes it the same rendering the reply path
+/// uses, by construction rather than by two implementations agreeing —
+/// see [`frogdb_protocol::format_float`].
+pub(super) use frogdb_protocol::format_float;

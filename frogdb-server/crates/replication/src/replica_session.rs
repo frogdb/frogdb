@@ -622,6 +622,18 @@ impl ReplicaSession {
         // frames sent *after* the subscribe).
         let snapshot_offset = handler.offsets.current();
 
+        // Process-wide state that is not in the keyspace — the function-library
+        // registry — rides the stream rather than the checkpoint (see
+        // [`crate::primary::FunctionSnapshotHook`]). Emitted *after* the offset
+        // capture on purpose: `start_streaming` replays
+        // `(snapshot_offset, current]` from the backlog before the live tail, so
+        // a frame broadcast here is guaranteed to reach this replica, while a
+        // frame broadcast before the capture would fall inside the snapshot's
+        // own range and be skipped.
+        if let Some(hook) = handler.function_snapshot_hook() {
+            hook(handler);
+        }
+
         let response = format!("+FULLRESYNC {} {}\r\n", replication_id, snapshot_offset);
         stream.write_all(response.as_bytes()).await?;
 
@@ -1761,7 +1773,7 @@ mod tests {
         let mut expected = Vec::new();
         for i in 0..4 {
             let key = format!("during{i}");
-            handler.broadcast_command("SET", &[Bytes::from(key.clone()), Bytes::from("v")]);
+            handler.broadcast_control_command("SET", &[Bytes::from(key.clone()), Bytes::from("v")]);
             expected.push(serialize_command_to_resp(
                 "SET",
                 &[Bytes::from(key), Bytes::from("v")],
@@ -1801,10 +1813,14 @@ mod tests {
 
         // Seed the backlog. `off1` is the offset the reconnecting replica holds;
         // it must be replayed `(off1, off3]` == {off2, off3}.
-        let _off1_first = handler.broadcast_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
-        let off1 = handler.broadcast_command("SET", &[Bytes::from("k1"), Bytes::from("v1")]);
-        let off2 = handler.broadcast_command("SET", &[Bytes::from("k2"), Bytes::from("v2")]);
-        let off3 = handler.broadcast_command("SET", &[Bytes::from("k3"), Bytes::from("v3")]);
+        let _off1_first =
+            handler.broadcast_control_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
+        let off1 =
+            handler.broadcast_control_command("SET", &[Bytes::from("k1"), Bytes::from("v1")]);
+        let off2 =
+            handler.broadcast_control_command("SET", &[Bytes::from("k2"), Bytes::from("v2")]);
+        let off3 =
+            handler.broadcast_control_command("SET", &[Bytes::from("k3"), Bytes::from("v3")]);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let session = tracker.register_replica(addr());
@@ -1834,7 +1850,8 @@ mod tests {
         );
 
         // A fresh write after the handoff arrives on the live tail exactly once.
-        let off4 = handler.broadcast_command("SET", &[Bytes::from("k4"), Bytes::from("v4")]);
+        let off4 =
+            handler.broadcast_control_command("SET", &[Bytes::from("k4"), Bytes::from("v4")]);
         let mut codec = {
             use crate::frame::ReplicationFrameCodec;
             ReplicationFrameCodec::new()
@@ -1896,7 +1913,8 @@ mod tests {
 
         // The offset the reconnecting replica holds, granted while it is still
         // inside the window.
-        let held = handler.broadcast_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
+        let held =
+            handler.broadcast_control_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
         assert!(handler.replay.backlog_start().unwrap() <= held);
 
         let (mut client, server) = tokio::io::duplex(1);
@@ -1915,7 +1933,10 @@ mod tests {
         // The session is parked writing `+CONTINUE`; evict the resume point out
         // from under the grant it just made.
         for i in 1..=4 {
-            handler.broadcast_command("SET", &[Bytes::from(format!("k{i}")), Bytes::from("v")]);
+            handler.broadcast_control_command(
+                "SET",
+                &[Bytes::from(format!("k{i}")), Bytes::from("v")],
+            );
         }
         assert!(
             handler.replay.backlog_start().unwrap() > held,
@@ -1987,7 +2008,7 @@ mod tests {
         // Writes during the transfer overrun the backlog, so the snapshot offset
         // the replica was granted is no longer inside the window.
         for i in 0..4 {
-            handler.broadcast_command(
+            handler.broadcast_control_command(
                 "SET",
                 &[Bytes::from(format!("during{i}")), Bytes::from("v")],
             );
@@ -2645,9 +2666,10 @@ mod tests {
         let repl_id = handler.state.read().replication_id.clone();
 
         // Advance the live offset and populate the backlog with real commands.
-        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
-        handler.broadcast_command("SET", &[Bytes::from("b"), Bytes::from("2")]);
-        handler.broadcast_command("SET", &[Bytes::from("c"), Bytes::from("3")]);
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        handler.broadcast_control_command("SET", &[Bytes::from("b"), Bytes::from("2")]);
+        handler.broadcast_control_command("SET", &[Bytes::from("c"), Bytes::from("3")]);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let server: BoxedStream = Box::new(server);
@@ -2694,7 +2716,8 @@ mod tests {
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
         let repl_id = handler.state.read().replication_id.clone();
 
-        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let server: BoxedStream = Box::new(server);
@@ -2742,7 +2765,8 @@ mod tests {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
         let repl_id = handler.state.read().replication_id.clone();
-        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
 
         // No sessions yet, so the drain returns immediately — it still latches.
         assert_eq!(
@@ -2853,9 +2877,13 @@ mod tests {
 
         // First command's offset is the replica's resume point; later writes
         // evict it from the 3-entry backlog.
-        let evicted_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        let evicted_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
         for i in 0..5 {
-            handler.broadcast_command("SET", &[Bytes::from(format!("k{i}")), Bytes::from("v")]);
+            handler.broadcast_control_command(
+                "SET",
+                &[Bytes::from(format!("k{i}")), Bytes::from("v")],
+            );
         }
         assert!(
             handler.replay.oldest_offset().unwrap() > evicted_point,
@@ -2937,8 +2965,9 @@ mod tests {
         // 2. Reconnect inside the backlog window: `+CONTINUE`, and sync_full
         //    must stay where it was — the whole point of a partial resync is
         //    that no checkpoint was transferred.
-        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
-        handler.broadcast_command("SET", &[Bytes::from("b"), Bytes::from("2")]);
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        handler.broadcast_control_command("SET", &[Bytes::from("b"), Bytes::from("2")]);
         let line = run_psync(&handler, &repl_id, resume_point as i64).await;
         assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
         // A grant is counted where it becomes true — after the backlog tail is
@@ -2958,7 +2987,10 @@ mod tests {
         //    refused, and the refusal falls through to a full resync — so both
         //    sync_partial_err and sync_full advance, exactly as Redis does it.
         for i in 0..8 {
-            handler.broadcast_command("SET", &[Bytes::from(format!("k{i}")), Bytes::from("v")]);
+            handler.broadcast_control_command(
+                "SET",
+                &[Bytes::from(format!("k{i}")), Bytes::from("v")],
+            );
         }
         assert!(
             handler.replay.oldest_offset().unwrap() > resume_point,
@@ -3038,7 +3070,8 @@ mod tests {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
         let repl_id = handler.state.read().replication_id.clone();
-        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
 
         let announcement = ReplicaAnnouncement {
             listening_port: 7001,

@@ -11,7 +11,7 @@ rationale: `.scratch/hardening/` (specs, issues, metrics).
 | 0 | Enablement (freeze, gating, recipes, frogdb-net) | **done** (2026-07-31) |
 | 1 | Transactions / VLL | **LOCKED** (2026-08-01) — mutation gate 90%, both crates at 100% |
 | 2 | Persistence / recovery | **LOCKED** (2026-08-02) — mutation gate 85%, frogdb-persistence 99.1%, frogdb-recovery 100% |
-| 3 | Replication runtime | **in progress** — extracted (`docs/adr/0004-replication-runtime-seams.md`); spec at FM-REPLICATION-001..053 (044-050 written by closing a bug, 051-053 by the runtime mutation round); 13 bugs filed (issues 12-24), 12-18 fixed, 19-24 open (21-24 raised by the adversarial review of the round's own diff); baselines `frogdb-replication` 74.7%, `frogdb-replication-runtime` 50.0%, scoped re-run of the gap-filled files 95.2%, `frogdb-replication-runtime` re-run after the gap-fill 100% of viable (53 caught / 0 missed / 6 unviable) |
+| 3 | Replication runtime | **in progress** — extracted (`docs/adr/0004-replication-runtime-seams.md`); spec at FM-REPLICATION-001..057 (044-050 written by closing a bug, 051-053 by the runtime mutation round, 054-057 by the control-lane batch); 14 bugs filed (issues 12-25), 12-18 and 25 fixed, 19-24 open (21-24 raised by the adversarial review of the round's own diff); baselines `frogdb-replication` 74.7%, `frogdb-replication-runtime` 50.0%, scoped re-run of the gap-filled files 95.2%, `frogdb-replication-runtime` re-run after the gap-fill 100% of viable (53 caught / 0 missed / 6 unviable) |
 | 4 | Cluster runtime | pending |
 
 Each area goes through: **extract → failure-mode spec → close known bugs → mutation-test →

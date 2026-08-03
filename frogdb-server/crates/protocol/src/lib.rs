@@ -6,6 +6,7 @@
 
 mod command;
 mod error;
+mod format;
 mod limits;
 mod reply;
 mod response;
@@ -13,6 +14,7 @@ mod version;
 
 pub use command::ParsedCommand;
 pub use error::ProtocolError;
+pub use format::format_float;
 pub use limits::{MAX_INTERNAL_FRAME_LEN, PROTO_MAX_BULK_LEN, PROTO_MAX_MULTIBULK_LEN};
 pub use reply::MapReply;
 pub use response::{

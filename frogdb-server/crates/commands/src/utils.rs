@@ -17,50 +17,13 @@ use frogdb_protocol::Response;
 // These now accept any type implementing AsRef<[u8]>, including &[u8] and &Bytes.
 pub use frogdb_core::{parse_f64, parse_i64, parse_u64, parse_usize};
 
-/// Format a float for Redis compatibility.
+/// The canonical float renderer — see [`frogdb_protocol::format_float`].
 ///
-/// Uses `ryu` for accurate, round-trip-safe float-to-string conversion,
-/// matching Redis's `ld2string` behavior for extreme values (very small
-/// or very large numbers that need scientific notation).
-///
-/// Handles special cases:
-/// - Infinity values are formatted as "inf" or "-inf"
-/// - Zero is formatted as "0"
-/// - Integers (within safe range) are formatted without decimal point
-/// - Trailing zeros are removed
-pub fn format_float(f: f64) -> String {
-    if f == f64::INFINITY {
-        return "inf".to_string();
-    }
-    if f == f64::NEG_INFINITY {
-        return "-inf".to_string();
-    }
-    if f == 0.0 {
-        return "0".to_string();
-    }
-
-    // Redis uses %.17g which uses decimal notation for exponents < 17 (i.e., values < 1e17).
-    // For integer-valued floats within f64's exact integer range (up to 2^53 ≈ 9e15),
-    // return as plain integer string matching Redis's behavior.
-    if f.fract() == 0.0 && f.abs() < 1e17 {
-        return format!("{:.0}", f);
-    }
-
-    // Use ryu for accurate round-trip representation.
-    // ryu produces minimal-length representations that round-trip correctly.
-    let mut buf = ryu::Buffer::new();
-    let s = buf.format(f);
-
-    // Redis uses C's %.17g format which includes "e+308" (with explicit '+' sign
-    // for positive exponents). ryu produces "e308" (no '+'), so we normalize here.
-    if let Some(e_pos) = s.find('e') {
-        let after_e = &s[e_pos + 1..];
-        if !after_e.starts_with('-') && !after_e.starts_with('+') {
-            return format!("{}e+{}", &s[..e_pos], after_e);
-        }
-    }
-    s.to_string()
-}
+/// Re-exported rather than reimplemented: the reply path and the *store* path
+/// (`INCRBYFLOAT`/`HINCRBYFLOAT` persist the rendered string, which is also what
+/// replicates) must produce the same bytes, and the only way to guarantee that
+/// is for there to be one function.
+pub use frogdb_protocol::format_float;
 
 // ============================================================================
 // Increment Utilities

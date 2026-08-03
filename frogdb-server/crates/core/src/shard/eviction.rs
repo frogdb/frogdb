@@ -9,7 +9,7 @@ use crate::error::CommandError;
 use crate::eviction::{
     EvictionCandidate, EvictionPolicy, EvictionRanker, LfuRanker, LruRanker, TtlRanker,
 };
-use crate::store::Store;
+use crate::store::{SpillError, Store};
 
 use super::post_execution::{ENGINE_INTERNAL_CONN_ID, RemovalPropagation, RemovalReason};
 use super::worker::ShardWorker;
@@ -232,6 +232,33 @@ impl ShardWorker {
     /// surface spills — there is no standard spill keyspace event. Only its
     /// fallback-to-delete path is a real removal, and that awaits
     /// `delete_for_eviction`.
+    ///
+    /// # Why a warm-tier I/O error does not fall back to deletion
+    ///
+    /// The fallback-to-delete path is reachable only for the *structural*
+    /// spill failures — the key vanished between ranking and spilling, it was
+    /// already warm, or no warm tier is wired up at all. For those, a real
+    /// eviction is the policy doing its job: nothing is lost that the policy
+    /// was not already licensed to discard, and `NoWarmStore` in particular
+    /// degrades a tiered policy to the plain LRU/LFU it is a superset of.
+    ///
+    /// A [`SpillError::Rocks`] is different in kind. It means the warm tier
+    /// *failed*, and deleting on that path converts a transient disk error
+    /// (ENOSPC, EIO, a write stall) into permanent, silent data loss — on the
+    /// primary and, because `delete_for_eviction` reconstructs the removal as a
+    /// synthetic `DEL`, on every replica too, while the client's write returns
+    /// `+OK`. Tiered storage is by definition disk-heavy, so that is an
+    /// ordinary ops event for exactly the deployments that enable it.
+    ///
+    /// So an I/O failure reports "could not free memory" instead, which the
+    /// caller ([`Self::check_memory_for_write`]) already turns into
+    /// `-OOM`. The key survives; the write is refused. No system in this family
+    /// does otherwise: Dragonfly's `ClearStashPending` leaves the value in RAM
+    /// and counts a cancelled stash, Redis Enterprise Flex keeps values in RAM
+    /// and lets the shard report OOM, and Redis's own
+    /// `writeCommandsDeniedByDiskError` refuses writes with `-MISCONF` rather
+    /// than dropping data. Losing availability under a broken warm tier is
+    /// recoverable; losing the data is not.
     async fn spill_for_eviction(&mut self, key: &[u8]) -> bool {
         // Remove from eviction pool
         self.eviction.forget_key(key);
@@ -264,14 +291,32 @@ impl ShardWorker {
 
                 true
             }
+            // The warm tier itself failed. Refuse to turn that into a delete —
+            // see the "Why a warm-tier I/O error does not fall back to
+            // deletion" section above. Reporting "no key freed" makes
+            // `check_memory_for_write` reject the write with `-OOM`, which is
+            // the same contract as a shard that has nothing left to evict.
+            Err(e @ SpillError::Rocks(_)) => {
+                tracing::error!(
+                    shard_id = self.shard_id(),
+                    key = %String::from_utf8_lossy(key),
+                    error = %e,
+                    "Warm tier write failed; refusing to evict the key. \
+                     Writes on this shard will be rejected with OOM until the \
+                     warm tier recovers or memory is freed."
+                );
+                false
+            }
+            // Structural failures: the key is not spillable, but nothing is
+            // broken. Degrade to a real eviction, which is what the policy
+            // would have done without a warm tier.
             Err(e) => {
                 tracing::warn!(
                     shard_id = self.shard_id(),
                     key = %String::from_utf8_lossy(key),
                     error = %e,
-                    "Failed to spill key"
+                    "Failed to spill key; falling back to eviction"
                 );
-                // Fall back to deletion
                 self.delete_for_eviction(key).await
             }
         }

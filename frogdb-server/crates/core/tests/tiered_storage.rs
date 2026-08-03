@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-use frogdb_core::store::{HashMapStore, Store};
+use frogdb_core::store::{HashMapStore, SpillError, Store};
 use frogdb_core::types::{KeyMetadata, KeyType, SortedSetValue, Value};
 use frogdb_persistence::{RocksConfig, RocksStore};
 
@@ -261,17 +261,34 @@ fn test_memory_accounting_warm_keys() {
     assert_eq!(mem_unspilled, mem_hot);
 }
 
+/// Which [`SpillError`] a failure produces is now load-bearing, not
+/// incidental: `spill_for_eviction` degrades the *structural* variants to a
+/// real eviction and refuses to delete on [`SpillError::Rocks`], because that
+/// one means the warm tier failed and a delete would turn a disk error into
+/// permanent data loss (issue 41). Asserting only `is_err()` — which this test
+/// used to do — cannot distinguish the two policies, so it could not have
+/// caught the bug.
+///
+/// The consequences of each variant are asserted at level 3 in
+/// `frogdb-shard-harness/tests/eviction_spill_failure.rs`; this pins the
+/// variant each situation actually produces, which that test relies on.
 #[test]
 fn test_spill_errors() {
     let (mut store, _rocks, _tmp) = store_with_warm();
 
-    // Key not found
-    assert!(store.spill_key(b"nonexistent").is_err());
+    // Key not found: structural, nothing is broken.
+    assert!(matches!(
+        store.spill_key(b"nonexistent"),
+        Err(SpillError::KeyNotFound)
+    ));
 
-    // Already warm
+    // Already warm: structural — there is nothing left in RAM to move.
     store.set(Bytes::from("key1"), Value::string("v"));
     store.spill_key(b"key1").unwrap();
-    assert!(store.spill_key(b"key1").is_err());
+    assert!(matches!(
+        store.spill_key(b"key1"),
+        Err(SpillError::AlreadyWarm)
+    ));
 }
 
 #[test]
@@ -279,7 +296,35 @@ fn test_spill_no_warm_store() {
     let mut store = HashMapStore::new(); // No warm store configured
 
     store.set(Bytes::from("key1"), Value::string("v"));
-    assert!(store.spill_key(b"key1").is_err());
+    assert!(matches!(
+        store.spill_key(b"key1"),
+        Err(SpillError::NoWarmStore)
+    ));
+}
+
+/// A *configured* warm tier whose column families are missing: the tier gets
+/// past the `NoWarmStore` guard and then fails its write, which is the shape an
+/// ENOSPC / EIO / write stall takes. This must surface as
+/// [`SpillError::Rocks`] — the variant `spill_for_eviction` refuses to turn
+/// into a delete.
+#[test]
+fn test_spill_reports_warm_tier_io_failure_as_rocks() {
+    let tmp = TempDir::new().unwrap();
+    // `warm_enabled = false` → the handle exists but the warm CFs do not.
+    let rocks = Arc::new(
+        RocksStore::open_with_warm(tmp.path(), 1, &RocksConfig::default(), false).unwrap(),
+    );
+    let mut store = HashMapStore::new();
+    store.set_warm_store(rocks, 0);
+
+    store.set(Bytes::from("key1"), Value::string("v"));
+    assert!(
+        matches!(store.spill_key(b"key1"), Err(SpillError::Rocks(_))),
+        "a failing warm-tier write must not be reported as a structural failure",
+    );
+    // And the value is untouched — the store does not drop it on I/O failure.
+    assert!(store.contains(b"key1"));
+    assert_eq!(store.warm_tier().warm_keys(), 0);
 }
 
 #[test]
