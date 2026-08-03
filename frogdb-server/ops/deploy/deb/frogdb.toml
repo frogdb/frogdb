@@ -119,12 +119,15 @@ replication-lag-threshold-bytes = 0
 replication-lag-threshold-secs = 0
 fullresync-cooldown-secs = 60
 split-brain-log-enabled = true
-split-brain-buffer-size = 10000
-split-brain-buffer-max-mb = 64
+backlog-enabled = true
+backlog-size = 10000
+backlog-max-mb = 64
 self-fence-on-replica-loss = true
 replica-freshness-timeout-ms = 3000
 backlog-ttl-secs = 3600
 replica-write-timeout-ms = 5000
+replica-txn-max-commands = 1000000
+replica-txn-max-bytes = 1073741824
 
 [slowlog]
 log-slower-than = 10000

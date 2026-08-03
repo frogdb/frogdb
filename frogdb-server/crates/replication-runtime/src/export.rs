@@ -55,3 +55,89 @@ async fn export_live_dataset(senders: &[ShardSender]) -> io::Result<Vec<Vec<u8>>
     }
     Ok(blobs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_shards::{drop_export_ack, fake_shards, serve_export};
+
+    // FM-REPLICATION-001
+    /// One blob per shard, in shard order, is the whole contract: the trailer's
+    /// checksum is folded under positional names (`shard-<n>.dataset`), so a
+    /// dropped or reordered blob is a sync the replica cannot verify.
+    #[tokio::test]
+    async fn every_shard_contributes_its_blob_in_shard_order() {
+        let mut shards = fake_shards(3);
+        let source = live_snapshot_source(shards.senders());
+
+        let (exported, ()) = tokio::join!(source(), async {
+            serve_export(shards.shard(0), Ok(b"shard-zero".to_vec())).await;
+            // An empty shard still owes a blob: its slot is what tells the
+            // receiving side that shard held nothing, rather than that the
+            // dataset stopped early.
+            serve_export(shards.shard(1), Ok(Vec::new())).await;
+            serve_export(shards.shard(2), Ok(b"shard-two".to_vec())).await;
+        });
+
+        let blobs = exported.expect("every shard answered, so the export succeeds");
+        assert_eq!(
+            blobs,
+            vec![b"shard-zero".to_vec(), Vec::new(), b"shard-two".to_vec()],
+            "the dataset is every shard's blob, in shard order"
+        );
+    }
+
+    // FM-REPLICATION-001
+    /// A shard that cannot serialize its keyspace fails the whole sync. The
+    /// blob is installed as a complete replacement, so shipping the shards that
+    /// did answer is silent data loss on the replica — strictly worse than a
+    /// failed sync it retries.
+    #[tokio::test]
+    async fn a_shard_that_cannot_export_fails_the_whole_sync() {
+        let mut shards = fake_shards(3);
+        let senders = shards.senders();
+
+        let (exported, ()) = tokio::join!(export_live_dataset(&senders), async {
+            serve_export(shards.shard(0), Ok(b"shard-zero".to_vec())).await;
+            serve_export(shards.shard(1), Err("key `big` is not hot".to_string())).await;
+        });
+
+        let err = exported.expect_err("a shard that cannot export must fail the sync");
+        assert!(
+            err.to_string().contains("key `big` is not hot"),
+            "the shard's own reason must reach the operator, got {err}"
+        );
+        assert!(
+            shards.untouched(2),
+            "the export stops at the first failure rather than collecting a partial dataset"
+        );
+    }
+
+    // FM-REPLICATION-001
+    /// The two ways a shard can vanish mid-export — the channel already closed,
+    /// and the worker dying after taking the request — are both failures of the
+    /// sync, and both name the shard.
+    #[tokio::test]
+    async fn a_shard_that_vanishes_mid_export_fails_the_sync() {
+        let mut shards = fake_shards(2);
+        shards.disconnect(1);
+        let senders = shards.senders();
+        let (exported, ()) = tokio::join!(export_live_dataset(&senders), async {
+            serve_export(shards.shard(0), Ok(b"shard-zero".to_vec())).await;
+        });
+        let err = exported.expect_err("a gone shard must fail the sync");
+        assert!(err.to_string().contains("shard 1 is gone"), "got {err}");
+
+        let mut shards = fake_shards(2);
+        let senders = shards.senders();
+        let (exported, ()) = tokio::join!(export_live_dataset(&senders), async {
+            serve_export(shards.shard(0), Ok(b"shard-zero".to_vec())).await;
+            drop_export_ack(shards.shard(1)).await;
+        });
+        let err = exported.expect_err("a dropped export ack must fail the sync");
+        assert!(
+            err.to_string().contains("shard 1 dropped the export ack"),
+            "got {err}"
+        );
+    }
+}

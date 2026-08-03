@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 93,
+  "count": 94,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -725,6 +725,13 @@
       "name": "frogdb_split_brain_events_total",
       "type": "counter",
       "help": "Total split-brain events detected",
+      "group": "split",
+      "labels": []
+    },
+    {
+      "name": "frogdb_split_brain_log_write_failures_total",
+      "type": "counter",
+      "help": "Split-brain divergence records that could not be written to disk. The divergent writes are gone with no durable trace, so this is a data-loss signal, not a logging nit — and it is the only one, since `frogdb_split_brain_recovery_pending` deliberately stays down when there is no file for an operator to reconcile.",
       "group": "split",
       "labels": []
     },

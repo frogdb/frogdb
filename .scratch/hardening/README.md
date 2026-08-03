@@ -32,7 +32,7 @@ the forcing test, then change the code.
 | `specs/txn-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-txn` 100% vs 90% gate) |
 | `specs/vll-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-vll` 100% vs 90% gate) |
 | `specs/persistence-failure-modes.md` | LOCKED 2026-08-02 (phase 2, `frogdb-persistence` 99.1% / `frogdb-recovery` 100% vs 85% gate) |
-| `specs/replication-failure-modes.md` | draft — phase 3 (full-sync payload path + steady-state link) |
+| `specs/replication-failure-modes.md` | draft — phase 3, whole area specced (FM-REPLICATION-001..053) |
 | `specs/blocking-failure-modes.md` | draft |
 
 ## Issues

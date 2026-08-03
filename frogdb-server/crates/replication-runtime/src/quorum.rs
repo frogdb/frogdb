@@ -374,6 +374,172 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), None);
     }
 
+    /// A hand-rolled WARN collector. The crate carries no `tracing-subscriber`
+    /// dev-dependency and adding one would edit the workspace lockfile, so the
+    /// handful of `Subscriber` methods this needs are implemented directly.
+    #[derive(Clone, Default)]
+    struct WarnLog {
+        events: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl WarnLog {
+        fn warnings(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    struct Fields(String);
+
+    impl tracing::field::Visit for Fields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.push_str(&format!(" {}={:?}", field.name(), value));
+        }
+    }
+
+    impl tracing::Subscriber for WarnLog {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() <= tracing::Level::WARN
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() != tracing::Level::WARN {
+                return;
+            }
+            let mut fields = Fields(String::new());
+            event.record(&mut fields);
+            self.events.lock().unwrap().push(fields.0);
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A checker that is armed, fencing-disabled, and has already lost its
+    /// replica — the exact state in which turning the toggle on rejects writes
+    /// on the spot.
+    fn armed_and_quorum_lost() -> ReplicationQuorumChecker {
+        let tracker = make_tracker();
+        let session = tracker.register_replica(addr(9001));
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
+        let checker = ReplicationQuorumChecker::new(tracker.clone(), false, Duration::from_secs(3));
+        // Fencing is off here, so `has_quorum()`'s return value is always true
+        // regardless of arming — assert on `is_armed()` directly, which is the
+        // only thing this call is actually meant to latch.
+        checker.has_quorum();
+        assert!(checker.is_armed(), "arms on the streaming replica");
+        tracker.unregister_replica(session.id());
+        checker
+    }
+
+    // FM-REPLICATION-041
+    /// Turning the fence on while quorum is *already* lost starts rejecting
+    /// writes immediately, so the transition is announced — otherwise the
+    /// operator sees CLUSTERDOWN arrive out of nowhere and attributes it to the
+    /// replicas rather than to their own `CONFIG SET`. The warning belongs to the
+    /// off -> on edge: re-affirming a toggle that is already on changes nothing
+    /// about the fence, and re-warning on every `CONFIG SET` would train the
+    /// operator to ignore the line.
+    #[test]
+    fn enabling_the_fence_onto_a_lost_quorum_warns_once() {
+        let checker = armed_and_quorum_lost();
+
+        // Each call gets its own collector, so *which* call warned is asserted
+        // rather than just how many warnings appeared in total.
+        let edge = WarnLog::default();
+        tracing::subscriber::with_default(edge.clone(), || {
+            checker.set_self_fence_enabled(true);
+        });
+        let warnings = edge.warnings();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "the off -> on edge is the call that announces the fence, got {warnings:?}"
+        );
+
+        // The same value again: no edge, no second warning.
+        let repeat = WarnLog::default();
+        tracing::subscriber::with_default(repeat.clone(), || {
+            checker.set_self_fence_enabled(true);
+        });
+        assert!(
+            repeat.warnings().is_empty(),
+            "re-affirming a toggle that is already on changes nothing about the \
+             fence, so it must not re-warn; got {:?}",
+            repeat.warnings()
+        );
+
+        let warning = &warnings[0];
+        assert!(
+            warning.contains(FENCE_REASON),
+            "the warning must name the fence reason, got {warning}"
+        );
+        assert!(
+            warning.contains("CLUSTERDOWN"),
+            "the warning must name what clients will see, got {warning}"
+        );
+        assert!(
+            !checker.has_quorum(),
+            "the warning describes a fence that is genuinely engaged"
+        );
+    }
+
+    // FM-REPLICATION-041
+    /// Enabling the fence on a *healthy* primary is a no-op for writes, so it
+    /// must stay silent. A warning here would be a false alarm on the ordinary
+    /// path — every operator who turns the knob on while their replicas are fine
+    /// would be told their writes are now rejected, which they are not.
+    #[test]
+    fn enabling_the_fence_on_a_healthy_primary_is_silent() {
+        let log = WarnLog::default();
+        let tracker = make_tracker();
+        let session = tracker.register_replica(addr(9001));
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
+        let checker = ReplicationQuorumChecker::new(tracker, false, Duration::from_secs(3600));
+        assert!(checker.has_quorum());
+
+        tracing::subscriber::with_default(log.clone(), || {
+            checker.set_self_fence_enabled(true);
+        });
+
+        assert!(
+            log.warnings().is_empty(),
+            "a fence that is not engaged must not be announced, got {:?}",
+            log.warnings()
+        );
+        assert!(
+            checker.has_quorum(),
+            "the fresh replica still carries quorum"
+        );
+    }
+
+    // FM-REPLICATION-041
+    /// Turning the fence *off* never warns, whatever the quorum state: the
+    /// transition can only make writes more permissive.
+    #[test]
+    fn disabling_the_fence_is_silent() {
+        let log = WarnLog::default();
+        let checker = armed_and_quorum_lost();
+        checker.set_self_fence_enabled(true);
+        assert!(!checker.has_quorum());
+
+        tracing::subscriber::with_default(log.clone(), || {
+            checker.set_self_fence_enabled(false);
+            checker.set_self_fence_enabled(false);
+        });
+
+        assert!(
+            log.warnings().is_empty(),
+            "relaxing the fence is not an alarm, got {:?}",
+            log.warnings()
+        );
+        assert!(checker.has_quorum());
+    }
+
     // FM-REPLICATION-041
     /// An empty tracker is the shape a *replica* (or standalone) node carries
     /// from boot: the checker is installed but has nothing to fence on, so it is

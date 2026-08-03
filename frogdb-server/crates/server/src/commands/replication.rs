@@ -12,6 +12,48 @@ use frogdb_core::{
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
+use frogdb_replication::{AnnouncedOption, AnnouncementError, ReplicaInfo};
+
+/// The client-visible error for a `REPLCONF` option that describes the replica
+/// but could not be read.
+///
+/// One mapping, used by both halves of the split: the connection-level
+/// handshake stage (`DispatchStage::ReplicationHandshake`) and the shard-path
+/// `REPLCONF` executor below. The wire errors are therefore identical no matter
+/// which path the option took, which is what lets the handshake move to the
+/// connection without becoming a second dialect.
+pub(crate) fn announcement_error(err: AnnouncementError) -> CommandError {
+    match err {
+        AnnouncementError::MissingPort => CommandError::WrongArity {
+            command: "replconf listening-port",
+        },
+        // Distinct from `InvalidPort` below: this is the pre-refactor wire
+        // text for a port argument that is not even valid UTF-8, restored
+        // here because it cannot be told apart from "valid text that isn't a
+        // number" once both collapse to the same message.
+        AnnouncementError::InvalidPortEncoding => CommandError::InvalidArgument {
+            message: "invalid port encoding".to_string(),
+        },
+        AnnouncementError::InvalidPort => CommandError::InvalidArgument {
+            message: "invalid port number".to_string(),
+        },
+    }
+}
+
+/// One replica's `ROLE` entry: `[ip, announced-port, acked-offset]`.
+///
+/// Redis reports the port the replica *announced* over `REPLCONF
+/// listening-port`, not its ephemeral source port, so an orchestrator reading
+/// `ROLE` on the primary can connect straight to the replica. Split out of
+/// `RoleCommand::execute` so the projection is testable without a live
+/// `CommandContext` (FM-REPLICATION-049).
+pub(crate) fn role_replica_entry(replica: &ReplicaInfo) -> Response {
+    Response::Array(vec![
+        Response::bulk(Bytes::from(replica.address.ip().to_string())),
+        Response::Integer(replica.listening_port as i64),
+        Response::Integer(replica.acked_offset as i64),
+    ])
+}
 
 // ============================================================================
 // REPLICAOF / SLAVEOF
@@ -226,36 +268,20 @@ impl Command for ReplconfCommand {
             .to_ascii_lowercase();
 
         match subcommand.as_str() {
-            "listening-port" => {
-                if args.len() < 2 {
-                    return Err(CommandError::WrongArity {
-                        command: "replconf listening-port",
-                    });
-                }
-
-                let port: u16 = std::str::from_utf8(&args[1])
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "invalid port encoding".to_string(),
-                    })?
-                    .parse()
-                    .map_err(|_| CommandError::InvalidArgument {
-                        message: "invalid port number".to_string(),
-                    })?;
-
-                tracing::debug!(port = port, "REPLCONF listening-port");
-                // The server will store this in the replica connection state
-                Ok(Response::ok())
-            }
-
-            "capa" => {
-                // Capability negotiation
-                let capabilities: Vec<&str> = args[1..]
-                    .iter()
-                    .filter_map(|b| std::str::from_utf8(b).ok())
-                    .collect();
-
-                tracing::debug!(capabilities = ?capabilities, "REPLCONF capa");
-                // The server will store these in the replica connection state
+            // The announcing options are normally intercepted by
+            // `DispatchStage::ReplicationHandshake`, which is where the
+            // connection that will become a replica session can actually hold
+            // them. Reaching here means the option arrived on a path with no
+            // connection to record it on — queued inside `MULTI`, or replayed
+            // by a script. The same parser runs so validation and the reply are
+            // identical on both paths; only the recording is missing, and it is
+            // logged rather than silently dropped.
+            "listening-port" | "capa" => {
+                let option = AnnouncedOption::parse(args).map_err(announcement_error)?;
+                tracing::debug!(
+                    ?option,
+                    "REPLCONF announcement reached the shard path; not recorded"
+                );
                 Ok(Response::ok())
             }
 
@@ -392,7 +418,7 @@ impl Command for PsyncCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        // PSYNC never reaches the shard executor: `DispatchStage::PsyncIntercept`
+        // PSYNC never reaches the shard executor: `DispatchStage::ReplicationHandshake`
         // (connection/dispatch.rs) owns the whole PSYNC decision — it presence-gates
         // the primary replication handler, parses the args into a typed
         // [`PsyncHandoff`], and yields `StageOutcome::Handoff`, which the connection
@@ -428,7 +454,7 @@ impl PsyncHandoff {
     /// exactly as before via the error `Response`).
     ///
     /// The `WrongArity` branch is dead in the live dispatch path — the `Arity`
-    /// stage validates PSYNC's `Fixed(2)` arity before `PsyncIntercept` is
+    /// stage validates PSYNC's `Fixed(2)` arity before `ReplicationHandshake` is
     /// reached — but is kept as defensive validation and unit-tested in isolation.
     pub(crate) fn from_args(args: &[Bytes]) -> Result<Self, CommandError> {
         if args.len() != 2 {
@@ -661,13 +687,7 @@ impl Command for RoleCommand {
                 .map(|t| {
                     t.get_streaming_replicas()
                         .iter()
-                        .map(|r| {
-                            Response::Array(vec![
-                                Response::bulk(Bytes::from(r.address.ip().to_string())),
-                                Response::Integer(r.listening_port as i64),
-                                Response::Integer(r.acked_offset as i64),
-                            ])
-                        })
+                        .map(role_replica_entry)
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -683,9 +703,73 @@ impl Command for RoleCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::PsyncHandoff;
+    use super::{PsyncHandoff, announcement_error, role_replica_entry};
     use bytes::Bytes;
     use frogdb_core::CommandError;
+    use frogdb_protocol::Response;
+    use frogdb_replication::{
+        AnnouncementError, Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession,
+    };
+    use std::time::Instant;
+
+    /// A snapshot shaped like one a completed handshake produces.
+    fn streaming_replica(listening_port: u16) -> ReplicaInfo {
+        let session = ReplicaSession::new(1, "127.0.0.1:54321".parse().unwrap());
+        ReplicaInfo {
+            listening_port,
+            acked_offset: 99,
+            phase: Phase::Streaming,
+            capabilities: ReplicaCapabilities {
+                eof: true,
+                psync2: true,
+            },
+            last_ack_time: Instant::now(),
+            ..session.snapshot()
+        }
+    }
+
+    // FM-REPLICATION-049
+    /// `ROLE` on a primary reports the port the replica *announced*, so an
+    /// orchestrator can dial it — not the placeholder `0` that the discarded
+    /// `REPLCONF listening-port` used to leave behind (issue 16).
+    #[test]
+    fn role_reports_the_announced_port() {
+        let entry = role_replica_entry(&streaming_replica(7001));
+        let Response::Array(fields) = entry else {
+            panic!("a ROLE replica entry is an array");
+        };
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0], Response::bulk(Bytes::from_static(b"127.0.0.1")));
+        assert_eq!(fields[1], Response::Integer(7001));
+        assert_eq!(fields[2], Response::Integer(99));
+    }
+
+    // FM-REPLICATION-018
+    /// The announcement rejections keep the wire errors the shard-path
+    /// `REPLCONF` executor used to raise, so moving the handshake to the
+    /// connection did not change what a client sees. `InvalidPortEncoding` and
+    /// `InvalidPort` are pinned to their exact, distinct wire text: a
+    /// non-UTF-8 port argument and a UTF-8 argument that just isn't a `u16`
+    /// were told apart before this crate's refactor, and collapsing them to
+    /// one message would be a silent regression a `matches!` on the error
+    /// variant alone would not catch.
+    #[test]
+    fn announcement_errors_keep_their_wire_shape() {
+        assert!(matches!(
+            announcement_error(AnnouncementError::MissingPort),
+            CommandError::WrongArity {
+                command: "replconf listening-port"
+            }
+        ));
+        assert_eq!(
+            announcement_error(AnnouncementError::InvalidPortEncoding).to_string(),
+            "ERR invalid port encoding"
+        );
+        assert_eq!(
+            announcement_error(AnnouncementError::InvalidPort).to_string(),
+            "ERR invalid port number"
+        );
+    }
 
     /// The happy path: a well-formed `PSYNC <replid> <offset>` parses into a
     /// typed [`PsyncHandoff`] carrying exactly those values — asserted directly,
@@ -715,7 +799,7 @@ mod tests {
 
     /// Wrong arg count → `WrongArity`. NOTE: this branch is *dead in the live
     /// dispatch path* — the `Arity` stage validates PSYNC's `Fixed(2)` arity
-    /// before `PsyncIntercept` is reached, so `from_args` never sees a wrong arg
+    /// before `ReplicationHandshake` is reached, so `from_args` never sees a wrong arg
     /// count in production. This asserts `from_args` as a standalone function
     /// (defensive validation), not production wire behavior (already covered by
     /// the `Arity` stage and `test_psync_invalid_args`).

@@ -28,8 +28,9 @@ use crate::ReplicationBroadcaster;
 use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
 use crate::identity::ReplicationIdentity;
 use crate::offset_coordinator::OffsetCoordinator;
-use crate::replica_session::SyncKind;
+use crate::replica_session::{ReplicaAnnouncement, SyncKind};
 use crate::state::ReplicationState;
+use crate::sync_counters::SyncOutcome;
 use crate::tracker::ReplicationTrackerImpl;
 use crate::wait_coordinator::WaitCoordinator;
 
@@ -515,12 +516,20 @@ impl PrimaryReplicationHandler {
     /// and drives it to completion. The session's exit handler unregisters
     /// itself and cleans up any per-sync resources regardless of which path
     /// the connection takes through `?`.
+    ///
+    /// `announcement` is what the replica said about itself in the `REPLCONF`
+    /// exchange that preceded this `PSYNC`. It is taken as a parameter rather
+    /// than read back off the connection because `PSYNC` is the moment the
+    /// session comes into existence — there is nowhere earlier to store it, and
+    /// nowhere later that could store it without `INFO` first observing a
+    /// placeholder identity (FM-REPLICATION-049).
     pub async fn handle_psync(
         self: &Arc<Self>,
         stream: BoxedStream,
         addr: SocketAddr,
         replication_id: &str,
         offset: i64,
+        announcement: ReplicaAnnouncement,
     ) -> io::Result<()> {
         // Refuse once the shutdown drain has started: a session opened now
         // would stream past the drain that was meant to end them all.
@@ -557,7 +566,24 @@ impl PrimaryReplicationHandler {
             )
         };
 
-        let session = self.tracker.register_replica(addr);
+        // Count the *refusals* here, at the fork, before anything can fail: a
+        // refusal is a decision, and the full transfer it falls through to is
+        // one this primary has committed to pay for (Redis likewise counts
+        // `sync_full` when the fork starts, not when the transfer completes).
+        //
+        // A grant is not counted here. `+CONTINUE` is written before the backlog
+        // tail is extracted, and the window can close in between
+        // (FM-REPLICATION-012) — the link then drops without a byte of the
+        // resume being streamed. Counting the grant at this point would report a
+        // partial resync that served no data, so `sync_partial_ok` is recorded
+        // in `start_streaming` once the extract has actually produced the tail,
+        // which is where Redis counts it too (after `addReplyReplicationBacklog`).
+        if !matches!(decision, ReplayDecision::Continue(_)) {
+            self.tracker
+                .record_sync_outcome(SyncOutcome::classify(replication_id, false));
+        }
+
+        let session = self.tracker.register_announced_replica(addr, announcement);
         let sync_kind = match decision {
             ReplayDecision::Continue(grant) => {
                 tracing::info!(

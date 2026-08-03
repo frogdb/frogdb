@@ -288,6 +288,56 @@ fn test_ring_buffer_empty() {
     assert!(writes.is_empty());
 }
 
+// FM-REPLICATION-047
+/// A degenerate cap must bound the buffer, never wedge the writer.
+///
+/// `push` holds the entries lock across its eviction loop, so a loop that
+/// cannot terminate does not merely lose the backlog — it parks every later
+/// write behind a mutex that is never released. `max_entries == 0` used to do
+/// exactly that: `entries.len() >= 0` is true on an empty deque, `pop_front()`
+/// returns `None`, and the body was a no-op forever.
+///
+/// Validation now refuses `0` from a config file, but the loop is the
+/// load-bearing half: it is the only guard on the callers that build a
+/// `BacklogConfig` directly (tests, and any future in-process construction).
+/// Each case runs on its own thread behind a `recv_timeout` so a regression
+/// fails this test rather than wedging the whole suite.
+#[test]
+fn ring_buffer_push_terminates_under_a_degenerate_cap() {
+    for (label, max_entries, max_bytes) in [
+        ("max_entries = 0", 0usize, 1024usize),
+        ("max_bytes = 0", 4, 0),
+        ("both caps 0", 0, 0),
+    ] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rb = ReplicationRingBuffer::new(max_entries, max_bytes);
+            rb.push(4, 0, Bytes::from("cmd1"));
+            rb.push(8, 0, Bytes::from("cmd2"));
+            let _ = tx.send(rb.extract_divergent_writes(0));
+        });
+        let retained = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "{label}: push never returned — the eviction loop cannot drain an empty deque"
+                )
+            });
+        // The empty-deque guard is what stops the loop, so the newest entry
+        // always survives: the buffer is bounded at one, not emptied and not
+        // grown. Zero retained would mean `push` had become a no-op.
+        assert_eq!(
+            retained.len(),
+            1,
+            "{label}: a degenerate cap must retain exactly the newest command"
+        );
+        assert_eq!(
+            retained[0].0, 8,
+            "{label}: the survivor is the newest entry"
+        );
+    }
+}
+
 // FM-REPLICATION-015
 #[test]
 fn test_ring_buffer_extract_is_nondestructive() {

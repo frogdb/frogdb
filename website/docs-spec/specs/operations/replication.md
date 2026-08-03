@@ -59,8 +59,11 @@ Clustering) or manual `CLUSTER FAILOVER` — there is NO external orchestrator.
   `reconnect-backoff-initial-ms` (100) / `-max-ms` (30000)
 - lag guards: `replication-lag-threshold-bytes` (0) / `-secs` (0),
   `fullresync-cooldown-secs` (60)
-- split-brain diagnostics: `split-brain-log-enabled` (true),
-  `split-brain-buffer-size` (10000), `split-brain-buffer-max-mb` (64)
+- replication backlog: `backlog-enabled` (true), `backlog-size` (10000),
+  `backlog-max-mb` (64), `repl-backlog-ttl` (3600) — the `+CONTINUE` resume
+  window; all four must be > 0 where numeric
+- split-brain diagnostics: `split-brain-log-enabled` (true) — log-only, and
+  explicitly NOT a backlog switch (issue 14)
 - self-fencing/freshness: `self-fence-on-replica-loss` (true),
   `replica-freshness-timeout-ms` (3000; should be ≥ 3× `ack-interval-ms` — the
   build warns otherwise), `replica-write-timeout-ms` (5000)

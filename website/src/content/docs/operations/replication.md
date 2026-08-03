@@ -59,9 +59,11 @@ The full key set and defaults:
 | `self-fence-on-replica-loss` | `true` | Reject writes when the primary loses ACK freshness from all replicas. |
 | `replica-freshness-timeout-ms` | `3000` | ACK-freshness window for self-fencing; the build warns if this is below `3 × ack-interval-ms`. |
 | `replica-write-timeout-ms` | `5000` | Write timeout when streaming to a replica (`0` disables); forces a disconnect when packets are silently dropped. |
-| `split-brain-log-enabled` | `true` | Log divergent writes from a demoted primary before resync (logging only). |
-| `split-brain-buffer-size` | `10000` | Recent commands buffered for split-brain detection. |
-| `split-brain-buffer-max-mb` | `64` | Memory cap for the split-brain buffer. |
+| `split-brain-log-enabled` | `true` | Write a divergent-writes audit file when a demoted primary diverged (logging only — it does not affect partial resync). |
+| `backlog-enabled` | `true` | Populate the replication backlog. `false` forces every reconnecting replica through a full resync. |
+| `backlog-size` | `10000` | Recent commands the backlog retains — the entry-count cap on the `+CONTINUE` resume window. Must be > 0. |
+| `backlog-max-mb` | `64` | Memory cap for the backlog (Redis's `repl-backlog-size`). Must be > 0. |
+| `repl-backlog-ttl` | `3600` | Seconds with zero connected replicas after which the backlog is freed and its resume window closed (`0` keeps it forever). |
 
 See the [Configuration reference](/reference/configuration/) for the authoritative, generated list.
 

@@ -128,11 +128,7 @@ impl ConnectionHandler {
                 replicas: tracker
                     .get_streaming_replicas()
                     .iter()
-                    .map(|replica| ReplicaLine {
-                        ip: replica.address.ip().to_string(),
-                        port: replica.listening_port,
-                        offset: replica.acked_offset,
-                    })
+                    .map(ReplicaLine::from_replica)
                     .collect(),
             });
         // One offset counter per node, whatever role is running: the tracker's
@@ -144,11 +140,20 @@ impl ConnectionHandler {
             .replication_tracker
             .as_ref()
             .map_or(0, |tracker| tracker.current_offset());
+        // Reported whatever the current role is: a demoted node's lifetime
+        // resync tally is exactly what an operator diagnosing the demotion
+        // wants, and zeroing it on demotion would be a lie.
+        let sync = self
+            .cluster
+            .replication_tracker
+            .as_ref()
+            .map_or_else(Default::default, |tracker| tracker.sync_counters());
         let replication = ReplicationSnapshot {
             is_replica,
             node_id: self.cluster.node_id,
             replication_id,
             primary,
+            sync,
             repl_offset,
             master_host: shards.master_host.clone(),
             master_port: shards.master_port,

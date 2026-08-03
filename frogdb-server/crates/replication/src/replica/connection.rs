@@ -606,6 +606,67 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-049
+    /// The port the primary renders as `slaveN:port=` is whatever this
+    /// handshake writes, so the value handed in must reach the wire verbatim —
+    /// a replica that announces a port it does not serve on gives the primary
+    /// an address nobody can dial, which is the `port=0` failure with a
+    /// different origin.
+    #[tokio::test]
+    async fn the_handshake_announces_the_port_it_was_given() {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(0)),
+            AppliedOffset::detached(0),
+        );
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state,
+            connection_state: ConnectionState::Connected,
+            data_dir: PathBuf::from("/tmp/frogdb-test"),
+            offsets,
+            link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: Duration::from_secs(1),
+            snapshot_installer: None,
+            pending_stream_bytes: BytesMut::new(),
+        };
+
+        // One `+OK` per REPLCONF the handshake sends; scripted up front so it
+        // never blocks on a reader.
+        client.write_all(b"+OK\r\n+OK\r\n+OK\r\n").await.unwrap();
+
+        conn.handshake(7001).await.expect("handshake completes");
+        drop(conn); // close the server half so `read_to_end` returns
+
+        let mut written = Vec::new();
+        client.read_to_end(&mut written).await.unwrap();
+        let written = String::from_utf8(written).expect("the handshake is RESP text");
+
+        let expected = String::from_utf8(
+            serialize_command_to_resp(
+                "REPLCONF",
+                &[
+                    Bytes::from_static(b"listening-port"),
+                    Bytes::from_static(b"7001"),
+                ],
+            )
+            .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            written.starts_with(&expected),
+            "the handshake must announce the port it was given first, got: {written:?}"
+        );
+        assert!(
+            written.contains("capa"),
+            "the capability announcement still follows, got: {written:?}"
+        );
+    }
+
     /// Encode a checkpoint envelope body (per-file frames + trailing metadata,
     /// *without* the marker/count prelude that `psync` already consumed) for a
     /// given offset, folding the combined checksum the sender way.

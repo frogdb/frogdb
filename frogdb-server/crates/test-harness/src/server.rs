@@ -106,12 +106,17 @@ pub struct TestServerConfig {
     /// resync). `None` keeps the server default (5000ms). Lowering it makes a
     /// stalled-replica lag-disconnect fire quickly and deterministically.
     pub replication_replica_write_timeout_ms: Option<u64>,
-    /// Override `replication.split-brain-buffer-size` (the replication backlog's
-    /// max entry count — Redis `repl-backlog-size` analogue). `None` keeps the
-    /// server default (10_000). Raising it lets a reconnecting replica whose gap
+    /// Override `replication.backlog-size` (the replication backlog's max entry
+    /// count — Redis `repl-backlog-size` analogue). `None` keeps the server
+    /// default (10_000). Raising it lets a reconnecting replica whose gap
     /// exceeds 10k commands still qualify for a partial resync (`+CONTINUE`)
     /// instead of falling back to a full resync.
-    pub replication_split_brain_buffer_size: Option<usize>,
+    pub replication_backlog_size: Option<usize>,
+    /// Override `replication.split-brain-log-enabled` (whether a demoted
+    /// primary's divergent writes are written to an audit file). `None` keeps
+    /// the server default (`true`). This is log-only: it must not change
+    /// whether a reconnecting replica is granted `+CONTINUE` (issue 14).
+    pub replication_split_brain_log_enabled: Option<bool>,
     /// Override `replication.min-replicas-to-write` (Redis `NOREPLICAS` gate:
     /// refuse writes with fewer than N good replicas). `None` keeps the default 0.
     pub replication_min_replicas_to_write: Option<u32>,
@@ -232,7 +237,8 @@ impl Clone for TestServerConfig {
             replication_replica_freshness_timeout_ms: self.replication_replica_freshness_timeout_ms,
             replication_ack_interval_ms: self.replication_ack_interval_ms,
             replication_replica_write_timeout_ms: self.replication_replica_write_timeout_ms,
-            replication_split_brain_buffer_size: self.replication_split_brain_buffer_size,
+            replication_backlog_size: self.replication_backlog_size,
+            replication_split_brain_log_enabled: self.replication_split_brain_log_enabled,
             replication_min_replicas_to_write: self.replication_min_replicas_to_write,
             replication_min_replicas_timeout_ms: self.replication_min_replicas_timeout_ms,
             cluster_enabled: self.cluster_enabled,
@@ -510,8 +516,11 @@ impl TestServer {
         if let Some(v) = test_config.replication_replica_write_timeout_ms {
             config.replication.replica_write_timeout_ms = v;
         }
-        if let Some(v) = test_config.replication_split_brain_buffer_size {
-            config.replication.split_brain_buffer_size = v;
+        if let Some(v) = test_config.replication_backlog_size {
+            config.replication.backlog_size = v;
+        }
+        if let Some(v) = test_config.replication_split_brain_log_enabled {
+            config.replication.split_brain_log_enabled = v;
         }
         if let Some(v) = test_config.replication_min_replicas_to_write {
             config.replication.min_replicas_to_write = v;

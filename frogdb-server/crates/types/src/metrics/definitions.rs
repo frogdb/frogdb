@@ -463,6 +463,13 @@ define_metrics! {
     /// Whether an unprocessed split-brain log file exists (1 = yes, 0 = no)
     gauge SplitBrainRecoveryPending("frogdb_split_brain_recovery_pending") {}
 
+    /// Split-brain divergence records that could not be written to disk. The
+    /// divergent writes are gone with no durable trace, so this is a data-loss
+    /// signal, not a logging nit — and it is the only one, since
+    /// `frogdb_split_brain_recovery_pending` deliberately stays down when there
+    /// is no file for an operator to reconcile.
+    counter SplitBrainLogWriteFailuresTotal("frogdb_split_brain_log_write_failures_total") {}
+
     // ========================================================================
     // Latency Metrics
     // ========================================================================

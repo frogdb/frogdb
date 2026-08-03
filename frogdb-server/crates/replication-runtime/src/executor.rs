@@ -133,3 +133,283 @@ impl ReplicaApplier for ReplicaCommandExecutor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_shards::{Reply, Seen, cmd, fake_shards, render, serve_command};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    /// A group that reaches no shard must not wait on one either, so the
+    /// "nothing was sent" assertions are made under a bound rather than by
+    /// hanging.
+    const NO_WAIT: Duration = Duration::from_secs(3);
+
+    // FM-REPLICATION-051
+    /// A replicated bare command is one `CoreMsg::Execute` on the shard the
+    /// primary tagged the frame with, carrying the internal connection id that
+    /// keeps it from being re-broadcast.
+    #[tokio::test]
+    async fn a_single_replicated_command_executes_directly_on_its_tagged_shard() {
+        let mut shards = fake_shards(2);
+        let executor = ReplicaCommandExecutor::new(shards.senders(), 2);
+
+        let (applied, seen) = tokio::join!(
+            executor.apply_group(1, vec![cmd("SET", &["user:1", "alice"])]),
+            serve_command(shards.shard(1), Reply::Ok),
+        );
+
+        assert!(
+            applied.is_ok(),
+            "a clean apply must not report a divergence"
+        );
+        match seen {
+            Seen::Execute {
+                command,
+                conn_id,
+                txid,
+                track_reads,
+                no_touch,
+            } => {
+                assert_eq!(render(&command), "SET user:1 alice");
+                assert_eq!(
+                    conn_id, REPLICA_INTERNAL_CONN_ID,
+                    "a replicated write applied under a client's id would be \
+                     re-broadcast, looping the write back to the primary"
+                );
+                assert_eq!(txid, None);
+                assert!(
+                    !track_reads,
+                    "a replicated apply has no client to invalidate"
+                );
+                assert!(!no_touch);
+            }
+            other => panic!("a bare command must not be wrapped in a transaction: {other:?}"),
+        }
+        assert!(
+            shards.untouched(0),
+            "the tag chooses the shard; no other shard may see the write"
+        );
+    }
+
+    // FM-REPLICATION-051
+    // FM-REPLICATION-034
+    /// A reconstructed `MULTI … EXEC` is **one** `ExecTransaction` on the tagged
+    /// shard — not N separate applies, which would make intermediate
+    /// transaction state readable on the replica.
+    #[tokio::test]
+    async fn a_reconstructed_transaction_is_one_atomic_shard_message() {
+        let mut shards = fake_shards(2);
+        let executor = ReplicaCommandExecutor::new(shards.senders(), 2);
+
+        let group = vec![
+            cmd("SET", &["a", "1"]),
+            cmd("INCR", &["a"]),
+            cmd("DEL", &["b"]),
+        ];
+        let (applied, seen) = tokio::join!(
+            executor.apply_group(0, group),
+            serve_command(shards.shard(0), Reply::Ok),
+        );
+
+        assert!(applied.is_ok());
+        match seen {
+            Seen::Transaction {
+                commands,
+                watches,
+                conn_id,
+            } => {
+                assert_eq!(
+                    commands.iter().map(render).collect::<Vec<_>>(),
+                    vec!["SET a 1", "INCR a", "DEL b"],
+                    "the group must arrive whole and in order"
+                );
+                assert_eq!(
+                    watches, 0,
+                    "the primary already resolved the WATCH set; re-watching on \
+                     the replica could abort a transaction the primary committed"
+                );
+                assert_eq!(conn_id, REPLICA_INTERNAL_CONN_ID);
+            }
+            other => panic!("the group was split into per-command applies: {other:?}"),
+        }
+        assert!(
+            shards.untouched(0),
+            "the group is one message, so nothing follows it"
+        );
+        assert!(shards.untouched(1));
+    }
+
+    // FM-REPLICATION-051
+    /// An empty group is a no-op that reaches no shard at all — not an empty
+    /// transaction, which a shard would answer and which would show up as a
+    /// WATCH-version bump on the replica.
+    #[tokio::test]
+    async fn an_empty_group_reaches_no_shard() {
+        let mut shards = fake_shards(2);
+        let executor = ReplicaCommandExecutor::new(shards.senders(), 2);
+
+        let applied = timeout(NO_WAIT, executor.apply_group(0, Vec::new()))
+            .await
+            .expect("an empty group must not wait on a shard response");
+
+        assert!(applied.is_ok());
+        assert!(shards.untouched(0), "an empty group must send nothing");
+        assert!(shards.untouched(1));
+    }
+
+    // FM-REPLICATION-051
+    /// A shard that refuses a replicated command is a divergence, surfaced with
+    /// the shard's own reason — never swallowed as a clean apply, which would
+    /// let the replica keep ACKing offsets whose writes it never took.
+    #[tokio::test]
+    async fn a_refused_command_is_reported_as_a_divergence_with_its_reason() {
+        for (label, reply) in [
+            ("-ERR", Reply::Error("WRONGTYPE Operation against a key")),
+            ("blob error", Reply::BlobError("OOM command not allowed")),
+        ] {
+            let mut shards = fake_shards(2);
+            let executor = ReplicaCommandExecutor::new(shards.senders(), 2);
+
+            let (applied, _) = tokio::join!(
+                executor.apply_group(1, vec![cmd("LPUSH", &["k", "v"])]),
+                serve_command(shards.shard(1), reply),
+            );
+
+            match applied {
+                Err(ApplyError::Rejected { shard, detail }) => {
+                    assert_eq!(shard, 1, "the divergence names the shard it happened on");
+                    assert!(
+                        detail.contains("WRONGTYPE") || detail.contains("OOM"),
+                        "the shard's own reason must survive into the divergence \
+                         ({label}), got {detail:?}"
+                    );
+                }
+                other => panic!("a refused {label} apply must not report success: {other:?}"),
+            }
+        }
+    }
+
+    // FM-REPLICATION-051
+    /// The same for a group: a transaction the shard could not run is a
+    /// divergence, and a `WATCH` abort is reported as one rather than as a
+    /// silent success.
+    #[tokio::test]
+    async fn a_failed_transaction_is_reported_as_a_divergence() {
+        let mut shards = fake_shards(1);
+        let executor = ReplicaCommandExecutor::new(shards.senders(), 1);
+        let group = || vec![cmd("SET", &["a", "1"]), cmd("SET", &["b", "2"])];
+
+        let (applied, _) = tokio::join!(
+            executor.apply_group(0, group()),
+            serve_command(shards.shard(0), Reply::Error("EXECABORT")),
+        );
+        match applied {
+            Err(ApplyError::Rejected { shard, detail }) => {
+                assert_eq!(shard, 0);
+                assert_eq!(detail, "EXECABORT");
+            }
+            other => panic!("a failed transaction must not report success: {other:?}"),
+        }
+
+        let (applied, _) = tokio::join!(
+            executor.apply_group(0, group()),
+            serve_command(shards.shard(0), Reply::WatchAborted),
+        );
+        match applied {
+            Err(ApplyError::Rejected { shard, detail }) => {
+                assert_eq!(shard, 0);
+                assert!(
+                    detail.to_ascii_uppercase().contains("WATCH"),
+                    "the abort must be attributable to the WATCH conflict, got {detail:?}"
+                );
+            }
+            other => panic!("a WATCH-aborted group must not report success: {other:?}"),
+        }
+    }
+
+    // FM-REPLICATION-051
+    /// Every shard id the node actually has is applied to; an id the node does
+    /// not have is refused **before** any send, so a mis-tagged frame can never
+    /// land on the wrong shard.
+    #[tokio::test]
+    async fn an_origin_shard_tag_outside_the_shard_count_is_refused_before_any_send() {
+        let mut shards = fake_shards(2);
+        let executor = ReplicaCommandExecutor::new(shards.senders(), 2);
+
+        match executor.apply_group(2, vec![cmd("SET", &["k", "v"])]).await {
+            Err(ApplyError::ShardOutOfRange(shard, count)) => {
+                assert_eq!((shard, count), (2, 2));
+            }
+            other => panic!("a tag past the last shard must be refused: {other:?}"),
+        }
+        assert!(shards.untouched(0), "a refused tag must reach no shard");
+        assert!(shards.untouched(1));
+
+        // ...and every in-range tag is served, so the bound is a bound and not
+        // a blanket refusal.
+        for shard_id in 0..2u16 {
+            let (applied, _) = tokio::join!(
+                executor.apply_group(shard_id, vec![cmd("SET", &["k", "v"])]),
+                serve_command(shards.shard(shard_id as usize), Reply::Ok),
+            );
+            assert!(applied.is_ok(), "shard {shard_id} is a shard this node has");
+        }
+
+        // A count that over-states the wired senders is caught by the same
+        // refusal rather than panicking on an index.
+        let short = ReplicaCommandExecutor::new(shards.senders(), 4);
+        match short.apply_group(3, vec![cmd("SET", &["k", "v"])]).await {
+            Err(ApplyError::ShardOutOfRange(shard, count)) => {
+                assert_eq!((shard, count), (3, 4));
+            }
+            other => panic!("a tag with no sender behind it must be refused: {other:?}"),
+        }
+    }
+
+    // FM-REPLICATION-051
+    /// A shard that is gone, or that dies without answering, is reported as
+    /// unavailable — distinct from a divergence, because the write may or may
+    /// not have landed and the link must be re-established rather than the
+    /// history abandoned.
+    #[tokio::test]
+    async fn a_shard_that_is_gone_or_silent_is_reported_as_unavailable() {
+        let mut shards = fake_shards(2);
+        let executor = ReplicaCommandExecutor::new(shards.senders(), 2);
+
+        // The worker dropped its receiver: the send itself fails.
+        shards.disconnect(0);
+        let single = executor.apply_group(0, vec![cmd("SET", &["k", "v"])]).await;
+        assert!(
+            matches!(single, Err(ApplyError::ShardUnavailable(0))),
+            "a closed shard channel is unavailability, got {single:?}"
+        );
+        let group = executor
+            .apply_group(0, vec![cmd("SET", &["k", "v"]), cmd("DEL", &["k"])])
+            .await;
+        assert!(
+            matches!(group, Err(ApplyError::ShardUnavailable(0))),
+            "a closed shard channel is unavailability for a group too, got {group:?}"
+        );
+
+        // The worker took the message and died before answering.
+        let (applied, _) = tokio::join!(
+            executor.apply_group(1, vec![cmd("SET", &["k", "v"])]),
+            serve_command(shards.shard(1), Reply::Silent),
+        );
+        assert!(
+            matches!(applied, Err(ApplyError::ShardUnavailable(1))),
+            "a dropped response channel is unavailability, got {applied:?}"
+        );
+
+        let (applied, _) = tokio::join!(
+            executor.apply_group(1, vec![cmd("SET", &["k", "v"]), cmd("DEL", &["k"])]),
+            serve_command(shards.shard(1), Reply::Silent),
+        );
+        assert!(
+            matches!(applied, Err(ApplyError::ShardUnavailable(1))),
+            "a dropped transaction ack is unavailability, got {applied:?}"
+        );
+    }
+}

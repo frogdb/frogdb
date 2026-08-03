@@ -822,7 +822,7 @@ async fn test_wait_inside_multi_returns_correct_acked_count_with_replica() {
 
 // FM-TXN-044
 /// PSYNC queued inside MULTI/EXEC replies `+OK` and never triggers a socket
-/// takeover. This path bypasses `PsyncIntercept` entirely: `TransactionQueue`
+/// takeover. This path bypasses `ReplicationHandshake` entirely: `TransactionQueue`
 /// (earlier in `PRE_DISPATCH_ORDER`) queues the command, and at EXEC
 /// `execute_connection_level_in_transaction` short-circuits it to `+OK` without
 /// calling `PsyncCommand::execute`. Guards that the typed-handoff refactor left
@@ -2409,7 +2409,7 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
 /// the transition has to be carried by behavior rather than by construction:
 /// `RoleManager::demote` calls `end_primary_stint`, which closes the backlog
 /// window and disconnects the downstream replicas, and the live role flag makes
-/// the next `PSYNC` attempt fail the `PsyncIntercept` gate. Together those give
+/// the next `PSYNC` attempt fail the `ReplicationHandshake` gate. Together those give
 /// the invariant a sub-replica depends on — there is no window in which a node
 /// is a replica of one node while still serving a resync to another.
 #[tokio::test]
@@ -2510,7 +2510,7 @@ async fn test_demoted_primary_stops_serving_psync_to_its_downstream() {
 /// background connection then performs a `PSYNC` handshake against that
 /// target, and a node that is *currently a replica* answers PSYNC with an
 /// outright `-ERR ... not running as primary` — `connection/dispatch.rs`'s
-/// `PsyncIntercept` role gate, read live from the role flag (the primary-side
+/// `ReplicationHandshake` role gate, read live from the role flag (the primary-side
 /// handler itself exists on every role, so a *promoted* node does serve PSYNC;
 /// see `test_promoted_node_via_replicaof_no_one_serves_downstream_psync`). The
 /// sub-replica's link never comes up and no primary-origin write ever
@@ -3778,8 +3778,10 @@ async fn test_wait_zero_numreplicas() {
 // ============================================================================
 
 // FM-REPLICATION-043
-/// Parses INFO replication on primary and verifies the expected format:
-/// master_replid is 40-char hex, master_repl_offset >= 0.
+/// Parses INFO replication on primary and verifies the expected format, with
+/// `master_repl_offset` and `connected_slaves` checked against values this
+/// test caused itself (a write count, an attach count) rather than merely
+/// "present and non-negative" — a check a hardcoded `0` would also pass.
 #[tokio::test]
 async fn test_info_replication_primary_format() {
     let config = TestServerConfig {
@@ -3788,8 +3790,17 @@ async fn test_info_replication_primary_format() {
     };
     let (primary, _replica) = start_primary_replica_pair(config).await;
 
-    // Extra wait for replication handshake
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Drive the handshake to completion instead of reading whatever
+    // connected_slaves happens to be after a fixed sleep.
+    wait_for_replication(&primary, 2000).await;
+    let (replid_before, offset_before) = get_replication_state(&primary)
+        .await
+        .expect("primary should report master_replid/master_repl_offset before the workload");
+
+    for i in 0..10 {
+        primary.send("SET", &[&format!("fmt{i}"), "v"]).await;
+    }
+    wait_for_replication(&primary, 2000).await;
 
     let response = primary.send("INFO", &["replication"]).await;
     let info = parse_info_replication(&response).expect("should parse INFO replication");
@@ -3801,92 +3812,113 @@ async fn test_info_replication_primary_format() {
         "Primary should report role:master"
     );
 
-    // master_replid should be 40-char hex
-    if let Some(replid) = info.get("master_replid") {
-        assert_eq!(
-            replid.len(),
-            40,
-            "master_replid should be 40 chars, got: {}",
-            replid
-        );
-        assert!(
-            replid.chars().all(|c| c.is_ascii_hexdigit()),
-            "master_replid should be hex, got: {}",
-            replid
-        );
-        assert_ne!(
-            replid, "0000000000000000000000000000000000000000",
-            "primary master_replid should be the real ReplicationState id, not zeros"
-        );
-    }
+    // master_replid should be 40-char hex, and stable across a plain write
+    // workload (it only changes on a fullresync-worthy discontinuity).
+    let replid = info.get("master_replid").expect("master_replid present");
+    assert_eq!(
+        replid.len(),
+        40,
+        "master_replid should be 40 chars, got: {}",
+        replid
+    );
+    assert!(
+        replid.chars().all(|c| c.is_ascii_hexdigit()),
+        "master_replid should be hex, got: {}",
+        replid
+    );
+    assert_eq!(
+        *replid, replid_before,
+        "master_replid must not change across a plain SET workload"
+    );
 
-    // master_repl_offset should be >= 0
-    if let Some(offset_str) = info.get("master_repl_offset") {
-        let offset: i64 = offset_str.parse().expect("offset should be numeric");
-        assert!(
-            offset >= 0,
-            "master_repl_offset should be >= 0, got {}",
-            offset
-        );
-    }
+    // master_repl_offset must have advanced past the pre-workload offset —
+    // not just be "some number >= 0", which a frozen placeholder satisfies
+    // too.
+    let offset: i64 = info
+        .get("master_repl_offset")
+        .expect("master_repl_offset present")
+        .parse()
+        .expect("offset should be numeric");
+    assert!(
+        offset > offset_before,
+        "master_repl_offset should advance past the pre-workload offset {} after 10 SETs, got {}",
+        offset_before,
+        offset
+    );
 
-    // connected_slaves — timing-dependent, so just verify it's a valid number
-    if let Some(slaves_str) = info.get("connected_slaves") {
-        let slaves: i64 = slaves_str
-            .parse()
-            .expect("connected_slaves should be numeric");
-        eprintln!("connected_slaves: {}", slaves);
-        // May be 0 if handshake hasn't finished, or 1 if it has
-        assert!(slaves >= 0, "connected_slaves should be >= 0");
-    }
+    // connected_slaves must equal the one replica this test actually
+    // attached, not merely "a valid number" (a hardcoded 0 is one too).
+    let slaves: i64 = info
+        .get("connected_slaves")
+        .expect("connected_slaves present")
+        .parse()
+        .expect("connected_slaves should be numeric");
+    assert_eq!(
+        slaves, 1,
+        "connected_slaves should report the one attached replica, got {}",
+        slaves
+    );
 }
 
-/// Parses INFO replication on replica and verifies expected fields.
-/// The replica should report role:slave once the replication handshake completes.
+/// Parses INFO replication on replica and verifies `master_host`/
+/// `master_port`/`master_link_status` resolve to the primary this test
+/// actually started — not just "present" or "up or down", both of which a
+/// hardcoded placeholder would also satisfy.
 #[tokio::test]
 async fn test_info_replication_replica_format() {
     let config = TestServerConfig {
         persistence: true,
         ..Default::default()
     };
-    let (_primary, replica) = start_primary_replica_pair(config).await;
+    let (primary, replica) = start_primary_replica_pair(config).await;
 
-    // Extra wait for replication handshake to complete
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    let response = replica.send("INFO", &["replication"]).await;
-    let info = parse_info_replication(&response).expect("should parse INFO replication");
-
-    // Role should be slave (replica), but may be master if handshake hasn't completed
-    let role = info.get("role").map(|s| s.as_str());
-    eprintln!("Replica reports role: {:?}", role);
-
-    if role == Some("slave") {
-        // Full replication handshake completed
-        assert!(
-            info.contains_key("master_host"),
-            "Replica should have master_host in INFO replication"
-        );
-
-        if let Some(port_str) = info.get("master_port") {
-            let port: u16 = port_str.parse().expect("master_port should be numeric");
-            assert!(port > 0, "master_port should be > 0");
+    // Poll for the handshake instead of silently skipping the assertions
+    // when it has not finished within a fixed sleep.
+    let mut info = None;
+    for _ in 0..50 {
+        let response = replica.send("INFO", &["replication"]).await;
+        if let Some(parsed) = parse_info_replication(&response)
+            && parsed.get("role").map(String::as_str) == Some("slave")
+        {
+            info = Some(parsed);
+            break;
         }
-
-        if let Some(link_status) = info.get("master_link_status") {
-            eprintln!("master_link_status: {}", link_status);
-            assert!(
-                link_status == "up" || link_status == "down",
-                "master_link_status should be up or down, got: {}",
-                link_status
-            );
-        }
-    } else {
-        // Handshake not yet complete — the server started as a replica
-        // but INFO may still show master until handshake finishes.
-        // This is acceptable timing-dependent behavior.
-        eprintln!("Note: Replica not yet reporting as slave (handshake may still be in progress)");
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    let info = info.expect("replica should report role:slave within 5s");
+
+    // master_host/master_port must name the primary this test actually
+    // started, derived independently via `primary.port()` — not just be
+    // present.
+    assert_eq!(
+        info.get("master_host").map(String::as_str),
+        Some("127.0.0.1"),
+        "replica should report the primary's real host: {info:?}"
+    );
+    let expected_port = primary.port().to_string();
+    assert_eq!(
+        info.get("master_port").map(String::as_str),
+        Some(expected_port.as_str()),
+        "replica should report the primary's real port, not a placeholder: {info:?}"
+    );
+
+    // master_link_status must settle on "up" for a replica that connected
+    // and streamed, not merely be "a member of {up, down}".
+    let mut link_status = info.get("master_link_status").cloned();
+    for _ in 0..50 {
+        if link_status.as_deref() == Some("up") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let response = replica.send("INFO", &["replication"]).await;
+        link_status =
+            parse_info_replication(&response).and_then(|i| i.get("master_link_status").cloned());
+    }
+    assert_eq!(
+        link_status.as_deref(),
+        Some("up"),
+        "replica should report master_link_status:up once streaming"
+    );
 }
 
 // FM-REPLICATION-027
@@ -5524,7 +5556,7 @@ async fn test_multiple_replicas_same_primary() {
     primary.shutdown().await;
 }
 
-// FM-REPLICATION-043
+// FM-REPLICATION-043, FM-REPLICATION-049
 /// INFO replication shows connected_slaves:N and all slaveN entries.
 #[tokio::test]
 async fn test_info_replication_shows_all_replicas() {
@@ -5556,11 +5588,43 @@ async fn test_info_replication_shows_all_replicas() {
         connected
     );
 
-    // Check for slave0 and slave1 entries
-    let has_slave0 = info.contains_key("slave0");
-    let has_slave1 = info.contains_key("slave1");
-    assert!(has_slave0, "INFO replication should have slave0 entry");
-    assert!(has_slave1, "INFO replication should have slave1 entry");
+    // The lines must exist *and* describe these two replicas. Asserting only
+    // presence is what let `port=0` and `state=online` ship as literals for as
+    // long as they did (issues 16/17): every field below was a constant that a
+    // presence check could not tell from a projection.
+    let mut announced_ports = Vec::new();
+    for i in 0..connected {
+        let key = format!("slave{i}");
+        let line = info
+            .get(&key)
+            .unwrap_or_else(|| panic!("INFO replication should have a {key} entry: {info:?}"));
+        let field = |name: &str| -> String {
+            line.split(',')
+                .find_map(|p| p.strip_prefix(name).map(str::to_string))
+                .unwrap_or_else(|| panic!("{key} has no {name} field: {line}"))
+        };
+        // The announced `REPLCONF listening-port`, not the ephemeral source
+        // port of the replication link — that is the whole point of the field,
+        // and the two are never equal here.
+        announced_ports.push(field("port=").parse::<u16>().expect("port must be numeric"));
+        assert_eq!(
+            field("state="),
+            "online",
+            "a streaming replica renders online: {line}"
+        );
+        assert!(
+            field("lag=").parse::<u64>().is_ok(),
+            "lag must be a whole number of seconds: {line}"
+        );
+        assert!(!field("ip=").is_empty(), "ip must be populated: {line}");
+    }
+    announced_ports.sort_unstable();
+    let mut expected = vec![replica1.port(), replica2.port()];
+    expected.sort_unstable();
+    assert_eq!(
+        announced_ports, expected,
+        "each slaveN line must report the port its replica announced"
+    );
 
     replica2.shutdown().await;
     replica1.shutdown().await;
@@ -6190,6 +6254,61 @@ fn encode_resp_command(parts: &[&str]) -> Vec<u8> {
         out.extend_from_slice(b"\r\n");
     }
     out
+}
+
+// FM-REPLICATION-047
+/// Turning split-brain logging off must not cost every reconnecting replica a
+/// full resync.
+///
+/// `split-brain-log-enabled` is documented as log-only, and switching it off is
+/// the obvious way to stop audit files accumulating in the data directory. It
+/// used to be the `enabled` flag of the replication backlog as well, so that
+/// gesture silently disabled partial resync: every PSYNC answered
+/// `+FULLRESYNC` and every reconnect paid for a checkpoint transfer, with no
+/// log line and no config value that looked wrong. Only a test that reaches the
+/// wire with the flag off can catch that, because the backlog itself behaved
+/// perfectly — it was simply switched off by the wrong key.
+#[tokio::test]
+async fn partial_resync_survives_split_brain_logging_disabled() {
+    let config = TestServerConfig {
+        replication_split_brain_log_enabled: Some(false),
+        ..Default::default()
+    };
+    let primary = TestServer::start_primary_with_config(config.clone()).await;
+    let replica = TestServer::start_replica_with_config(&primary, config).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    for i in 0..20 {
+        primary.send("SET", &[&format!("pre{i}"), "v"]).await;
+    }
+    let _ = primary.send("WAIT", &["1", "2000"]).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (replid, offset) = get_replication_state(&primary)
+        .await
+        .expect("primary INFO replication");
+    assert!(offset > 0, "replication offset should have advanced");
+
+    for i in 0..20 {
+        primary.send("SET", &[&format!("post{i}"), "v"]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp = primary
+        .send_raw(&encode_resp_command(&[
+            "PSYNC",
+            &replid,
+            &offset.to_string(),
+        ]))
+        .await;
+    let head = String::from_utf8_lossy(&resp);
+    assert!(
+        head.starts_with("+CONTINUE"),
+        "the backlog is governed by backlog-enabled, not by the split-brain log \
+         switch — an in-window reconnect must still be granted +CONTINUE, got: {head:?}"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
 }
 
 // FM-REPLICATION-015
@@ -7409,7 +7528,7 @@ async fn test_broadcast_lag_disconnect_and_resync(#[case] persistence: bool) {
         // replays the missed writes as live commands, converging the running
         // keyspace without a restart (a full resync would only stage a
         // checkpoint / send an empty in-memory RDB).
-        replication_split_brain_buffer_size: Some(100_000),
+        replication_backlog_size: Some(100_000),
         ..Default::default()
     })
     .await;

@@ -50,6 +50,13 @@ pub fn serialize_command_to_resp(cmd_name: &str, args: &[Bytes]) -> Bytes {
 
     // Estimate capacity: array header + command + args
     // Each element has: $<len>\r\n<data>\r\n
+    //
+    // A hint, not a bound: `BytesMut` grows when it is wrong, so the three
+    // `+ -> *` mutations of this expression are equivalent — they change how
+    // much is reserved up front and nothing any caller can observe. The
+    // *underflowing* form is not: `16 - cmd_name.len()` panics on a command
+    // name longer than the per-element estimate, which
+    // `test_serialize_command_to_resp_long_command_name` pins.
     let estimated_size = 16 + cmd_name.len() + args.iter().map(|a| 16 + a.len()).sum::<usize>();
     let mut buf = BytesMut::with_capacity(estimated_size);
 
@@ -151,6 +158,12 @@ impl ReplconfCodec {
         let Some(rest) = payload.strip_prefix(b"*3\r\n$8\r\n") else {
             return false;
         };
+        // `REPLCONF` (8) + `\r\n$6\r\n` (6) + `GETACK` (6): the shortest prefix
+        // that can answer the question, and the bound that makes the
+        // `split_at(8)` below infallible. Mutating either `+` to `-` leaves 8,
+        // which is equivalent: 8 still makes the split safe, and the checks
+        // that follow re-derive the same 20-byte requirement, so no input can
+        // be classified differently — only more work is done before saying no.
         if rest.len() < 8 + 6 + 6 {
             return false;
         }
@@ -207,6 +220,8 @@ impl FrameFlags {
     pub const NONE: Self = Self(0);
 
     /// Frame contains compressed payload
+    // Written as a shift for symmetry with its siblings; `1 << 0` and `1 >> 0`
+    // are the same value, so mutating the shift direction here is equivalent.
     pub const COMPRESSED: Self = Self(1 << 0);
 
     /// Frame is the last in a batch
@@ -336,8 +351,13 @@ impl ReplicationFrame {
             return Err(FrameDecodeError::InvalidMagic);
         }
 
+        // Equality, not a ceiling: version 1 had no `shard_id` field, so a v1
+        // frame parsed under today's 20-byte layout yields a bogus shard id and
+        // a bogus sequence — and the sequence IS the replication offset. There
+        // is no code path in this crate that understands any layout but the
+        // current one, so "older" is exactly as unreadable as "newer".
         let version = buf.get_u8();
-        if version > FRAME_VERSION {
+        if version != FRAME_VERSION {
             return Err(FrameDecodeError::UnsupportedVersion(version));
         }
 
@@ -469,8 +489,11 @@ impl Decoder for ReplicationFrameCodec {
                         ));
                     }
 
+                    // Same equality gate as `ReplicationFrame::decode`, and for
+                    // the same reason: this build's header layout is the only
+                    // one it can parse, in either direction.
                     let version = src[4];
-                    if version > FRAME_VERSION {
+                    if version != FRAME_VERSION {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
                             format!("unsupported frame version: {}", version),
@@ -541,6 +564,9 @@ impl Encoder<ReplicationFrame> for ReplicationFrameCodec {
             }
             .into());
         }
+        // Capacity hint only — `put_slice` grows `dst` regardless — so the
+        // `+ -> *` mutation of this expression is equivalent. The underflowing
+        // `-` form is not, and any payload longer than the header catches it.
         dst.reserve(FRAME_HEADER_SIZE + item.payload.len());
 
         dst.put_slice(&FRAME_MAGIC);
@@ -709,6 +735,7 @@ mod tests {
         assert_eq!(via_codec.sequence, 42);
     }
 
+    // FM-REPLICATION-032
     #[test]
     fn test_frame_decode_invalid_magic() {
         let mut buf = BytesMut::new();
@@ -751,25 +778,35 @@ mod tests {
     // FM-REPLICATION-032
     #[test]
     fn test_codec_partial_decode() {
-        let mut codec = ReplicationFrameCodec::new();
+        // Every split point, not one fixed offset: a decoder that only handled
+        // a particular cut (inside the header, say) would still pass a single
+        // arbitrarily-chosen offset. The claim this test makes is that no TCP
+        // segmentation boundary can desynchronise the two-state machine, so it
+        // has to try every position a real socket read could land on.
         let payload = Bytes::from("test data");
         let frame = ReplicationFrame::new(999, payload.clone());
-
         let mut full = BytesMut::new();
-        codec.encode(frame, &mut full).unwrap();
+        ReplicationFrameCodec::new()
+            .encode(frame, &mut full)
+            .unwrap();
 
-        // Split into partial chunks
-        let mut partial = full.split_to(10);
+        for cut in 1..full.len() {
+            let mut codec = ReplicationFrameCodec::new();
+            let mut partial = BytesMut::from(&full[..cut]);
 
-        // Should return None for incomplete frame
-        assert!(codec.decode(&mut partial).unwrap().is_none());
+            assert!(
+                codec.decode(&mut partial).unwrap().is_none(),
+                "a buffer holding only {cut} of {} bytes must not yield a frame",
+                full.len()
+            );
 
-        // Add rest of the data
-        partial.unsplit(full);
-
-        // Now should decode successfully
-        let decoded = codec.decode(&mut partial).unwrap().unwrap();
-        assert_eq!(decoded.sequence, 999);
+            partial.extend_from_slice(&full[cut..]);
+            let decoded = codec.decode(&mut partial).unwrap().unwrap_or_else(|| {
+                panic!("the whole frame must decode once the rest arrives (cut={cut})")
+            });
+            assert_eq!(decoded.sequence, 999);
+            assert_eq!(decoded.payload, payload);
+        }
     }
 
     #[test]
@@ -824,6 +861,22 @@ mod tests {
         // Binary data should be preserved correctly (20 bytes: value\r\nwith\x00newlines)
         assert!(resp.starts_with(b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$20\r\n"));
         assert!(resp.ends_with(b"\r\n"));
+    }
+
+    /// A command name longer than the 16-byte-per-element capacity estimate.
+    /// `GEORADIUSBYMEMBER_RO` is 20 bytes, so the estimate under-counts the
+    /// name alone — the serializer must be sizing a hint, not a bound.
+    // FM-REPLICATION-031
+    #[test]
+    fn test_serialize_command_to_resp_long_command_name() {
+        let resp = super::serialize_command_to_resp(
+            "GEORADIUSBYMEMBER_RO",
+            &[Bytes::from("key"), Bytes::from("m")],
+        );
+        assert_eq!(
+            resp.as_ref(),
+            b"*3\r\n$20\r\nGEORADIUSBYMEMBER_RO\r\n$3\r\nkey\r\n$1\r\nm\r\n"
+        );
     }
 
     // --- ReplconfCodec: the golden-bytes round-trip suite for the ACK/GETACK
@@ -939,5 +992,354 @@ mod tests {
         assert!(!ReplconfCodec::is_getack(&ReplconfCodec::encode_ack(100)));
         assert!(!ReplconfCodec::is_getack(b""));
         assert!(!ReplconfCodec::is_getack(b"*3\r\n$8\r\nREPLCONF\r\n"));
+    }
+
+    // FM-REPLICATION-033
+    #[test]
+    fn replconf_parse_ack_checks_the_command_and_the_subcommand() {
+        // Both tokens are load-bearing, and neither alone is enough. The
+        // dangerous shape is a *real* REPLCONF whose third field happens to
+        // parse as a number: `REPLCONF listening-port 6379` arrives on the same
+        // socket during the handshake, and crediting the replica with an ACK
+        // for offset 6379 would let `WAIT` return on a write nobody applied —
+        // or, worse, park the acked head ahead of the true one.
+        let listening_port = serialize_command_to_resp(
+            "REPLCONF",
+            &[
+                Bytes::from_static(b"listening-port"),
+                Bytes::from_static(b"6379"),
+            ],
+        );
+        assert_eq!(ReplconfCodec::parse_ack(&listening_port), None);
+
+        // And the mirror: an `ACK` subcommand under some other command name is
+        // not an ACK either.
+        let foreign_ack = serialize_command_to_resp(
+            "NOTREPLCONF",
+            &[Bytes::from_static(b"ACK"), Bytes::from_static(b"123")],
+        );
+        assert_eq!(ReplconfCodec::parse_ack(&foreign_ack), None);
+    }
+
+    // FM-REPLICATION-033
+    #[test]
+    fn replconf_is_getack_decides_on_the_command_and_subcommand_tokens_alone() {
+        // The discriminator is a prefix test: `REPLCONF` + `$6` + `GETACK` is
+        // the whole decision, and the trailing `$1\r\n*\r\n` is not re-checked.
+        // Exactly those 20 bytes past the `*3\r\n$8\r\n` prefix are enough...
+        const MINIMAL: &[u8] = b"*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK";
+        assert_eq!(MINIMAL.len(), 8 + 8 + 6 + 6, "the boundary case is exact");
+        assert!(ReplconfCodec::is_getack(MINIMAL));
+
+        // ...and one byte fewer is not: a buffer cut inside the subcommand
+        // cannot be classified, and must not be guessed at.
+        assert!(!ReplconfCodec::is_getack(&MINIMAL[..MINIMAL.len() - 1]));
+    }
+
+    // FM-REPLICATION-033
+    #[test]
+    fn replconf_is_getack_rejects_a_frame_cut_inside_the_command_name() {
+        // This runs on every ingested frame, over payloads the peer controls,
+        // so every short prefix must answer `false` rather than index past the
+        // end. The lengths below straddle the `split_at(8)` the command-name
+        // comparison does.
+        for cut in 0..=b"REPLCONF".len() {
+            let mut payload = b"*3\r\n$8\r\n".to_vec();
+            payload.extend_from_slice(&b"REPLCONF"[..cut]);
+            assert!(
+                !ReplconfCodec::is_getack(&payload),
+                "a frame holding only {cut} bytes of the command name is not a GETACK"
+            );
+        }
+    }
+
+    // FM-REPLICATION-033
+    #[test]
+    fn replconf_is_getack_rejects_a_six_byte_subcommand_that_is_not_getack() {
+        // The length check that guards the subcommand comparison must not be
+        // allowed to stand in for the comparison: a REPLCONF whose subcommand
+        // is six bytes of something else is not a solicitation.
+        assert!(!ReplconfCodec::is_getack(
+            b"*3\r\n$8\r\nREPLCONF\r\n$6\r\nFOOBAR\r\n$1\r\n*\r\n"
+        ));
+        assert!(!ReplconfCodec::is_getack(
+            b"*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACX\r\n$1\r\n*\r\n"
+        ));
+    }
+
+    // --- the decoder's rejection ladder and its boundaries -------------------
+    //
+    // Every comparison below is pinned as a *pair*: the value the decoder must
+    // accept and the adjacent one it must refuse. A ceiling tested only from
+    // the far side is a ceiling that can move a byte in either direction
+    // unnoticed.
+
+    /// A 20-byte frame header, built by hand so a test can claim a length it
+    /// does not supply (the oversize and truncation cases would otherwise cost
+    /// a gigabyte of payload to express).
+    fn raw_header(version: u8, sequence: u64, length: u32) -> BytesMut {
+        let mut buf = BytesMut::new();
+        buf.put_slice(&FRAME_MAGIC);
+        buf.put_u8(version);
+        buf.put_u8(0); // flags
+        buf.put_u16(CONTROL_SHARD);
+        buf.put_u64(sequence);
+        buf.put_u32(length);
+        assert_eq!(buf.len(), FRAME_HEADER_SIZE);
+        buf
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn decode_accepts_only_this_builds_frame_version() {
+        // The gate is equality, not a ceiling: this build has exactly one
+        // header layout, so a version that is not its own — older or newer —
+        // cannot be parsed by it. Version 1 had no `shard_id` field, so a v1
+        // frame read under today's 20-byte layout would yield a bogus shard id
+        // and a bogus sequence (the sequence IS the replication offset), which
+        // is a worse failure than a refused link.
+        for version in 0..FRAME_VERSION {
+            let older = raw_header(version, 1, 0).freeze();
+            assert!(
+                matches!(
+                    ReplicationFrame::decode(older),
+                    Err(FrameDecodeError::UnsupportedVersion(v)) if v == version
+                ),
+                "version {version} predates this build's header layout and must be refused"
+            );
+        }
+
+        let current = ReplicationFrame::decode(raw_header(FRAME_VERSION, 1, 0).freeze())
+            .unwrap_or_else(|e| panic!("this build's own version must decode, got {e}"));
+        assert_eq!(current.version, FRAME_VERSION);
+
+        let newer = raw_header(FRAME_VERSION + 1, 1, 0).freeze();
+        assert!(matches!(
+            ReplicationFrame::decode(newer),
+            Err(FrameDecodeError::UnsupportedVersion(v)) if v == FRAME_VERSION + 1
+        ));
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn decode_refuses_a_claimed_length_above_the_ceiling_but_not_at_it() {
+        // A header claiming exactly the ceiling is legal and merely
+        // unsatisfied — the payload has not arrived — while one byte more is a
+        // frame no encoder could have produced. Neither case allocates: the
+        // claim is in the header, not in the buffer.
+        let at_ceiling = raw_header(FRAME_VERSION, 1, MAX_FRAME_SIZE as u32).freeze();
+        assert!(
+            matches!(
+                ReplicationFrame::decode(at_ceiling),
+                Err(FrameDecodeError::InsufficientData)
+            ),
+            "a header at the ceiling is short of data, not over the limit"
+        );
+
+        let over_ceiling = raw_header(FRAME_VERSION, 1, MAX_FRAME_SIZE as u32 + 1).freeze();
+        assert!(matches!(
+            ReplicationFrame::decode(over_ceiling),
+            Err(FrameDecodeError::PayloadTooLarge(n)) if n == MAX_FRAME_SIZE + 1
+        ));
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn decode_takes_exactly_the_payload_its_header_claims() {
+        let payload = Bytes::from_static(b"nine byte");
+        let encoded = ReplicationFrame::new(7, payload.clone()).encode().unwrap();
+
+        // Exactly one frame's worth: the whole payload, no more.
+        let decoded = ReplicationFrame::decode(encoded.clone()).unwrap();
+        assert_eq!(decoded.payload, payload);
+
+        // A buffer holding the frame *and* the head of the next one still
+        // yields this frame's payload and nothing of its neighbour.
+        let mut with_trailer = BytesMut::from(&encoded[..]);
+        with_trailer.put_slice(b"FRPL-next-frame-starts-here");
+        let decoded = ReplicationFrame::decode(with_trailer.freeze()).unwrap();
+        assert_eq!(decoded.payload, payload);
+
+        // One byte short of the claimed payload is incomplete, never a short
+        // payload handed on as if it were whole.
+        let truncated = encoded.slice(..encoded.len() - 1);
+        assert!(matches!(
+            ReplicationFrame::decode(truncated),
+            Err(FrameDecodeError::InsufficientData)
+        ));
+    }
+
+    // FM-REPLICATION-031
+    #[test]
+    fn encoded_size_is_the_header_plus_the_payload_and_matches_the_encoding() {
+        for len in [0usize, 1, 17, 4096] {
+            let frame = ReplicationFrame::new(1, Bytes::from(vec![0xABu8; len]));
+            assert_eq!(frame.encoded_size(), FRAME_HEADER_SIZE + len);
+            assert_eq!(
+                frame.encoded_size(),
+                frame.encode().unwrap().len(),
+                "the predicted size must match the bytes actually produced"
+            );
+            // The offset unit is the payload alone — `encoded_size` is the
+            // transport cost and the two must not be confused.
+            assert_eq!(frame.stream_advance(), len as u64);
+            assert_eq!(
+                frame.encoded_size() as u64 - frame.stream_advance(),
+                FRAME_HEADER_SIZE as u64
+            );
+        }
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn codec_yields_a_frame_the_moment_its_last_byte_arrives() {
+        // The zero-payload frame is the boundary of the header check: a buffer
+        // holding exactly 20 bytes is a whole frame, and 19 is not.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        codec
+            .encode(ReplicationFrame::new(11, Bytes::new()), &mut buf)
+            .unwrap();
+        assert_eq!(buf.len(), FRAME_HEADER_SIZE);
+
+        let mut short = buf.split_to(FRAME_HEADER_SIZE - 1);
+        assert!(
+            codec.decode(&mut short).unwrap().is_none(),
+            "a header one byte short yields nothing and consumes nothing"
+        );
+        assert_eq!(short.len(), FRAME_HEADER_SIZE - 1);
+
+        short.unsplit(buf);
+        let frame = codec
+            .decode(&mut short)
+            .unwrap()
+            .expect("the twentieth byte completes the frame");
+        assert_eq!(frame.sequence, 11);
+        assert!(frame.payload.is_empty());
+        assert!(short.is_empty(), "a decoded frame is consumed whole");
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn codec_accepts_only_this_builds_frame_version() {
+        // Same equality gate as `ReplicationFrame::decode`, on the streaming
+        // path: the two must not be able to disagree about which frames the
+        // link will carry, in either direction.
+        for version in 0..FRAME_VERSION {
+            let mut codec = ReplicationFrameCodec::new();
+            let mut buf = raw_header(version, 3, 0);
+            let err = codec
+                .decode(&mut buf)
+                .expect_err("a version older than this build's layout must be refused");
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "version {version}");
+        }
+
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = raw_header(FRAME_VERSION, 3, 0);
+        let frame = codec
+            .decode(&mut buf)
+            .unwrap_or_else(|e| panic!("this build's own version must decode, got {e}"))
+            .expect("a zero-length payload completes the frame");
+        assert_eq!(frame.version, FRAME_VERSION);
+
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = raw_header(FRAME_VERSION + 1, 3, 0);
+        let err = codec
+            .decode(&mut buf)
+            .expect_err("a newer version is refused");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn codec_refuses_a_claimed_length_above_the_ceiling_but_not_at_it() {
+        // At the ceiling the decoder is simply waiting for bytes; above it the
+        // link is unusable and must be failed rather than parked forever.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut at_ceiling = raw_header(FRAME_VERSION, 4, MAX_FRAME_SIZE as u32);
+        assert!(
+            codec.decode(&mut at_ceiling).unwrap().is_none(),
+            "a frame at the ceiling is awaited, not rejected"
+        );
+
+        let mut codec = ReplicationFrameCodec::new();
+        let mut over_ceiling = raw_header(FRAME_VERSION, 4, MAX_FRAME_SIZE as u32 + 1);
+        let err = codec
+            .decode(&mut over_ceiling)
+            .expect_err("a length above the ceiling is refused");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn codec_round_trips_a_payload_longer_than_the_header() {
+        // Anything the reservation arithmetic could get wrong shows up once the
+        // payload outgrows the 20-byte header it is added to.
+        let payload = Bytes::from_static(b"a payload comfortably longer than twenty bytes");
+        assert!(payload.len() > FRAME_HEADER_SIZE);
+
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        codec
+            .encode(
+                ReplicationFrame::new_on_shard(21, 2, payload.clone()),
+                &mut buf,
+            )
+            .unwrap();
+        assert_eq!(buf.len(), FRAME_HEADER_SIZE + payload.len());
+
+        let frame = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(frame.payload, payload);
+        assert_eq!(frame.shard_id, 2);
+        assert!(buf.is_empty());
+    }
+
+    // FM-REPLICATION-032
+    #[test]
+    fn codec_refuses_a_header_whose_magic_is_not_frpl() {
+        // The magic is the streaming decoder's only defence against a buffer it
+        // has lost its place in: every other header field is a plausible number
+        // whatever bytes arrive. A frame one byte out of phase must fail the
+        // link here rather than be parsed as a plausible header.
+        let payload = Bytes::from_static(b"payload");
+        let mut good = BytesMut::new();
+        ReplicationFrameCodec::new()
+            .encode(ReplicationFrame::new(5, payload), &mut good)
+            .unwrap();
+
+        for (label, corrupt) in [
+            ("wrong magic", {
+                let mut buf = good.clone();
+                buf[..4].copy_from_slice(b"XXXX");
+                buf
+            }),
+            ("one byte of the magic flipped", {
+                let mut buf = good.clone();
+                buf[3] ^= 0x01;
+                buf
+            }),
+            ("a stream one byte out of phase", {
+                let mut buf = BytesMut::from(&b"\0"[..]);
+                buf.extend_from_slice(&good);
+                buf
+            }),
+        ] {
+            let mut codec = ReplicationFrameCodec::new();
+            let mut buf = corrupt;
+            let err = match codec.decode(&mut buf) {
+                Err(err) => err,
+                Ok(other) => panic!(
+                    "{label} must fail the link, got {:?}",
+                    other.map(|f| f.sequence)
+                ),
+            };
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{label}");
+        }
+
+        // The control: the same bytes with their magic intact still decode, so
+        // the three cases above are refused for their magic and nothing else.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = good;
+        assert_eq!(codec.decode(&mut buf).unwrap().unwrap().sequence, 5);
     }
 }

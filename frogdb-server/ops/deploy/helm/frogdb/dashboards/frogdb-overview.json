@@ -6567,6 +6567,96 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Split-brain divergence records that could not be written to disk. The divergent writes are gone with no durable trace, so this is a data-loss signal, not a logging nit — and it is the only one, since `frogdb_split_brain_recovery_pending` deliberately stays down when there is no file for an operator to reconcile.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 346
+      },
+      "id": 93,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(frogdb_split_brain_log_write_failures_total{instance=~\"$instance\", job=~\"$job\"}[$__rate_interval])",
+          "legendFormat": "{{__name__}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Frogdb Split Brain Log Write Failures Total",
+      "type": "timeseries"
+    },
+    {
       "collapsed": true,
       "gridPos": {
         "h": 1,
@@ -6574,7 +6664,7 @@
         "x": 0,
         "y": 354
       },
-      "id": 93,
+      "id": 94,
       "panels": [],
       "title": "Task",
       "type": "row"
@@ -6640,7 +6730,7 @@
         "x": 0,
         "y": 355
       },
-      "id": 94,
+      "id": 95,
       "options": {
         "legend": {
           "calcs": [],
@@ -6730,7 +6820,7 @@
         "x": 12,
         "y": 355
       },
-      "id": 95,
+      "id": 96,
       "options": {
         "legend": {
           "calcs": [],
@@ -6820,7 +6910,7 @@
         "x": 0,
         "y": 363
       },
-      "id": 96,
+      "id": 97,
       "options": {
         "legend": {
           "calcs": [],
@@ -6910,7 +7000,7 @@
         "x": 12,
         "y": 363
       },
-      "id": 97,
+      "id": 98,
       "options": {
         "legend": {
           "calcs": [],
@@ -7000,7 +7090,7 @@
         "x": 0,
         "y": 371
       },
-      "id": 98,
+      "id": 99,
       "options": {
         "legend": {
           "calcs": [],
@@ -7090,7 +7180,7 @@
         "x": 12,
         "y": 371
       },
-      "id": 99,
+      "id": 100,
       "options": {
         "legend": {
           "calcs": [],
@@ -7127,7 +7217,7 @@
         "x": 0,
         "y": 379
       },
-      "id": 100,
+      "id": 101,
       "panels": [],
       "title": "Tiered",
       "type": "row"
@@ -7193,7 +7283,7 @@
         "x": 0,
         "y": 380
       },
-      "id": 101,
+      "id": 102,
       "options": {
         "legend": {
           "calcs": [],
@@ -7283,7 +7373,7 @@
         "x": 12,
         "y": 380
       },
-      "id": 102,
+      "id": 103,
       "options": {
         "legend": {
           "calcs": [],
@@ -7320,7 +7410,7 @@
         "x": 0,
         "y": 388
       },
-      "id": 103,
+      "id": 104,
       "panels": [],
       "title": "Tls",
       "type": "row"
@@ -7386,7 +7476,7 @@
         "x": 0,
         "y": 389
       },
-      "id": 104,
+      "id": 105,
       "options": {
         "legend": {
           "calcs": [],
@@ -7423,7 +7513,7 @@
         "x": 0,
         "y": 397
       },
-      "id": 105,
+      "id": 106,
       "panels": [],
       "title": "Transactions",
       "type": "row"
@@ -7489,7 +7579,7 @@
         "x": 0,
         "y": 398
       },
-      "id": 106,
+      "id": 107,
       "options": {
         "legend": {
           "calcs": [],
@@ -7579,7 +7669,7 @@
         "x": 12,
         "y": 398
       },
-      "id": 107,
+      "id": 108,
       "options": {
         "legend": {
           "calcs": [],
@@ -7691,7 +7781,7 @@
         "x": 0,
         "y": 406
       },
-      "id": 108,
+      "id": 109,
       "options": {
         "legend": {
           "calcs": [],
@@ -7750,7 +7840,7 @@
         "x": 0,
         "y": 414
       },
-      "id": 109,
+      "id": 110,
       "panels": [],
       "title": "Uptime",
       "type": "row"
@@ -7816,7 +7906,7 @@
         "x": 0,
         "y": 415
       },
-      "id": 110,
+      "id": 111,
       "options": {
         "legend": {
           "calcs": [],
@@ -7853,7 +7943,7 @@
         "x": 0,
         "y": 423
       },
-      "id": 111,
+      "id": 112,
       "panels": [],
       "title": "Version",
       "type": "row"
@@ -7919,7 +8009,7 @@
         "x": 0,
         "y": 424
       },
-      "id": 112,
+      "id": 113,
       "options": {
         "legend": {
           "calcs": [],
@@ -7956,7 +8046,7 @@
         "x": 0,
         "y": 432
       },
-      "id": 113,
+      "id": 114,
       "panels": [],
       "title": "Wal",
       "type": "row"
@@ -8022,7 +8112,7 @@
         "x": 0,
         "y": 433
       },
-      "id": 114,
+      "id": 115,
       "options": {
         "legend": {
           "calcs": [],
@@ -8112,7 +8202,7 @@
         "x": 12,
         "y": 433
       },
-      "id": 115,
+      "id": 116,
       "options": {
         "legend": {
           "calcs": [],
@@ -8202,7 +8292,7 @@
         "x": 0,
         "y": 441
       },
-      "id": 116,
+      "id": 117,
       "options": {
         "legend": {
           "calcs": [],
@@ -8314,7 +8404,7 @@
         "x": 12,
         "y": 441
       },
-      "id": 117,
+      "id": 118,
       "options": {
         "legend": {
           "calcs": [],
@@ -8404,7 +8494,7 @@
         "x": 0,
         "y": 449
       },
-      "id": 118,
+      "id": 119,
       "options": {
         "legend": {
           "calcs": [],
@@ -8494,7 +8584,7 @@
         "x": 12,
         "y": 449
       },
-      "id": 119,
+      "id": 120,
       "options": {
         "legend": {
           "calcs": [],
@@ -8584,7 +8674,7 @@
         "x": 0,
         "y": 457
       },
-      "id": 120,
+      "id": 121,
       "options": {
         "legend": {
           "calcs": [],
@@ -8674,7 +8764,7 @@
         "x": 12,
         "y": 457
       },
-      "id": 121,
+      "id": 122,
       "options": {
         "legend": {
           "calcs": [],
@@ -8764,7 +8854,7 @@
         "x": 0,
         "y": 465
       },
-      "id": 122,
+      "id": 123,
       "options": {
         "legend": {
           "calcs": [],
@@ -8854,7 +8944,7 @@
         "x": 12,
         "y": 465
       },
-      "id": 123,
+      "id": 124,
       "options": {
         "legend": {
           "calcs": [],
@@ -8944,7 +9034,7 @@
         "x": 0,
         "y": 473
       },
-      "id": 124,
+      "id": 125,
       "options": {
         "legend": {
           "calcs": [],
@@ -9034,7 +9124,7 @@
         "x": 12,
         "y": 473
       },
-      "id": 125,
+      "id": 126,
       "options": {
         "legend": {
           "calcs": [],
@@ -9124,7 +9214,7 @@
         "x": 0,
         "y": 481
       },
-      "id": 126,
+      "id": 127,
       "options": {
         "legend": {
           "calcs": [],
@@ -9214,7 +9304,7 @@
         "x": 12,
         "y": 481
       },
-      "id": 127,
+      "id": 128,
       "options": {
         "legend": {
           "calcs": [],

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use parking_lot::RwLock;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -38,6 +38,7 @@ use crate::fullsync::{
     calculate_bytes_checksum, calculate_file_checksum, stream_file_to_writer,
 };
 use crate::primary::{LAG_CHECK_INTERVAL, LagThresholds, PrimaryReplicationHandler};
+use crate::sync_counters::SyncOutcome;
 use crate::tracker::ReplicationTrackerImpl;
 
 /// Lifecycle phase of a replica session.
@@ -72,7 +73,7 @@ impl std::fmt::Display for Phase {
 }
 
 /// Capabilities advertised by the replica during REPLCONF capa negotiation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReplicaCapabilities {
     /// Supports EOF marker in RDB transfer.
     pub eof: bool,
@@ -84,14 +85,133 @@ impl ReplicaCapabilities {
     pub fn parse_capa(capabilities: &[&str]) -> Self {
         let mut caps = Self::default();
         for cap in capabilities {
-            match *cap {
-                "eof" => caps.eof = true,
-                "psync2" => caps.psync2 = true,
-                _ => {}
+            // Case-insensitive like every other REPLCONF token on this path
+            // (subcommand matching in `AnnouncedOption::parse` is the same):
+            // a replica sending `capa EOF` must not be recorded as having
+            // announced nothing.
+            if cap.eq_ignore_ascii_case("eof") {
+                caps.eof = true;
+            } else if cap.eq_ignore_ascii_case("psync2") {
+                caps.psync2 = true;
             }
         }
         caps
     }
+}
+
+/// What a replica said about *itself* in the pre-PSYNC `REPLCONF` exchange.
+///
+/// The handshake is two-phase: the replica announces its identity with one or
+/// more `REPLCONF` options and only then sends `PSYNC`, which is what creates
+/// the [`ReplicaSession`]. There is therefore no session to write these into
+/// when they arrive — they are accumulated on the *connection* and handed to
+/// [`crate::tracker::ReplicationTrackerImpl::register_announced_replica`] at
+/// the PSYNC handoff, so a session is never registered with a placeholder
+/// identity that INFO could observe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReplicaAnnouncement {
+    /// The port the replica itself serves on — Redis's `slave_listening_port`,
+    /// and what `INFO replication` / `ROLE` report so an operator or an
+    /// orchestrator can reach the replica from the primary's view. `0` means
+    /// the peer never announced one.
+    pub listening_port: u16,
+    /// The capabilities it claims.
+    pub capabilities: ReplicaCapabilities,
+}
+
+impl ReplicaAnnouncement {
+    /// Fold one parsed option into the announcement. Later options of the same
+    /// kind win, matching Redis, which simply overwrites `slave_listening_port`
+    /// / `slave_capa` each time.
+    pub fn absorb(&mut self, option: AnnouncedOption) {
+        match option {
+            AnnouncedOption::ListeningPort(port) => self.listening_port = port,
+            AnnouncedOption::Capabilities(caps) => self.capabilities = caps,
+        }
+    }
+}
+
+/// A single `REPLCONF` option that describes the replica rather than acting on
+/// the link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnouncedOption {
+    /// `REPLCONF listening-port <port>`.
+    ListeningPort(u16),
+    /// `REPLCONF capa <cap> [<cap> …]`.
+    Capabilities(ReplicaCapabilities),
+}
+
+/// Why an announcing `REPLCONF` could not be read.
+///
+/// A rejection is local to the option: the connection stays open and the
+/// replica may carry on to `PSYNC` (FM-REPLICATION-018).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnouncementError {
+    /// `listening-port` with no value.
+    MissingPort,
+    /// `listening-port` whose value is not valid UTF-8, so it cannot even be
+    /// handed to the `u16` parser. Distinct from [`Self::InvalidPort`] because
+    /// the wire text differs: `ERR invalid port encoding` vs `ERR invalid port
+    /// number`.
+    InvalidPortEncoding,
+    /// `listening-port` whose value is valid UTF-8 but not a `u16`.
+    InvalidPort,
+}
+
+impl AnnouncedOption {
+    /// Parse a `REPLCONF` invocation's arguments.
+    ///
+    /// `Ok(None)` means "this is not an option that describes the replica" —
+    /// `ACK`, `GETACK`, `ip-address`, bare `REPLCONF`, and every option a
+    /// future or foreign peer knows that this primary does not. Those keep
+    /// flowing to the ordinary `REPLCONF` handler, so the forward-compatible
+    /// `+OK` of FM-REPLICATION-018 is untouched.
+    ///
+    /// This is the one parser for both halves of the split: the connection-level
+    /// handshake stage calls it to *record* the announcement, and the ordinary
+    /// `REPLCONF` command calls it so a `REPLCONF` that reaches the shard path
+    /// (queued inside `MULTI`) validates and replies identically.
+    pub fn parse(args: &[Bytes]) -> Result<Option<Self>, AnnouncementError> {
+        let Some(subcommand) = args.first() else {
+            return Ok(None);
+        };
+        let subcommand = String::from_utf8_lossy(subcommand).to_ascii_lowercase();
+        match subcommand.as_str() {
+            "listening-port" => {
+                let raw = args.get(1).ok_or(AnnouncementError::MissingPort)?;
+                let port = std::str::from_utf8(raw)
+                    .map_err(|_| AnnouncementError::InvalidPortEncoding)?
+                    .parse::<u16>()
+                    .map_err(|_| AnnouncementError::InvalidPort)?;
+                Ok(Some(Self::ListeningPort(port)))
+            }
+            "capa" => {
+                // Unknown capability names are dropped rather than refused: a
+                // replica that claims something this primary has never heard of
+                // is recorded without it and still completes its handshake.
+                let named: Vec<&str> = args[1..]
+                    .iter()
+                    .filter_map(|b| std::str::from_utf8(b).ok())
+                    .collect();
+                Ok(Some(Self::Capabilities(ReplicaCapabilities::parse_capa(
+                    &named,
+                ))))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+/// Seconds since an ACK landed — the one spelling of Redis's `slaveN:lag`.
+///
+/// Read by [`ReplicationTrackerImpl::replica_lag_secs`] for the proactive
+/// lag-disconnect policy and by [`ReplicaInfo::lag_secs`] for `INFO
+/// replication`, so the number an operator reads is the number the primary
+/// acts on.
+///
+/// [`ReplicationTrackerImpl::replica_lag_secs`]: crate::tracker::ReplicationTrackerImpl::replica_lag_secs
+pub fn ack_age_secs(last_ack_time: Instant) -> f64 {
+    last_ack_time.elapsed().as_secs_f64()
 }
 
 /// Snapshot view of a replica session for read consumers (INFO, ROLE, cluster bus).
@@ -116,6 +236,15 @@ impl ReplicaInfo {
     pub fn is_streaming(&self) -> bool {
         matches!(self.phase, Phase::Streaming)
     }
+
+    /// Whole seconds since this replica's last ACK — Redis's `slaveN:lag`.
+    ///
+    /// The same measure [`ack_age_secs`] hands the proactive-disconnect policy,
+    /// truncated to Redis's integer field, read off this snapshot instead of
+    /// re-locking the registry.
+    pub fn lag_secs(&self) -> u64 {
+        ack_age_secs(self.last_ack_time) as u64
+    }
 }
 
 /// What sync flow to drive for this session.
@@ -133,6 +262,21 @@ pub enum SyncKind {
     /// [`ReplicaSession::handle_full`], not threaded in here, so it corresponds
     /// to the data actually contained in the checkpoint.
     Full { replication_id: String },
+}
+
+/// Which fork of the handshake reached [`ReplicaSession::start_streaming`].
+///
+/// The streamer needs to know for exactly one reason: `sync_partial_ok` counts
+/// partial resyncs that were *served*, and the backlog extract that serves one
+/// lives in the streamer, not at the grant (see the accounting note in
+/// [`PrimaryReplicationHandler::handle_psync`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResumeSource {
+    /// Reached here from a granted `+CONTINUE`.
+    PartialGrant,
+    /// Reached here from a `+FULLRESYNC` whose payload has already been sent;
+    /// that transfer was counted as `sync_full` at the fork.
+    FullSnapshot,
 }
 
 struct SessionInner {
@@ -175,8 +319,19 @@ pub struct ReplicaSession {
 }
 
 impl ReplicaSession {
-    /// Create a new session in the `Connecting` phase.
+    /// Create a new session in the `Connecting` phase for a replica that
+    /// announced nothing about itself.
     pub fn new(id: u64, address: SocketAddr) -> Arc<Self> {
+        Self::announced(id, address, ReplicaAnnouncement::default())
+    }
+
+    /// Create a new session in the `Connecting` phase, seeded with what the
+    /// replica announced over `REPLCONF` before it sent `PSYNC`.
+    ///
+    /// The announcement is applied at construction rather than through a setter
+    /// so there is no window in which a registered session reports a
+    /// placeholder port to `INFO replication` / `ROLE`.
+    pub fn announced(id: u64, address: SocketAddr, announcement: ReplicaAnnouncement) -> Arc<Self> {
         let now = Instant::now();
         Arc::new(Self {
             id,
@@ -188,8 +343,8 @@ impl ReplicaSession {
             inner: RwLock::new(SessionInner {
                 phase: Phase::Connecting,
                 last_ack_time: now,
-                listening_port: 0,
-                capabilities: ReplicaCapabilities::default(),
+                listening_port: announcement.listening_port,
+                capabilities: announcement.capabilities,
                 replica_version: None,
                 sync_checkpoint_path: None,
                 sync_total_bytes: 0,
@@ -223,7 +378,7 @@ impl ReplicaSession {
         self.inner.read().listening_port
     }
     pub fn capabilities(&self) -> ReplicaCapabilities {
-        self.inner.read().capabilities.clone()
+        self.inner.read().capabilities
     }
     pub fn replica_version(&self) -> Option<String> {
         self.inner.read().replica_version.clone()
@@ -256,7 +411,7 @@ impl ReplicaSession {
             last_ack_time: inner.last_ack_time,
             connected_at: self.connected_at,
             phase: inner.phase,
-            capabilities: inner.capabilities.clone(),
+            capabilities: inner.capabilities,
             replica_version: inner.replica_version.clone(),
         }
     }
@@ -429,7 +584,8 @@ impl ReplicaSession {
         let replication_id = handler.state.read().replication_id.clone();
         let response = format!("+CONTINUE {}\r\n", replication_id);
         stream.write_all(response.as_bytes()).await?;
-        self.start_streaming(stream, handler, replay_from).await
+        self.start_streaming(stream, handler, replay_from, ResumeSource::PartialGrant)
+            .await
     }
 
     async fn handle_full(
@@ -554,7 +710,8 @@ impl ReplicaSession {
 
         // Replay any writes that landed during checkpoint creation/transfer
         // (the F1 handoff window) from the backlog before the live tail.
-        self.start_streaming(stream, handler, snapshot_offset).await
+        self.start_streaming(stream, handler, snapshot_offset, ResumeSource::FullSnapshot)
+            .await
     }
 
     /// Stream checkpoint files to the replica.
@@ -794,6 +951,7 @@ impl ReplicaSession {
         mut stream: BoxedStream,
         handler: &Arc<PrimaryReplicationHandler>,
         replay_from: u64,
+        resume: ResumeSource,
     ) -> io::Result<()> {
         self.set_phase(Phase::Streaming);
 
@@ -828,6 +986,16 @@ impl ReplicaSession {
                 );
                 io::Error::new(io::ErrorKind::InvalidData, truncated)
             })?;
+        // The grant is only now a partial resync that happened: the tail exists
+        // and the link is still up. A grant abandoned above is deliberately
+        // *not* counted at all — the replica reconnects, its second `PSYNC` is
+        // refused against the same floor, and that refusal is what moves
+        // `sync_partial_err` + `sync_full`. Counting the abandoned grant as well
+        // would report two refusals and two full resyncs for one replica that
+        // received one.
+        if resume == ResumeSource::PartialGrant {
+            handler.tracker.record_sync_outcome(SyncOutcome::PartialOk);
+        }
         for (offset, shard_id, payload) in tail {
             let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode()?;
             stream.write_all(&encoded).await?;
@@ -1109,6 +1277,7 @@ mod tests {
     use crate::primary::BacklogConfig;
     use crate::primary::{LagThresholdConfig, PrimaryReplicationHandler};
     use crate::state::ReplicationState;
+    use crate::sync_counters::SyncCountersSnapshot;
     use crate::tracker::ReplicationTrackerImpl;
     use bytes::Bytes;
     use frogdb_persistence::{RocksConfig, RocksStore};
@@ -1119,6 +1288,212 @@ mod tests {
 
     fn addr() -> SocketAddr {
         "127.0.0.1:9001".parse().unwrap()
+    }
+
+    // ------------------------------------------------------------------
+    // The replica handshake: what a replica announces about itself.
+    // ------------------------------------------------------------------
+
+    fn arg(text: &str) -> Bytes {
+        Bytes::from(text.to_string())
+    }
+
+    fn parse_announcement(args: &[&str]) -> Result<Option<AnnouncedOption>, AnnouncementError> {
+        let args: Vec<Bytes> = args.iter().map(|a| arg(a)).collect();
+        AnnouncedOption::parse(&args)
+    }
+
+    // FM-REPLICATION-049
+    /// A replica announces its identity before `PSYNC` exists to carry it, so
+    /// the announcement is folded on the connection and applied when the
+    /// session is constructed. What the replica said is what the session
+    /// reports — the half that had no writer at all before (issue 16).
+    #[test]
+    fn an_announced_session_reports_the_port_and_capabilities_it_was_told() {
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(
+            parse_announcement(&["listening-port", "7001"])
+                .expect("a well-formed listening-port parses")
+                .expect("listening-port describes the replica"),
+        );
+        announcement.absorb(
+            parse_announcement(&["capa", "eof", "psync2"])
+                .expect("capa never fails")
+                .expect("capa describes the replica"),
+        );
+
+        let session = ReplicaSession::announced(1, addr(), announcement);
+        let info = session.snapshot();
+        assert_eq!(
+            info.listening_port, 7001,
+            "the announced port must survive into the session INFO/ROLE read"
+        );
+        assert!(info.capabilities.eof, "eof was announced");
+        assert!(info.capabilities.psync2, "psync2 was announced");
+    }
+
+    // FM-REPLICATION-049
+    /// A capability this primary has never heard of is dropped, not refused:
+    /// the announcement is still recorded (without it) and the replica carries
+    /// on to `PSYNC`. The complement of FM-REPLICATION-018's "an unknown
+    /// `REPLCONF` still answers `+OK`" — here the *recording* also survives.
+    #[test]
+    fn an_unknown_capability_is_recorded_as_absent_not_rejected() {
+        let option = parse_announcement(&["capa", "eof", "quantum-psync"])
+            .expect("an unknown capability must not fail the option")
+            .expect("capa describes the replica");
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(option);
+
+        assert!(announcement.capabilities.eof, "the known half is kept");
+        assert!(
+            !announcement.capabilities.psync2,
+            "an unknown name must not set an unrelated capability"
+        );
+
+        let info = ReplicaSession::announced(1, addr(), announcement).snapshot();
+        assert_eq!(
+            info.listening_port, 0,
+            "a capa-only handshake announces no port"
+        );
+        assert!(info.capabilities.eof);
+    }
+
+    // FM-REPLICATION-049
+    /// `REPLCONF` token matching is case-insensitive everywhere else in this
+    /// dispatch path (subcommands, `ACK`/`GETACK`), so a `capa` token must be
+    /// too: `REPLCONF capa EOF` was silently recorded as no capabilities
+    /// before `parse_capa` matched exact-lowercase strings only. The "unknown
+    /// token is dropped, handshake still succeeds" behaviour of
+    /// FM-REPLICATION-018 is unaffected — mixing in an unrecognized token
+    /// alongside a differently-cased known one still keeps only the known
+    /// half.
+    #[test]
+    fn parse_capa_matches_case_insensitively() {
+        let caps = ReplicaCapabilities::parse_capa(&["EOF", "PSYNC2"]);
+        assert!(caps.eof, "uppercase EOF must still set the capability");
+        assert!(
+            caps.psync2,
+            "uppercase PSYNC2 must still set the capability"
+        );
+
+        let mixed = ReplicaCapabilities::parse_capa(&["Eof", "quantum-Psync"]);
+        assert!(mixed.eof, "mixed-case Eof must still set the capability");
+        assert!(
+            !mixed.psync2,
+            "an unrecognized token must not set an unrelated capability"
+        );
+    }
+
+    // FM-REPLICATION-049
+    /// Later options of the same kind win, and the two kinds are independent:
+    /// re-announcing a port must not clear the capabilities already recorded.
+    #[test]
+    fn a_repeated_option_overwrites_only_its_own_kind() {
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(AnnouncedOption::Capabilities(ReplicaCapabilities {
+            eof: true,
+            psync2: true,
+        }));
+        announcement.absorb(AnnouncedOption::ListeningPort(7001));
+        announcement.absorb(AnnouncedOption::ListeningPort(7002));
+
+        assert_eq!(announcement.listening_port, 7002, "the later port wins");
+        assert!(
+            announcement.capabilities.psync2,
+            "a port announcement must not clear capabilities"
+        );
+    }
+
+    /// The options that act on the *link* rather than describing the replica
+    /// are not announcements: they fall through to the ordinary `REPLCONF`
+    /// executor, which is what keeps `ACK`/`GETACK` working unchanged.
+    #[test]
+    fn link_options_are_not_announcements() {
+        for args in [
+            vec!["ack", "12345"],
+            vec!["getack", "*"],
+            vec!["ip-address", "10.0.0.1"],
+            vec!["some-future-option", "x"],
+            vec![],
+        ] {
+            assert_eq!(
+                parse_announcement(&args).expect("non-announcing options never error"),
+                None,
+                "{args:?} must not be treated as an announcement"
+            );
+        }
+    }
+
+    /// A `listening-port` that cannot be read is refused at the option, not at
+    /// the connection: the caller turns this into an error reply and the
+    /// replica may still carry on.
+    #[test]
+    fn an_unreadable_listening_port_is_refused() {
+        assert_eq!(
+            parse_announcement(&["listening-port"]),
+            Err(AnnouncementError::MissingPort)
+        );
+        assert_eq!(
+            parse_announcement(&["listening-port", "not-a-port"]),
+            Err(AnnouncementError::InvalidPort)
+        );
+        assert_eq!(
+            parse_announcement(&["listening-port", "70000"]),
+            Err(AnnouncementError::InvalidPort),
+            "a value past u16 is not a port"
+        );
+        // Not valid UTF-8 at all — a distinct failure from "valid text that
+        // isn't a number", with its own wire text (`announcement_error` in
+        // `server::commands::replication` maps the two differently).
+        assert_eq!(
+            AnnouncedOption::parse(&[
+                Bytes::from_static(b"listening-port"),
+                Bytes::from_static(&[0xFF, 0xFE]),
+            ]),
+            Err(AnnouncementError::InvalidPortEncoding),
+            "a non-UTF-8 port argument cannot even reach the number parser"
+        );
+    }
+
+    /// Subcommand matching is case-insensitive, as every other `REPLCONF`
+    /// subcommand is — a replica sending `LISTENING-PORT` must be recorded.
+    #[test]
+    fn announcement_subcommands_are_case_insensitive() {
+        assert_eq!(
+            parse_announcement(&["LISTENING-PORT", "7001"]).unwrap(),
+            Some(AnnouncedOption::ListeningPort(7001))
+        );
+    }
+
+    // FM-REPLICATION-049
+    /// `lag` is Redis's seconds-since-last-ACK, and INFO must read the same
+    /// measure the proactive lag-disconnect policy acts on rather than a
+    /// literal (GAP-3).
+    #[test]
+    fn lag_secs_is_the_age_of_the_last_ack() {
+        let session = ReplicaSession::new(1, addr());
+        assert_eq!(
+            session.snapshot().lag_secs(),
+            0,
+            "a session that just ACKed lags by zero whole seconds"
+        );
+
+        let aged = Instant::now() - Duration::from_millis(2_500);
+        assert_eq!(
+            ack_age_secs(aged).round() as u64,
+            3,
+            "the shared measure keeps sub-second precision"
+        );
+        let info = ReplicaInfo {
+            last_ack_time: aged,
+            ..session.snapshot()
+        };
+        assert_eq!(
+            info.lag_secs(),
+            2,
+            "INFO truncates to Redis's whole-second field"
+        );
     }
 
     /// Wire a live-snapshot source returning `blobs`, standing in for the
@@ -1510,7 +1885,7 @@ mod tests {
     /// suffix, `resume_offset` was seeded from the last frame actually sent, the
     /// live tail deduped against it, and the replica was permanently missing the
     /// evicted range with an offset that looked contiguous (round-2 issue 52).
-    // FM-REPLICATION-012
+    // FM-REPLICATION-012, FM-REPLICATION-050
     #[tokio::test]
     async fn a_resume_evicted_after_the_grant_is_abandoned_not_truncated() {
         let dir = TempDir::new().unwrap();
@@ -1562,6 +1937,14 @@ mod tests {
 
         assert_no_frames_then_eof(&mut client).await;
         assert_eq!(tracker.replica_count(), 0, "the session must be cleaned up");
+        // The grant served nothing, so it is not a partial resync that happened.
+        // The replica's *next* PSYNC is what moves the counters, and it is
+        // refused against the same floor it just lost.
+        assert_eq!(
+            tracker.sync_counters().partial_ok,
+            0,
+            "an abandoned resume must not be counted as a served partial resync"
+        );
     }
 
     /// The same window, on the path that opens it widest: a full sync, where the
@@ -2273,7 +2656,13 @@ mod tests {
             let repl_id = repl_id.clone();
             async move {
                 handler
-                    .handle_psync(server, addr(), &repl_id, resume_point as i64)
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        resume_point as i64,
+                        ReplicaAnnouncement::default(),
+                    )
                     .await
             }
         });
@@ -2314,7 +2703,13 @@ mod tests {
             let repl_id = repl_id.clone();
             async move {
                 handler
-                    .handle_psync(server, addr(), &repl_id, resume_point as i64)
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        resume_point as i64,
+                        ReplicaAnnouncement::default(),
+                    )
                     .await
             }
         });
@@ -2360,7 +2755,13 @@ mod tests {
         let (_client, server) = tokio::io::duplex(64 * 1024);
         let server: BoxedStream = Box::new(server);
         let err = handler
-            .handle_psync(server, addr(), &repl_id, resume_point as i64)
+            .handle_psync(
+                server,
+                addr(),
+                &repl_id,
+                resume_point as i64,
+                ReplicaAnnouncement::default(),
+            )
             .await
             .expect_err("PSYNC must not be served once the drain has started");
         assert_eq!(err.kind(), std::io::ErrorKind::ConnectionAborted);
@@ -2392,7 +2793,15 @@ mod tests {
             async move {
                 // Offset 500 <= live 1000 with a matching replid is a valid
                 // window, but the disabled backlog cannot replay the gap.
-                handler.handle_psync(server, addr(), &repl_id, 500).await
+                handler
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        500,
+                        ReplicaAnnouncement::default(),
+                    )
+                    .await
             }
         });
 
@@ -2460,7 +2869,13 @@ mod tests {
             let repl_id = repl_id.clone();
             async move {
                 handler
-                    .handle_psync(server, addr(), &repl_id, evicted_point as i64)
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &repl_id,
+                        evicted_point as i64,
+                        ReplicaAnnouncement::default(),
+                    )
                     .await
             }
         });
@@ -2470,6 +2885,206 @@ mod tests {
             line.starts_with("+FULLRESYNC"),
             "evicted resume point must force FULLRESYNC, got: {line:?}"
         );
+
+        drop(client);
+        let _ = task.await.unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // The PSYNC-outcome counters (INFO's sync_full / sync_partial_ok /
+    // sync_partial_err).
+    // ------------------------------------------------------------------
+
+    // FM-REPLICATION-050
+    /// Each arm of the `+FULLRESYNC` / `+CONTINUE` fork moves the counter it is
+    /// named after, driven through the real `handle_psync` rather than the
+    /// classifier alone — the counters were literal zeros in both INFO
+    /// renderers, which reads identically to a healthy link (issue 17).
+    ///
+    /// The three handshakes are run against one handler in sequence because the
+    /// counters are cumulative: the assertions pin the *deltas*, including the
+    /// two that must NOT move.
+    #[tokio::test]
+    async fn each_psync_fork_moves_the_counter_it_is_named_after() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        // A six-entry backlog: large enough for the in-window reconnect below,
+        // small enough to evict the resume point on demand.
+        let handler =
+            make_handler_with_backlog_entries(tracker.clone(), None, dir.path().to_path_buf(), 6);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        assert_eq!(
+            tracker.sync_counters(),
+            SyncCountersSnapshot::default(),
+            "a primary that has served no PSYNC reports all three at zero"
+        );
+
+        // 1. First attach: `PSYNC ? -1`. No partial was attempted, so only
+        //    sync_full moves.
+        let line = run_psync(&handler, "?", -1).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        assert_eq!(
+            tracker.sync_counters(),
+            SyncCountersSnapshot {
+                full: 1,
+                partial_ok: 0,
+                partial_err: 0,
+            },
+            "an outright full-resync request is not a refused partial"
+        );
+
+        // 2. Reconnect inside the backlog window: `+CONTINUE`, and sync_full
+        //    must stay where it was — the whole point of a partial resync is
+        //    that no checkpoint was transferred.
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        handler.broadcast_command("SET", &[Bytes::from("b"), Bytes::from("2")]);
+        let line = run_psync(&handler, &repl_id, resume_point as i64).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+        // A grant is counted where it becomes true — after the backlog tail is
+        // extracted, which is downstream of the reply this test just read — so
+        // this arm waits for the counter instead of reading it immediately.
+        await_counters(
+            &tracker,
+            SyncCountersSnapshot {
+                full: 1,
+                partial_ok: 1,
+                partial_err: 0,
+            },
+        )
+        .await;
+
+        // 3. Reconnect that overran the backlog: the partial was attempted and
+        //    refused, and the refusal falls through to a full resync — so both
+        //    sync_partial_err and sync_full advance, exactly as Redis does it.
+        for i in 0..8 {
+            handler.broadcast_command("SET", &[Bytes::from(format!("k{i}")), Bytes::from("v")]);
+        }
+        assert!(
+            handler.replay.oldest_offset().unwrap() > resume_point,
+            "the resume point must have been evicted for this arm to be a refusal"
+        );
+        let line = run_psync(&handler, &repl_id, resume_point as i64).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        assert_eq!(
+            tracker.sync_counters(),
+            SyncCountersSnapshot {
+                full: 2,
+                partial_ok: 1,
+                partial_err: 1,
+            },
+            "a refused partial advances sync_partial_err AND sync_full"
+        );
+    }
+
+    /// Poll until the counters reach `expected`, or fail with what they were.
+    ///
+    /// Only the grant needs this: it is recorded by the streaming session once
+    /// the backlog tail exists, so it lands after the reply the caller read.
+    async fn await_counters(tracker: &ReplicationTrackerImpl, expected: SyncCountersSnapshot) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = tracker.sync_counters();
+            if seen == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "counters never reached {expected:?}; last read {seen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Drive one `PSYNC` to its decision line and let the session go.
+    ///
+    /// A refusal is recorded at the fork, so reading the reply line is enough
+    /// for those arms; the session is then dropped by closing the client end.
+    async fn run_psync(
+        handler: &Arc<PrimaryReplicationHandler>,
+        replication_id: &str,
+        offset: i64,
+    ) -> String {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let replication_id = replication_id.to_string();
+            async move {
+                handler
+                    .handle_psync(
+                        server,
+                        addr(),
+                        &replication_id,
+                        offset,
+                        ReplicaAnnouncement::default(),
+                    )
+                    .await
+            }
+        });
+        let line = read_response_line(&mut client).await;
+        drop(client);
+        let _ = task.await.unwrap();
+        line
+    }
+
+    // FM-REPLICATION-049
+    /// The end-to-end shape of issue 16: a replica that announced port 7001
+    /// before `PSYNC` is registered with that port, so the primary's INFO/ROLE
+    /// projection reports it instead of the placeholder `0`.
+    #[tokio::test]
+    async fn a_psync_carries_the_announcement_into_the_registry() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point = handler.broadcast_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        let announcement = ReplicaAnnouncement {
+            listening_port: 7001,
+            capabilities: ReplicaCapabilities {
+                eof: true,
+                psync2: true,
+            },
+        };
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, resume_point as i64, announcement)
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+
+        // `+CONTINUE` is written before `start_streaming` sets the phase to
+        // `Streaming`, so reading the line first does not order-after the
+        // registration this test cares about — poll for it instead of relying
+        // on an ordering the test does not control.
+        let replicas = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let replicas = tracker.get_streaming_replicas();
+                if !replicas.is_empty() {
+                    return replicas;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("replica must reach the Streaming phase and register within 5s");
+
+        assert_eq!(replicas.len(), 1);
+        assert_eq!(
+            replicas[0].listening_port, 7001,
+            "the registry must carry the announced port, not 0"
+        );
+        assert!(replicas[0].capabilities.psync2);
 
         drop(client);
         let _ = task.await.unwrap();

@@ -74,6 +74,10 @@ pub(super) async fn init_cluster(
     config: &Config,
     recovered_raft_storage: Option<ClusterStorage>,
     listener: &TcpListener,
+    // The port this node actually serves RESP on (the bound one, which is what
+    // `config.server.port == 0` resolves to). Every replica stream the runtime
+    // streamer starts announces it with `REPLCONF listening-port`.
+    listening_port: u16,
     cluster_bus_listener: &Option<TcpListener>,
     shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
@@ -130,6 +134,7 @@ pub(super) async fn init_cluster(
             replication_identity,
             shard_senders.clone(),
             num_shards,
+            listening_port,
             is_replica_flag.clone(),
             shared_replication_offset.clone(),
             #[cfg(not(feature = "turmoil"))]
@@ -801,18 +806,30 @@ impl SplitBrainLogger {
                     record.writes.len(),
                     path.display()
                 );
+                // `SplitBrainRecoveryPending = 1` is a statement about a file on
+                // disk waiting for an operator to reconcile it — `has_pending_logs`
+                // is what lowers it again at the next boot. It therefore belongs
+                // where the file exists, and nowhere else (issue 15).
+                frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to write split-brain log");
+                // The failure needs its own signal. Silence here would be
+                // indistinguishable from a clean demotion, and raising
+                // `SplitBrainRecoveryPending` (as this used to, unconditionally)
+                // is worse than silence: it points the operator at a file that
+                // does not exist.
+                frogdb_telemetry::definitions::SplitBrainLogWriteFailuresTotal::inc(&*self.metrics);
             }
         }
 
+        // The event happened and the writes were discarded whether or not the
+        // record reached disk, so these two count it either way.
         frogdb_telemetry::definitions::SplitBrainEventsTotal::inc(&*self.metrics);
         frogdb_telemetry::definitions::SplitBrainOpsDiscardedTotal::inc_by(
             &*self.metrics,
             record.writes.len() as u64,
         );
-        frogdb_telemetry::definitions::SplitBrainRecoveryPending::set(&*self.metrics, 1.0);
     }
 }
 
@@ -1607,6 +1624,11 @@ mod tests {
             Some(1.0),
             "recovery-pending gauge must be raised while a log awaits processing"
         );
+        assert_eq!(
+            recorder.counter_value("frogdb_split_brain_log_write_failures_total"),
+            None,
+            "a successful write must not register as a write failure"
+        );
 
         // ---- (4) the demotion (discard-via-resync) is still issued.
         assert_eq!(
@@ -1647,9 +1669,118 @@ mod tests {
         );
     }
 
+    /// Stage a divergence on a real handler and run the production
+    /// `SplitBrainLogger::log` against `data_dir`, returning the recorder so the
+    /// caller can read exactly what the telemetry surface would report.
+    ///
+    /// The divergence setup is the same shape as
+    /// `split_brain_lifecycle_captures_audit_and_initiates_discard`'s: writes the
+    /// cluster acked, a streaming replica pinned at that head to fix the floor,
+    /// then divergent writes past it.
+    fn log_a_divergence_into(
+        handler_dir: &std::path::Path,
+        data_dir: &std::path::Path,
+    ) -> Arc<PrometheusRecorder> {
+        let handler = split_brain_handler(handler_dir, 1000);
+        let acked = broadcast_set(&handler, "acked_key", "va");
+        streaming_replica_acked_at(&handler, "127.0.0.1:6391", acked);
+        broadcast_set(&handler, "div_key", "dv");
+        assert!(
+            handler.divergence_record().is_some(),
+            "the fixture must actually diverge, or the logger returns early"
+        );
+
+        let recorder = Arc::new(PrometheusRecorder::new());
+        let logger = SplitBrainLogger {
+            data_dir: data_dir.to_path_buf(),
+            primary_handler: Some(handler),
+            metrics: recorder.clone(),
+        };
+        logger.log(&DemotionEvent {
+            demoted_node_id: 0xA,
+            new_primary_id: Some(0xB),
+            epoch: 7,
+        });
+        recorder
+    }
+
+    // FM-REPLICATION-048
+    /// The split-brain telemetry describes the record that exists, not the event
+    /// that was attempted.
+    ///
+    /// All three metric calls used to sit *outside* the match on `write_log`, so
+    /// a failed write produced metric-for-metric the same state as a successful
+    /// one. `frogdb_split_brain_recovery_pending = 1` means specifically "a
+    /// divergence record is on disk waiting for an operator to reconcile it" —
+    /// after a failed write there is no such file, and the operator is sent to
+    /// find one that was never created while the discarded writes are gone with
+    /// no durable trace at all.
+    ///
+    /// Both directions are asserted from one place, because the bug is precisely
+    /// that the two directions were indistinguishable.
+    #[test]
+    fn split_brain_telemetry_follows_the_log_write_outcome() {
+        let handler_dir = tempfile::tempdir().unwrap();
+        let good_dir = tempfile::tempdir().unwrap();
+
+        // --- The write succeeds: the file exists, so the gauge is raised and
+        // no failure is counted.
+        let ok = log_a_divergence_into(handler_dir.path(), good_dir.path());
+        assert!(
+            frogdb_replication::split_brain_log::has_pending_logs(good_dir.path()),
+            "the fixture must have written a record"
+        );
+        assert_eq!(
+            ok.gauge_value("frogdb_split_brain_recovery_pending"),
+            Some(1.0),
+            "a written record must raise recovery-pending"
+        );
+        assert_eq!(
+            ok.counter_value("frogdb_split_brain_log_write_failures_total"),
+            None,
+            "a successful write is not a write failure"
+        );
+
+        // --- The write fails: `write_log` does `File::create` under `data_dir`,
+        // so a directory that does not exist is a portable, permission-free way
+        // to make the create fail the way a full or read-only volume would.
+        let missing_dir = good_dir.path().join("nonexistent").join("nested");
+        let failed = log_a_divergence_into(handler_dir.path(), &missing_dir);
+        assert!(
+            !missing_dir.exists(),
+            "the failure fixture must not have created the directory"
+        );
+        assert_eq!(
+            failed.gauge_value("frogdb_split_brain_recovery_pending"),
+            None,
+            "no record was written, so nothing is pending an operator's attention"
+        );
+        assert_eq!(
+            failed.counter_value("frogdb_split_brain_log_write_failures_total"),
+            Some(1),
+            "the failed write needs its own signal, or it is invisible"
+        );
+
+        // The event and the discarded ops are statements about the demotion,
+        // which happened either way — they must NOT become conditional on the
+        // write, or a failure would stop counting the data that was lost.
+        for (label, recorder) in [("ok", &ok), ("failed", &failed)] {
+            assert_eq!(
+                recorder.counter_value("frogdb_split_brain_events_total"),
+                Some(1),
+                "{label}: the split-brain event happened regardless of the write"
+            );
+            assert_eq!(
+                recorder.counter_value("frogdb_split_brain_ops_discarded_total"),
+                Some(1),
+                "{label}: the divergent write was discarded regardless of the write"
+            );
+        }
+    }
+
     /// Buffer-overflow / truncation behavior (issue 15, audit gap E#5: "the
     /// truncation path untested"). When the divergence exceeds
-    /// `split_brain_buffer_size`, the ring buffer evicts oldest-first (FIFO), so
+    /// `backlog_size`, the ring buffer evicts oldest-first (FIFO), so
     /// the audit captures only the retained *tail* of the divergent writes.
     ///
     /// This test pins the *actual* designed behavior and its boundary honestly:

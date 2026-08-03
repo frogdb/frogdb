@@ -498,11 +498,20 @@ struct ReplicaTlsConfig {
 
 impl RealReplicaStreamer {
     /// Assemble the streamer from server configuration and shared collaborators.
+    ///
+    /// `listening_port` is the port this node actually accepts RESP connections
+    /// on — the bound port, not `config.server.port`, which is `0` when the
+    /// operator asked the OS to assign one. It is what every stream this
+    /// streamer starts announces with `REPLCONF listening-port`, so passing the
+    /// configured value would hand the primary an address nobody can dial
+    /// (FM-REPLICATION-049).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: &crate::config::Config,
         identity: crate::replication::ReplicationIdentity,
         shard_senders: Arc<Vec<frogdb_core::ShardSender>>,
         num_shards: usize,
+        listening_port: u16,
         is_replica_flag: Arc<AtomicBool>,
         shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
         #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
@@ -532,7 +541,7 @@ impl RealReplicaStreamer {
             identity,
             shard_senders,
             num_shards,
-            listening_port: config.server.port,
+            listening_port,
             data_dir,
             state_path,
             is_replica_flag,
@@ -1102,9 +1111,10 @@ mod tests {
 
     /// Build a bare `RealReplicaStreamer` for the offset-wiring seam tests. The
     /// shard/flag collaborators are unused by `build_handler`, so they can be
-    /// empty; only `shared_offset` (and path/port config) matter here.
-    fn streamer_with_offset(
+    /// empty; only `shared_offset`, `listening_port` and the paths matter here.
+    fn streamer_with(
         shared_offset: Option<Arc<std::sync::atomic::AtomicU64>>,
+        listening_port: u16,
     ) -> RealReplicaStreamer {
         RealReplicaStreamer {
             identity: crate::replication::ReplicationIdentity::detached(
@@ -1112,7 +1122,7 @@ mod tests {
             ),
             shard_senders: Arc::new(Vec::new()),
             num_shards: 1,
-            listening_port: 0,
+            listening_port,
             data_dir: std::env::temp_dir(),
             state_path: std::env::temp_dir().join("replication_state.json"),
             is_replica_flag: Arc::new(AtomicBool::new(false)),
@@ -1139,7 +1149,7 @@ mod tests {
     fn runtime_stream_wires_shared_offset_to_healthprobe_atomic() {
         // The atomic the cluster-bus HealthProbe answers with.
         let probe_offset = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let streamer = streamer_with_offset(Some(probe_offset.clone()));
+        let streamer = streamer_with(Some(probe_offset.clone()), 0);
 
         let (handler, _frame_rx) = streamer.build_handler(addr("127.0.0.1:7000"));
         let wired = handler
@@ -1162,9 +1172,26 @@ mod tests {
     /// leaves the handler's offset unwired (the boot path behaves the same).
     #[test]
     fn runtime_stream_without_cluster_leaves_offset_unwired() {
-        let streamer = streamer_with_offset(None);
+        let streamer = streamer_with(None, 0);
         let (handler, _frame_rx) = streamer.build_handler(addr("127.0.0.1:7000"));
         assert!(handler.shared_offset().is_none());
+    }
+
+    // FM-REPLICATION-049
+    /// A stream started by a runtime demotion announces the node's *serving*
+    /// port, which is the streamer's `listening_port` — the bound one, fed in
+    /// at construction. Nothing may substitute `config.server.port` on the way
+    /// through: that is `0` under an OS-assigned port, and the primary would
+    /// render `slaveN:port=0` for a replica that is perfectly reachable.
+    #[test]
+    fn runtime_stream_announces_the_streamers_listening_port() {
+        let streamer = streamer_with(None, 7001);
+        let (handler, _frame_rx) = streamer.build_handler(addr("127.0.0.1:7000"));
+        assert_eq!(
+            handler.listening_port(),
+            7001,
+            "the demotion stream must announce the port the node serves on"
+        );
     }
 
     #[test]

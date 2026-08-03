@@ -688,6 +688,24 @@
           "mutable": false
         },
         {
+          "name": "backlog-enabled",
+          "type": "boolean",
+          "default": true,
+          "description": "Whether the replication backlog is populated at all.\n\nThe backlog is the ring of recent commands a `+CONTINUE` replays from\n(Redis's `repl-backlog`), and the same ring the split-brain audit reads\nits divergent writes out of. `false` means every reconnecting replica\npays for a full checkpoint transfer, so it is an availability knob, not a\ndiagnostic one — which is exactly why it is no longer spelled\n[`Self::split_brain_log_enabled`]."
+        },
+        {
+          "name": "backlog-max-mb",
+          "type": "integer",
+          "default": 64,
+          "description": "Maximum memory in MB the replication backlog retains — the byte half of\nits two caps (Redis's `repl-backlog-size`, which is bytes-only).\n\nMust be > 0, and small enough that its byte form fits a `usize`."
+        },
+        {
+          "name": "backlog-size",
+          "type": "integer",
+          "default": 10000,
+          "description": "Maximum number of recent commands the replication backlog retains — the\nentry-count half of its two caps (see [`Self::backlog_max_mb`]).\n\nBounds how far a replica may fall behind and still reconnect with a\n`+CONTINUE`. Must be > 0."
+        },
+        {
           "name": "backlog-ttl-secs",
           "type": "integer",
           "default": 3600,
@@ -810,22 +828,10 @@
           "mutable": true
         },
         {
-          "name": "split-brain-buffer-max-mb",
-          "type": "integer",
-          "default": 64,
-          "description": "Maximum memory in MB for the split-brain command buffer."
-        },
-        {
-          "name": "split-brain-buffer-size",
-          "type": "integer",
-          "default": 10000,
-          "description": "Maximum number of recent commands to buffer for split-brain detection."
-        },
-        {
           "name": "split-brain-log-enabled",
           "type": "boolean",
           "default": true,
-          "description": "Enable split-brain discarded-writes logging (log-only).\n\nWhen a demoted primary diverged from the new primary, its divergent\nwrites are logged before resync. This flag controls ONLY that logging;\nit does not affect cluster behavior. Automatic Role Demotion during\nfailover always runs in cluster mode regardless of this setting — the\nkill-switch for cluster behavior is `cluster.enabled`, not this flag."
+          "description": "Write a divergent-writes audit file when a demoted primary is found to\nhave diverged from the new primary (log-only).\n\nThis flag controls ONLY that file. It does not gate the demotion, and —\nsince issue 14 — it does not gate the replication backlog either: the\nbacklog has its own [`Self::backlog_enabled`], so turning this off stops\nlog files accumulating without costing every reconnecting replica a full\nresync. Automatic Role Demotion during failover always runs in cluster\nmode regardless of this setting; the kill-switch for cluster behavior is\n`cluster.enabled`, not this flag."
         },
         {
           "name": "state-file",

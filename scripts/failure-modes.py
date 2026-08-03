@@ -76,6 +76,13 @@ HEADING_RE = re.compile(r"^##\s+(FM-([A-Z]+)-(\d+))\s*(?:[—-]\s*(.*))?$")
 # `| Field | Value |`
 ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$")
 FM_TAG_RE = re.compile(r"\bFM-([A-Z]+)-(\d+)\b")
+# A *tag* is a comment line that is nothing but ids — `// FM-TXN-004`,
+# `// FM-TXN-009, FM-TXN-022`, `/// FM-BLOCKING-005`. A comment that merely
+# *mentions* an id in prose ("the complement of FM-REPLICATION-018") is a
+# cross-reference, not a claim that this item forces that row, and must not be
+# linted as one: the invariants are worth citing where the code implements
+# them, and treating a citation as a tag makes the lint punish good comments.
+FM_TAG_LINE_RE = re.compile(r"^\s*//[/!]?\s*FM-[A-Z]+-\d+(?:\s*,?\s*FM-[A-Z]+-\d+)*\s*$")
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 # `MISSING ([gap: 03-disk-full-injection.md](../issues/03-disk-full-injection.md))`
@@ -329,7 +336,11 @@ def resolve(name: str, test_paths: set[str]) -> bool:
 
 
 def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:
-    """Collect every `// FM-<AREA>-NNN` comment and the test it annotates."""
+    """Collect every `// FM-<AREA>-NNN` tag comment and the test it annotates.
+
+    Only a comment line consisting *solely* of ids is a tag — see
+    [`FM_TAG_LINE_RE`]. Prose that cites an id is left alone.
+    """
     tags: list[Tag] = []
     for root in roots:
         for path in sorted(root.rglob("*.rs")):
@@ -337,11 +348,9 @@ def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:
                 continue
             lines = path.read_text(errors="replace").splitlines()
             for index, line in enumerate(lines):
-                if not line.lstrip().startswith("//"):
+                if not FM_TAG_LINE_RE.match(line):
                     continue
                 matches = FM_TAG_RE.findall(line)
-                if not matches:
-                    continue
                 test = annotated_fn(lines, index)
                 if test is None:
                     errors.append(

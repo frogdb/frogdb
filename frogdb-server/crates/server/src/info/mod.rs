@@ -29,6 +29,7 @@ use frogdb_core::{
     ClusterState, CommandLatencyHistograms, MetricsRecorder, ServerCommandStats, ShardSender,
 };
 use frogdb_protocol::Response;
+use frogdb_replication::{Phase, ReplicaInfo, SyncCountersSnapshot};
 use frogdb_telemetry::definitions::{CommandsTotal, WalBytes, WalWrites};
 use frogdb_telemetry::{NodeStateSnapshot, ShardScatterError};
 use tracing::warn;
@@ -260,15 +261,112 @@ impl RateLimitSnapshot {
     }
 }
 
+/// What a `slaveN:` line's `state=` field reports.
+///
+/// Redis names three states (`wait_bgsave`, `send_bulk`, `online`) and *omits*
+/// the whole line for any replica in none of them. FrogDB reports `offline`
+/// instead of omitting, because `connected_slaves` is rendered from the same
+/// list: dropping a line would leave the count and the lines disagreeing, which
+/// is the one thing FM-REPLICATION-043 forbids.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReplicaState {
+    /// Handshake accepted, checkpoint not started.
+    WaitBgsave,
+    /// Checkpoint is being transferred.
+    SendBulk,
+    /// Streaming the live WAL — the only state in which the replica is caught
+    /// up enough to satisfy WAIT.
+    #[default]
+    Online,
+    /// Tearing down.
+    Offline,
+}
+
+impl ReplicaState {
+    /// The wire spelling in the `slaveN:` line.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WaitBgsave => "wait_bgsave",
+            Self::SendBulk => "send_bulk",
+            Self::Online => "online",
+            Self::Offline => "offline",
+        }
+    }
+}
+
+impl From<Phase> for ReplicaState {
+    fn from(phase: Phase) -> Self {
+        match phase {
+            // A replica that has not yet been told which sync it is getting is
+            // in the same position as a Redis replica waiting for the fork.
+            Phase::Connecting | Phase::PreparingCheckpoint => Self::WaitBgsave,
+            Phase::StreamingCheckpoint => Self::SendBulk,
+            Phase::Streaming => Self::Online,
+            Phase::Disconnecting => Self::Offline,
+        }
+    }
+}
+
 /// One `slaveN:` line worth of replica state.
 #[derive(Debug, Clone, Default)]
 pub struct ReplicaLine {
     /// Replica IP address.
     pub ip: String,
-    /// Replica listening port.
+    /// Replica listening port, as announced by `REPLCONF listening-port`.
     pub port: u16,
+    /// Where the replica is in its lifecycle.
+    pub state: ReplicaState,
     /// Replica acknowledged offset.
     pub offset: u64,
+    /// Whole seconds since the replica's last ACK — Redis's `lag`.
+    pub lag_secs: u64,
+}
+
+impl ReplicaLine {
+    /// Project a live session snapshot onto the line INFO renders.
+    ///
+    /// Every field is read off the same [`ReplicaInfo`], so no two fields of a
+    /// `slaveN:` line can describe different instants, and none of them is a
+    /// literal.
+    pub fn from_replica(replica: &ReplicaInfo) -> Self {
+        Self {
+            ip: replica.address.ip().to_string(),
+            port: replica.listening_port,
+            state: replica.phase.into(),
+            offset: replica.acked_offset,
+            lag_secs: replica.lag_secs(),
+        }
+    }
+
+    /// Render this line as `slave<index>:…`, without a trailing terminator.
+    ///
+    /// THE single spelling of the `slaveN:` format. Both INFO renderers — the
+    /// connection-level [`crate::info::sections`] one and the shard-local
+    /// [`crate::commands::info`] one — call this, so the two cannot drift into
+    /// reporting different fields for the same replica.
+    pub fn render(&self, index: usize) -> String {
+        format!(
+            "slave{}:ip={},port={},state={},offset={},lag={}",
+            index,
+            self.ip,
+            self.port,
+            self.state.as_str(),
+            self.offset,
+            self.lag_secs
+        )
+    }
+}
+
+/// The three `sync_*` fields of `INFO stats`, in Redis's order.
+///
+/// Shared by both INFO renderers for the same reason [`ReplicaLine::render`] is:
+/// one list, so neither renderer can omit or rename a counter the other reports.
+pub fn sync_counter_fields(sync: SyncCountersSnapshot) -> [(&'static str, u64); 3] {
+    [
+        ("sync_full", sync.full),
+        ("sync_partial_ok", sync.partial_ok),
+        ("sync_partial_err", sync.partial_err),
+    ]
 }
 
 /// Primary-role replication state (present when this node tracks replicas).
@@ -291,6 +389,10 @@ pub struct ReplicationSnapshot {
     pub replication_id: Option<String>,
     /// Primary-role state (replica tracking); `None` for replica/standalone.
     pub primary: Option<PrimarySnapshot>,
+    /// Lifetime `sync_full` / `sync_partial_ok` / `sync_partial_err`, read as
+    /// one triple so the three fields cannot describe different instants.
+    /// Reported in `INFO stats`, not `INFO replication`, as in Redis.
+    pub sync: SyncCountersSnapshot,
     /// Live replication offset of this node, whatever role it is running.
     ///
     /// Rendered as `master_repl_offset`. On a primary this is the last offset

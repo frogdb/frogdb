@@ -253,9 +253,17 @@ impl Server {
         // counted from the moment the store exists — no separate install step.
         let infra = init::init_infrastructure(&config, listeners, log_reload_handle).await?;
 
+        // The port this node actually serves RESP on. Read off the bound
+        // listener, never `config.server.port`: that is `0` when the operator
+        // asked the OS to assign a port, and `0` is what a replica would then
+        // announce with `REPLCONF listening-port` — an address the primary
+        // renders as `slaveN:port=0` and nobody can dial (FM-REPLICATION-049).
+        let listening_port = infra.listener.local_addr()?.port();
+
         // Phase 2: Replication handler setup
         let repl = replication_init::init_replication(
             &config,
+            listening_port,
             &infra.recovered_replication,
             &infra.rocks_store,
             &infra.shard_senders,
@@ -301,6 +309,7 @@ impl Server {
             &config,
             infra.recovered_raft_storage,
             &infra.listener,
+            listening_port,
             &infra.cluster_bus_listener,
             &infra.shard_senders,
             infra.num_shards,

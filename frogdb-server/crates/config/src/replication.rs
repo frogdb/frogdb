@@ -105,28 +105,55 @@ pub struct ReplicationConfigSection {
     // skip: borderline: FrogDB-internal lag-disconnect cooldown; no Redis analogue
     pub fullresync_cooldown_secs: u64,
 
-    /// Enable split-brain discarded-writes logging (log-only).
+    /// Write a divergent-writes audit file when a demoted primary is found to
+    /// have diverged from the new primary (log-only).
     ///
-    /// When a demoted primary diverged from the new primary, its divergent
-    /// writes are logged before resync. This flag controls ONLY that logging;
-    /// it does not affect cluster behavior. Automatic Role Demotion during
-    /// failover always runs in cluster mode regardless of this setting — the
-    /// kill-switch for cluster behavior is `cluster.enabled`, not this flag.
+    /// This flag controls ONLY that file. It does not gate the demotion, and —
+    /// since issue 14 — it does not gate the replication backlog either: the
+    /// backlog has its own [`Self::backlog_enabled`], so turning this off stops
+    /// log files accumulating without costing every reconnecting replica a full
+    /// resync. Automatic Role Demotion during failover always runs in cluster
+    /// mode regardless of this setting; the kill-switch for cluster behavior is
+    /// `cluster.enabled`, not this flag.
     #[serde(default = "default_split_brain_log_enabled")]
     #[param(skip)]
     // skip: FrogDB-specific split-brain discarded-writes logging toggle; diagnostic, no Redis analogue
     pub split_brain_log_enabled: bool,
 
-    /// Maximum number of recent commands to buffer for split-brain detection.
-    #[serde(default = "default_split_brain_buffer_size")]
+    /// Whether the replication backlog is populated at all.
+    ///
+    /// The backlog is the ring of recent commands a `+CONTINUE` replays from
+    /// (Redis's `repl-backlog`), and the same ring the split-brain audit reads
+    /// its divergent writes out of. `false` means every reconnecting replica
+    /// pays for a full checkpoint transfer, so it is an availability knob, not a
+    /// diagnostic one — which is exactly why it is no longer spelled
+    /// [`Self::split_brain_log_enabled`].
+    #[serde(default = "default_backlog_enabled")]
     #[param(skip)]
-    // skip: internal split-brain detection ring-buffer sizing; no operator story
-    pub split_brain_buffer_size: usize,
+    // skip: capacity is fixed when the ring is built, so CONFIG SET could only report a
+    // change the running buffer never made; Redis's live `repl-backlog-size` resize is unbuilt
+    pub backlog_enabled: bool,
 
-    /// Maximum memory in MB for the split-brain command buffer.
-    #[serde(default = "default_split_brain_buffer_max_mb")]
-    #[param(skip)] // skip: internal split-brain detection buffer memory cap; no operator story
-    pub split_brain_buffer_max_mb: usize,
+    /// Maximum number of recent commands the replication backlog retains — the
+    /// entry-count half of its two caps (see [`Self::backlog_max_mb`]).
+    ///
+    /// Bounds how far a replica may fall behind and still reconnect with a
+    /// `+CONTINUE`. Must be > 0.
+    #[serde(default = "default_backlog_size")]
+    #[param(skip)]
+    // skip: capacity is fixed when the ring is built, so CONFIG SET could only report a
+    // change the running buffer never made; Redis's live `repl-backlog-size` resize is unbuilt
+    pub backlog_size: usize,
+
+    /// Maximum memory in MB the replication backlog retains — the byte half of
+    /// its two caps (Redis's `repl-backlog-size`, which is bytes-only).
+    ///
+    /// Must be > 0, and small enough that its byte form fits a `usize`.
+    #[serde(default = "default_backlog_max_mb")]
+    #[param(skip)]
+    // skip: capacity is fixed when the ring is built, so CONFIG SET could only report a
+    // change the running buffer never made; Redis's live `repl-backlog-size` resize is unbuilt
+    pub backlog_max_mb: usize,
 
     /// Reject writes when primary loses all replica ACK freshness.
     /// Prevents zombie writes during network partitions.
@@ -194,8 +221,12 @@ pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 10000;
 pub const DEFAULT_RECONNECT_BACKOFF_INITIAL_MS: u64 = 100;
 pub const DEFAULT_RECONNECT_BACKOFF_MAX_MS: u64 = 30000;
 pub const DEFAULT_SPLIT_BRAIN_LOG_ENABLED: bool = true;
-pub const DEFAULT_SPLIT_BRAIN_BUFFER_SIZE: usize = 10_000;
-pub const DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB: usize = 64;
+/// Mirrors `frogdb_replication::BacklogConfig::default().enabled`.
+pub const DEFAULT_BACKLOG_ENABLED: bool = true;
+/// Mirrors `frogdb_replication::BacklogConfig::default().max_entries`.
+pub const DEFAULT_BACKLOG_SIZE: usize = 10_000;
+/// Mirrors `frogdb_replication::BacklogConfig::default().max_bytes`, in MB.
+pub const DEFAULT_BACKLOG_MAX_MB: usize = 64;
 pub const DEFAULT_SELF_FENCE_ON_REPLICA_LOSS: bool = true;
 pub const DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS: u64 = 3000;
 pub const DEFAULT_REPLICA_WRITE_TIMEOUT_MS: u64 = 5000;
@@ -246,12 +277,16 @@ fn default_split_brain_log_enabled() -> bool {
     DEFAULT_SPLIT_BRAIN_LOG_ENABLED
 }
 
-fn default_split_brain_buffer_size() -> usize {
-    DEFAULT_SPLIT_BRAIN_BUFFER_SIZE
+fn default_backlog_enabled() -> bool {
+    DEFAULT_BACKLOG_ENABLED
 }
 
-fn default_split_brain_buffer_max_mb() -> usize {
-    DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB
+fn default_backlog_size() -> usize {
+    DEFAULT_BACKLOG_SIZE
+}
+
+fn default_backlog_max_mb() -> usize {
+    DEFAULT_BACKLOG_MAX_MB
 }
 
 fn default_self_fence_on_replica_loss() -> bool {
@@ -296,8 +331,9 @@ impl Default for ReplicationConfigSection {
             replication_lag_threshold_secs: 0,
             fullresync_cooldown_secs: default_fullresync_cooldown_secs(),
             split_brain_log_enabled: default_split_brain_log_enabled(),
-            split_brain_buffer_size: default_split_brain_buffer_size(),
-            split_brain_buffer_max_mb: default_split_brain_buffer_max_mb(),
+            backlog_enabled: default_backlog_enabled(),
+            backlog_size: default_backlog_size(),
+            backlog_max_mb: default_backlog_max_mb(),
             self_fence_on_replica_loss: default_self_fence_on_replica_loss(),
             replica_freshness_timeout_ms: default_replica_freshness_timeout_ms(),
             replica_write_timeout_ms: default_replica_write_timeout_ms(),
@@ -359,6 +395,30 @@ impl ReplicationConfigSection {
             anyhow::bail!("replication.replica_txn_max_bytes must be > 0");
         }
 
+        // Both backlog caps are eviction bounds, and an eviction loop cannot
+        // drain below empty: `0` is not "no backlog" (that is
+        // `backlog_enabled = false`), it is a cap the loop can never satisfy.
+        // `ReplicationRingBuffer::push` no longer hangs on it, but a buffer that
+        // retains one command is not a backlog either, so it is refused here.
+        if self.backlog_size == 0 {
+            anyhow::bail!(
+                "replication.backlog_size must be > 0 (use backlog_enabled = false to disable the backlog)"
+            );
+        }
+
+        if self.backlog_max_mb == 0 {
+            anyhow::bail!(
+                "replication.backlog_max_mb must be > 0 (use backlog_enabled = false to disable the backlog)"
+            );
+        }
+
+        if self.backlog_max_bytes().is_none() {
+            anyhow::bail!(
+                "replication.backlog_max_mb ({}) overflows a usize when converted to bytes",
+                self.backlog_max_mb
+            );
+        }
+
         let recommended_minimum = self.ack_interval_ms.saturating_mul(3);
         if self.self_fence_on_replica_loss
             && self.replica_freshness_timeout_ms < recommended_minimum
@@ -373,6 +433,18 @@ impl ReplicationConfigSection {
         }
 
         Ok(())
+    }
+
+    /// [`Self::backlog_max_mb`] in bytes, or `None` if the conversion overflows
+    /// a `usize`.
+    ///
+    /// The MB→byte multiplication used to be an unchecked `* 1024 * 1024` at
+    /// the wiring site, where a wrapped product would silently hand the ring
+    /// buffer a tiny (or zero) byte cap — the caller least able to notice. It
+    /// lives here so `validate()` and the wiring share one spelling and the
+    /// failure is a boot error rather than a mis-sized backlog.
+    pub fn backlog_max_bytes(&self) -> Option<usize> {
+        self.backlog_max_mb.checked_mul(1024 * 1024)
     }
 
     /// Check if this node is a primary.
@@ -429,6 +501,57 @@ mod tests {
             let err = config.validate().unwrap_err();
             assert!(err.to_string().contains(label), "{label}: {err}");
         }
+    }
+
+    // FM-REPLICATION-047
+    #[test]
+    fn zero_backlog_caps_are_rejected_and_the_mb_conversion_is_checked() {
+        // `0` on either cap is an eviction bound the loop can never satisfy —
+        // it used to spin `ReplicationRingBuffer::push` forever under the
+        // entries lock. "No backlog" is spelled `backlog_enabled = false`, so
+        // neither cap has a "0 = disabled" reading.
+        for (label, config) in [
+            (
+                "backlog_size",
+                ReplicationConfigSection {
+                    backlog_size: 0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "backlog_max_mb",
+                ReplicationConfigSection {
+                    backlog_max_mb: 0,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let err = config.validate().unwrap_err();
+            assert!(err.to_string().contains(label), "{label}: {err}");
+            assert!(
+                err.to_string().contains("backlog_enabled"),
+                "{label}: the error must point at the real disable switch: {err}"
+            );
+        }
+
+        // The MB→byte conversion is checked, so an absurd-but-typeable value is
+        // a boot error rather than a wrapped (and possibly zero) byte cap.
+        let overflowing = ReplicationConfigSection {
+            backlog_max_mb: usize::MAX,
+            ..Default::default()
+        };
+        assert!(overflowing.backlog_max_bytes().is_none());
+        let err = overflowing.validate().unwrap_err();
+        assert!(err.to_string().contains("overflows"), "{err}");
+
+        // The default is expressible and is the value the ring buffer is built
+        // with, so the wiring has a byte cap to read.
+        let ok = ReplicationConfigSection::default();
+        assert_eq!(
+            ok.backlog_max_bytes(),
+            Some(DEFAULT_BACKLOG_MAX_MB * 1024 * 1024)
+        );
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

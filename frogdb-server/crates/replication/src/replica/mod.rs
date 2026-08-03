@@ -271,6 +271,14 @@ impl ReplicaReplicationHandler {
         self.shared_offset.clone()
     }
 
+    /// The port every link this handler opens announces with `REPLCONF
+    /// listening-port` — i.e. the address the primary will render as
+    /// `slaveN:port=` and `ROLE` (FM-REPLICATION-049). Exposed so the wiring
+    /// that supplies it can be asserted without opening a socket.
+    pub fn listening_port(&self) -> u16 {
+        self.listening_port
+    }
+
     /// Run the connect/sync/reconnect loop until [`Self::stop`] is called.
     ///
     /// The loop reconnects after *any* link loss — a transport error or a

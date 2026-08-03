@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use frogdb_cluster::version_gate;
 use frogdb_core::histogram::KeysizeType;
 
-use super::{InfoSection, InfoSources, SectionWriter};
+use super::{InfoSection, InfoSources, SectionWriter, sync_counter_fields};
 
 /// The standard section registry, in canonical order.
 pub(super) fn all_sections() -> Vec<Box<dyn InfoSection>> {
@@ -344,11 +344,14 @@ impl InfoSection for StatsSection {
             .field("instantaneous_output_kbps", "0.00")
             .field("instantaneous_input_repl_kbps", "0.00")
             .field("instantaneous_output_repl_kbps", "0.00")
-            .field("rejected_connections", 0)
-            .field("sync_full", 0)
-            .field("sync_partial_ok", 0)
-            .field("sync_partial_err", 0)
-            .field("expired_keys", sh.expired_keys)
+            .field("rejected_connections", 0);
+        // The PSYNC-outcome counters, from the one shared field list, so this
+        // renderer and the shard-local one in `crate::commands::info` cannot
+        // report a different set (FM-REPLICATION-050).
+        for (name, value) in sync_counter_fields(src.replication().sync) {
+            w.field(name, value);
+        }
+        w.field("expired_keys", sh.expired_keys)
             .field("expired_stale_perc", "0.00")
             .field("expired_time_cap_reached_count", 0)
             .field("expire_cycle_cpu_milliseconds", 0)
@@ -422,10 +425,7 @@ impl InfoSection for ReplicationSection {
             w.field("role", "master")
                 .field("connected_slaves", primary.replicas.len());
             for (i, replica) in primary.replicas.iter().enumerate() {
-                w.line(&format!(
-                    "slave{}:ip={},port={},state=online,offset={},lag=0",
-                    i, replica.ip, replica.port, replica.offset
-                ));
+                w.line(&replica.render(i));
             }
             w.field("master_failover_state", "no-failover")
                 .field("master_replid", &replid)
@@ -726,7 +726,7 @@ impl InfoSection for KeysizesSection {
 mod tests {
     use super::super::test_support::sources;
     use super::super::{
-        InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine, SectionSelector,
+        InfoBuilder, PrimarySnapshot, RateLimitSnapshot, ReplicaLine, ReplicaState, SectionSelector,
     };
     use super::*;
     use frogdb_core::{ServerCommandStats, WalLagAggregate};
@@ -1103,6 +1103,140 @@ mod tests {
         assert!(out.contains("master_repl_offset:172\r\n"), "{out}");
     }
 
+    /// A snapshot shaped like one a completed handshake produces.
+    fn streaming_replica(listening_port: u16) -> frogdb_replication::ReplicaInfo {
+        use frogdb_replication::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession};
+        let session = ReplicaSession::new(1, "127.0.0.1:54321".parse().unwrap());
+        ReplicaInfo {
+            listening_port,
+            acked_offset: 99,
+            phase: Phase::Streaming,
+            capabilities: ReplicaCapabilities::default(),
+            ..session.snapshot()
+        }
+    }
+
+    // FM-REPLICATION-043, FM-REPLICATION-049
+    /// Every field of a `slaveN:` line is projected off the replica's own
+    /// snapshot. `state` and `lag` used to be string constants in the format
+    /// call (GAP-2 / GAP-3): `state=online` was true only because the caller
+    /// pre-filtered to streaming replicas — two facts in two files with nothing
+    /// tying them — and `lag=0` was a literal even though the tracker already
+    /// computed the number the lag-disconnect policy acts on.
+    #[test]
+    fn a_slave_line_is_projected_from_the_replica_not_from_literals() {
+        use frogdb_replication::Phase;
+
+        let line = ReplicaLine::from_replica(&streaming_replica(7001));
+        assert_eq!(line.port, 7001, "the announced port, not 0");
+        assert_eq!(line.state, ReplicaState::Online);
+        assert_eq!(
+            line.render(0),
+            "slave0:ip=127.0.0.1,port=7001,state=online,offset=99,lag=0"
+        );
+
+        // The state now follows the phase rather than the caller's filter: a
+        // replica still receiving its checkpoint reports `send_bulk`, which is
+        // what tells an operator the link is not yet usable for WAIT.
+        let mut mid_sync = streaming_replica(7001);
+        mid_sync.phase = Phase::StreamingCheckpoint;
+        let line = ReplicaLine::from_replica(&mid_sync);
+        assert_eq!(line.state, ReplicaState::SendBulk);
+        assert!(line.render(2).contains("state=send_bulk"), "{line:?}");
+
+        // Every phase maps to a state; none may render as `online` by default.
+        for (phase, expected) in [
+            (Phase::Connecting, ReplicaState::WaitBgsave),
+            (Phase::PreparingCheckpoint, ReplicaState::WaitBgsave),
+            (Phase::StreamingCheckpoint, ReplicaState::SendBulk),
+            (Phase::Streaming, ReplicaState::Online),
+            (Phase::Disconnecting, ReplicaState::Offline),
+        ] {
+            assert_eq!(ReplicaState::from(phase), expected, "{phase:?}");
+        }
+    }
+
+    // FM-REPLICATION-043, FM-REPLICATION-049
+    /// `lag` is the age of the replica's last ACK in whole seconds, so a
+    /// replica that has gone quiet renders a growing number instead of a
+    /// permanent `0` (GAP-3).
+    #[test]
+    fn a_slave_line_reports_the_real_ack_age() {
+        use std::time::{Duration, Instant};
+
+        let mut replica = streaming_replica(7001);
+        replica.last_ack_time = Instant::now() - Duration::from_secs(4);
+        let line = ReplicaLine::from_replica(&replica);
+        assert_eq!(line.lag_secs, 4);
+        assert!(line.render(0).ends_with(",lag=4"), "{line:?}");
+    }
+
+    // FM-REPLICATION-050
+    /// The two INFO renderers report the same three PSYNC counters for the same
+    /// state. They are separate code paths over separate data sources
+    /// (connection-level sections vs. the shard-local builder scripts see), and
+    /// the duplication is exactly how both ended up hardcoding zeros.
+    #[test]
+    fn both_info_renderers_report_the_same_sync_counters() {
+        use frogdb_replication::SyncCountersSnapshot;
+
+        let sync = SyncCountersSnapshot {
+            full: 3,
+            partial_ok: 4,
+            partial_err: 5,
+        };
+        let mut src = sources();
+        src.replication.sync = sync;
+
+        let connection_level = render(&StatsSection, &src);
+        let shard_local = crate::commands::info::build_stats_info(sync);
+
+        let sync_lines = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| line.starts_with("sync_"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        assert_eq!(
+            sync_lines(&connection_level),
+            vec![
+                "sync_full:3".to_string(),
+                "sync_partial_ok:4".to_string(),
+                "sync_partial_err:5".to_string(),
+            ],
+            "{connection_level}"
+        );
+        assert_eq!(
+            sync_lines(&connection_level),
+            sync_lines(&shard_local),
+            "the two INFO renderers must agree for the same state"
+        );
+    }
+
+    // FM-REPLICATION-050
+    /// A primary that has served no PSYNC reports all three at zero, and the
+    /// zero is live rather than printed: nudging one counter away from zero
+    /// moves only that line. A renderer with `sync_full` etc. hardcoded to `0`
+    /// (the pre-fix state) would render this baseline correctly too — zero and
+    /// a literal `0` are the same bytes — and only the perturbation below can
+    /// tell them apart.
+    #[test]
+    fn an_untouched_primary_reports_zero_sync_counters() {
+        let out = render(&StatsSection, &sources());
+        assert!(out.contains("sync_full:0\r\n"), "{out}");
+        assert!(out.contains("sync_partial_ok:0\r\n"), "{out}");
+        assert!(out.contains("sync_partial_err:0\r\n"), "{out}");
+
+        let mut src = sources();
+        src.replication.sync.full = 7;
+        let out = render(&StatsSection, &src);
+        assert!(out.contains("sync_full:7\r\n"), "{out}");
+        assert!(out.contains("sync_partial_ok:0\r\n"), "{out}");
+        assert!(out.contains("sync_partial_err:0\r\n"), "{out}");
+    }
+
     // FM-REPLICATION-043
     #[test]
     fn replication_primary_renders_slave_lines() {
@@ -1111,7 +1245,9 @@ mod tests {
             replicas: vec![ReplicaLine {
                 ip: "127.0.0.1".to_string(),
                 port: 7001,
+                state: ReplicaState::Online,
                 offset: 99,
+                lag_secs: 0,
             }],
         });
         src.replication.repl_offset = 100;

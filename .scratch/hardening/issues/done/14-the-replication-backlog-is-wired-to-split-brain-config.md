@@ -1,6 +1,6 @@
 # The replication backlog is wired to the split-brain config keys
 
-Status: needs-triage
+Status: done
 Type: bug (availability + correctness)
 Severity: likelihood 2/3 (three ordinary-looking config keys, one of which is documented as having
 no effect on replication), consequence 3/3 (`split-brain-buffer-size = 0` hangs the server in a
@@ -77,3 +77,60 @@ it returns (today it never does — the test needs a timeout harness or the fix 
 `split_brain_log_enabled = false` and asserts a reconnecting replica still gets `+CONTINUE`, which
 pins the wiring itself and would have caught the swap. Spec rows FM-REPLICATION-012/013/014 (armed
 floor, `+CONTINUE` replay, backlog bounded on both axes) are the rows this belongs under.
+
+## Resolution
+
+Both pieces fixed as proposed, renaming rather than aliasing.
+
+**The wiring.** `ReplicationConfigSection` gained `backlog_enabled` / `backlog_size` /
+`backlog_max_mb` (joining the existing `backlog_ttl_secs`), and `split_brain_buffer_size` /
+`split_brain_buffer_max_mb` were **removed** rather than kept as aliases. There is only one ring
+buffer — it serves both the partial-resync replay and the split-brain divergence capture from the
+same entries — so those two keys never described a buffer that exists independently of the backlog;
+they described the backlog under a name that hid what it did. `split_brain_log_enabled` survives as
+a genuinely log-only flag (`SplitBrainLogger` is already `Option`, `None` when it is off), and its
+doc comment now says what the code does. Defaults are today's effective values (`true`, `10_000`,
+`64`).
+
+The mapping itself was extracted from the middle of `init_replication` into a pure
+`fn backlog_config(&ReplicationConfigSection) -> BacklogConfig`, precisely so a unit test can hold
+it — the defect was entirely in the mapping, which is why no replication test could see it (the
+backlog behaved correctly throughout).
+
+**Key mutability: TOML-only (`#[param(skip)]`), not `CONFIG SET`-able.** `ReplicationRingBuffer::new`
+fixes `max_entries`/`max_bytes` at construction and there is no live-resize path, so a `CONFIG SET`
+could only report a change the running buffer never made — the same lying-observability class this
+campaign is closing (cf. FM-REPLICATION-046). Redis's live `repl-backlog-size` resize is unbuilt in
+FrogDB; if it is ever built, these become mutable then. `backlog_ttl_secs` stays
+`#[param(mutable, name = "repl-backlog-ttl")]` because `BacklogTtl` is a live `Arc` seam a retune
+actually reaches. Shape follows the `4ced6229` precedent (`skip` + a `validate()` that rejects 0).
+
+**The hang.** `push`'s eviction loop now leads with `!entries.is_empty() &&`, so the guard covers
+**both** caps instead of only the byte one and an empty deque always exits. `validate()` rejects `0`
+on both caps with an error that also names `backlog_enabled` (the switch the operator wanted), and
+rejects a `backlog_max_mb` whose byte form overflows; `backlog_max_bytes()` is the single
+`checked_mul(1024 * 1024)` spelling that validation and the wiring share, and the wiring saturates
+rather than wraps on the (now unreachable) overflow. No `CONFIG SET` validator was needed — the caps
+are not settable.
+
+**The hang was real and was reproduced.** The forcing test was written first and hung: it failed
+after the 10 s harness timeout with `max_entries = 0: push never returned — the eviction loop cannot
+drain an empty deque`, and passed once the guard was hoisted. It runs `push` on a spawned thread
+behind `recv_timeout` so a regression fails the test rather than wedging the suite, and covers
+`max_entries = 0`, `max_bytes = 0` and both-zero.
+
+Forcing tests: `ring_buffer_push_terminates_under_a_degenerate_cap` (frogdb-replication),
+`zero_backlog_caps_are_rejected_and_the_mb_conversion_is_checked` (frogdb-config),
+`the_backlog_is_configured_by_backlog_keys_only` and
+`an_overflowing_backlog_mb_saturates_rather_than_wrapping` (frogdb-server, unit — deliberately not
+the integration suite, which `cargo mutants -p` never runs), plus
+`partial_resync_survives_split_brain_logging_disabled` (integration; boots with
+`split_brain_log_enabled = false` and asserts a raw `PSYNC` still gets `+CONTINUE`). Spec row
+**FM-REPLICATION-047**, plus an amendment to FM-REPLICATION-016, whose "Deliberate non-guarantees"
+section documented this hang as a live bug.
+
+**Two claims in this issue were off.** The suggested rows were FM-REPLICATION-012/013/014; the row
+that actually documents the hang — and cites this issue in its `Bug refs` — is **016** (the
+both-axes bound), not 014. And "reject `0` ... in the corresponding `CONFIG SET` validators" has no
+target: the caps were `skip` params before this fix and stayed `skip` after, so `CONFIG SET` never
+reached them.

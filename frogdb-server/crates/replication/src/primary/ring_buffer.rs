@@ -126,9 +126,17 @@ impl ReplicationRingBuffer {
                 Ordering::AcqRel,
             );
         }
-        while entries.len() >= self.max_entries
-            || (self.current_bytes.load(Ordering::Relaxed) + entry_size > self.max_bytes
-                && !entries.is_empty())
+        // `!entries.is_empty()` guards **both** caps, not just the byte one: an
+        // eviction loop whose exit depends on `pop_front` succeeding can never
+        // terminate once the deque is drained, and it spins holding
+        // `self.entries` — so every later write parks on a lock that is never
+        // released. `max_entries == 0` reached that state on the very first
+        // push (`0 >= 0`). Config validation refuses `0`, but the loop is what
+        // makes the hang unreachable from *any* caller, including the ones that
+        // build a `BacklogConfig` in process (issue 14).
+        while !entries.is_empty()
+            && (entries.len() >= self.max_entries
+                || self.current_bytes.load(Ordering::Relaxed) + entry_size > self.max_bytes)
         {
             if let Some(evicted) = entries.pop_front() {
                 self.current_bytes

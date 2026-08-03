@@ -11,7 +11,9 @@ use frogdb_core::{ConnMutation, ExecutionStrategy, ServerWideOp};
 use frogdb_protocol::Response;
 use tracing::Instrument;
 
-use crate::commands::replication::PsyncHandoff;
+use frogdb_replication::AnnouncedOption;
+
+use crate::commands::replication::{PsyncHandoff, announcement_error};
 use crate::connection::ConnectionHandler;
 use crate::connection::conn_command::ConnectionCommand;
 
@@ -27,7 +29,8 @@ use crate::connection::conn_command::ConnectionCommand;
 ///   decisions over the socketless
 ///   [`PreDispatchView`](crate::connection::guards::PreDispatchView).
 /// - **Dispatch stages** (`PreAuthIntercept`, `ResetIntercept`,
-///   `TransactionControl`, `PauseGate`, `ConnectionCommand`, `PsyncIntercept`,
+///   `TransactionControl`, `PauseGate`, `ConnectionCommand`,
+///   `ReplicationHandshake`,
 ///   `WaitIntercept`, `ServerWide`, `ClusterSlotSubcommand`, `Execute`)
 ///   terminate into a command executor that needs the full handler; their arms
 ///   are thin adapters over the unchanged executors.
@@ -51,8 +54,9 @@ pub(crate) enum DispatchStage {
     PauseGate,
     /// CONFIG/CLIENT/INFO/ASKING/… registry union (capability from the spec).
     ConnectionCommand,
-    /// PSYNC handoff signal.
-    PsyncIntercept,
+    /// The replica handshake: `REPLCONF` identity announcement, then the PSYNC
+    /// handoff signal.
+    ReplicationHandshake,
     /// WAIT → WaitCoordinator.
     WaitIntercept,
     /// SCAN/KEYS/FLUSHDB/MIGRATE/…
@@ -99,7 +103,7 @@ impl DispatchStage {
             | Self::TransactionControl
             | Self::PauseGate
             | Self::ConnectionCommand
-            | Self::PsyncIntercept
+            | Self::ReplicationHandshake
             | Self::WaitIntercept
             | Self::ServerWide
             | Self::ClusterSlotSubcommand
@@ -122,7 +126,7 @@ pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 16] = [
     DispatchStage::CommandLookup,
     DispatchStage::PauseGate,
     DispatchStage::ConnectionCommand,
-    DispatchStage::PsyncIntercept,
+    DispatchStage::ReplicationHandshake,
     DispatchStage::WaitIntercept,
     DispatchStage::ServerWide,
     DispatchStage::ClusterSlotSubcommand,
@@ -142,7 +146,7 @@ pub(crate) enum StageOutcome {
     ShortCircuit(Vec<Response>),
     /// End dispatch by handing the raw socket to the primary replication
     /// handler (PSYNC). A *control* outcome, not data: the sole producer is
-    /// [`DispatchStage::PsyncIntercept`], after its presence gate, so the
+    /// [`DispatchStage::ReplicationHandshake`], after its presence gate, so the
     /// takeover is a compiler-tracked value rather than a sentinel `Response`.
     Handoff(PsyncHandoff),
 }
@@ -534,13 +538,40 @@ impl ConnectionHandler {
                 }
             }
 
-            // Handle PSYNC: this stage owns the entire takeover decision. It is
-            // the single site that role-gates the replication handoff *and*
+            // The replica handshake, both halves of it. A replica announces
+            // itself with `REPLCONF listening-port` / `REPLCONF capa` and only
+            // then sends `PSYNC`, and the two must be handled in the same place:
+            // `PSYNC` is what *creates* the replica's session, so the
+            // announcement has to be accumulated on the connection until then.
+            // Handling `REPLCONF` on the shard path instead would drop it —
+            // the shard executor has no connection to write it to, which was
+            // exactly the `port=0` bug (FM-REPLICATION-049).
+            //
+            // For `PSYNC` this stage also owns the entire takeover decision: it
+            // is the single site that role-gates the replication handoff *and*
             // parses the args, yielding a typed `StageOutcome::Handoff` (carried
             // out as a raw-socket takeover by the connection task) or a client
             // error. It never runs the shard `PsyncCommand::execute` — parsing
             // happens once, here.
-            DispatchStage::PsyncIntercept => {
+            DispatchStage::ReplicationHandshake => {
+                if cmd_name == "REPLCONF" {
+                    // Only the *announcing* options are intercepted. `ACK`,
+                    // `GETACK`, `ip-address` and every option this primary does
+                    // not know fall through to the shard executor, which keeps
+                    // answering them as before (FM-REPLICATION-018).
+                    match AnnouncedOption::parse(&cmd.args) {
+                        Ok(Some(option)) => {
+                            self.replica_announcement.absorb(option);
+                            return StageOutcome::ShortCircuit(vec![Response::ok()]);
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            return StageOutcome::ShortCircuit(vec![
+                                announcement_error(err).to_response(),
+                            ]);
+                        }
+                    }
+                }
                 if cmd_name == "PSYNC" {
                     // Role gate: only a primary can hand off a replication
                     // stream. Read live, because the handler itself is built on
@@ -782,7 +813,7 @@ mod tests {
             CommandLookup,
             PauseGate,
             ConnectionCommand,
-            PsyncIntercept,
+            ReplicationHandshake,
             WaitIntercept,
             ServerWide,
             ClusterSlotSubcommand,
@@ -903,7 +934,7 @@ mod tests {
             (CommandLookup, true),
             (PauseGate, false),
             (ConnectionCommand, false),
-            (PsyncIntercept, false),
+            (ReplicationHandshake, false),
             (WaitIntercept, false),
             (ServerWide, false),
             (ClusterSlotSubcommand, false),

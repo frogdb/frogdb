@@ -11,7 +11,7 @@ rationale: `.scratch/hardening/` (specs, issues, metrics).
 | 0 | Enablement (freeze, gating, recipes, frogdb-net) | **done** (2026-07-31) |
 | 1 | Transactions / VLL | **LOCKED** (2026-08-01) — mutation gate 90%, both crates at 100% |
 | 2 | Persistence / recovery | **LOCKED** (2026-08-02) — mutation gate 85%, frogdb-persistence 99.1%, frogdb-recovery 100% |
-| 3 | Replication runtime | **in progress** — extracted (`docs/adr/0004-replication-runtime-seams.md`); spec at FM-REPLICATION-001..043; 8 bugs filed (issues 12-19); baselines `frogdb-replication` 74.7%, `frogdb-replication-runtime` 50.0% |
+| 3 | Replication runtime | **in progress** — extracted (`docs/adr/0004-replication-runtime-seams.md`); spec at FM-REPLICATION-001..053 (044-050 written by closing a bug, 051-053 by the runtime mutation round); 13 bugs filed (issues 12-24), 12-18 fixed, 19-24 open (21-24 raised by the adversarial review of the round's own diff); baselines `frogdb-replication` 74.7%, `frogdb-replication-runtime` 50.0%, scoped re-run of the gap-filled files 95.2%, `frogdb-replication-runtime` re-run after the gap-fill 100% of viable (53 caught / 0 missed / 6 unviable) |
 | 4 | Cluster runtime | pending |
 
 Each area goes through: **extract → failure-mode spec → close known bugs → mutation-test →
@@ -68,11 +68,24 @@ cache.
   row names the test that forces it in its `Forced by` cell (backticked, comma-separated), and
   every named test carries a `// FM-<AREA>-NNN` comment on its definition (above the doc/attribute
   block). `just lint-failure-modes` enforces both directions — an unforced row, a name no test
-  matches, and a tag no row names are all errors — and runs as part of `just lint`.
+  matches, and a tag no row names are all errors — and runs as part of `just lint`. A *tag* is a
+  comment line that is nothing but ids (`// FM-TXN-004`, `// FM-TXN-009, FM-TXN-022`); prose that
+  cites an id in passing (`… the complement of FM-REPLICATION-018`) is a cross-reference and is
+  deliberately not linted, so production code may point at the row it implements.
 - Campaign issues: `.scratch/hardening/issues/` per [issue-tracker](issue-tracker.md) conventions.
 - Metrics: `.scratch/hardening/metrics/loop-cost.md` — record a row before and after each
   extraction (`just loop-cost <area>`).
 - Bug fixes follow spec-first order: failure-mode row → failing test → fix.
+- **A mutation score is a floor, not a measurement — put the forcing test in the mutated crate.**
+  `cargo mutants -p <crate>` runs only that package's own tests against each mutant (cargo-mutants
+  tests the mutated package unless `--test-package`/`--test-workspace` says otherwise). A row whose
+  only `Forced by` test lives in `frogdb-server/crates/server/tests/` therefore contributes nothing
+  to the score of the crate it describes: the mutant is reported as missed even though a test would
+  have caught it. This is why the replication area measures lower than it behaves — many of its
+  forcing tests are in `integration_replication.rs`. Widening the test scope is not the fix (the
+  server suite per mutant is hours of compute); the fix is to force each invariant from a unit test
+  in the crate that owns it, keeping the integration test as the end-to-end check rather than as
+  the only witness.
 - Command families behind cargo features (`frogdb-commands`): default `core-profile` covers
   strings/bitmap/lists/hashes/sets/zsets/expiry/multi/blocking/scan/generic/sort. Exotic families
   (`json`, `timeseries`, `bloom`, `cuckoo`, `cms`, `topk`, `tdigest`, `geo`, `vectorset`,

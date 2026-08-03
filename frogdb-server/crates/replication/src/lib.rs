@@ -41,6 +41,7 @@ pub mod replica;
 pub mod replica_session;
 pub mod split_brain_log;
 pub mod state;
+pub mod sync_counters;
 pub mod tracker;
 pub mod wait_coordinator;
 
@@ -59,11 +60,15 @@ pub use primary::{
     PreCheckpointHook, PrimaryReplicationHandler,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
-pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};
+pub use replica_session::{
+    AnnouncedOption, AnnouncementError, Phase, ReplicaAnnouncement, ReplicaCapabilities,
+    ReplicaInfo, ReplicaSession, SyncKind, ack_age_secs,
+};
 pub use state::{
     ReplicationState, StagedReplicationMetadata, consume_staged_replication_metadata,
     discard_staged_full_sync, read_staged_replication_metadata,
 };
+pub use sync_counters::{SyncCounters, SyncCountersSnapshot, SyncOutcome};
 pub use tracker::{ReplicationTrackerImpl, ack_is_fresh};
 pub use wait_coordinator::{AckSolicitor, RoleFence, WaitCoordinator, WaitVerdict};
 

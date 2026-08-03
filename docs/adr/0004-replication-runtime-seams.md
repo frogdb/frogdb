@@ -49,7 +49,7 @@ What stayed behind stayed for one reason: it is coupled to a live connection. Th
 `REPLICAOF`/`SLAVEOF` handler mutates the connection's own role view and drives the
 `RoleManager` through `CommandContext`; `REPLCONF` is a handshake exchange whose state belongs
 to the replica connection that sent it; and `PSYNC` never reaches a shard at all —
-`DispatchStage::PsyncIntercept` parses it into a `PsyncHandoff` and the connection task hands
+`DispatchStage::ReplicationHandshake` parses it into a `PsyncHandoff` and the connection task hands
 the raw socket to the `PrimaryReplicationHandler`, so the registered `Command` executor exists
 only to carry arity/flags and returns an internal error if it is ever actually run. Boot
 wiring (`server::replication_init`) and `role_manager` stay for the same reason: they build
@@ -58,7 +58,9 @@ crates, so server call sites did not move.
 
 Consequences: the four seams are unit-testable in a crate that builds without the server test
 binary, and the failure-mode contract is `.scratch/hardening/specs/replication-failure-modes.md`,
-which now carries FM-REPLICATION-001..043 and names these files in its own scope statement.
+which now carries FM-REPLICATION-001..053 and names these files in its own scope statement —
+including three rows (051-053) written directly against these seams, because the runtime crate's
+own tests reached almost none of them.
 The measured baseline is honest about how much of that is verified: `frogdb-replication`
 scored 533 caught / 181 missed / 1 timeout / 84 unviable — 74.7% on viable mutants — and that
 number is a floor rather than a measurement, because `cargo mutants -p frogdb-replication`

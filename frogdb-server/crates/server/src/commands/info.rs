@@ -30,6 +30,9 @@ use frogdb_protocol::Response;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use frogdb_replication::SyncCountersSnapshot;
+
+use crate::info::{ReplicaLine, sync_counter_fields};
 use crate::latency_test;
 use frogdb_cluster::version_gate;
 
@@ -145,7 +148,15 @@ fn append_section(
         b"server" => build_server_info(ctx),
         b"memory" => build_memory_info(ctx),
         b"persistence" => build_persistence_info(ctx),
-        b"stats" => build_stats_info(ctx),
+        b"stats" => {
+            // The PSYNC counters are node-wide, not shard-local, so they come
+            // off the tracker rather than the shard — the same source the
+            // connection-level renderer reads (FM-REPLICATION-050).
+            let sync = ctx
+                .replication_tracker
+                .map_or_else(Default::default, |tracker| tracker.sync_counters());
+            build_stats_info(sync)
+        }
         b"replication" => build_replication_info(ctx),
         b"cpu" => build_cpu_info(),
         b"keyspace" => build_keyspace_info(ctx),
@@ -333,8 +344,12 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
 /// `keyspace_hits`/`keyspace_misses`, `total_error_replies`) are omitted, not
 /// emitted as placeholder zeros; the connection-level builder
 /// ([`crate::info`]) reports them for clients.
-fn build_stats_info(_ctx: &mut CommandContext) -> String {
-    "# Stats\r\n\
+///
+/// `sync` is passed in rather than read from a `CommandContext` so this
+/// renderer is a pure function of its inputs and can be compared line-for-line
+/// against the connection-level one in a unit test.
+pub(crate) fn build_stats_info(sync: SyncCountersSnapshot) -> String {
+    let mut info = "# Stats\r\n\
      total_connections_received:1\r\n\
      total_commands_processed:0\r\n\
      instantaneous_ops_per_sec:0\r\n\
@@ -346,11 +361,13 @@ fn build_stats_info(_ctx: &mut CommandContext) -> String {
      instantaneous_output_kbps:0.00\r\n\
      instantaneous_input_repl_kbps:0.00\r\n\
      instantaneous_output_repl_kbps:0.00\r\n\
-     rejected_connections:0\r\n\
-     sync_full:0\r\n\
-     sync_partial_ok:0\r\n\
-     sync_partial_err:0\r\n\
-     expired_stale_perc:0.00\r\n\
+     rejected_connections:0\r\n"
+        .to_string();
+    for (name, value) in sync_counter_fields(sync) {
+        info.push_str(&format!("{name}:{value}\r\n"));
+    }
+    info.push_str(
+        "expired_stale_perc:0.00\r\n\
      expired_time_cap_reached_count:0\r\n\
      expire_cycle_cpu_milliseconds:0\r\n\
      evicted_clients:0\r\n\
@@ -377,8 +394,9 @@ fn build_stats_info(_ctx: &mut CommandContext) -> String {
      total_reads_processed:0\r\n\
      total_writes_processed:0\r\n\
      io_threaded_reads_processed:0\r\n\
-     io_threaded_writes_processed:0\r\n\r\n"
-        .to_string()
+     io_threaded_writes_processed:0\r\n\r\n",
+    );
+    info
 }
 
 fn build_replication_info(ctx: &CommandContext) -> String {
@@ -398,15 +416,11 @@ fn build_replication_info(ctx: &CommandContext) -> String {
             connected_slaves
         );
 
-        // Add info for each connected replica
+        // One `slaveN:` spelling for both INFO renderers — see
+        // [`ReplicaLine::render`] (FM-REPLICATION-049).
         for (i, replica) in replicas.iter().enumerate() {
-            info.push_str(&format!(
-                "slave{}:ip={},port={},state=online,offset={},lag=0\r\n",
-                i,
-                replica.address.ip(),
-                replica.listening_port,
-                replica.acked_offset
-            ));
+            info.push_str(&ReplicaLine::from_replica(replica).render(i));
+            info.push_str("\r\n");
         }
 
         // Add replication IDs and offset info

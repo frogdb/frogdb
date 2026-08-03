@@ -46,6 +46,33 @@ pub(super) struct ReplicationInitResult {
     pub replication_identity: ReplicationIdentity,
 }
 
+/// Map the replication config section onto the backlog the primary handler is
+/// built with.
+///
+/// Extracted as a pure function because the mapping itself was the bug (issue
+/// 14): three of the four fields were read from the *split-brain* keys, so
+/// `split-brain-log-enabled = false` — documented as log-only, and the obvious
+/// way to stop audit files accumulating — silently switched off partial resync
+/// and turned every replica reconnect into a full checkpoint transfer. A
+/// wiring mistake of that shape is invisible to every test that does not read
+/// the wiring, so it lives here where a unit test can pin each field to its
+/// own key.
+fn backlog_config(replication: &crate::config::ReplicationConfigSection) -> BacklogConfig {
+    BacklogConfig {
+        enabled: replication.backlog_enabled,
+        max_entries: replication.backlog_size,
+        max_bytes: replication.backlog_max_bytes().unwrap_or_else(|| {
+            // `validate()` refuses an overflowing value at boot, so this is
+            // unreachable from a loaded config. Saturating (rather than the old
+            // unchecked `* 1024 * 1024`, which wraps to an arbitrarily small —
+            // possibly zero — cap) keeps an in-process caller that skipped
+            // validation with a byte cap that is too large rather than too small.
+            replication.backlog_max_mb.saturating_mul(1024 * 1024)
+        }),
+        ttl_secs: replication.backlog_ttl_secs,
+    }
+}
+
 /// Initialize replication handlers based on the server role.
 ///
 /// The replication state is recovered upstream by recovery phase 5 (already
@@ -76,8 +103,14 @@ pub(super) struct ReplicationInitResult {
 ///   share one `replication.state_file`.
 /// - Only a replica boot builds a [`ReplicaReplicationHandler`] and dials a
 ///   primary; a runtime demotion starts its own stream via the `RoleManager`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn init_replication(
     config: &Config,
+    // The port this node actually serves RESP on (the bound one, which is what
+    // `config.server.port == 0` resolves to). A boot-configured replica
+    // announces it with `REPLCONF listening-port`, and it is what the primary
+    // renders as `slaveN:port=` / `ROLE` (FM-REPLICATION-049).
+    listening_port: u16,
     recovered_replication: &frogdb_core::ReplicationState,
     rocks_store: &Option<Arc<RocksStore>>,
     shard_senders: &Arc<Vec<frogdb_core::ShardSender>>,
@@ -118,12 +151,7 @@ pub(super) fn init_replication(
             threshold_secs: config.replication.replication_lag_threshold_secs,
             cooldown: Duration::from_secs(config.replication.fullresync_cooldown_secs),
         },
-        BacklogConfig {
-            enabled: config.replication.split_brain_log_enabled,
-            max_entries: config.replication.split_brain_buffer_size,
-            max_bytes: config.replication.split_brain_buffer_max_mb * 1024 * 1024,
-            ttl_secs: config.replication.backlog_ttl_secs,
-        },
+        backlog_config(&config.replication),
         config.replication.replica_write_timeout_ms,
     ));
     // A FULLRESYNC checkpoint must contain every write this node has already
@@ -186,7 +214,7 @@ pub(super) fn init_replication(
 
         let (mut handler, frame_rx) = ReplicaReplicationHandler::new(
             resolved_primary_addr,
-            config.server.port,
+            listening_port,
             identity.clone(),
             state_path.clone(),
             config.persistence.data_dir.clone(),
@@ -373,6 +401,68 @@ mod tests {
     use crate::replication::ReplicationIdentity;
     use frogdb_replication::ReplicationState;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    // FM-REPLICATION-047
+    /// Every backlog field comes from a backlog key, and no split-brain key
+    /// reaches the backlog at all.
+    ///
+    /// The bug this pins was a wiring swap, not a logic error: `enabled`,
+    /// `max_entries` and `max_bytes` were read from `split-brain-log-enabled`,
+    /// `split-brain-buffer-size` and `split-brain-buffer-max-mb`. Nothing else
+    /// in the suite reads the mapping, so the swap survived every replication
+    /// test — the backlog behaved correctly, it was just tuned by the wrong
+    /// operator gesture. The test therefore sets each backlog key to a value
+    /// distinguishable from every default *and* pins the split-brain flag to
+    /// the opposite of `backlog_enabled`, so the old wiring cannot pass.
+    #[test]
+    fn the_backlog_is_configured_by_backlog_keys_only() {
+        let replication = crate::config::ReplicationConfigSection {
+            backlog_enabled: true,
+            backlog_size: 4321,
+            backlog_max_mb: 7,
+            backlog_ttl_secs: 99,
+            // The log-only flag, set to the value that used to switch the
+            // backlog off underneath the operator.
+            split_brain_log_enabled: false,
+            ..Default::default()
+        };
+        assert!(replication.validate().is_ok());
+
+        let backlog = backlog_config(&replication);
+        assert!(
+            backlog.enabled,
+            "split-brain logging is log-only; it must not disable partial resync"
+        );
+        assert_eq!(backlog.max_entries, 4321);
+        assert_eq!(backlog.max_bytes, 7 * 1024 * 1024);
+        assert_eq!(backlog.ttl_secs, 99);
+
+        // ...and the backlog's own switch is the one that does turn it off.
+        let off = crate::config::ReplicationConfigSection {
+            backlog_enabled: false,
+            split_brain_log_enabled: true,
+            ..replication.clone()
+        };
+        assert!(!backlog_config(&off).enabled);
+    }
+
+    // FM-REPLICATION-047
+    /// The MB→byte conversion saturates instead of wrapping.
+    ///
+    /// `validate()` rejects the overflowing value at boot, so this guards the
+    /// direction the old unchecked `* 1024 * 1024` got wrong: a wrapped product
+    /// lands on an arbitrarily *small* cap (zero, for any multiple of
+    /// 2^64 / 2^20), which would evict the backlog to a single entry on a
+    /// config the operator wrote to make it enormous.
+    #[test]
+    fn an_overflowing_backlog_mb_saturates_rather_than_wrapping() {
+        let replication = crate::config::ReplicationConfigSection {
+            backlog_max_mb: usize::MAX,
+            ..Default::default()
+        };
+        assert!(replication.validate().is_err(), "boot must refuse it");
+        assert_eq!(backlog_config(&replication).max_bytes, usize::MAX);
+    }
 
     fn handler(
         dir: &std::path::Path,

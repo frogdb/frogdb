@@ -35,6 +35,9 @@ pub mod export;
 pub mod install;
 pub mod quorum;
 
+#[cfg(test)]
+mod test_shards;
+
 pub use executor::ReplicaCommandExecutor;
 pub use export::live_snapshot_source;
 pub use install::LiveSnapshotInstaller;

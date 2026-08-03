@@ -78,6 +78,7 @@ use bytes::BytesMut;
 use codec::FrogDbResp2;
 use frogdb_core::{ClientHandle, PubSubMsg, PubSubReceiver, PubSubSender};
 use frogdb_protocol::{ParsedCommand, Response, WireResponse};
+use frogdb_replication::ReplicaAnnouncement;
 use futures::StreamExt;
 use lifecycle::TrackingIo;
 use tokio_util::codec::Framed;
@@ -172,11 +173,21 @@ pub struct ConnectionHandler {
     /// seam so it can be exposed through [`ConnCtx::memory_diag`].
     memory_diag: crate::connection::observability_conn_command::MemoryDiag,
 
-    /// Pending PSYNC connection takeover. Set when `PsyncIntercept` yields a
+    /// Pending PSYNC connection takeover. Set when `ReplicationHandshake` yields a
     /// typed [`Dispatched::Handoff`], carried out after the run loop (so any
     /// buffered pipelined replies flush over the wire before the socket is
     /// handed to the `PrimaryReplicationHandler`).
     pending_psync_handoff: Option<PsyncHandoff>,
+
+    /// What this connection has announced about itself over `REPLCONF`, if it
+    /// is a replica mid-handshake.
+    ///
+    /// Accumulated by `DispatchStage::ReplicationHandshake` and handed to the
+    /// primary at the `PSYNC` takeover below, because `PSYNC` is what creates
+    /// the replica's session — there is no session to write it into when the
+    /// `REPLCONF` arrives. A connection that never sends `REPLCONF` keeps the
+    /// default, which is what a `PSYNC` from a bare client would register.
+    replica_announcement: ReplicaAnnouncement,
 
     /// Reusable buffer for RESP3 encoding to avoid per-response allocation.
     resp3_buf: BytesMut,
@@ -281,6 +292,7 @@ impl ConnectionHandler {
                 config.memory_diag_config,
             ),
             pending_psync_handoff: None,
+            replica_announcement: ReplicaAnnouncement::default(),
             resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,
             is_replica: config.is_replica,
@@ -789,17 +801,16 @@ impl ConnectionHandler {
                 "Performing PSYNC handoff"
             );
 
-            // A handoff is only ever stashed after `PsyncIntercept` passed the
+            // A handoff is only ever stashed after `ReplicationHandshake` passed the
             // `primary_replication_handler.is_none()` gate, so the handler is
             // present here by construction. The former no-handler `else` (a
             // silent warn) is thus dead; this `expect` documents the invariant
             // and would surface a dispatch-order regression loudly rather than
             // silently dropping the replica.
-            let handler = self
-                .cluster
-                .primary_replication_handler
-                .as_ref()
-                .expect("PsyncIntercept gates handler presence before yielding a handoff");
+            let handler =
+                self.cluster.primary_replication_handler.as_ref().expect(
+                    "ReplicationHandshake gates handler presence before yielding a handoff",
+                );
 
             // Extract the ConnectionStream from the Framed codec and type-erase
             // it for the replication handler (`handle_psync` takes a
@@ -814,7 +825,13 @@ impl ConnectionHandler {
             let boxed_stream: frogdb_replication::BoxedStream = Box::new(connection_stream);
 
             if let Err(e) = handler
-                .handle_psync(boxed_stream, self.state.addr, &replication_id, offset)
+                .handle_psync(
+                    boxed_stream,
+                    self.state.addr,
+                    &replication_id,
+                    offset,
+                    self.replica_announcement,
+                )
                 .await
             {
                 warn!(

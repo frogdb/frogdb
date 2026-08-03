@@ -17,7 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
-use crate::replica_session::{Phase, ReplicaInfo, ReplicaSession};
+use crate::replica_session::{
+    Phase, ReplicaAnnouncement, ReplicaInfo, ReplicaSession, ack_age_secs,
+};
+use crate::sync_counters::{SyncCounters, SyncCountersSnapshot, SyncOutcome};
 
 /// Whether an ACK that landed `ack_age` ago is still inside a freshness
 /// `window`.
@@ -62,6 +65,13 @@ pub struct ReplicationTrackerImpl {
     /// Timestamps of proactive lag disconnects, keyed by socket address.
     /// Address-based (not replica_id) because replica IDs change on reconnect.
     lag_disconnect_times: RwLock<HashMap<SocketAddr, Instant>>,
+
+    /// Lifetime tally of how each `PSYNC` resolved — `INFO`'s `sync_full`,
+    /// `sync_partial_ok` and `sync_partial_err`. Kept here rather than on a
+    /// session because it must outlive every session: the number an operator
+    /// cares about is how often replicas *had* to resync, and the sessions that
+    /// resynced are long gone.
+    sync_counters: SyncCounters,
 }
 
 impl Default for ReplicationTrackerImpl {
@@ -79,6 +89,7 @@ impl ReplicationTrackerImpl {
             current_offset: Arc::new(AtomicU64::new(0)),
             ack_notify,
             lag_disconnect_times: RwLock::new(HashMap::new()),
+            sync_counters: SyncCounters::default(),
         }
     }
 
@@ -103,8 +114,22 @@ impl ReplicationTrackerImpl {
     /// keeps an Arc so consumers can query it via [`Self::get_streaming_replicas`]
     /// and friends until [`Self::unregister_replica`] is called.
     pub fn register_replica(&self, address: SocketAddr) -> Arc<ReplicaSession> {
+        self.register_announced_replica(address, ReplicaAnnouncement::default())
+    }
+
+    /// Register a replica that announced its identity over `REPLCONF` before
+    /// sending `PSYNC`.
+    ///
+    /// The announcement is seeded into the session at construction, so a
+    /// session is never visible to `INFO replication` / `ROLE` carrying a
+    /// placeholder `port=0` (FM-REPLICATION-049).
+    pub fn register_announced_replica(
+        &self,
+        address: SocketAddr,
+        announcement: ReplicaAnnouncement,
+    ) -> Arc<ReplicaSession> {
         let id = self.next_replica_id.fetch_add(1, Ordering::Relaxed);
-        let session = ReplicaSession::new(id, address);
+        let session = ReplicaSession::announced(id, address, announcement);
         self.replicas.write().insert(id, session.clone());
         tracing::info!(
             replica_id = id,
@@ -264,7 +289,26 @@ impl ReplicationTrackerImpl {
         self.replicas
             .read()
             .get(&replica_id)
-            .map(|s| s.last_ack_time().elapsed().as_secs_f64())
+            .map(|s| ack_age_secs(s.last_ack_time()))
+    }
+
+    /// Record how one `PSYNC` resolved.
+    ///
+    /// Refusals are recorded by the primary at the `+FULLRESYNC` / `+CONTINUE`
+    /// fork, before the session is registered, so they move for every resolved
+    /// handshake — including ones that never reach a streaming session. A
+    /// *granted* partial is recorded later, by the streaming session, once the
+    /// backlog tail it promised has actually been extracted: the window can
+    /// close between the two (FM-REPLICATION-012), and a resume that was
+    /// abandoned served no data.
+    pub fn record_sync_outcome(&self, outcome: SyncOutcome) {
+        self.sync_counters.record(outcome);
+    }
+
+    /// Read `sync_full` / `sync_partial_ok` / `sync_partial_err` as one
+    /// consistent triple, for `INFO`.
+    pub fn sync_counters(&self) -> SyncCountersSnapshot {
+        self.sync_counters.snapshot()
     }
 
     /// Record that a replica was proactively disconnected due to lag.
