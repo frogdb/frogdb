@@ -73,8 +73,16 @@ pub fn plain_tcp_connect_factory(connect_timeout_ms: u64) -> ConnectFactory {
     })
 }
 
-/// Maximum frame size for cluster RPC messages (64 MiB).
-const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
+/// Maximum frame size for cluster RPC messages.
+///
+/// Not an independent number: the bus carries user payloads as well as
+/// consensus traffic — [`BusRpc::PubSubBroadcast`] and [`BusRpc::PubSubForward`]
+/// ship the channel and message a client published — so a ceiling below what
+/// the connection layer accepts is a message that is taken and then cannot be
+/// delivered. It is therefore the shared internal ceiling
+/// ([`frogdb_protocol::MAX_INTERNAL_FRAME_LEN`]), the same one the replication
+/// frame codec derives from (round-2 issue 69).
+const MAX_FRAME_SIZE: usize = frogdb_protocol::MAX_INTERNAL_FRAME_LEN;
 
 /// Simple error wrapper for network errors that implements std::error::Error.
 #[derive(Debug)]

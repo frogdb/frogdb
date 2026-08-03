@@ -340,9 +340,7 @@ impl WaiterRegistrationOrder {
         let mut out: Vec<(Bytes, u64, u64)> = self
             .map
             .iter()
-            .flat_map(|((key, client), regs)| {
-                regs.iter().map(move |r| (key.clone(), *client, r.seq))
-            })
+            .flat_map(|((key, client), regs)| regs.iter().map(|r| (key.clone(), *client, r.seq)))
             .collect();
         out.sort_unstable();
         out

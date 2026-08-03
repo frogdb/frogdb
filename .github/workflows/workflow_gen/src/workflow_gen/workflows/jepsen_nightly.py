@@ -111,6 +111,30 @@ def _install_lein_step() -> Step:
     )
 
 
+def _install_gnuplot_step() -> Step:
+    """Install gnuplot on the runner for Jepsen's perf checkers.
+
+    `jepsen.checker.perf` shells out to `gnuplot` for the latency/rate graphs and
+    treats a missing binary as a checker *error*, which turns an otherwise clean
+    analysis ("no anomalies found") into a red suite. The runner image does not
+    ship it; `gnuplot-nox` is the headless variant (no X11 pull-in).
+    """
+    return Step(
+        name="Install gnuplot",
+        run=script(
+            """\
+            if command -v gnuplot >/dev/null 2>&1; then
+              echo "gnuplot already present: $(command -v gnuplot)"
+              exit 0
+            fi
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq gnuplot-nox
+            gnuplot --version
+            """
+        ),
+    )
+
+
 def _run_suites_step() -> Step:
     """Run the selected Jepsen suites, continuing past a failing suite.
 
@@ -205,6 +229,7 @@ def jepsen_nightly_workflow() -> Workflow:
                 checkout_step(),
                 mise_setup_step(install_args=MISE_TOOLS),
                 _install_lein_step(),
+                _install_gnuplot_step(),
                 Step(
                     name="Build debug Docker image",
                     run=script("just docker-build-debug\n"),

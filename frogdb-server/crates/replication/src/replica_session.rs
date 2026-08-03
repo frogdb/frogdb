@@ -792,8 +792,30 @@ impl ReplicaSession {
         // streamed; the live tail dedups against it (step 3).
         let current = handler.offsets.current();
         let mut resume_offset = replay_from;
-        for (offset, shard_id, payload) in handler.replay.extract_backlog(replay_from, current) {
-            let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode();
+        // The window can close between the grant and here — the grant is written
+        // before the checkpoint is cut, and the whole payload transfer sits in
+        // between, which on a busy primary is long enough to evict the resume
+        // point outright. A short tail would be streamed as if it were the whole
+        // thing (the live tail then dedups against the last frame actually sent),
+        // leaving the replica a permanent hole with a contiguous-looking offset,
+        // so a truncated window abandons the resume instead: the link drops, the
+        // replica reconnects, and its `PSYNC` is answered `+FULLRESYNC` because
+        // the same floor check fails at grant time too (round-2 issue 52).
+        let tail = handler
+            .replay
+            .extract_backlog(replay_from, current)
+            .map_err(|truncated| {
+                tracing::warn!(
+                    replica_id = self.id,
+                    replay_from,
+                    error = %truncated,
+                    "Backlog window closed before the resume could be streamed; \
+                     dropping the link so the replica comes back for a full sync"
+                );
+                io::Error::new(io::ErrorKind::InvalidData, truncated)
+            })?;
+        for (offset, shard_id, payload) in tail {
+            let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode()?;
             stream.write_all(&encoded).await?;
             resume_offset = offset;
         }
@@ -853,7 +875,22 @@ impl ReplicaSession {
                         if frame.sequence <= resume_offset {
                             continue;
                         }
-                        let encoded = frame.encode();
+                        let encoded = match frame.encode() {
+                            Ok(encoded) => encoded,
+                            Err(e) => {
+                                // Unreplicable, and no reconnect can change that
+                                // — the same frame comes back from the backlog.
+                                // Drop the link loudly rather than put a frame
+                                // with a wrapped length prefix on the wire.
+                                tracing::error!(
+                                    replica_id = lag_replica_id,
+                                    sequence = frame.sequence,
+                                    error = %e,
+                                    "Replication frame exceeds the link's frame ceiling; dropping the replica link"
+                                );
+                                break;
+                            }
+                        };
                         if let Forward::Break =
                             forward_frame(&mut write_half, &encoded, write_timeout, lag_replica_id)
                                 .await
@@ -1174,6 +1211,18 @@ mod tests {
         rocks: Option<Arc<RocksStore>>,
         data_dir: PathBuf,
     ) -> Arc<PrimaryReplicationHandler> {
+        make_handler_with_backlog_entries(tracker, rocks, data_dir, 10_000)
+    }
+
+    /// Same, with the backlog's entry cap under the test's control — a cap of a
+    /// few entries makes eviction happen on demand instead of after 10 000
+    /// writes.
+    fn make_handler_with_backlog_entries(
+        tracker: Arc<ReplicationTrackerImpl>,
+        rocks: Option<Arc<RocksStore>>,
+        data_dir: PathBuf,
+        max_entries: usize,
+    ) -> Arc<PrimaryReplicationHandler> {
         let state_path = data_dir.join("replication_state.json");
         let identity =
             crate::identity::ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
@@ -1190,7 +1239,7 @@ mod tests {
             },
             BacklogConfig {
                 enabled: true,
-                max_entries: 10_000,
+                max_entries,
                 max_bytes: 64 * 1024 * 1024,
                 ttl_secs: 0,
             },
@@ -1414,6 +1463,153 @@ mod tests {
         drop(client);
         let _ = task.await.unwrap();
         assert_eq!(tracker.replica_count(), 0);
+    }
+
+    /// Read to EOF and assert nothing more was streamed.
+    ///
+    /// An abandoned resume must leave the wire empty: not a short tail, not a
+    /// frame, just the close.
+    async fn assert_no_frames_then_eof(client: &mut tokio::io::DuplexStream) {
+        let mut rest = Vec::new();
+        loop {
+            let mut buf = [0u8; 256];
+            match client.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => rest.extend_from_slice(&buf[..n]),
+            }
+        }
+        assert!(
+            !rest.windows(4).any(|w| w == crate::frame::FRAME_MAGIC),
+            "an abandoned resume must stream no frames, got {} trailing bytes",
+            rest.len()
+        );
+    }
+
+    /// The window can close between the grant and the replay, and when it does
+    /// the resume is abandoned — never streamed short.
+    ///
+    /// The `+CONTINUE` is already on the wire when the eviction happens (a
+    /// 1-byte duplex parks the session inside that write), which is exactly the
+    /// production shape: the grant is decided against one window and streamed
+    /// against a later one. Pre-fix, `extract_backlog` returned the surviving
+    /// suffix, `resume_offset` was seeded from the last frame actually sent, the
+    /// live tail deduped against it, and the replica was permanently missing the
+    /// evicted range with an offset that looked contiguous (round-2 issue 52).
+    // FM-REPLICATION-012
+    #[tokio::test]
+    async fn a_resume_evicted_after_the_grant_is_abandoned_not_truncated() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        // Two entries of backlog: eviction is a few writes away, not 10 000.
+        let handler =
+            make_handler_with_backlog_entries(tracker.clone(), None, dir.path().to_path_buf(), 2);
+
+        // The offset the reconnecting replica holds, granted while it is still
+        // inside the window.
+        let held = handler.broadcast_command("SET", &[Bytes::from("k0"), Bytes::from("v0")]);
+        assert!(handler.replay.backlog_start().unwrap() <= held);
+
+        let (mut client, server) = tokio::io::duplex(1);
+        let session = tracker.register_replica(addr());
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(server, SyncKind::Partial { replay_from: held }, handler)
+                    .await
+            }
+        });
+
+        // The session is parked writing `+CONTINUE`; evict the resume point out
+        // from under the grant it just made.
+        for i in 1..=4 {
+            handler.broadcast_command("SET", &[Bytes::from(format!("k{i}")), Bytes::from("v")]);
+        }
+        assert!(
+            handler.replay.backlog_start().unwrap() > held,
+            "the test must actually evict the resume point"
+        );
+
+        // Unblock the session by draining the grant line.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+CONTINUE"), "got: {line:?}");
+
+        // The replay refuses, so the session fails the link instead of streaming
+        // the surviving suffix.
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the session must not hang on a closed window")
+            .unwrap();
+        let err = result.expect_err("a truncated replay must fail the link");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "got: {err}");
+
+        assert_no_frames_then_eof(&mut client).await;
+        assert_eq!(tracker.replica_count(), 0, "the session must be cleaned up");
+    }
+
+    /// The same window, on the path that opens it widest: a full sync, where the
+    /// grant is written before the dataset is even cut and the whole payload
+    /// transfer sits between the grant and the replay.
+    // FM-REPLICATION-012
+    #[tokio::test]
+    async fn a_full_sync_whose_handoff_window_is_evicted_abandons_the_link() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler =
+            make_handler_with_backlog_entries(tracker.clone(), None, dir.path().to_path_buf(), 2);
+        with_live_dataset(&handler, vec![dataset_blob(&[("seed", "v")])]);
+        let repl_id = handler.state.read().replication_id.clone();
+
+        // Tiny buffer: the session parks inside the dataset write, which is the
+        // production stand-in for a multi-gigabyte checkpoint transfer.
+        let (mut client, server) = tokio::io::duplex(32);
+        let session = tracker.register_replica(addr());
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(
+                        server,
+                        SyncKind::Full {
+                            replication_id: repl_id,
+                        },
+                        handler,
+                    )
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        // Writes during the transfer overrun the backlog, so the snapshot offset
+        // the replica was granted is no longer inside the window.
+        for i in 0..4 {
+            handler.broadcast_command(
+                "SET",
+                &[Bytes::from(format!("during{i}")), Bytes::from("v")],
+            );
+        }
+        assert!(handler.replay.backlog_start().unwrap() > 0);
+
+        let (blobs, _) = drain_live_dataset(&mut client).await;
+        assert_eq!(blobs.len(), 1);
+
+        // The replica gets a whole dataset and then a dropped link — it comes
+        // back for a fresh full sync rather than resuming past the hole.
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the session must not hang on a closed window")
+            .unwrap();
+        let err = result.expect_err("a truncated handoff replay must fail the link");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "got: {err}");
+
+        assert_no_frames_then_eof(&mut client).await;
+        assert_eq!(tracker.replica_count(), 0, "the session must be cleaned up");
     }
 
     /// Streaming drop: a partial sync that completes and enters `Streaming`,

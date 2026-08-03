@@ -182,8 +182,21 @@ pub const FRAME_HEADER_SIZE: usize = 20; // 4 + 1 + 1 + 2 + 8 + 4
 /// id is a control frame; the consumer handles it without shard routing.
 pub const CONTROL_SHARD: u16 = u16::MAX;
 
-/// Maximum frame payload size (64 MB)
-pub const MAX_FRAME_SIZE: usize = 64 * 1024 * 1024;
+/// Maximum frame payload size — **derived**, not chosen.
+///
+/// A replication frame carries the RESP encoding of a command the connection
+/// layer already accepted and the primary already committed, so this ceiling
+/// cannot be picked independently of the ceiling that admitted the write:
+/// anything the client layer takes and this codec refuses is a write that is
+/// acknowledged and unreplicable, and the link wedges re-sending it from the
+/// backlog forever (round-2 issue 69, which is what a private 64 MB constant
+/// bought against a 512 MB [`frogdb_protocol::PROTO_MAX_BULK_LEN`]).
+///
+/// So it is [`frogdb_protocol::MAX_INTERNAL_FRAME_LEN`], the shared internal
+/// ceiling, and both directions enforce it: [`ReplicationFrame::encode`]
+/// refuses an oversized payload instead of truncating its length prefix through
+/// an unchecked `as u32`, and `decode` refuses a header that claims more.
+pub const MAX_FRAME_SIZE: usize = frogdb_protocol::MAX_INTERNAL_FRAME_LEN;
 
 /// Frame flags
 #[derive(Debug, Clone, Copy, Default)]
@@ -275,8 +288,29 @@ impl ReplicationFrame {
         }
     }
 
-    /// Encode frame to bytes.
-    pub fn encode(&self) -> Bytes {
+    /// Whether a payload of `len` bytes fits a frame.
+    ///
+    /// The predicate the encoders share, exposed so the boundary can be pinned
+    /// at exactly [`MAX_FRAME_SIZE`] without allocating a gigabyte to do it.
+    #[inline]
+    pub fn payload_fits(len: usize) -> bool {
+        len <= MAX_FRAME_SIZE
+    }
+
+    /// Encode frame to bytes, or refuse a payload no frame can carry.
+    ///
+    /// The length prefix is a `u32`, so an unchecked cast of an oversized
+    /// payload would wrap and put a frame on the wire whose header disagrees
+    /// with its bytes — the receiver would decode the truncated prefix and then
+    /// read the remainder as the next frame's header, desynchronising the link
+    /// for good. Refusing is the honest failure: the caller drops the
+    /// connection and the replica comes back for a full resync.
+    pub fn encode(&self) -> Result<Bytes, FrameEncodeError> {
+        if !Self::payload_fits(self.payload.len()) {
+            return Err(FrameEncodeError::PayloadTooLarge {
+                size: self.payload.len(),
+            });
+        }
         let mut buf = BytesMut::with_capacity(FRAME_HEADER_SIZE + self.payload.len());
 
         buf.put_slice(&FRAME_MAGIC);
@@ -287,7 +321,7 @@ impl ReplicationFrame {
         buf.put_u32(self.payload.len() as u32);
         buf.put_slice(&self.payload);
 
-        buf.freeze()
+        Ok(buf.freeze())
     }
 
     /// Decode frame from bytes.
@@ -344,6 +378,23 @@ impl ReplicationFrame {
     #[inline]
     pub fn stream_advance(&self) -> u64 {
         self.payload.len() as u64
+    }
+}
+
+/// The one way encoding a frame can fail: a payload larger than the link can
+/// carry ([`MAX_FRAME_SIZE`]).
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum FrameEncodeError {
+    #[error(
+        "payload too large to replicate: {size} bytes exceeds the {} byte frame ceiling",
+        MAX_FRAME_SIZE
+    )]
+    PayloadTooLarge { size: usize },
+}
+
+impl From<FrameEncodeError> for io::Error {
+    fn from(err: FrameEncodeError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidInput, err.to_string())
     }
 }
 
@@ -481,6 +532,15 @@ impl Encoder<ReplicationFrame> for ReplicationFrameCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: ReplicationFrame, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        // Same ceiling as `ReplicationFrame::encode`, refused the same way: a
+        // `u32` length prefix cannot describe a larger payload, and writing the
+        // wrapped value would desynchronise the reader.
+        if !ReplicationFrame::payload_fits(item.payload.len()) {
+            return Err(FrameEncodeError::PayloadTooLarge {
+                size: item.payload.len(),
+            }
+            .into());
+        }
         dst.reserve(FRAME_HEADER_SIZE + item.payload.len());
 
         dst.put_slice(&FRAME_MAGIC);
@@ -504,7 +564,7 @@ mod tests {
         let payload = Bytes::from("test payload data");
         let frame = ReplicationFrame::new(12345, payload.clone());
 
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
         let decoded = ReplicationFrame::decode(encoded).unwrap();
 
         assert_eq!(decoded.version, FRAME_VERSION);
@@ -520,7 +580,7 @@ mod tests {
         flags.set(FrameFlags::END_OF_BATCH);
 
         let frame = ReplicationFrame::with_flags(100, payload, flags);
-        let encoded = frame.encode();
+        let encoded = frame.encode().unwrap();
         let decoded = ReplicationFrame::decode(encoded).unwrap();
 
         assert!(decoded.flags.contains(FrameFlags::COMPRESSED));
@@ -534,7 +594,7 @@ mod tests {
         // the streaming codec, and defaults to CONTROL_SHARD via `new`.
         let payload = Bytes::from("data");
         let tagged = ReplicationFrame::new_on_shard(7, 3, payload.clone());
-        let decoded = ReplicationFrame::decode(tagged.encode()).unwrap();
+        let decoded = ReplicationFrame::decode(tagged.encode().unwrap()).unwrap();
         assert_eq!(decoded.shard_id, 3);
         assert_eq!(decoded.sequence, 7);
         assert_eq!(decoded.payload, payload);
@@ -557,6 +617,94 @@ mod tests {
         let via_codec = codec.decode(&mut buf).unwrap().unwrap();
         assert_eq!(via_codec.shard_id, 5);
         assert_eq!(via_codec.sequence, 9);
+    }
+
+    // --- the link carries what the connection layer accepted (issue 69) ------
+
+    /// The ceiling is derived from the RESP bulk ceiling, not chosen next to
+    /// it. Pinned as a relation rather than a number so the two cannot drift
+    /// back into a band where a write is accepted and then unreplicable — which
+    /// is what a private 64 MB frame constant did against a 512 MB bulk limit.
+    // FM-REPLICATION-011
+    #[test]
+    fn the_frame_ceiling_is_derived_from_the_resp_bulk_ceiling() {
+        assert_eq!(MAX_FRAME_SIZE, frogdb_protocol::MAX_INTERNAL_FRAME_LEN);
+        // Both relations are compile-time truths, so they are asserted in const
+        // blocks: a drift between the two ceilings fails the build rather than
+        // the test run.
+        const {
+            assert!(
+                MAX_FRAME_SIZE > frogdb_protocol::PROTO_MAX_BULK_LEN,
+                "a maximal bulk value plus its command framing must fit a frame"
+            );
+        }
+        // The header's length prefix is a `u32`; a ceiling above that could not
+        // be described on the wire even if the encoder allowed it.
+        const {
+            assert!(
+                MAX_FRAME_SIZE <= u32::MAX as usize,
+                "the frame ceiling must be describable by the header's u32 length"
+            );
+        }
+
+        // The boundary itself, without allocating a gigabyte to touch it.
+        assert!(ReplicationFrame::payload_fits(0));
+        assert!(ReplicationFrame::payload_fits(MAX_FRAME_SIZE - 1));
+        assert!(ReplicationFrame::payload_fits(MAX_FRAME_SIZE));
+        assert!(!ReplicationFrame::payload_fits(MAX_FRAME_SIZE + 1));
+    }
+
+    /// A payload no `u32` length prefix can describe is refused, not truncated.
+    /// The unchecked `as u32` this replaces wrote a wrapped length, so the peer
+    /// decoded a short frame and then read the rest of the payload as the next
+    /// frame's header — a link that never resynchronises.
+    ///
+    /// The oversized buffer is never written to, so its pages stay unmapped:
+    /// the allocation is virtual, and `encode` refuses before it copies.
+    // FM-REPLICATION-011
+    #[test]
+    fn encode_refuses_a_payload_larger_than_the_frame_ceiling() {
+        let oversized = Bytes::from(vec![0u8; MAX_FRAME_SIZE + 1]);
+        let frame = ReplicationFrame::new(1, oversized.clone());
+
+        assert!(matches!(
+            frame.encode(),
+            Err(FrameEncodeError::PayloadTooLarge { size }) if size == MAX_FRAME_SIZE + 1
+        ));
+
+        // The tokio codec enforces the same ceiling the same way.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        let err = codec
+            .encode(ReplicationFrame::new(1, oversized), &mut buf)
+            .expect_err("the streaming encoder must refuse it too");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(buf.is_empty(), "a refused frame writes no bytes");
+    }
+
+    /// The regression proper: a value inside the documented client limit but
+    /// above the old private 64 MB frame ceiling crosses the link intact. Before
+    /// the ceilings were related, the primary accepted this write, committed it,
+    /// and then emitted a frame its replica's decoder rejected on sight.
+    // FM-REPLICATION-011
+    #[test]
+    fn a_payload_over_the_old_ceiling_round_trips_across_the_link() {
+        const OVER_OLD_CEILING: usize = 64 * 1024 * 1024 + 1;
+        let payload = Bytes::from(vec![7u8; OVER_OLD_CEILING]);
+        let frame = ReplicationFrame::new_on_shard(42, 3, payload.clone());
+
+        let decoded = ReplicationFrame::decode(frame.encode().unwrap()).unwrap();
+        assert_eq!(decoded.payload.len(), OVER_OLD_CEILING);
+        assert_eq!(decoded.payload, payload);
+        assert_eq!(decoded.shard_id, 3);
+
+        // And through the streaming codec both ends actually use.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        codec.encode(frame, &mut buf).unwrap();
+        let via_codec = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(via_codec.payload.len(), OVER_OLD_CEILING);
+        assert_eq!(via_codec.sequence, 42);
     }
 
     #[test]

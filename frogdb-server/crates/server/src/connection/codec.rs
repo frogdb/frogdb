@@ -20,6 +20,7 @@
 //! telnet input.
 
 use bytes::{Bytes, BytesMut};
+use frogdb_protocol::PROTO_MAX_MULTIBULK_LEN;
 use redis_protocol::{
     codec::Resp2,
     error::{RedisProtocolError, RedisProtocolErrorKind},
@@ -27,13 +28,14 @@ use redis_protocol::{
 };
 use tokio_util::codec::{Decoder, Encoder};
 
-/// Maximum number of elements in a multibulk (array) request.
-/// Redis uses 1048576 (1024 * 1024).
-const PROTO_MAX_MULTIBULK_LEN: i64 = 1_048_576;
-
-/// Maximum length of a single bulk string (512 MB).
-/// Redis uses `512ll * 1024 * 1024`.
-const PROTO_MAX_BULK_LEN: i64 = 512 * 1024 * 1024;
+/// Maximum length of a single bulk string, as the parsed `$N` header's type.
+///
+/// The value is [`frogdb_protocol::PROTO_MAX_BULK_LEN`] — the one home of the
+/// RESP ceilings, shared with the transports that have to carry what this codec
+/// accepts (the replication frame codec and the cluster bus; see
+/// `frogdb_protocol::MAX_INTERNAL_FRAME_LEN`). Only the `i64` view is local,
+/// because a declared length is parsed as `i64` and may be negative.
+const PROTO_MAX_BULK_LEN: i64 = frogdb_protocol::PROTO_MAX_BULK_LEN as i64;
 
 /// Maximum length of an inline (telnet-style) request line.
 /// Redis uses `PROTO_INLINE_MAX_SIZE` = `1024 * 64`.

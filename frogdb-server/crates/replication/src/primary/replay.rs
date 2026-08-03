@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::primary::ring_buffer::{BacklogConfig, ReplicationRingBuffer};
+use crate::primary::ring_buffer::{BacklogConfig, BacklogTruncated, ReplicationRingBuffer};
 use crate::state::ReplicationState;
 
 /// How long the backlog outlives its last replica (Redis `repl-backlog-ttl`).
@@ -209,9 +209,24 @@ impl PartialSyncReplay {
     }
 
     /// The replay tail `(start, end]`, offset-ordered — each entry
-    /// `(offset, origin_shard, resp_bytes)`. Only call after [`Self::can_replay`]
-    /// has confirmed coverage.
-    pub fn extract_backlog(&self, start: u64, end: u64) -> Vec<(u64, u16, Bytes)> {
+    /// `(offset, origin_shard, resp_bytes)`.
+    ///
+    /// [`Self::can_replay`] confirms coverage at grant time; this re-confirms it
+    /// against the window as it stands *now*, because the grant and the stream
+    /// are separated by a checkpoint cut and a file transfer. `Err` means the
+    /// resume must be abandoned, not shortened — see [`BacklogTruncated`].
+    pub fn extract_backlog(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<(u64, u16, Bytes)>, BacklogTruncated> {
+        if !self.enabled {
+            // Nothing is buffered by configuration, so there is no window to be
+            // truncated *by eviction* and nothing to abandon: a disabled backlog
+            // means every reconnect is a full resync (`FullResyncReason::Disabled`)
+            // and the full-sync handoff has no replay to make.
+            return Ok(Vec::new());
+        }
         self.backlog.extract_backlog(start, end)
     }
 
@@ -307,11 +322,17 @@ impl PartialSyncReplay {
     ) -> ReplayDecision {
         match self.can_replay(state, requested_id, req_offset, current_offset) {
             Err(reason) => ReplayDecision::FullResync(reason),
-            Ok(()) => ReplayDecision::Continue(ReplayGrant {
-                replay_from: req_offset,
-                frames: self.extract_backlog(req_offset, current_offset),
-                resume_offset: current_offset,
-            }),
+            // The extraction re-checks the window under the entries lock, so an
+            // eviction between `can_replay` and here degrades to a full resync
+            // instead of a short tail.
+            Ok(()) => match self.extract_backlog(req_offset, current_offset) {
+                Ok(frames) => ReplayDecision::Continue(ReplayGrant {
+                    replay_from: req_offset,
+                    frames,
+                    resume_offset: current_offset,
+                }),
+                Err(_) => ReplayDecision::FullResync(FullResyncReason::BacklogEvicted),
+            },
         }
     }
 
@@ -603,7 +624,16 @@ mod tests {
         assert!(replay.expire_backlog_if_idle(0, t0 + Duration::from_secs(60)));
         assert_eq!(replay.backlog_start(), None);
         assert_eq!(replay.oldest_offset(), None);
-        assert!(replay.extract_backlog(0, head).is_empty());
+        // A freed window does not answer "nothing to replay" — it refuses the
+        // extraction outright, so no caller can mistake the empty tail for a
+        // caught-up replica (see the contiguity row of the failure-mode spec).
+        assert_eq!(
+            replay.extract_backlog(0, head),
+            Err(BacklogTruncated {
+                requested: 0,
+                floor: None
+            })
+        );
     }
 
     /// The clock is idle time, not age: any tick that sees a replica clears it,

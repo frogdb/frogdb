@@ -7,6 +7,7 @@ publish = false
 description = "Raft-based cluster coordination for FrogDB"
 
 [dependencies]
+frogdb-protocol.workspace = true
 openraft.workspace = true
 rocksdb.workspace = true
 parking_lot.workspace = true
