@@ -1406,8 +1406,8 @@ mod tests {
     // ========================================================================
 
     use frogdb_replication::{
-        LagThresholdConfig, Phase, PrimaryReplicationHandler, ReplicationBroadcaster,
-        ReplicationTrackerImpl, SplitBrainBufferConfig, state::ReplicationState,
+        BacklogConfig, LagThresholdConfig, Phase, PrimaryReplicationHandler,
+        ReplicationBroadcaster, ReplicationTrackerImpl, state::ReplicationState,
     };
     use frogdb_telemetry::PrometheusRecorder;
 
@@ -1428,10 +1428,11 @@ mod tests {
                 threshold_secs: 0,
                 cooldown: Duration::from_secs(0),
             },
-            SplitBrainBufferConfig {
+            BacklogConfig {
                 enabled: true,
                 max_entries: buffer_entries,
                 max_bytes: 64 * 1024 * 1024,
+                ttl_secs: 0,
             },
             0,
         ))

@@ -29,9 +29,9 @@ push-discipline rule, not a CI gate; full runs: `just mutants <crate>` +
 `docs/adr/0003-persistence-durability-seams.md`.
 
 A surviving mutant that no test can kill is documented *at the code*, with a comment saying why
-the mutation is unobservable — never with a blanket skip. The persistence lock carries five such
+the mutation is unobservable — never with a blanket skip. The persistence lock carries six such
 equivalents (RocksDB option knobs whose two forms produce identical reads, a match arm that is
-redundant with its own fallback, a `NoopSnapshotCoordinator` accessor with no state to report,
+redundant with its own fallback, two `NoopSnapshotCoordinator` accessors with no state to report,
 and a drain-loop disjunct that costs channel round-trips rather than batch contents).
 
 ## Out of scope — do not touch during the campaign

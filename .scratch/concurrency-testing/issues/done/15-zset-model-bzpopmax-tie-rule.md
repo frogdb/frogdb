@@ -1,6 +1,6 @@
 # 15 — ZSet "not linearizable" reports are a model artifact: BZPOPMAX tie rule inverted
 
-Status: ready-for-agent
+Status: done
 Type: bug
 Origin: post-harness-fix re-verification of issue 11 Findings B/C (2026-08-02). **Finding C is not a
 product bug.**
@@ -108,3 +108,13 @@ divergence" comments whose premise no longer holds.
   generation (the tie source).
 - Issue 11 — Findings B/C, where these reports were classified as product bugs.
 - Issue 14 — why the repro is probabilistic.
+
+## Resolution
+
+Fixed 2026-08-02 (checker-repair batch; finished by session coordinator after agent stalls).
+`ZSetModel`'s blocking-pop comparator now models both directions of the `(score, member)` order:
+BZPOPMIN pops the lex-smallest member on a score tie, BZPOPMAX the lex-greatest — matching the
+server's `SkipList::pop_first`/`pop_last`. The stale "workloads avoid ties" comment is replaced
+with the tie-break rationale (ties are routine under the generator: five members over 100
+scores with re-scoring). Model unit test with a deliberate score tie added; sweep re-runs after
+the fix produced zero ZSet-linearizability reports (previously seeds 1/10/13/19 class).

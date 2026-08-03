@@ -1,6 +1,6 @@
 # Recovery has no corruption threshold and cannot tell an empty database from the wrong one
 
-Status: ready-for-human
+Status: done
 Type: bug (data safety)
 Severity: likelihood 2/3 (a mistyped data-dir is an ordinary operator slip; wholesale value
 corruption is rare), consequence 3/3 (an empty keyspace comes up healthy and is then written to,
@@ -101,12 +101,47 @@ Forcing tests: `wholly_undecodable_database_refuses_to_start`,
 Spec: FM-PERSISTENCE-033 retitled and rewritten to the surfaced behavior; the refusal is a new row,
 FM-PERSISTENCE-045.
 
-## Remaining scope (why this stays open)
+## Resolution (rest of candidate 1): `recovery.on-decode-failure`, binary, default `continue`
 
-1. **A partial-corruption threshold.** Refuse (or degrade) when `keys_failed` exceeds a configured
-   fraction of the total, with a force-boot override. Needs a config knob and a policy decision;
-   the 100%-failure case above is the floor, not the whole of candidate 1.
-2. **Case 2 in full: "no existing data" vs "wrong data dir"** (candidate 3, the marker file).
-   Untouched — a mistyped `--data-dir` still boots as a fresh database. Note the refusal added
-   above does *not* help here: a wrong-but-writable directory has no data to fail decoding, so it
-   takes the `has_data() == false` path (FM-PERSISTENCE-029) exactly as before.
+The partial-corruption threshold left open above is now closed — as a **binary policy rather than
+a fraction**, which is the substantive part of the decision.
+
+`recovery.on-decode-failure` (`CONFIG` name `recovery-on-decode-failure`), enum
+`continue | refuse`, default `continue`, **boot-time only** (an immutable param — recovery has
+finished before the first connection exists, so a live-mutable knob could only ever lie about what
+the last boot did).
+
+- `continue` — today's behavior, unchanged: skip the undecodable key, count it, raise the aggregate
+  `ERROR` and `frogdb_recovery_keys_failed_total`, and still refuse outright when *nothing* decoded
+  (FM-PERSISTENCE-045).
+- `refuse` — *any* decode failure fails the `RestoreShards` phase, naming the count, the data dir,
+  the first failing key's context (shard, hot/warm tier, key preview, decode error) and the
+  remediation.
+
+**Why not a percentage.** A fractional threshold ("refuse above N%") reads as the more nuanced
+option and is the worse one: its denominator is the keys that *decoded*, which is exactly the
+number that corruption makes untrustworthy. A truncated column family can present as 3% failure or
+80% depending on where the truncation fell, and no operator has a defensible N. The two answers a
+person actually holds are "serve what I have" and "do not serve a keyspace that is missing things",
+which is what the binary offers. It also needs no force-boot override: flipping back to `continue`
+*is* the override, and it is the same knob rather than a second one.
+
+The `refuse` check is evaluated **before** the nothing-decoded refusal, so an operator who asked
+for `refuse` is told about their own policy rather than about a fallback that happens to agree
+with it. The first-failure context is captured first-wins across the whole database (shards in
+ascending id, hot tier before warm) and built lazily, so the `DecodeFailure` is constructed once
+rather than per failing key.
+
+Spec: FM-PERSISTENCE-047 (new), plus an FM-047 Redis-deviations row. Forcing tests:
+`refuse_policy_fails_the_boot_on_a_single_decode_failure`,
+`continue_policy_is_the_default_and_boots_past_a_decode_failure`,
+`refuse_policy_covers_warm_tier_decode_failures`, `decode_failure_context_is_first_wins`,
+`warm_decode_failure_context_records_the_warm_tier`.
+
+## Not in scope here
+
+**Case 2: "no existing data" vs "wrong data dir"** (candidate 3, the marker file) is untouched — a
+mistyped `--data-dir` still boots as a fresh database. Tracked as its own issue,
+`.scratch/hardening/issues/open/11-wrong-data-dir-boots-as-a-fresh-database.md`. Note that neither
+refusal added here helps it: a wrong-but-writable directory has no data to fail decoding, so it
+takes the `has_data() == false` path (FM-PERSISTENCE-029) exactly as before.

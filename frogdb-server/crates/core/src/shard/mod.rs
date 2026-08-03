@@ -86,7 +86,8 @@ pub use types::{
     MemoryCheckInfo, PartialResult, PubSubLimitsInfo, ShardClusterDeps, ShardConfig, ShardCoreDeps,
     ShardMemoryStats, ShardPersistenceDeps, TieredCounts, TransactionResult,
     VllContinuationLockInfo, VllKeyIntentInfo, VllPendingOpInfo, VllQueueInfo, WaitQueueInfo,
-    WaitQueueKeyInfo, WaitQueueWaiterInfo, WalLagStatsResponse,
+    WaitQueueKeyInfo, WaitQueueLogEntryInfo, WaitQueueLogInfo, WaitQueueWaiterInfo,
+    WalLagStatsResponse,
 };
-pub use wait_queue::{ShardWaitQueue, WaitEntry, WaiterDump};
+pub use wait_queue::{ShardWaitQueue, WaitEntry, WaitRegistrationRecord, WaiterDump};
 pub use worker::ShardWorker;

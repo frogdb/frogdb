@@ -13,6 +13,7 @@
 use bytes::Bytes;
 use frogdb_core::shard::{
     ExpiryIndexCheckInfo, LockTableInfo, MemoryCheckInfo, VllQueueInfo, WaitQueueInfo,
+    WaitQueueLogInfo,
 };
 use frogdb_core::{BoxFuture, DebugProvider, KeysizeHistograms};
 use frogdb_protocol::Response;
@@ -113,6 +114,18 @@ impl DebugProvider for ConnectionHandler {
             self.scatter_gather()
                 .gather_all(|_shard, response_tx| {
                     frogdb_core::shard::DebugIntrospectionMsg::GetWaitQueueInfo { response_tx }
+                })
+                .await
+        })
+    }
+
+    /// DEBUG WAITQUEUE-LOG — gather the blocking-registration journal from
+    /// every shard.
+    fn gather_wait_queue_log<'a>(&'a self) -> BoxFuture<'a, Vec<WaitQueueLogInfo>> {
+        Box::pin(async move {
+            self.scatter_gather()
+                .gather_all(|_shard, response_tx| {
+                    frogdb_core::shard::DebugIntrospectionMsg::GetWaitQueueLog { response_tx }
                 })
                 .await
         })

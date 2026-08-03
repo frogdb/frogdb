@@ -224,100 +224,101 @@ pub fn check_exactly_once_delivery(
     Ok(())
 }
 
-/// Blocked poppers (BLPOP/BRPOP hits) on a key are served in invoke order.
+/// Observed true registration order, built from the server's blocking
+/// registration journal (`DEBUG WAITQUEUE-LOG`): the ordinals the shard
+/// stamped on each waiter as it parked, joined onto workload clients.
 ///
-/// Waiters are grouped by the key each was actually *served* from — parsed
-/// out of the hit-encoding `"served_key|elem"` in the op result — rather
-/// than by `op.args.first()`. For multi-key blocking pops (e.g.
-/// `blpop k1 k2 0`), the first watched key need not be the key that ended
-/// up serving the op, so grouping by it can silently split one logical
-/// wake-order queue across multiple key buckets and hide real violations.
-/// Ops that timed out (`result == None`) are skipped: they were never
-/// served and carry no wake-order information.
+/// The journal is written at registration time, so it records every waiter -
+/// including one that parks and is served between two samples, which the
+/// earlier `DEBUG WAITQUEUE` *sampling* prober systematically missed
+/// (`.scratch/concurrency-testing/issues/16`).
 ///
-/// Known limitation: this check uses invoke-time order as a proxy for the
-/// server's actual registration order. Two waiters with near-simultaneous,
-/// overlapping invokes can legitimately register with the server in either
-/// order, so this can flag a false FIFO violation in that narrow race
-/// window. Phase 2's `DEBUG WAITQUEUE` registration-order dumps will let
-/// this check use exact registration order instead of invoke order;
-/// phase 3's generator will stagger blocking invokes to keep generated
-/// histories out of that window.
-pub fn check_fifo_wake_order(history: &History) -> Result<(), ConservationViolation> {
-    // served_key -> [(invoke_time, return_time, op_id)] for served blocking
-    // pops, grouped by the key each waiter was actually served from.
-    let mut by_key: HashMap<Bytes, Vec<(u64, u64, u64)>> = HashMap::new();
-    for op in history.completed_operations() {
-        if !matches!(op.function.as_str(), "blpop" | "brpop") {
-            continue;
-        }
-        let Some(result) = &op.result else {
-            // Timed out: never served, no ordering information to check.
-            continue;
-        };
-        let result_str = String::from_utf8_lossy(result);
-        let Some((served_key, _)) = result_str.split_once('|') else {
-            continue;
-        };
-        by_key
-            .entry(Bytes::from(served_key.to_string()))
-            .or_default()
-            .push((op.invoke_time, op.return_time, op.id));
-    }
-    for (key, mut served) in by_key {
-        served.sort_by_key(|x| x.1); // by serve (return) order
-        for w in served.windows(2) {
-            if w[0].0 > w[1].0 {
-                // Served earlier but invoked later -> jumped an earlier waiter.
-                return Err(ConservationViolation::FifoViolation {
-                    key: key.to_vec(),
-                    served: w[0].2,
-                    waiter: w[1].2,
-                });
-            }
-        }
-    }
-    Ok(())
+/// Ordinals are stored per `(key, client_id)` as a list, never collapsed, and
+/// each keeps the blocking command that produced it so a client's `BLPOP` /
+/// `BRPOP` registrations can be told apart from its `BZPOPMIN` ones on the same
+/// key. `complete` records whether the journal itself was whole; a truncated
+/// journal means "missing ordinal" no longer implies "never parked", so the
+/// checker refuses to judge at all.
+#[derive(Debug, Clone)]
+pub struct WaiterRegistrationOrder {
+    map: std::collections::HashMap<(Bytes, u64), Vec<Registration>>,
+    complete: bool,
 }
 
-/// Observed true registration order: `(served_key, client_id) -> registration_seq`,
-/// built from mid-run `DEBUG WAITQUEUE` observations.
-///
-/// Soundness constraint (binding on callers): this joins strictly on
-/// `(key, client_id)` and keeps the *smallest* observed ordinal per pair.
-/// That collapse is sound only because the multi-waiter generator path
-/// guarantees **at most one blocking pop per key per client** across a
-/// script — a client that parked twice on the same key would have two
-/// distinct registrations collapsed into one ordinal (its first), which
-/// can silently misjudge the second wait. Per-operation matching (using a
-/// prober observation's timestamp against each op's `[invoke, return]`
-/// interval, rather than joining on client identity alone) is the phase-4b
-/// lift that removes this constraint.
-#[derive(Debug, Default, Clone)]
-pub struct WaiterRegistrationOrder {
-    map: std::collections::HashMap<(Bytes, u64), u64>,
+/// One journaled registration: the ordinal the shard stamped on it, plus
+/// whether it came from the list-pop family the FIFO checker judges.
+#[derive(Debug, Clone, Copy)]
+struct Registration {
+    seq: u64,
+    list_pop: bool,
+}
+
+impl Default for WaiterRegistrationOrder {
+    /// An empty but *complete* order: a run with no blocking pops legitimately
+    /// journals nothing. Truncation is reported explicitly via
+    /// [`Self::mark_truncated`].
+    fn default() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            complete: true,
+        }
+    }
 }
 
 impl WaiterRegistrationOrder {
-    /// Record an observed registration ordinal for `client_id` waiting on
-    /// `key`. If multiple observations exist for the same `(key, client_id)`
-    /// pair (e.g. re-probed mid-run), the smallest ordinal wins — see the
-    /// struct-level soundness note for why that's safe.
-    pub fn insert(&mut self, key: Bytes, client_id: u64, registration_seq: u64) {
+    /// Record a journaled registration ordinal for `client_id` parking on `key`
+    /// via the blocking command `op` (`BLPOP`, `BZPOPMIN`, ... - case-insensitive).
+    pub fn insert(&mut self, key: Bytes, client_id: u64, registration_seq: u64, op: &str) {
         self.map
             .entry((key, client_id))
-            .and_modify(|e| *e = (*e).min(registration_seq))
-            .or_insert(registration_seq);
+            .or_default()
+            .push(Registration {
+                seq: registration_seq,
+                list_pop: op.eq_ignore_ascii_case("blpop") || op.eq_ignore_ascii_case("brpop"),
+            });
     }
 
-    fn get(&self, key: &Bytes, client_id: u64) -> Option<u64> {
-        self.map.get(&(key.clone(), client_id)).copied()
+    /// Mark the capture as incomplete (the server's journal was truncated, or
+    /// it could not be read). [`check_fifo_wake_order_exact`] then judges
+    /// nothing and reports the coverage collapse.
+    pub fn mark_truncated(&mut self) {
+        self.complete = false;
     }
 
-    /// Number of distinct `(key, client_id)` registrations recorded. A run's
-    /// smoke test asserts this is non-zero so a silent CLIENT ID ↔ WAITQUEUE
-    /// join mismatch (which would empty the map and silently disable the exact
-    /// checker via the all-known guard) fails loudly instead.
+    /// Whether the journal behind this order is known-complete.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// Ascending list-pop registration ordinals for `(key, client_id)`.
+    ///
+    /// Sorted because the ordinal *is* the registration order; the journal is
+    /// already appended in that order, but sorting removes any dependence on
+    /// how the per-shard journals were concatenated by the reader.
+    fn list_pop_ordinals(&self, key: &Bytes, client_id: u64) -> Vec<u64> {
+        let mut out: Vec<u64> = self
+            .map
+            .get(&(key.clone(), client_id))
+            .map(|regs| regs.iter().filter(|r| r.list_pop).map(|r| r.seq).collect())
+            .unwrap_or_default();
+        out.sort_unstable();
+        out
+    }
+
+    /// Total journaled list-pop (`BLPOP`/`BRPOP`) registrations: the number of
+    /// blocking pops that provably parked, and hence the only honest
+    /// denominator for exact-FIFO coverage.
+    pub fn list_pop_registrations(&self) -> usize {
+        self.map
+            .values()
+            .map(|regs| regs.iter().filter(|r| r.list_pop).count())
+            .sum()
+    }
+
+    /// Number of distinct `(key, client_id)` pairs with a recorded
+    /// registration. A run's smoke test asserts this is non-zero so a silent
+    /// CLIENT ID / journal join mismatch (which would empty the map and leave
+    /// the exact checker with nothing to judge) fails loudly instead.
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -327,7 +328,9 @@ impl WaiterRegistrationOrder {
         self.map.is_empty()
     }
 
-    /// Every recorded `(key, client_id) -> registration_seq` in a canonical order.
+    /// Every recorded registration as `(key, client_id, registration_seq)`, in a
+    /// canonical order. A `(key, client_id)` pair that parked more than once
+    /// contributes one entry per registration.
     ///
     /// The backing map is a `HashMap` with per-process seeded hashing, so its iteration
     /// order is not reproducible even between two runs in the same process. Callers that
@@ -337,38 +340,125 @@ impl WaiterRegistrationOrder {
         let mut out: Vec<(Bytes, u64, u64)> = self
             .map
             .iter()
-            .map(|((key, client), seq)| (key.clone(), *client, *seq))
+            .flat_map(|((key, client), regs)| {
+                regs.iter().map(move |r| (key.clone(), *client, r.seq))
+            })
             .collect();
         out.sort_unstable();
         out
     }
 }
 
-/// Exact FIFO wake-order: for each key whose served blocking pops *all* have
-/// a known registration ordinal, serve (return-time) order must equal
-/// ascending `registration_seq`. Keys missing one or more ordinals fall back
-/// to the invoke-time proxy used by [`check_fifo_wake_order`], applied only
-/// to that key's served waiters.
+/// How much of a history the exact FIFO checker was actually able to judge.
 ///
-/// A key with complete ordinals is judged **only** by ordinals, never also
-/// by the invoke-time proxy: the proxy is known to false-positive on
-/// overlapping invokes (two waiters can legitimately register in either
-/// order relative to their invoke timestamps), so re-running it over a key
-/// this function already validated exactly would risk flagging a spurious
-/// violation on a provably-correct history. This function therefore
-/// replicates the proxy's per-key logic inline (scoped to the residual,
-/// ordinal-incomplete keys) rather than delegating to
-/// `check_fifo_wake_order(history)` over the whole history afterward.
+/// Reported rather than silently absorbed: the predecessor of this checker
+/// degraded to an unsound invoke-order proxy whenever ordinals were missing,
+/// and did so invisibly — a coverage collapse read exactly like a clean run
+/// (`.scratch/concurrency-testing/issues/16`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FifoCoverage {
+    /// List-pop registrations the shard journaled, i.e. the blocking pops that
+    /// provably *parked*. This is the denominator that means something: a
+    /// blocking pop that found data already present never entered the wait
+    /// queue and carries no wake-order information, so it can never be judged
+    /// no matter how good the capture is.
+    pub registrations: usize,
+    /// Journaled registrations the checker tied to a specific operation. The
+    /// gap to [`Self::registrations`] is attribution loss (a client's pop count
+    /// on a key disagreed with its registration count there), not capture loss.
+    pub attributed: usize,
+    /// Served blocking pops the checker considered. Includes pops that never
+    /// parked, so `judged_pops / served_pops` is *not* a capture metric.
+    pub served_pops: usize,
+    /// Of those, how many carried an unambiguous registration ordinal.
+    pub judged_pops: usize,
+    /// Serve-order pairs actually compared (0 when no key had two judged pops,
+    /// i.e. nothing about wake ordering was verified).
+    pub pairs_compared: usize,
+    /// False when the registration journal was truncated/unavailable, in which
+    /// case nothing was judged at all.
+    pub complete: bool,
+}
+
+/// Exact FIFO wake-order: on each key, the blocking pops that provably *parked*
+/// must have been served in ascending registration order.
+///
+/// Waiters are grouped by the key each was actually *served* from - parsed out
+/// of the hit-encoding `"served_key|elem"` in the op result - rather than by
+/// `op.args.first()`. For multi-key blocking pops (e.g. `blpop k1 k2 0`), the
+/// first watched key need not be the key that ended up serving the op, so
+/// grouping by it can silently split one logical wake-order queue across
+/// multiple key buckets and hide real violations. Ops that timed out
+/// (`result == None`) are skipped: they were never served and carry no
+/// wake-order information.
+///
+/// # Attributing an ordinal to an operation
+///
+/// The journal records `(key, conn_id, seq)`, not the operation id, so ordinals
+/// must be matched to operations. A workload client executes its script
+/// strictly serially (one in-flight op at a time), so *that client's*
+/// registrations on a given key occur in the same order as its blocking pops on
+/// that key. When the counts agree - the client issued `n` `BLPOP`/`BRPOP`s
+/// watching the key and the journal holds `n` list-pop registrations for it -
+/// the i-th pop is the i-th registration, exactly.
+///
+/// When the counts disagree, some pop found data already present and never
+/// parked (or the reverse), and *which* one is unknowable from the history, so
+/// none of that client's pops on that key are judged. They are counted as
+/// unjudged coverage rather than guessed at.
+///
+/// There is deliberately **no fallback**. The obvious one, comparing
+/// `Operation::invoke_time`, is unsound in both directions: `invoke_time` is a
+/// recorder-arrival counter, not a clock, so two waiters invoking at the same
+/// sim instant get consecutive ordinals in whatever order the sim polled their
+/// tasks. Worse, between two *served* waiters it can only ever produce false
+/// positives - if A was served before B, then `A.return < B.return`, and the
+/// only way the proxy fires is `A.invoke > B.invoke`, which for served waiters
+/// is precisely the overlapping-interval case where either registration order
+/// is legal. Missing ordinals therefore reduce coverage, never the verdict.
 pub fn check_fifo_wake_order_exact(
     history: &History,
     order: &WaiterRegistrationOrder,
-) -> Result<(), ConservationViolation> {
-    // served_key -> [(invoke_time, return_time, client_id, op_id)] for served
-    // blocking pops, grouped by the key each waiter was actually served from
-    // (mirrors check_fifo_wake_order's grouping, with client_id carried
-    // through for the ordinal lookup).
-    let mut by_key: HashMap<Bytes, Vec<(u64, u64, u64, u64)>> = HashMap::new();
-    for op in history.completed_operations() {
+) -> Result<FifoCoverage, ConservationViolation> {
+    let ops = history.completed_operations();
+
+    // (watched_key, client_id) -> that client's blocking pops watching the key,
+    // in program order. `blpop k1 [k2 ...] timeout`: every arg but the trailing
+    // timeout is a watched key, and the op registers on all of them.
+    let mut pops_by_key_client: HashMap<(Bytes, u64), Vec<(u64, u64)>> = HashMap::new();
+    for op in &ops {
+        if !matches!(op.function.as_str(), "blpop" | "brpop") {
+            continue;
+        }
+        for key in op.args.iter().take(op.args.len().saturating_sub(1)) {
+            pops_by_key_client
+                .entry((key.clone(), op.client_id))
+                .or_default()
+                .push((op.invoke_time, op.id));
+        }
+    }
+
+    // (watched_key, op_id) -> registration ordinal, for the pops the journal
+    // pins down positionally (see the doc comment).
+    let mut op_ordinal: HashMap<(Bytes, u64), u64> = HashMap::new();
+    let mut attributed = 0usize;
+    for ((key, client_id), pops) in &mut pops_by_key_client {
+        let seqs = order.list_pop_ordinals(key, *client_id);
+        if seqs.len() != pops.len() {
+            continue;
+        }
+        attributed += seqs.len();
+        // Program order for a serial client == increasing invoke_time.
+        pops.sort_unstable();
+        for ((_, op_id), seq) in pops.iter().zip(seqs) {
+            op_ordinal.insert((key.clone(), *op_id), seq);
+        }
+    }
+
+    // served_key -> [(return_time, client_id, op_id)] for served blocking pops,
+    // grouped by the key each waiter was actually served from.
+    let mut by_key: HashMap<Bytes, Vec<(u64, u64, u64)>> = HashMap::new();
+    for op in &ops {
         if !matches!(op.function.as_str(), "blpop" | "brpop") {
             continue;
         }
@@ -383,43 +473,47 @@ pub fn check_fifo_wake_order_exact(
         by_key
             .entry(Bytes::from(served_key.to_string()))
             .or_default()
-            .push((op.invoke_time, op.return_time, op.client_id, op.id));
+            .push((op.return_time, op.client_id, op.id));
     }
 
-    for (key, mut served) in by_key {
-        served.sort_by_key(|x| x.1); // by serve (return) order
-        let all_known = served
-            .iter()
-            .all(|(_, _, client_id, _)| order.get(&key, *client_id).is_some());
-        if all_known {
-            // Exact path: compare ascending registration_seq.
-            for w in served.windows(2) {
-                let seq0 = order.get(&key, w[0].2).unwrap();
-                let seq1 = order.get(&key, w[1].2).unwrap();
-                if seq0 > seq1 {
-                    return Err(ConservationViolation::FifoViolation {
-                        key: key.to_vec(),
-                        served: w[0].3,
-                        waiter: w[1].3,
-                    });
-                }
-            }
-        } else {
-            // Residual (ordinal-incomplete) key: fall back to the
-            // invoke-time proxy, scoped to this key alone.
-            for w in served.windows(2) {
-                if w[0].0 > w[1].0 {
-                    // Served earlier but invoked later -> jumped an earlier waiter.
-                    return Err(ConservationViolation::FifoViolation {
-                        key: key.to_vec(),
-                        served: w[0].3,
-                        waiter: w[1].3,
-                    });
-                }
+    let mut coverage = FifoCoverage {
+        registrations: order.list_pop_registrations(),
+        attributed,
+        served_pops: by_key.values().map(Vec::len).sum(),
+        complete: order.is_complete(),
+        ..FifoCoverage::default()
+    };
+    if !order.is_complete() {
+        // Coverage collapsed: with a truncated journal a missing ordinal no
+        // longer proves the waiter never parked, so no comparison is sound.
+        coverage.attributed = 0;
+        return Ok(coverage);
+    }
+
+    for (key, served) in by_key {
+        // Judged waiters only, in serve (return-time) order.
+        let mut judged: Vec<(u64, u64, u64)> = served
+            .into_iter()
+            .filter_map(|(return_time, _client_id, op_id)| {
+                let seq = op_ordinal.get(&(key.clone(), op_id))?;
+                Some((return_time, *seq, op_id))
+            })
+            .collect();
+        coverage.judged_pops += judged.len();
+        judged.sort_by_key(|x| x.0);
+        coverage.pairs_compared += judged.len().saturating_sub(1);
+        for w in judged.windows(2) {
+            if w[0].1 > w[1].1 {
+                // Served first but registered later -> jumped an earlier waiter.
+                return Err(ConservationViolation::FifoViolation {
+                    key: key.to_vec(),
+                    served: w[0].2,
+                    waiter: w[1].2,
+                });
             }
         }
     }
-    Ok(())
+    Ok(coverage)
 }
 
 /// Net integer delta a single command applies to keys in `keyset`.
@@ -519,20 +613,55 @@ fn is_write(function: &str) -> bool {
     )
 }
 
-/// Keys actually *written* by a completed op, as opposed to the keys it
-/// merely touched/watched (`default_keys_of`). Two corrections matter here:
+/// The integer an op replied with, when its recorded result is a base-10
+/// integer. `None` for a nil/errored result (both recorded as `None`) or a
+/// non-integer reply.
+fn int_result(result: Option<&Bytes>) -> Option<i64> {
+    std::str::from_utf8(result?)
+        .ok()?
+        .trim()
+        .parse::<i64>()
+        .ok()
+}
+
+/// Keys a completed op *provably mutated*, as opposed to the keys it merely
+/// touched/watched (`default_keys_of`).
+///
+/// This powers [`writer_between`], whose soundness claim is "no false
+/// positives": a key is returned only when the recorded result proves the key
+/// changed. Erring toward "counts as a write" is NOT the safe direction here —
+/// a spurious write manufactures a WATCH false-negative report on a legal
+/// history (`.scratch/concurrency-testing/issues/13`).
+///
+/// Result-awareness by command shape:
 ///
 /// - Pop/move ops (`lpop`/`rpop`/`blpop`/`brpop`/`bzpopmin`/`bzpopmax`/
-///   `lmove`/`blmove`) only mutate state when they actually served an
-///   element; a nil/timeout result (`result == None`) is a no-op and must
-///   not count as a write.
+///   `lmove`/`blmove`) only mutate when they actually served an element; a
+///   nil/timeout result (`result == None`) is a no-op.
 /// - For the blocking multi-key pops, the key that was actually served is
 ///   encoded in the result (`"served_key|elem"` / `"served_key|member|score"`)
 ///   and need not be `args[0]` — mirrors the parsing
-///   [`check_fifo_wake_order`] uses to group waiters by served key, rather
-///   than by the full watched-key list `default_keys_of` would return.
+///   [`check_fifo_wake_order_exact`] uses to group waiters by served key,
+///   rather than by the full watched-key list `default_keys_of` would return.
 /// - `lmove`/`blmove` write *both* the source (pop) and destination (push)
 ///   keys once they've actually served (non-nil result).
+/// - Counted removals (`del`/`unlink`/`zrem`/`hdel`/`srem`/`lrem`) reply with
+///   the number of things removed: a `0` reply proves nothing was removed, so
+///   the key's watch version was never bumped (Redis only dirties watchers on
+///   an actual removal) and the op is not a write.
+/// - Everything else in the write vocabulary is unconditionally mutating *when
+///   it completed with a reply*. A `None` result means the reply was nil or an
+///   error (both are recorded as `None`), i.e. the command did not apply — e.g.
+///   a WRONGTYPE `lpush`. Note `zadd`/`hset` reply with a count of *newly
+///   added* members/fields, so a `0` there still means an in-place score/value
+///   update: those must stay writes and deliberately do NOT use the
+///   zero-means-no-op rule.
+///
+/// Not yet covered (each would only ever *add* detections, never remove a
+/// false positive, so they are safe to leave): `setnx`/`msetnx` returning `0`,
+/// `getdel` returning nil, `expire`/`persist`/`smove` returning `0` — none of
+/// those commands are in the generator's vocabulary or in [`is_write`], so
+/// they are never classified as writers to begin with.
 fn written_keys_of(function: &str, args: &[Bytes], result: Option<&Bytes>) -> Vec<Bytes> {
     match function {
         "lpop" | "rpop" => {
@@ -559,8 +688,58 @@ fn written_keys_of(function: &str, args: &[Bytes], result: Option<&Bytes>) -> Ve
                 Vec::new()
             }
         }
-        _ => default_keys_of(function, args),
+        // Multi-key counted removal. `n == 0` removed nothing; `n == args.len()`
+        // removed every named key. In between, the count does not say *which*
+        // keys existed, so no individual key is provably written — the
+        // generator only ever emits single-key DELs, so this arm costs no real
+        // detection.
+        "del" | "delete" | "unlink" => match int_result(result) {
+            Some(n) if n > 0 && (args.len() == 1 || n as usize == args.len()) => args.to_vec(),
+            _ => Vec::new(),
+        },
+        // Single-key counted removal: a non-zero count proves that key changed.
+        "zrem" | "hdel" | "srem" | "lrem" => match int_result(result) {
+            Some(n) if n > 0 => args.first().cloned().into_iter().collect(),
+            _ => Vec::new(),
+        },
+        // Unconditional writers: mutating iff the command actually replied.
+        _ => {
+            if result.is_some() {
+                default_keys_of(function, args)
+            } else {
+                Vec::new()
+            }
+        }
     }
+}
+
+/// Split a committed EXEC's `|`-joined result into one recorded result per
+/// sub-command, in sub-command order.
+///
+/// The recorder encodes a nil sub-reply as the literal `"nil"` and an errored
+/// one as `"ERR:…"`; both mean "did not apply", so they map to `None` —
+/// matching how a top-level op's nil/errored reply is recorded. Positional
+/// alignment assumes every sub-command replies with a scalar (true for the
+/// generator's `set`/`get`/`incr`/`del` EXEC vocabulary; an array-replying
+/// sub-command would flatten into several `|` fields and shift the mapping),
+/// the same assumption `partition::project_for_key` already makes. A
+/// sub-command with no corresponding field yields `None`, which is the
+/// conservative (never-a-writer) direction.
+fn exec_sub_results(result: Option<&Bytes>, num_cmds: usize) -> Vec<Option<Bytes>> {
+    let mut out = vec![None; num_cmds];
+    let Some(r) = result else { return out };
+    let s = String::from_utf8_lossy(r);
+    if s.is_empty() {
+        return out;
+    }
+    for (i, field) in s.split('|').enumerate().take(num_cmds) {
+        out[i] = if field == "nil" || field.starts_with("ERR:") {
+            None
+        } else {
+            Some(Bytes::from(field.to_string()))
+        };
+    }
+    out
 }
 
 /// Find a completed write to `key` by a client other than `exclude_client`
@@ -608,11 +787,15 @@ fn writer_between(
         if op.function == "exec"
             && exec_committed(op.result.as_ref())
             && let Some(cmds) = parse_exec_commands(&op.args)
-            && cmds
-                .iter()
-                .any(|(name, cargs)| is_write(name) && default_keys_of(name, cargs).contains(key))
         {
-            return Some(op.id);
+            // Same result-awareness as the top-level path: a sub-command is a
+            // writer only when its own recorded reply proves it mutated.
+            let sub_results = exec_sub_results(op.result.as_ref(), cmds.len());
+            if cmds.iter().zip(&sub_results).any(|((name, cargs), res)| {
+                is_write(name) && written_keys_of(name, cargs, res.as_ref()).contains(key)
+            }) {
+                return Some(op.id);
+            }
         }
     }
     None
@@ -999,28 +1182,183 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn fifo_ok_when_served_in_invoke_order() {
+    /// Two waiters on `k` (clients 1 and 2) whose registration ordinals are
+    /// 1 and 2; `first_served` is served before the other.
+    fn two_waiter_history(first_served: u64) -> (History, WaiterRegistrationOrder) {
         let mut h = History::new();
         let w1 = h.invoke(1, "blpop", vec![b("k"), b("0")]);
         let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
-        h.respond(w1, Some(b("k|a")));
-        h.respond(w2, Some(b("k|b")));
-        assert!(check_fifo_wake_order(&h).is_ok());
+        if first_served == 1 {
+            h.respond(w1, Some(b("k|a")));
+            h.respond(w2, Some(b("k|b")));
+        } else {
+            h.respond(w2, Some(b("k|b")));
+            h.respond(w1, Some(b("k|a")));
+        }
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1, "BLPOP");
+        order.insert(b("k"), 2, 2, "BLPOP");
+        (h, order)
+    }
+
+    #[test]
+    fn fifo_ok_when_served_in_registration_order() {
+        let (h, order) = two_waiter_history(1);
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("legal serve order");
+        assert_eq!(cov.served_pops, 2);
+        assert_eq!(cov.judged_pops, 2);
+        assert_eq!(cov.pairs_compared, 1);
+        assert!(cov.complete);
     }
 
     #[test]
     fn fifo_detects_out_of_order_wake() {
-        let mut h = History::new();
-        let w1 = h.invoke(1, "blpop", vec![b("k"), b("0")]);
-        let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
-        // w2 (later waiter) served before w1 (earlier waiter).
-        h.respond(w2, Some(b("k|b")));
-        h.respond(w1, Some(b("k|a")));
+        // Client 2 (registered second) served first -> jumped the queue.
+        let (h, order) = two_waiter_history(2);
         assert!(matches!(
-            check_fifo_wake_order(&h),
+            check_fifo_wake_order_exact(&h, &order),
             Err(ConservationViolation::FifoViolation { .. })
         ));
+    }
+
+    #[test]
+    fn fifo_without_ordinals_yields_no_verdict() {
+        // The same out-of-order serve, but with NO registration ordinals: the
+        // history alone cannot prove the server registered client 1 first
+        // (invoke_time is recorder-arrival order, not a clock), so the checker
+        // must return a clean, zero-coverage result rather than a violation.
+        // This is the regression pin for issue 16: the old fallback flagged it.
+        let (h, _) = two_waiter_history(2);
+        let cov = check_fifo_wake_order_exact(&h, &WaiterRegistrationOrder::default())
+            .expect("no ordinals must not produce a FIFO verdict");
+        assert_eq!(cov.served_pops, 2);
+        assert_eq!(cov.judged_pops, 0);
+        assert_eq!(cov.pairs_compared, 0);
+    }
+
+    #[test]
+    fn fifo_partial_ordinals_judge_nothing_alone() {
+        // Only one of the two waiters parked (the other's list was non-empty,
+        // so it never entered the queue). One judged pop makes no pair, hence
+        // no comparison and no verdict.
+        let (h, _) = two_waiter_history(2);
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1, "BLPOP");
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("one ordinal proves no ordering");
+        assert_eq!(cov.judged_pops, 1);
+        assert_eq!(cov.pairs_compared, 0);
+    }
+
+    #[test]
+    fn fifo_truncated_journal_judges_nothing() {
+        // Ordinals present and out of order, but the journal was truncated:
+        // "missing ordinal" no longer implies "never parked", so no comparison
+        // is sound and the collapse is reported instead of a verdict.
+        let (h, mut order) = two_waiter_history(2);
+        order.mark_truncated();
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("truncated journal: no verdict");
+        assert!(!cov.complete);
+        assert_eq!(cov.judged_pops, 0);
+        assert_eq!(cov.served_pops, 2);
+    }
+
+    #[test]
+    fn fifo_ambiguous_registration_not_judged() {
+        // Client 1 registered TWICE on k but issued only ONE blocking pop on
+        // it: the counts disagree, so which registration belongs to the op is
+        // unknowable and neither is used. (The old min-wins collapse would
+        // have judged the pair with the earlier ordinal.)
+        let (h, _) = two_waiter_history(2);
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1, "BLPOP");
+        order.insert(b("k"), 1, 9, "BLPOP");
+        order.insert(b("k"), 2, 2, "BLPOP");
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("ambiguous ordinal: no verdict");
+        assert_eq!(cov.judged_pops, 1);
+        assert_eq!(cov.pairs_compared, 0);
+    }
+
+    #[test]
+    fn fifo_repeat_pop_by_one_client_not_judged() {
+        // One journal record, but the client issued TWO blocking pops on the
+        // key (one parked, one did not) — the ordinal cannot be attributed to
+        // either, so neither is judged.
+        let mut h = History::new();
+        let a = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        h.respond(a, Some(b("k|a")));
+        let c = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        h.respond(c, Some(b("k|c")));
+        let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(w2, Some(b("k|b")));
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 5, "BLPOP");
+        order.insert(b("k"), 2, 1, "BLPOP");
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("unattributable ordinal");
+        assert_eq!(cov.served_pops, 3);
+        assert_eq!(cov.judged_pops, 1); // client 2 only
+        assert_eq!(cov.pairs_compared, 0);
+    }
+
+    /// Two pops by one client on one key, with two journaled registrations:
+    /// the counts agree, so the i-th pop is the i-th ordinal and both are
+    /// judged. This is the coverage the "exactly one pop, exactly one ordinal"
+    /// rule threw away on the `BlockingHeavy`/`Mixed` profiles, where a key's
+    /// blocking owner pops it repeatedly.
+    fn repeat_pop_history() -> History {
+        let mut h = History::new();
+        // Client 1 pops twice (program order a then c); client 2 once.
+        let a = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(a, Some(b("k|a")));
+        h.respond(w2, Some(b("k|b")));
+        let c = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        h.respond(c, Some(b("k|c")));
+        h
+    }
+
+    #[test]
+    fn fifo_repeat_pops_judged_positionally() {
+        let h = repeat_pop_history();
+        let mut order = WaiterRegistrationOrder::default();
+        // Client 1's first pop got ordinal 1, its second got 3; client 2 got 2.
+        // Serve order a(1), b(2), c(3) is exactly registration order.
+        order.insert(b("k"), 1, 1, "BLPOP");
+        order.insert(b("k"), 1, 3, "BLPOP");
+        order.insert(b("k"), 2, 2, "BLPOP");
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("serve order == reg order");
+        assert_eq!(cov.served_pops, 3);
+        assert_eq!(cov.judged_pops, 3, "all three pops attributed positionally");
+        assert_eq!(cov.pairs_compared, 2);
+    }
+
+    #[test]
+    fn fifo_repeat_pops_detect_violation_positionally() {
+        // Same history, but client 2 registered (ordinal 4) *after* client 1's
+        // second pop (ordinal 3) while being served before it -> queue jump.
+        let h = repeat_pop_history();
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1, "BLPOP");
+        order.insert(b("k"), 1, 3, "BLPOP");
+        order.insert(b("k"), 2, 4, "BLPOP");
+        assert!(matches!(
+            check_fifo_wake_order_exact(&h, &order),
+            Err(ConservationViolation::FifoViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn fifo_ignores_non_list_registrations_on_the_same_key() {
+        // A `BZPOPMIN` registration by the same client on the same key must not
+        // be counted toward the list-pop ordinals: doing so would make the
+        // counts agree by accident and shift every attribution by one.
+        let (h, _) = two_waiter_history(1);
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1, "BZPOPMIN");
+        order.insert(b("k"), 1, 2, "BLPOP");
+        order.insert(b("k"), 2, 3, "BLPOP");
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("legal serve order");
+        assert_eq!(cov.judged_pops, 2);
+        assert_eq!(cov.pairs_compared, 1);
     }
 
     #[test]
@@ -1077,17 +1415,22 @@ mod tests {
         let w1 = h.invoke(1, "blpop", vec![b("k1"), b("k2"), b("0")]);
         // waiter2 invokes later, watching only k2.
         let w2 = h.invoke(2, "blpop", vec![b("k2"), b("0")]);
-        // waiter2 (later invoke) is served from k2 first...
+        // waiter2 (registered second on k2) is served from k2 first...
         h.respond(w2, Some(b("k2|a")));
-        // ...and waiter1 (earlier invoke) is served from k2 second: this is
+        // ...and waiter1 (registered first) is served from k2 second: this is
         // a FIFO violation, but only detectable when both waiters are
         // grouped by the *served* key (k2), not by op.args.first() (which
         // would put waiter1 under k1 and waiter2 under k2, hiding the
         // violation).
         h.respond(w1, Some(b("k2|b")));
 
+        // waiter1 parked on both its keys under one ordinal; waiter2 later.
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k1"), 1, 1, "BLPOP");
+        order.insert(b("k2"), 1, 1, "BLPOP");
+        order.insert(b("k2"), 2, 2, "BLPOP");
         assert!(matches!(
-            check_fifo_wake_order(&h),
+            check_fifo_wake_order_exact(&h, &order),
             Err(ConservationViolation::FifoViolation { .. })
         ));
     }
@@ -1104,12 +1447,11 @@ mod tests {
         h.respond(w2, Some(b("k|b"))); // served first
         h.respond(w1, Some(b("k|a"))); // served second
         let mut order = WaiterRegistrationOrder::default();
-        order.insert(b("k"), 2, 3); // client 2 registered first (seq 3)
-        order.insert(b("k"), 1, 8); // client 1 registered later (seq 8)
-        assert!(
-            check_fifo_wake_order_exact(&h, &order).is_ok(),
-            "serving in true registration order must be legal"
-        );
+        order.insert(b("k"), 2, 3, "BLPOP"); // client 2 registered first (seq 3)
+        order.insert(b("k"), 1, 8, "BLPOP"); // client 1 registered later (seq 8)
+        let cov = check_fifo_wake_order_exact(&h, &order)
+            .expect("serving in true registration order must be legal");
+        assert_eq!(cov.pairs_compared, 1, "the pair must actually be compared");
 
         // Now flip: serve w1 (registered later) before w2 -> violation.
         let mut h2 = History::new();
@@ -1299,6 +1641,189 @@ mod tests {
         let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
         h.respond(e, Some(b("OK")));
         assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    // --- Result-aware write classification (issue 13) -------------------
+
+    #[test]
+    fn watch_noop_del_not_flagged() {
+        // Another client's DEL on the watched key returns 0: the key did not
+        // exist, nothing was removed, no watcher was dirtied. The watcher's
+        // EXEC committing is CORRECT. Pre-fix, `del` fell through to the
+        // unconditional default arm and manufactured a WatchFalseNegative.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "del", vec![b("k")]);
+        h.respond(other, Some(b("0")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_effective_del_still_flagged() {
+        // Same shape, but the DEL actually removed the key (reply 1). That is
+        // a real mutation of the watched key, so the committed EXEC is a real
+        // false negative: the fix must not blind the checker to it.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "del", vec![b("k")]);
+        h.respond(other, Some(b("1")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_noop_del_inside_committed_exec_not_flagged() {
+        // The no-op DEL hides inside another client's committed EXEC
+        // (`SET a v; DEL k` -> "OK|0"). The DEL removed nothing, so the
+        // watcher's own EXEC may commit. Exercises the second code path,
+        // which pre-fix used `default_keys_of` and ignored sub-results
+        // entirely.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(
+            2,
+            "exec",
+            vec![
+                b("2"),
+                b("set"),
+                b("2"),
+                b("a"),
+                b("v"),
+                b("del"),
+                b("1"),
+                b("k"),
+            ],
+        );
+        h.respond(other, Some(b("OK|0")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_effective_del_inside_committed_exec_flagged() {
+        // Same EXEC shape, but the DEL removed the key ("OK|1"): a real
+        // interfering write hidden in a transaction is still detected, and
+        // the per-sub-command result alignment is exercised (field 1, not 0).
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(
+            2,
+            "exec",
+            vec![
+                b("2"),
+                b("set"),
+                b("2"),
+                b("a"),
+                b("v"),
+                b("del"),
+                b("1"),
+                b("k"),
+            ],
+        );
+        h.respond(other, Some(b("OK|1")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_errored_write_not_flagged() {
+        // Another client's LPUSH on the watched key fails (WRONGTYPE, recorded
+        // as a `None` result): it never applied, so it is not a writer.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "lpush", vec![b("k"), b("v")]);
+        h.respond(other, None);
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_zadd_zero_added_is_still_a_write() {
+        // ZADD's reply counts *newly added* members, so 0 means an in-place
+        // score update -- a real mutation that dirties watchers. The
+        // zero-means-no-op rule must NOT be applied to it.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "zadd", vec![b("k"), b("7"), b("m")]);
+        h.respond(other, Some(b("0")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn watch_zero_count_zrem_not_flagged() {
+        // ZREM removing nothing (reply 0) mutated nothing.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "zrem", vec![b("k"), b("m")]);
+        h.respond(other, Some(b("0")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+    }
+
+    #[test]
+    fn watch_partial_multi_key_del_not_flagged() {
+        // DEL k1 k2 -> 1 proves *a* key was removed but not WHICH. Counting
+        // either key would be a guess, so neither is reported: conservative,
+        // documented in `written_keys_of`, and unreachable from the generator
+        // (which only emits single-key DELs).
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k1")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "del", vec![b("k1"), b("k2")]);
+        h.respond(other, Some(b("1")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k1"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(check_watch_no_false_negative(&h).is_ok());
+        // ...but a DEL whose count equals its key count removed them all.
+        let mut h = History::new();
+        let w = h.invoke(1, "watch", vec![b("k1")]);
+        h.respond(w, Some(b("OK")));
+        let other = h.invoke(2, "del", vec![b("k1"), b("k2")]);
+        h.respond(other, Some(b("2")));
+        let e = h.invoke(1, "exec", vec![b("1"), b("set"), b("2"), b("k1"), b("v")]);
+        h.respond(e, Some(b("OK")));
+        assert!(matches!(
+            check_watch_no_false_negative(&h),
+            Err(ConservationViolation::WatchFalseNegative { .. })
+        ));
+    }
+
+    #[test]
+    fn exec_sub_results_maps_nil_and_error_to_none() {
+        let r = b("OK|nil|3|ERR:WRONGTYPE Operation against a key");
+        let got = exec_sub_results(Some(&r), 4);
+        assert_eq!(got[0], Some(b("OK")));
+        assert_eq!(got[1], None);
+        assert_eq!(got[2], Some(b("3")));
+        assert_eq!(got[3], None);
+        // Missing fields and a missing result are conservatively `None`.
+        assert_eq!(exec_sub_results(Some(&r), 6)[5], None);
+        assert_eq!(exec_sub_results(None, 2), vec![None, None]);
     }
 
     #[test]

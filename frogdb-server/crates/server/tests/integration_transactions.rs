@@ -236,6 +236,60 @@ async fn test_watch_exec_abort() {
     server.shutdown().await;
 }
 
+// FM-TXN-050
+/// Re-`WATCH`ing a key this connection already watches must not re-arm the CAS
+/// against a fresher version: the write that landed between the two `WATCH`es
+/// still has to abort the `EXEC`. Redis' `watchForKey` returns early for an
+/// already-watched key and nothing but `EXEC`/`DISCARD`/`UNWATCH`/`RESET`
+/// clears `CLIENT_DIRTY_CAS`.
+#[tokio::test]
+async fn test_rewatch_does_not_rearm_a_dirty_watch() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    client1.command(&["SET", "rewatched", "initial"]).await;
+
+    // First WATCH: the CAS snapshot client1 must be held to.
+    let response = client1.command(&["WATCH", "rewatched"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Another client dirties the watch.
+    client2.command(&["SET", "rewatched", "by_client2"]).await;
+
+    // Second WATCH of the same key — must be a no-op for the snapshot.
+    let response = client1.command(&["WATCH", "rewatched"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    client1.command(&["MULTI"]).await;
+    let response = client1.command(&["SET", "rewatched", "by_client1"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Bulk(None),
+        "the write between the two WATCHes must still abort the EXEC"
+    );
+    let response = client1.command(&["GET", "rewatched"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("by_client2"))));
+
+    // The aborted EXEC cleared the watch set, so a fresh WATCH re-arms normally
+    // and an undisturbed transaction commits.
+    client1.command(&["WATCH", "rewatched"]).await;
+    client1.command(&["WATCH", "rewatched"]).await;
+    client1.command(&["MULTI"]).await;
+    client1.command(&["SET", "rewatched", "by_client1"]).await;
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Array(vec![Response::Simple(Bytes::from("OK"))]),
+        "a re-WATCH of an untouched key must not abort either"
+    );
+
+    server.shutdown().await;
+}
+
 #[cfg(feature = "cmd-hyperloglog")]
 /// A duplicate PFADD moves no register (no-op write), so it must not bump the
 /// watched key's version: a WATCH over it must survive and EXEC must succeed.

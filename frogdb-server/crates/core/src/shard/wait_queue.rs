@@ -69,6 +69,46 @@ pub struct ShardWaitQueue {
     /// slots of live entries are ever read (via `dump`); reused slots are
     /// overwritten on the next `register`, so stale ordinals are never observed.
     seq_by_slot: Vec<u64>,
+    /// Append-only journal of every registration, for `DEBUG WAITQUEUE-LOG`.
+    /// See [`ShardWaitQueue::registration_log`].
+    #[cfg(feature = "wait-queue-log")]
+    registration_log: Vec<WaitRegistrationRecord>,
+    /// Set once the journal hit [`MAX_REGISTRATION_LOG`] and started dropping
+    /// records, so a reader can tell "no more registrations" from "I stopped
+    /// recording" instead of drawing conclusions from a truncated log.
+    #[cfg(feature = "wait-queue-log")]
+    registration_log_truncated: bool,
+}
+
+/// Cap on the registration journal. A test run parks on the order of thousands
+/// of waiters; the cap only exists so a pathological (or long-lived) process
+/// running with the `wait-queue-log` feature cannot grow it without bound.
+#[cfg(feature = "wait-queue-log")]
+const MAX_REGISTRATION_LOG: usize = 1 << 16;
+
+/// One recorded registration: the event-time counterpart of [`WaiterDump`],
+/// which can only ever show waiters that are *still parked* when it is read.
+///
+/// A waiter that parks and is served between two `DEBUG WAITQUEUE` samples is
+/// invisible to sampling but always present here, which is what makes exact
+/// FIFO wake-order checking sound (`.scratch/concurrency-testing/issues/16`).
+/// One record is emitted per key of a multi-key waiter, all sharing the
+/// waiter's single `registration_seq`.
+///
+/// Recording is compiled in only under the `wait-queue-log` cargo feature
+/// (enabled by the server's `turmoil` feature for simulation tests, never in
+/// production); the type itself is always defined so the accessor has one
+/// signature in both configurations.
+#[derive(Debug, Clone)]
+pub struct WaitRegistrationRecord {
+    /// Queue-wide monotonic registration ordinal (smaller = registered earlier).
+    pub registration_seq: u64,
+    /// Connection id of the waiter.
+    pub conn_id: u64,
+    /// One of the keys the waiter parked on.
+    pub key: Bytes,
+    /// Blocking-command name (e.g. "BLPOP").
+    pub op: &'static str,
 }
 
 impl ShardWaitQueue {
@@ -89,6 +129,10 @@ impl ShardWaitQueue {
             max_blocked_connections,
             next_seq: 0,
             seq_by_slot: Vec::new(),
+            #[cfg(feature = "wait-queue-log")]
+            registration_log: Vec::new(),
+            #[cfg(feature = "wait-queue-log")]
+            registration_log_truncated: false,
         }
     }
 
@@ -117,6 +161,24 @@ impl ShardWaitQueue {
 
         let seq = self.next_seq;
         self.next_seq += 1;
+
+        // Journal the registration at the moment it happens (test builds only).
+        #[cfg(feature = "wait-queue-log")]
+        {
+            let op = blocking_op_name(&entry.op);
+            for key in &keys {
+                if self.registration_log.len() >= MAX_REGISTRATION_LOG {
+                    self.registration_log_truncated = true;
+                    break;
+                }
+                self.registration_log.push(WaitRegistrationRecord {
+                    registration_seq: seq,
+                    conn_id,
+                    key: key.clone(),
+                    op,
+                });
+            }
+        }
 
         // Allocate a slot for the entry, keeping `seq_by_slot` in lock-step
         // with `entries` so `seq_by_slot[slot_idx]` is always valid.
@@ -549,6 +611,34 @@ impl ShardWaitQueue {
                 (key.clone(), waiters)
             })
             .collect()
+    }
+
+    /// Append-only journal of every registration this queue has seen, in
+    /// registration order. Used by `DEBUG WAITQUEUE-LOG`. Always empty without
+    /// the `wait-queue-log` feature — see [`WaitRegistrationRecord`].
+    pub fn registration_log(&self) -> &[WaitRegistrationRecord] {
+        #[cfg(feature = "wait-queue-log")]
+        {
+            &self.registration_log
+        }
+        #[cfg(not(feature = "wait-queue-log"))]
+        {
+            &[]
+        }
+    }
+
+    /// True once the journal stopped recording because it hit its cap. A
+    /// reader must not treat a truncated journal as a complete registration
+    /// history.
+    pub fn registration_log_truncated(&self) -> bool {
+        #[cfg(feature = "wait-queue-log")]
+        {
+            self.registration_log_truncated
+        }
+        #[cfg(not(feature = "wait-queue-log"))]
+        {
+            false
+        }
     }
 }
 

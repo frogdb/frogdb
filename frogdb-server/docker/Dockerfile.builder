@@ -71,7 +71,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 # ---------------------------------------------------------------------------
 FROM mise-base AS builder
 
-# System RocksDB + compression libs + jemalloc build deps
+# System RocksDB + compression libs + jemalloc build deps.
+# gcc/g++ (via build-base in mise-base + gcc here) are the C/C++ compilers; see
+# the CC/CXX comment below. aws-lc-sys additionally needs -lgcc at link time.
 RUN apk add --no-cache \
     rocksdb-dev \
     snappy-dev \
@@ -81,15 +83,20 @@ RUN apk add --no-cache \
     openssl-dev \
     pkgconf \
     make \
-    mold
+    mold \
+    gcc
 
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     cargo install cargo-chef --locked
 
-# Use clang toolchain (clang-dev is installed above; cc-rs defaults to "c++"/GCC which isn't present)
-ENV CC=clang
-ENV CXX=clang++
+# Use the GCC toolchain for C/C++ build scripts. clang++ on Alpine fails to
+# locate libstdc++ headers ("'algorithm' file not found") when cc-rs passes the
+# generic x86_64-unknown-linux-musl triple — the headers live under Alpine's own
+# x86_64-alpine-linux-musl triple, which g++ resolves natively. clang-dev stays
+# installed: bindgen (librocksdb-sys) needs libclang regardless of CC/CXX.
+ENV CC=gcc
+ENV CXX=g++
 # Tell librocksdb-sys, snappy-sys, and zstd-sys to use system libraries
 ENV ROCKSDB_LIB_DIR=/usr/lib
 ENV SNAPPY_LIB_DIR=/usr/lib

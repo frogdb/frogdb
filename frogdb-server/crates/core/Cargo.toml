@@ -18,6 +18,10 @@ test-utils = ["frogdb-cluster/test-utils"]
 # Compile the deterministic FakeWalSink builder arm + fake-WAL registry. Enabled
 # by the server's `turmoil` feature for simulation tests; never in production.
 fake-wal = []
+# Record every blocking-waiter registration in an in-memory journal, exposed by
+# `DEBUG WAITQUEUE-LOG`. Enabled by the server's `turmoil` feature so simulation
+# tests can check exact FIFO wake order without sampling; never in production.
+wait-queue-log = []
 # Test-only public seam surface for the frogdb-shard-harness crate's driver.
 # Feature-gates the public `drive*` wrapper methods on `ShardWorker` (and
 # `ShardReceiver::try_recv`) so an out-of-crate harness can pump a worker

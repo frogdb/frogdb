@@ -332,6 +332,11 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
     // accumulator, so any fold recorded now would be discarded. The watch set's
     // shards are folded at EXEC time in `take_transaction`, from the live
     // (post-UNWATCH) watch set.
+    // A key already in the watch set keeps its earlier snapshot: `watch_key` is
+    // first-watch-wins, matching Redis' `watchForKey`, which no-ops on an
+    // already-watched key. The version probe above is still taken for the
+    // whole argument list — it is one round-trip for the batch and it is what
+    // lazily purges already-expired keys — only the recording is guarded.
     for ((key, version), live_at_watch) in args.iter().zip(versions).zip(live_flags) {
         state.watch_key(key.clone(), shard, version, live_at_watch);
     }

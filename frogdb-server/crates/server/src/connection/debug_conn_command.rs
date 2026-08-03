@@ -150,6 +150,9 @@ impl ConnectionCommand for DebugConnCommand {
                 }
                 b"LOCKTABLE" => format_locktable_response(debug.gather_lock_table().await),
                 b"WAITQUEUE" => format_waitqueue_response(debug.gather_wait_queue().await),
+                b"WAITQUEUE-LOG" => {
+                    format_waitqueue_log_response(debug.gather_wait_queue_log().await)
+                }
                 b"MEMORY-CHECK" => format_memory_check_response(debug.memory_check().await),
                 b"EXPIRY-INDEX-CHECK" => {
                     format_expiry_index_check_response(debug.expiry_index_check().await)
@@ -278,6 +281,8 @@ fn debug_help() -> Response {
         "    Show the per-shard VLL lock table (intents, grants, continuation locks).",
         "DEBUG WAITQUEUE",
         "    Show blocked waiters by key/connection, in registration order.",
+        "DEBUG WAITQUEUE-LOG",
+        "    Show every recorded blocking registration, in registration order (test support).",
         "DEBUG MEMORY-CHECK",
         "    Recompute live memory and report the diff vs the tracked counter.",
         "DEBUG EXPIRY-INDEX-CHECK",
@@ -624,6 +629,50 @@ fn format_waitqueue_response(infos: Vec<frogdb_core::shard::WaitQueueInfo>) -> R
                     Response::Integer(info.total_waiters as i64),
                 ),
                 (Response::bulk("keys"), keys),
+            ]),
+        ));
+    }
+    Response::Map(shards)
+}
+
+/// Format `DEBUG WAITQUEUE-LOG` — RESP map of `shard:<id>` → {truncated,
+/// registrations}, where each registration is
+/// {registration_seq, conn_id, key, op} in registration order.
+///
+/// Test-support surface: the journal behind it is only recorded when
+/// `frogdb-core`'s `wait-queue-log` feature is on (the server's `turmoil`
+/// feature turns it on for simulation tests), so a production build always
+/// reports empty journals.
+fn format_waitqueue_log_response(infos: Vec<frogdb_core::shard::WaitQueueLogInfo>) -> Response {
+    let mut shards = Vec::new();
+    for info in infos {
+        let entries = Response::Array(
+            info.entries
+                .iter()
+                .map(|e| {
+                    Response::Map(vec![
+                        (
+                            Response::bulk("registration_seq"),
+                            Response::Integer(e.registration_seq as i64),
+                        ),
+                        (
+                            Response::bulk("conn_id"),
+                            Response::Integer(e.conn_id as i64),
+                        ),
+                        (Response::bulk("key"), Response::bulk(e.key.clone())),
+                        (Response::bulk("op"), Response::bulk(e.op.clone())),
+                    ])
+                })
+                .collect(),
+        );
+        shards.push((
+            Response::bulk(format!("shard:{}", info.shard_id)),
+            Response::Map(vec![
+                (
+                    Response::bulk("truncated"),
+                    Response::Integer(i64::from(info.truncated)),
+                ),
+                (Response::bulk("registrations"), entries),
             ]),
         ));
     }
@@ -1011,6 +1060,11 @@ mod tests {
         fn gather_wait_queue<'a>(
             &'a self,
         ) -> BoxFuture<'a, Vec<frogdb_core::shard::WaitQueueInfo>> {
+            Box::pin(async { Vec::new() })
+        }
+        fn gather_wait_queue_log<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<frogdb_core::shard::WaitQueueLogInfo>> {
             Box::pin(async { Vec::new() })
         }
         fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<frogdb_core::shard::MemoryCheckInfo>> {

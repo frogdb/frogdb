@@ -1133,7 +1133,7 @@ mod tests {
         drop(tx);
         let mut frames = Vec::new();
         while let Some(frame) = rx.recv().await {
-            frames.push(frame.payload);
+            frames.push(frame.frame.payload);
         }
         frames
     }

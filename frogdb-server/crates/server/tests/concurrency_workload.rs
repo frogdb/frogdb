@@ -14,7 +14,9 @@ use crate::common::invariants::{
     InvariantReport, MAX_OPS_PER_KEY, MAX_WGL_STATES, MAX_WGL_STATES_NIGHTLY, check_all_with,
 };
 use crate::common::repro::{ReproFile, read_repro, repro_path, write_repro};
-use crate::common::sweep_summary::{SweepSummary, fail_ratio_override, warn_ratio_override};
+use crate::common::sweep_summary::{
+    SweepSummary, fail_ratio_override, fifo_ratio_override, warn_ratio_override,
+};
 use crate::common::workload_runner::run_workload_capturing;
 
 /// Generate → run against the real server (fake persistence) → check invariants.
@@ -112,6 +114,7 @@ fn seed_sweep_short_workloads() {
     // conservation-only checking still reported a silent clean pass.
     eprintln!("{}", summary.report_line("seed_sweep_short_workloads"));
     summary.warn_if_over("seed_sweep_short_workloads", warn_ratio_override());
+    eprintln!("{}", summary.fifo_report_line("seed_sweep_short_workloads"));
 }
 
 // The tier-4 quiescence stage: run one small workload and assert the DEBUG
@@ -146,25 +149,34 @@ fn quiescence_stage_runs_and_is_clean() {
 // Multi-waiter exact-FIFO smoke test: a small `Profile::MultiWaiter` workload
 // where every client may park a long-timeout blocking pop on shared list/zset
 // keys, so several waiters register concurrently on one key and a delayed
-// producer serves them. The mid-run `DEBUG WAITQUEUE` prober correlates each
-// waiter's registration ordinal to its client via the CLIENT ID map, feeding
-// the exact FIFO wake-order checker (not the invoke-time proxy).
+// producer serves them. The post-drain `DEBUG WAITQUEUE-LOG` journal correlates
+// each registration's ordinal to its client via the CLIENT ID map, feeding the
+// exact FIFO wake-order checker. There is no fallback proxy: an empty or
+// ambiguous journal means "nothing judged", so the checker cannot be silently
+// disabled without the coverage assertions below noticing.
 //
-// Two assertions guard against a silently-disabled checker: (1) the prober +
-// CLIENT ID join must have produced at least one `(key, client_id)` ordinal
-// entry — a broken join (mismatched id space, or a WAITQUEUE key that does not
-// round-trip to the served key) would empty the map and quietly fall the exact
-// checker back to nothing; (2) a correct, FIFO-fair server serves in
-// registration order, so `check_all` must pass. If it fails on served order,
-// triage harness-vs-server per the bug workflow before pinning a regression.
+// Three assertions guard the checker: (1) the journal must be whole and the
+// CLIENT ID join must have produced ordinals — a broken join (mismatched id
+// space, or a journal key that does not round-trip to the served key) would
+// empty the map; (2) coverage must reach the comparison stage, i.e. at least
+// one key had two judged waiters to order against each other, so the test
+// fails if capture ever regresses to the near-zero coverage of the old polling
+// prober (issue 16); (3) a correct, FIFO-fair server serves in registration
+// order, so `check_all` must pass. If it fails on served order, triage
+// harness-vs-server per the bug workflow before pinning a regression.
 #[test]
 fn multi_waiter_exact_fifo_is_clean() {
     let workload = Workload::generate(0, Profile::MultiWaiter, 4, 12);
     let run = run_workload_capturing(&workload, 2, true);
     assert!(
+        run.registration_order.is_complete(),
+        "wait-queue registration journal was truncated — the exact FIFO checker \
+         refuses to judge a truncated journal"
+    );
+    assert!(
         !run.registration_order.is_empty(),
-        "prober + CLIENT ID join produced no registration ordinals — the exact \
-         FIFO checker is silently disabled (join mismatch or key-encoding drift)"
+        "journal + CLIENT ID join produced no registration ordinals — the exact \
+         FIFO checker has nothing to judge (join mismatch or key-encoding drift)"
     );
     let report = check_all_with(
         &run.history,
@@ -179,6 +191,25 @@ fn multi_waiter_exact_fifo_is_clean() {
         report.passed(),
         "multi-waiter workload violated invariants: {:?}",
         report.violations
+    );
+    // Not every served pop is judgeable: a pop that finds data already present
+    // never enters the wait queue, so it has no ordinal by construction. The
+    // honest coverage target is therefore *journaled registrations*, i.e. the
+    // pops that provably parked — every one of those must be attributed to an
+    // operation. On top of that, real ordering comparisons must have happened.
+    // This seed measures 5 served pops / 4 registrations / 4 attributed / 3
+    // pairs compared; the polling prober it replaced typically captured nothing
+    // at all.
+    let cov = report.fifo_coverage;
+    assert_eq!(
+        cov.attributed, cov.registrations,
+        "exact FIFO checker left journaled registrations unattributed \
+         (coverage {cov:?}) — the (key, client) join has drifted"
+    );
+    assert!(
+        cov.registrations >= 1 && cov.pairs_compared >= 1,
+        "exact FIFO checker compared no waiter pairs (coverage {cov:?}) — \
+         registration capture regressed to the useless sampling of issue 16"
     );
 }
 
@@ -218,6 +249,7 @@ fn seed_sweep_txheavy() {
     }
     eprintln!("{}", summary.report_line("seed_sweep_txheavy"));
     summary.warn_if_over("seed_sweep_txheavy", warn_ratio_override());
+    eprintln!("{}", summary.fifo_report_line("seed_sweep_txheavy"));
 }
 
 // Nightly generated-workload seed sweep (CI nightly tier, see the "CI" section
@@ -295,6 +327,13 @@ fn seed_sweep_nightly() {
     let downgrade_threshold_result =
         summary.check_threshold("seed_sweep_nightly", fail_ratio_override());
 
+    // Same treatment for exact-FIFO coverage (issue 16): the checker has no
+    // fallback, so a capture regression turns every FIFO verdict into "no
+    // verdict" — which without this threshold reads as a clean pass.
+    eprintln!("{}", summary.fifo_report_line("seed_sweep_nightly"));
+    let fifo_coverage_result =
+        summary.check_fifo_coverage("seed_sweep_nightly", fifo_ratio_override());
+
     assert!(
         failures.is_empty(),
         "{} of {} seed(s) violated invariants: {:#?}",
@@ -303,6 +342,9 @@ fn seed_sweep_nightly() {
         failures
     );
     if let Err(e) = downgrade_threshold_result {
+        panic!("{e}");
+    }
+    if let Err(e) = fifo_coverage_result {
         panic!("{e}");
     }
 }
@@ -490,9 +532,9 @@ mod regressions {
     /// Finding A, which reproduced on nearly every seed above the threshold and
     /// held the nightly `ops_per_client` cap at 75.
     ///
-    /// Fix: the drainer (and the WAITQUEUE prober) key off a client-completion
-    /// latch instead of a wall-clock deadline, so the capture is always taken
-    /// after the last client script finished.
+    /// Fix: the drainer keys off a client-completion latch instead of a
+    /// wall-clock deadline, so the capture is always taken after the last
+    /// client script finished.
     ///
     /// This seed/config is one of the reproducers from the original bisection.
     /// It must FAIL before that fix and PASS after; `ops_per_client = 110` is

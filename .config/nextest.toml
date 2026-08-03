@@ -102,3 +102,14 @@ slow-timeout = { period = "30s", terminate-after = 3 }
 [[profile.default.overrides]]
 filter = "test(scan_full_iteration_survives_resizes_mid_scan)"
 slow-timeout = { period = "15s", terminate-after = 3 }
+
+# SDIFF's fuzzing port runs 100 iterations, each building up to 10 sets of up
+# to 100 elements apiece (SADD) and then diffing them (SDIFF) — thousands of
+# real socket round-trips to the spawned test server. That is fine locally but
+# right at the default 15s hard kill on slower CI runners, where it was
+# observed to TIMEOUT while the rest of the frozen suite (2300/2301) passed.
+# Legitimately heavy, not flaky: give it the same headroom as the HLL
+# round-trip-heavy tests above rather than shrinking the fuzz iteration count.
+[[profile.default.overrides]]
+filter = "test(tcl_sdiff_fuzzing)"
+slow-timeout = { period = "30s", terminate-after = 3 }

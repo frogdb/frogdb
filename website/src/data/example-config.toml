@@ -50,6 +50,10 @@ wal-failure-policy = "continue"
 snapshot-dir = "./snapshots"
 snapshot-interval-secs = 3600
 max-snapshots = 5
+stop-writes-on-save-error = false
+
+[recovery]
+on-decode-failure = "continue"
 
 [http]
 enabled = true
@@ -120,6 +124,7 @@ split-brain-buffer-size = 10000
 split-brain-buffer-max-mb = 64
 self-fence-on-replica-loss = true
 replica-freshness-timeout-ms = 3000
+backlog-ttl-secs = 3600
 replica-write-timeout-ms = 5000
 
 [slowlog]

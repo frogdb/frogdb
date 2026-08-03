@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 use frogdb_testing::{
-    ConservationViolation, HashModel, History, ListModel, StreamModel, ZSetModel,
-    check_exactly_once_delivery, check_fifo_wake_order, check_linearizability,
+    ConservationViolation, HashModel, History, ListModel, StreamModel, WaiterRegistrationOrder,
+    ZSetModel, check_exactly_once_delivery, check_fifo_wake_order_exact, check_linearizability,
     check_linearizability_bounded, check_tx_sum_conservation, check_watch_no_false_negative,
     default_keys_of, partition_by_key,
 };
@@ -29,7 +29,7 @@ fn oracle_api_is_reachable_from_root() {
     // Partitioning + conservation reachable.
     let _parts = partition_by_key(&h, default_keys_of);
     assert!(check_exactly_once_delivery(&h, &HashMap::new()).is_ok());
-    assert!(check_fifo_wake_order(&h).is_ok());
+    assert!(check_fifo_wake_order_exact(&h, &WaiterRegistrationOrder::default()).is_ok());
     assert!(check_tx_sum_conservation(&h, &[b("k")], 0).is_ok());
     assert!(check_watch_no_false_negative(&h).is_ok());
 

@@ -3,7 +3,9 @@ use super::handle::SnapshotHandle;
 use super::metadata::{SnapshotConfig, SnapshotMetadataFile};
 use super::scheduler::SnapshotScheduler;
 use super::stager::SnapshotStager;
-use super::{SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats};
+use super::{
+    SaveHistory, SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats,
+};
 use crate::rocks::RocksStore;
 use frogdb_types::metrics::definitions::{
     PersistenceErrors, SnapshotDuration, SnapshotEpoch, SnapshotInProgress, SnapshotLastTimestamp,
@@ -34,7 +36,7 @@ pub struct RocksSnapshotCoordinator {
     snapshot_dir: PathBuf,
     num_shards: usize,
     scheduler: Arc<SnapshotScheduler>,
-    stats: Arc<RwLock<SnapshotStats>>,
+    stats: Arc<SaveHistory>,
     max_snapshots: usize,
     metrics_recorder: Arc<dyn MetricsRecorder>,
     pre_snapshot_hook: Arc<RwLock<Option<PreSnapshotHook>>>,
@@ -87,7 +89,7 @@ impl RocksSnapshotCoordinator {
             snapshot_dir: config.snapshot_dir,
             num_shards: ns,
             scheduler,
-            stats: Arc::new(RwLock::new(stats)),
+            stats: Arc::new(SaveHistory::new(stats)),
             max_snapshots: config.max_snapshots,
             metrics_recorder: mr,
             pre_snapshot_hook: Arc::new(RwLock::new(None)),
@@ -158,7 +160,7 @@ impl RocksSnapshotCoordinator {
         // already claimed, so `in_progress()` is true from this point on and
         // `rdb_current_bgsave_time_sec` must not read `-1` in the window before
         // the runtime polls the task.
-        let started = self.stats.write().unwrap().record_start();
+        let started = self.stats.record_start();
         SnapshotInProgress::set(&*self.metrics_recorder, 1.0);
         SnapshotEpoch::set(&*self.metrics_recorder, epoch as f64);
         tracing::info!(epoch, "Snapshot started");
@@ -188,7 +190,10 @@ impl SnapshotCoordinator for RocksSnapshotCoordinator {
         Ok(SnapshotHandle::new(epoch))
     }
     fn stats(&self) -> SnapshotStats {
-        self.stats.read().unwrap().clone()
+        self.stats.snapshot()
+    }
+    fn last_save_failed(&self) -> bool {
+        self.stats.last_save_failed()
     }
     fn in_progress(&self) -> bool {
         self.scheduler.in_progress()
@@ -217,7 +222,7 @@ struct SnapshotRun {
     rocks_store: Arc<RocksStore>,
     snapshot_dir: PathBuf,
     data_dir: PathBuf,
-    stats: Arc<RwLock<SnapshotStats>>,
+    stats: Arc<SaveHistory>,
     metrics: Arc<dyn MetricsRecorder>,
     pre_snapshot_hook: Arc<RwLock<Option<PreSnapshotHook>>>,
     num_shards: usize,
@@ -282,10 +287,7 @@ impl SnapshotRun {
                 // not produced by `mark_complete`; fall back to now rather than
                 // dropping the save's timestamp).
                 let completed_at = md.completed_at().unwrap_or_else(SystemTime::now);
-                self.stats
-                    .write()
-                    .unwrap()
-                    .record_success(completed_at, elapsed);
+                self.stats.record_success(completed_at, elapsed);
                 SnapshotDuration::observe(&*self.metrics, elapsed.as_secs_f64());
                 SnapshotSizeBytes::set(&*self.metrics, md.size_bytes as f64);
                 SnapshotLastTimestamp::set(
@@ -306,14 +308,12 @@ impl SnapshotRun {
             }
             Ok(Err(e)) => {
                 PersistenceErrors::inc(&*self.metrics, PersistenceErrorType::Snapshot);
-                self.stats.write().unwrap().record_failure(e.to_string());
+                self.stats.record_failure(e.to_string());
                 tracing::error!(epoch, error = %e, "Snapshot failed");
             }
             Err(e) => {
                 PersistenceErrors::inc(&*self.metrics, PersistenceErrorType::Snapshot);
                 self.stats
-                    .write()
-                    .unwrap()
                     .record_failure(format!("snapshot task panicked: {e}"));
                 tracing::error!(epoch, error = %e, "Snapshot task panicked");
             }
@@ -339,7 +339,7 @@ async fn run_loop(run: SnapshotRun, mut epoch: u64, mut started: Instant) {
             }
             Some(next) => {
                 epoch = next;
-                started = run.stats.write().unwrap().record_start();
+                started = run.stats.record_start();
                 SnapshotEpoch::set(&*run.metrics, epoch as f64);
                 tracing::info!(epoch, "Starting scheduled snapshot");
             }

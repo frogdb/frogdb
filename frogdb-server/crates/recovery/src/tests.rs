@@ -7,7 +7,9 @@
 
 use std::path::Path;
 
-use frogdb_config::{ClusterConfigSection, PersistenceConfig, ReplicationConfigSection};
+use frogdb_config::{
+    ClusterConfigSection, PersistenceConfig, RecoveryConfig, ReplicationConfigSection,
+};
 use frogdb_core::persistence::{RocksConfig, RocksStore};
 use frogdb_core::sync::Arc;
 use frogdb_core::{KeyMetadata, NoopMetricsRecorder, Store, Value, serialize};
@@ -31,6 +33,26 @@ fn replication_config(role: &str) -> ReplicationConfigSection {
         serde_json::from_str("{}").expect("default replication config from empty json");
     cfg.role = role.to_string();
     cfg
+}
+
+/// The default decode-failure policy (`continue`), borrowed as `'static` so
+/// every `RecoveryInputs` in this file can name it without a per-test local.
+///
+/// Every test here except the policy tests below runs under it, which is the
+/// point: `continue` is what a boot does when nobody configured anything.
+fn continue_policy() -> &'static RecoveryConfig {
+    static POLICY: std::sync::LazyLock<RecoveryConfig> =
+        std::sync::LazyLock::new(RecoveryConfig::default);
+    &POLICY
+}
+
+/// `recovery.on-decode-failure = refuse`, the opt-in strict policy.
+fn refuse_policy() -> &'static RecoveryConfig {
+    static POLICY: std::sync::LazyLock<RecoveryConfig> =
+        std::sync::LazyLock::new(|| RecoveryConfig {
+            on_decode_failure: "refuse".to_string(),
+        });
+    &POLICY
 }
 
 /// Build a `ClusterConfigSection` with serde defaults and the given enabled flag.
@@ -67,6 +89,7 @@ fn fresh_boot_creates_empty_shards() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 4,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -103,6 +126,7 @@ fn persistence_disabled_touches_nothing() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 3,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -135,6 +159,7 @@ fn restart_with_data_restores_keys() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 2,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -171,6 +196,7 @@ fn corrupt_functions_file_is_tolerated() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -197,6 +223,7 @@ fn standalone_does_not_persist_replication_state() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -225,6 +252,7 @@ fn primary_loads_and_persists_replication_state() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -265,6 +293,7 @@ fn staged_replication_metadata_is_adopted_and_consumed() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -341,6 +370,7 @@ fn staged_metadata_survives_a_failed_state_save() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -394,6 +424,7 @@ fn corrupt_replication_state_is_regenerated() {
             persistence: &cfg,
             replication: &repl_cfg,
             cluster: &cluster_cfg,
+            recovery: continue_policy(),
             num_shards: 1,
             warm_enabled: false,
             metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -449,6 +480,7 @@ fn cluster_storage_open_failure_is_a_recovery_error() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -473,6 +505,7 @@ fn cluster_mode_opens_raft_storage() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 1,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -508,6 +541,7 @@ fn shard_count_mismatch_is_a_recovery_error() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 4,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -539,6 +573,7 @@ fn staged_checkpoint_is_installed() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 2,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -591,6 +626,7 @@ fn incomplete_staged_checkpoint_is_refused_without_touching_live_db() {
         persistence: &cfg,
         replication: &repl_cfg,
         cluster: &cluster_cfg,
+        recovery: continue_policy(),
         num_shards: 2,
         warm_enabled: false,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -656,6 +692,7 @@ fn inputs_for<'a>(
     cfg: &'a PersistenceConfig,
     repl: &'a ReplicationConfigSection,
     cluster: &'a ClusterConfigSection,
+    recovery: &'a RecoveryConfig,
     num_shards: usize,
     metrics: Arc<dyn frogdb_core::MetricsRecorder>,
 ) -> RecoveryInputs<'a> {
@@ -664,6 +701,7 @@ fn inputs_for<'a>(
         persistence: cfg,
         replication: repl,
         cluster,
+        recovery,
         num_shards,
         warm_enabled: false,
         metrics_recorder: metrics,
@@ -694,6 +732,7 @@ fn wholly_undecodable_database_refuses_to_start() {
         &cfg,
         &repl_cfg,
         &cluster_cfg,
+        continue_policy(),
         2,
         Arc::new(NoopMetricsRecorder::new()),
     );
@@ -723,7 +762,14 @@ fn partial_decode_failure_is_counted_and_metered() {
     let repl_cfg = replication_config("standalone");
     let cluster_cfg = cluster_config(false);
     let metrics = Arc::new(RecordingMetricsRecorder::default());
-    let inputs = inputs_for(&cfg, &repl_cfg, &cluster_cfg, 2, metrics.clone());
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        continue_policy(),
+        2,
+        metrics.clone(),
+    );
 
     let recovered = recover(&inputs).expect("one bad key must not fail the boot");
     assert_eq!(recovered.stats.keys_failed, 1);
@@ -767,6 +813,7 @@ fn expired_keys_count_as_decoded_so_one_bad_key_does_not_refuse() {
         &cfg,
         &repl_cfg,
         &cluster_cfg,
+        continue_policy(),
         2,
         Arc::new(NoopMetricsRecorder::new()),
     );
@@ -783,6 +830,7 @@ fn warm_inputs_for<'a>(
     cfg: &'a PersistenceConfig,
     repl: &'a ReplicationConfigSection,
     cluster: &'a ClusterConfigSection,
+    recovery: &'a RecoveryConfig,
     num_shards: usize,
 ) -> RecoveryInputs<'a> {
     RecoveryInputs {
@@ -790,6 +838,7 @@ fn warm_inputs_for<'a>(
         persistence: cfg,
         replication: repl,
         cluster,
+        recovery,
         num_shards,
         warm_enabled: true,
         metrics_recorder: Arc::new(NoopMetricsRecorder::new()),
@@ -822,7 +871,7 @@ fn warm_tier_only_decode_does_not_refuse_start() {
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
     let cluster_cfg = cluster_config(false);
-    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, 2);
+    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, continue_policy(), 2);
 
     let recovered = recover(&inputs).expect("a decodable warm-tier key means the db is readable");
     assert_eq!(recovered.stats.keys_loaded, 0, "hot tier decoded nothing");
@@ -857,7 +906,7 @@ fn stale_warm_entry_counts_as_decoded() {
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
     let cluster_cfg = cluster_config(false);
-    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, 2);
+    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, continue_policy(), 2);
 
     let recovered = recover(&inputs).expect("a stale-but-decoded warm key still counts");
     assert_eq!(recovered.stats.keys_loaded, 1);
@@ -867,6 +916,275 @@ fn stale_warm_entry_counts_as_decoded() {
         "the warm shadow decoded and was then dropped for the hot copy"
     );
     assert_eq!(recovered.stats.warm_keys_loaded, 0);
+}
+
+// FM-PERSISTENCE-047
+/// `refuse` means what it says: one undecodable key among perfectly good ones
+/// stops the boot. The whole point of the policy is that it fires where the
+/// nothing-decoded refusal deliberately does not, so this seeds a database that
+/// boots fine under the default.
+#[test]
+fn refuse_policy_fails_the_boot_on_a_single_decode_failure() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"good", "value");
+    seed_raw(&db_dir, 2, &[(b"bad", b"not a serialized value")]);
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let metrics = Arc::new(RecordingMetricsRecorder::default());
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        refuse_policy(),
+        2,
+        metrics.clone(),
+    );
+
+    let err = recover(&inputs)
+        .err()
+        .expect("refuse must not boot past a decode failure");
+    assert_eq!(err.phase, RecoveryPhase::RestoreShards);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("recovery.on-decode-failure is 'refuse'"),
+        "the refusal must name the policy that caused it, so the operator knows \
+         it is their setting and not corruption triage: {msg}"
+    );
+    assert!(
+        msg.contains("1 key(s)") && msg.contains(&db_dir.display().to_string()),
+        "the refusal must name the scale and the directory: {msg}"
+    );
+    assert!(
+        msg.contains("key 'bad'") && msg.contains("shard 0") && msg.contains("hot tier"),
+        "the refusal must point at a concrete failing key: {msg}"
+    );
+    assert!(
+        msg.contains("recovery.on-decode-failure = continue"),
+        "the refusal must name the way out of it: {msg}"
+    );
+    assert_eq!(
+        metrics.total("frogdb_recovery_keys_failed_total"),
+        1,
+        "the metric is incremented before the refusal, so a monitored boot loop \
+         shows what it is failing on"
+    );
+}
+
+// FM-PERSISTENCE-047
+/// The default is `continue`, and it is the *configured* default rather than a
+/// property of the test fixture: this boots the same corrupt database as the
+/// test above through a `RecoveryConfig` nobody touched.
+#[test]
+fn continue_policy_is_the_default_and_boots_past_a_decode_failure() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"good", "value");
+    seed_raw(&db_dir, 2, &[(b"bad", b"not a serialized value")]);
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    // Straight from serde defaults — the config an operator gets by writing
+    // nothing at all.
+    let recovery_cfg: RecoveryConfig =
+        serde_json::from_str("{}").expect("default recovery config from empty json");
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        &recovery_cfg,
+        2,
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+
+    let recovered = recover(&inputs).expect("the default policy skips and keeps going");
+    assert_eq!(recovered.stats.keys_loaded, 1);
+    assert_eq!(recovered.stats.keys_failed, 1);
+}
+
+// FM-PERSISTENCE-047
+/// The policy covers the warm tier too. A tiered deployment holds most of its
+/// bytes there, so a `refuse` that only watched the hot CF would quietly not be
+/// the policy the operator asked for. The hot tier here decodes cleanly, so
+/// nothing but the warm failure can be causing the refusal.
+#[test]
+fn refuse_policy_covers_warm_tier_decode_failures() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    {
+        let rocks = RocksStore::open_with_warm(&db_dir, 2, &RocksConfig::default(), true).unwrap();
+        let value = Value::string("hot and fine");
+        let metadata = KeyMetadata::new(value.memory_size());
+        rocks
+            .put(0, b"hotkey", &serialize(&value, &metadata))
+            .unwrap();
+        rocks
+            .put_warm(0, b"warmbad", b"not a serialized value")
+            .unwrap();
+        rocks.flush().unwrap();
+    }
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, refuse_policy(), 2);
+
+    let err = recover(&inputs)
+        .err()
+        .expect("a warm-tier decode failure must refuse under 'refuse'");
+    assert_eq!(err.phase, RecoveryPhase::RestoreShards);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("key 'warmbad'") && msg.contains("warm tier"),
+        "the refusal must name the tier, because a warm-only failure points at \
+         tiered storage rather than at the primary dataset: {msg}"
+    );
+}
+
+// FM-PERSISTENCE-047
+/// The reported context is the *first* failure in iteration order, not the last
+/// one seen. Two undecodable keys are seeded in the same shard with names that
+/// fix their order, so a last-wins capture would name the other one.
+#[test]
+fn decode_failure_context_is_first_wins() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"good", "value");
+    seed_raw(
+        &db_dir,
+        2,
+        &[
+            (b"aaa-bad", b"not a serialized value"),
+            (b"zzz-bad", b"nor is this one"),
+        ],
+    );
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        refuse_policy(),
+        2,
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+
+    let msg = recover(&inputs)
+        .err()
+        .expect("two decode failures must refuse under 'refuse'")
+        .to_string();
+    assert!(
+        msg.contains("key 'aaa-bad'"),
+        "the first failure in iteration order is the one to report: {msg}"
+    );
+    assert!(
+        !msg.contains("zzz-bad"),
+        "the context is one example, not a list: {msg}"
+    );
+    assert!(
+        msg.contains("2 key(s)"),
+        "the count is what says how widespread the problem is: {msg}"
+    );
+}
+
+// FM-PERSISTENCE-047
+/// The captured context records which tier it came from, and survives the fold
+/// from per-shard stats into the whole-database total — so `continue` boots
+/// carry it too, for the INFO/log surfaces rather than a refusal message.
+#[test]
+fn warm_decode_failure_context_records_the_warm_tier() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    {
+        let rocks = RocksStore::open_with_warm(&db_dir, 2, &RocksConfig::default(), true).unwrap();
+        let value = Value::string("hot and fine");
+        let metadata = KeyMetadata::new(value.memory_size());
+        rocks
+            .put(0, b"hotkey", &serialize(&value, &metadata))
+            .unwrap();
+        rocks
+            .put_warm(0, b"warmbad", b"not a serialized value")
+            .unwrap();
+        rocks.flush().unwrap();
+    }
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = warm_inputs_for(&cfg, &repl_cfg, &cluster_cfg, continue_policy(), 2);
+
+    let recovered = recover(&inputs).expect("continue boots past a warm decode failure");
+    let failure = recovered
+        .stats
+        .first_failure
+        .as_ref()
+        .expect("a decode failure must leave context behind, not only a count");
+    assert!(failure.warm, "the failure came from the warm CF");
+    assert_eq!(failure.shard_id, 0);
+    assert_eq!(failure.key.as_ref(), b"warmbad");
+    assert!(
+        !failure.error.is_empty(),
+        "the decoder's own words are what make the context actionable"
+    );
+}
+
+// FM-PERSISTENCE-047
+/// The refusal previews the failing key, and a key can be megabytes. The
+/// preview is cut at 128 bytes — and the cut is announced with the real byte
+/// length, so a truncated preview cannot be mistaken for a whole key name that
+/// happens to end there. Both sides of the boundary are asserted: a key exactly
+/// at the limit must come out whole, since a preview that says "… (128 bytes
+/// total)" about a key it printed in full is a lie about the data.
+#[test]
+fn a_failing_key_is_previewed_whole_up_to_the_limit_and_marked_when_cut() {
+    let refusal_for = |key: &[u8]| {
+        let tmp = TempDir::new().unwrap();
+        let db_dir = tmp.path().join("db");
+        seed_raw(&db_dir, 2, &[(key, b"not a serialized value")]);
+
+        let cfg = persistence_config(&db_dir, true);
+        let repl_cfg = replication_config("standalone");
+        let cluster_cfg = cluster_config(false);
+        let inputs = inputs_for(
+            &cfg,
+            &repl_cfg,
+            &cluster_cfg,
+            refuse_policy(),
+            2,
+            Arc::new(NoopMetricsRecorder::new()),
+        );
+        recover(&inputs)
+            .err()
+            .expect("a decode failure must refuse under 'refuse'")
+            .to_string()
+    };
+
+    let at_limit = vec![b'k'; 128];
+    let msg = refusal_for(&at_limit);
+    assert!(
+        msg.contains(&format!("key '{}'", String::from_utf8_lossy(&at_limit))),
+        "a key exactly at the limit is printed whole: {msg}"
+    );
+    assert!(
+        !msg.contains("bytes total"),
+        "nothing was cut, so nothing announces a cut: {msg}"
+    );
+
+    let over_limit = vec![b'k'; 129];
+    let msg = refusal_for(&over_limit);
+    assert!(
+        msg.contains("129 bytes total"),
+        "one byte past the limit is cut, and says so with the true length: {msg}"
+    );
+    assert!(
+        !msg.contains(&format!("key '{}'", String::from_utf8_lossy(&over_limit))),
+        "the whole key is not printed once it is over the limit: {msg}"
+    );
 }
 
 // FM-PERSISTENCE-037
@@ -898,6 +1216,7 @@ fn persisted_functions_are_restored() {
         &cfg,
         &repl_cfg,
         &cluster_cfg,
+        continue_policy(),
         1,
         Arc::new(NoopMetricsRecorder::new()),
     );

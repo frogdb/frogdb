@@ -370,9 +370,12 @@ fn block_timeout(rng: &mut StdRng) -> Bytes {
 }
 
 /// Long blocking timeout (seconds) for the multi-waiter path. Chosen so the
-/// parked window (until a delayed producer serves the waiter) comfortably
-/// exceeds the ~50 sim-ms `DEBUG WAITQUEUE` prober cadence, guaranteeing the
-/// prober catches every concurrent waiter's registration ordinal.
+/// parked window (until a delayed producer serves the waiter) outlives the
+/// producer's think delay, so several waiters are queued on one key at once
+/// and the wake order is actually exercised rather than trivially serialized.
+/// (Registration ordinals themselves no longer depend on the park duration:
+/// they come from the event-driven `DEBUG WAITQUEUE-LOG` journal, not from a
+/// polling probe.)
 const MULTI_WAITER_TIMEOUT: &str = "5";
 
 /// Small early think (ms) before a multi-waiter blocking pop, so waiters
@@ -382,8 +385,8 @@ fn multi_waiter_think(rng: &mut StdRng) -> u64 {
 }
 
 /// Larger delayed think (ms) before a multi-waiter *producer* push, so the
-/// push fires after concurrent waiters have parked (letting the prober observe
-/// them first) and then serves them in registration order.
+/// push fires after concurrent waiters have parked and then serves them in
+/// registration order.
 fn producer_think(rng: &mut StdRng) -> u64 {
     rng.random_range(120..400)
 }
@@ -680,11 +683,14 @@ enum MultiWaiterFamily {
 ///
 /// The single-owner [`blocking_owner`] restriction is intentionally dropped
 /// here — every client may block on any key — because the exact FIFO checker
-/// judges served order against the mid-run `DEBUG WAITQUEUE` registration
-/// ordinals, not the invoke-time proxy. The one binding constraint is
-/// **at most one blocking pop per key per client** (`multi_waited` guard); a
-/// client that would block a second time on the same key instead issues a
-/// producer push, so its `(key, client_id)` join stays single-valued.
+/// judges served order against the shard's registration journal
+/// (`DEBUG WAITQUEUE-LOG`), not the invoke-time proxy. The remaining
+/// constraint, **at most one blocking pop per key per client**
+/// (`multi_waited` guard), keeps each `(key, client_id)` join single-valued;
+/// the checker no longer requires it (it attributes repeated pops positionally)
+/// but a one-to-one join is the case with the least that can go wrong, and a
+/// client that would block a second time on the same key produces a push
+/// instead, which is what actually serves the other waiters.
 fn gen_multi_waiter(
     keys: &[Bytes],
     family: MultiWaiterFamily,
@@ -720,8 +726,8 @@ fn gen_multi_waiter(
         }
     } else {
         // Producer path: a delayed push/add that serves the oldest parked
-        // waiter FIFO. The delay lets concurrent waiters register (and the
-        // prober observe them) before the first element arrives.
+        // waiter FIFO. The delay lets concurrent waiters register before the
+        // first element arrives.
         let delay = producer_think(rng);
         match family {
             MultiWaiterFamily::List => {

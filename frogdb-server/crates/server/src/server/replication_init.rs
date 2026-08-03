@@ -13,8 +13,8 @@ use tracing::info;
 
 use crate::config::Config;
 use crate::replication::{
-    LagThresholdConfig, PrimaryReplicationHandler, ReplicaReplicationHandler, ReplicationIdentity,
-    SplitBrainBufferConfig,
+    BacklogConfig, LagThresholdConfig, PrimaryReplicationHandler, ReplicaReplicationHandler,
+    ReplicationIdentity,
 };
 use frogdb_replication_runtime::ReplicationQuorumChecker;
 
@@ -25,7 +25,7 @@ pub(super) struct ReplicationInitResult {
     /// `Option` only so the per-connection `ClusterDeps` can keep a `Default`.
     pub replication_tracker: Option<Arc<ReplicationTrackerImpl>>,
     pub replica_handler: Option<Arc<ReplicaReplicationHandler>>,
-    pub replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>>,
+    pub replica_frame_rx: Option<mpsc::Receiver<frogdb_core::StreamedFrame>>,
     /// Primary-side replication handler. Always present, on every role.
     pub primary_replication_handler: Option<Arc<PrimaryReplicationHandler>>,
     pub shared_replication_offset: Option<Arc<AtomicU64>>,
@@ -91,7 +91,7 @@ pub(super) fn init_replication(
     >,
 ) -> Result<ReplicationInitResult> {
     let mut replica_handler: Option<Arc<ReplicaReplicationHandler>> = None;
-    let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>> = None;
+    let mut replica_frame_rx: Option<mpsc::Receiver<frogdb_core::StreamedFrame>> = None;
     let mut primary_addr: Option<std::net::SocketAddr> = None;
 
     let state_path = config
@@ -118,10 +118,11 @@ pub(super) fn init_replication(
             threshold_secs: config.replication.replication_lag_threshold_secs,
             cooldown: Duration::from_secs(config.replication.fullresync_cooldown_secs),
         },
-        SplitBrainBufferConfig {
+        BacklogConfig {
             enabled: config.replication.split_brain_log_enabled,
             max_entries: config.replication.split_brain_buffer_size,
             max_bytes: config.replication.split_brain_buffer_max_mb * 1024 * 1024,
+            ttl_secs: config.replication.backlog_ttl_secs,
         },
         config.replication.replica_write_timeout_ms,
     ));
@@ -388,10 +389,11 @@ mod tests {
                 threshold_secs: 0,
                 cooldown: Duration::from_secs(0),
             },
-            SplitBrainBufferConfig {
+            BacklogConfig {
                 enabled: true,
                 max_entries: 128,
                 max_bytes: 1024 * 1024,
+                ttl_secs: 0,
             },
             1000,
         ))

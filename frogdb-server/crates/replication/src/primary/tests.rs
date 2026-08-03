@@ -10,7 +10,7 @@ fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicati
     use crate::primary::PrimaryReplicationHandler;
     use crate::state::ReplicationState;
     use crate::tracker::ReplicationTrackerImpl;
-    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use crate::{BacklogConfig, LagThresholdConfig};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -26,10 +26,11 @@ fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicati
             threshold_secs: 0,
             cooldown: Duration::from_secs(0),
         },
-        SplitBrainBufferConfig {
+        BacklogConfig {
             enabled: true,
             max_entries: 1000,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 0,
         },
         0,
     )
@@ -356,7 +357,7 @@ async fn save_state_persists_tracker_offset() {
     use crate::primary::PrimaryReplicationHandler;
     use crate::state::ReplicationState;
     use crate::tracker::ReplicationTrackerImpl;
-    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use crate::{BacklogConfig, LagThresholdConfig};
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -377,10 +378,11 @@ async fn save_state_persists_tracker_offset() {
             threshold_secs: 0,
             cooldown: Duration::from_secs(0),
         },
-        SplitBrainBufferConfig {
+        BacklogConfig {
             enabled: false,
             max_entries: 0,
             max_bytes: 0,
+            ttl_secs: 0,
         },
         0,
     );
@@ -411,7 +413,7 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
     use crate::state::ReplicationState;
     use crate::tracker::ReplicationTrackerImpl;
     use crate::wait_coordinator::WaitVerdict;
-    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use crate::{BacklogConfig, LagThresholdConfig};
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -429,10 +431,11 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
             threshold_secs: 0,
             cooldown: Duration::from_secs(0),
         },
-        SplitBrainBufferConfig {
+        BacklogConfig {
             enabled: false,
             max_entries: 0,
             max_bytes: 0,
+            ttl_secs: 0,
         },
         0,
     );
@@ -484,7 +487,7 @@ fn stint_handler(
 ) -> crate::primary::PrimaryReplicationHandler {
     use crate::primary::PrimaryReplicationHandler;
     use crate::tracker::ReplicationTrackerImpl;
-    use crate::{LagThresholdConfig, SplitBrainBufferConfig};
+    use crate::{BacklogConfig, LagThresholdConfig};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -500,10 +503,11 @@ fn stint_handler(
             threshold_secs: 0,
             cooldown: Duration::from_secs(0),
         },
-        SplitBrainBufferConfig {
+        BacklogConfig {
             enabled: true,
             max_entries: 1000,
             max_bytes: 64 * 1024 * 1024,
+            ttl_secs: 0,
         },
         0,
     )
@@ -720,4 +724,48 @@ async fn ending_a_stint_disconnects_downstream_replicas() {
         2,
         "every registered session must be signalled to tear down"
     );
+}
+
+/// Freeing the backlog is a memory decision, not a history change: the buffered
+/// commands go, and nothing else moves. A stint change (promotion, demotion)
+/// rotates the replication id and freezes a failover window; the TTL must do
+/// none of that, or a node that sat idle overnight would come back claiming a
+/// different history than the one its data is on.
+// FM-REPLICATION-009
+#[test]
+fn freeing_the_backlog_moves_no_offset_and_no_replication_id() {
+    use crate::ReplicationBroadcaster;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    handler.begin_primary_stint().unwrap();
+    push_write(&handler, "k1", "v1");
+    let head = push_write(&handler, "k2", "v2");
+
+    let before = handler.state();
+    assert!(handler.replay.has_resume_history());
+
+    // The TTL elapses with no replica attached.
+    let t0 = std::time::Instant::now();
+    assert!(handler.replay.backlog_ttl().secs() == 0);
+    handler.replay.backlog_ttl().set_secs(60);
+    assert!(!handler.replay.expire_backlog_if_idle(0, t0));
+    assert!(
+        handler
+            .replay
+            .expire_backlog_if_idle(0, t0 + std::time::Duration::from_secs(60))
+    );
+
+    let after = handler.state();
+    assert_eq!(after.replication_id, before.replication_id);
+    assert_eq!(after.secondary_id, before.secondary_id);
+    assert_eq!(after.secondary_offset, before.secondary_offset);
+    assert_eq!(handler.current_offset(), head, "the live offset stands");
+    assert_eq!(handler.replication_id(), before.replication_id);
+    // Only the resume window is gone.
+    assert!(!handler.replay.has_resume_history());
+    // …and with it the reason to keep buffering: a node with no window and no
+    // replica is idle again, which is the whole point of the TTL. Nothing is
+    // lost by that — the next PSYNC full-resyncs either way.
+    assert!(!handler.is_active());
 }

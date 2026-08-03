@@ -9,12 +9,14 @@
 //! coalesce / lost-wakeup guarantee is inherited from the scheduler for free.
 use super::handle::SnapshotHandle;
 use super::scheduler::SnapshotScheduler;
-use super::{SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats};
-use std::sync::{Arc, RwLock};
+use super::{
+    SaveHistory, SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats,
+};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 pub struct NoopSnapshotCoordinator {
-    stats: RwLock<SnapshotStats>,
+    stats: SaveHistory,
     scheduler: Arc<SnapshotScheduler>,
 }
 impl Default for NoopSnapshotCoordinator {
@@ -25,7 +27,7 @@ impl Default for NoopSnapshotCoordinator {
 impl NoopSnapshotCoordinator {
     pub fn new() -> Self {
         Self {
-            stats: RwLock::new(SnapshotStats::default()),
+            stats: SaveHistory::default(),
             scheduler: Arc::new(SnapshotScheduler::with_epoch(0)),
         }
     }
@@ -37,10 +39,7 @@ impl NoopSnapshotCoordinator {
     /// and releasing it — so `rdb_last_bgsave_time_sec` reports `0`, not a
     /// borrowed number from a real save that never happened.
     fn record_instant_save(&self) {
-        self.stats
-            .write()
-            .unwrap()
-            .record_success(SystemTime::now(), Duration::ZERO);
+        self.stats.record_success(SystemTime::now(), Duration::ZERO);
     }
 
     /// A no-op save has no disk work, so it completes instantly. Release the slot
@@ -70,7 +69,20 @@ impl SnapshotCoordinator for NoopSnapshotCoordinator {
         Ok(SnapshotHandle::new(self.complete_instantly(epoch)))
     }
     fn stats(&self) -> SnapshotStats {
-        self.stats.read().unwrap().clone()
+        self.stats.snapshot()
+    }
+    /// Always `false`, and structurally so: a no-op save writes nothing, so
+    /// [`record_instant_save`](Self::record_instant_save) is the only history
+    /// call this type makes and it only ever records success. Delegating rather
+    /// than returning a literal keeps the answer right if the no-op ever gains
+    /// a failure path.
+    //
+    // Equivalent mutant, same class as `in_progress` below: replacing this body
+    // with `false` is unobservable, because no sequence of calls on this type
+    // can put a cause in the history to report. Kept as a delegation anyway —
+    // the alternative is a literal that would go stale silently.
+    fn last_save_failed(&self) -> bool {
+        self.stats.last_save_failed()
     }
     // Indistinguishable from a bare `false` by construction: every no-op save
     // claims and releases the slot inside one synchronous call, so no observer

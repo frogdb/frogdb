@@ -381,7 +381,23 @@ def test_workflow() -> Workflow:
                 ),
                 run_step(
                     name="Install dashboard-linter",
-                    run="test -x ~/go/bin/dashboard-linter || go install github.com/grafana/dashboard-linter@latest",
+                    # `go install .../dashboard-linter@latest` fails as of v0.1.0-v0.2.0:
+                    # its go.mod carries a `replace` directive (a memberlist fork pin), and
+                    # `go install` refuses to build a module outside its own tree when the
+                    # target module's go.mod has replace directives. Cloning the tag and
+                    # building it as the main module sidesteps that restriction — the
+                    # replace directive is honored as intended in that context. Pinned to
+                    # v0.2.0 (latest tag) for reproducibility.
+                    run=script(
+                        """\
+                        if [ -x ~/go/bin/dashboard-linter ]; then
+                          exit 0
+                        fi
+                        git clone --depth 1 -b v0.2.0 https://github.com/grafana/dashboard-linter.git /tmp/dashboard-linter-src
+                        mkdir -p ~/go/bin
+                        go build -C /tmp/dashboard-linter-src -o ~/go/bin/dashboard-linter .
+                        """
+                    ),
                 ),
                 run_step(
                     name="Lint Grafana dashboard",

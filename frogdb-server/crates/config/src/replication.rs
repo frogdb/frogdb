@@ -133,6 +133,17 @@ pub struct ReplicationConfigSection {
     #[param(mutable)]
     pub replica_freshness_timeout_ms: u64,
 
+    /// Seconds with zero connected replicas after which the replication backlog
+    /// is freed and its resume window closed (Redis `repl-backlog-ttl`).
+    /// 0 = keep the backlog forever.
+    ///
+    /// Freeing costs a reconnecting replica a full resync instead of a
+    /// `+CONTINUE`; keeping it costs ring-buffer memory and a push per write for
+    /// resume history nobody may ever ask for.
+    #[serde(default = "default_backlog_ttl_secs")]
+    #[param(mutable, name = "repl-backlog-ttl")]
+    pub backlog_ttl_secs: u64,
+
     /// Write timeout for streaming to replicas (ms). 0 = disabled.
     /// Forces TCP disconnect when iptables drops packets.
     #[serde(default = "default_replica_write_timeout_ms")]
@@ -158,6 +169,8 @@ pub const DEFAULT_SPLIT_BRAIN_BUFFER_MAX_MB: usize = 64;
 pub const DEFAULT_SELF_FENCE_ON_REPLICA_LOSS: bool = true;
 pub const DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS: u64 = 3000;
 pub const DEFAULT_REPLICA_WRITE_TIMEOUT_MS: u64 = 5000;
+/// Redis's `repl-backlog-ttl` default: one hour with no replicas.
+pub const DEFAULT_BACKLOG_TTL_SECS: u64 = 3600;
 
 fn default_primary_port() -> u16 {
     DEFAULT_PRIMARY_PORT
@@ -219,6 +232,10 @@ fn default_replica_write_timeout_ms() -> u64 {
     DEFAULT_REPLICA_WRITE_TIMEOUT_MS
 }
 
+fn default_backlog_ttl_secs() -> u64 {
+    DEFAULT_BACKLOG_TTL_SECS
+}
+
 impl Default for ReplicationConfigSection {
     fn default() -> Self {
         Self {
@@ -242,6 +259,7 @@ impl Default for ReplicationConfigSection {
             self_fence_on_replica_loss: default_self_fence_on_replica_loss(),
             replica_freshness_timeout_ms: default_replica_freshness_timeout_ms(),
             replica_write_timeout_ms: default_replica_write_timeout_ms(),
+            backlog_ttl_secs: default_backlog_ttl_secs(),
         }
     }
 }

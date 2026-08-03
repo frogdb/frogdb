@@ -1,11 +1,69 @@
 # Replicas ACK on frame receipt, not on apply, so `WAIT` overstates durability by up to 10 000 commands
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/14 F7 · MASTER.md §3 (durability)
 Score: severity 4 · likelihood 4 · effort 3 · priority 17
 Area: frogdb-replication / replica streaming, `WAIT`
+
+## Resolution — the ACK is now the applied head, unconditionally
+
+The contract decided (and now pinned by `FM-REPLICATION-008` in
+`.scratch/hardening/specs/replication-failure-modes.md`): **an acked offset means every frame at
+or below it has been applied to its shard.** No config knob — a durability primitive that is only
+sometimes durable is worse than one that is slow, and `WAIT` is the primitive promotion safety is
+built on.
+
+The replica now tracks three heads instead of two (`replication/src/replica/offset.rs`):
+`landed <= claimed <= received`. `received` (`ReplicaOffset::current`) counts frames decoded off
+the socket; `claimed` (`AppliedOffset::current`) moves when the applier claims a group, *before*
+it dispatches — that is what the promotion boundary needs, because a claimed group will be applied
+before the stint retires; `landed` (`AppliedOffset::landed`) moves only once nothing is in flight.
+Both ACK paths in `replica/streaming.rs` now report `landed`: the spontaneous tick reads it
+directly, and the solicited `REPLCONF GETACK` answer parks on `wait_until_applied`, which was
+re-pointed at the landed head.
+
+**Deviation from the dispatch's suggested design, deliberately.** The brief asked for a per-shard
+applied high-water plus a min-fold at the ack point. That is not needed here: `apply_group` awaits
+the shard's `oneshot` reply and the consume loop applies exactly one group at a time
+(`replication-runtime/src/executor.rs`, `apply.rs::consume_frames`), so at most one group is ever
+in flight and a single monotone `landed` counter is exactly the min-fold's answer with none of the
+per-shard bookkeeping. If the applier ever dispatches groups to several shards concurrently, the
+fold becomes necessary and `ReplicaApplyStint::land()` is the one place it has to go.
+
+Acceptance criteria, as resolved:
+
+- The turmoil criterion (kill/restart the replica after `WAIT 1` returns) is **not** the shape that
+  landed — it depends on round-2 infrastructure issues 02 (subprocess SIGKILL) and 06 (live-link
+  fault primitive), neither of which exists yet. What landed instead is stronger than the level-3
+  pin and cheaper than the kill: five unit-level forcing tests that place the assertion exactly at
+  the ack point (`an_ack_reports_the_landed_head_not_the_claimed_one`,
+  `a_claim_alone_does_not_move_the_offset_the_replica_acks`,
+  `a_group_in_flight_to_its_shard_is_claimed_but_not_yet_ackable`,
+  `a_frame_that_touches_no_shard_lands_as_it_is_claimed`,
+  `a_full_resync_levels_the_landed_head_with_the_adopted_offset`), plus the level-4 sim below. The
+  kill-restart scenario stays worth adding once 02/06 land; it would then be testing the state
+  file, not the ack.
+- The level-3 "pin the current contract first" step was **skipped on purpose**: pinning a contract
+  in the same change that replaces it records nothing anyone will read, and the receipt-only
+  behaviour is described here and in the FM row's "NOT observable" line.
+- The apply-lag INFO field is **moot** — it only existed to make the weaker contract honest, and
+  the weaker contract is gone.
+- The spontaneous-tick branch is covered by `an_ack_reports_the_landed_head_not_the_claimed_one`
+  (which drives both branches: the tick fires first with nothing landed, then the solicited answer
+  arrives once the group lands).
+
+`server/tests/simulation.rs`'s `run_spop_replication_convergence` — the workaround this issue was
+filed off — now compares primary and replica `SMEMBERS` immediately after `WAIT 1 1000` returns,
+with no polling, and is listed in the FM row as a forcing test.
+
+**Out of scope, stated rather than left open:** replica-side *persistence*. An ack means applied,
+not fsynced; `ReplicationState::save()` is still `write`+`rename` without an fsync, so a replica
+power-cut can still lose a `WAIT`-confirmed write that its store had not flushed. That is the same
+durability question every local write has (`durability-mode`), and folding it into the ack would
+make `WAIT` mean something different from what Redis means by it. Recorded in the FM row's "Not
+covered here" note; a separate issue should carry it if fsync-on-ack is ever wanted.
 
 ## Context
 

@@ -554,6 +554,10 @@ pub trait DebugProvider: Send + Sync {
     /// DEBUG WAITQUEUE — the per-shard blocking-waiter snapshots (all shards).
     fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>>;
 
+    /// DEBUG WAITQUEUE-LOG — the per-shard blocking-registration journals
+    /// (all shards).
+    fn gather_wait_queue_log<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueLogInfo>>;
+
     /// DEBUG MEMORY-CHECK — per-shard tracked-vs-recomputed memory (all shards).
     fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>>;
 
@@ -1015,6 +1019,11 @@ mod tests {
             unimplemented!()
         }
         fn gather_wait_queue<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::WaitQueueInfo>> {
+            unimplemented!()
+        }
+        fn gather_wait_queue_log<'a>(
+            &'a self,
+        ) -> BoxFuture<'a, Vec<crate::shard::WaitQueueLogInfo>> {
             unimplemented!()
         }
         fn memory_check<'a>(&'a self) -> BoxFuture<'a, Vec<crate::shard::MemoryCheckInfo>> {

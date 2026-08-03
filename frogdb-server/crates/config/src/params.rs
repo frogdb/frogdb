@@ -272,6 +272,7 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         use crate::memory::MemoryConfig;
         use crate::metrics::MetricsConfig;
         use crate::persistence::{PersistenceConfig, SnapshotConfig};
+        use crate::recovery::RecoveryConfig;
         use crate::replication::ReplicationConfigSection;
         use crate::security::{AclFileConfig, SecurityConfig};
         use crate::server::ServerConfig;
@@ -480,6 +481,23 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // Live-mutable: shard workers read the flag per dispatched command, and
         // the collector reads it per `collect()`. ---
         rows.push(pick(HotShardsConfig::PARAMS, "hotshards-enabled"));
+
+        // --- replication hardening round: the backlog's idle TTL, appended last
+        // so the golden snapshot's first 118 rows stay byte-identical.
+        // Live-mutable: the primary's backlog-TTL ticker re-reads it every
+        // second, so a SET arms, retunes or parks the timer on the spot. ---
+        rows.push(pick(ReplicationConfigSection::PARAMS, "repl-backlog-ttl"));
+
+        // --- persistence hardening round (issues 09 / 06): the opt-in MISCONF
+        // write-refusal latch and the recovery decode-failure policy, appended
+        // last so the golden snapshot's first 119 rows stay byte-identical.
+        // `stop-writes-on-save-error` is live-mutable (the write path reads a
+        // shared `AtomicBool` per write, the same seam `wal-failure-policy`
+        // uses); `recovery-on-decode-failure` is immutable because recovery has
+        // finished before the first connection exists, so there is nothing a SET
+        // could act on. ---
+        rows.push(pick(SnapshotConfig::PARAMS, "stop-writes-on-save-error"));
+        rows.push(pick(RecoveryConfig::PARAMS, "recovery-on-decode-failure"));
 
         rows
     });
@@ -1333,6 +1351,27 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "repl-backlog-ttl",
+            section: Some("replication"),
+            field: Some("backlog-ttl-secs"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "stop-writes-on-save-error",
+            section: Some("snapshot"),
+            field: Some("stop-writes-on-save-error"),
+            mutable: true,
+            noop: false,
+        },
+        ConfigParamInfo {
+            name: "recovery-on-decode-failure",
+            section: Some("recovery"),
+            field: Some("on-decode-failure"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1368,8 +1407,11 @@ mod tests {
         // tls-watch ×2 promote-immutable), giving 117 — its other 23 promotions
         // only flipped `mutable` on existing rows and added no new ones. The
         // hot-shard hardening round appended the feature's mutable kill switch
-        // (`hotshards-enabled`), giving 118.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 118);
+        // (`hotshards-enabled`), giving 118. The replication hardening round
+        // appended the backlog's idle TTL (`repl-backlog-ttl`), giving 119. The
+        // persistence hardening round appended 2 (`stop-writes-on-save-error`
+        // mutable, `recovery-on-decode-failure` immutable), giving 121.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 121);
     }
 
     #[test]
@@ -1542,13 +1584,13 @@ mod tests {
         #[cfg(not(feature = "turmoil"))]
         assert_eq!(
             crate::Config::SECTION_PARAMS.len(),
-            25,
+            26,
             "expected one SECTION_PARAMS entry per #[section] field of Config"
         );
         #[cfg(feature = "turmoil")]
         assert_eq!(
             crate::Config::SECTION_PARAMS.len(),
-            26,
+            27,
             "expected one SECTION_PARAMS entry per #[section] field of Config (incl. chaos)"
         );
     }

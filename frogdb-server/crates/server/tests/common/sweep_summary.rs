@@ -33,6 +33,25 @@ pub const DEFAULT_WARN_RATIO: f64 = 0.05;
 /// fired.
 pub const DEFAULT_FAIL_RATIO: f64 = 0.25;
 
+/// Env var overriding the minimum share of *journaled* blocking-pop
+/// registrations the exact FIFO checker must have attributed to an operation.
+pub const FIFO_RATIO_ENV: &str = "FROGDB_FIFO_ATTRIBUTED_MIN_RATIO";
+
+/// Default floor on the sweep-wide share of journaled registrations tied to a
+/// specific operation.
+///
+/// The denominator is registrations, not served pops: a blocking pop that finds
+/// data already present never enters the wait queue, so it has no ordinal *by
+/// construction* — measured sweeps serve ~370 blocking pops of which only ~20
+/// ever park, and judging the other 350 is not a thing any capture could do.
+/// Against registrations the achievable target is 1.0, and the floor exists to
+/// catch issue 16's failure mode: capture (or the `(key, client_id)` join)
+/// regressing toward zero while the sweep still reports a clean pass, which is
+/// how an unsound proxy went unnoticed. It sits below 1.0 only because a client
+/// whose pop count on a key disagrees with its registration count there is
+/// deliberately left unattributed rather than guessed at.
+pub const DEFAULT_FIFO_ATTRIBUTED_MIN_RATIO: f64 = 0.9;
+
 /// Aggregate downgrade/coverage counters across every seed in a sweep run.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SweepSummary {
@@ -42,6 +61,21 @@ pub struct SweepSummary {
     pub keys_checked: usize,
     /// Sum of `InvariantReport::downgraded_keys.len()` across every seed.
     pub downgraded_keys: usize,
+    /// Blocking-pop registrations the shards journaled, sweep-wide: the pops
+    /// that provably parked.
+    pub fifo_registrations: usize,
+    /// Of those, how many the checker tied to a specific operation.
+    pub fifo_attributed: usize,
+    /// Served blocking pops the exact FIFO checker considered, sweep-wide.
+    /// Mostly pops that never parked, so this is context, not a target.
+    pub fifo_served_pops: usize,
+    /// Of those, how many carried an unambiguous registration ordinal.
+    pub fifo_judged_pops: usize,
+    /// Serve-order pairs actually compared, sweep-wide. Zero means the sweep
+    /// verified nothing at all about wake ordering.
+    pub fifo_pairs_compared: usize,
+    /// Seeds whose registration journal was truncated (nothing judged).
+    pub fifo_incomplete_runs: u64,
 }
 
 impl SweepSummary {
@@ -50,6 +84,26 @@ impl SweepSummary {
         self.seeds_run += 1;
         self.keys_checked += report.keys_checked;
         self.downgraded_keys += report.downgraded_keys.len();
+        let cov = report.fifo_coverage;
+        self.fifo_registrations += cov.registrations;
+        self.fifo_attributed += cov.attributed;
+        self.fifo_served_pops += cov.served_pops;
+        self.fifo_judged_pops += cov.judged_pops;
+        self.fifo_pairs_compared += cov.pairs_compared;
+        if !cov.complete {
+            self.fifo_incomplete_runs += 1;
+        }
+    }
+
+    /// Sweep-wide share of journaled registrations the checker attributed to an
+    /// operation. `1.0` (not `0.0`) when nothing ever parked — nothing was
+    /// missed, so the floor must not fire on a workload that does not block.
+    pub fn fifo_attributed_ratio(&self) -> f64 {
+        if self.fifo_registrations == 0 {
+            1.0
+        } else {
+            self.fifo_attributed as f64 / self.fifo_registrations as f64
+        }
     }
 
     /// Fraction of WGL-eligible keys, across the whole sweep, downgraded to
@@ -74,6 +128,61 @@ impl SweepSummary {
             self.keys_checked,
             self.downgrade_ratio()
         )
+    }
+
+    /// One-line summary of exact-FIFO coverage, the counterpart of
+    /// [`Self::report_line`] for issue 16's collapse mode.
+    pub fn fifo_report_line(&self, label: &str) -> String {
+        format!(
+            "{label}: exact FIFO attributed {}/{} journaled registration(s) \
+             (ratio {:.4}), judged {} of {} served blocking pop(s), {} pair(s) \
+             compared, {} run(s) with a truncated registration journal",
+            self.fifo_attributed,
+            self.fifo_registrations,
+            self.fifo_attributed_ratio(),
+            self.fifo_judged_pops,
+            self.fifo_served_pops,
+            self.fifo_pairs_compared,
+            self.fifo_incomplete_runs,
+        )
+    }
+
+    /// Hard-threshold check on exact-FIFO coverage: `Err` when the journal was
+    /// truncated anywhere, when blocking pops were served but nothing parked
+    /// (capture is dead), when too few journaled registrations were attributed,
+    /// or when no serve-order pair was compared at all. Any of the four means
+    /// the FIFO verdict is not evidence of anything.
+    pub fn check_fifo_coverage(&self, label: &str, min_ratio: f64) -> Result<(), String> {
+        if self.fifo_incomplete_runs > 0 {
+            return Err(format!(
+                "{} — a truncated journal makes a missing ordinal stop implying \
+                 \"never parked\", so the checker judged nothing for those runs",
+                self.fifo_report_line(label)
+            ));
+        }
+        if self.fifo_served_pops > 0 && self.fifo_registrations == 0 {
+            return Err(format!(
+                "{} — blocking pops were served but the shards journaled no \
+                 registration at all: capture is dead (issue 16)",
+                self.fifo_report_line(label)
+            ));
+        }
+        if self.fifo_attributed_ratio() < min_ratio {
+            return Err(format!(
+                "{} — below the minimum attributed ratio {min_ratio:.4}: \
+                 registration capture or the (key, client) join has regressed \
+                 (issue 16)",
+                self.fifo_report_line(label)
+            ));
+        }
+        if self.fifo_served_pops > 0 && self.fifo_pairs_compared == 0 {
+            return Err(format!(
+                "{} — blocking pops were served but no two judged waiters ever \
+                 shared a key, so wake order was never actually checked",
+                self.fifo_report_line(label)
+            ));
+        }
+        Ok(())
     }
 
     /// Log a loud warning (stderr) when the ratio exceeds `warn_ratio`.
@@ -136,6 +245,11 @@ pub fn fail_ratio_override() -> f64 {
     env_ratio(FAIL_RATIO_ENV, DEFAULT_FAIL_RATIO)
 }
 
+/// The minimum exact-FIFO attributed ratio, honoring [`FIFO_RATIO_ENV`].
+pub fn fifo_ratio_override() -> f64 {
+    env_ratio(FIFO_RATIO_ENV, DEFAULT_FIFO_ATTRIBUTED_MIN_RATIO)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,7 +260,107 @@ mod tests {
             downgraded_keys: (0..downgraded).map(|i| format!("k{i}")).collect(),
             keys_checked,
             quiescence_checked: false,
+            ..InvariantReport::default()
         }
+    }
+
+    fn report_with_fifo(
+        registrations: usize,
+        attributed: usize,
+        served: usize,
+        judged: usize,
+        pairs: usize,
+        complete: bool,
+    ) -> InvariantReport {
+        InvariantReport {
+            fifo_coverage: frogdb_testing::FifoCoverage {
+                registrations,
+                attributed,
+                served_pops: served,
+                judged_pops: judged,
+                pairs_compared: pairs,
+                complete,
+            },
+            ..InvariantReport::default()
+        }
+    }
+
+    #[test]
+    fn fifo_ratio_is_one_when_nothing_ever_parked() {
+        // No waiter parked, so nothing was missed — the floor must not fire on
+        // a workload that simply does not block.
+        let summary = SweepSummary::default();
+        assert_eq!(summary.fifo_attributed_ratio(), 1.0);
+        assert!(summary.check_fifo_coverage("empty", 0.9).is_ok());
+    }
+
+    #[test]
+    fn fifo_coverage_accumulates_and_passes_when_healthy() {
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(4, 4, 50, 4, 3, true));
+        summary.record(&report_with_fifo(4, 4, 50, 4, 3, true));
+        assert_eq!(summary.fifo_registrations, 8);
+        assert_eq!(summary.fifo_attributed, 8);
+        assert_eq!(summary.fifo_served_pops, 100);
+        assert_eq!(summary.fifo_judged_pops, 8);
+        assert_eq!(summary.fifo_pairs_compared, 6);
+        assert_eq!(summary.fifo_incomplete_runs, 0);
+        assert!(summary.check_fifo_coverage("healthy", 0.9).is_ok());
+    }
+
+    #[test]
+    fn fifo_dead_capture_fails() {
+        // Issue 16's exact failure mode: waiters were served, the journal came
+        // back empty, no violation was reported — which must NOT read as a
+        // clean pass.
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(0, 0, 20, 0, 0, true));
+        let err = summary
+            .check_fifo_coverage("dead", 0.9)
+            .expect_err("zero capture must fail");
+        assert!(err.contains("capture is dead"), "{err}");
+    }
+
+    #[test]
+    fn fifo_no_pair_compared_fails_even_with_ordinals() {
+        // Every parked pop was attributed, but no key ever had two of them, so
+        // no ordering was actually verified.
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(4, 4, 4, 4, 0, true));
+        assert!(summary.check_fifo_coverage("no pairs", 0.9).is_err());
+    }
+
+    #[test]
+    fn fifo_truncated_journal_fails() {
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(10, 0, 10, 0, 0, false));
+        let err = summary
+            .check_fifo_coverage("truncated", 0.9)
+            .expect_err("a truncated journal must fail");
+        assert!(err.contains("truncated"), "{err}");
+    }
+
+    #[test]
+    fn fifo_low_attribution_fails() {
+        // Registrations were captured but most could not be tied to an op:
+        // the join has regressed even though capture itself works.
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(100, 10, 100, 10, 4, true));
+        let err = summary
+            .check_fifo_coverage("low", 0.9)
+            .expect_err("10% attribution must fail a 90% floor");
+        assert!(err.contains("minimum attributed ratio"), "{err}");
+    }
+
+    #[test]
+    fn fifo_served_pops_that_never_parked_do_not_drag_the_ratio() {
+        // 4 registrations, all attributed, but 200 served pops that found data
+        // present and never parked. The old served-pop denominator read this
+        // as 2% coverage; against registrations it is a clean 100%.
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(4, 4, 200, 4, 2, true));
+        assert_eq!(summary.fifo_attributed_ratio(), 1.0);
+        assert!(summary.check_fifo_coverage("sparse parking", 0.9).is_ok());
     }
 
     #[test]

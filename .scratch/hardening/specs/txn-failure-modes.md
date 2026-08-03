@@ -425,7 +425,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 |---|---|
 | Trigger | Any watched key's version moved between `WATCH` and `EXEC` — another client's write, a Lua script's write, a lazy expiry of a key that was live at `WATCH` time. |
 | Observable | A nil reply: `Response::Bulk(None)` → `$-1` in RESP2 (**deviation**: Redis sends `*-1`), `_` in RESP3. |
-| NOT observable | An array of any length; any queued command taking effect; the watch surviving into the next transaction. A *no-op* write must not abort (the version only moves on real mutation) and a spill to the warm tier must not either. |
+| NOT observable | An array of any length; any queued command taking effect; the watch surviving into the next transaction. A *no-op* write must not abort (the version only moves on real mutation) and a spill to the warm tier must not either. A second `WATCH` of the same key must not re-arm the CAS against a newer snapshot (FM-TXN-050). |
 | Invariant | The version check happens shard-side, before the first command runs, and the whole batch is refused atomically. The transaction and the watch set are consumed regardless. |
 | Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) |
 | Forced by | `watch_aborted_answers_nil`, `test_watch_exec_abort`, `test_scripted_write_dirties_watch`, `test_watch_exec_success` |
@@ -622,6 +622,18 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) |
 | Forced by | `a_watched_slot_that_left_this_node_aborts_the_watch`, `a_queue_redirect_outranks_the_watched_slot_abort`, `watch_slot_locally_served_accepts_an_open_migration`, `watch_slot_locally_served_rejects_a_slot_owned_elsewhere`, `test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch` |
 | Bug refs | `.scratch/replication-cluster-rework/issues/04` (done — these tests are its outcome) |
+
+## FM-TXN-050 — Re-WATCHing an already-watched key keeps the first snapshot
+
+| Field | Value |
+|---|---|
+| Trigger | `WATCH k` on a connection that is already watching `k`, with no intervening `UNWATCH`/`DISCARD`/`EXEC`/`RESET` — typically a retry loop that re-issues its whole `WATCH` list. |
+| Observable | `+OK`, and a following `EXEC` still aborts (nil, FM-TXN-033) if `k` was written between the two `WATCH`es. Only after the watch set is cleared (`UNWATCH`/`DISCARD`/`EXEC`/`RESET`) does a fresh `WATCH k` re-arm against the current version. |
+| NOT observable | The second `WATCH` overwriting the first snapshot — the CAS silently re-arming and the `EXEC` committing over a write it was supposed to have seen (a WATCH false negative). The `live_at_watch` flag must not be laundered either: a key watched live and since expired must not be downgraded to an already-stale watch (which never aborts, FM-TXN-033's gap-4 clause) by a re-`WATCH`. |
+| Invariant | `TransactionState::watch_key` records the entry with `entry().or_insert(…)`, so the first `(shard_id, version, live_at_watch)` triple for a key wins for as long as the key stays in the watch set; only the set-clearing transitions (`unwatch_all`, `take`, `discard`, `clear`) allow a new snapshot. Matches Redis `watchForKey()`, which returns early when the key is already in `c->watched_keys`, and `CLIENT_DIRTY_CAS`, which no `WATCH` ever clears. The shard round-trip is still taken for the whole argument list (it also lazily purges already-expired keys); only the recording is first-wins. |
+| Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) when the earlier snapshot is dirty |
+| Forced by | `rewatching_a_key_keeps_the_first_snapshot`, `test_rewatch_does_not_rearm_a_dirty_watch` |
+| Bug refs | `.scratch/concurrency-testing/issues/done/12-rewatch-resets-watch-snapshot.md` (done — this row is its outcome) |
 
 ---
 

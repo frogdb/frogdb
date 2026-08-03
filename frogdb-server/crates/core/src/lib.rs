@@ -129,7 +129,7 @@ pub use replication::{
     FRAME_MAGIC, FRAME_VERSION, NoopBroadcaster, PrimaryReplicationHandler, ReplicaConnection,
     ReplicaInfo, ReplicaReplicationHandler, ReplicationBroadcaster, ReplicationFrame,
     ReplicationFrameCodec, ReplicationState, ReplicationTrackerImpl, SharedBroadcaster,
-    StagedReplicationMetadata, consume_staged_replication_metadata,
+    StagedReplicationMetadata, StreamedFrame, consume_staged_replication_metadata,
     read_staged_replication_metadata, serialize_command_to_resp,
 };
 pub use scripting::{

@@ -7,6 +7,7 @@
 //! entries from the opened store.
 
 use anyhow::{Result, bail};
+use frogdb_config::OnDecodeFailure;
 use frogdb_core::persistence::{RecoveryStats, RocksConfig, RocksStore, recover_all_shards};
 use frogdb_core::sync::Arc;
 use frogdb_core::{ExpiryIndex, HashMapStore};
@@ -83,14 +84,37 @@ pub(crate) fn restore(
 /// accepts writes and the WAL/snapshot cadence starts overwriting what is still
 /// there. One decoded value (even one that was then dropped as expired, even a
 /// warm-tier one) means the database is readable and takes the skip-and-count
-/// path instead. A *partial*-corruption threshold ("refuse above N%") is policy,
-/// needs a knob and an override, and is not decided here.
+/// path instead.
+///
+/// An operator who would rather not serve at all than serve a silently smaller
+/// keyspace sets `recovery.on-decode-failure = refuse`, which turns *any*
+/// failure into a refused boot. That is a binary policy on purpose: a
+/// fractional threshold ("refuse above N%") sounds more nuanced but the
+/// denominator is the keys that *decoded*, which is exactly the number
+/// corruption makes untrustworthy.
 fn report_decode_failures(inputs: &RecoveryInputs<'_>, stats: &RecoveryStats) -> Result<()> {
     if stats.keys_failed == 0 {
         return Ok(());
     }
 
     RecoveryKeysFailed::inc_by(inputs.metrics_recorder.as_ref(), stats.keys_failed);
+
+    // Before the nothing-decoded check below, not after: under `refuse` the
+    // answer is the same either way, and the operator who asked for `refuse`
+    // should be told about *their* policy rather than about a fallback that
+    // happens to agree with it.
+    if inputs.recovery.decode_failure_policy() == OnDecodeFailure::Refuse {
+        bail!(
+            "{} key(s) in {} failed to deserialize and \
+             recovery.on-decode-failure is 'refuse', so this boot is refused rather than serving \
+             a keyspace that is missing them.{} Restore from a snapshot, point data-dir at the \
+             right directory, or set recovery.on-decode-failure = continue to boot without them \
+             (they stay gone).",
+            stats.keys_failed,
+            inputs.persistence.data_dir.display(),
+            first_failure_context(stats),
+        );
+    }
 
     let decoded = stats.keys_loaded
         + stats.keys_expired_skipped
@@ -108,6 +132,7 @@ fn report_decode_failures(inputs: &RecoveryInputs<'_>, stats: &RecoveryStats) ->
 
     error!(
         data_dir = %inputs.persistence.data_dir.display(),
+        first_failure = ?stats.first_failure,
         keys_failed = stats.keys_failed,
         keys_loaded = stats.keys_loaded,
         keys_expired = stats.keys_expired_skipped,
@@ -116,4 +141,43 @@ fn report_decode_failures(inputs: &RecoveryInputs<'_>, stats: &RecoveryStats) ->
          (rdb_last_load_keys_failed)."
     );
     Ok(())
+}
+
+/// How long a key may be before the refusal message truncates it.
+///
+/// A refusal is read in a terminal or a log line, and FrogDB keys can be
+/// megabytes. Long enough that a real key name survives whole; short enough
+/// that the remediation after it is still on screen.
+const FAILED_KEY_PREVIEW_LIMIT: usize = 128;
+
+/// The " First failure: shard N, hot tier, key '…': <error>." sentence appended
+/// to a refusal, or an empty string when no context was captured.
+///
+/// Empty is not a defensive branch: `first_failure` is `None` only when nothing
+/// failed, and callers reach here only when something did — but a refusal that
+/// panicked while explaining itself would be worse than one that is briefer
+/// than intended.
+fn first_failure_context(stats: &RecoveryStats) -> String {
+    let Some(failure) = stats.first_failure.as_ref() else {
+        return String::new();
+    };
+    // Lossy, because a key is arbitrary bytes and the operator needs to see
+    // *something*; the true byte length is printed alongside whenever the
+    // preview is cut, so a truncated preview can never be mistaken for the
+    // whole key.
+    let preview =
+        String::from_utf8_lossy(&failure.key[..failure.key.len().min(FAILED_KEY_PREVIEW_LIMIT)]);
+    let suffix = if failure.key.len() > FAILED_KEY_PREVIEW_LIMIT {
+        format!("… ({} bytes total)", failure.key.len())
+    } else {
+        String::new()
+    };
+    format!(
+        " First failure: shard {}, {} tier, key '{}{}': {}.",
+        failure.shard_id,
+        if failure.warm { "warm" } else { "hot" },
+        preview,
+        suffix,
+        failure.error,
+    )
 }

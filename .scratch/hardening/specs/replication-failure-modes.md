@@ -1,16 +1,25 @@
 # Replication — failure modes
 
-Every way FrogDB's full-resync path can fail, refuse, or succeed, one table per mode. This is the
+Every way FrogDB's replication link can fail, refuse, or succeed, one table per mode. This is the
 reference the mutation run is measured against: a mutant that survives is a row nothing forces.
 
-Scope: the full-sync payload path — what a primary puts on the wire when it grants a
-`+FULLRESYNC` (`frogdb-replication/src/replica_session.rs`), the envelope and its markers
-(`frogdb-replication/src/fullsync.rs`), what the replica accepts, verifies and installs
+Scope, part one — the full-sync payload path (FM-REPLICATION-001..005): what a primary puts on the
+wire when it grants a `+FULLRESYNC` (`frogdb-replication/src/replica_session.rs`), the envelope and
+its markers (`frogdb-replication/src/fullsync.rs`), what the replica accepts, verifies and installs
 (`frogdb-replication/src/replica/connection.rs`), the shard-level export/install seam
 (`frogdb-core/src/shard/dispatch_replication.rs`), the dataset framing they share
 (`frogdb-persistence/src/serialization/dataset.rs`), and the server-side wiring that connects them
 (`frogdb-replication-runtime/src/{export,install}.rs`). Rows stop at what a *client of the replica*
 can observe once the sync reports done.
+
+Scope, part two — the steady-state link (FM-REPLICATION-006..): what the replica does with the
+frames a sync hands it. The decode loop and the ACK it answers with
+(`frogdb-replication/src/replica/streaming.rs`), the received/applied offset pair and the gate that
+guards it (`frogdb-replication/src/replica/offset.rs`), the frame consumer that applies them
+(`frogdb-replication/src/apply.rs`) through the executor seam
+(`frogdb-replication-runtime/src/executor.rs`), and the primary-side backlog the link resumes from
+(`frogdb-replication/src/primary/{ring_buffer,replay}.rs`). Rows stop at what a client of *either*
+node can observe: the replica's keyspace and `INFO replication`, and the primary's `WAIT`.
 
 Adjacent specs: the boot-time half of a full sync — installing a staged checkpoint and adopting the
 replication id/offset it carries — lives in
@@ -111,6 +120,99 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Bug refs | `.scratch/hardening/issues` (issue 01 — surfaced as a load-dependent `test_broadcast_lag_disconnect_and_resync` flake; the seed write was acked by neither replica because the ACK never arrived) |
 
 [`PayloadReader`]: ../../../frogdb-server/crates/replication/src/replica/payload_reader.rs
+
+## FM-REPLICATION-006 — owing an ACK never stops the replica reading its link
+
+| Field | Value |
+|---|---|
+| Trigger | A `REPLCONF GETACK` (what `WAIT` sends) reaching a replica whose applier is behind the received head — frames still queued on the 10k frame channel, a shard slow to apply, or a consumer that has stopped for good because a promotion froze its stint. Sharpened by the primary continuing to stream behind the GETACK, which is the normal case: a solicitation is not a barrier, and the frames after it are already in flight. |
+| Observable | The frames that arrive behind the GETACK are decoded and queued while the answer is still owed, with no wait for the applier: the received head keeps advancing at socket speed. The spontaneous ACK tick keeps firing on cadence throughout, so a primary counting ACKs keeps seeing this replica's true applied head. The solicited ACK goes out the moment the applier reaches the solicited offset — which covers the GETACK frame itself, as in Redis. |
+| NOT observable | **A replica that stops reading its socket because it owes an ACK.** Its consequences: TCP backpressure to the primary, which stalls the shared broadcast and slows *other* replicas' streams; the spontaneous ACK cadence skipping a tick, so the link goes quiet exactly when `WAIT` made it interesting; the solicited answer itself arriving a whole cadence late because the loop that must notice the applier caught up was the loop that was blocked. Nor the opposite escape: an ACK reporting the *received* head to answer without waiting (FM-REPLICATION-008's rule — an ACK is a durability claim). |
+| Invariant | The wait is a `select!` branch, not an inline `await`. `drain_frames` only *records* the solicitation (`pending_ack: Option<u64>`, the offset it covers) and returns to the loop, so the socket-read branch and the ACK-tick branch stay pollable for exactly as long as the answer is owed. A GETACK arriving while one is already pending raises the target to the newer, higher offset rather than queueing a second answer: ACKs are cumulative, so one ACK at the newer target answers both. An unanswerable solicitation (the applier stopped for good — a frozen gate, a retired stint) needs no timeout to stay harmless: it parks one branch of the loop and nothing else, while the spontaneous cadence keeps reporting the same applied head the timeout would have made it report. |
+| Outcome variant | n/a (wire-level invariant; surfaces as a stalled replica read and a hiccuping ACK cadence) |
+| Forced by | `a_solicited_ack_does_not_stall_the_decode_loop`, `a_solicited_ack_is_sent_as_soon_as_the_applier_catches_up`, `a_second_getack_raises_the_target_to_the_newer_offset`, `the_ack_cadence_survives_a_solicitation_that_can_never_be_answered`, `wait_until_applied_returns_as_soon_as_the_applier_catches_up`, `wait_until_applied_parks_when_the_applier_can_no_longer_advance` |
+| Bug refs | `.scratch/replication-cluster-rework/issues` (issue 09) |
+
+---
+
+## FM-REPLICATION-007 — frames outlive their connection, never their history
+
+| Field | Value |
+|---|---|
+| Trigger | A replica link that drops mid-stream, possibly mid-`MULTI`, with frames already decoded onto the 10k-deep frame channel — which, with its consumer, outlives the connection (`ReplicaReplicationHandler::start` reconnects in a loop into the same channel). The retry is then granted `+FULLRESYNC`: a dataset is installed and both heads are reset to the payload's offset. The leftovers now describe a keyspace that no longer exists. |
+| Observable | The queued frames from the replaced history are dropped without reaching a shard and without claiming a byte, counted on the consumer's `discarded` shutdown field; an open group among them is abandoned with them. The applied head after the resync is the payload's offset plus exactly the new history's frames. A `+CONTINUE` resume is the opposite case and is left alone: it installs no dataset and resets no head, so its leftovers — including a `MULTI` group split across the reconnect — still apply, and the group closes normally on the `EXEC` that arrives after it. |
+| NOT observable | **A frame from a replaced history applied to the installed dataset**, or its bytes credited to the new history's offset (which would make this node ACK — and, once promoted, vouch for — an offset covering data it never held, the FM-REPLICATION-004 hazard arriving from the replica side). **A `MULTI` group straddling a resync**: an old history's half-transaction continued by the new history's commands, or closed by an `EXEC` from the other side of the install, applied on the *old* group's tagged shard. Nor the blunt fixes for either: retiring the stint on resync (which stops the long-lived consumer for good, so the replica silently applies nothing after its first reconnect) or draining/rebuilding the channel per connection. |
+| Invariant | Every frame the decode loop queues is stamped with the **history epoch** it was decoded under (`StreamedFrame`), and the epoch is bumped by `reset_pair` only — i.e. exactly when a full resync adopts a new dataset — under the same gate lock that moves the heads. The consumer checks it twice: a cheap pre-check at the top of the loop that drops a stale frame and the group it belonged to, and the authoritative re-check inside `ReplicaApplyStint::claim`, taken under that same lock, which is what makes the check race-free (`Claim::Stale`) against a resync landing on the connection task mid-group. A group is additionally abandoned when the frame in hand is current but the group was opened under an older epoch. Because both the decode loop and the reset run on the connection task, a channel never interleaves epochs: all of one history's frames precede all of the next's. |
+| Outcome variant | n/a (internal invariant; surfaces as a diverged replica keyspace and an over-claimed applied offset) |
+| Forced by | `a_full_resync_discards_the_frames_queued_from_the_previous_history`, `a_multi_group_left_open_by_a_dropped_link_is_never_closed_by_the_next_history`, `a_continue_resume_still_applies_the_frames_it_left_queued`, `a_claim_stamped_before_a_resync_is_refused_after_it` |
+| Bug refs | `.scratch/replication-cluster-rework/issues` (issue 06) |
+
+---
+
+## FM-REPLICATION-008 — an ACK is a durability claim, not a receipt
+
+| Field | Value |
+|---|---|
+| Trigger | `WAIT N t` on the primary, which sends `REPLCONF GETACK` and counts the ACKs that come back, against a replica whose applier is behind its socket: frames queued on the 10k-deep frame channel, or one group in flight between the applier's claim and the shard's reply. Sharpened by killing the replica the instant `WAIT` returns, which is the whole point of the primitive. |
+| Observable | An acked offset implies **every frame at or below it has been applied to its shard**. The replica ACKs its *landed* head — moved as each `apply_group` returns, and immediately for frames that reach no shard (`REPLCONF`, `FROGDB.FINALIZE`, an unparseable payload) — on both branches: the spontaneous cadence tick and the solicited answer. A group in flight to a shard is inside the promotion boundary (claimed) and outside the ACK (not landed), which is the one-group gap between the two heads. A full resync levels all three heads at the adopted offset: the installed dataset is applied. |
+| NOT observable | **`WAIT` satisfied by a replica that has not applied the write** — neither one still holding it in the frame channel (the received head, which a promotion discards down to the applied offset) nor one that has merely claimed it (the claimed head, which is what the promotion boundary needs and is a byte count, not an apply). A `WAIT 1` that returns 1 and is then followed by killing and restarting that replica must not lose the key. Nor the reverse escape: a landed head that runs ahead of the claimed head, or that keeps reporting a previous history's offset after a resync adopted a lower one. |
+| Invariant | Three heads, one direction: `landed <= claimed <= received`. `claimed` is `AppliedOffset::current` — taken before the group is dispatched, under the gate, which is what makes the promotion boundary exact (FM-REPLICATION-007's claim path). `landed` is `AppliedOffset::landed`, advanced by `ReplicaApplyStint::land` at every point where nothing is in flight; because the consume loop applies one group at a time and awaits each, "nothing in flight" means `landed` may simply be re-read from `claimed` (a `fetch_max`, so a resync that stored a lower offset in between wins). Only `landed` is read by `send_ack` and by `wait_until_applied`, the two ACK branches. The primary's own writes (`advance_by`) move both, because that path applies first and counts after. |
+| Outcome variant | n/a (wire-level invariant; surfaces as `WAIT` returning a count that overstates durability) |
+| Forced by | `an_ack_reports_the_landed_head_not_the_claimed_one`, `a_claim_alone_does_not_move_the_offset_the_replica_acks`, `a_group_in_flight_to_its_shard_is_claimed_but_not_yet_ackable`, `a_frame_that_touches_no_shard_lands_as_it_is_claimed`, `a_full_resync_levels_the_landed_head_with_the_adopted_offset`, `test_spop_replication_convergence_random_workload` |
+| Bug refs | `.scratch/testing-improvements-round2/issues` (issue 76) |
+
+**Latency.** Moving the ACK behind the apply does not add a round trip, but it does mean a `WAIT`
+is answered on the *applier's* schedule rather than the decoder's: the solicited answer is parked as
+a `select!` branch and fires the moment the landed head reaches the solicited offset
+(FM-REPLICATION-006), while the fallback is the spontaneous cadence
+(`replication.ack-interval-ms`, Redis `repl-ping-replica-period`). A replica whose applier is
+wedged therefore keeps ACKing its true, lower landed head on cadence instead of a higher receipt —
+`WAIT` times out rather than lying. This is the Redis behaviour and the reason its replicas ack
+after executing the command stream.
+
+**Not covered here.** ACK means applied, not *persisted*: `ReplicationState::save()` is
+`write`+`rename` with no fsync, so a power cut can still lose a landed offset that was acked. That
+is a separate contract (issue 76 item 2) and is not claimed by this row.
+
+---
+
+## FM-REPLICATION-009 — the backlog outlives its last replica by a bounded time
+
+| Field | Value |
+|---|---|
+| Trigger | A primary whose backlog window is armed — by boot recovery at a non-zero offset, or by `begin_primary_stint` at a promotion boundary — and whose replica count is zero and stays zero: a standalone node restarted after it once had a replica, or a primary whose only replica went away for good. Every write is still stamped and buffered, for resume history nobody is waiting for. |
+| Observable | After `repl-backlog-ttl` seconds with zero connected replicas the buffer is emptied and the window closed, so the next `PSYNC` is answered `+FULLRESYNC` (`FullResyncReason::BacklogEvicted`). A replica that reconnects *before* the TTL elapses still gets its `+CONTINUE`, and a replica connected the whole time never lets the clock start — a reconnect restarts the window rather than resuming it. `repl-backlog-ttl 0` parks the timer entirely (Redis's disable value), and the knob is live: a `CONFIG SET` retunes an idle window that is already running. |
+| NOT observable | **A `+CONTINUE` over history that was freed** — the floor is disarmed in the same call that empties the buffer, so no resume can be granted over the hole. **Any offset or identity movement**: freeing the backlog is not a stint change, so `master_replid`, `master_replid2`, `second_repl_offset`, `master_repl_offset` and the applied head are all exactly what they were; `INFO` reports the same history, only without a resume window. Nor the timer firing repeatedly (once per tick for the rest of the process) once the window has already been freed, nor starting at all on a node that has no window armed. |
+| Invariant | The TTL is an idle clock, not a countdown from arming: `BacklogTtl::due` clears its start whenever the replica count is non-zero or the TTL is `0`, sets it on the first tick that finds zero replicas, and fires — clearing itself in the same breath — on the first tick at or past the deadline. `PartialSyncReplay::expire_backlog_if_idle` refuses to start the clock while nothing is armed and, when the clock fires, calls exactly `reset_backlog()`: the ring buffer's `reset` empties the entries and returns `start` to `UNARMED`, which is the same disarm both ends of a primary stint use. The tick itself is the server's 1 Hz maintenance task (Redis frees the backlog from `replicationCron` on the same cadence and for the same reason). |
+| Outcome variant | `FullResyncReason::BacklogEvicted` on the next `PSYNC` after a free |
+| Forced by | `an_idle_backlog_is_freed_once_its_ttl_elapses`, `a_replica_reconnecting_before_the_ttl_still_resumes`, `a_connected_replica_never_starts_the_ttl_clock`, `a_ttl_of_zero_never_frees_the_backlog`, `a_freed_backlog_full_resyncs_the_next_psync`, `freeing_the_backlog_moves_no_offset_and_no_replication_id`, `an_unarmed_backlog_never_starts_the_ttl_clock`, `the_ttl_fires_once_per_idle_window_not_once_per_tick` |
+| Bug refs | `.scratch/replication-cluster-rework/issues` (issue 07) |
+
+---
+
+## FM-REPLICATION-010 — an admitted divergence ends the history it happened on
+
+| Field | Value |
+|---|---|
+| Trigger | `apply_group` returning `Err` on a replica: a command the primary accepted that this node's shard refuses (a version skew, a shard-side resource failure, a bug), for a bare command or for a `MULTI/EXEC` group. The claim is already taken and cannot be given back without desynchronising every later frame's stream position, so the node now holds a keyspace that does not match the offset it counts. |
+| Observable | The failure is **latched on the history it happened on**: every further `claim` on that epoch returns `Claim::Stale`, so later frames are dropped without reaching a shard and the applied head stops moving. `land()` is never reached either, so the ACK keeps reporting the last truly-applied offset and `WAIT` times out rather than lying (FM-REPLICATION-008). The connection task wakes on the latch, logs at `error`, rewinds the received head to 0 and drops the link with an `Err`, so the reconnect asks `PSYNC ? -1` and is answered `+FULLRESYNC` — on the exponential-backoff path, not a 100 ms hot loop. A divergence outstanding when a link is *established* abandons that link before it decodes a byte. Installing the resync payload (`reset_pair`) clears the latch in the same critical section that bumps the epoch, and the applier resumes on the new history. |
+| NOT observable | **A diverged replica quietly continuing to apply** the rest of the stream onto a keyspace it has already broken, or ACKing offsets it never applied, or being handed `+CONTINUE` over the hole after a promotion. **Retiring the long-lived frame consumer** — FM-REPLICATION-007 forbids it: the consumer outlives connections, so retiring it makes the replica silently apply nothing for the rest of the process. Nor the reverse escapes: a latch surviving the full resync that replaced the keyspace (which would force a second, pointless resync), a latch admitted against an epoch a resync has *already* replaced, or an unparseable payload being treated as a divergence (it reaches no shard, breaks no keyspace, and is counted and skipped as before). |
+| Invariant | The latch is an epoch-keyed cell on `AppliedOffset` (`diverged: AtomicU64`, sentinel `u64::MAX`) plus a `Notify`. `ReplicaApplyStint::admit_divergence(epoch)` takes the gate, compares `epoch` to the live epoch and stores it only if they match — so a resync that landed between the claim and the `Err` wins and the doomed history is simply forgotten. `claim` checks the cell under the same gate, immediately after its epoch check, and returns `Claim::Stale` (not `Retired`: the consumer must stay alive for the next history). `reset_pair` stores the sentinel back under that gate, so the latch clears if and only if a fresh dataset was installed — it survives reconnects, `+CONTINUE`s and promotion/demotion round trips. `AppliedOffset::divergence()` is a re-checking `Notify` wait, safe against a latch that fires before the waiter parks, consumed as a `select!` branch in `stream_replication` and re-checked once before the pre-loop drain. |
+| Outcome variant | n/a (internal invariant; surfaces as a dropped link, a forced `+FULLRESYNC`, and a stalled ACK head) |
+| Forced by | `a_failed_apply_stops_the_history_it_happened_on`, `a_diverged_applier_resumes_on_the_history_a_resync_installs`, `a_diverged_history_is_refused_until_a_resync_replaces_it`, `a_divergence_on_a_history_a_resync_already_replaced_is_ignored`, `the_divergence_wait_resolves_however_it_races_the_latch`, `an_admitted_divergence_drops_the_link_and_rewinds_for_a_full_resync`, `a_divergence_outstanding_at_connect_abandons_the_new_link_at_once` |
+| Bug refs | `.scratch/replication-cluster-rework/issues` (issue 08) |
+
+**Reads during the window.** A diverged replica keeps serving reads until the resync payload lands.
+This matches Redis's `replica-serve-stale-data yes` default, and the window here is much tighter than
+Redis's: the link is dropped the instant the latch is seen, so the node is already in a forced full
+resync rather than waiting out a link timeout. Refusing reads would need a `-MASTERDOWN`-style gate
+on the read path and a knob to go with it; that is deliberately not in this row.
+
+**Not covered here.** The remaining over-claim window is a **crash between a claim and its shard
+write**, which leaves the persisted offset one group ahead of the data with no `Err` to latch. This
+row only covers failures the applier is alive to see. Closing the crash window means persisting the
+applied offset from the shard's own write path, and it stays tracked in
+`.scratch/replication-cluster-rework/issues` (issue 08 follow-up).
 
 ---
 

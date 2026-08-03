@@ -33,7 +33,9 @@
 
 use std::path::Path;
 
-use frogdb_config::{ClusterConfigSection, Config, PersistenceConfig, ReplicationConfigSection};
+use frogdb_config::{
+    ClusterConfigSection, Config, PersistenceConfig, RecoveryConfig, ReplicationConfigSection,
+};
 use frogdb_core::persistence::{RecoveryStats, RocksStore};
 use frogdb_core::sync::Arc;
 use frogdb_core::{ClusterStorage, ExpiryIndex, HashMapStore, MetricsRecorder, ReplicationState};
@@ -58,6 +60,11 @@ pub struct RecoveryInputs<'a> {
     pub replication: &'a ReplicationConfigSection,
     /// Cluster configuration (whether cluster mode is enabled).
     pub cluster: &'a ClusterConfigSection,
+    /// Recovery policy: what to do about state that will not decode.
+    /// Separate from [`Self::persistence`] because it is
+    /// policy rather than plumbing — the same data dir boots or refuses
+    /// depending only on this.
+    pub recovery: &'a RecoveryConfig,
     /// Number of shards the server is configured for.
     pub num_shards: usize,
     /// Whether the warm tier (tiered storage) column families are enabled.
@@ -83,6 +90,7 @@ impl<'a> RecoveryInputs<'a> {
             persistence: &config.persistence,
             replication: &config.replication,
             cluster: &config.cluster,
+            recovery: &config.recovery,
             num_shards,
             warm_enabled: config.tiered_storage.enabled,
             metrics_recorder,

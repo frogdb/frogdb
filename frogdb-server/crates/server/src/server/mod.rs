@@ -175,7 +175,7 @@ pub struct Server {
     replica_handler: Option<Arc<ReplicaReplicationHandler>>,
 
     /// Optional replica frame receiver (only when running as replica).
-    replica_frame_rx: Option<mpsc::Receiver<frogdb_core::ReplicationFrame>>,
+    replica_frame_rx: Option<mpsc::Receiver<frogdb_core::StreamedFrame>>,
 
     /// Optional primary replication handler (only when running as primary).
     /// Used for PSYNC connection handoff.
@@ -285,6 +285,7 @@ impl Server {
             infra
                 .config_manager
                 .set_replication_lag_thresholds(handler.lag_thresholds());
+            infra.config_manager.set_backlog_ttl(handler.backlog_ttl());
         }
         if let Some(ref checker) = repl.replication_self_fence {
             infra
