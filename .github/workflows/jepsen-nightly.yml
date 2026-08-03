@@ -42,6 +42,15 @@ jobs:
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         export PATH="$HOME/.local/bin:$PATH"
         lein version
+    - name: Install gnuplot
+      run: |
+        if command -v gnuplot >/dev/null 2>&1; then
+          echo "gnuplot already present: $(command -v gnuplot)"
+          exit 0
+        fi
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq gnuplot-nox
+        gnuplot --version
     - name: Build debug Docker image
       run: |
         just docker-build-debug
