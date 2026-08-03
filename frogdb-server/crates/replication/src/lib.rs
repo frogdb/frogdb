@@ -44,7 +44,9 @@ pub mod state;
 pub mod tracker;
 pub mod wait_coordinator;
 
-pub use apply::{ApplyError, ReplicaApplier, StreamedFrame, consume_frames, parse_frame_payload};
+pub use apply::{
+    ApplyError, ControlApplier, ReplicaApplier, StreamedFrame, consume_frames, parse_frame_payload,
+};
 pub use frame::{
     CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
     serialize_command_to_resp,
@@ -53,8 +55,8 @@ pub use fullsync::FullSyncMetadata;
 pub use identity::{ReplicationIdentity, SharedReplicationState};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
-    BacklogConfig, BacklogTtl, DivergenceRecord, LagThresholdConfig, LagThresholds,
-    PreCheckpointHook, PrimaryReplicationHandler,
+    BacklogConfig, BacklogTtl, DivergenceRecord, FunctionSnapshotHook, LagThresholdConfig,
+    LagThresholds, PreCheckpointHook, PrimaryReplicationHandler,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{Phase, ReplicaCapabilities, ReplicaInfo, ReplicaSession, SyncKind};

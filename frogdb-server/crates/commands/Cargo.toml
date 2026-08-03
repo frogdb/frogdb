@@ -52,7 +52,6 @@ rand.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 bitvec.workspace = true
-ryu.workspace = true
 xxhash-rust.workspace = true
 hex.workspace = true
 smallvec.workspace = true

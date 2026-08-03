@@ -59,6 +59,8 @@ mod integration_ratelimit;
 #[cfg(not(feature = "turmoil"))]
 mod integration_replication;
 #[cfg(not(feature = "turmoil"))]
+mod integration_replication_functions;
+#[cfg(not(feature = "turmoil"))]
 mod integration_scripting;
 #[cfg(not(feature = "turmoil"))]
 mod integration_sets;

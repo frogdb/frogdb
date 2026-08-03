@@ -22,6 +22,9 @@
 //!   unrepresentable.
 //! - [`notify_capture`]: a keyspace-notification capture seam plus an
 //!   order-consistency checker.
+//! - [`recording_broadcaster`]: a [`frogdb_core::ReplicationBroadcaster`] that
+//!   records propagated frames, so a scenario can assert what did (or did not)
+//!   reach a replica.
 //!
 //! The scenario tests that exercise this harness live under `tests/` in this
 //! same crate (moved from `frogdb-core`'s integration-test tree, which no
@@ -30,4 +33,5 @@
 pub mod generator;
 pub mod harness;
 pub mod notify_capture;
+pub mod recording_broadcaster;
 pub mod sink;

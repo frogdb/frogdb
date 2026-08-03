@@ -100,6 +100,25 @@ pub enum ApplyError {
     /// replica has diverged from the primary for this write.
     #[error("shard {shard} rejected replicated apply: {detail}")]
     Rejected { shard: u16, detail: String },
+
+    /// A control-shard command was refused by the process-wide state it targets
+    /// (see [`ReplicaApplier::apply_control`]). No shard is involved, which is
+    /// why this is a variant of its own rather than a `Rejected` with a made-up
+    /// shard id.
+    #[error("control command {command} rejected: {detail}")]
+    ControlRejected { command: String, detail: String },
+}
+
+/// The seam a [`ReplicaApplier`] delegates control-shard commands to.
+///
+/// Synchronous by design: the state behind it is process-wide and in memory
+/// (the function-library registry plus a small file write), so there is nothing
+/// to await, and keeping it `async`-free means the consume loop can not be
+/// blocked on someone else's I/O. `Err(detail)` carries the primary-visible
+/// error text.
+pub trait ControlApplier: Send + Sync {
+    /// Apply `command`, or report why it did not apply.
+    fn apply(&self, command: &ParsedCommand) -> Result<(), String>;
 }
 
 /// The server-side seam for applying replicated writes on a specific shard.
@@ -119,6 +138,23 @@ pub trait ReplicaApplier: Send + Sync {
         &self,
         shard_id: u16,
         commands: Vec<ParsedCommand>,
+    ) -> impl std::future::Future<Output = Result<(), ApplyError>> + Send;
+
+    /// Apply a command the primary tagged [`crate::frame::CONTROL_SHARD`]:
+    /// process-wide state with no shard to route to.
+    ///
+    /// Today that is `FUNCTION LOAD/DELETE/FLUSH/RESTORE` (issue 48) — the
+    /// function-library registry is one per process, so a shard tag would be a
+    /// lie and would break the moment the two nodes' shard counts differed.
+    ///
+    /// Same contract as [`Self::apply_group`]: `Err` is an admitted divergence,
+    /// because a replica that quietly failed to load a library answers `FCALL`
+    /// with "function not found" while reporting itself in sync. A control
+    /// command this build does not recognise is *not* an error — it is stepped
+    /// over, the same rule the loop applies to an undecodable payload.
+    fn apply_control(
+        &self,
+        command: ParsedCommand,
     ) -> impl std::future::Future<Output = Result<(), ApplyError>> + Send;
 }
 
@@ -374,6 +410,34 @@ pub async fn consume_frames<A: ReplicaApplier>(
             continue;
         }
 
+        // --- Control-shard frames: process-wide state, never shard-routed. ---
+        //
+        // Routed by the frame's *tag*, not by `args[0]`, for the same reason
+        // data frames are: the primary knows where the write belongs and the
+        // replica must not re-derive it. A control frame never appears inside a
+        // MULTI group — the primary emits them from the connection layer, one
+        // frame at a time, outside any transaction batch — so an open group is a
+        // protocol violation and the group is abandoned rather than silently
+        // interleaved.
+        if frame.shard_id == crate::frame::CONTROL_SHARD {
+            if let Some(abandoned) = pending.take() {
+                tracing::warn!(
+                    command = %cmd_name,
+                    "Control frame inside an open MULTI group; abandoning the group"
+                );
+                errors += 1;
+                claim_or_stop!(abandoned.bytes);
+            }
+            claim_or_stop!(frame_bytes);
+            if let Err(e) = applier.apply_control(cmd).await {
+                diverged!(e, cmd_name);
+            } else {
+                frames_processed += 1;
+            }
+            settled!();
+            continue;
+        }
+
         // --- Transaction reconstruction. ---
 
         match cmd_name.as_str() {
@@ -471,6 +535,12 @@ mod tests {
         /// Signalled as an apply enters the gate, so a test can promote at
         /// exactly the moment a group is mid-flight.
         entered: Option<Arc<tokio::sync::Notify>>,
+        /// Control-shard commands, recorded as `[name, arg…]` so a test can see
+        /// both that a frame reached the control seam and what it carried.
+        controls: Mutex<Vec<Vec<String>>>,
+        /// When set, a control command whose first argument matches is refused —
+        /// the replica-side divergence a failed `FUNCTION LOAD` produces.
+        reject_control: Option<String>,
     }
 
     impl ReplicaApplier for MockApplier {
@@ -497,6 +567,26 @@ mod tests {
             self.groups.lock().unwrap().push((shard_id, names));
             Ok(())
         }
+
+        async fn apply_control(&self, command: ParsedCommand) -> Result<(), ApplyError> {
+            let mut parts = vec![command.name_uppercase_string()];
+            parts.extend(
+                command
+                    .args
+                    .iter()
+                    .map(|a| String::from_utf8_lossy(a).into_owned()),
+            );
+            if let Some(ref bad) = self.reject_control
+                && parts.get(1).is_some_and(|first| first == bad)
+            {
+                return Err(ApplyError::ControlRejected {
+                    command: parts.join(" "),
+                    detail: format!("rejecting {bad}"),
+                });
+            }
+            self.controls.lock().unwrap().push(parts);
+            Ok(())
+        }
     }
 
     fn frame_on(shard: u16, seq: u64, name: &str, args: &[&str]) -> ReplicationFrame {
@@ -519,6 +609,10 @@ mod tests {
             commands: Vec<ParsedCommand>,
         ) -> Result<(), ApplyError> {
             self.0.apply_group(shard_id, commands).await
+        }
+
+        async fn apply_control(&self, command: ParsedCommand) -> Result<(), ApplyError> {
+            self.0.apply_control(command).await
         }
     }
 

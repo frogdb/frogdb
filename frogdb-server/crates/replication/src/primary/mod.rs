@@ -65,6 +65,24 @@ pub type LiveSnapshotSource = Arc<
         + Sync,
 >;
 
+/// Ships the primary's process-wide, non-keyspace state to a replica that is
+/// full-syncing — today the function-library registry (issue 48).
+///
+/// It is a *hook* for the same reason [`PreCheckpointHook`] is: the replication
+/// crate owns no registry. It is *not* part of the checkpoint payload because
+/// the registry is not in the keyspace — libraries live in their own file next
+/// to RocksDB, and the `LiveDataset` branch has no file at all — so the state is
+/// carried as a normal replicated command instead, and reaches the replica
+/// through the same control-shard apply path a steady-state `FUNCTION LOAD`
+/// takes.
+///
+/// The hook is invoked with the handler so it can broadcast under whatever lock
+/// orders its own state (see `function_store::propagation_order` in the server
+/// crate). Called *after* the full-sync offset is captured, so the frame falls
+/// inside the `(snapshot_offset, current]` window `start_streaming` replays and
+/// the syncing replica is guaranteed to see it.
+pub type FunctionSnapshotHook = Arc<dyn Fn(&PrimaryReplicationHandler) + Send + Sync>;
+
 /// The split-brain divergence window this (demoted) Primary computed against the
 /// last offset the cluster had acknowledged — the writes it committed past that
 /// point and must surrender to the new Primary.
@@ -175,6 +193,11 @@ pub struct PrimaryReplicationHandler {
     /// than sending an empty dataset the replica would mistake for the
     /// primary's (issue 67).
     live_snapshot_source: RwLock<Option<LiveSnapshotSource>>,
+    /// Ships process-wide non-keyspace state (the function-library registry) to
+    /// a full-syncing replica (see [`FunctionSnapshotHook`]). Installed after
+    /// construction; a handler without one simply ships no libraries, which is
+    /// what every pre-issue-48 build did.
+    function_snapshot_hook: RwLock<Option<FunctionSnapshotHook>>,
     /// Directory for storing temporary checkpoint data.
     pub(crate) data_dir: PathBuf,
     /// Live proactive lag-disconnect thresholds, shared with every streaming
@@ -244,6 +267,7 @@ impl PrimaryReplicationHandler {
             rocks_store,
             pre_checkpoint_hook: RwLock::new(None),
             live_snapshot_source: RwLock::new(None),
+            function_snapshot_hook: RwLock::new(None),
             data_dir,
             lag_thresholds,
             lag_cooldown: lag_config.cooldown,
@@ -266,6 +290,19 @@ impl PrimaryReplicationHandler {
     /// runs.
     pub(crate) fn pre_checkpoint_hook(&self) -> Option<PreCheckpointHook> {
         self.pre_checkpoint_hook.read().clone()
+    }
+
+    /// Install the shipper for process-wide non-keyspace state (see
+    /// [`FunctionSnapshotHook`]). Set once during wiring; replacing it
+    /// supersedes the previous hook.
+    pub fn set_function_snapshot_hook(&self, hook: FunctionSnapshotHook) {
+        *self.function_snapshot_hook.write() = Some(hook);
+    }
+
+    /// The installed function-snapshot hook, cloned out so no lock is held while
+    /// it runs.
+    pub(crate) fn function_snapshot_hook(&self) -> Option<FunctionSnapshotHook> {
+        self.function_snapshot_hook.read().clone()
     }
 
     /// Install the reader for the live keyspace (see [`LiveSnapshotSource`]).
@@ -587,13 +624,18 @@ impl PrimaryReplicationHandler {
 
     /// Untagged broadcast: control/global commands with no shard origin.
     ///
-    /// Reachable through the `CONTROL_SHARD` frame tag. Kept as a crate-private
-    /// helper (tests and any future control-only path) rather than a trait
-    /// method, since production writes flow through the shard-tagged variant
-    /// [`Self::broadcast_command_on_shard`]. This keeps the frame-emit trait
-    /// surface to the tagged path only.
-    #[cfg_attr(not(test), allow(dead_code))] // exercised by unit tests; kept per proposal 57
-    pub(crate) fn broadcast_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
+    /// Reachable through the `CONTROL_SHARD` frame tag, which the replica's
+    /// consume loop routes to [`crate::apply::ReplicaApplier::apply_control`]
+    /// instead of to a shard. Deliberately *not* a
+    /// [`crate::ReplicationBroadcaster`] method: that trait is the shard-write
+    /// emit surface handed to shard workers, and process-wide state has no
+    /// shard to emit from. Callers hold the concrete handler.
+    ///
+    /// The one production caller today is `FUNCTION LOAD/DELETE/FLUSH/RESTORE`
+    /// (issue 48): the function-library registry is process-wide, so routing its
+    /// mutations to a shard would make a replica's libraries depend on which
+    /// shard carried the frame and on both nodes having the same shard count.
+    pub fn broadcast_control_command(&self, cmd_name: &str, args: &[Bytes]) -> u64 {
         self.broadcast_tagged(CONTROL_SHARD, cmd_name, args)
     }
 

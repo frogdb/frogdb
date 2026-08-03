@@ -2,6 +2,7 @@
 //!
 //! Commands for time series data with Gorilla compression.
 
+use crate::utils::format_float;
 use bytes::Bytes;
 use frogdb_core::{
     AccessSpec, Aggregation, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags,
@@ -1362,23 +1363,5 @@ fn process_downsample_rules(ctx: &mut CommandContext, source_key: &[u8], timesta
         if let Ok(Some(dest_ts)) = ctx.store.get_timeseries_mut(&dest_key) {
             let _ = dest_ts.add(bucket_ts, agg_val); // best-effort
         }
-    }
-}
-
-/// Format a float for output.
-/// Uses minimal precision while maintaining round-trip accuracy.
-fn format_float(f: f64) -> String {
-    if f.is_nan() {
-        return "nan".to_string();
-    }
-    if f.is_infinite() {
-        return if f.is_sign_positive() { "inf" } else { "-inf" }.to_string();
-    }
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        format!("{:.0}", f)
-    } else {
-        // Use Display formatting which provides a reasonable representation
-        // that works well for most float values
-        format!("{}", f)
     }
 }

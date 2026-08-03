@@ -481,6 +481,12 @@ pub struct RealReplicaStreamer {
     /// keyspace has forked from the new master's and must be replaced rather
     /// than staged for a reboot that may never come.
     snapshot_installer: frogdb_replication::replica::SnapshotInstaller,
+    /// The control-shard seam every runtime replica stream applies through:
+    /// process-wide state with no shard to route to (the function-library
+    /// registry, issue 48). A runtime-demoted node must pick up its new
+    /// primary's `FUNCTION LOAD` exactly like a boot-configured replica does,
+    /// so this is threaded here rather than only into the boot path.
+    control_applier: Option<Arc<dyn frogdb_replication::ControlApplier>>,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -535,9 +541,22 @@ impl RealReplicaStreamer {
             shared_offset,
             ack_interval_ms: config.replication.ack_interval_ms,
             snapshot_installer,
+            control_applier: None,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
+    }
+
+    /// Attach the control-shard apply seam every stream this streamer starts
+    /// applies through. Separate from [`Self::new`] because it is optional: the
+    /// turmoil and unit builds run without one.
+    #[must_use]
+    pub fn with_control_applier(
+        mut self,
+        control_applier: Arc<dyn frogdb_replication::ControlApplier>,
+    ) -> Self {
+        self.control_applier = Some(control_applier);
+        self
     }
 }
 
@@ -656,7 +675,10 @@ impl ReplicaStreamer for RealReplicaStreamer {
         // Frame consumer task: applies replicated commands to the shards. Stops
         // itself when the role flag flips back to primary, or when its stint is
         // frozen/retired through the applied offset.
-        let executor = ReplicaCommandExecutor::new(self.shard_senders.clone(), self.num_shards);
+        let mut executor = ReplicaCommandExecutor::new(self.shard_senders.clone(), self.num_shards);
+        if let Some(control) = self.control_applier.clone() {
+            executor = executor.with_control_applier(control);
+        }
         let flag = self.is_replica_flag.clone();
         let consumer = crate::net::spawn(async move {
             consume_frames(frame_rx, executor, flag, replication_state, stint).await;
@@ -1095,6 +1117,7 @@ mod tests {
                 false,
             )
             .into_installer(),
+            control_applier: None,
             #[cfg(not(feature = "turmoil"))]
             tls: None,
         }

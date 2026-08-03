@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, format_float};
 
 use crate::store::Store;
 use crate::{Aggregation, LabelFilter, TimeSeriesValue};
@@ -346,13 +346,5 @@ fn build_labels_response(ts: &TimeSeriesValue, mode: &LabelMode) -> Response {
                 .collect();
             Response::Array(labels)
         }
-    }
-}
-
-fn format_float(f: f64) -> String {
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        format!("{:.0}", f)
-    } else {
-        format!("{}", f)
     }
 }

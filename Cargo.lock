@@ -1651,7 +1651,6 @@ dependencies = [
  "frogdb-protocol",
  "hex",
  "rand 0.10.0",
- "ryu",
  "serde_json",
  "smallvec",
  "tokio",
@@ -1798,6 +1797,7 @@ dependencies = [
  "bytes-utils",
  "proptest",
  "redis-protocol",
+ "ryu",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -1986,6 +1986,7 @@ dependencies = [
  "frogdb-protocol",
  "frogdb-vll",
  "proptest",
+ "tempfile",
  "tokio",
 ]
 

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use frogdb_core::{CoreMsg, REPLICA_INTERNAL_CONN_ID, ShardSender, TransactionResult};
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
-use frogdb_replication::{ApplyError, ReplicaApplier};
+use frogdb_replication::{ApplyError, ControlApplier, ReplicaApplier};
 use tokio::sync::oneshot;
 
 /// Applies replicated command groups to shards on behalf of the replication
@@ -30,6 +30,14 @@ pub struct ReplicaCommandExecutor {
     shard_senders: Arc<Vec<ShardSender>>,
     /// Number of shards, for validating the tagged origin shard.
     num_shards: usize,
+    /// Where control-shard commands go — process-wide state with no shard to
+    /// route to (`FUNCTION LOAD/DELETE/FLUSH/RESTORE`, issue 48).
+    ///
+    /// `None` on a node wired without one, in which case a control frame is
+    /// counted and stepped over rather than failing the link: an old replica
+    /// meeting a newer primary should fall behind on a feature, not diverge on
+    /// every frame.
+    control: Option<Arc<dyn ControlApplier>>,
 }
 
 impl ReplicaCommandExecutor {
@@ -38,7 +46,14 @@ impl ReplicaCommandExecutor {
         Self {
             shard_senders,
             num_shards,
+            control: None,
         }
+    }
+
+    /// Wire the control-shard seam (see [`Self::control`]).
+    pub fn with_control_applier(mut self, control: Arc<dyn ControlApplier>) -> Self {
+        self.control = Some(control);
+        self
     }
 
     /// Resolve the sender for a tagged origin shard, or an [`ApplyError`].
@@ -131,5 +146,21 @@ impl ReplicaApplier for ReplicaCommandExecutor {
             1 => self.apply_single(shard_id, commands.pop().unwrap()).await,
             _ => self.apply_transaction(shard_id, commands).await,
         }
+    }
+
+    async fn apply_control(&self, command: ParsedCommand) -> Result<(), ApplyError> {
+        let Some(control) = self.control.as_ref() else {
+            tracing::warn!(
+                command = %command.name_uppercase_string(),
+                "No control applier wired; stepping over a control-shard frame"
+            );
+            return Ok(());
+        };
+        control
+            .apply(&command)
+            .map_err(|detail| ApplyError::ControlRejected {
+                command: command.name_uppercase_string(),
+                detail,
+            })
     }
 }

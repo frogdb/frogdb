@@ -106,6 +106,11 @@ pub(super) async fn init_cluster(
     // arming (a re-promoted node must not inherit a fence earned by replica
     // sessions that are no longer its own).
     replication_self_fence: Option<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
+    // The control-shard apply seam (function-library registry) handed to every
+    // runtime replica stream the `RoleManager` starts, so a runtime demotion
+    // adopts its new primary's libraries the same way a boot-configured replica
+    // does.
+    control_applier: Option<Arc<dyn frogdb_replication::ControlApplier>>,
     #[cfg(not(feature = "turmoil"))] tls_runtime: &Option<
         Arc<crate::tls_runtime::TlsRuntimeHandle>,
     >,
@@ -124,17 +129,20 @@ pub(super) async fn init_cluster(
     } else {
         shared_replication_offset
     };
-    let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> =
-        Arc::new(crate::role_manager::RealReplicaStreamer::new(
-            config,
-            replication_identity,
-            shard_senders.clone(),
-            num_shards,
-            is_replica_flag.clone(),
-            shared_replication_offset.clone(),
-            #[cfg(not(feature = "turmoil"))]
-            tls_runtime,
-        ));
+    let mut real_streamer = crate::role_manager::RealReplicaStreamer::new(
+        config,
+        replication_identity,
+        shard_senders.clone(),
+        num_shards,
+        is_replica_flag.clone(),
+        shared_replication_offset.clone(),
+        #[cfg(not(feature = "turmoil"))]
+        tls_runtime,
+    );
+    if let Some(control) = control_applier {
+        real_streamer = real_streamer.with_control_applier(control);
+    }
+    let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> = Arc::new(real_streamer);
     let mut role_manager =
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);
     if let Some(checker) = replication_self_fence {

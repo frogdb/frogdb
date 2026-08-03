@@ -784,6 +784,86 @@ mod tests {
         assert!((result - 12.0).abs() < 0.001);
     }
 
+    /// The table of `f64`s issue 55 names, plus the values that broke each of
+    /// the renderers this collapse deleted.
+    ///
+    /// `-0.0` is in the list because both the old and the new renderer normalize
+    /// it to `"0"` (Redis does the same in `ld2string`), and `1e-320` is in it
+    /// because `{:.17}` rendered that as the *empty string* — seventeen decimal
+    /// places of 1e-320 are all zero and the trim ate the `"0."` as well.
+    // 3.14 below is a test datum from issue 55, not an approximation of pi.
+    #[allow(clippy::approx_constant)]
+    const RENDERING_TABLE: [f64; 9] = [
+        0.1,
+        3.14,
+        1e-7,
+        -0.0,
+        1e17,
+        1e-320,
+        0.1 + 0.2,
+        17179869184.0,
+        -2.5,
+    ];
+
+    /// Issue 55 invariant P7: `INCRBYFLOAT` stores exactly the bytes it replies.
+    ///
+    /// The reply is built by `frogdb_protocol::format_float` (via
+    /// `commands::utils::format_float`); the store used to have its own
+    /// `{:.17}`-and-trim renderer, so `SET k 0; INCRBYFLOAT k 0.1` replied `0.1`
+    /// and stored `0.10000000000000001`. That divergent string is what a later
+    /// `GET` returned, what the WAL persisted and what crossed the replication
+    /// link. **Failed before the collapse** for 0.1, 3.14, 1e-7, 1e17, 1e-320
+    /// and 0.1+0.2.
+    #[test]
+    fn increment_float_stores_exactly_what_the_reply_renders() {
+        for delta in RENDERING_TABLE {
+            let mut sv = StringValue::from_integer(0);
+            let new_val = sv.increment_float(delta).expect("finite delta from zero");
+            assert_eq!(
+                sv.as_bytes(),
+                Bytes::from(frogdb_protocol::format_float(new_val)),
+                "increment_float stored a different rendering than the reply for {delta:?}",
+            );
+        }
+    }
+
+    /// The same invariant for `HINCRBYFLOAT`, which shared the deleted renderer
+    /// through `hash.rs`'s import of it. This one diverged on *every* protocol
+    /// version, because `HINCRBYFLOAT` always replies a bulk string.
+    #[test]
+    fn hash_incr_by_float_stores_exactly_what_the_reply_renders() {
+        for delta in RENDERING_TABLE {
+            let mut hash = HashValue::new();
+            let field = Bytes::from_static(b"f");
+            let new_val = hash
+                .incr_by_float(field.clone(), delta, ListpackThresholds::default())
+                .expect("finite delta from an absent field");
+            assert_eq!(
+                hash.get(&field).expect("field was just set"),
+                Bytes::from(frogdb_protocol::format_float(new_val)),
+                "incr_by_float stored a different rendering than the reply for {delta:?}",
+            );
+        }
+    }
+
+    /// Repeated increments compound the divergence, which is the shape that
+    /// actually bit in production: each step re-parses the string the previous
+    /// step stored, so a renderer that loses or invents digits drifts.
+    #[test]
+    fn repeated_increments_keep_the_stored_rendering_canonical() {
+        let mut sv = StringValue::from_integer(0);
+        for _ in 0..10 {
+            let new_val = sv.increment_float(0.1).expect("finite");
+            assert_eq!(
+                sv.as_bytes(),
+                Bytes::from(frogdb_protocol::format_float(new_val))
+            );
+        }
+        // Ten times 0.1 in f64 is not 1.0, and the canonical renderer says so
+        // exactly rather than rounding it away.
+        assert_eq!(sv.as_bytes(), Bytes::from_static(b"0.9999999999999999"));
+    }
+
     #[test]
     fn test_string_value_as_float() {
         let sv_int = StringValue::from_integer(42);

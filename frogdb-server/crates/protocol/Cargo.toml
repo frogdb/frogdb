@@ -10,6 +10,7 @@ description = "RESP2/RESP3 wire protocol handling for FrogDB"
 bytes.workspace = true
 bytes-utils.workspace = true
 redis-protocol.workspace = true
+ryu.workspace = true
 tokio-util.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

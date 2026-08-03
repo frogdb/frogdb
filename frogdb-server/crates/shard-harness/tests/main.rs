@@ -15,4 +15,7 @@ mod scenario_s6;
 mod scenario_s8;
 
 // Targeted regression scenarios (not part of the numbered S-series).
+mod eviction_spill_failure;
+mod rendering_incrbyfloat;
 mod scenario_expiry_window;
+mod script_timeout_effects;

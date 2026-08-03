@@ -26,6 +26,18 @@ fn extract_float(response: &Response) -> Option<f64> {
     }
 }
 
+/// Extract the raw bulk-string bytes from a response.
+///
+/// Distinct from [`extract_float`] on purpose: the *bytes* are the thing under
+/// test wherever a reply and a stored value have to agree exactly (issue 55),
+/// and parsing to `f64` first is precisely what hid the rendering divergence.
+fn extract_bulk(response: &Response) -> Option<Bytes> {
+    match response {
+        Response::Bulk(Some(b)) => Some(b.clone()),
+        _ => None,
+    }
+}
+
 /// Check if response is an error
 fn is_error(response: &Response) -> bool {
     matches!(response, Response::Error(_))
@@ -229,11 +241,32 @@ proptest! {
             client.command(&["SET", &key, &initial.to_string()]).await;
 
             // INCRBYFLOAT delta
-            let _after_incr = client.command(&["INCRBYFLOAT", &key, &delta.to_string()]).await;
+            let after_incr = client.command(&["INCRBYFLOAT", &key, &delta.to_string()]).await;
+
+            // Issue 55: the reply and the stored value are the same rendering.
+            // This is a *byte* comparison and it belongs here even though the
+            // round-trip assertion below is rightly an epsilon one — the two
+            // measure different things. The epsilon covers `+delta` then
+            // `-delta` not landing exactly back on `initial`, which is genuine
+            // f64 behaviour. Byte equality covers the reply and the store being
+            // rendered by the same function, which admits no tolerance: the
+            // stored spelling is what a later GET returns, what the WAL
+            // persists and what crosses the replication link.
+            let stored = extract_bulk(&client.command(&["GET", &key]).await);
+            prop_assert_eq!(
+                extract_bulk(&after_incr), stored,
+                "INCRBYFLOAT reply and stored value disagree"
+            );
 
             // INCRBYFLOAT -delta (should return close to original)
             let neg_delta = format!("{}", -delta);
             let after_decr = client.command(&["INCRBYFLOAT", &key, &neg_delta]).await;
+
+            let stored = extract_bulk(&client.command(&["GET", &key]).await);
+            prop_assert_eq!(
+                extract_bulk(&after_decr), stored,
+                "INCRBYFLOAT reply and stored value disagree"
+            );
 
             let final_val = extract_float(&after_decr).unwrap();
 

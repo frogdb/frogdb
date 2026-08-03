@@ -19,6 +19,7 @@
 //! - [`Response`] - Union type for command handlers that can return either wire
 //!   responses or internal actions. Use `into_wire()` to safely extract.
 
+use crate::format::format_float;
 use bytes::Bytes;
 use bytes_utils::Str;
 use redis_protocol::resp2::types::BytesFrame as Resp2BytesFrame;
@@ -870,31 +871,6 @@ impl Response {
     pub fn try_to_resp3_frame(self) -> Option<Resp3BytesFrame> {
         self.into_wire().ok().map(|w| w.to_resp3_frame())
     }
-}
-
-/// Format a float for Redis compatibility.
-fn format_float(f: f64) -> String {
-    if f == f64::INFINITY {
-        return "inf".to_string();
-    }
-    if f == f64::NEG_INFINITY {
-        return "-inf".to_string();
-    }
-    if f.is_nan() {
-        return "nan".to_string();
-    }
-    if f == 0.0 {
-        return "0".to_string();
-    }
-
-    if f.fract() == 0.0 && f.abs() < 1e15 {
-        return format!("{:.0}", f);
-    }
-
-    let s = format!("{:.17}", f);
-    let s = s.trim_end_matches('0');
-    let s = s.trim_end_matches('.');
-    s.to_string()
 }
 
 impl From<Response> for BytesFrame {

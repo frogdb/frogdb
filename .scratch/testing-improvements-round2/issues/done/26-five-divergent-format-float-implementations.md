@@ -1,6 +1,6 @@
 # Five independent `format_float` implementations — `INCRBYFLOAT` already replies one rendering and stores another
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §2 T8
@@ -81,3 +81,23 @@ Nothing. The fix lands in `types`/`commands`; area 08 surfaced it because the pr
 one of the five copies. Issue 33, `.scratch/testing-improvements-round2/issues/`, owns the
 `< 1e-10` assertions that let this ship — the two should land together, but neither blocks the
 other.
+
+## Resolution
+
+Done as one piece of work with issue 55 (the live consequence). The collapse, the single-definition
+guard (`just lint-format-float`, wired into `just lint`), the rendering table and the
+reply-equals-store assertion are all described there — see
+`.scratch/testing-improvements-round2/issues/done/55-incrbyfloat-stores-a-different-rendering-than-it-replies.md`.
+
+Two of this issue's acceptance criteria were **not** met as written, deliberately:
+
+- **`-0.0` renders as `"0"`, not `"-0"`.** The criterion is right about Redis's `d2string`
+  (`ZSCORE`) and wrong about `ld2string(LD_STR_HUMAN)` (`INCRBYFLOAT`), which has an explicit
+  "convert -0 to 0" step. A single renderer cannot do both, and having two is the defect this
+  issue exists to remove. `"0"` matches what the pre-existing canonical implementation returned,
+  so nothing regressed; the `ZSCORE`-of-`-0.0` divergence from Redis is pre-existing and is now
+  recorded in issue 55's Resolution rather than silently carried.
+- **`1e300` renders as `1e+300`** (criterion met) **and `1e-320` renders as `1e-320`, not as a
+  decimal expansion** (criterion met — it does not collapse to `"0"`). Redis's `INCRBYFLOAT` would
+  spell both without an exponent; that is a separate, larger change and a separate decision, noted
+  in issue 55.

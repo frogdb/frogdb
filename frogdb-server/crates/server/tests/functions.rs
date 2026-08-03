@@ -790,3 +790,70 @@ end)
 
     server.shutdown().await;
 }
+
+/// With persistence disabled, libraries do **not** survive a restart, and no
+/// `functions.fdb` is written at all.
+///
+/// This is the documented behaviour asked for by issue 48, and it is deliberate
+/// rather than an oversight: in Redis the function registry lives in the RDB, so
+/// a server with no RDB and no AOF loses its libraries on restart exactly the
+/// way it loses its keys. FrogDB keeps the registry beside the data dir instead
+/// of inside it, but ties its durability to the same switch — `persistence
+/// disabled` means "this node keeps nothing across a restart", with no
+/// exceptions that would make the switch mean two different things.
+///
+/// The replication half is unaffected: a restarted replica takes the libraries
+/// from its primary's full resync (see `integration_replication_functions.rs`),
+/// which is the path a persistence-disabled deployment actually relies on.
+#[tokio::test]
+async fn test_functions_are_lost_on_restart_when_persistence_is_disabled() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let config = || TestServerConfig {
+        num_shards: Some(1),
+        persistence: false,
+        data_dir: Some(temp_dir.path().to_path_buf()),
+        ..Default::default()
+    };
+
+    let server = TestServer::start_standalone_with_config(config()).await;
+    let mut client = server.connect().await;
+
+    let code = r#"#!lua name=ephemerallib
+redis.register_function('ephemeral_func', function(keys, args)
+    return 'ephemeral'
+end)
+"#;
+    let loaded = client.command(&["FUNCTION", "LOAD", code]).await;
+    assert_eq!(loaded, Response::Bulk(Some(Bytes::from("ephemerallib"))));
+    assert_eq!(
+        client.command(&["FCALL", "ephemeral_func", "0"]).await,
+        Response::Bulk(Some(Bytes::from("ephemeral"))),
+    );
+    assert!(
+        !temp_dir.path().join("functions.fdb").exists(),
+        "persistence is disabled, so nothing may be written to the data dir",
+    );
+
+    server.shutdown().await;
+
+    // Restart on the same data dir: the registry starts empty.
+    let restarted = TestServer::start_standalone_with_config(config()).await;
+    let mut client = restarted.connect().await;
+
+    match client.command(&["FUNCTION", "LIST"]).await {
+        Response::Array(arr) => assert!(
+            arr.is_empty(),
+            "a persistence-disabled restart must come back with no libraries, got {arr:?}",
+        ),
+        other => panic!("Expected array from FUNCTION LIST, got: {other:?}"),
+    }
+    let called = client.command(&["FCALL", "ephemeral_func", "0"]).await;
+    assert!(
+        matches!(called, Response::Error(_)),
+        "the function must be gone after a persistence-disabled restart, got {called:?}",
+    );
+
+    restarted.shutdown().await;
+}

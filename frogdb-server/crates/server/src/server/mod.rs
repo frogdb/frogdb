@@ -293,6 +293,45 @@ impl Server {
                 .set_replication_self_fence(checker.clone());
         }
 
+        // Ship the function-library registry to every full-syncing replica. The
+        // registry is process-wide state that lives beside the keyspace rather
+        // than in it, so the checkpoint cannot carry it; it is broadcast as a
+        // `FUNCTION RESTORE <dump> FLUSH` inside the window the syncing replica
+        // replays (issue 48). Held under the same lock as a client-issued
+        // mutation, so the snapshot and the incremental frames can not be
+        // reordered against the registry state they describe.
+
+        // Ship the function-library registry to every full-syncing replica. The
+        // registry is process-wide state that lives beside the keyspace rather
+        // than in it, so the checkpoint cannot carry it; it is broadcast as a
+        // `FUNCTION RESTORE <dump> FLUSH` inside the window the syncing replica
+        // replays (issue 48). Held under the same lock as a client-issued
+        // mutation, so the snapshot and the incremental frames can not be
+        // reordered against the registry state they describe.
+        //
+        // The closure captures the registry and *nothing else*: the handler
+        // outlives the storage engine, and capturing anything that reaches the
+        // config manager would keep RocksDB open past shutdown (see
+        // `function_store::FunctionStore::snapshot_command_args`).
+        if let Some(ref handler) = repl.primary_replication_handler {
+            let registry = infra.function_registry.clone();
+            handler.set_function_snapshot_hook(Arc::new(move |handler| {
+                let _order = crate::function_store::propagation_order();
+                match crate::function_store::FunctionStore::snapshot_command_args(&registry) {
+                    Some(args) => {
+                        handler.broadcast_control_command("FUNCTION", &args);
+                    }
+                    None => {
+                        tracing::warn!(
+                            "Could not read the function registry for a full resync; the \
+                             replica will start without this primary's libraries until the \
+                             next FUNCTION command"
+                        );
+                    }
+                }
+            }));
+        }
+
         // Phase 3: Cluster/Raft initialization + background tasks.
         // `init_cluster` may mint the HealthProbe offset atomic (when the node
         // booted primary/standalone in cluster mode) and shares it with the
@@ -312,6 +351,10 @@ impl Server {
             infra.config_manager.cluster_flags(),
             infra.is_replica_flag.clone(),
             repl.replication_self_fence.clone(),
+            Some(Arc::new(crate::function_store::FunctionStore::new(
+                infra.function_registry.clone(),
+                infra.config_manager.clone(),
+            ))),
             #[cfg(not(feature = "turmoil"))]
             &infra.tls_runtime,
         )

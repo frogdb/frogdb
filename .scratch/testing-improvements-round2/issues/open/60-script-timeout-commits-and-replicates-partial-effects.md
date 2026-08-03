@@ -1,6 +1,6 @@
 # A write script aborted by `lua-time-limit` has its partial effects committed *and* replicated
 
-Status: needs-triage
+Status: needs-info
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/09 F4 · MASTER.md §3 (consistency violations), §2 T6, §7 (decision required)
@@ -81,3 +81,95 @@ replication half, which is why the level-4 case is still required.
 
 issue 05 (I5 — "shard busy running a script" fixture),
 `.scratch/testing-improvements-round2/issues/`
+
+## Verification of the premise (2026-08-02)
+
+The premise is **half right**, and the half that is wrong is the half this issue is filed under.
+
+Confirmed by a new level-3 scenario
+(`frogdb-server/crates/shard-harness/tests/script_timeout_effects.rs`), run with
+`lua_time_limit_ms = 50`, `lua_timeout_grace_ms = 0` and
+`for i=1,1e9 do redis.call('SET', KEYS[1]..i, i) end`:
+
+* The script **is** aborted mid-way and the completed writes **do** survive. Measured:
+  9985 keys applied on the primary.
+* **There is no replication divergence.** `run_script` drains one `script_writes` vec and that
+  same vec drives both the store effects and the propagation, and
+  `run_script_write_effects` (`core/src/shard/post_execution.rs:635-661`) selects
+  `EffectScope::Transaction` whenever `writes.len() > 1`, which frames the batch as
+  `MULTI … EXEC`. Measured: 9985 applied, 9987 frames propagated — `MULTI`, 9985 × `SET`,
+  `EXEC`. So acceptance criteria 2 and 3 already hold, and criterion 3's `fake-wal` route was
+  not needed: the `RecordingBroadcaster` observes the replication side directly, which is the
+  side the criterion is actually about.
+* Acceptance criterion 1 was **broken for a different reason**: `ScriptError::Timeout`
+  rendered as `ERR BUSY Lua script running. …`, i.e. the RESP error *code* was `ERR`, with
+  `BUSY` demoted to prose. `website/src/content/docs/architecture/glossary.md` already
+  documents this error as `-BUSY`. Fixed in `core/src/scripting/error.rs` — the code is now
+  `BUSY`. This is policy-independent, so it was fixed rather than deferred.
+
+What is therefore left of this issue is **only** the policy question in `## Options`, which is
+a product decision, not a defect. Per the standing rule ("if a fix requires a product
+decision, stop and ask"), it is recorded below rather than guessed at.
+
+## Open question — does a server-imposed abort get to keep its partial writes?
+
+Both candidate answers are internally consistent; they trade atomicity against availability,
+and the choice has an ops story attached, so it is not the implementing agent's to make.
+
+**Option A — a write-dirty script is never aborted (Redis/Valkey parity).**
+Redis's `busy-reply-threshold` (née `lua-time-limit`) *never* terminates a script: it only
+starts answering `-BUSY` to other clients, and once the script is `SCRIPT_WRITE_DIRTY`,
+`SCRIPT KILL` returns `-UNKILLABLE` and the only exit is `SHUTDOWN NOSAVE`. FrogDB already
+implements exactly this rule on its *kill* path (`LuaVm::request_kill` →
+`ScriptError::Unkillable`); the timeout path simply does not consult `has_writes`. Making it
+consult the flag — abort read-only scripts on the deadline, never abort a script that has
+written — would make the two paths agree and delete the partial-application class outright.
+
+Shape of the change: hoist `has_writes` out of `ExecutionState`'s mutex into an
+`Arc<AtomicBool>` shared by `LuaVm`, `ScriptCommandGate` and a new
+`TimeoutHook.has_writes` field (an atomic, not the mutex, because `mark_write` already holds
+that mutex on the same thread the mlua instruction hook runs on — re-entrancy hazard), then
+return `Ok(VmState::Continue)` instead of the BUSY `RuntimeError` when the flag is set.
+Roughly 40 lines, no new seams.
+
+Cost: a runaway write script blocks its shard **forever**. Today `lua-time-limit` is the only
+thing that stops it, because `request_kill` already refuses on `has_writes`. Redis accepts
+exactly this cost; FrogDB shards are single-threaded, so the blast radius is one shard rather
+than the whole node. Needs an operator answer to "what do I do now" (`SHUTDOWN NOSAVE`
+equivalent?) before it can ship.
+
+**Option B — abort, and pin "writes survive and replicate identically" as the policy.**
+This is today's behaviour. It is already replication-safe (see above), it bounds script
+runtime, and it is defensible under "scripts are not transactions". The cost is that the
+surviving prefix is wall-clock dependent — not reproducible, and the client that received
+`-BUSY` is told nothing about how much landed. Redis has no equivalent behaviour to point at.
+
+**Option C — abort and roll back.** Rejected without a decision needed: script effects are
+applied to the store as they execute and there is no undo log or snapshot for them, so this
+is a large piece of new machinery for a case Redis solves by not aborting.
+
+**Recommendation: A**, because it makes the timeout path agree with the kill path that is
+already in the tree, and because "partially applied, non-reproducible" is a worse failure for
+a database than "one shard is stuck and the operator is told why". But B is a legitimate
+product choice for a system that would rather stay available, and if B is chosen the only work
+left is to say so in the comment at `core/src/shard/scripting.rs` (already amended to state
+the facts and point here) and to tick criterion 4.
+
+**Blocking on:** an answer of A or B. Everything else in this issue is done.
+
+## Work landed so far
+
+- `frogdb-server/crates/core/src/scripting/error.rs` — `ScriptError::Timeout` now renders with
+  the `BUSY` error code instead of `ERR BUSY`.
+- `frogdb-server/crates/core/src/shard/scripting.rs` — the comment at the unconditional
+  `run_script_write_effects` call now distinguishes a script-raised error from a
+  server-imposed abort, states the applied-set/propagated-batch identity, and points at this
+  open question instead of implying the behaviour is intended (criterion 4, partially).
+- `frogdb-server/crates/shard-harness/tests/script_timeout_effects.rs` — level 3, 2 tests:
+  `a_script_that_overruns_the_time_limit_is_aborted_with_busy` (RED before the error.rs fix),
+  `a_timed_out_write_script_replicates_exactly_what_it_applied` (criteria 2 + 3).
+
+No `FM-REPLICATION-*` row was added: `scripts/failure-modes.py`'s `NEXTEST_CRATES` does not
+include `frogdb-shard-harness`, so a row naming these tests would fail `just lint-failure-modes`
+in the "test does not exist" direction. The row is worth writing once the policy is settled and
+the level-4 (two-node) half is added in `frogdb-server`, which *is* a listed crate.
