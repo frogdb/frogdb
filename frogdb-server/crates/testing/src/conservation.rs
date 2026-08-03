@@ -328,7 +328,8 @@ impl WaiterRegistrationOrder {
         self.map.is_empty()
     }
 
-    /// Every recorded `(key, client_id) -> registration_seq` in a canonical order.
+    /// Every recorded `(key, client_id, registration_seq)` in a canonical order,
+    /// one row per journaled registration.
     ///
     /// The backing map is a `HashMap` with per-process seeded hashing, so its iteration
     /// order is not reproducible even between two runs in the same process. Callers that
@@ -338,7 +339,7 @@ impl WaiterRegistrationOrder {
         let mut out: Vec<(Bytes, u64, u64)> = self
             .map
             .iter()
-            .map(|((key, client), seq)| (key.clone(), *client, *seq))
+            .flat_map(|((key, client), regs)| regs.iter().map(|r| (key.clone(), *client, r.seq)))
             .collect();
         out.sort_unstable();
         out
