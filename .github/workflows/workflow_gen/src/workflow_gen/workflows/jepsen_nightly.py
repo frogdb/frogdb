@@ -236,14 +236,30 @@ def jepsen_nightly_workflow() -> Workflow:
                 ),
                 _run_suites_step(),
                 _summary_step(),
+                Step(
+                    name="Tar jepsen store",
+                    if_="failure()",
+                    run=script(
+                        f"""\
+                        # Jepsen's independent-checker directories contain colons
+                        # (store/.../independent/:f1/...), which upload-artifact
+                        # rejects for NTFS compatibility. Ship one tarball instead.
+                        if [ -d "{STORE_DIR}" ]; then
+                          tar -czf /tmp/jepsen-store.tgz -C "{STORE_DIR}" .
+                        else
+                          echo "no store directory; nothing to tar"
+                        fi
+                        """
+                    ),
+                ),
                 upload_artifact_step(
                     name="jepsen-store",
-                    path=STORE_DIR,
+                    path="/tmp/jepsen-store.tgz",
                     if_="failure()",
-                    # store/ may legitimately be empty if the failure was in the build
-                    # step (before any test wrote results), so keep the default "warn"
-                    # rather than "error" — we don't want a build failure to also emit a
-                    # confusing missing-artifact error.
+                    # The tarball may legitimately be absent if the failure was in the
+                    # build step (before any test wrote results), so keep the default
+                    # "warn" rather than "error" — we don't want a build failure to
+                    # also emit a confusing missing-artifact error.
                 ),
             ],
         ),

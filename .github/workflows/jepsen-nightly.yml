@@ -97,10 +97,21 @@ jobs:
           cat /tmp/jepsen-summary.txt 2>/dev/null || echo '(no summary produced)'
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
+    - name: Tar jepsen store
+      if: failure()
+      run: |
+        # Jepsen's independent-checker directories contain colons
+        # (store/.../independent/:f1/...), which upload-artifact
+        # rejects for NTFS compatibility. Ship one tarball instead.
+        if [ -d "testing/jepsen/frogdb/store" ]; then
+          tar -czf /tmp/jepsen-store.tgz -C "testing/jepsen/frogdb/store" .
+        else
+          echo "no store directory; nothing to tar"
+        fi
     - name: Upload jepsen-store
       if: failure()
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
       with:
         name: jepsen-store
-        path: testing/jepsen/frogdb/store
+        path: /tmp/jepsen-store.tgz
         retention-days: '7'
