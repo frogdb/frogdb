@@ -280,6 +280,8 @@ mod tests {
         session.id()
     }
 
+    // FM-REPLICATION-038
+    // FM-REPLICATION-037
     #[tokio::test]
     async fn quorum_already_met_returns_without_soliciting() {
         let (coord, tracker) = coordinator();
@@ -294,6 +296,7 @@ mod tests {
         assert_eq!(solicitor.calls(), 0, "satisfied WAIT must not send GETACK");
     }
 
+    // FM-REPLICATION-037
     #[tokio::test]
     async fn numreplicas_zero_returns_actual_acked_count() {
         // Redis returns the real acked count on the fast path, which can
@@ -310,6 +313,7 @@ mod tests {
         assert_eq!(solicitor.calls(), 0);
     }
 
+    // FM-REPLICATION-038
     #[tokio::test]
     async fn blocking_wait_solicits_exactly_once_then_reaches_quorum() {
         let (coord, tracker) = coordinator();
@@ -338,6 +342,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-037
     #[tokio::test]
     async fn timeout_returns_count_acked_at_target() {
         let (coord, tracker) = coordinator();
@@ -355,6 +360,7 @@ mod tests {
         assert_eq!(solicitor.calls(), 1);
     }
 
+    // FM-REPLICATION-038
     #[tokio::test]
     async fn no_streaming_replicas_means_no_solicitation() {
         // GETACK is part of the command stream; a replica-less primary must
@@ -371,6 +377,7 @@ mod tests {
         assert_eq!(solicitor.calls(), 0);
     }
 
+    // FM-REPLICATION-039
     #[tokio::test]
     async fn acks_below_the_target_do_not_count() {
         let (coord, tracker) = coordinator();
@@ -385,6 +392,7 @@ mod tests {
         assert_eq!(verdict, WaitVerdict::TimedOut(0));
     }
 
+    // FM-REPLICATION-037
     #[tokio::test]
     async fn no_deadline_blocks_until_quorum() {
         // deadline = None is Redis `WAIT n 0`: block until the quorum is
@@ -408,6 +416,7 @@ mod tests {
         assert_eq!(verdict, WaitVerdict::Reached(1));
     }
 
+    // FM-REPLICATION-040
     #[tokio::test]
     async fn role_change_releases_a_wait_parked_forever() {
         // `WAIT n 0` has no deadline, so the fence is the only thing that can
@@ -432,6 +441,7 @@ mod tests {
         assert_eq!(verdict, WaitVerdict::RoleChanged(0));
     }
 
+    // FM-REPLICATION-040
     #[tokio::test]
     async fn role_change_releases_a_wait_with_a_deadline() {
         let (coord, tracker) = coordinator();
@@ -465,6 +475,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-040
     #[tokio::test]
     async fn a_fence_from_an_earlier_stint_does_not_release_a_later_wait() {
         // The subscription is taken when the caller enters WAIT, so demotions
@@ -491,6 +502,7 @@ mod tests {
         assert_eq!(verdict, WaitVerdict::Reached(1));
     }
 
+    // FM-REPLICATION-040
     #[tokio::test]
     async fn a_demotion_racing_the_role_check_still_releases_the_wait() {
         // The interleaving the fence-first ordering exists for: the caller has
@@ -513,6 +525,7 @@ mod tests {
         assert_eq!(verdict, WaitVerdict::RoleChanged(0));
     }
 
+    // FM-REPLICATION-039
     #[tokio::test]
     async fn a_replica_that_attaches_mid_wait_can_satisfy_the_quorum() {
         // Membership is read at count time, not snapshotted when the wait
@@ -553,6 +566,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-039
     #[tokio::test]
     async fn a_replica_that_detaches_mid_wait_stops_counting() {
         // The acked count is a projection over live sessions: a replica that
@@ -591,6 +605,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-037
     #[tokio::test]
     async fn target_offset_reads_the_offset_coordinator() {
         let (coord, _tracker) = coordinator();

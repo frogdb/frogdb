@@ -493,6 +493,7 @@ mod tests {
         assert!(state.validate());
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn test_replication_state_persistence() {
         let dir = tempdir().unwrap();
@@ -509,6 +510,7 @@ mod tests {
         assert_eq!(loaded.offset_at_save, 0);
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn test_replication_state_load_missing() {
         let dir = tempdir().unwrap();
@@ -522,6 +524,7 @@ mod tests {
         assert!(path.exists());
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn test_replication_state_load_corrupted() {
         let dir = tempdir().unwrap();
@@ -552,6 +555,7 @@ mod tests {
         assert_eq!(state.secondary_offset, 1000);
     }
 
+    // FM-REPLICATION-019
     #[test]
     fn test_window_contains() {
         let mut state = ReplicationState::new();
@@ -655,6 +659,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn test_consume_staged_replication_metadata() {
         let dir = tempdir().unwrap();
@@ -667,6 +672,7 @@ mod tests {
         consume_staged_replication_metadata(dir.path());
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn discard_staged_full_sync_disarms_the_staging_area() {
         let parent = tempdir().unwrap();
@@ -692,6 +698,7 @@ mod tests {
         discard_staged_full_sync(&data_dir).unwrap();
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn discard_staged_full_sync_disarms_before_deleting() {
         let parent = tempdir().unwrap();
@@ -713,6 +720,7 @@ mod tests {
         assert!(!disarmed.exists(), "the renamed copy is deleted afterwards");
     }
 
+    // FM-REPLICATION-020
     #[test]
     fn discard_staged_full_sync_keeps_the_metadata_when_disarming_fails() {
         let parent = tempdir().unwrap();
@@ -762,6 +770,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-021
     #[test]
     fn offset_at_save_loads_from_legacy_replication_offset_key() {
         // Existing on-disk state files were written with the old
@@ -786,6 +795,7 @@ mod tests {
         assert_eq!(state.offset_at_save, 1234);
     }
 
+    // FM-REPLICATION-019
     #[test]
     fn shift_replication_id_freezes_window_inclusively() {
         let mut state = ReplicationState::new();
@@ -801,6 +811,7 @@ mod tests {
         assert!(!state.window_contains(&old, 101, 200));
     }
 
+    // FM-REPLICATION-022
     #[test]
     fn clear_secondary_window_closes_the_old_history() {
         let mut state = ReplicationState::new();
@@ -821,6 +832,7 @@ mod tests {
         assert!(state.window_contains(&current, 50, 100));
     }
 
+    // FM-REPLICATION-022
     #[test]
     fn adopt_replication_history_drops_a_stale_window() {
         let mut state = ReplicationState::new();
@@ -839,6 +851,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-022
     #[test]
     fn apply_staged_metadata_drops_a_stale_window() {
         let mut state = ReplicationState::new();

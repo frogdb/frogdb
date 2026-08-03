@@ -191,6 +191,7 @@ pub fn has_pending_logs(data_dir: &Path) -> bool {
 mod tests {
     use super::*;
 
+    // FM-REPLICATION-024
     #[test]
     fn test_write_and_read_log() {
         let dir = tempfile::tempdir().unwrap();
@@ -230,6 +231,7 @@ mod tests {
         assert!(content.contains("*2\r\n$4\r\nINCR\r\n$7\r\ncounter\r\n"));
     }
 
+    // FM-REPLICATION-024
     #[test]
     fn test_write_log_empty_entries() {
         let dir = tempfile::tempdir().unwrap();
@@ -252,6 +254,7 @@ mod tests {
         assert!(content.contains("ops_discarded=0"));
     }
 
+    // FM-REPLICATION-024
     #[test]
     fn test_has_pending_logs() {
         let dir = tempfile::tempdir().unwrap();
@@ -270,6 +273,7 @@ mod tests {
         assert!(has_pending_logs(dir.path()));
     }
 
+    // FM-REPLICATION-024
     #[test]
     fn test_has_pending_logs_ignores_other_files() {
         let dir = tempfile::tempdir().unwrap();

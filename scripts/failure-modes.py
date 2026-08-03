@@ -307,9 +307,23 @@ def load_test_paths(nextest_output: Path | None) -> set[str]:
 
 
 def resolve(name: str, test_paths: set[str]) -> bool:
-    """Whether `name` names a listed test (exact path or trailing segment)."""
+    """Whether `name` names a listed test.
+
+    Three shapes, because `cargo nextest list` renders a test's identity
+    differently depending on how it was declared:
+
+    * the full path (`integration_replication::test_psync_initial_request`);
+    * a trailing segment of it, which is how a spec row names a test — bare, so
+      that moving a test between modules is not a spec edit;
+    * the *second to last* segment, which is where an `#[rstest]` function's
+      name lands: each `#[case]` becomes its own listed test with the case name
+      appended (`…::test_wait_no_replicas::in_memory`). A parameterized test is
+      still one function with one `// FM-…` tag, so the row names the function
+      and every case counts as forcing it.
+    """
     suffix = "::" + name
-    return any(path == name or path.endswith(suffix) for path in test_paths)
+    infix = "::" + name + "::"
+    return any(path == name or path.endswith(suffix) or infix in path for path in test_paths)
 
 
 def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:

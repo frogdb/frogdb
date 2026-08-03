@@ -93,6 +93,7 @@ mod tests {
         (buf, checksum)
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn receiver_reads_framed_files_and_metadata() {
         let files = vec![
@@ -124,6 +125,7 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn receiver_creates_incoming_for_zero_files() {
         // With no files, only the unconditional create_dir_all makes the scratch
@@ -140,6 +142,7 @@ mod tests {
         assert!(incoming.is_dir(), "incoming scratch dir must exist");
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn receiver_truncated_stream_yields_unexpected_eof() {
         // A single file declared but its payload truncated: receive_to_file must

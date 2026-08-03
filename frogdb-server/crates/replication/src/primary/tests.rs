@@ -121,6 +121,7 @@ fn broadcast_gate_stays_open_while_backlog_can_resume() {
     );
 }
 
+// FM-REPLICATION-024
 /// `end == min_acked` ⇒ `None` (pins the `end > start` gate — `current > min_acked`
 /// today). A fully caught-up demoted primary diverged from nothing.
 #[test]
@@ -141,6 +142,7 @@ fn divergence_record_none_when_caught_up() {
     );
 }
 
+// FM-REPLICATION-024
 /// `end > start` but no backlog writes past `start` ⇒ `None` (pins the
 /// `!writes.is_empty()` gate). The live offset advanced without any recorded
 /// command past the acked point, so there is nothing to surrender.
@@ -163,6 +165,7 @@ fn divergence_record_none_when_backlog_empty_past_start() {
     );
 }
 
+// FM-REPLICATION-024
 /// Acks at `min_acked`, several writes past it ⇒
 /// `Some { start == min_acked, end == current, writes == (start, current] }`,
 /// offset-ordered — the exact fact no prior test covered.
@@ -202,6 +205,7 @@ fn divergence_record_window_and_writes() {
     assert!(record.writes.iter().all(|(o, _)| *o > acked));
 }
 
+// FM-REPLICATION-024
 /// `min_acked()` is `None` (no streaming replicas) ⇒ `start == 0`, the whole
 /// backlog is divergent (pins the `unwrap_or(0)` floor).
 #[test]
@@ -230,6 +234,7 @@ fn divergence_record_no_streaming_replicas_uses_zero_floor() {
 // The `parse_replconf_ack` unit tests moved to the `ReplconfCodec` golden
 // round-trip suite in `frame.rs` (the codec now owns the ACK/GETACK grammar).
 
+// FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_push_and_extract() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
@@ -248,6 +253,7 @@ fn test_ring_buffer_push_and_extract() {
     assert!(writes.is_empty());
 }
 
+// FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_entry_limit_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
@@ -261,6 +267,7 @@ fn test_ring_buffer_entry_limit_eviction() {
     assert_eq!(writes[2].0, 40);
 }
 
+// FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_byte_limit_eviction() {
     let rb = ReplicationRingBuffer::new(100, 10);
@@ -273,6 +280,7 @@ fn test_ring_buffer_byte_limit_eviction() {
     assert_eq!(writes[1].0, 30);
 }
 
+// FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_empty() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
@@ -280,6 +288,7 @@ fn test_ring_buffer_empty() {
     assert!(writes.is_empty());
 }
 
+// FM-REPLICATION-015
 #[test]
 fn test_ring_buffer_extract_is_nondestructive() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
@@ -290,6 +299,7 @@ fn test_ring_buffer_extract_is_nondestructive() {
     assert_eq!(w2.len(), 1);
 }
 
+// FM-REPLICATION-014
 #[test]
 fn ring_buffer_reset_closes_the_window_and_lets_the_floor_move_down() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
@@ -309,6 +319,7 @@ fn ring_buffer_reset_closes_the_window_and_lets_the_floor_move_down() {
     assert_eq!(rb.start_offset(), Some(50));
 }
 
+// FM-REPLICATION-014
 #[test]
 fn ring_buffer_push_into_an_unarmed_buffer_opens_the_window_at_the_entry_start() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
@@ -320,6 +331,7 @@ fn ring_buffer_push_into_an_unarmed_buffer_opens_the_window_at_the_entry_start()
     );
 }
 
+// FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_oldest_offset_tracks_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
@@ -334,6 +346,7 @@ fn test_ring_buffer_oldest_offset_tracks_eviction() {
     assert_eq!(rb.oldest_offset(), Some(20));
 }
 
+// FM-REPLICATION-015
 #[test]
 fn test_ring_buffer_extract_backlog_is_contiguous_and_bounded() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
@@ -606,6 +619,7 @@ fn frame_of(len: usize) -> crate::frame::ReplicationFrame {
     crate::frame::ReplicationFrame::new(0, Bytes::from(vec![b'x'; len]))
 }
 
+// FM-REPLICATION-019
 /// CRITICAL: the promotion boundary is the offset of data this node HOLDS.
 ///
 /// The replica stream advances the received head at decode time and queues the
@@ -674,6 +688,7 @@ async fn promotion_freezes_the_window_at_the_applied_offset_not_the_received_hea
     ));
 }
 
+// FM-REPLICATION-019
 /// MAJOR: the backlog and its floor are scoped to a single primary stint.
 ///
 /// A demoted node's buffered commands describe a history it no longer heads, and
@@ -734,6 +749,7 @@ async fn a_re_promotion_at_a_lower_offset_re_arms_the_floor_from_scratch() {
     assert_eq!(handler.replay.oldest_offset(), None);
 }
 
+// FM-REPLICATION-020
 /// MEDIUM: a promotion that cannot be written to disk must not happen.
 ///
 /// Persisting is what makes the mint survive a restart; a node that reported a
@@ -771,6 +787,7 @@ async fn a_promotion_that_cannot_persist_leaves_the_identity_untouched() {
     );
 }
 
+// FM-REPLICATION-022
 /// A demotion drops the replicas that were following the ended stint — Redis's
 /// `replicationSetMaster` → `disconnectSlaves`.
 #[tokio::test]

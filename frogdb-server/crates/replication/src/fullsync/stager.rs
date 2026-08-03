@@ -192,6 +192,7 @@ mod tests {
         incoming
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn stager_commit_stages_and_stamps_metadata() {
         let dir = tempdir().unwrap();
@@ -229,6 +230,7 @@ mod tests {
         assert_eq!(parsed.checksum, Some(hex::encode(checksum)));
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn stager_commit_checksum_mismatch_cleans_up() {
         let dir = tempdir().unwrap();
@@ -250,6 +252,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn stager_commit_removes_stale_staged() {
         let dir = tempdir().unwrap();
@@ -276,6 +279,7 @@ mod tests {
         assert_eq!(current, b"MANIFEST-000005\n", "new checkpoint content wins");
     }
 
+    // FM-REPLICATION-036
     #[tokio::test]
     async fn stager_commit_metadata_write_failure_is_non_fatal() {
         // Pre-create the metadata path *as a directory* inside the incoming dir

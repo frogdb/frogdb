@@ -1058,6 +1058,7 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-024
     /// Criterion 1: with split-brain logging DISABLED, a demotion event still
     /// demotes the node (the bug this issue fixes — a disabled log line used to
     /// silently disable automatic failover demotion).
@@ -1097,6 +1098,7 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-024
     /// Criterion 2: with logging ENABLED (a real logger present) the demotion
     /// behavior is identical to the disabled case. Same event, same topology,
     /// only the logger presence differs — the resulting demotion must match.
@@ -1133,6 +1135,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-024
     /// Regression guard for the split-brain log format contract: the header must
     /// map the divergence record's fields exactly (`start → seq_diverge_start`,
     /// `end → seq_diverge_end`, `writes.len() → ops_discarded`) and derive the
@@ -1167,6 +1170,7 @@ mod tests {
         assert_eq!(header.epoch_new, 8);
     }
 
+    // FM-REPLICATION-024
     /// An unknown new primary formats as "unknown".
     #[test]
     fn split_brain_header_unknown_new_primary() {
@@ -1484,6 +1488,7 @@ mod tests {
         std::fs::read_to_string(matches.pop().unwrap()).unwrap()
     }
 
+    // FM-REPLICATION-024
     /// Full split-brain lifecycle through the production `DemotionConsumer`:
     ///
     /// A primary accepts writes the cluster acknowledged (up to `acked`), then —

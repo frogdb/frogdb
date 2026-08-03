@@ -261,6 +261,7 @@ mod tests {
         Bytes::from(vec![b'x'; n])
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn frame_advance_counts_payload_not_header() {
         let payload = Bytes::from_static(b"*1\r\n$4\r\nPING\r\n");
@@ -277,6 +278,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn advance_is_cumulative_and_visible_via_current() {
         let coord = coordinator();
@@ -287,6 +289,7 @@ mod tests {
         assert_eq!(coord.current(), 15);
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn advance_and_frame_advance_agree_on_the_single_unit() {
         // The one gate: `advance(&payload)` and `frame_advance(&frame_of(payload))`
@@ -300,6 +303,7 @@ mod tests {
         assert_eq!(advanced, resp.len() as u64);
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn broadcast_and_ingest_count_the_same_unit() {
         // The primary advances by the RESP payload it serialized; the replica
@@ -406,6 +410,7 @@ mod tests {
         assert!(!coord.can_serve_partial_sync("unknown_id", 500));
     }
 
+    // FM-REPLICATION-019
     #[test]
     fn can_serve_partial_sync_honours_secondary_failover_window() {
         let tracker = ReplicationTrackerImpl::new_arc();

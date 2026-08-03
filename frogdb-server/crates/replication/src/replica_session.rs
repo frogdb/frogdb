@@ -1400,6 +1400,7 @@ mod tests {
         let _ = task.await.unwrap();
     }
 
+    // FM-REPLICATION-015
     /// F2: a partial resync replays the backlog tail `(replay_from, current]`
     /// before joining the live tail — it never silently drops the gap. Then a
     /// fresh write streams once (no duplicate of the replayed frames).
@@ -2093,6 +2094,7 @@ mod tests {
         assert_eq!(session.phase(), Phase::Streaming);
     }
 
+    // FM-REPLICATION-039
     #[test]
     fn record_ack_is_monotonic_and_refreshes_liveness() {
         let session = ReplicaSession::new(1, addr());
@@ -2117,6 +2119,7 @@ mod tests {
         assert_eq!(session.acked_offset(), 100);
     }
 
+    // FM-REPLICATION-013
     /// The FULLRESYNC reply line and the streamed checkpoint metadata must both
     /// carry the primary's *live* offset (the tracker's write position), not the
     /// stale `state.replication_offset` (left at 0 here). This is the offset/data
@@ -2233,6 +2236,7 @@ mod tests {
         String::from_utf8(line).unwrap()
     }
 
+    // FM-REPLICATION-015
     /// The inverse of the old pinning test: with the backlog enabled and the
     /// requested offset still covered, a matching window now yields `+CONTINUE`
     /// — the gate is gone, partial resync is granted end to end.
@@ -2275,6 +2279,7 @@ mod tests {
         let _ = task.await.unwrap();
     }
 
+    // FM-REPLICATION-017
     /// Shutdown must end a streaming session even though its peer keeps the
     /// socket open: the session is served inline by the accepting connection
     /// task, so nothing else would ever release it — and it holds the storage
@@ -2317,6 +2322,7 @@ mod tests {
         task.await.unwrap().unwrap();
     }
 
+    // FM-REPLICATION-017
     /// A connection accepted a moment before the acceptors were aborted can
     /// still reach PSYNC while the drain runs. It must be refused: a session
     /// registered behind the drain would stream past the shutdown that was
@@ -2350,6 +2356,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-013
     /// With the backlog disabled there is nothing to replay, so even a matching
     /// window falls back to FULLRESYNC — and the offset is the live tracker's.
     #[tokio::test]
@@ -2392,6 +2399,7 @@ mod tests {
         let _ = task.await.unwrap();
     }
 
+    // FM-REPLICATION-014
     /// A replica whose resume point has been evicted from the backlog falls back
     /// to FULLRESYNC — the lower bound guards against a truncated replay.
     #[tokio::test]
@@ -2518,6 +2526,7 @@ mod tests {
         breach
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn lag_policy_disabled_never_fires() {
         let tracker = ReplicationTrackerImpl::new();
@@ -2529,6 +2538,7 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn lag_policy_byte_threshold_triggers() {
         let tracker = ReplicationTrackerImpl::new();
@@ -2547,6 +2557,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn lag_policy_byte_threshold_not_exceeded_does_not_fire() {
         let tracker = ReplicationTrackerImpl::new();
@@ -2559,6 +2570,7 @@ mod tests {
         assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn lag_policy_time_threshold_triggers() {
         let tracker = ReplicationTrackerImpl::new();
@@ -2577,6 +2589,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn lag_policy_cooldown_suppresses_retrigger() {
         let tracker = ReplicationTrackerImpl::new();
@@ -2599,6 +2612,7 @@ mod tests {
         assert!(drive_one_interval(&mut expired, &tracker, session.id()));
     }
 
+    // FM-REPLICATION-043
     /// Propagation truth for `replication-lag-threshold-bytes`: the policy of an
     /// *already-running* session reads the shared thresholds at evaluation time,
     /// so storing a new byte threshold changes the very next decision — no
@@ -2632,6 +2646,7 @@ mod tests {
         assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
     }
 
+    // FM-REPLICATION-043
     /// Propagation truth for `replication-lag-threshold-secs`, via the handler's
     /// own setter — the exact call `ConfigManager` will make. The handler and the
     /// session's policy share one [`LagThresholds`], so the store is visible to

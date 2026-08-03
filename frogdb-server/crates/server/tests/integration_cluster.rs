@@ -12413,6 +12413,7 @@ fn wait_reply_count(resp: &frogdb_protocol::Response) -> i64 {
     }
 }
 
+// FM-REPLICATION-039
 /// WAIT on a cluster primary counts the replicas attached to that primary's
 /// shard, blocking until they ACK the write under test.
 ///
@@ -12490,6 +12491,7 @@ async fn test_wait_in_cluster_counts_shard_replicas() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-040
 /// WAIT on a cluster *replica* node is rejected with the replica error, before
 /// argument parsing — the data-path `is_replica` flag gates it exactly as in
 /// standalone replica mode.
@@ -12529,6 +12531,7 @@ async fn test_wait_rejected_on_cluster_replica() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-040
 /// A promoted node *serves* WAIT: the failover moves the WAIT surface along
 /// with the primary role, rather than leaving a node that advertises `master`
 /// while still rejecting WAIT as a replica.
@@ -12625,6 +12628,7 @@ async fn test_wait_is_served_by_a_promoted_cluster_primary() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-037
 /// A `numreplicas` larger than the attached replica set blocks to the deadline
 /// and then returns the count it actually has (Redis parity).
 ///
@@ -12676,6 +12680,7 @@ async fn test_wait_numreplicas_exceeds_actual_blocks_to_timeout() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-039
 /// WAIT counts *this* node's replicas, never the whole cluster's.
 ///
 /// Two shards, one replica each: WAIT on shard A's primary must answer 1, not
@@ -12725,6 +12730,7 @@ async fn test_wait_does_not_count_other_shards_replicas() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-037
 /// WAIT takes no key, so it never redirects.
 ///
 /// The control is the same connection redirecting a *keyed* command in the same
@@ -12772,6 +12778,7 @@ async fn test_wait_never_redirects_in_cluster() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-039
 /// A slot-migration target does not count as a replica.
 ///
 /// Migration moves keys with `MIGRATE` (a client-level command), not PSYNC, so
@@ -12837,6 +12844,7 @@ async fn test_wait_ignores_slot_migration_target() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-040
 /// A WAIT parked on a cluster primary is released with `-UNBLOCKED` when the
 /// cluster demotes that node.
 ///
@@ -12897,6 +12905,7 @@ async fn test_wait_unblocked_on_cluster_demotion() {
     harness.shutdown_all().await;
 }
 
+// FM-REPLICATION-041
 /// A cluster primary with zero replicas still accepts writes.
 ///
 /// Guard for the risk that building the primary-side replication seams on every

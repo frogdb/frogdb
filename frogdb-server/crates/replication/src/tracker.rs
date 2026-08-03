@@ -359,6 +359,7 @@ mod tests {
         assert_eq!(tracker.replica_count(), 0);
     }
 
+    // FM-REPLICATION-039
     #[test]
     fn test_record_ack() {
         let tracker = ReplicationTrackerImpl::new();
@@ -371,6 +372,7 @@ mod tests {
         assert_eq!(tracker.count_acked(200), 1);
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn test_replica_lag() {
         let tracker = ReplicationTrackerImpl::new();
@@ -383,6 +385,7 @@ mod tests {
         assert_eq!(tracker.replica_lag(session.id()), Some(0));
     }
 
+    // FM-REPLICATION-039
     /// Seeding regression (round-7 follow-up to proposal 57): seeding the
     /// resume position advances the acked offset (so WAIT quorum counting and
     /// the lag monitor start from where the replica resumed) AND notifies WAIT
@@ -418,6 +421,7 @@ mod tests {
         assert_eq!(acks.try_recv().unwrap(), (session.id(), 200));
     }
 
+    // FM-REPLICATION-039
     #[test]
     fn test_min_acked_offset() {
         let tracker = ReplicationTrackerImpl::new();
@@ -431,6 +435,7 @@ mod tests {
         assert_eq!(tracker.min_acked_offset(), Some(100));
     }
 
+    // FM-REPLICATION-039
     #[tokio::test]
     async fn test_wait_for_acks_immediate() {
         let tracker = ReplicationTrackerImpl::new();
@@ -441,6 +446,7 @@ mod tests {
         assert_eq!(count, 1);
     }
 
+    // FM-REPLICATION-039
     #[tokio::test]
     async fn test_wait_for_acks_with_timeout() {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
@@ -462,6 +468,7 @@ mod tests {
         assert_eq!(result.unwrap(), 1);
     }
 
+    // FM-REPLICATION-039
     /// Reconnect-during-WAIT regression (round-7 follow-up to proposal 57): a
     /// replica that resumes via partial resync at/past a blocked WAIT's target
     /// must wake the waiter immediately via `seed_acked_position`, not leave it
@@ -491,6 +498,8 @@ mod tests {
         assert_eq!(result.unwrap(), 1);
     }
 
+    // FM-REPLICATION-042
+    // FM-REPLICATION-039
     #[test]
     fn test_get_streaming_replicas() {
         let tracker = ReplicationTrackerImpl::new();
@@ -504,6 +513,7 @@ mod tests {
         assert_eq!(streaming.len(), 2);
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn test_replica_lag_secs() {
         let tracker = ReplicationTrackerImpl::new();
@@ -514,6 +524,7 @@ mod tests {
         assert!(lag < 1.0);
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn test_lag_disconnect_cooldown() {
         let tracker = ReplicationTrackerImpl::new();
@@ -526,6 +537,7 @@ mod tests {
         assert!(!tracker.is_in_lag_cooldown(session.id(), Duration::ZERO));
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn test_lag_cooldown_address_based() {
         let tracker = ReplicationTrackerImpl::new();

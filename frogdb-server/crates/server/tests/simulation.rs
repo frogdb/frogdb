@@ -5973,6 +5973,7 @@ fn run_cluster_wait_partitioned_replica(seed: u64) {
     drop(dirs);
 }
 
+// FM-REPLICATION-037
 /// Cluster WAIT degrades and recovers across a data-plane partition: it counts
 /// the shard's attached replica while healthy, returns the reduced count at the
 /// deadline while the replica is unreachable (never early, never hanging), and
@@ -6171,6 +6172,7 @@ fn run_cluster_wait_across_failover(seed: u64) {
     drop(dirs);
 }
 
+// FM-REPLICATION-040
 /// A WAIT parked on a cluster primary across a graceful `CLUSTER FAILOVER`
 /// resolves to the documented `-UNBLOCKED` role-change error; the demoted node
 /// then rejects WAIT as a replica and the promoted node serves it as the shard's

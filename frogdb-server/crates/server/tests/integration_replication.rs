@@ -33,6 +33,7 @@ use std::time::Duration;
 // Tier 1: Protocol Verification (Single Server)
 // ============================================================================
 
+// FM-REPLICATION-018
 /// Test that REPLCONF listening-port returns +OK.
 #[rstest]
 #[case::in_memory(false)]
@@ -51,6 +52,7 @@ async fn test_replconf_listening_port(#[case] persistence: bool) {
     server.shutdown().await;
 }
 
+// FM-REPLICATION-018
 /// Test that REPLCONF capa eof psync2 returns +OK.
 #[rstest]
 #[case::in_memory(false)]
@@ -69,6 +71,7 @@ async fn test_replconf_capa(#[case] persistence: bool) {
     server.shutdown().await;
 }
 
+// FM-REPLICATION-018
 /// Test that REPLCONF ACK <offset> returns +OK.
 #[rstest]
 #[case::in_memory(false)]
@@ -87,6 +90,7 @@ async fn test_replconf_ack(#[case] persistence: bool) {
     server.shutdown().await;
 }
 
+// FM-REPLICATION-013
 /// Test that PSYNC ? -1 returns a response (either FULLRESYNC or OK placeholder).
 #[rstest]
 #[case::in_memory(false)]
@@ -146,6 +150,7 @@ async fn test_role_command(#[case] persistence: bool) {
     server.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// Test that WAIT with no replicas returns 0 after the timeout.
 ///
 /// Note the nonzero timeout: matching Redis, `WAIT n 0` blocks until the
@@ -510,6 +515,7 @@ async fn test_wait_blocks_until_ack(#[case] persistence: bool) {
     );
 }
 
+// FM-REPLICATION-038
 /// Regression: WAIT must solicit acks (REPLCONF GETACK *) instead of waiting
 /// out the replica's spontaneous 1-second ACK cadence.
 ///
@@ -542,6 +548,7 @@ async fn test_wait_returns_promptly_via_getack() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// `WAIT n 0` blocks until the quorum is reached (Redis: timeout 0 = no
 /// deadline) — and with GETACK solicitation it resolves promptly.
 #[tokio::test]
@@ -561,6 +568,7 @@ async fn test_wait_zero_timeout_blocks_until_ack() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// WAIT on a replica is rejected before argument parsing, as in Redis.
 #[tokio::test]
 async fn test_wait_on_replica_is_an_error() {
@@ -581,6 +589,7 @@ async fn test_wait_on_replica_is_an_error() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// CLIENT UNBLOCK releases a WAIT blocked with no deadline: TIMEOUT mode
 /// replies with the acked count, ERROR mode with -UNBLOCKED.
 #[tokio::test]
@@ -1042,6 +1051,7 @@ async fn a_value_over_the_old_frame_ceiling_replicates_without_wedging_the_link(
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-018
 /// Test REPLCONF with various subcommands.
 #[tokio::test]
 async fn test_replconf_subcommands() {
@@ -1126,6 +1136,7 @@ async fn test_replica_read_only(#[case] persistence: bool) {
 // Error Handling Tests
 // ============================================================================
 
+// FM-REPLICATION-013
 /// Test PSYNC with invalid arguments.
 #[tokio::test]
 async fn test_psync_invalid_args() {
@@ -1145,6 +1156,7 @@ async fn test_psync_invalid_args() {
     server.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// Test WAIT with invalid arguments.
 #[tokio::test]
 async fn test_wait_invalid_args() {
@@ -1201,6 +1213,7 @@ fn role_name(response: &Response) -> Option<String> {
     }
 }
 
+// FM-REPLICATION-025
 /// Runtime `REPLICAOF <host> <port>` (Role Demotion) must *actually* demote:
 /// flip the node to read-only, reject writes, and report `slave` via ROLE —
 /// then `REPLICAOF NO ONE` (Role Promotion) must restore a writable primary.
@@ -1453,6 +1466,7 @@ async fn test_full_resync_from_a_persistence_disabled_primary_transfers_the_data
     master.shutdown().await;
 }
 
+// FM-REPLICATION-036
 /// A `FULLRESYNC` checkpoint must contain every write the primary has already
 /// acknowledged — including those still sitting in a shard's WAL flush-engine.
 ///
@@ -1528,6 +1542,7 @@ fn role_master_host_port(response: &Response) -> Option<(String, i64)> {
     }
 }
 
+// FM-REPLICATION-025
 /// Round-8 P05: `ROLE` and `INFO replication` must show the *real* Primary
 /// target after a runtime `REPLICAOF host port` demotion, not the hardcoded
 /// empty host / port 0 the old `RoleCommand` stub returned. `REPLICAOF NO
@@ -1842,6 +1857,7 @@ async fn test_different_shard_counts(#[case] num_shards: usize) {
 // Tier 4: Partial Sync Tests
 // ============================================================================
 
+// FM-REPLICATION-015
 /// PSYNC presenting the primary's own replid at its current live offset must be
 /// granted a partial resync (`+CONTINUE`) — the fully-caught-up reconnect case.
 /// (Previously this test accepted "CONTINUE, FULLRESYNC, or OK" and only checked
@@ -1947,6 +1963,7 @@ async fn test_partial_sync_preserves_ordering(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-013
 /// PSYNC presenting a replid the primary does not recognize must fall back to a
 /// full resync (`+FULLRESYNC`) — never a partial resync. (Previously this test
 /// accepted "FULLRESYNC or OK"; the loose `OK` alternative would have masked a
@@ -1983,6 +2000,7 @@ async fn test_partial_sync_falls_back_to_full(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-019
 /// Replication-ID handling across a `REPLICAOF NO ONE` promotion (PSYNC2 parity).
 ///
 /// The promoted node mints a *new* `master_replid` and preserves the inherited
@@ -2099,6 +2117,7 @@ async fn test_secondary_replication_id_failover(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-022
 /// A role round-trip must not leave a stale failover window behind: once the
 /// promoted node adopts someone else's history via `+FULLRESYNC`, its claim to
 /// the old stream is gone and `master_replid2` must go back to the all-zero
@@ -2165,6 +2184,7 @@ async fn test_promotion_window_cleared_when_node_adopts_a_new_history() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-019
 /// A node promoted via manual `REPLICAOF NO ONE` becomes both *writable* and a
 /// replication *source*: it serves downstream `PSYNC`.
 ///
@@ -2381,6 +2401,7 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-022
 /// The demotion half of the same contract: a node that *stops* being a primary
 /// stops being a replication source, in the same breath.
 ///
@@ -2761,6 +2782,7 @@ async fn test_replica_reconnect_outside_buffer(#[case] persistence: bool) {
 // Tier 6: Edge Cases and Failure Scenarios
 // ============================================================================
 
+// FM-REPLICATION-039
 /// Test WAIT timeout behavior when replica disconnects.
 /// Documents behavior of WAIT when replica dies during the wait period.
 #[rstest]
@@ -3587,6 +3609,7 @@ async fn test_fullresync_interrupted_resume(#[case] persistence: bool) {
 // Tier 5: WAIT Edge Cases
 // ============================================================================
 
+// FM-REPLICATION-039
 /// Tests WAIT with multiple replicas. Start primary + 2 replicas,
 /// WAIT 2 should return 2. Kill one replica, write, WAIT 2 should return ≤1.
 #[tokio::test]
@@ -3634,6 +3657,7 @@ async fn test_wait_multiple_replicas() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// Tests that WAIT 1 0 on a primary blocks (Redis: timeout 0 = no deadline)
 /// until externally released.
 #[tokio::test]
@@ -3674,6 +3698,8 @@ async fn test_wait_zero_timeout_blocks_without_quorum() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-040
+// FM-REPLICATION-022
 /// A WAIT parked across a demotion is released with `-UNBLOCKED`, not with a
 /// count.
 ///
@@ -3725,6 +3751,7 @@ async fn test_wait_unblocked_on_demotion() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-037
 /// Tests that WAIT 0 0 returns 0 immediately (degenerate case).
 #[tokio::test]
 async fn test_wait_zero_numreplicas() {
@@ -3750,6 +3777,7 @@ async fn test_wait_zero_numreplicas() {
 // Tier 6: INFO Replication Format Verification
 // ============================================================================
 
+// FM-REPLICATION-043
 /// Parses INFO replication on primary and verifies the expected format:
 /// master_replid is 40-char hex, master_repl_offset >= 0.
 #[tokio::test]
@@ -3861,6 +3889,7 @@ async fn test_info_replication_replica_format() {
     }
 }
 
+// FM-REPLICATION-027
 /// `master_link_status` must track the real replication link, not a
 /// hardcoded literal: `up` once the replica is connected and streaming from
 /// its primary, and never `up` while no connection has ever been
@@ -3895,6 +3924,7 @@ async fn test_info_replication_master_link_status_tracks_connection() {
     );
 }
 
+// FM-REPLICATION-027
 /// Complementary case: a replica booted against a primary address nobody is
 /// listening on reports `role:slave` (the boot config still flags it as a
 /// replica) but must never claim `master_link_status:up` — the connection
@@ -4079,6 +4109,7 @@ async fn poll_until_replica_has_positive_pttl(
     }
 }
 
+// FM-REPLICATION-030
 /// Pins the actual (not Redis's) replica-expiry contract: a real, bounded
 /// drift window where the replica serves a value the primary has already
 /// expired, and eventual independent convergence — never via a propagated
@@ -4221,6 +4252,7 @@ async fn test_replica_expires_independently_not_via_del(#[case] persistence: boo
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-030
 /// PTTL bound test (issue 32 acceptance criteria): the replica's `PTTL` for a
 /// key whose TTL was set by a verbatim-propagated relative-TTL command must
 /// be bounded relative to the primary's `PTTL` by a documented lag bound —
@@ -4421,6 +4453,7 @@ async fn test_replica_repl_offset_catches_up_to_primary(#[case] persistence: boo
 // Tier 11: Replica Promotion Data Completeness
 // ============================================================================
 
+// FM-REPLICATION-026
 /// Test that after REPLICAOF NO ONE, all replicated data is readable
 /// and new writes succeed on the promoted replica.
 #[rstest]
@@ -4482,6 +4515,7 @@ async fn test_promoted_replica_serves_all_writes_after_promotion(#[case] persist
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-026
 /// Test that after promotion, the old primary's writes no longer propagate.
 #[rstest]
 #[case::in_memory(false)]
@@ -5117,6 +5151,7 @@ async fn test_role_changes_after_replicaof(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-019
 /// PSYNC2 cross-failover from a two-replica topology: a replica promoted with
 /// `REPLICAOF NO ONE` rotates its replication id, keeps the inherited id as the
 /// failover window, and hands a *surviving sibling* a partial resync over that
@@ -5220,6 +5255,9 @@ async fn test_psync2_failover_partial_sync(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-043
+// FM-REPLICATION-040
+// FM-REPLICATION-019
 /// The whole failover a real operator performs: primary `P` with replicas `R1`
 /// and `R2`, `P` dies, `R1` is promoted, `R2` is repointed at `R1`.
 ///
@@ -5303,6 +5341,7 @@ async fn test_failover_chain_survivor_reattaches_to_promoted_node() {
     replica1.shutdown().await;
 }
 
+// FM-REPLICATION-021
 /// The failover window is part of the persisted replication state, so a promoted
 /// node that restarts must come back with the same identity it minted: the same
 /// `master_replid`, the same `master_replid2`, and the same `second_repl_offset`.
@@ -5485,6 +5524,7 @@ async fn test_multiple_replicas_same_primary() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-043
 /// INFO replication shows connected_slaves:N and all slaveN entries.
 #[tokio::test]
 async fn test_info_replication_shows_all_replicas() {
@@ -5531,6 +5571,7 @@ async fn test_info_replication_shows_all_replicas() {
 // Category G: Replication — Edge Cases
 // ============================================================================
 
+// FM-REPLICATION-027
 /// Kill/restart replica 3x rapidly — recovers each time.
 #[rstest]
 #[case::in_memory(false)]
@@ -5575,6 +5616,7 @@ async fn test_replica_handles_rapid_reconnect(#[case] persistence: bool) {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-039
 /// 3 replicas, kill 1, WAIT 3 → timeout returns ≤ 2.
 #[tokio::test]
 async fn test_wait_returns_correct_count_with_partial_ack() {
@@ -5621,6 +5663,7 @@ async fn test_wait_returns_correct_count_with_partial_ack() {
 // Replica READONLY Enforcement
 // ============================================================================
 
+// FM-REPLICATION-028
 /// Test that replicas reject write commands with READONLY error while allowing reads.
 #[tokio::test]
 async fn test_replica_readonly_enforcement() {
@@ -5989,6 +6032,7 @@ async fn test_full_sync_stages_live_primary_offset() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-023
 /// A replica's INFO `master_replid` must report the primary's replication id —
 /// the identity it adopts from `+FULLRESYNC` — not its own node id. Redis: a
 /// replica's `master_replid` is the id of the primary it replicates from.
@@ -6032,6 +6076,7 @@ async fn test_info_master_replid_replica_matches_primary() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-021
 /// INFO `master_replid` is the persisted `ReplicationState::replication_id`, so a
 /// primary must report the same id after a graceful restart (the id is stored in
 /// the replication state file alongside the snapshot).
@@ -6147,6 +6192,7 @@ fn encode_resp_command(parts: &[&str]) -> Vec<u8> {
     out
 }
 
+// FM-REPLICATION-015
 /// A reconnecting replica that presents a recent, still-buffered offset must be
 /// granted a partial resync (`+CONTINUE`) off the backlog — never forced into a
 /// full resync. This is the end-to-end payoff of the replication backlog: the
@@ -6201,6 +6247,7 @@ async fn test_partial_resync_after_brief_disconnect_grants_continue() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-013
 /// A reconnect presenting an offset the backlog no longer covers (an unknown
 /// replication id stands in for "evicted/unservable") must fall back to a full
 /// resync — the lower-bound guard, end to end.
@@ -6715,6 +6762,7 @@ async fn poll_set<F: Fn(&Response) -> bool>(
     }
 }
 
+// FM-REPLICATION-041
 /// Self-fence engages on replica loss: a primary that had a healthy replica
 /// rejects writes with the exact `CLUSTERDOWN ...` string once the replica
 /// drops, while reads stay allowed.
@@ -6758,6 +6806,7 @@ async fn test_self_fence_engages_on_replica_loss() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-041
 /// Self-fence recovers: once a fresh replica reconnects and restores quorum,
 /// writes are accepted again.
 #[tokio::test]
@@ -6792,6 +6841,7 @@ async fn test_self_fence_recovers_after_replica_reconnect() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-041
 /// A primary that never had a replica does not fence: the checker never arms,
 /// so writes are always allowed even with self-fence enabled.
 #[tokio::test]
@@ -6958,6 +7008,7 @@ async fn test_self_fence_does_not_gate_lua_writes() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-042
 /// `min-replicas-to-write 1` with zero replicas refuses writes from boot with
 /// the exact `NOREPLICAS ...` string (no arming), while reads stay allowed.
 #[tokio::test]
@@ -6971,6 +7022,7 @@ async fn test_min_replicas_to_write_rejects_without_replicas() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-042
 /// The `min-replicas-to-write` gate tracks replica health live: writes are
 /// allowed while a good replica streams, then rejected with NOREPLICAS once it
 /// drops below the configured count.
@@ -7046,6 +7098,7 @@ async fn test_min_replicas_to_write_multi_and_lua_paths() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-042
 /// `CONFIG SET min-replicas-to-write` takes effect on the hot write path
 /// immediately (the gate reads the value live, not at boot).
 #[tokio::test]
@@ -7730,6 +7783,7 @@ fn minimal_args(name: &str, arity: Arity) -> Vec<String> {
     }
 }
 
+// FM-REPLICATION-028
 /// Registry-driven READONLY enforcement: every WRITE-flagged command in the
 /// *production* registry, invoked against a replica, must be rejected with
 /// `-READONLY`. Walks `registry.iter()` rather than a hand-picked list, so a
@@ -7793,6 +7847,7 @@ async fn test_replica_rejects_every_write_command() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-029
 /// Monotonic-read regression (issue 46): a tight loop of replica reads must
 /// never observe a value regress to an earlier one, both while the primary
 /// is still issuing increasing writes and after `WAIT` has confirmed the

@@ -795,6 +795,7 @@ mod tests {
         (mgr, target)
     }
 
+    // FM-REPLICATION-020
     #[test]
     fn promote_mints_identity_before_clearing_the_replica_flag() {
         let (mut mgr, target) = manager_with_target(true);
@@ -811,6 +812,7 @@ mod tests {
         assert!(!mgr.is_replica(), "promotion must end with the fence open");
     }
 
+    // FM-REPLICATION-020
     #[test]
     fn promote_is_idempotent_and_does_not_remint() {
         let (mut mgr, target) = manager_with_target(true);
@@ -827,6 +829,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-020
     #[test]
     fn promoting_a_node_that_booted_primary_mints_nothing() {
         let (mut mgr, target) = manager_with_target(false);
@@ -837,6 +840,7 @@ mod tests {
         assert!(!mgr.is_replica());
     }
 
+    // FM-REPLICATION-020
     #[test]
     fn promote_stops_the_inbound_stream_before_minting() {
         // The frozen window boundary is only meaningful if the applied offset
@@ -874,6 +878,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-020
     #[test]
     fn a_promotion_that_cannot_mint_leaves_the_node_a_replica() {
         // The flag is the fence that opens writes. If the replication identity
@@ -892,6 +897,7 @@ mod tests {
         assert_eq!(target.mints.lock().unwrap().len(), 1);
     }
 
+    // FM-REPLICATION-022
     #[test]
     fn demote_ends_the_primary_stint_while_the_node_is_already_fenced() {
         // The backlog reset and the downstream disconnect happen behind the
@@ -909,6 +915,7 @@ mod tests {
         assert!(target.mints.lock().unwrap().is_empty());
     }
 
+    // FM-REPLICATION-022
     #[test]
     fn a_no_op_demotion_does_not_end_the_stint_again() {
         let (mut mgr, target) = manager_with_target(true);
@@ -924,6 +931,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-022
     #[test]
     fn re_promotion_after_a_demotion_mints_again() {
         // A full round-trip is a new stint under a new primary's history, so it
@@ -937,6 +945,7 @@ mod tests {
         assert_eq!(target.mints.lock().unwrap().len(), 2);
     }
 
+    // FM-REPLICATION-025
     #[test]
     fn demote_sets_flag_records_target_and_starts_stream() {
         let (mut mgr, streamer) = manager(false);
@@ -997,6 +1006,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-026
     #[test]
     fn demote_promote_round_trip() {
         let (mut mgr, streamer) = manager(false);
@@ -1015,6 +1025,7 @@ mod tests {
         assert_eq!(streamer.stops.load(Ordering::SeqCst), 1);
     }
 
+    // FM-REPLICATION-025
     /// Demotion must un-latch the replication self-fence's arming. The replica
     /// sessions this node tracked as a primary belong to the old role; carrying
     /// their arming across `REPLICAOF host port` would fence the node the moment
@@ -1054,6 +1065,7 @@ mod tests {
         assert!(checker.has_quorum());
     }
 
+    // FM-REPLICATION-025
     #[test]
     fn demote_is_idempotent_per_target_but_switches_primaries() {
         let (mut mgr, streamer) = manager(false);
@@ -1296,6 +1308,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-026
     /// Regression test for the bug this issue fixes: a boot-spawned
     /// `ReplicaReplicationHandler` (built by `init_replication`/
     /// `start_subsystems`, entirely outside the `RoleManager`'s own `stream`

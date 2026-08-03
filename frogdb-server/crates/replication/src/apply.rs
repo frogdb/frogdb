@@ -544,6 +544,7 @@ mod tests {
         applied.current()
     }
 
+    // FM-REPLICATION-034
     #[tokio::test]
     async fn transaction_group_applied_atomically_on_tagged_shard() {
         // A MULTI/EXEC group tagged shard 3, plus a bare command tagged shard 1.
@@ -573,6 +574,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-034
     #[tokio::test]
     async fn replconf_is_skipped_and_not_routed() {
         let frames = vec![
@@ -731,6 +733,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-034
     #[tokio::test]
     async fn an_interrupted_transaction_credits_nothing() {
         // A MULTI group whose EXEC never arrives applied nothing, so none of its

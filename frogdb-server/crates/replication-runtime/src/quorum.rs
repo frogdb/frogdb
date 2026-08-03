@@ -199,6 +199,7 @@ mod tests {
         format!("127.0.0.1:{port}").parse().unwrap()
     }
 
+    // FM-REPLICATION-041
     #[test]
     fn unarmed_allows_writes() {
         let tracker = make_tracker();
@@ -207,6 +208,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), None);
     }
 
+    // FM-REPLICATION-041
     #[test]
     fn armed_with_fresh_replica_allows_writes() {
         let tracker = make_tracker();
@@ -219,6 +221,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), None);
     }
 
+    // FM-REPLICATION-041
     #[test]
     fn armed_with_stale_replica_rejects_writes() {
         let tracker = make_tracker();
@@ -235,6 +238,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
     }
 
+    // FM-REPLICATION-041
     #[test]
     fn armed_with_no_replicas_rejects_writes() {
         let tracker = make_tracker();
@@ -252,6 +256,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
     }
 
+    // FM-REPLICATION-041
     #[test]
     fn arming_transition() {
         let tracker = make_tracker();
@@ -285,6 +290,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), None);
     }
 
+    // FM-REPLICATION-041
     /// Propagation truth for `replication-self-fence-on-replica-loss`: the
     /// toggle is read at the fence decision, so flipping it on a *live* checker
     /// changes the very next `has_quorum()` — no restart, no re-construction.
@@ -328,6 +334,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), None);
     }
 
+    // FM-REPLICATION-041
     /// Propagation truth for `replica-freshness-timeout-ms`: the window is
     /// loaded per freshness check, so shrinking it makes an already-registered
     /// replica stale (and widening it makes it fresh again) without a restart.
@@ -359,6 +366,7 @@ mod tests {
         assert_eq!(checker.write_fence_reason(), None);
     }
 
+    // FM-REPLICATION-041
     /// An empty tracker is the shape a *replica* (or standalone) node carries
     /// from boot: the checker is installed but has nothing to fence on, so it is
     /// permissive until a promotion actually attracts replicas.

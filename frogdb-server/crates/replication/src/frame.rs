@@ -588,6 +588,8 @@ mod tests {
         assert!(!decoded.flags.contains(FrameFlags::REQUIRE_ACK));
     }
 
+    // FM-REPLICATION-034
+    // FM-REPLICATION-032
     #[test]
     fn test_frame_shard_id_round_trips() {
         // A data frame tagged with an origin shard survives encode/decode and
@@ -721,6 +723,7 @@ mod tests {
         assert!(matches!(result, Err(FrameDecodeError::InvalidMagic)));
     }
 
+    // FM-REPLICATION-032
     #[test]
     fn test_frame_decode_insufficient_data() {
         let buf = Bytes::from_static(b"FRPL"); // Only magic, missing rest
@@ -728,6 +731,7 @@ mod tests {
         assert!(matches!(result, Err(FrameDecodeError::InsufficientData)));
     }
 
+    // FM-REPLICATION-032
     #[test]
     fn test_codec_decode() {
         let mut codec = ReplicationFrameCodec::new();
@@ -744,6 +748,7 @@ mod tests {
         assert_eq!(decoded.payload, payload);
     }
 
+    // FM-REPLICATION-032
     #[test]
     fn test_codec_partial_decode() {
         let mut codec = ReplicationFrameCodec::new();
@@ -781,6 +786,7 @@ mod tests {
         assert!(flags.contains(FrameFlags::END_OF_BATCH));
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn test_serialize_command_to_resp() {
         // Test simple SET command
@@ -794,6 +800,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn test_serialize_command_to_resp_no_args() {
         // Test PING command with no arguments
@@ -804,6 +811,7 @@ mod tests {
         assert_eq!(resp.as_ref(), b"*1\r\n$4\r\nPING\r\n");
     }
 
+    // FM-REPLICATION-031
     #[test]
     fn test_serialize_command_to_resp_binary_data() {
         // Test with binary data containing special characters
@@ -821,6 +829,7 @@ mod tests {
     // --- ReplconfCodec: the golden-bytes round-trip suite for the ACK/GETACK
     // control grammar. Each encoder is bound to its inverse in one place. ---
 
+    // FM-REPLICATION-033
     #[test]
     fn replconf_ack_round_trips() {
         // parse_ack(encode_ack(x)) == Some((x, encoded.len())) for the boundary
@@ -849,6 +858,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-033
     #[test]
     fn replconf_getack_round_trips() {
         // is_getack(encode_getack()) — GETACK producer/parser pin, anchored to
@@ -862,6 +872,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-033
     #[test]
     fn replconf_cross_discriminator_rejection() {
         // ACK and GETACK cannot be confused for one another.
@@ -872,6 +883,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-033
     #[test]
     fn replconf_parse_ack_streaming_invariants() {
         // Incomplete buffers → None, no panic (ported from
@@ -897,6 +909,7 @@ mod tests {
         assert_eq!(offset2, 200);
     }
 
+    // FM-REPLICATION-033
     #[test]
     fn replconf_parse_ack_rejects_wrong_command() {
         // Valid RESP array that is not a REPLCONF ACK (ported from
@@ -910,6 +923,7 @@ mod tests {
         assert_eq!(ReplconfCodec::parse_ack(b"INVALID"), None);
     }
 
+    // FM-REPLICATION-033
     #[test]
     fn replconf_is_getack_recognizes_variants_and_rejects_others() {
         // Case-insensitivity (ported from matches_case_insensitively).

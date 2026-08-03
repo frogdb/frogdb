@@ -978,6 +978,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-023
     #[test]
     fn replication_standalone_renders_node_id_replid() {
         let mut src = sources();
@@ -991,6 +992,7 @@ mod tests {
         assert!(out.contains("connected_slaves:0\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-023
     #[test]
     fn replication_live_replid_overrides_node_id() {
         let mut src = sources();
@@ -1011,6 +1013,7 @@ mod tests {
         assert!(out.contains("second_repl_offset:-1\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-023
     #[test]
     fn replication_primary_renders_secondary_window_after_failover() {
         // Primary arm: a promoted node exposes the previous primary's id as
@@ -1031,6 +1034,7 @@ mod tests {
         assert!(out.contains("second_repl_offset:4096\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-023
     #[test]
     fn replication_replica_renders_secondary_window_after_failover() {
         // Else arm (replica / standalone-master): the same window pair renders
@@ -1052,6 +1056,7 @@ mod tests {
         assert!(out.contains("second_repl_offset:0\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn replication_replica_renders_master_link_up_when_streaming() {
         let mut src = sources();
@@ -1066,6 +1071,7 @@ mod tests {
         assert!(out.contains("master_link_status:up\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn replication_replica_renders_master_link_down_when_not_streaming() {
         // The link starts (and stays) down until the replica connection
@@ -1080,6 +1086,7 @@ mod tests {
         assert!(out.contains("master_link_status:down\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn replication_replica_renders_its_applied_offset() {
         // A replica's master_repl_offset is the offset it has applied — the
@@ -1096,6 +1103,7 @@ mod tests {
         assert!(out.contains("master_repl_offset:172\r\n"), "{out}");
     }
 
+    // FM-REPLICATION-043
     #[test]
     fn replication_primary_renders_slave_lines() {
         let mut src = sources();

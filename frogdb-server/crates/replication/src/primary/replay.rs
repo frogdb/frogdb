@@ -442,6 +442,8 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-015
+    // FM-REPLICATION-013
     #[test]
     fn window_fit_continues_with_ordered_tail() {
         let replay = enabled_replay();
@@ -466,6 +468,7 @@ mod tests {
         assert_eq!(shards, vec![2, 3, 0]);
     }
 
+    // FM-REPLICATION-013
     #[test]
     fn offset_ahead_falls_back_to_full() {
         let replay = enabled_replay();
@@ -477,6 +480,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-013
     #[test]
     fn unknown_replid_falls_back_to_full() {
         let replay = enabled_replay();
@@ -488,6 +492,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-013
     #[test]
     fn initial_sync_sentinel_falls_back_to_full() {
         let replay = enabled_replay();
@@ -499,6 +504,8 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-019
+    // FM-REPLICATION-014
     #[test]
     fn secondary_id_within_window_continues() {
         let replay = enabled_replay();
@@ -519,6 +526,7 @@ mod tests {
         assert!(grant.frames.is_empty());
     }
 
+    // FM-REPLICATION-014
     #[test]
     fn unarmed_backlog_at_nonzero_offset_falls_back_to_full() {
         // The floor is the sole authority for the lower bound. Without it, an
@@ -534,6 +542,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-014
     #[test]
     fn request_below_armed_floor_falls_back_to_full() {
         let replay = enabled_replay();
@@ -546,6 +555,8 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-016
+    // FM-REPLICATION-014
     #[test]
     fn evicted_offset_falls_back_to_full_not_truncated() {
         // Tight entry cap so early commands are evicted; requesting an offset
@@ -568,6 +579,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-014
     #[test]
     fn boundary_req_equals_oldest_continues() {
         let replay = PartialSyncReplay::new(&BacklogConfig {
@@ -591,6 +603,8 @@ mod tests {
         assert_eq!(grant.frames.last().map(|(o, _, _)| *o), Some(head));
     }
 
+    // FM-REPLICATION-015
+    // FM-REPLICATION-014
     #[test]
     fn boundary_req_equals_current_grants_empty_tail() {
         let replay = enabled_replay();
@@ -773,6 +787,7 @@ mod tests {
         assert_eq!(fired, 1);
     }
 
+    // FM-REPLICATION-013
     #[test]
     fn disabled_backlog_always_full_resyncs() {
         let replay = PartialSyncReplay::new(&BacklogConfig {

@@ -560,6 +560,7 @@ mod tests {
         }
     }
 
+    // FM-REPLICATION-035
     /// Encode a whole envelope (prelude + interleaved headers/payloads +
     /// metadata) into a buffer, then decode it back and assert every field
     /// survives. The checkpoint-stream analogue of `frame.rs`'s round-trip test
@@ -720,6 +721,7 @@ mod tests {
         assert_ne!(renamed.finalize(), wire_checksum);
     }
 
+    // FM-REPLICATION-035
     /// Golden-bytes assertion: for a fixed input the codec must emit exactly the
     /// bytes today's hand-rolled sender emits (`$FROGDB_CHECKPOINT\r\n`, decimal
     /// count, `$<name_len>\r\n<name>\r\n$<size>\r\n`, `$<meta_len>\r\n<bytes>\r\n`).
@@ -762,6 +764,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_checkpoint_codec_zero_file_prelude() {
         let mut buf: Vec<u8> = Vec::new();
@@ -784,6 +787,7 @@ mod tests {
         assert_eq!(decoded.replication_offset, metadata.replication_offset);
     }
 
+    // FM-REPLICATION-035
     #[test]
     fn test_parse_file_count_rejects_garbage() {
         // Non-numeric.
@@ -796,6 +800,7 @@ mod tests {
         assert_eq!(CheckpointStreamCodec::parse_file_count("7\r\n").unwrap(), 7);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_prelude_rejects_bad_marker() {
         let mut cursor = std::io::Cursor::new(b"$NOT_A_CHECKPOINT\r\n1\r\n".to_vec());
@@ -812,6 +817,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_file_header_non_numeric_len() {
         let mut cursor = std::io::Cursor::new(b"$xyz\r\nname\r\n$0\r\n".to_vec());
@@ -821,6 +827,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_file_header_oversized_name_len() {
         // Larger than MAX_CHECKPOINT_NAME_LEN — rejected before allocation.
@@ -831,6 +838,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_file_header_truncated_name() {
         // Declares an 8-byte name but only supplies part of it: the length
@@ -842,6 +850,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_metadata_wrong_field_count() {
         // Payload with too few `:`-separated fields must be InvalidData.
@@ -852,6 +861,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_metadata_oversized_len() {
         let mut cursor = std::io::Cursor::new(b"$99999999\r\n".to_vec());
@@ -861,6 +871,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    // FM-REPLICATION-035
     #[tokio::test]
     async fn test_read_metadata_truncated_body() {
         // Declares a 71-byte metadata frame but supplies far fewer bytes.
@@ -872,6 +883,7 @@ mod tests {
     }
 
     proptest::proptest! {
+        // FM-REPLICATION-035
         /// For an arbitrary list of file headers, encoding then decoding the
         /// header sequence yields the same list — pinning the per-file framing
         /// against future format edits (proposal 56's property test).
