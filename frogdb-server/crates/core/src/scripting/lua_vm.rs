@@ -31,8 +31,6 @@ pub struct ExecutionState {
     pub grace_ms: u64,
     /// Whether the script has been marked for soft stop.
     pub soft_stop: bool,
-    /// Whether the script has performed any writes.
-    pub has_writes: bool,
     /// Declared keys for strict validation.
     pub declared_keys: Vec<Bytes>,
 }
@@ -64,7 +62,6 @@ impl ExecutionState {
     pub fn reset(&mut self) {
         self.start_time = None;
         self.soft_stop = false;
-        self.has_writes = false;
         self.declared_keys.clear();
     }
 }
@@ -79,6 +76,16 @@ pub struct LuaVm {
     state: Arc<Mutex<ExecutionState>>,
     /// Kill flag (thread-safe for use in hooks).
     kill_flag: Arc<AtomicBool>,
+    /// Whether the running script has performed a write ("write-dirty", Redis's
+    /// `SCRIPT_WRITE_DIRTY`). Shared with [`ScriptCommandGate`], which raises
+    /// it, and with the sandbox instruction hook, which stops enforcing the
+    /// deadline once it is set (see [`sandbox::deadline_aborts`]).
+    ///
+    /// It is an atomic and NOT a field of [`ExecutionState`] on purpose: the
+    /// instruction hook runs on the same thread that already holds the
+    /// `ExecutionState` mutex while a `redis.call` is being recorded, so
+    /// reading it through that mutex would deadlock re-entrantly.
+    write_dirty: Arc<AtomicBool>,
 }
 
 impl LuaVm {
@@ -102,6 +109,7 @@ impl LuaVm {
 
         let state = Arc::new(Mutex::new(ExecutionState::default()));
         let kill_flag = Arc::new(AtomicBool::new(false));
+        let write_dirty = Arc::new(AtomicBool::new(false));
 
         debug!(
             heap_limit_mb = config.lua_heap_limit_mb,
@@ -114,10 +122,12 @@ impl LuaVm {
             config,
             state,
             kill_flag,
+            write_dirty,
         })
     }
 
-    /// Set up hook for timeout checking (shared sandbox hook + kill flag).
+    /// Set up hook for timeout checking (shared sandbox hook + kill flag +
+    /// write-dirty flag).
     fn setup_timeout_hook(&self, start_time: Instant) {
         sandbox::install_timeout_hook(
             &self.lua,
@@ -126,6 +136,7 @@ impl LuaVm {
                 timeout_ms: self.config.effective_lua_time_limit_ms(),
                 grace_ms: self.config.lua_timeout_grace_ms,
                 kill_flag: Some(self.kill_flag.clone()),
+                write_dirty: Some(self.write_dirty.clone()),
                 context: TimeoutContext::ScriptExecution,
             },
         );
@@ -150,8 +161,9 @@ impl LuaVm {
             state.declared_keys = keys.to_vec();
         }
 
-        // Reset kill flag
+        // Reset kill and write-dirty flags
         self.kill_flag.store(false, Ordering::Relaxed);
+        self.write_dirty.store(false, Ordering::Relaxed);
 
         // Set up timeout hook
         self.setup_timeout_hook(start_time);
@@ -205,8 +217,11 @@ impl LuaVm {
         let _ = globals.raw_set("KEYS", Value::Nil);
         let _ = globals.raw_set("ARGV", Value::Nil);
 
-        // Reset state
+        // Reset state. `write_dirty` lives outside the mutex (see the field
+        // doc) so it has to be cleared alongside it — callers read it via
+        // `has_writes()` *before* cleanup.
         self.state.lock_or_panic("LuaVm::cleanup_execution").reset();
+        self.write_dirty.store(false, Ordering::Relaxed);
     }
 
     /// Execute a Lua script.
@@ -406,7 +421,7 @@ end
         // they can never diverge — the only difference is how each surfaces the
         // `Result`.
         let gate = ScriptCommandGate::new(
-            self.state.clone(),
+            self.write_dirty.clone(),
             read_only,
             enforce_cross_slot,
             cross_slot,
@@ -460,18 +475,22 @@ end
 
     /// Mark the script as having performed writes.
     pub fn mark_write(&self) {
-        self.state.lock_or_panic("LuaVm::mark_write").has_writes = true;
+        self.write_dirty.store(true, Ordering::Relaxed);
     }
 
     /// Check if the script has performed writes.
     pub fn has_writes(&self) -> bool {
-        self.state.lock_or_panic("LuaVm::has_writes").has_writes
+        self.write_dirty.load(Ordering::Relaxed)
     }
 
     /// Request the script to be killed.
+    ///
+    /// A write-dirty script is `Unkillable` (Redis's `-UNKILLABLE`), and since
+    /// the deadline no longer aborts one either (see
+    /// [`sandbox::deadline_aborts`]) the only exit for a runaway write script
+    /// is `SHUTDOWN NOSAVE` — exactly Redis's contract.
     pub fn request_kill(&self) -> Result<(), ScriptError> {
-        let state = self.state.try_lock_err()?;
-        if state.has_writes {
+        if self.has_writes() {
             Err(ScriptError::Unkillable)
         } else {
             self.kill_flag.store(true, Ordering::Relaxed);

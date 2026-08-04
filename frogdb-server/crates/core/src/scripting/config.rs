@@ -8,6 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScriptingConfig {
     /// Maximum execution time in milliseconds (0 = unlimited).
+    ///
+    /// Bounds a script only until it writes: once the script is write-dirty the
+    /// deadline stops aborting it, matching Redis's `busy-reply-threshold`
+    /// (see [`frogdb_scripting::sandbox::deadline_aborts`]).
     #[serde(default = "default_lua_time_limit_ms")]
     pub lua_time_limit_ms: u64,
 
@@ -20,7 +24,8 @@ pub struct ScriptingConfig {
     #[serde(default = "default_lua_heap_limit_mb")]
     pub lua_heap_limit_mb: usize,
 
-    /// Grace period before forcible kill in milliseconds.
+    /// Extra milliseconds added to `lua_time_limit_ms` before the deadline
+    /// aborts a (still read-only) script.
     #[serde(default = "default_lua_timeout_grace_ms")]
     pub lua_timeout_grace_ms: u64,
 

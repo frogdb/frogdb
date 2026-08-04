@@ -1,6 +1,6 @@
 # A write script aborted by `lua-time-limit` has its partial effects committed *and* replicated
 
-Status: needs-info
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/09 F4 · MASTER.md §3 (consistency violations), §2 T6, §7 (decision required)
@@ -62,13 +62,24 @@ replicate identically" — but *pin* one.
 
 ## Acceptance criteria
 
-- [ ] With `lua-time-limit` set to ~50 ms, `for i=1,1e9 do redis.call('SET', KEYS[1]..i, i) end`
-      returns a `BUSY` error to the client. Fails today for the surviving-effects assertions.
-- [ ] The number of keys actually present on the primary equals the number reported by the
-      replica after `WAIT` — primary and replica agree exactly on the partial set.
-- [ ] The propagated batch is MULTI/EXEC-framed (asserted at level 3 via the `fake-wal` seam).
-- [ ] The chosen policy ("no writes survive" or "writes survive and replicate identically") is
-      asserted explicitly, not left implicit.
+Criterion 1 was **restated** when option A was chosen (see `## Resolution` below): under
+Redis/Valkey parity a write script is never aborted at all, so "the write script returns BUSY"
+is no longer the behaviour to assert. What replaces it is the split below.
+
+- [x] With `lua-time-limit` set low, a script that overruns it **without writing** returns a
+      `BUSY` error to the client (RESP error *code* `BUSY`), and a script that has **written**
+      is not aborted and runs to completion.
+      (`a_read_only_script_that_overruns_the_time_limit_is_aborted_with_busy`,
+      `a_write_dirty_script_is_never_aborted_by_the_time_limit`)
+- [x] The number of keys actually present on the primary equals the number the replica sees —
+      primary and replica agree exactly on the applied set. Asserted at level 3 against the
+      propagated frames, which is the side the criterion is about; no `WAIT`/replica needed.
+- [x] The propagated batch is MULTI/EXEC-framed. Asserted via the `RecordingBroadcaster`
+      rather than the `fake-wal` seam — it observes the replication side directly.
+- [x] The chosen policy is asserted explicitly: **option A**, "a write-dirty script is never
+      aborted by the deadline", is the subject of
+      `a_write_dirty_script_is_never_aborted_by_the_time_limit` and of three unit tests on the
+      hook decision itself.
 
 ## Test boundary
 
@@ -156,6 +167,7 @@ left is to say so in the comment at `core/src/shard/scripting.rs` (already amend
 the facts and point here) and to tick criterion 4.
 
 **Blocking on:** an answer of A or B. Everything else in this issue is done.
+**Answered 2026-08-04: A.** See `## Resolution` below.
 
 ## Work landed so far
 
@@ -173,3 +185,64 @@ No `FM-REPLICATION-*` row was added: `scripts/failure-modes.py`'s `NEXTEST_CRATE
 include `frogdb-shard-harness`, so a row naming these tests would fail `just lint-failure-modes`
 in the "test does not exist" direction. The row is worth writing once the policy is settled and
 the level-4 (two-node) half is added in `frogdb-server`, which *is* a listed crate.
+
+## Resolution: Option A implemented (2026-08-04)
+
+The user chose **option A**. `lua-time-limit` now bounds a script only until it writes; a
+write-dirty script is never aborted by the deadline, exactly as Redis/Valkey's
+`busy-reply-threshold` behaves. This makes the timeout path agree with the kill path that was
+already in the tree, and it deletes the partially-applied-script class rather than pinning a
+policy for it: a server-imposed abort is now reachable only for a read-only script, which by
+construction has nothing to leave behind.
+
+**What changed**
+
+- `frogdb-server/crates/scripting/src/sandbox.rs` — `TimeoutHook` gained a
+  `write_dirty: Option<Arc<AtomicBool>>` field, and the deadline branch of the instruction hook
+  now goes through a new pure predicate `sandbox::deadline_aborts(elapsed_ms, budget_ms,
+  write_dirty)` — `elapsed > budget && !write_dirty`. When the flag is set the hook returns
+  `Ok(VmState::Continue)` and the script keeps running. The predicate's doc comment carries the
+  policy, the Redis citation, and the **operator escape**: a runaway *write* script holds its
+  shard until `SHUTDOWN NOSAVE`, same as Redis, with a blast radius of one shard because FrogDB
+  shards are single-threaded. The kill-flag check is untouched and still runs first — the
+  write-dirty rule is enforced where the flag is *raised*, not where it is read. FUNCTION LOAD's
+  hook passes `write_dirty: None` (library top-level code cannot call `redis.call`).
+- `frogdb-server/crates/core/src/scripting/lua_vm.rs` — `has_writes` moved out of
+  `ExecutionState`'s mutex into a `LuaVm.write_dirty: Arc<AtomicBool>` shared with the gate and
+  the hook. It has to be an atomic: the mlua instruction hook runs on the very thread that holds
+  that mutex while `mark_write` records a write, so reading it through the mutex would deadlock
+  re-entrantly. `mark_write`/`has_writes`/`request_kill` now use the atomic; `request_kill` no
+  longer needs the state lock at all (it can no longer fail on lock contention).
+  `prepare_execution` and `cleanup_execution` clear the flag alongside `ExecutionState::reset`.
+- `frogdb-server/crates/core/src/scripting/gate.rs` — `ScriptCommandGate` carries the
+  `write_dirty` atomic and raises it in `mark_write`. Its `state: Arc<Mutex<ExecutionState>>`
+  field became dead as a direct consequence and was removed rather than left to warn.
+- `frogdb-server/crates/core/src/shard/scripting.rs` — the `run_script_write_effects` comment
+  (criterion 4) now states the settled policy: only a *script-raised* error can leave writes
+  behind, which is what Redis does too; a server-imposed abort cannot, because neither the
+  deadline nor `SCRIPT KILL` terminates a write-dirty script.
+- `frogdb-server/crates/core/src/scripting/config.rs` — `lua_time_limit_ms` /
+  `lua_timeout_grace_ms` doc comments say the limit bounds a script only until it writes.
+
+**Tests**
+
+- `frogdb-server/crates/shard-harness/tests/script_timeout_effects.rs` — both level-3 tests were
+  reworked. Under option A the old `for i=1,1e9 do SET end` probe never terminates, so **both
+  probes are now bounded** (wall-clock deadline plus an iteration cap):
+  - `a_read_only_script_that_overruns_the_time_limit_is_aborted_with_busy` — read-only overrun
+    still aborts with the `BUSY` error code, applies nothing, propagates nothing.
+  - `a_write_dirty_script_is_never_aborted_by_the_time_limit` (replaces
+    `a_timed_out_write_script_replicates_exactly_what_it_applied`) — a script that SETs, spins
+    ~10× past the limit, then SETs again returns its value, lands **both** keys, and propagates
+    exactly `MULTI, SET, SET, EXEC`. RED against the pre-fix code (BUSY reply, one key).
+- `frogdb-server/crates/scripting/src/sandbox.rs` — three new unit tests on the hook seam:
+  `test_deadline_aborts_only_a_clean_script` (the pure predicate at every corner),
+  `test_hook_aborts_an_overrunning_clean_script`, `test_hook_never_aborts_a_write_dirty_script`,
+  plus `test_hook_kill_flag_beats_write_dirty` pinning that the hook's kill check is unaffected.
+- Kill-path parity needed no change and is still covered by
+  `core::scripting::lua_vm::tests::test_kill_request` (write-dirty → `Unkillable`).
+
+**Verified**: `just check frogdb-scripting`, `just check frogdb-core` (clean, no warnings),
+`just test frogdb-scripting` 70/70, `just test frogdb-core scripting` 78/78,
+`just test frogdb-shard-harness script_timeout` 2/2. The frozen redis-regression timeout tests
+are unaffected — they all use `while true do end`, which is read-only and still aborts.

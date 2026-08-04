@@ -128,26 +128,22 @@ impl ShardWorker {
         // wrote (scripts are not transactions; Redis propagates completed
         // effects of a failed script the same way).
         //
-        // This covers two distinct aborts, and only the first has Redis
-        // precedent:
-        //   * a *script-raised* error (`redis.call` failed, Lua threw) — Redis
-        //     behaves identically;
-        //   * a *server-imposed* abort, i.e. the `lua-time-limit` instruction
-        //     hook raising `ScriptError::Timeout` — Redis has no equivalent,
-        //     because its busy threshold never terminates a script (it only
-        //     starts answering `BUSY` to *other* clients, and a script that has
-        //     written is `UNKILLABLE`). FrogDB's own `LuaVm::request_kill`
-        //     honours that same rule; the timeout path does not consult
-        //     `has_writes` at all.
-        // Whichever way the abort arrives, the applied set and the propagated
-        // batch are the same `script_writes` vec, and `run_script_write_effects`
-        // frames >1 write as one MULTI/EXEC transaction, so primary and replica
-        // never disagree about the partial prefix. What is NOT settled is
-        // whether that partial prefix should exist at all after a
-        // server-imposed abort — see
-        // `.scratch/testing-improvements-round2/issues/open/60-*.md`
-        // ("Open question"), which must be answered before this comment can
-        // claim the behaviour is intended rather than merely current.
+        // The only abort that can leave writes behind is a *script-raised*
+        // error (`redis.call` failed, Lua threw), and Redis behaves
+        // identically. A *server-imposed* abort cannot: since issue 60
+        // (option A) neither `lua-time-limit` nor `SCRIPT KILL` terminates a
+        // script that has already written — the instruction hook stops
+        // enforcing the deadline once the write-dirty flag is set
+        // (`frogdb_scripting::sandbox::deadline_aborts`) and
+        // `LuaVm::request_kill` returns `Unkillable`. A timeout abort is
+        // therefore only ever reachable for a read-only script, which by
+        // construction has no writes to drain, so "partial writes survive a
+        // server-imposed abort" is a dead class rather than a policy.
+        // Independently of the abort's origin: the applied set and the
+        // propagated batch are the same `script_writes` vec, and
+        // `run_script_write_effects` frames >1 write as one MULTI/EXEC
+        // transaction, so primary and replica never disagree about what
+        // landed.
         self.run_script_write_effects(script_writes, conn_id).await;
 
         let elapsed = start.elapsed().as_secs_f64();

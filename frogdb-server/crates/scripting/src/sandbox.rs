@@ -160,6 +160,9 @@ pub fn build_frogdb_lua_vm(options: &SandboxOptions) -> Result<Lua, SandboxError
                 timeout_ms: LOAD_TIMEOUT_MS,
                 grace_ms: 0,
                 kill_flag: None,
+                // Library top-level code has no `redis.call`, so it can never
+                // be write-dirty: the load budget always aborts.
+                write_dirty: None,
                 context: TimeoutContext::LibraryLoad,
             },
         );
@@ -186,8 +189,34 @@ pub struct TimeoutHook {
     pub grace_ms: u64,
     /// Optional kill flag checked on every hook invocation (SCRIPT KILL).
     pub kill_flag: Option<Arc<AtomicBool>>,
+    /// Optional write-dirty flag: once the guarded script has performed a
+    /// write, the deadline stops being an abort trigger (see
+    /// [`deadline_aborts`]). `None` means "this script can never write" —
+    /// FUNCTION LOAD's library top-level code — so the deadline always aborts.
+    pub write_dirty: Option<Arc<AtomicBool>>,
     /// Selects the BUSY error message.
     pub context: TimeoutContext,
+}
+
+/// THE timeout-hook decision: does an overrun of the time budget abort the
+/// script?
+///
+/// Policy (Redis/Valkey parity, FrogDB issue 60 option A): `lua-time-limit` /
+/// `busy-reply-threshold` never terminates a script that has already written.
+/// Redis's threshold only starts answering `-BUSY` to *other* clients; once the
+/// script is `SCRIPT_WRITE_DIRTY`, `SCRIPT KILL` returns `-UNKILLABLE` too, and
+/// the only operator exit is `SHUTDOWN NOSAVE`. FrogDB's kill path already
+/// implements that rule (`LuaVm::request_kill` → `ScriptError::Unkillable`);
+/// this makes the timeout path agree, which deletes the
+/// partially-applied-script class outright.
+///
+/// The operator escape for a runaway *write* script is therefore the same as
+/// Redis's: it holds its shard until the process is restarted with
+/// `SHUTDOWN NOSAVE`. FrogDB shards are single-threaded, so the blast radius is
+/// one shard rather than the whole node. A runaway *read-only* script is still
+/// bounded by the deadline and by `SCRIPT KILL`.
+pub fn deadline_aborts(elapsed_ms: u64, budget_ms: u64, write_dirty: bool) -> bool {
+    elapsed_ms > budget_ms && !write_dirty
 }
 
 /// Install the sandbox instruction hook: every [`HOOK_INSTRUCTION_INTERVAL`]
@@ -203,17 +232,30 @@ pub fn install_timeout_hook(lua: &Lua, start: Instant, hook: TimeoutHook) {
         timeout_ms,
         grace_ms,
         kill_flag,
+        write_dirty,
         context,
     } = hook;
     let triggers = HookTriggers::new().every_nth_instruction(HOOK_INSTRUCTION_INTERVAL);
     let _ = lua.set_hook(triggers, move |_lua, _debug| {
+        // The kill flag is checked first and unconditionally: the write-dirty
+        // rule is enforced where the flag is *raised* (`LuaVm::request_kill`
+        // refuses with `Unkillable`), so anything that reaches here is a kill
+        // the policy already allowed.
         if let Some(flag) = &kill_flag
             && flag.load(Ordering::Relaxed)
         {
             return Err(mlua::Error::RuntimeError("Script killed".to_string()));
         }
         let elapsed = start.elapsed().as_millis() as u64;
-        if elapsed > timeout_ms + grace_ms {
+        // Reading the flag on an `Arc<AtomicBool>` rather than through the
+        // execution-state mutex is required, not a micro-optimization: this
+        // hook runs on the very thread that holds that mutex while
+        // `ScriptCommandGate::mark_write` records the write, so locking here
+        // would deadlock re-entrantly.
+        let write_dirty = write_dirty
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed));
+        if deadline_aborts(elapsed, timeout_ms + grace_ms, write_dirty) {
             let msg = match context {
                 TimeoutContext::LibraryLoad => {
                     "BUSY timeout during FUNCTION LOAD (library loading took too long)".to_string()
@@ -1079,6 +1121,89 @@ mod tests {
         assert_eq!(v, 42);
         let err = exec_err(&lua, "mytable.answer = 1");
         assert!(err.contains("Attempt to modify a readonly table"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Timeout-hook policy (issue 60, option A): the deadline bounds a
+    // read-only script and is inert once the script has written.
+    // -----------------------------------------------------------------------
+
+    /// The pure decision, at every corner: under budget never aborts; over
+    /// budget aborts only while the script is not write-dirty.
+    #[test]
+    fn test_deadline_aborts_only_a_clean_script() {
+        assert!(deadline_aborts(101, 100, false), "over budget, no writes");
+        assert!(!deadline_aborts(101, 100, true), "over budget, write-dirty");
+        assert!(!deadline_aborts(100, 100, false), "exactly at budget");
+        assert!(!deadline_aborts(1, 100, false), "well under budget");
+        assert!(!deadline_aborts(1, 100, true), "under budget, write-dirty");
+    }
+
+    /// A bounded busy loop that overruns the budget: the installed hook aborts
+    /// it with BUSY while the write-dirty flag is clear.
+    #[test]
+    fn test_hook_aborts_an_overrunning_clean_script() {
+        let lua = build(SandboxMode::Execute);
+        let write_dirty = Arc::new(AtomicBool::new(false));
+        install_timeout_hook(
+            &lua,
+            Instant::now(),
+            TimeoutHook {
+                timeout_ms: 20,
+                grace_ms: 0,
+                kill_flag: None,
+                write_dirty: Some(write_dirty),
+                context: TimeoutContext::ScriptExecution,
+            },
+        );
+        let err = exec_err(&lua, "local n = 0 for i = 1, 1e9 do n = n + i end return n");
+        assert!(err.contains("BUSY"), "expected a BUSY abort, got: {err}");
+    }
+
+    /// The same loop with the write-dirty flag set runs to completion: the
+    /// deadline never terminates a script that has written.
+    #[test]
+    fn test_hook_never_aborts_a_write_dirty_script() {
+        let lua = build(SandboxMode::Execute);
+        let write_dirty = Arc::new(AtomicBool::new(true));
+        install_timeout_hook(
+            &lua,
+            Instant::now(),
+            TimeoutHook {
+                timeout_ms: 20,
+                grace_ms: 0,
+                kill_flag: None,
+                write_dirty: Some(write_dirty),
+                context: TimeoutContext::ScriptExecution,
+            },
+        );
+        // Bounded, but long enough that the 20 ms budget is exceeded many
+        // hook invocations before it ends.
+        let n: i64 = lua
+            .load("local n = 0 for i = 1, 2e7 do n = n + 1 end return n")
+            .eval()
+            .expect("a write-dirty script is never aborted by the deadline");
+        assert_eq!(n, 20_000_000);
+    }
+
+    /// A write-dirty script is still killable-by-flag at the hook level; the
+    /// `Unkillable` rule is enforced where the flag is raised, not here.
+    #[test]
+    fn test_hook_kill_flag_beats_write_dirty() {
+        let lua = build(SandboxMode::Execute);
+        install_timeout_hook(
+            &lua,
+            Instant::now(),
+            TimeoutHook {
+                timeout_ms: 5_000,
+                grace_ms: 0,
+                kill_flag: Some(Arc::new(AtomicBool::new(true))),
+                write_dirty: Some(Arc::new(AtomicBool::new(true))),
+                context: TimeoutContext::ScriptExecution,
+            },
+        );
+        let err = exec_err(&lua, "local n = 0 for i = 1, 1e6 do n = n + i end");
+        assert!(err.contains("killed"), "expected a kill, got: {err}");
     }
 
     /// Lua 5.1-compat unpack is available in both modes.

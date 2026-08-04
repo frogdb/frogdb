@@ -44,7 +44,7 @@
 //! break the standalone `numkeys=0` case above and has no Redis analogue.
 
 use std::cell::RefCell;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -53,7 +53,6 @@ use frogdb_protocol::{ProtocolVersion, Response};
 use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
 };
-use super::lua_vm::ExecutionState;
 use crate::command::{CommandContext, ExecutionStrategy, ScriptWriteRecord};
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
@@ -172,15 +171,15 @@ pub(crate) trait CommandInvoker {
 
 /// Single owner of the `redis.call` / `redis.pcall` policy contract.
 ///
-/// Holds the execution state used to record writes, the per-call policy
+/// Holds the write-dirty flag it raises on the first write, the per-call policy
 /// (`read_only`, `enforce_cross_slot`), and the shared [`CrossSlotTracker`].
 /// It is entirely store-agnostic: dispatch happens through a
 /// [`CommandInvoker`] handed to [`Self::dispatch`]. Cheap to clone (all
 /// `Arc`/`Copy`); the `call` and `pcall` closures each hold a clone that shares
-/// the same state and cross-slot accumulator.
+/// the same flag and cross-slot accumulator.
 #[derive(Clone)]
 pub(crate) struct ScriptCommandGate {
-    state: Arc<Mutex<ExecutionState>>,
+    write_dirty: Arc<AtomicBool>,
     read_only: bool,
     enforce_cross_slot: bool,
     cross_slot: CrossSlotTracker,
@@ -188,13 +187,13 @@ pub(crate) struct ScriptCommandGate {
 
 impl ScriptCommandGate {
     pub(crate) fn new(
-        state: Arc<Mutex<ExecutionState>>,
+        write_dirty: Arc<AtomicBool>,
         read_only: bool,
         enforce_cross_slot: bool,
         cross_slot: CrossSlotTracker,
     ) -> Self {
         Self {
-            state,
+            write_dirty,
             read_only,
             enforce_cross_slot,
             cross_slot,
@@ -202,10 +201,13 @@ impl ScriptCommandGate {
     }
 
     /// Mark the running script as having performed a write.
+    ///
+    /// An atomic rather than a field of [`super::lua_vm::ExecutionState`]: the sandbox
+    /// instruction hook reads this flag from the same thread that runs
+    /// `classify`, so routing it through the state mutex would deadlock (see
+    /// `LuaVm::write_dirty`).
     fn mark_write(&self) {
-        self.state
-            .lock_or_panic("ScriptCommandGate::mark_write")
-            .has_writes = true;
+        self.write_dirty.store(true, Ordering::Relaxed);
     }
 
     /// THE single decision: one key extraction; all validation; one routing
@@ -522,7 +524,7 @@ mod tests {
         seed: Option<u16>,
     ) -> ScriptCommandGate {
         ScriptCommandGate::new(
-            Arc::new(Mutex::new(ExecutionState::default())),
+            Arc::new(AtomicBool::new(false)),
             read_only,
             enforce_cross_slot,
             CrossSlotTracker::new(seed),
@@ -587,14 +589,14 @@ mod tests {
         let gate = detached_gate(false, false, None);
         gate.classify(&[part("SET"), part("k"), part("v")], 1, 0)
             .unwrap();
-        assert!(gate.state.lock_or_panic("test").has_writes);
+        assert!(gate.write_dirty.load(Ordering::Relaxed));
     }
 
     #[test]
     fn classify_does_not_mark_read() {
         let gate = detached_gate(false, false, None);
         gate.classify(&[part("GET"), part("k")], 1, 0).unwrap();
-        assert!(!gate.state.lock_or_panic("test").has_writes);
+        assert!(!gate.write_dirty.load(Ordering::Relaxed));
     }
 
     #[test]
