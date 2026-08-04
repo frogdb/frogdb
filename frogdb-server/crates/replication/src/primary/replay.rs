@@ -106,6 +106,22 @@ impl BacklogTtl {
             }
         }
     }
+
+    /// Test seam: pretend the idle clock started `by` earlier.
+    ///
+    /// [`PrimaryReplicationHandler::expire_idle_backlog`] reads `Instant::now()`
+    /// itself (it is the production entry point the maintenance task ticks), so
+    /// this is the only way to exercise its *elapsed* outcome without sleeping
+    /// for a whole TTL second.
+    ///
+    /// [`PrimaryReplicationHandler::expire_idle_backlog`]: super::PrimaryReplicationHandler::expire_idle_backlog
+    #[cfg(test)]
+    pub(crate) fn backdate_idle_clock_for_test(&self, by: Duration) {
+        let mut idle = self.idle_since.lock();
+        if let Some(start) = *idle {
+            *idle = Some(start.checked_sub(by).unwrap_or(start));
+        }
+    }
 }
 
 /// Owns the replication backlog and the partial-sync grant decision.
@@ -569,6 +585,25 @@ mod tests {
         assert_eq!(replay.backlog_start(), Some(4096));
         assert_full(
             replay.handle_partial_sync_request(&state, &state.replication_id, 4095, 4096),
+            FullResyncReason::BacklogEvicted,
+        );
+    }
+
+    #[test]
+    fn a_caught_up_request_below_the_armed_floor_still_full_resyncs() {
+        // The floor outranks `extract_backlog`'s empty-range shortcut, which
+        // serves any `(x, x]` request without consulting the window at all.
+        // A promotion arms the floor at the boundary it froze, and a replica
+        // that had been reading the deposed primary can sit *below* that floor
+        // while being caught up against its own head — `req == current < floor`.
+        // Granting it a `+CONTINUE` (with an empty tail, so nothing on the wire
+        // would ever look wrong) resumes it over the range between its head and
+        // the floor, which this node never buffered.
+        let replay = enabled_replay();
+        let state = ReplicationState::new();
+        replay.arm_backlog_floor(4096);
+        assert_full(
+            replay.handle_partial_sync_request(&state, &state.replication_id, 2048, 2048),
             FullResyncReason::BacklogEvicted,
         );
     }

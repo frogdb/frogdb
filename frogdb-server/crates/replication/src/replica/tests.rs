@@ -235,6 +235,149 @@ async fn test_demotion_stamps_zero_then_fullresync_offset_into_shared_probe() {
     );
 }
 
+/// A handler over a primary that answers the handshake and grants a partial
+/// resync, then goes quiet: the link reaches `Streaming` and stays there, which
+/// is the only state in which `link_up()` is allowed to report `true`.
+fn handler_over_a_quiet_primary(
+    tmp: &std::path::Path,
+) -> (
+    Arc<ReplicaReplicationHandler>,
+    Arc<std::sync::Mutex<Vec<tokio::io::DuplexStream>>>,
+) {
+    let parked: Arc<std::sync::Mutex<Vec<tokio::io::DuplexStream>>> = Arc::default();
+    let keep = parked.clone();
+    let factory: ConnectFactory = Arc::new(move |_addr| {
+        let keep = keep.clone();
+        Box::pin(async move {
+            let (mut client, server) = tokio::io::duplex(64 * 1024);
+            // Three `+OK`s for the REPLCONFs, then `+CONTINUE` — no dataset, so
+            // no installer is needed to reach the streaming state.
+            tokio::io::AsyncWriteExt::write_all(&mut client, b"+OK\r\n+OK\r\n+OK\r\n+CONTINUE\r\n")
+                .await
+                .unwrap();
+            // Parked, not dropped: a closed primary half would end the stream
+            // immediately and the link would come straight back down.
+            keep.lock().unwrap().push(client);
+            Ok(Box::new(server) as crate::BoxedStream)
+        })
+    });
+    let (mut handler, _rx) = ReplicaReplicationHandler::new(
+        "127.0.0.1:6379".parse().unwrap(),
+        6380,
+        ReplicationIdentity::detached(ReplicationState::new()),
+        tmp.join("state.json"),
+        tmp.join("db"),
+    );
+    handler.set_connect_factory(factory);
+    (Arc::new(handler), parked)
+}
+
+/// `link_up()` is what INFO renders as `master_link_status`, and an operator
+/// deciding whether a replica is safe to fail over to reads exactly that. It
+/// must report the live link, so it has to be able to say `true` — a reader
+/// that is hardwired down would call a healthy, streaming replica disconnected.
+#[tokio::test]
+async fn link_up_reports_true_once_the_stream_is_running() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (handler, _parked) = handler_over_a_quiet_primary(tmp.path());
+    assert!(!handler.link_up(), "down before anything is dialled");
+
+    let running = handler.clone();
+    let task = tokio::spawn(async move { running.start().await });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !handler.link_up() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the link never came up over a primary that granted +CONTINUE"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    handler.stop();
+    let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+}
+
+/// Saving is what makes a clean restart resume from where the replica got to
+/// rather than rewinding to its boot value and forcing a full resync. A save
+/// that writes nothing looks identical at runtime and only shows up as a
+/// needless full resync after the next restart.
+#[tokio::test]
+async fn save_state_writes_the_applied_offset_to_the_state_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state_path = tmp.path().join("replication_state.json");
+    let identity = ReplicationIdentity::detached(ReplicationState::new());
+    let (handler, _rx) = ReplicaReplicationHandler::new(
+        "127.0.0.1:6379".parse().unwrap(),
+        6380,
+        identity.clone(),
+        state_path.clone(),
+        tmp.path().join("db"),
+    );
+    let expected_id = handler.state().await.replication_id;
+
+    // The applier got to 4096 since boot; nothing has been persisted yet.
+    identity.applied().advance_by(4096);
+    assert!(!state_path.exists());
+
+    handler.save_state().await.expect("the save must succeed");
+
+    let reloaded = ReplicationState::load_or_create(&state_path).unwrap();
+    assert_eq!(
+        reloaded.offset_at_save, 4096,
+        "the persisted save point must be the applied head"
+    );
+    assert_eq!(reloaded.replication_id, expected_id);
+}
+
+/// The port the handler announces with `REPLCONF listening-port` is the address
+/// the primary renders as `slaveN:port=`; a reader that answers a constant would
+/// hand every operator an address nobody can dial (FM-REPLICATION-049).
+#[tokio::test]
+async fn listening_port_reports_the_port_the_handler_was_built_with() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (handler, _rx) = ReplicaReplicationHandler::new(
+        "127.0.0.1:6379".parse().unwrap(),
+        7137,
+        ReplicationIdentity::detached(ReplicationState::new()),
+        tmp.path().join("state.json"),
+        tmp.path().join("db"),
+    );
+    assert_eq!(handler.listening_port(), 7137);
+}
+
+/// The handler does not own a private `ReplicationState`: it works on the
+/// node's, so a replica reports the history the identity holds and a mutation
+/// through the shared handle is visible to every reader (INFO, the frame
+/// consumer) without a round trip.
+#[tokio::test]
+async fn state_and_shared_state_are_the_nodes_state_not_a_fresh_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let identity = ReplicationIdentity::detached(ReplicationState::new());
+    let node_id = identity.state().read().replication_id.clone();
+    let (handler, _rx) = ReplicaReplicationHandler::new(
+        "127.0.0.1:6379".parse().unwrap(),
+        6380,
+        identity.clone(),
+        tmp.path().join("state.json"),
+        tmp.path().join("db"),
+    );
+
+    // A default-constructed state would carry a freshly minted id, and the
+    // master host/port the constructor stamped in would be missing.
+    let snapshot = handler.state().await;
+    assert_eq!(snapshot.replication_id, node_id);
+    assert_eq!(snapshot.master_port, Some(6379));
+
+    let shared = handler.shared_state();
+    assert!(
+        Arc::ptr_eq(&shared, &identity.state()),
+        "the handler must hand back the node's state handle, not a copy"
+    );
+    shared.write().replication_id = "shifted-by-a-holder".to_string();
+    assert_eq!(handler.state().await.replication_id, "shifted-by-a-holder");
+}
+
 /// `stop()` called before `start()` is ever polled must make `start()`
 /// return immediately rather than attempting one more connection.
 #[tokio::test]

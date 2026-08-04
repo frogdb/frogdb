@@ -32,6 +32,12 @@ use tokio::fs::{self, File};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufWriter};
 
 /// Chunk size for streaming RDB data.
+///
+/// A buffering knob, not a protocol constant: every read/write loop that uses it
+/// bounds each pass by `min(CHUNK_SIZE, bytes_remaining)`, so any positive value
+/// transfers the same bytes and computes the same checksums — only the number of
+/// syscalls changes. Documented equivalent mutant: no test can observe the
+/// arithmetic here.
 const CHUNK_SIZE: usize = 64 * 1024;
 
 /// Metadata frame sent at the end of a checkpoint stream.
@@ -602,6 +608,46 @@ mod tests {
         assert_eq!(on_disk, payload);
     }
 
+    /// A file bigger than one chunk is the case where the per-pass bound has to
+    /// shrink: the last pass may read only the remainder, or it eats into
+    /// whatever follows on the stream. On a real socket that "whatever" is the
+    /// next file's header (or the trailing metadata), so an over-long final read
+    /// silently corrupts the rest of the envelope.
+    #[tokio::test]
+    async fn receive_to_file_stops_at_the_declared_size_across_chunks() {
+        let dir = tempdir().unwrap();
+        // Just past one chunk, so the transfer needs a short final pass.
+        let payload: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE + 10).collect();
+        let trailer = b"$7\r\nnextfile\r\n".to_vec();
+        let mut wire = payload.clone();
+        wire.extend_from_slice(&trailer);
+        let mut cursor = std::io::Cursor::new(wire);
+
+        let checksum = receive_to_file(
+            &mut cursor,
+            dir.path(),
+            "dst.bin",
+            payload.len() as u64,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(checksum, calculate_bytes_checksum(&payload));
+        let on_disk = tokio::fs::read(dir.path().join("dst.bin")).await.unwrap();
+        assert_eq!(
+            on_disk.len(),
+            payload.len(),
+            "no byte past the declared size"
+        );
+        assert_eq!(on_disk, payload);
+        // The bytes that followed the payload are still on the stream for the
+        // next reader.
+        let consumed = cursor.position() as usize;
+        assert_eq!(consumed, payload.len());
+        assert_eq!(&cursor.into_inner()[consumed..], &trailer[..]);
+    }
+
     // ---- CheckpointStreamCodec ----
 
     fn sample_metadata() -> FullSyncMetadata {
@@ -851,6 +897,68 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         // Valid.
         assert_eq!(CheckpointStreamCodec::parse_file_count("7\r\n").unwrap(), 7);
+    }
+
+    /// The bounds exist to refuse a hostile length *before* it drives an
+    /// allocation, so where each one falls is the whole contract: one short and
+    /// a legitimate checkpoint is refused, one long and the allocation it was
+    /// meant to cap goes through. Pinned at the exact value and one past it.
+    #[test]
+    fn parse_file_count_admits_the_bound_and_refuses_one_past_it() {
+        const BOUND: usize = 1_000_000;
+        assert_eq!(
+            CheckpointStreamCodec::parse_file_count(&format!("{BOUND}\r\n")).unwrap(),
+            BOUND,
+            "the bound itself is a legal count"
+        );
+        let err =
+            CheckpointStreamCodec::parse_file_count(&format!("{}\r\n", BOUND + 1)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn read_file_header_admits_a_name_at_the_bound_and_refuses_one_past_it() {
+        // Spelled out rather than read off the constant: a test that sizes its
+        // name from the bound moves with the bound and can never say where the
+        // bound is, which is the only thing worth pinning here.
+        const BOUND: usize = 65_536;
+        let name = "a".repeat(BOUND);
+        let wire = format!("${}\r\n{}\r\n$0\r\n", name.len(), name).into_bytes();
+        let mut cursor = std::io::Cursor::new(wire);
+        let header = CheckpointStreamCodec::read_file_header(&mut cursor)
+            .await
+            .expect("a name of exactly the bound is legal");
+        assert_eq!(header.name.len(), BOUND);
+        assert_eq!(header.size, 0);
+
+        // One past it is refused on the length line alone — before the name
+        // buffer is allocated, so nothing here depends on supplying a body.
+        let mut cursor = std::io::Cursor::new(format!("${}\r\n", BOUND + 1).into_bytes());
+        let err = CheckpointStreamCodec::read_file_header(&mut cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn read_metadata_admits_a_body_far_above_a_short_bound() {
+        // A replication id long enough that a bound computed as `64 + 1024`
+        // instead of `64 * 1024` would refuse this legitimate frame.
+        let metadata = FullSyncMetadata {
+            replication_id: "z".repeat(4096),
+            ..sample_metadata()
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
+            .await
+            .unwrap();
+        assert!(buf.len() > 4096 && buf.len() <= 65_536);
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let got = CheckpointStreamCodec::read_metadata(&mut cursor)
+            .await
+            .expect("a body under the bound round-trips");
+        assert_eq!(got.replication_id, metadata.replication_id);
     }
 
     // FM-REPLICATION-035

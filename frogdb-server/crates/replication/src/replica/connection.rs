@@ -639,6 +639,130 @@ mod tests {
         );
     }
 
+    /// Drive the real `psync()` against a primary whose whole reply is scripted
+    /// up front, and hand back its verdict together with the heads it acted on.
+    ///
+    /// The duplex is big enough to swallow the `PSYNC` request without a reader,
+    /// so the exchange never blocks; the client half is dropped on return, which
+    /// is only ever observed as EOF *after* the scripted bytes.
+    async fn psync_against(
+        script: &[u8],
+        state: Arc<RwLock<ReplicationState>>,
+        seed: u64,
+    ) -> (io::Result<SyncType>, ReplicaOffset) {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        client.write_all(script).await.unwrap();
+
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(seed)),
+            AppliedOffset::detached(seed),
+        );
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state,
+            connection_state: ConnectionState::Connected,
+            data_dir: PathBuf::from("/tmp/frogdb-test"),
+            offsets: offsets.clone(),
+            link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: Duration::from_secs(1),
+            snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
+            pending_stream_bytes: BytesMut::new(),
+        };
+        let verdict = conn.psync().await;
+        (verdict, offsets)
+    }
+
+    /// The marker decides which receive path the caller drives, and the two
+    /// payloads are framed differently end to end (staged RocksDB files vs.
+    /// blobs pushed straight at the shards). Reading one as the other would
+    /// install a dataset through machinery that cannot parse it — so the marker
+    /// must route to its own kind, and the count must survive the routing.
+    #[tokio::test]
+    async fn each_full_resync_marker_routes_to_its_own_payload_kind() {
+        for (marker, expect_checkpoint) in [(CHECKPOINT_MARKER, true), (SNAPSHOT_MARKER, false)] {
+            let state = Arc::new(RwLock::new(ReplicationState::new()));
+            let script = format!("+FULLRESYNC newid 900\r\n${marker}\r\n3\r\n");
+            let (verdict, _offsets) = psync_against(script.as_bytes(), state, 0).await;
+            match verdict.expect("the marker is understood") {
+                SyncType::FullSyncCheckpoint { file_count } => {
+                    assert!(expect_checkpoint, "{marker} must not read as a checkpoint");
+                    assert_eq!(file_count, 3);
+                }
+                SyncType::FullSyncSnapshot { blob_count } => {
+                    assert!(!expect_checkpoint, "{marker} must not read as a snapshot");
+                    assert_eq!(blob_count, 3);
+                }
+                other => panic!("{marker} routed to {other:?}"),
+            }
+        }
+    }
+
+    /// A `+CONTINUE` that names an id shifts this node's history onto it (the
+    /// deposed primary's id becomes the failover window at the offset the stream
+    /// resumed from), and a bare `+CONTINUE` — what a primary that was never
+    /// promoted sends — leaves the history exactly as it was.
+    #[tokio::test]
+    async fn a_continue_carrying_an_id_shifts_the_history_and_a_bare_one_does_not() {
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let old_id = state.read().replication_id.clone();
+        let (verdict, _offsets) =
+            psync_against(b"+CONTINUE promoted-id\r\n", state.clone(), 700).await;
+        assert!(matches!(verdict.unwrap(), SyncType::PartialSync));
+        {
+            let st = state.read();
+            assert_eq!(st.replication_id, "promoted-id");
+            assert_eq!(
+                st.secondary_id.as_deref(),
+                Some(old_id.as_str()),
+                "the id it was following becomes the failover window"
+            );
+            assert_eq!(
+                st.secondary_offset, 700,
+                "frozen at the head the stream resumed from"
+            );
+        }
+
+        // Bare `+CONTINUE`: nothing to shift, and nothing may be invented.
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let unchanged = state.read().replication_id.clone();
+        let (verdict, _offsets) = psync_against(b"+CONTINUE\r\n", state.clone(), 700).await;
+        assert!(matches!(verdict.unwrap(), SyncType::PartialSync));
+        let st = state.read();
+        assert_eq!(st.replication_id, unchanged);
+        assert_eq!(st.secondary_id, None);
+        assert_eq!(st.secondary_offset, -1);
+    }
+
+    /// The ordinary reconnect: the primary echoes back the id this node is
+    /// already on. Shifting on that would file the node's *own* current history
+    /// as its failover window and clobber whatever real window it was holding —
+    /// the id is only shifted when it actually changes.
+    #[tokio::test]
+    async fn a_continue_echoing_the_current_id_leaves_the_failover_window_alone() {
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let (same_id, prior_window) = {
+            let mut st = state.write();
+            // A window this node earned earlier and must keep.
+            st.shift_replication_id("current-id".to_string(), 42);
+            (st.replication_id.clone(), st.secondary_id.clone())
+        };
+
+        let script = format!("+CONTINUE {same_id}\r\n");
+        let (verdict, _offsets) = psync_against(script.as_bytes(), state.clone(), 700).await;
+        assert!(matches!(verdict.unwrap(), SyncType::PartialSync));
+
+        let st = state.read();
+        assert_eq!(st.replication_id, same_id);
+        assert_eq!(
+            st.secondary_id, prior_window,
+            "an unchanged id must not push the current history into the window"
+        );
+        assert_eq!(st.secondary_offset, 42, "nor refreeze it at the live head");
+    }
+
     // FM-REPLICATION-049
     /// The port the primary renders as `slaveN:port=` is whatever this
     /// handshake writes, so the value handed in must reach the wire verbatim —
