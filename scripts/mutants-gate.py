@@ -30,7 +30,15 @@ def main() -> None:
     data = json.loads(args.outcomes.read_text())
     counts = Counter(o["summary"] for o in data["outcomes"] if o.get("scenario") != "Baseline")
 
-    caught = counts.get("CaughtMutant", 0)
+    # An --iterate run only re-tests mutants not already caught; the caught set
+    # from earlier passes lives in previously_caught.txt next to outcomes.json
+    # and must count toward the score or an iterated run scores absurdly low.
+    previously_caught = 0
+    prev_file = args.outcomes.parent / "previously_caught.txt"
+    if prev_file.exists():
+        previously_caught = sum(1 for line in prev_file.read_text().splitlines() if line.strip())
+
+    caught = counts.get("CaughtMutant", 0) + previously_caught
     missed = counts.get("MissedMutant", 0)
     timeout = counts.get("Timeout", 0)
     unviable = counts.get("Unviable", 0)
@@ -40,9 +48,10 @@ def main() -> None:
         sys.exit("no viable mutants in outcomes — wrong file or empty run?")
     score = caught / denom
 
-    total = sum(counts.values())
+    total = sum(counts.values()) + previously_caught
+    prev_note = f" ({previously_caught} from earlier --iterate passes)" if previously_caught else ""
     print(
-        f"mutants: {total} total, {caught} caught, {missed} missed, "
+        f"mutants: {total} total, {caught} caught{prev_note}, {missed} missed, "
         f"{unviable} unviable, {timeout} timeout"
     )
     print(f"score: {score:.1%} (gate: {args.min_score:.1%})")
