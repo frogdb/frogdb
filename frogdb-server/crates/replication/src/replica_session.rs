@@ -503,6 +503,11 @@ impl ReplicaSession {
         let old = inner.phase;
         inner.phase = phase;
         drop(inner);
+        // Equivalent-mutant note: this guard suppresses a duplicate debug line
+        // and nothing else — both readings leave identical session state, and
+        // the phase written above is the same either way — so no assertion
+        // short of capturing the tracing output can distinguish `!=` from `==`
+        // here.
         if old != phase {
             tracing::debug!(
                 replica_id = self.id,
@@ -844,11 +849,7 @@ impl ReplicaSession {
             .sync_started_at
             .map(|t| t.elapsed())
             .unwrap_or_default();
-        let rate_mbps = if elapsed.as_secs_f64() > 0.0 {
-            (total_size as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64()
-        } else {
-            0.0
-        };
+        let rate_mbps = transfer_rate_mbps(total_size, elapsed);
         tracing::info!(
             replica_id = self.id,
             files = files.len(),
@@ -1084,11 +1085,7 @@ impl ReplicaSession {
         let lag_tracker = handler.tracker.clone();
         let lag_replica_id = self.id;
         let mut lag_policy = LagPolicy::new(handler.lag_thresholds.clone(), handler.lag_cooldown);
-        let write_timeout = if handler.write_timeout_ms > 0 {
-            Some(Duration::from_millis(handler.write_timeout_ms))
-        } else {
-            None
-        };
+        let write_timeout = frame_write_timeout(handler.write_timeout_ms);
 
         let write_task = tokio::spawn(async move {
             // Single live frame source: `wal_broadcast`. Subscribe, replay,
@@ -1192,6 +1189,39 @@ enum Forward {
 /// per-replica frame channel removed there is one live frame source, so the
 /// write+timeout+error path is defined exactly once here instead of being
 /// duplicated across two `select!` arms.
+/// Full-sync transfer rate in MiB/s, as the completion log reports it.
+///
+/// A pure function of the two numbers rather than an expression inside the log
+/// call: an unmeasurably fast transfer (`elapsed == 0`) must report `0.0`
+/// instead of dividing by zero and telling an operator the link ran at
+/// `inf MiB/s`, and that boundary is only assertable if the arithmetic can be
+/// called without standing up a checkpoint stream.
+fn transfer_rate_mbps(total_bytes: u64, elapsed: Duration) -> f64 {
+    let secs = elapsed.as_secs_f64();
+    if secs > 0.0 {
+        (total_bytes as f64 / 1024.0 / 1024.0) / secs
+    } else {
+        0.0
+    }
+}
+
+/// The per-frame write deadline for a streaming session, or `None` when the
+/// operator disabled it.
+///
+/// `replication-write-timeout-ms 0` is the documented "never time out a write"
+/// setting, so the boundary is strict: `1` is a real (if brutal) deadline and
+/// `0` is no deadline at all. Extracted from the streaming loop because the
+/// difference between the two readings of `0` — no timeout, versus an already
+/// expired one that drops every replica link on its first frame — is otherwise
+/// only visible through a live session.
+fn frame_write_timeout(write_timeout_ms: u64) -> Option<Duration> {
+    if write_timeout_ms > 0 {
+        Some(Duration::from_millis(write_timeout_ms))
+    } else {
+        None
+    }
+}
+
 async fn forward_frame(
     write_half: &mut (impl AsyncWrite + Unpin),
     encoded: &[u8],
@@ -2671,6 +2701,136 @@ mod tests {
         assert_eq!(session.acked_offset(), 100);
     }
 
+    /// Seeding shares `record_ack`'s contract: it reports an *advance*, so a
+    /// re-seed of the offset the session is already at is not one. The tracker
+    /// turns that `false` into "do not notify WAIT waiters", which is what keeps
+    /// a reconnect storm from waking every parked WAIT for no progress.
+    #[test]
+    fn seed_acked_position_advances_only_strictly_forward() {
+        let session = ReplicaSession::new(1, addr());
+
+        assert!(session.seed_acked_position(100), "0 → 100 is an advance");
+        assert_eq!(session.acked_offset(), 100);
+        assert!(
+            !session.seed_acked_position(100),
+            "re-seeding the offset the session already holds is not an advance"
+        );
+        assert!(
+            !session.seed_acked_position(50),
+            "a stale seed is not an advance"
+        );
+        assert_eq!(session.acked_offset(), 100, "and never regresses the offset");
+        assert!(session.seed_acked_position(101), "one byte forward is enough");
+        assert_eq!(session.acked_offset(), 101);
+    }
+
+    /// The read accessors report what the session was built with — the surface
+    /// `INFO replication`, `ROLE` and the version gate read. The session and a
+    /// snapshot taken from it must also agree about the streaming phase: they
+    /// are the same question asked by different callers (the write path asks
+    /// the session, the renderers ask the snapshot).
+    #[test]
+    fn session_accessors_report_the_announced_identity_and_live_phase() {
+        let session = ReplicaSession::announced(
+            42,
+            addr(),
+            ReplicaAnnouncement {
+                listening_port: 7001,
+                capabilities: ReplicaCapabilities {
+                    eof: true,
+                    psync2: false,
+                },
+                version: Some("9.9.9".to_string()),
+            },
+        );
+
+        assert_eq!(session.id(), 42);
+        assert_eq!(session.address(), addr());
+        assert_eq!(session.listening_port(), 7001);
+        assert!(session.capabilities().eof, "eof was announced");
+        assert!(
+            !session.capabilities().psync2,
+            "psync2 was not, and must not be invented"
+        );
+        assert_eq!(session.replica_version().as_deref(), Some("9.9.9"));
+        assert_eq!(session.snapshot().listening_port, 7001);
+
+        assert!(
+            !session.is_streaming(),
+            "a session that has not finished its handshake is not streaming"
+        );
+        assert!(!session.snapshot().is_streaming());
+
+        session.force_phase_for_test(Phase::StreamingCheckpoint);
+        assert!(
+            !session.is_streaming(),
+            "shipping the checkpoint is not the live stream"
+        );
+        assert!(!session.snapshot().is_streaming());
+
+        session.force_phase_for_test(Phase::Streaming);
+        assert!(session.is_streaming());
+        assert!(session.snapshot().is_streaming());
+
+        session.force_phase_for_test(Phase::Disconnecting);
+        assert!(
+            !session.is_streaming(),
+            "a session in teardown must stop counting as streaming"
+        );
+        assert!(!session.snapshot().is_streaming());
+    }
+
+    /// Full-sync progress is a fraction of the enumerated total, and an
+    /// un-enumerated transfer reports 100 rather than dividing by zero.
+    #[test]
+    fn progress_percent_is_the_transferred_fraction_of_the_expected_total() {
+        let session = ReplicaSession::new(1, addr());
+        assert_eq!(
+            session.progress_percent(),
+            100.0,
+            "nothing expected yet reads as complete, not as 0/0"
+        );
+
+        session.inner.write().sync_total_bytes = 400;
+        assert_eq!(session.progress_percent(), 0.0);
+        session.sync_bytes_transferred.store(100, Ordering::Release);
+        assert_eq!(session.progress_percent(), 25.0);
+        session.sync_bytes_transferred.store(400, Ordering::Release);
+        assert_eq!(session.progress_percent(), 100.0);
+    }
+
+    /// The completion log's MiB/s figure, including the unmeasurably-fast case:
+    /// a transfer that finished inside the clock's resolution reports 0, not
+    /// `inf`.
+    #[test]
+    fn transfer_rate_is_mib_per_second_and_survives_a_zero_duration() {
+        assert_eq!(
+            transfer_rate_mbps(2 * 1024 * 1024, Duration::from_secs(2)),
+            1.0
+        );
+        assert_eq!(transfer_rate_mbps(1024 * 1024, Duration::from_secs(4)), 0.25);
+        assert_eq!(
+            transfer_rate_mbps(1024 * 1024, Duration::ZERO),
+            0.0,
+            "an immeasurably fast transfer reports 0 MiB/s, never a division by zero"
+        );
+        assert_eq!(transfer_rate_mbps(0, Duration::from_secs(1)), 0.0);
+    }
+
+    /// `replication-write-timeout-ms 0` disables the per-frame write deadline.
+    /// The boundary is the whole point: reading `0` as a zero-length timeout
+    /// would expire before the first frame and drop every replica link.
+    #[test]
+    fn a_zero_write_timeout_means_no_deadline_at_all() {
+        assert_eq!(frame_write_timeout(0), None);
+        assert_eq!(
+            frame_write_timeout(1),
+            Some(Duration::from_millis(1)),
+            "the smallest armed value is still an armed value"
+        );
+        assert_eq!(frame_write_timeout(5_000), Some(Duration::from_secs(5)));
+    }
+
     // FM-REPLICATION-013
     /// The FULLRESYNC reply line and the streamed checkpoint metadata must both
     /// carry the primary's *live* offset (the tracker's write position), not the
@@ -2742,6 +2902,8 @@ mod tests {
         let file_count: usize = count_line.trim().parse().unwrap();
 
         // 3. Drain each file body: "$<name_len>\r\n<name>\r\n$<size>\r\n<raw bytes>".
+        assert!(file_count > 0, "a cut checkpoint has files in it");
+        let mut streamed_bytes = 0u64;
         for _ in 0..file_count {
             let mut name_len_line = String::new();
             reader.read_line(&mut name_len_line).await.unwrap();
@@ -2752,6 +2914,7 @@ mod tests {
             let size: usize = size_line.trim().trim_start_matches('$').parse().unwrap();
             let mut body = vec![0u8; size];
             reader.read_exact(&mut body).await.unwrap();
+            streamed_bytes += size as u64;
         }
 
         // 4. Metadata frame: "$<mlen>\r\n<metadata bytes>\r\n".
@@ -2766,6 +2929,18 @@ mod tests {
             "streamed checkpoint metadata must carry the live tracker offset"
         );
         assert_eq!(metadata.replication_id, repl_id);
+        assert!(streamed_bytes > 0, "the checkpoint files are not empty");
+        assert_eq!(
+            metadata.rdb_size, streamed_bytes,
+            "the announced payload size must be the sum of the file sizes \
+             actually put on the wire — the replica sizes its staging area \
+             from this number"
+        );
+        assert_eq!(
+            session.inner.read().sync_total_bytes,
+            streamed_bytes,
+            "and the same total is what the session's sync progress is measured against"
+        );
 
         drop(reader);
         let _ = task.await.unwrap();
@@ -3338,6 +3513,39 @@ mod tests {
         for _ in 0..(2 * LAG_CHECK_INTERVAL) {
             assert!(policy.should_disconnect(&tracker, session.id()).is_none());
         }
+    }
+
+    /// The check cadence is exactly `LAG_CHECK_INTERVAL` forwarded frames, and
+    /// it is a *counter*, not a coincidence: an armed policy over a replica that
+    /// is already far past the threshold stays silent for the whole interval and
+    /// fires on the frame that completes it, then starts the interval again.
+    /// Evaluating on every frame would put a `replica_lag` lookup (two locks) on
+    /// the per-frame write path.
+    #[test]
+    fn lag_policy_evaluates_once_per_check_interval() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(addr());
+        tracker.set_offset(10_000); // acked = 0 → far past the threshold
+        let mut policy = LagPolicy::new(Arc::new(LagThresholds::new(1_000, 0)), Duration::ZERO);
+
+        for frame in 1..LAG_CHECK_INTERVAL {
+            assert!(
+                policy.should_disconnect(&tracker, session.id()).is_none(),
+                "frame {frame} is inside the interval, so nothing is evaluated"
+            );
+        }
+        assert!(
+            policy.should_disconnect(&tracker, session.id()).is_some(),
+            "the {LAG_CHECK_INTERVAL}th frame completes the interval and evaluates"
+        );
+
+        for frame in 1..LAG_CHECK_INTERVAL {
+            assert!(
+                policy.should_disconnect(&tracker, session.id()).is_none(),
+                "frame {frame} of the second interval evaluates nothing either"
+            );
+        }
+        assert!(policy.should_disconnect(&tracker, session.id()).is_some());
     }
 
     // FM-REPLICATION-043

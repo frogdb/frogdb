@@ -93,7 +93,7 @@ impl WaitVerdict {
 /// park forever on a node that has already rejected every later WAIT. Taking
 /// the fence first and re-reading the role afterwards closes that window: one
 /// of the two observations must see the change.
-pub struct RoleFence(tokio::sync::watch::Receiver<u64>);
+pub struct RoleFence(tokio::sync::watch::Receiver<()>);
 
 impl RoleFence {
     /// Resolve once this node's role changed since the fence was taken.
@@ -117,10 +117,13 @@ pub struct WaitCoordinator {
     /// Ack registry: quorum counting + the ACK notification channel.
     tracker: Arc<ReplicationTrackerImpl>,
     /// Role-change fence: bumped when this node stops being a primary, which
-    /// releases every parked wait. A counter rather than a flag because a node
-    /// can be demoted, promoted and demoted again while one WAIT is parked, and
-    /// a subscriber only ever needs "did it change since I started".
-    role_fence: tokio::sync::watch::Sender<u64>,
+    /// releases every parked wait. The payload is `()` because the signal *is*
+    /// the bump: `watch` versions every send, and a subscriber only ever needs
+    /// "did it change since I started" — which stays true across a node that is
+    /// demoted, promoted and demoted again while one WAIT is parked. A counter
+    /// here would be write-only state (nothing reads it, and `send_modify`
+    /// notifies whether or not the value moved).
+    role_fence: tokio::sync::watch::Sender<()>,
 }
 
 impl WaitCoordinator {
@@ -129,7 +132,7 @@ impl WaitCoordinator {
         Self {
             offsets,
             tracker,
-            role_fence: tokio::sync::watch::Sender::new(0),
+            role_fence: tokio::sync::watch::Sender::new(()),
         }
     }
 
@@ -143,7 +146,9 @@ impl WaitCoordinator {
     /// [`PrimaryReplicationHandler::end_primary_stint`], next to the downstream
     /// disconnect it belongs with.
     pub fn fence_role_change(&self) {
-        self.role_fence.send_modify(|epoch| *epoch += 1);
+        // `send_modify` notifies unconditionally — the bump, not the payload,
+        // is the signal (see [`Self::role_fence`]).
+        self.role_fence.send_modify(|()| {});
     }
 
     /// Subscribe to the role-change fence.
@@ -612,5 +617,61 @@ mod tests {
         assert_eq!(coord.target_offset(), 0);
         coord.offsets.advance(&Bytes::from(vec![b'x'; 123]));
         assert_eq!(coord.target_offset(), 123);
+    }
+
+    /// WAIT replies with the acked count in every outcome, so each verdict has
+    /// to carry its *own* number through: a timed-out WAIT that reports the
+    /// quorum it never reached (or a constant) is a wrong answer to the client,
+    /// not a cosmetic one.
+    #[test]
+    fn every_verdict_reports_the_count_it_carries() {
+        assert_eq!(WaitVerdict::Reached(7).count(), 7);
+        assert_eq!(WaitVerdict::TimedOut(3).count(), 3);
+        assert_eq!(WaitVerdict::RoleChanged(5).count(), 5);
+        assert_eq!(WaitVerdict::TimedOut(0).count(), 0);
+    }
+
+    /// The fence releases *every* wait parked before it, and a second stint
+    /// releases the waits parked after the first one — the property the
+    /// `watch`-versioned fence exists for, checked with two concurrent waits so
+    /// a fence that only ever woke a single receiver would show up.
+    #[tokio::test]
+    async fn one_fence_releases_every_wait_parked_before_it() {
+        let (coord, tracker) = coordinator();
+        let _id = streaming_replica(&tracker, 6388);
+        let coord = Arc::new(coord);
+
+        let waits: Vec<_> = (0..2)
+            .map(|_| {
+                let coord = coord.clone();
+                let fence = coord.role_fence();
+                tokio::spawn(async move {
+                    coord
+                        .wait_for_replicas(fence, 400, 1, None, &MockSolicitor::new())
+                        .await
+                })
+            })
+            .collect();
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        coord.fence_role_change();
+        for wait in waits {
+            assert_eq!(wait.await.unwrap(), WaitVerdict::RoleChanged(0));
+        }
+
+        // A second demotion, later in this node's life, must release a wait
+        // that parked after the first one just as well.
+        let fence = coord.role_fence();
+        let second = {
+            let coord = coord.clone();
+            tokio::spawn(async move {
+                coord
+                    .wait_for_replicas(fence, 400, 1, None, &MockSolicitor::new())
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        coord.fence_role_change();
+        assert_eq!(second.await.unwrap(), WaitVerdict::RoleChanged(0));
     }
 }
