@@ -82,6 +82,11 @@ pub fn read_staged_replication_metadata(
 /// Idempotent: a missing file is not an error.
 pub fn consume_staged_replication_metadata(data_dir: &Path) {
     let path = ReplicationState::staged_metadata_path(data_dir);
+    // The kind test selects a log line and nothing else — every removal outcome
+    // leaves the same state behind and this function reports none of them, so
+    // mutating the comparison is unobservable to every caller. It is kept
+    // because "the file was already gone" is the expected case and is not worth
+    // warning about, while a real failure is.
     if let Err(e) = fs::remove_file(&path)
         && e.kind() != io::ErrorKind::NotFound
     {
@@ -401,11 +406,6 @@ impl ReplicationState {
         false
     }
 
-    /// Get the default path for the replication state file.
-    pub fn default_path(data_dir: &Path) -> PathBuf {
-        data_dir.join("replication_state.json")
-    }
-
     /// Path of the staged full-sync replication metadata inside a data directory.
     pub fn staged_metadata_path(data_dir: &Path) -> PathBuf {
         data_dir.join(STAGED_METADATA_FILE)
@@ -536,6 +536,91 @@ mod tests {
         // Load should create new state
         let state = ReplicationState::load_or_create(&path).unwrap();
         assert!(state.validate());
+    }
+
+    /// Validation is what decides whether a state file is trusted or thrown
+    /// away for a freshly minted identity, so it has to reject both halves of
+    /// the identity — and accept a well-formed failover window rather than
+    /// treating any window at all as corruption.
+    #[test]
+    fn validate_rejects_a_malformed_id_in_either_half() {
+        let mut state = ReplicationState::new();
+        assert!(state.validate(), "a freshly minted state is valid");
+
+        // A well-formed failover window is not corruption.
+        state.secondary_id = Some(generate_replication_id());
+        state.secondary_offset = 100;
+        assert!(state.validate());
+
+        // A malformed secondary is: continuing from it would answer PSYNC for a
+        // history no id describes.
+        state.secondary_id = Some("not-a-replication-id".to_string());
+        assert!(!state.validate());
+
+        state.secondary_id = None;
+        assert!(state.validate());
+
+        // A malformed primary id fails on its own.
+        state.replication_id = "tooshort".to_string();
+        assert!(!state.validate());
+    }
+
+    /// A state file that cannot be *read* is not a state file that is absent: a
+    /// permission or I/O failure must reach the caller, not be papered over by
+    /// minting a fresh identity and overwriting the file that is still there.
+    /// A node that did that would silently abandon its own history.
+    #[cfg(unix)]
+    #[test]
+    fn load_or_create_propagates_a_read_failure_that_is_not_a_missing_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("replication_state.json");
+        let state = ReplicationState::new();
+        state.save(&path).unwrap();
+        let on_disk = fs::read_to_string(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_to_string(&path).is_ok() {
+            // Permission checks are bypassed (running as root); this failure
+            // cannot be provoked here.
+            return;
+        }
+
+        let err = ReplicationState::load_or_create(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            on_disk,
+            "an unreadable state file must not be replaced with a new identity"
+        );
+    }
+
+    /// The staged-metadata mirror: unreadable is not absent. Treating it as
+    /// absent would boot the node on the snapshot it just installed while
+    /// claiming offset 0 under its own id.
+    #[cfg(unix)]
+    #[test]
+    fn read_staged_replication_metadata_propagates_a_read_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let path = ReplicationState::staged_metadata_path(dir.path());
+        let json = serde_json::json!({
+            "replication_id": generate_replication_id(),
+            "replication_offset": 77u64,
+        });
+        fs::write(&path, json.to_string()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_to_string(&path).is_ok() {
+            return; // running as root; the failure cannot be provoked
+        }
+
+        let err = read_staged_replication_metadata(dir.path()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
     #[test]

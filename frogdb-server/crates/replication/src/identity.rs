@@ -156,3 +156,64 @@ impl ReplicationIdentity {
         self.state.read().clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::generate_replication_id;
+
+    fn state_at(offset_at_save: u64) -> ReplicationState {
+        let mut state = ReplicationState::new();
+        state.offset_at_save = offset_at_save;
+        state
+    }
+
+    /// The identity is built from the state the node recovered, and every
+    /// accessor reports that state: a handler that read a zero offset or a
+    /// freshly minted id here would advertise a history this node is not on.
+    #[test]
+    fn a_detached_identity_reports_the_state_it_adopted() {
+        let state = state_at(4242);
+        let id = state.replication_id.clone();
+        let identity = ReplicationIdentity::detached(state);
+
+        assert_eq!(identity.current_offset(), 4242);
+        assert_eq!(
+            identity.applied_offset(),
+            4242,
+            "at boot the node holds everything it has received"
+        );
+        assert_eq!(identity.replication_id(), id);
+
+        let snapshot = identity.snapshot();
+        assert_eq!(snapshot.replication_id, id);
+        assert_eq!(snapshot.offset_at_save, 4242);
+    }
+
+    /// The accessors are views on the shared cells, not copies taken at build
+    /// time — that sharing is the whole point of the type: a promotion that
+    /// mints a new id, and a stream that moves the heads, must be visible
+    /// through the one identity every handler holds.
+    #[test]
+    fn the_accessors_follow_the_shared_cells() {
+        let identity = ReplicationIdentity::detached(state_at(0));
+
+        let minted = generate_replication_id();
+        identity.state().write().replication_id = minted.clone();
+        assert_eq!(identity.replication_id(), minted);
+        assert_eq!(identity.snapshot().replication_id, minted);
+
+        // The received head moves first; the held head only as data lands.
+        identity.live().store(900, Ordering::Release);
+        assert_eq!(identity.current_offset(), 900);
+        assert_eq!(
+            identity.applied_offset(),
+            0,
+            "the received head is not the head this node can vouch for"
+        );
+
+        identity.applied().advance_by(700);
+        assert_eq!(identity.applied_offset(), 700);
+        assert_eq!(identity.current_offset(), 900);
+    }
+}
