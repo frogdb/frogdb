@@ -525,9 +525,10 @@ impl ReplicaOffset {
     pub async fn reconcile_for_persist(&self) -> ReplicationState {
         let offset = self.applied.current();
         let mut state = self.state.write();
-        if offset > state.offset_at_save {
-            state.offset_at_save = offset;
-        }
+        // Monotone bump as a `max`, not a compare-and-assign: the two forms of
+        // the guard (`>` / `>=`) differ only in whether they redundantly
+        // re-store the value the field already holds.
+        state.offset_at_save = state.offset_at_save.max(offset);
         state.clone()
     }
 }
@@ -955,6 +956,23 @@ mod tests {
         assert_eq!(claim_now(&stint, 4), Claim::Retired);
         // The node's own writes are not gated: a promoted primary keeps counting.
         assert_eq!(applied.advance_by(6), 10);
+    }
+
+    #[test]
+    fn a_stint_reports_the_head_it_is_claiming_into() {
+        // The consume loop reads `current()` off the stint it holds to stamp the
+        // offset a frame is being applied at; it must be the shared claimed head
+        // (which a resync can move underneath it), not a per-stint counter and
+        // not a constant.
+        let applied = AppliedOffset::detached(0);
+        let stint = applied.begin_replica_stint();
+        assert_eq!(stint.current(), 0, "a fresh stint starts where it opened");
+        assert_eq!(claim_now(&stint, 7), Claim::Granted);
+        assert_eq!(stint.current(), 7, "and tracks each byte it claims");
+        assert_eq!(stint.current(), applied.current());
+        // A second claim keeps it moving — pins the value against a constant.
+        assert_eq!(claim_now(&stint, 5), Claim::Granted);
+        assert_eq!(stint.current(), 12);
     }
 
     #[tokio::test]

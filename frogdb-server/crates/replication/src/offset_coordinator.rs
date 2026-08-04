@@ -160,6 +160,10 @@ impl OffsetCoordinator {
     pub fn settle_at_applied(&self) -> u64 {
         let applied = self.applied.freeze();
         let received = self.current();
+        // The guard is log-only: the store inside it writes the value `live`
+        // already holds when the two heads are level, so `>` and `>=` produce
+        // identical state and differ only in whether a zero-byte discard is
+        // logged. No test can separate them (documented equivalent mutant).
         if received > applied {
             tracing::warn!(
                 received,
@@ -235,9 +239,10 @@ impl OffsetCoordinator {
         // someone else's stream.
         let offset = self.applied();
         let mut state = self.state.write();
-        if offset > state.offset_at_save {
-            state.offset_at_save = offset;
-        }
+        // Monotone bump as a `max`, not a compare-and-assign: the two forms of
+        // the guard (`>` / `>=`) differ only in whether they redundantly
+        // re-store the value the field already holds.
+        state.offset_at_save = state.offset_at_save.max(offset);
         state.clone()
     }
 }
@@ -469,6 +474,43 @@ mod tests {
         );
         // The first post-promotion write continues from the settled head.
         assert_eq!(coord.advance(&payload(10)), 110);
+    }
+
+    /// The demotion mirror of [`OffsetCoordinator::settle_at_applied`]: a role
+    /// change retires the applier that was running under the stream that just
+    /// ended, so the frames it has already decoded cannot land on top of the
+    /// resync that follows. Without the retire the consumer keeps claiming, and
+    /// old-history writes are applied over a keyspace that is being replaced.
+    #[test]
+    fn retire_replica_applies_stops_the_running_consumers_claims() {
+        let tracker = ReplicationTrackerImpl::new_arc();
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let coord = OffsetCoordinator::new(tracker, &identity);
+        let applied = identity.applied();
+
+        let stint = applied.begin_replica_stint();
+        assert_eq!(
+            stint.claim(stint.epoch(), 10),
+            crate::replica::offset::Claim::Granted,
+            "the applier owns the counter while its stream is live"
+        );
+        assert_eq!(coord.applied(), 10);
+
+        coord.retire_replica_applies();
+
+        assert_eq!(
+            stint.claim(stint.epoch(), 10),
+            crate::replica::offset::Claim::Retired,
+            "a retired stint may not claim another byte"
+        );
+        assert_eq!(coord.applied(), 10, "and the counter stands where it was");
+        // Unlike a promotion's settle, retiring does not freeze: the next stream
+        // opens a fresh stint and applies again.
+        let next = applied.begin_replica_stint();
+        assert_eq!(
+            next.claim(next.epoch(), 5),
+            crate::replica::offset::Claim::Granted
+        );
     }
 
     #[test]

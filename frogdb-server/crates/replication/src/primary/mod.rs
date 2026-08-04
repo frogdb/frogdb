@@ -382,9 +382,11 @@ impl PrimaryReplicationHandler {
             let mut state = self.state.write();
             let previous = state.clone();
             state.new_replication_id(boundary);
-            if boundary > state.offset_at_save {
-                state.offset_at_save = boundary;
-            }
+            // Monotone bump, spelled as a `max` rather than a compare-and-assign:
+            // the persisted offset may never move back, and the two forms of the
+            // guard (`>` / `>=`) differ only in whether they redundantly re-store
+            // the value they already hold.
+            state.offset_at_save = state.offset_at_save.max(boundary);
             let snapshot = state.clone();
             if let Err(e) = self.save_snapshot(&snapshot) {
                 *state = previous;

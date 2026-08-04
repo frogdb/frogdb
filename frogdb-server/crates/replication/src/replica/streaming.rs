@@ -52,6 +52,10 @@ impl ReplicaConnection {
         // whatever it buffered past the trailer. Starting from an empty buffer
         // here is what silently dropped those frames (hardening issue 01).
         let mut buf = self.take_pending_stream_bytes();
+        // Capacity hint only — `BytesMut` grows on demand, so every value here
+        // decodes the same bytes into the same frames and differs only in how
+        // often the buffer reallocates. Documented equivalent mutant: no test
+        // can observe the arithmetic in this argument.
         buf.reserve(64 * 1024);
         // Cloned out of `self` so the solicited-ACK branch below does not borrow
         // the connection the socket-read branch holds mutably.

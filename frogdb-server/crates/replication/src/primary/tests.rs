@@ -1017,3 +1017,281 @@ fn freeing_the_backlog_moves_no_offset_and_no_replication_id() {
     // lost by that — the next PSYNC full-resyncs either way.
     assert!(!handler.is_active());
 }
+
+// ============================================================================
+// The handler's wiring seams: the accessors callers reach the live state
+// through, and the setters that install the hooks it runs.
+// ============================================================================
+
+/// The hooks are how this crate reaches state it does not own (the function
+/// library lives in the server crate), so a setter that dropped its argument —
+/// or a getter that answered `None` — would silently ship a full-syncing replica
+/// a keyspace with no libraries behind it.
+#[test]
+fn the_function_snapshot_hook_is_installed_and_handed_back_callable() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+
+    assert!(
+        handler.function_snapshot_hook().is_none(),
+        "nothing is shipped until the owner of the registry wires it"
+    );
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    handler.set_function_snapshot_hook(Arc::new(move |_handler| {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    let hook = handler
+        .function_snapshot_hook()
+        .expect("the installed hook must be handed back to the full-sync path");
+    hook(&handler);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the hook that ran is ours");
+
+    // Re-installing supersedes rather than stacks.
+    let second = Arc::new(AtomicUsize::new(0));
+    let counter = second.clone();
+    handler.set_function_snapshot_hook(Arc::new(move |_handler| {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    handler.function_snapshot_hook().unwrap()(&handler);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the first hook is gone");
+    assert_eq!(second.load(Ordering::SeqCst), 1);
+}
+
+/// `tracker()` vends the handler's own registry, not a fresh one: WAIT counting,
+/// INFO's `connected_slaves` and the lag monitor all read the sessions this
+/// handler registered.
+#[test]
+fn tracker_vends_the_handlers_own_session_registry() {
+    use crate::replica_session::Phase;
+    use frogdb_types::ReplicationTracker;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    let vended = handler.tracker();
+    assert!(
+        Arc::ptr_eq(&vended, &handler.tracker),
+        "the vended handle must be the registry the handler registers into"
+    );
+
+    let session = handler
+        .tracker
+        .register_replica("127.0.0.1:6380".parse().unwrap());
+    session.force_phase_for_test(Phase::Streaming);
+    assert_eq!(
+        vended.replica_count(),
+        1,
+        "a replica registered on the handler must be visible through the vended handle"
+    );
+}
+
+/// `CONFIG SET replication-lag-threshold-*` retunes the live thresholds every
+/// streaming session reads; a setter that dropped its argument would leave the
+/// operator's new value invisible while `CONFIG GET` reported it applied.
+#[test]
+fn setting_a_lag_threshold_retunes_the_live_thresholds() {
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    let live = handler.lag_thresholds();
+    assert_eq!(live.threshold_bytes(), 0, "seeded from the config");
+    assert_eq!(live.threshold_secs(), 0);
+
+    handler.set_lag_threshold_bytes(8 * 1024 * 1024);
+    handler.set_lag_threshold_secs(45);
+
+    // Read through the handle `ConfigManager` holds, which is the same object
+    // the sessions consult — not a copy taken at construction.
+    assert_eq!(live.threshold_bytes(), 8 * 1024 * 1024);
+    assert_eq!(live.threshold_secs(), 45);
+    assert_eq!(handler.lag_thresholds().threshold_bytes(), 8 * 1024 * 1024);
+}
+
+/// One tick of the backlog TTL, driven through the production entry point the
+/// maintenance task calls (which reads the clock itself). It must answer `false`
+/// while the window is still owed its TTL and `true` on the tick that frees it —
+/// the caller logs the transition off that boolean, so a stuck answer either
+/// hides the free or reports one on every tick forever.
+#[test]
+fn one_ttl_tick_reports_only_the_tick_that_freed_the_backlog() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    handler.begin_primary_stint().unwrap();
+    push_write(&handler, "k1", "v1");
+    assert!(handler.replay.has_resume_history());
+
+    handler.replay.backlog_ttl().set_secs(60);
+    assert!(
+        !handler.expire_idle_backlog(),
+        "the first idle tick only starts the clock"
+    );
+    assert!(handler.replay.has_resume_history(), "nothing freed yet");
+
+    handler
+        .replay
+        .backlog_ttl()
+        .backdate_idle_clock_for_test(Duration::from_secs(61));
+    assert!(
+        handler.expire_idle_backlog(),
+        "the tick that finds the TTL elapsed with no replica must report the free"
+    );
+    assert!(!handler.replay.has_resume_history(), "the window closed");
+
+    assert!(
+        !handler.expire_idle_backlog(),
+        "a freed backlog has nothing left to free"
+    );
+}
+
+/// `replica_count()` is what INFO's `connected_slaves` and the TTL tick read.
+#[test]
+fn replica_count_reports_every_registered_session() {
+    use crate::replica_session::Phase;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    assert_eq!(handler.replica_count(), 0);
+
+    let mut ids = Vec::new();
+    for addr in ["127.0.0.1:6380", "127.0.0.1:6381", "127.0.0.1:6382"] {
+        let session = handler.tracker.register_replica(addr.parse().unwrap());
+        session.force_phase_for_test(Phase::Streaming);
+        ids.push(session.id());
+    }
+    assert_eq!(handler.replica_count(), 3);
+
+    handler.tracker.unregister_replica(ids[0]);
+    assert_eq!(handler.replica_count(), 2);
+}
+
+/// INFO's `master_replid` reads the handler's state through `shared_state()`; a
+/// handle onto a *different* state would report an identity this node does not
+/// have — the exact confusion a promotion's mint exists to avoid.
+#[test]
+fn shared_state_is_the_handlers_live_state_not_a_copy() {
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    let shared = handler.shared_state();
+    assert!(Arc::ptr_eq(&shared, &handler.state));
+    assert_eq!(shared.read().replication_id, handler.replication_id());
+
+    // A promotion mints a new id under the handler's own lock; the shared handle
+    // must observe it.
+    handler.begin_primary_stint().unwrap();
+    assert_eq!(shared.read().replication_id, handler.replication_id());
+    assert!(
+        shared.read().secondary_id.is_some(),
+        "the failover window the mint opened is visible through the shared handle"
+    );
+}
+
+/// The cluster bus's HealthProbe answers off `shared_offset()`. A handle that was
+/// not the atomic the advance gate writes would advertise a frozen zero, and the
+/// failure detector would judge this node's progress on it.
+#[test]
+fn shared_offset_tracks_the_gate_the_primary_advances() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    let probe = handler.shared_offset();
+    assert_eq!(probe.load(Ordering::Acquire), 0);
+
+    let head = push_write(&handler, "k", "v");
+    assert!(head > 1, "the write advances past a constant answer");
+    assert_eq!(probe.load(Ordering::Acquire), head);
+    assert_eq!(probe.load(Ordering::Acquire), handler.current_offset());
+    assert!(
+        Arc::ptr_eq(&probe, &handler.shared_offset()),
+        "there is one atomic, vended twice"
+    );
+}
+
+/// The `ReplicationBroadcaster` impl is what the command path calls for every
+/// write. Its return value is the offset the write landed at — WAIT blocks on
+/// exactly that number — and `current_offset` is the head WAIT compares against.
+#[test]
+fn the_broadcaster_impl_returns_the_offset_the_write_landed_at() {
+    use crate::ReplicationBroadcaster;
+    use crate::frame::serialize_command_to_resp;
+
+    let dir = tempfile::tempdir().unwrap();
+    let handler = divergence_handler(dir.path());
+    let mut frames = handler.wal_broadcast.subscribe();
+    assert_eq!(ReplicationBroadcaster::current_offset(&handler), 0);
+
+    let args = [Bytes::from_static(b"k"), Bytes::from_static(b"v")];
+    let expected = serialize_command_to_resp("SET", &args).len() as u64;
+    let landed = handler.broadcast_command_on_shard(7, "SET", &args);
+
+    assert_eq!(
+        landed, expected,
+        "the returned offset is the stream position after this command"
+    );
+    assert_eq!(ReplicationBroadcaster::current_offset(&handler), landed);
+    assert_eq!(handler.current_offset(), landed);
+
+    // The write really went out, tagged with the shard it executed on and
+    // stamped at the offset that was returned.
+    let frame = frames.try_recv().expect("the write must be broadcast");
+    assert_eq!(frame.sequence, landed);
+    assert_eq!(frame.shard_id, 7);
+
+    // A second write advances again, so the number is a running head rather than
+    // a constant.
+    let second = handler.broadcast_command_on_shard(7, "SET", &args);
+    assert_eq!(second, landed + expected);
+    assert_eq!(ReplicationBroadcaster::current_offset(&handler), second);
+}
+
+/// A promotion persists the boundary it froze: the offset the node vouches for
+/// must survive a restart, or the reboot resumes below its own backlog floor.
+/// Monotone — a boundary below an already-persisted save point never rewinds it.
+#[tokio::test]
+async fn a_promotion_persists_its_boundary_without_ever_rewinding_it() {
+    use crate::identity::ReplicationIdentity;
+    use crate::state::ReplicationState;
+    use crate::tracker::ReplicationTrackerImpl;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let tracker = Arc::new(ReplicationTrackerImpl::new());
+    let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+    let (received, applied) = replica_heads(&identity);
+    let handler = stint_handler(dir.path(), identity);
+
+    let landed = frame_of(900);
+    received.frame_advance(&landed);
+    applied.frame_applied(&landed);
+
+    let (boundary, snapshot) = handler.begin_primary_stint().unwrap();
+    assert_eq!(boundary, 900);
+    assert_eq!(
+        snapshot.offset_at_save, 900,
+        "the promotion boundary is what a restart resumes from"
+    );
+    let reloaded =
+        ReplicationState::load_or_create(&dir.path().join("replication_state.json")).unwrap();
+    assert_eq!(reloaded.offset_at_save, 900, "and it is on disk");
+
+    // A later stint whose boundary sits *below* the persisted save point must not
+    // drag it back down: the file describes data this node still holds.
+    handler.end_primary_stint();
+    handler.state.write().offset_at_save = 5_000;
+    let (second_boundary, snapshot) = handler.begin_primary_stint().unwrap();
+    assert_eq!(second_boundary, 900, "the applied head has not moved");
+    assert_eq!(
+        snapshot.offset_at_save, 5_000,
+        "a lower boundary must never rewind the persisted offset"
+    );
+}

@@ -41,6 +41,9 @@ pub async fn receive_checkpoint_files<R: AsyncBufRead + Unpin>(
     file_count: usize,
 ) -> io::Result<(FullSyncMetadata, [u8; 32])> {
     fs::create_dir_all(incoming).await?;
+    // Log-only tally: it feeds the completion `tracing::info!` below and nothing
+    // else — no file, checksum, or return value depends on it. Documented
+    // equivalent mutant: how it accumulates is unobservable to any test.
     let mut total_bytes = 0u64;
     // The combined checksum's coverage is owned by `CheckpointChecksum`: fold
     // each file in as it lands, in the same order the codec framed it.
