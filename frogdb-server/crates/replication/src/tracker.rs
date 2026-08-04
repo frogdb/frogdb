@@ -45,6 +45,19 @@ pub fn ack_is_fresh(ack_age: Duration, window: Duration) -> bool {
     ack_age < window
 }
 
+/// Whether a proactive lag disconnect that landed `age` ago is still inside the
+/// `cooldown` window.
+///
+/// Extracted from [`ReplicationTrackerImpl::is_in_lag_cooldown`] for the same
+/// reason [`ack_is_fresh`] is extracted from the freshness gates: the boundary
+/// is strict (`age == cooldown` is *out* of cooldown, so a zero cooldown means
+/// "no suppression at all"), and a comparison written against a live
+/// `Instant::elapsed()` can never be made to land exactly on the window — which
+/// leaves `<` vs `<=` untestable inside the accessor.
+fn lag_cooldown_active(age: Duration, cooldown: Duration) -> bool {
+    age < cooldown
+}
+
 /// Registry of replica sessions and cross-replica replication state.
 pub struct ReplicationTrackerImpl {
     /// Per-replica sessions keyed by id.
@@ -107,6 +120,10 @@ impl ReplicationTrackerImpl {
         }
     }
 
+    /// Equivalent-mutant note: `Arc::new(Self::new())` and
+    /// `Arc::new(Default::default())` are the same expression here — the
+    /// [`Default`] impl above is *defined* as `Self::new()` — so no test can
+    /// distinguish them.
     pub fn new_arc() -> Arc<Self> {
         Arc::new(Self::new())
     }
@@ -423,7 +440,7 @@ impl ReplicationTrackerImpl {
         self.lag_disconnect_times
             .read()
             .get(&addr)
-            .is_some_and(|t| t.elapsed() < cooldown)
+            .is_some_and(|t| lag_cooldown_active(t.elapsed(), cooldown))
     }
 }
 
@@ -711,6 +728,93 @@ mod tests {
         s2.force_phase_for_test(Phase::Streaming);
         // Cooldown still applies — same address, fresh id.
         assert!(tracker.is_in_lag_cooldown(s2.id(), Duration::from_secs(60)));
+    }
+
+    /// The cooldown boundary is exclusive, exactly like the freshness one: a
+    /// disconnect that landed exactly `cooldown` ago no longer suppresses the
+    /// next one, which is what makes `Duration::ZERO` mean "no cooldown".
+    ///
+    /// Asserted on the pure predicate for the reason spelled out on
+    /// [`lag_cooldown_active`]: `Instant::elapsed()` cannot be made to land on
+    /// the window, so `<` vs `<=` is invisible from the accessor.
+    #[test]
+    fn lag_cooldown_excludes_a_disconnect_exactly_at_the_window() {
+        let cooldown = Duration::from_millis(500);
+        assert!(lag_cooldown_active(Duration::from_millis(499), cooldown));
+        assert!(
+            !lag_cooldown_active(cooldown, cooldown),
+            "a disconnect exactly `cooldown` old has aged out; `<=` here would \
+             suppress one extra reconnect at every boundary"
+        );
+        assert!(!lag_cooldown_active(Duration::from_millis(501), cooldown));
+        assert!(!lag_cooldown_active(Duration::ZERO, Duration::ZERO));
+        assert!(lag_cooldown_active(Duration::ZERO, Duration::from_nanos(1)));
+    }
+
+    /// The two single-replica lookups answer from the live registry, and answer
+    /// `None` only for an id that is not in it.
+    #[test]
+    fn single_replica_lookups_see_the_registered_session() {
+        let tracker = ReplicationTrackerImpl::new();
+        assert!(tracker.get_session(1).is_none());
+        assert!(tracker.get_replica(1).is_none());
+
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 700);
+
+        let looked_up = tracker
+            .get_session(session.id())
+            .expect("a registered replica has a session");
+        assert_eq!(looked_up.id(), session.id());
+        assert!(Arc::ptr_eq(&looked_up, &session), "same session, not a copy");
+
+        let info = tracker
+            .get_replica(session.id())
+            .expect("a registered replica has a snapshot");
+        assert_eq!(info.id, session.id());
+        assert_eq!(info.address, test_addr());
+        assert_eq!(info.acked_offset, 700);
+        assert_eq!(info.phase, Phase::Streaming);
+
+        tracker.unregister_replica(session.id());
+        assert!(tracker.get_session(session.id()).is_none());
+        assert!(tracker.get_replica(session.id()).is_none());
+    }
+
+    // FM-REPLICATION-042
+    /// The allocation-free existence check must agree with the projection it
+    /// stands in for: a registry with only handshaking replicas has no
+    /// streaming replica, and one that lost its last streaming replica goes
+    /// back to `false`.
+    #[test]
+    fn has_streaming_replica_tracks_the_streaming_projection() {
+        let tracker = ReplicationTrackerImpl::new();
+        assert!(!tracker.has_streaming_replica(), "an empty registry has none");
+
+        let handshaking = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        assert!(
+            !tracker.has_streaming_replica(),
+            "a replica mid-handshake is not streaming"
+        );
+        assert_eq!(tracker.get_streaming_replicas().len(), 0);
+
+        let streaming = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
+        streaming.force_phase_for_test(Phase::Streaming);
+        assert!(tracker.has_streaming_replica());
+        assert_eq!(tracker.get_streaming_replicas().len(), 1);
+
+        handshaking.force_phase_for_test(Phase::Disconnecting);
+        assert!(
+            tracker.has_streaming_replica(),
+            "an unrelated phase change must not clear the answer"
+        );
+
+        tracker.unregister_replica(streaming.id());
+        assert!(
+            !tracker.has_streaming_replica(),
+            "the last streaming replica leaving flips it back"
+        );
     }
 
     // FM-REPLICATION-046
