@@ -46,8 +46,8 @@ pub mod tracker;
 pub mod wait_coordinator;
 
 pub use apply::{
-    ApplyError, ControlApplier, ReplicaApplier, ReplicaTxnBound, StreamedFrame, consume_frames,
-    parse_frame_payload,
+    ApplyError, ConsumeStats, ControlApplier, ReplicaApplier, ReplicaTxnBound, StreamedFrame,
+    consume_frames, parse_frame_payload,
 };
 pub use frame::{
     CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
@@ -156,3 +156,82 @@ impl ReplicationBroadcaster for NoopBroadcaster {
 
 /// A type alias for the broadcaster wrapped in an Arc.
 pub type SharedBroadcaster = Arc<dyn ReplicationBroadcaster>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Records every frame emit as `(shard, command)` and hands back a
+    /// monotonically advancing offset, as the primary's coordinator does.
+    #[derive(Default)]
+    struct RecordingBroadcaster {
+        emitted: Mutex<Vec<(u16, String)>>,
+        offset: AtomicU64,
+    }
+
+    impl ReplicationBroadcaster for RecordingBroadcaster {
+        fn broadcast_command_on_shard(
+            &self,
+            shard_id: u16,
+            cmd_name: &str,
+            _args: &[Bytes],
+        ) -> u64 {
+            self.emitted
+                .lock()
+                .unwrap()
+                .push((shard_id, cmd_name.to_string()));
+            self.offset.fetch_add(10, Ordering::Relaxed) + 10
+        }
+
+        fn is_active(&self) -> bool {
+            true
+        }
+
+        fn current_offset(&self) -> u64 {
+            self.offset.load(Ordering::Relaxed)
+        }
+    }
+
+    /// The single definition of the MULTI/EXEC framing: every frame of the
+    /// group carries the one shard the transaction ran on, and the offset
+    /// handed back is the one *after* the EXEC — the position a `WAIT` on this
+    /// transaction has to wait for.
+    #[test]
+    fn a_broadcast_transaction_frames_the_whole_group_on_one_shard() {
+        let broadcaster = RecordingBroadcaster::default();
+        let empty: &[Bytes] = &[];
+        let offset = broadcaster.broadcast_transaction_on_shard(4, &[("SET", empty), ("DEL", empty)]);
+
+        assert_eq!(
+            *broadcaster.emitted.lock().unwrap(),
+            vec![
+                (4, "MULTI".to_string()),
+                (4, "SET".to_string()),
+                (4, "DEL".to_string()),
+                (4, "EXEC".to_string()),
+            ],
+            "the group must be framed MULTI … EXEC, all on the origin shard"
+        );
+        assert_eq!(
+            offset, 40,
+            "the offset reported is the stream position after the EXEC frame"
+        );
+        assert_eq!(broadcaster.current_offset(), 40);
+    }
+
+    /// The no-op broadcaster is the "nothing is following this node" answer:
+    /// inactive, and at no offset. A truthy `is_active` would make every write
+    /// path stamp and broadcast frames nobody reads.
+    #[test]
+    fn the_noop_broadcaster_is_inactive_and_at_no_offset() {
+        let noop = NoopBroadcaster;
+        let empty: &[Bytes] = &[];
+
+        assert!(!noop.is_active());
+        assert_eq!(noop.current_offset(), 0);
+        assert_eq!(noop.broadcast_command_on_shard(3, "SET", empty), 0);
+        assert_eq!(noop.broadcast_transaction_on_shard(3, &[("SET", empty)]), 0);
+    }
+}

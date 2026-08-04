@@ -265,6 +265,31 @@ struct PendingTxn {
     bytes: u64,
 }
 
+/// What one run of [`consume_frames`] did with the stream it was handed.
+///
+/// The loop's own tally, returned rather than spent on a single shutdown log
+/// line. The three dispositions it chooses between — applied, stepped over,
+/// dropped with a replaced history — are the difference between a replica that
+/// is following its primary and one that is quietly skipping frames, so they
+/// are worth reporting to whoever owns the stint and worth asserting on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConsumeStats {
+    /// Units applied cleanly: a bare command, a reconstructed `MULTI … EXEC`
+    /// group, a control-shard command, or a `FROGDB.FINALIZE` this node
+    /// absorbed into its own replication state.
+    pub frames_processed: u64,
+    /// Frames the loop could not apply as sent: an undecodable payload, a
+    /// protocol violation (nested `MULTI`, `EXEC` without `MULTI`, a control
+    /// frame inside an open group), a rejected apply, or a group that outgrew
+    /// its bound.
+    pub errors: u64,
+    /// Frames dropped with the history they belong to: decoded under a history
+    /// this node has since replaced (see [`StreamedFrame`]), or refused by a
+    /// claim because the history they arrived on has ended — plus the open
+    /// group dropped with them.
+    pub discarded: u64,
+}
+
 /// Consume replication frames from the primary and apply them, honoring the
 /// atomicity + routing contract.
 ///
@@ -340,7 +365,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
     replication_state: Option<Arc<RwLock<ReplicationState>>>,
     stint: ReplicaApplyStint,
     txn_bound: Arc<ReplicaTxnBound>,
-) {
+) -> ConsumeStats {
     tracing::info!("Replica frame consumer started");
 
     let mut frames_processed: u64 = 0;
@@ -623,6 +648,12 @@ pub async fn consume_frames<A: ReplicaApplier>(
         oversized_groups_abandoned = txn_bound.abandoned(),
         "Replica frame consumer shutting down"
     );
+
+    ConsumeStats {
+        frames_processed,
+        errors,
+        discarded,
+    }
 }
 
 #[cfg(test)]
@@ -742,13 +773,24 @@ mod tests {
             .0
     }
 
-    /// `drive` with an explicit group bound, reporting the applied offset and
-    /// the applied head so a test can check what the bound did to the history.
+    /// `drive` reporting the loop's own tally alongside the applied offset.
+    async fn drive_counted(
+        frames: Vec<ReplicationFrame>,
+        applier: Arc<MockApplier>,
+    ) -> (u64, ConsumeStats) {
+        let (offset, _, stats) =
+            drive_bounded(frames, applier, Arc::new(ReplicaTxnBound::default())).await;
+        (offset, stats)
+    }
+
+    /// `drive` with an explicit group bound, reporting the applied offset, the
+    /// applied head so a test can check what the bound did to the history, and
+    /// the loop's tally.
     async fn drive_bounded(
         frames: Vec<ReplicationFrame>,
         applier: Arc<MockApplier>,
         bound: Arc<ReplicaTxnBound>,
-    ) -> (u64, AppliedOffset) {
+    ) -> (u64, AppliedOffset, ConsumeStats) {
         let (tx, rx) = mpsc::channel(1024);
         for f in frames {
             tx.send(live(f)).await.unwrap();
@@ -757,8 +799,8 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(true));
         let applied = AppliedOffset::detached(0);
         let stint = applied.begin_replica_stint();
-        consume_frames(rx, SharedApplier(applier), flag, None, stint, bound).await;
-        (applied.current(), applied)
+        let stats = consume_frames(rx, SharedApplier(applier), flag, None, stint, bound).await;
+        (applied.current(), applied, stats)
     }
 
     // FM-REPLICATION-034
@@ -981,7 +1023,217 @@ mod tests {
         assert_eq!(applied, 0, "an unfinished group claims no applied data");
     }
 
+    // ---- the loop's tally is exact ----------------------------------------
+
+    /// A frame whose payload is not a decodable command — how a corrupted
+    /// stream, or a command from a build this node does not share, arrives.
+    fn undecodable(shard: u16, seq: u64) -> ReplicationFrame {
+        ReplicationFrame::new_on_shard(seq, shard, Bytes::from_static(b"!! not resp !!"))
+    }
+
+    /// Every disposition the loop can reach for a data frame, in one stream:
+    /// applied, stepped over as undecodable, and stepped over as a protocol
+    /// violation. The tally is what tells an operator a replica is silently
+    /// skipping frames rather than following its primary, so it must count each
+    /// one exactly once — and a stepped-over frame is still stream bytes the
+    /// primary counted.
+    #[tokio::test]
+    async fn the_loop_reports_what_it_applied_and_what_it_stepped_over() {
+        let frames = vec![
+            frame_on(0, 1, "SET", &["a", "1"]), // applied: a bare command
+            undecodable(0, 2),                  // stepped over: undecodable payload
+            frame_on(0, 3, "EXEC", &[]),        // stepped over: EXEC without MULTI
+            frame_on(1, 4, "MULTI", &[]),
+            frame_on(1, 5, "MULTI", &[]), // stepped over: nested MULTI
+            frame_on(1, 6, "SET", &["b", "2"]),
+            frame_on(1, 7, "EXEC", &[]), // applied: the reconstructed group
+        ];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
+        let applier = Arc::new(MockApplier::default());
+        let (applied, stats) = drive_counted(frames, applier.clone()).await;
+
+        assert_eq!(
+            *applier.groups.lock().unwrap(),
+            vec![
+                (0, vec!["SET".to_string()]),
+                (1, vec!["SET".to_string()]),
+            ],
+            "only the group the second MULTI opened may reach shard 1"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 2,
+                errors: 3,
+                discarded: 0,
+            }
+        );
+        assert_eq!(
+            applied, total,
+            "a frame the loop steps over is still stream bytes the primary counted"
+        );
+    }
+
+    /// A frame the loop steps over *inside* an open group rides with the group:
+    /// its bytes join the group's span and are claimed with it at `EXEC`.
+    /// Dropping them would leave this node's stream position permanently below
+    /// the primary's, which is a silent divergence of the offset itself.
+    #[tokio::test]
+    async fn a_frame_stepped_over_inside_a_group_still_rides_with_its_claim() {
+        let frames = vec![
+            frame_on(2, 1, "MULTI", &[]),
+            frame_on(2, 2, "SET", &["a", "1"]),
+            undecodable(2, 3),
+            // A GETACK the primary interleaved: control traffic, not a command
+            // to buffer, but bytes the primary counted all the same.
+            frame_on(crate::frame::CONTROL_SHARD, 4, "REPLCONF", &["GETACK", "*"]),
+            frame_on(2, 5, "SET", &["b", "2"]),
+            frame_on(2, 6, "EXEC", &[]),
+        ];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
+        let applier = Arc::new(MockApplier::default());
+        let (applied, stats) = drive_counted(frames, applier.clone()).await;
+
+        assert_eq!(
+            *applier.groups.lock().unwrap(),
+            vec![(2, vec!["SET".to_string(), "SET".to_string()])],
+            "only the buffered commands belong to the group"
+        );
+        assert_eq!(stats.errors, 1, "the undecodable frame, and only it");
+        assert_eq!(
+            applied, total,
+            "the group's claim must cover every byte consumed between MULTI and EXEC"
+        );
+    }
+
+    /// Control-shard frames go to the process-wide seam, never to a shard — and
+    /// one arriving inside an open group is a protocol violation the primary
+    /// cannot produce, so the group is abandoned rather than interleaved.
+    #[tokio::test]
+    async fn control_frames_apply_off_the_shard_path_and_abandon_an_open_group() {
+        let control = crate::frame::CONTROL_SHARD;
+        let frames = vec![
+            frame_on(control, 1, "FUNCTION", &["LOAD", "lib"]),
+            frame_on(2, 2, "MULTI", &[]),
+            frame_on(2, 3, "SET", &["a", "1"]),
+            frame_on(control, 4, "FUNCTION", &["FLUSH"]),
+        ];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
+        let applier = Arc::new(MockApplier::default());
+        let (applied, stats) = drive_counted(frames, applier.clone()).await;
+
+        assert_eq!(
+            *applier.controls.lock().unwrap(),
+            vec![
+                vec!["FUNCTION".to_string(), "LOAD".to_string(), "lib".to_string()],
+                vec!["FUNCTION".to_string(), "FLUSH".to_string()],
+            ],
+            "both control frames must reach the control seam, in order"
+        );
+        assert!(
+            applier.groups.lock().unwrap().is_empty(),
+            "the interrupted group must not reach a shard, in whole or in part"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 2,
+                errors: 1,
+                discarded: 0,
+            },
+            "two control commands applied; the abandoned group is the one error"
+        );
+        assert_eq!(
+            applied, total,
+            "the abandoned group's consumed bytes are claimed, group or no group"
+        );
+    }
+
+    /// `FROGDB.FINALIZE` is absorbed into this node's own replication state
+    /// rather than routed to a shard: a replica that shard-routed it would both
+    /// diverge and never learn the active version.
+    #[tokio::test]
+    async fn a_replicated_finalize_updates_the_replicas_active_version() {
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let frames = vec![
+            frame_on(0, 1, "FROGDB.FINALIZE", &["v7"]),
+            frame_on(0, 2, "SET", &["a", "1"]),
+        ];
+        let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
+
+        let (tx, rx) = mpsc::channel(16);
+        for f in frames {
+            tx.send(live(f)).await.unwrap();
+        }
+        drop(tx);
+        let applier = Arc::new(MockApplier::default());
+        let applied = AppliedOffset::detached(0);
+        let stint = applied.begin_replica_stint();
+        let stats = consume_frames(
+            rx,
+            SharedApplier(applier.clone()),
+            Arc::new(AtomicBool::new(true)),
+            Some(state.clone()),
+            stint,
+            Arc::new(ReplicaTxnBound::default()),
+        )
+        .await;
+
+        assert_eq!(state.read().active_version.as_deref(), Some("v7"));
+        assert_eq!(
+            *applier.groups.lock().unwrap(),
+            vec![(0, vec!["SET".to_string()])],
+            "FROGDB.FINALIZE must never be routed to a shard"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 2,
+                errors: 0,
+                discarded: 0,
+            },
+            "an absorbed FINALIZE is a frame processed, not one stepped over"
+        );
+        assert_eq!(applied.current(), total);
+    }
+
     // ---- an unterminated MULTI is bounded (issue 13) ----------------------
+
+    /// The defaults the bound ships with, and the accessors the abandon
+    /// decision and its operator-facing log read them through.
+    #[test]
+    fn a_group_bound_reports_the_ceilings_it_was_built_with() {
+        assert_eq!(DEFAULT_REPLICA_TXN_MAX_COMMANDS, 1_000_000);
+        assert_eq!(DEFAULT_REPLICA_TXN_MAX_BYTES, 1_073_741_824, "1 GiB");
+        let default = ReplicaTxnBound::default();
+        assert_eq!(default.max_commands(), DEFAULT_REPLICA_TXN_MAX_COMMANDS);
+        assert_eq!(default.max_bytes(), DEFAULT_REPLICA_TXN_MAX_BYTES);
+
+        let configured = ReplicaTxnBound::new(7, 4096);
+        assert_eq!(configured.max_commands(), 7);
+        assert_eq!(configured.max_bytes(), 4096);
+        assert_eq!(configured.abandoned(), 0);
+        // The limits name the largest group that still applies: exactly on
+        // either axis is legal, one past it is not.
+        assert!(!configured.exceeded(7, 4096));
+        assert!(configured.exceeded(8, 4096));
+        assert!(configured.exceeded(7, 4097));
+    }
+
+    /// Each breach is counted once, and the count a breach reports is the new
+    /// total — the number the abandon log prints.
+    #[test]
+    fn each_abandoned_group_is_counted_once() {
+        let bound = ReplicaTxnBound::new(1, 1);
+        assert_eq!(
+            bound.record_abandoned(),
+            1,
+            "a breach reports the new total, not the count before it"
+        );
+        assert_eq!(bound.record_abandoned(), 2);
+        assert_eq!(bound.abandoned(), 2);
+    }
+
 
     /// A `MULTI` opened on shard 1 followed by `count` inner `SET`s and no
     /// `EXEC` — the shape of a primary that never closes the group.
@@ -1007,9 +1259,19 @@ mod tests {
         frames.push(frame_on(0, 99, "SET", &["after", "1"]));
 
         let applier = Arc::new(MockApplier::default());
-        let (offset, applied) = drive_bounded(frames, applier.clone(), bound.clone()).await;
+        let (offset, applied, stats) = drive_bounded(frames, applier.clone(), bound.clone()).await;
 
         assert_eq!(bound.abandoned(), 1, "the breach must be counted");
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 0,
+                errors: 1,
+                discarded: 2,
+            },
+            "the breach is one error, nothing applies, and every frame after it \
+             is dropped with the history the breach ended"
+        );
         assert!(
             applier.groups.lock().unwrap().is_empty(),
             "an abandoned group must not reach a shard, in whole or in part"
@@ -1034,7 +1296,7 @@ mod tests {
         let bound = Arc::new(ReplicaTxnBound::new(usize::MAX, 8192));
 
         let applier = Arc::new(MockApplier::default());
-        let (offset, applied) =
+        let (offset, applied, _) =
             drive_bounded(unterminated_multi(8, &big), applier.clone(), bound.clone()).await;
 
         assert_eq!(
@@ -1068,7 +1330,7 @@ mod tests {
         let bound = Arc::new(ReplicaTxnBound::new(commands, inner_bytes));
 
         let applier = Arc::new(MockApplier::default());
-        let (offset, applied) = drive_bounded(frames, applier.clone(), bound.clone()).await;
+        let (offset, applied, _) = drive_bounded(frames, applier.clone(), bound.clone()).await;
 
         assert_eq!(bound.abandoned(), 0, "a legal group must not be abandoned");
         assert!(!applied.has_diverged());
@@ -1103,9 +1365,17 @@ mod tests {
         rx: mpsc::Receiver<StreamedFrame>,
         stint: ReplicaApplyStint,
     ) -> Vec<(u16, Vec<String>)> {
+        consume_counted(rx, stint).await.0
+    }
+
+    /// `consume` reporting the loop's tally as well as what applied.
+    async fn consume_counted(
+        rx: mpsc::Receiver<StreamedFrame>,
+        stint: ReplicaApplyStint,
+    ) -> (Vec<(u16, Vec<String>)>, ConsumeStats) {
         let applier = Arc::new(MockApplier::default());
         let flag = Arc::new(AtomicBool::new(true));
-        consume_frames(
+        let stats = consume_frames(
             rx,
             SharedApplier(applier.clone()),
             flag,
@@ -1114,7 +1384,8 @@ mod tests {
             Arc::new(ReplicaTxnBound::default()),
         )
         .await;
-        applier.groups.lock().unwrap().clone()
+        let groups = applier.groups.lock().unwrap().clone();
+        (groups, stats)
     }
 
     /// Issue 06: the frame channel and its consumer outlive the connection that
@@ -1146,10 +1417,20 @@ mod tests {
             .unwrap();
         drop(tx);
 
+        let (groups, stats) = consume_counted(rx, stint).await;
         assert_eq!(
-            consume(rx, stint).await,
+            groups,
             vec![(0, vec!["DEL".to_string()])],
             "a frame from the replaced history reached the keyspace"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 1,
+                errors: 0,
+                discarded: 1,
+            },
+            "the frame of the replaced history is dropped, not stepped over or applied"
         );
         assert_eq!(
             applied.current(),
@@ -1194,15 +1475,93 @@ mod tests {
         }
         drop(tx);
 
+        let (groups, stats) = consume_counted(rx, stint).await;
         assert_eq!(
-            consume(rx, stint).await,
+            groups,
             vec![(1, vec!["DEL".to_string()])],
             "the abandoned group's commands (or its shard) survived the resync"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 1,
+                errors: 1,
+                discarded: 2,
+            },
+            "both frames of the replaced history are dropped, and the EXEC that \
+             closes nothing is stepped over"
         );
         assert_eq!(
             applied.current(),
             5_000 + fresh_bytes,
             "the abandoned group's bytes were claimed by the new history"
+        );
+    }
+
+    /// The case the top-of-loop pre-check cannot cover: the dropped link left an
+    /// open group behind but no further frame of the old history, so the *new*
+    /// history's first frame is the one that finds the group. Continuing it
+    /// would apply the old primary's half-transaction onto the installed
+    /// dataset; claiming its bytes would credit the new history with data this
+    /// node does not hold.
+    #[tokio::test]
+    async fn a_group_left_open_across_a_resync_is_dropped_by_the_first_new_frame() {
+        let (stint, offsets, applied) = resyncable();
+        // Capacity is the barrier below: the consumer must have taken the MULTI
+        // before the resync, or it would be dropped by the pre-check instead.
+        let (tx, rx) = mpsc::channel(2);
+        let applier = Arc::new(MockApplier::default());
+        let recorded = applier.clone();
+        let consumer = tokio::spawn(async move {
+            consume_frames(
+                rx,
+                SharedApplier(recorded),
+                Arc::new(AtomicBool::new(true)),
+                None,
+                stint,
+                Arc::new(ReplicaTxnBound::default()),
+            )
+            .await
+        });
+
+        // The old history's last frame opens a group; the link drops before
+        // anything closes it.
+        tx.send(live(frame_on(3, 1, "MULTI", &[]))).await.unwrap();
+        // Restored capacity means the frame was received, and the arm that opens
+        // a group does not await, so by the time this task is polled again the
+        // group is open.
+        while tx.capacity() < 2 {
+            tokio::task::yield_now().await;
+        }
+
+        // The retry is answered +FULLRESYNC: a new dataset, a new history.
+        assert!(offsets.reset_to(5_000), "the install must be accepted");
+        let fresh = frame_on(1, 1, "SET", &["new", "1"]);
+        let fresh_bytes = fresh.stream_advance();
+        tx.send(StreamedFrame::new(applied.epoch(), fresh))
+            .await
+            .unwrap();
+        drop(tx);
+        let stats = consumer.await.unwrap();
+
+        assert_eq!(
+            *applier.groups.lock().unwrap(),
+            vec![(1, vec!["SET".to_string()])],
+            "the new history's first frame was swallowed by the voided group"
+        );
+        assert_eq!(
+            stats,
+            ConsumeStats {
+                frames_processed: 1,
+                errors: 0,
+                discarded: 1,
+            },
+            "the group the resync voided must be counted as dropped"
+        );
+        assert_eq!(
+            applied.current(),
+            5_000 + fresh_bytes,
+            "the voided group's bytes were claimed by the new history"
         );
     }
 
@@ -1253,7 +1612,7 @@ mod tests {
         Arc<MockApplier>,
         Arc<tokio::sync::Semaphore>,
         Arc<tokio::sync::Notify>,
-        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<ConsumeStats>,
     ) {
         let (tx, rx) = mpsc::channel(64);
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
