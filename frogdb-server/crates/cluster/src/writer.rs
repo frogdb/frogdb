@@ -63,6 +63,26 @@ pub enum Proposed {
     Forwarded,
 }
 
+/// Successful outcome of a [`propose_reset`](ClusterWriter::propose_reset).
+///
+/// `CLUSTER RESET` is the one admin command whose *local* consequences outlive
+/// the replicated entry: a HARD reset re-keys this node's identity and every
+/// peer it used to talk to has to be dropped from the local transport. Those are
+/// this node's own bookkeeping, not the leader's side effects, so they run on the
+/// forwarded path too — unlike the voter-add of [`Proposed::Forwarded`].
+#[derive(Debug)]
+pub enum ResetProposed {
+    /// The reset landed — committed here or cleanly forwarded to the leader.
+    /// `ClusterState::self_node_id` has already been updated when the reset was
+    /// HARD; the caller drops `forget_nodes` from its network factory.
+    Applied {
+        /// Peers this node knew before the reset, which it must now forget.
+        forget_nodes: Vec<NodeId>,
+    },
+    /// The state machine refused the reset. Nothing local changed.
+    Rejected(crate::types::ClusterError),
+}
+
 /// Failure outcome of a [`propose`](ClusterWriter::propose).
 #[derive(Debug)]
 pub enum ProposeError {
@@ -182,6 +202,55 @@ impl<R: RaftProposer, F: LeaderForwarder> ClusterWriter<R, F> {
                 }
             }
         }
+    }
+
+    /// Propose a `CLUSTER RESET` and apply this node's local consequences.
+    ///
+    /// Reset used to call `client_write` directly, which is why a reset that
+    /// landed on a follower surfaced openraft's `ForwardToLeader` as a `Debug`
+    /// rendering instead of the `REDIRECT` every sibling admin command produces.
+    /// Routing it through [`propose`](Self::propose) gives it the same three-way
+    /// outcome; the reset-specific part is the local bookkeeping, which lives
+    /// here rather than at the connection layer so it is testable without a live
+    /// Raft.
+    ///
+    /// The peer list is snapshotted *before* the proposal, because a committed
+    /// reset empties the topology and there would be nothing left to forget.
+    pub async fn propose_reset(
+        &self,
+        node_id: NodeId,
+        new_node_id: Option<NodeId>,
+    ) -> Result<ResetProposed, ProposeError> {
+        let forget_nodes: Vec<NodeId> = self
+            .cluster_state
+            .snapshot()
+            .nodes
+            .keys()
+            .filter(|&&id| id != node_id)
+            .copied()
+            .collect();
+
+        let proposed = self
+            .propose(ClusterCommand::ResetCluster {
+                node_id,
+                new_node_id,
+            })
+            .await?;
+
+        if let Proposed::Committed(ClusterResponse::Error(e)) = proposed {
+            return Ok(ResetProposed::Rejected(e));
+        }
+
+        // HARD reset: publish the new identity so every connection reads it.
+        // This is deliberately performed on the forwarded path as well — the
+        // entry that re-keyed this node was applied on the leader, and a
+        // follower that kept announcing its old id would contradict the
+        // replicated topology it is about to receive.
+        if let Some(new_id) = new_node_id {
+            self.cluster_state.set_self_node_id(new_id);
+        }
+
+        Ok(ResetProposed::Applied { forget_nodes })
     }
 }
 
@@ -380,6 +449,124 @@ mod tests {
             }
             _ => panic!("expected Redirect (CLUSTERDOWN)"),
         }
+    }
+
+    // --- propose_reset: the same fork, plus local identity bookkeeping --------
+
+    /// Two-node state so a reset has a peer to forget.
+    fn state_with_two_nodes() -> ClusterState {
+        let cs = state_with_leader(2, "127.0.0.1:6380");
+        cs.apply_local(ClusterCommand::AddNode {
+            node: NodeInfo::new_primary(
+                1,
+                "127.0.0.1:6379".parse().unwrap(),
+                "127.0.0.1:26380".parse().unwrap(),
+            ),
+        })
+        .unwrap();
+        cs.set_self_node_id(1);
+        cs
+    }
+
+    // FM-CLUSTER-006
+    #[tokio::test]
+    async fn reset_on_a_follower_yields_a_redirect_not_a_raft_error() {
+        let cs = state_with_two_nodes();
+        let self_id_atomic = cs.self_node_id_atomic();
+        let w = writer(
+            FakeProposer(Err(forward_to_leader_err(Some(2)))),
+            FakeForwarder { outcome: Err(()) },
+            cs,
+        );
+
+        // The old direct `client_write` surfaced this as
+        // `ERR Raft error: APIError(ForwardToLeader(..))`; it is a redirect now.
+        match w.propose_reset(1, Some(99)).await {
+            Err(ProposeError::Redirect(r)) => {
+                assert_eq!(r.leader_id, Some(2));
+                assert_eq!(
+                    r.leader_client_addr,
+                    Some("127.0.0.1:6380".parse().unwrap())
+                );
+            }
+            other => panic!("expected Redirect, got {other:?}"),
+        }
+        assert_eq!(
+            self_id_atomic.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a reset that never landed must not re-key this node"
+        );
+    }
+
+    // FM-CLUSTER-006
+    #[tokio::test]
+    async fn reset_forwarded_to_the_leader_reports_forwarded() {
+        let cs = state_with_two_nodes();
+        let self_id_atomic = cs.self_node_id_atomic();
+        let w = writer(
+            FakeProposer(Err(forward_to_leader_err(Some(2)))),
+            FakeForwarder { outcome: Ok(()) },
+            cs,
+        );
+
+        match w.propose_reset(1, Some(99)).await {
+            Ok(ResetProposed::Applied { forget_nodes }) => {
+                assert_eq!(forget_nodes, vec![2], "the peer must be forgotten");
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert_eq!(
+            self_id_atomic.load(std::sync::atomic::Ordering::Relaxed),
+            99,
+            "a HARD reset re-keys this node on the forwarded path too"
+        );
+    }
+
+    // FM-CLUSTER-006
+    #[tokio::test]
+    async fn reset_committed_on_the_leader_keeps_a_soft_reset_identity() {
+        let cs = state_with_two_nodes();
+        let self_id_atomic = cs.self_node_id_atomic();
+        let w = writer(
+            FakeProposer(Ok(ClusterResponse::Ok)),
+            FakeForwarder { outcome: Err(()) },
+            cs,
+        );
+
+        // SOFT: `new_node_id` is `None`, so the identity must not move.
+        match w.propose_reset(1, None).await {
+            Ok(ResetProposed::Applied { forget_nodes }) => assert_eq!(forget_nodes, vec![2]),
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert_eq!(
+            self_id_atomic.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "SOFT keeps this node's identity"
+        );
+    }
+
+    // FM-CLUSTER-006
+    #[tokio::test]
+    async fn reset_rejected_by_the_state_machine_changes_nothing_local() {
+        let cs = state_with_two_nodes();
+        let self_id_atomic = cs.self_node_id_atomic();
+        let w = writer(
+            FakeProposer(Ok(ClusterResponse::Error(
+                crate::types::ClusterError::NotLeader,
+            ))),
+            FakeForwarder { outcome: Err(()) },
+            cs,
+        );
+
+        match w.propose_reset(1, Some(99)).await {
+            Ok(ResetProposed::Rejected(crate::types::ClusterError::NotLeader)) => {}
+            other => panic!("expected Rejected(NotLeader), got {other:?}"),
+        }
+        assert_eq!(
+            self_id_atomic.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a refused reset must not re-key this node"
+        );
     }
 
     // FM-CLUSTER-050

@@ -28,7 +28,7 @@ pub mod pubsub;
 pub use bus::{ClusterBusContext, run as run_cluster_bus};
 pub use failure_detector::{FailureDetector, FailureDetectorConfig, spawn_failure_detector_task};
 pub use flags::{ClusterRuntimeFlags, SelfFenceGate};
-pub use pubsub::ClusterPubSubForwarder;
+pub use pubsub::{ClusterPubSubForwarder, ShardRoute, SpublishOutcome};
 
 #[cfg(not(feature = "turmoil"))]
 pub use bus::BusTlsAcceptor;

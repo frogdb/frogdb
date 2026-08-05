@@ -67,7 +67,7 @@ pub use types::{
 };
 pub use writer::{
     ClusterWriter, LeaderForwarder, LeaderRedirect, ProposeError, Proposed, RaftClientWriteError,
-    RaftProposer, resolve_redirect,
+    RaftProposer, ResetProposed, resolve_redirect,
 };
 
 use openraft::Raft;

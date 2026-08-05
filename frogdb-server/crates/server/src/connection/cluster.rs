@@ -6,7 +6,7 @@
 
 use frogdb_core::ClusterRaft;
 use frogdb_core::cluster::{
-    ClusterCommand, ClusterResponse, ClusterWriter, LeaderRedirect, ProposeError, Proposed,
+    ClusterResponse, ClusterWriter, LeaderRedirect, ProposeError, Proposed, ResetProposed,
     spawn_add_raft_voter,
 };
 use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
@@ -141,58 +141,36 @@ impl ConnectionHandler {
 
     /// Handle a CLUSTER RESET command.
     ///
-    /// 1. Commits ResetCluster via Raft (clears slots, forgets nodes, promotes to primary)
-    /// 2. For HARD: updates self_node_id on ClusterState so all connections see the new ID
-    /// 3. Unregisters other nodes from NetworkFactory
+    /// Proposes through [`ClusterWriter::propose_reset`] like every other admin
+    /// command, so a reset that lands on a follower is forwarded or answered
+    /// with `REDIRECT` instead of a `Debug`-rendered `ForwardToLeader`. The
+    /// writer owns the identity update; the connection layer keeps only the
+    /// transport cleanup, which is the piece it alone can perform.
     async fn handle_reset_command(
         &self,
-        raft: &ClusterRaft,
+        raft: &std::sync::Arc<ClusterRaft>,
         node_id: u64,
         new_node_id: Option<u64>,
     ) -> Response {
-        let cluster_state = match &self.cluster.cluster_state {
-            Some(cs) => cs,
-            None => return Response::error("ERR Cluster state not available"),
-        };
+        let (network_factory, cluster_state) =
+            match (&self.cluster.network_factory, &self.cluster.cluster_state) {
+                (Some(nf), Some(cs)) => (nf, cs),
+                _ => return Response::error("ERR Cluster mode not enabled"),
+            };
 
-        // Snapshot current nodes (excluding self) to unregister from NetworkFactory
-        let other_node_ids: Vec<u64> = cluster_state
-            .snapshot()
-            .nodes
-            .keys()
-            .filter(|&&id| id != node_id)
-            .copied()
-            .collect();
-
-        // Commit the reset via Raft
-        let cmd = ClusterCommand::ResetCluster {
-            node_id,
-            new_node_id,
-        };
-        match raft.client_write(cmd).await {
-            Ok(resp) => {
-                if let ClusterResponse::Error(msg) = &resp.data {
-                    return Response::error(format!("ERR {}", msg));
+        let writer =
+            ClusterWriter::new(raft.clone(), network_factory.clone(), cluster_state.clone());
+        match writer.propose_reset(node_id, new_node_id).await {
+            Ok(ResetProposed::Applied { forget_nodes }) => {
+                for id in forget_nodes {
+                    network_factory.remove_node(id);
                 }
+                Response::ok()
             }
-            Err(e) => {
-                return Response::error(format!("ERR Raft error: {}", e));
-            }
+            Ok(ResetProposed::Rejected(e)) => Response::error(format!("ERR {}", e)),
+            Err(ProposeError::Redirect(r)) => redirect_to_response(r),
+            Err(ProposeError::Raft(e)) => Response::error(format!("ERR Raft error: {}", e)),
         }
-
-        // HARD: update the shared self_node_id so all connections see the new ID
-        if let Some(new_id) = new_node_id {
-            cluster_state.set_self_node_id(new_id);
-        }
-
-        // Unregister other nodes from NetworkFactory
-        if let Some(ref factory) = self.cluster.network_factory {
-            for id in other_node_ids {
-                factory.remove_node(id);
-            }
-        }
-
-        Response::ok()
     }
 }
 

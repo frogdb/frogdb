@@ -134,17 +134,20 @@ migration that can never complete; the operator's recovery is `SETSLOT … STABL
 | Field | Value |
 |---|---|
 | Trigger | `CLUSTER RESET [SOFT|HARD]` on a node with an empty keyspace (a non-empty one is refused at the command layer before it reaches Raft). |
-| Observable | Both forms clear the slot map, clear all migrations, forget every peer, and force this node to `Primary` with no parent. SOFT keeps the node id and both epochs. HARD re-keys the node under a freshly minted id and zeroes both the cluster counter and the node's own epoch. A reset naming a node that is not a member still clears everything and answers `Ok`. |
-| NOT observable | A reset that fails: the arm is infallible by construction, because a half-reset node is worse than a fully reset one. |
-| Invariant | `commands.rs:478-518` clears the slot map and migrations unconditionally before it branches, so no slot or migration can survive either form. |
-| Outcome variant | `ClusterResponse::Ok` |
-| Forced by | `test_reset_cluster_soft`, `test_reset_cluster_hard`, `test_reset_cluster_nonexistent_node` |
-| Bug refs | — |
+| Observable | Both forms clear the slot map, clear all migrations, forget every peer, and force this node to `Primary` with no parent. SOFT keeps the node id and both epochs. HARD re-keys the node under a freshly minted id and zeroes both the cluster counter and the node's own epoch. A reset naming a node that is not a member still clears everything and answers `Ok`. On a follower the reset is forwarded to the leader, or answered `REDIRECT`/`CLUSTERDOWN` if it cannot be — reset proposes through `ClusterWriter` like every other admin command (FM-CLUSTER-047..050). |
+| NOT observable | A reset that fails: the arm is infallible by construction, because a half-reset node is worse than a fully reset one. Nor a raw `ERR Raft error: APIError(ForwardToLeader(..))` on a follower — the `Debug` rendering of an openraft internal is not a redirect any client can follow. Nor a node that re-keyed itself locally after a reset that never landed. |
+| Invariant | `commands.rs:478-518` clears the slot map and migrations unconditionally before it branches, so no slot or migration can survive either form. `ClusterWriter::propose_reset` snapshots the peer list *before* proposing (a committed reset empties the topology), routes through `propose`, and applies the local identity update only on `Applied`. |
+| Outcome variant | `ClusterResponse::Ok` / `ResetProposed::{Applied, Rejected}` / `ProposeError::{Redirect, Raft}` |
+| Forced by | `test_reset_cluster_soft`, `test_reset_cluster_hard`, `test_reset_cluster_nonexistent_node`, `reset_on_a_follower_yields_a_redirect_not_a_raft_error`, `reset_forwarded_to_the_leader_reports_forwarded`, `reset_committed_on_the_leader_keeps_a_soft_reset_identity`, `reset_rejected_by_the_state_machine_changes_nothing_local` |
+| Bug refs | fixed: [39-cluster-reset-bypasses-the-cluster-writer.md](../issues/done/39-cluster-reset-bypasses-the-cluster-writer.md) |
 
 `CLUSTER RESET HARD` is why the config epoch is **not** globally monotonic — see FM-CLUSTER-010's
 non-guarantee. It also changes the node's identity inside replicated state; the local
-`self_node_id` atomic is updated separately by the caller, which is the seam any future identity
-bug will live in.
+`self_node_id` atomic is updated by `propose_reset` on the `Applied` path — including the forwarded
+one, because the entry that re-keyed this node was applied on the leader and a follower still
+announcing its old id would contradict the topology it is about to receive. The connection layer
+keeps only the transport cleanup (`network_factory.remove_node`), which is the piece the cluster
+crate cannot reach.
 
 ## FM-CLUSTER-007 — one function owns the bootstrap slot split
 
@@ -971,17 +974,20 @@ integer and Redis has the same property; the distinction lives in the logs.
 
 | Field | Value |
 |---|---|
-| Trigger | `SPUBLISH` to a shard channel whose slot this node owns, whose slot nobody owns, and whose owner has no address in the registry. |
-| Observable | All three answer `None`, which the caller reads as "deliver locally". |
-| NOT observable | The message being dropped. A `None` here means the local path still runs, so a subscriber attached to this node still receives it. |
-| Invariant | Every unresolvable step is a `?` on an `Option` returning `None` (`pubsub.rs:196-203`), so there is exactly one fallback behavior for all of them. |
-| Outcome variant | `Option<usize>` = `None` |
-| Forced by | `cluster_forward_returns_none_when_this_node_owns_the_slot`, `cluster_forward_falls_back_to_local_for_an_unowned_slot`, `cluster_forward_falls_back_to_local_when_the_owner_has_no_address` |
-| Bug refs | `.scratch/hardening/issues/open/36-spublish-conflates-unowned-slot-with-local-ownership.md` |
+| Trigger | `SPUBLISH` to a shard channel whose slot this node owns, whose slot a reachable peer owns, whose slot nobody owns, and whose owner has no address in the registry. |
+| Observable | Four distinct outcomes. Only a reachable remote owner forwards (`Forwarded(count)`); the other three deliver locally and say which one they are — `Local(Local)`, `Local(Unowned{slot})`, `Local(OwnerUnaddressable{owner,slot})`. Both fallbacks warn-log naming the slot. The client-visible reply is identical across all three local outcomes. |
+| NOT observable | The message being dropped — the local path still runs in every non-`Remote` case, so a subscriber attached to this node still receives it. Nor a fallback delivery reported identically to a correct one: a slot-assignment gap that silently delivers shard messages on the wrong node used to be indistinguishable from correct ownership. |
+| Invariant | `route_shard_channel_in` is a pure function of the slot map plus the address registry and returns a four-variant `ShardRoute`; `forward_spublish` matches it exhaustively, so a new unresolvable case cannot be added as another silent `None`. |
+| Outcome variant | `ShardRoute::{Local, Remote, Unowned, OwnerUnaddressable}` / `SpublishOutcome::{Forwarded, Local}` |
+| Forced by | `cluster_forward_returns_none_when_this_node_owns_the_slot`, `cluster_forward_distinguishes_an_unowned_slot_from_local_ownership`, `cluster_forward_distinguishes_an_unaddressable_owner_from_local_ownership`, `cluster_route_names_a_reachable_remote_owner`, `test_local_forwarder_forward_returns_none` |
+| Bug refs | fixed: [36-spublish-conflates-unowned-slot-with-local-ownership.md](../issues/done/36-spublish-conflates-unowned-slot-with-local-ownership.md) |
 
-The conflation is deliberate today (delivering locally is strictly better than dropping) but it is
-also indistinguishable from correct local ownership, so a slot-assignment gap silently delivers
-shard messages on the wrong node. Filed rather than fixed here.
+The local fallback itself stays deliberate: delivering locally is strictly better than dropping,
+because FrogDB's `SSUBSCRIBE` does not slot-route subscribers, so no other node would deliver the
+message either. Redis answers `MOVED`/`CLUSTERDOWN` for a shard channel it does not serve; matching
+that is a client-visible change gated on the broader "should shard pub/sub slot-route at all"
+question, and is not this row's subject. What this row pins is that the fallback is *named* rather
+than disguised as correct ownership.
 
 ## FM-CLUSTER-071 — `CLUSTER NODES` renders one exact line per node
 
@@ -1073,10 +1079,7 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 8. **Storage corruption paths** — `try_get_log_entries` with an `Excluded(0)` end bound silently
    reads to the end of the log; `purge` writes `last_purged` before the delete batch; the CF
    `.expect`s and `decode_log_key`'s fixed-width copy panic on a tampered DB.
-9. **`ResetCluster` bypasses `ClusterWriter` entirely**, calling `raft.client_write` directly, so
-   it has no forward and no redirect: on a follower it surfaces as `ERR Raft error: …
-   ForwardToLeader…` rather than the `REDIRECT` every other admin command produces — issue 39.
-10. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
+9. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
     huge `fail_threshold` panics the staleness multiply. Nothing rejects either at load.
 
 ## Tagging notes for whoever lands these
@@ -1104,6 +1107,7 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 | Gossip counters in `CLUSTER INFO` | `cluster_stats_messages_*` and `total_cluster_links_buffer_limit_exceeded` reported as `0` | Real message counts | There is no gossip layer to count. Reporting zeros rather than omitting the fields is the deviation, and it is filed as issue 37 — a fabricated zero is indistinguishable from a real one. |
 | `ping-sent`/`pong-recv` in `CLUSTER NODES` | Always `0 0` | Real timestamps | Same reason; positional fields cannot be omitted without breaking every client's parser, so `0` is the honest placeholder here. |
 | `PFAIL` | Structurally supported, never produced | Set by gossip suspicion before a majority confirms `FAIL` | Leader-only detection has no suspicion phase: the leader either has enough consecutive failures to latch or it does not. |
+| Shard pub/sub slot routing | `SPUBLISH` forwards to the slot owner when it can name one, and otherwise delivers locally; `SSUBSCRIBE` does not slot-route subscribers | Both are slot-routed like keyed commands, answering `MOVED`/`CLUSTERDOWN` | Since subscribers are not pinned to the owner, refusing a publish would drop a message no other node would deliver. The fallback is named rather than silent (FM-CLUSTER-070); adopting Redis' refusal means routing subscribers first. |
 | `CLUSTER BUMPEPOCH` | Not supported | Supported | Epoch changes are authorized by the replicated log; a manual bump would create a claim no entry justifies. |
 | `CLUSTER SET-CONFIG-EPOCH` | Sets the exact value; refused unless the node knows no peer and holds epoch 0 | Same two guards, same exact assignment | Identical (FM-CLUSTER-076). The command is replicated through Raft rather than applied locally, so the assignment is durable on the log; the guards are Redis' verbatim. |
 | `WAIT` in cluster mode | Per-node, keyless, never redirects | Per-node, keyless, never redirects | Identical. Cluster replicas attach over the same PSYNC link and ACK into the same tracker, so there is no cluster-mode branch to deviate in. |

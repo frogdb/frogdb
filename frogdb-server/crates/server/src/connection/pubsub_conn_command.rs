@@ -502,7 +502,10 @@ impl<'a> PubSubIo<'a> {
 
         // In cluster mode, forward to the slot owner if not local.
         if let Some(forwarder) = &self.cluster.pubsub_forwarder
-            && let Some(count) = forwarder.forward_spublish(channel, message).await
+            && let Some(count) = forwarder
+                .forward_spublish(channel, message)
+                .await
+                .remote_count()
         {
             return Response::Integer(count as i64);
         }
