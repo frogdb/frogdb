@@ -103,6 +103,7 @@ class Permissions:
     pull_requests: str | None = None
     id_token: str | None = None
     attestations: str | None = None
+    actions: str | None = None
 
     def to_yaml(self) -> CommentedMap:
         m = CommentedMap()
@@ -118,6 +119,8 @@ class Permissions:
             m["id-token"] = self.id_token
         if self.attestations is not None:
             m["attestations"] = self.attestations
+        if self.actions is not None:
+            m["actions"] = self.actions
         return m
 
 

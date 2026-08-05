@@ -19,7 +19,7 @@ from workflow_gen.helpers import (
     rust_toolchain_step,
     script,
 )
-from workflow_gen.schema import Job, Step, Trigger, Workflow
+from workflow_gen.schema import Job, PullRequestTrigger, PushTrigger, Step, Trigger, Workflow
 
 # Runner label — GitHub-hosted standard runners, which are free and unmetered on
 # public repositories. This previously routed trusted actors to a `self-hosted`
@@ -43,9 +43,10 @@ MISE_HELM = "helm"
 def test_workflow() -> Workflow:
     w = Workflow(
         name="Test",
-        # CI is manual-dispatch-only during the hardening campaign (push/pull_request
-        # triggers removed; see the sibling nightly workflows for the same pattern).
-        on=Trigger(),
+        on=Trigger(
+            push=PushTrigger(branches=["main"]),
+            pull_request=PullRequestTrigger(branches=["main"]),
+        ),
         env=omap(CARGO_TERM_COLOR="always"),
     )
 

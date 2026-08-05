@@ -5,6 +5,7 @@ from workflow_gen.helpers import omap
 from workflow_gen.schema import (
     Job,
     Permissions,
+    PushTrigger,
     Step,
     Trigger,
     Workflow,
@@ -14,8 +15,11 @@ from workflow_gen.schema import (
 def release_please_workflow() -> Workflow:
     w = Workflow(
         name="Release Please",
-        # CI is manual-dispatch-only during the hardening campaign.
-        on=Trigger(),
+        on=Trigger(
+            workflow_dispatch=True,
+            push=PushTrigger(branches=["main"]),
+            push_first=True,
+        ),
     )
 
     w.jobs["release-please"] = Job(

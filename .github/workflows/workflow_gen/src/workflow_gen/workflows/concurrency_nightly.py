@@ -19,6 +19,7 @@ from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.helpers import (
     cargo_cache_step,
+    change_gate_job,
     checkout_step,
     libclang_step,
     mise_setup_step,
@@ -27,7 +28,7 @@ from workflow_gen.helpers import (
     script,
     upload_artifact_step,
 )
-from workflow_gen.schema import Job, Trigger, Workflow
+from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
 
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 
@@ -35,6 +36,13 @@ MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 # one sequential test loop, not parallelized across cores, so a bigger (paid) box
 # buys nothing here. Blacksmith is reserved for the testbox workflow.
 RUNS_ON = "ubuntu-latest"
+
+WORKFLOW_FILE = "concurrency-nightly.yml"
+
+# 03:14 UTC has no significance beyond "not on the hour" (avoids the
+# GitHub Actions cron traffic spike at :00) and lands overnight for US time
+# zones, where this repo's activity concentrates.
+NIGHTLY_CRON = "14 3 * * *"
 
 # Unique seeds swept, each replayed once per profile (overridable per-dispatch); NOT the total
 # run count. Default 250 unique seeds x 4 profiles (Mixed, BlockingHeavy, TxHeavy, MultiWaiter)
@@ -62,17 +70,21 @@ def _seeds_input() -> CommentedMap:
 def concurrency_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Concurrency Nightly",
-        # Manual dispatch only: the nightly cron is deliberately off. A 250-seed
-        # sweep is hours of runner time every night for a repo with no on-call
-        # rotation reading the results; run it on demand instead.
-        on=Trigger(workflow_dispatch_inputs=CommentedMap(seeds=_seeds_input())),
+        on=Trigger(
+            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
+            workflow_dispatch_inputs=CommentedMap(seeds=_seeds_input()),
+        ),
     )
+
+    gate = w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
 
     w.job(
         "seed-sweep-nightly",
         Job(
             name="Nightly Generated-Workload Seed Sweep",
             runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
             # Testbox timing at the harness's actual defaults (ops_per_client=75,
             # see Justfile `concurrency-nightly` / concurrency_workload.rs
             # `seed_sweep_nightly`): ~3.5-4.6s per seed x profile combo across the
