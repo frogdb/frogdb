@@ -798,6 +798,7 @@ mod tests {
         snap
     }
 
+    // FM-CLUSTER-072
     #[test]
     fn test_map_slots_response_skips_zero_slot_primary() {
         let snap = fixture();
@@ -825,6 +826,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-072
     #[test]
     fn test_map_shards_response_reports_offset_for_local_node_only() {
         let snap = fixture();
@@ -897,6 +899,7 @@ mod tests {
             .to_string()
     }
 
+    // FM-CLUSTER-016
     #[test]
     fn test_cluster_info_reports_config_epoch_counter_verbatim() {
         // A Raft re-election with no topology change: the term outruns the
@@ -908,6 +911,7 @@ mod tests {
         assert_eq!(info_field(&body, "cluster_raft_term"), "7");
     }
 
+    // FM-CLUSTER-016
     #[test]
     fn test_cluster_info_reports_raft_term_as_its_own_field() {
         // A stable leader (low term) with several topology events already
@@ -917,6 +921,7 @@ mod tests {
         assert_eq!(info_field(&body, "cluster_raft_term"), "2");
     }
 
+    // FM-CLUSTER-016
     #[test]
     fn test_cluster_info_epoch_bump_is_visible_under_a_higher_term() {
         // The masking case the fold produced, now pinned as fixed: on a young
@@ -929,6 +934,7 @@ mod tests {
         assert_eq!(info_field(&after, "cluster_current_epoch"), "1");
     }
 
+    // FM-CLUSTER-016
     #[test]
     fn test_cluster_info_my_epoch_is_the_per_node_value_not_the_counter() {
         // `cluster_my_epoch` is this node's own `NodeInfo::config_epoch`; the
@@ -948,6 +954,7 @@ mod tests {
     /// would read as "term zero" and let a scrape chart a value that does not
     /// exist. The epochs *are* reported as `0` -- those fields are Redis's and
     /// clients parse them unconditionally.
+    // FM-CLUSTER-016
     #[test]
     fn test_cluster_info_standalone_omits_the_raft_term_line() {
         let body = ClusterInfoReport::standalone().render();
@@ -962,6 +969,7 @@ mod tests {
         assert_eq!(info_field(&body, "cluster_slots_ok"), "16384");
     }
 
+    // FM-CLUSTER-074
     #[test]
     fn test_cluster_info_render_is_crlf_framed_key_value_lines() {
         let body = epoch_report(1, 1, 1).render();
@@ -982,6 +990,7 @@ mod tests {
     // CommandContext (store/raft/quorum-checker plumbing).
     // ------------------------------------------------------------------
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_all_ok_when_no_node_flagged() {
         let snap = fixture();
@@ -991,6 +1000,7 @@ mod tests {
         assert_eq!(health.fail, 0);
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_fail_flagged_owner_counts_as_fail_not_ok() {
         let mut snap = fixture();
@@ -1002,6 +1012,7 @@ mod tests {
         assert_eq!(health.pfail, 0);
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_pfail_flagged_owner_counts_distinct_from_fail() {
         // PFAIL has no producer in FrogDB today (see `SlotHealthCounts`), so
@@ -1015,6 +1026,7 @@ mod tests {
         assert_eq!(health.ok, 0);
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_fail_takes_precedence_over_pfail() {
         let mut snap = fixture();
@@ -1028,6 +1040,7 @@ mod tests {
         assert_eq!(health.pfail, 0);
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_recovery_restores_full_ok() {
         let mut snap = fixture();
@@ -1043,6 +1056,7 @@ mod tests {
         assert_eq!(health.pfail, 0);
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_only_counts_flagged_owners_slots_others_unaffected() {
         let mut snap = fixture();
@@ -1063,6 +1077,7 @@ mod tests {
     /// at a dead address (a very common transient) is exactly this shape, and
     /// under the old predicate it flipped every node's `cluster_state` to
     /// `fail` while every key kept answering.
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_fail_flagged_slotless_primary_leaves_slots_ok() {
         let mut snap = fixture();
@@ -1072,6 +1087,7 @@ mod tests {
         assert_eq!(health.ok, 10, "every assigned slot is still served");
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_totals_always_equal_slots_assigned() {
         // The invariant `slots_ok + slots_pfail + slots_fail == slots_assigned`
@@ -1090,6 +1106,7 @@ mod tests {
         assert_eq!(health.ok, 0);
     }
 
+    // FM-CLUSTER-073
     #[test]
     fn test_count_slot_health_unknown_owner_counted_ok_not_dropped() {
         // Defensive: a slot pointing at a node missing from `nodes` must still

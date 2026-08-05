@@ -790,6 +790,7 @@ pub async fn send_rpc_response(
 mod tests {
     use super::*;
 
+    // FM-CLUSTER-051
     #[test]
     fn test_network_factory_node_registration() {
         let factory = ClusterNetworkFactory::new();
@@ -804,6 +805,7 @@ mod tests {
         assert_eq!(factory.get_node_addr(1), None);
     }
 
+    // FM-CLUSTER-051
     #[test]
     fn test_rpc_request_serialization() {
         // Test that our RPC types can be serialized/deserialized with postcard
@@ -817,6 +819,7 @@ mod tests {
         let _: ClusterRpcRequest = postcard::from_bytes(&bytes).unwrap();
     }
 
+    // FM-CLUSTER-051
     #[test]
     fn test_from_shims_wrap_correct_arm() {
         // The `From` shims must place each subset on the matching envelope arm.
@@ -831,6 +834,7 @@ mod tests {
         assert!(matches!(bus, ClusterRpcRequest::Bus(BusRpc::HealthProbe)));
     }
 
+    // FM-CLUSTER-051
     #[test]
     fn test_all_rpc_variants_roundtrip() {
         use crate::types::NodeInfo;

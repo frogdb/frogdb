@@ -263,6 +263,7 @@ mod tests {
         Arc::new(factory)
     }
 
+    // FM-CLUSTER-069
     #[tokio::test]
     async fn test_local_forwarder_broadcast_is_noop() {
         let forwarder = ClusterPubSubForwarder::Local;
@@ -270,6 +271,7 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+    // FM-CLUSTER-069
     #[tokio::test]
     async fn test_local_forwarder_forward_returns_none() {
         let forwarder = ClusterPubSubForwarder::Local;
@@ -344,6 +346,7 @@ mod tests {
     // `send_pubsub_rpc` is generic over the RPC future, so the timeout + shape
     // mapping is tested with plain async blocks — no network mock needed.
 
+    // FM-CLUSTER-068
     #[tokio::test]
     async fn test_rpc_expected_shape_yields_count() {
         let result = send_pubsub_rpc(
@@ -360,6 +363,7 @@ mod tests {
         assert_eq!(result, Ok(7));
     }
 
+    // FM-CLUSTER-068
     #[tokio::test]
     async fn test_rpc_shape_mismatch_is_distinguishable_not_zero() {
         // A broadcast request answered with a *forward* result is a protocol
@@ -378,6 +382,7 @@ mod tests {
         assert_eq!(result, Err(PubSubRpcError::UnexpectedResponse));
     }
 
+    // FM-CLUSTER-068
     #[tokio::test]
     async fn test_rpc_transport_error_maps_to_rpc_variant() {
         let result = send_pubsub_rpc(
@@ -390,6 +395,7 @@ mod tests {
         assert_eq!(result, Err(PubSubRpcError::Rpc));
     }
 
+    // FM-CLUSTER-067
     #[tokio::test(start_paused = true)]
     async fn test_rpc_timeout_maps_to_timeout_variant() {
         // A never-completing RPC: with paused time, tokio auto-advances the
@@ -404,6 +410,7 @@ mod tests {
         assert_eq!(result, Err(PubSubRpcError::Timeout));
     }
 
+    // FM-CLUSTER-068
     #[tokio::test]
     async fn test_forward_extractor_matches_only_forward_results() {
         assert_eq!(

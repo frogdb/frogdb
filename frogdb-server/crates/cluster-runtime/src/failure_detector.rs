@@ -787,6 +787,7 @@ pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::tas
 mod tests {
     use super::*;
 
+    // FM-CLUSTER-054
     #[test]
     fn test_failure_detector_config_default() {
         let config = FailureDetectorConfig::default();
@@ -795,6 +796,7 @@ mod tests {
         assert_eq!(config.fail_threshold, 5);
     }
 
+    // FM-CLUSTER-052
     #[test]
     fn test_node_health_default() {
         let health = NodeHealth::default();
@@ -807,6 +809,7 @@ mod tests {
     /// N-1 consecutive failures must NOT latch; the Nth latches; clearing the
     /// latch takes the same N consecutive successes; then it takes N failures
     /// again to re-latch.
+    // FM-CLUSTER-052
     #[test]
     fn test_health_table_threshold_latching_is_symmetric() {
         let now = Instant::now();
@@ -867,6 +870,7 @@ mod tests {
     /// The recovery run must be *consecutive*: one failure in the middle of it
     /// resets the count, so a peer that answers one probe in two never clears
     /// its FAIL flag (and never churns the config epoch flipping it).
+    // FM-CLUSTER-052
     #[test]
     fn test_health_table_latch_survives_flapping_recovery() {
         let now = Instant::now();
@@ -903,6 +907,7 @@ mod tests {
     /// that latched while this process was a follower (so nobody who could
     /// write to Raft saw the threshold crossing) must still report `Failed` on
     /// every later poll.
+    // FM-CLUSTER-053
     #[test]
     fn test_health_table_verdict_is_level_triggered() {
         let t0 = Instant::now();
@@ -949,6 +954,7 @@ mod tests {
 
     /// A single success resets the failure run of a node that never latched —
     /// the hysteresis only applies in the un-latch direction.
+    // FM-CLUSTER-052
     #[test]
     fn test_health_table_success_resets_failure_run() {
         let now = Instant::now();
@@ -972,6 +978,7 @@ mod tests {
 
     /// Staleness window boundary: reachable strictly while
     /// `now - last_seen < check_interval * (fail_threshold + 2)`.
+    // FM-CLUSTER-054
     #[test]
     fn test_health_table_staleness_boundary() {
         let t0 = Instant::now();
@@ -1011,6 +1018,7 @@ mod tests {
 
     /// A node that was never seen, or one latched as failed, is unreachable;
     /// self is always reachable regardless.
+    // FM-CLUSTER-055
     #[test]
     fn test_health_table_reachable_never_seen_and_failed() {
         let now = Instant::now();
@@ -1034,6 +1042,7 @@ mod tests {
     }
 
     /// Quorum arithmetic for odd and even cluster sizes.
+    // FM-CLUSTER-055
     #[test]
     fn test_health_table_quorum_arithmetic() {
         let now = Instant::now();
@@ -1094,6 +1103,7 @@ mod tests {
         )
     }
 
+    // FM-CLUSTER-057
     #[test]
     fn test_compute_replica_score_priority_zero_excluded() {
         let node = make_node(10, 0);
@@ -1101,6 +1111,7 @@ mod tests {
         assert_eq!(score_of(&node, 1000, &offsets), u64::MAX);
     }
 
+    // FM-CLUSTER-056
     #[test]
     fn test_compute_replica_score_lower_priority_is_better() {
         let node_a = make_node(10, 50);
@@ -1111,6 +1122,7 @@ mod tests {
         assert!(score_a < score_b, "Lower priority should give lower score");
     }
 
+    // FM-CLUSTER-056
     #[test]
     fn test_compute_replica_score_higher_offset_is_better() {
         let node_a = make_node(10, 100);
@@ -1125,6 +1137,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-058
     #[test]
     fn test_compute_replica_score_equal_scores_tiebreak_by_node_id() {
         let node_a = make_node(10, 100);
@@ -1136,6 +1149,7 @@ mod tests {
         // Tiebreaker is handled in the min_by comparator, not in compute_replica_score
     }
 
+    // FM-CLUSTER-056
     #[test]
     fn test_compute_replica_score_formula() {
         let node = make_node(10, 100);
@@ -1147,6 +1161,7 @@ mod tests {
         assert_eq!(score, 10_200_000);
     }
 
+    // FM-CLUSTER-056
     #[test]
     fn test_compute_replica_score_no_offset_found() {
         let node = make_node(10, 100);
@@ -1163,6 +1178,7 @@ mod tests {
     /// `cluster-replica-priority` is read at *selection* time through
     /// `priority_of`, so storing a new value re-decides the promotion target
     /// with no restart and no re-published `NodeInfo`.
+    // FM-CLUSTER-058
     #[test]
     fn test_replica_priority_store_changes_failover_target() {
         let self_id: NodeId = 10;
@@ -1210,6 +1226,7 @@ mod tests {
     }
 
     /// Every candidate at effective priority 0 => no promotion target at all.
+    // FM-CLUSTER-057
     #[test]
     fn test_select_failover_target_all_never_promote() {
         let a = make_node(10, 0);

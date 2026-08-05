@@ -891,6 +891,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-001
     #[test]
     fn test_add_node() {
         let state = ClusterState::new();
@@ -903,6 +904,7 @@ mod tests {
         assert_eq!(retrieved.addr, test_addr(6379));
     }
 
+    // FM-CLUSTER-001
     #[test]
     fn test_apply_local_shares_validated_path() {
         // Bootstrap seeding goes through apply_local, which must enforce the
@@ -945,6 +947,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(999))));
     }
 
+    // FM-CLUSTER-001
     #[test]
     fn test_add_duplicate_node() {
         let state = ClusterState::new();
@@ -965,6 +968,7 @@ mod tests {
         assert_eq!(info.cluster_addr, test_addr(16380));
     }
 
+    // FM-CLUSTER-001
     #[test]
     fn test_add_node_reregistration_keeps_recorded_role() {
         // A node re-registers itself on every boot with the only role it can
@@ -1005,6 +1009,7 @@ mod tests {
         assert_eq!(info.cluster_addr, test_addr(16390));
     }
 
+    // FM-CLUSTER-003
     #[test]
     fn test_assign_slots() {
         let state = ClusterState::new();
@@ -1023,6 +1028,7 @@ mod tests {
         assert_eq!(state.get_slot_owner(101), None);
     }
 
+    // FM-CLUSTER-002
     #[test]
     fn test_remove_node_clears_slots() {
         let state = ClusterState::new();
@@ -1045,6 +1051,7 @@ mod tests {
         assert!(state.get_node(1).is_none());
     }
 
+    // FM-CLUSTER-005
     #[test]
     fn test_set_role() {
         let state = ClusterState::new();
@@ -1070,6 +1077,7 @@ mod tests {
         assert_eq!(node.primary_id, Some(1));
     }
 
+    // FM-CLUSTER-015
     #[test]
     fn test_increment_epoch() {
         let state = ClusterState::new();
@@ -1082,6 +1090,7 @@ mod tests {
         assert_eq!(state.config_epoch(), 2);
     }
 
+    // FM-CLUSTER-031
     #[test]
     fn test_slot_migration() {
         let state = ClusterState::new();
@@ -1127,6 +1136,7 @@ mod tests {
         assert_eq!(state.get_slot_owner(42), Some(2));
     }
 
+    // FM-CLUSTER-043
     #[tokio::test]
     async fn test_demotion_detection_fires_for_self() {
         let cluster = ClusterState::new();
@@ -1163,6 +1173,7 @@ mod tests {
         assert_eq!(event.new_primary_id, Some(1));
     }
 
+    // FM-CLUSTER-043
     #[tokio::test]
     async fn test_demotion_detection_ignores_other_nodes() {
         let cluster = ClusterState::new();
@@ -1197,6 +1208,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    // FM-CLUSTER-043
     #[tokio::test]
     async fn test_demotion_detection_not_fired_for_rejected_set_role() {
         let cluster = ClusterState::new();
@@ -1236,6 +1248,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    // FM-CLUSTER-034
     #[tokio::test]
     async fn test_migration_complete_event_fires() {
         let cluster = ClusterState::new();
@@ -1298,6 +1311,7 @@ mod tests {
     // FinalizeUpgrade tests
     // ========================================================================
 
+    // FM-CLUSTER-008
     #[test]
     fn test_finalize_upgrade_succeeds_when_all_nodes_at_target() {
         let state = ClusterState::new();
@@ -1319,6 +1333,7 @@ mod tests {
         assert_eq!(state.active_version(), Some("0.2.0".to_string()));
     }
 
+    // FM-CLUSTER-008
     #[test]
     fn test_finalize_upgrade_rejects_when_node_behind() {
         let state = ClusterState::new();
@@ -1341,6 +1356,7 @@ mod tests {
         assert_eq!(state.active_version(), None);
     }
 
+    // FM-CLUSTER-008
     #[test]
     fn test_finalize_upgrade_rejects_empty_version_node() {
         let state = ClusterState::new();
@@ -1362,6 +1378,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
 
+    // FM-CLUSTER-008
     #[test]
     fn test_finalize_upgrade_allows_nodes_ahead_of_target() {
         let state = ClusterState::new();
@@ -1379,6 +1396,7 @@ mod tests {
         assert_eq!(state.active_version(), Some("0.2.0".to_string()));
     }
 
+    // FM-CLUSTER-008
     #[test]
     fn test_finalize_upgrade_invalid_target_version() {
         let state = ClusterState::new();
@@ -1393,6 +1411,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
 
+    // FM-CLUSTER-008
     #[test]
     fn test_finalize_upgrade_idempotent() {
         let state = ClusterState::new();
@@ -1417,6 +1436,7 @@ mod tests {
         assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
+    // FM-CLUSTER-001
     #[test]
     fn test_add_node_mixed_version_succeeds() {
         let state = ClusterState::new();
@@ -1449,6 +1469,7 @@ mod tests {
     /// already holds is admitted with a *freshly minted* epoch, and the incumbent
     /// keeps the contested one. The cluster-wide counter advances with it, so it
     /// still dominates every per-node epoch.
+    // FM-CLUSTER-011
     #[test]
     fn test_add_node_epoch_collision_reassigns_incoming_node() {
         let state = ClusterState::new();
@@ -1477,6 +1498,7 @@ mod tests {
     /// The minted epoch comes from the cluster-wide counter, so it clears a
     /// counter that has already run ahead of every per-node epoch (e.g. after
     /// `IncrementEpoch`), not just the contested value.
+    // FM-CLUSTER-010
     #[test]
     fn test_add_node_collision_mints_above_cluster_counter() {
         let state = ClusterState::new();
@@ -1504,6 +1526,7 @@ mod tests {
     /// An uncontested nonzero claim is recorded verbatim, but pulls the
     /// cluster-wide counter up to it: the counter must never trail a per-node
     /// epoch, or the next mint would hand out a duplicate.
+    // FM-CLUSTER-010
     #[test]
     fn test_add_node_uncontested_epoch_raises_cluster_counter() {
         let state = ClusterState::new();
@@ -1519,6 +1542,7 @@ mod tests {
 
     /// `config_epoch == 0` means "unassigned" — the bootstrap/self-registration
     /// convention — so several fresh nodes at 0 are not a collision.
+    // FM-CLUSTER-012
     #[test]
     fn test_add_node_zero_epoch_is_not_a_collision() {
         let state = ClusterState::new();
@@ -1541,6 +1565,7 @@ mod tests {
     /// Self-registration rebuilds `NodeInfo` from scratch (epoch 0), so an
     /// upsert must not reset an epoch the node already earned — otherwise a
     /// restart would silently free an epoch for someone else to claim.
+    // FM-CLUSTER-012
     #[test]
     fn test_add_node_zero_epoch_preserves_recorded_epoch() {
         let state = ClusterState::new();
@@ -1565,6 +1590,7 @@ mod tests {
     /// Only primaries arbitrate slot ownership, so only primaries collide —
     /// matching Redis's `clusterHandleConfigEpochCollision`, which returns early
     /// unless both nodes are masters.
+    // FM-CLUSTER-011
     #[test]
     fn test_add_node_replica_sharing_primary_epoch_is_not_a_collision() {
         let state = ClusterState::new();
@@ -1586,6 +1612,7 @@ mod tests {
 
     /// A node re-registering with the epoch it already holds is an upsert, not a
     /// collision with itself.
+    // FM-CLUSTER-011
     #[test]
     fn test_add_node_self_epoch_is_not_a_collision() {
         let state = ClusterState::new();
@@ -1617,6 +1644,7 @@ mod tests {
     /// Driven as a sweep over a mixed sequence rather than one case per command:
     /// the invariant is global, and the failure mode is a *new* command forgetting
     /// it — which a per-command test cannot catch.
+    // FM-CLUSTER-010
     #[test]
     fn test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence() {
         let state = ClusterState::new();
@@ -1760,6 +1788,7 @@ mod tests {
     // Zero-coverage command tests
     // ========================================================================
 
+    // FM-CLUSTER-004
     #[test]
     fn test_remove_slots_success() {
         let state = ClusterState::new();
@@ -1782,6 +1811,7 @@ mod tests {
         assert_eq!(state.get_slot_owner(50), None);
     }
 
+    // FM-CLUSTER-004
     #[test]
     fn test_remove_slots_not_assigned() {
         let state = ClusterState::new();
@@ -1797,6 +1827,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::SlotNotAssigned(_))));
     }
 
+    // FM-CLUSTER-013
     #[test]
     fn test_mark_node_failed() {
         let state = ClusterState::new();
@@ -1812,6 +1843,7 @@ mod tests {
         assert!(info.flags.fail);
     }
 
+    // FM-CLUSTER-013
     #[test]
     fn test_mark_node_failed_nonexistent() {
         let state = ClusterState::new();
@@ -1820,6 +1852,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-014
     #[test]
     fn test_mark_node_recovered() {
         let state = ClusterState::new();
@@ -1839,6 +1872,7 @@ mod tests {
         assert!(!info.flags.pfail);
     }
 
+    // FM-CLUSTER-014
     #[test]
     fn test_mark_node_recovered_nonexistent() {
         let state = ClusterState::new();
@@ -1847,6 +1881,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-035
     #[test]
     fn test_cancel_slot_migration() {
         let state = ClusterState::new();
@@ -1877,6 +1912,7 @@ mod tests {
         assert!(!state.is_slot_migrating(42));
     }
 
+    // FM-CLUSTER-035
     #[test]
     fn test_cancel_slot_migration_nonexistent() {
         let state = ClusterState::new();
@@ -1886,6 +1922,7 @@ mod tests {
         assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
+    // FM-CLUSTER-006
     #[test]
     fn test_reset_cluster_soft() {
         let state = ClusterState::new();
@@ -1933,6 +1970,7 @@ mod tests {
         assert_eq!(info.role, NodeRole::Primary);
     }
 
+    // FM-CLUSTER-006
     #[test]
     fn test_reset_cluster_hard() {
         let state = ClusterState::new();
@@ -1971,6 +2009,7 @@ mod tests {
         assert_eq!(state.config_epoch(), 0);
     }
 
+    // FM-CLUSTER-006
     #[test]
     fn test_reset_cluster_nonexistent_node() {
         let state = ClusterState::new();
@@ -2001,6 +2040,7 @@ mod tests {
     // Error-path tests for commands with happy-path-only coverage
     // ========================================================================
 
+    // FM-CLUSTER-002
     #[test]
     fn test_remove_node_nonexistent() {
         let state = ClusterState::new();
@@ -2009,6 +2049,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-003
     #[test]
     fn test_assign_slots_node_not_found() {
         let state = ClusterState::new();
@@ -2020,6 +2061,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-003
     #[test]
     fn test_assign_slots_already_assigned() {
         let state = ClusterState::new();
@@ -2048,6 +2090,7 @@ mod tests {
         ));
     }
 
+    // FM-CLUSTER-003
     #[test]
     fn test_assign_slots_idempotent() {
         let state = ClusterState::new();
@@ -2070,6 +2113,7 @@ mod tests {
         assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
+    // FM-CLUSTER-005
     #[test]
     fn test_set_role_node_not_found() {
         let state = ClusterState::new();
@@ -2082,6 +2126,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-005
     #[test]
     fn test_set_role_replica_without_primary() {
         let state = ClusterState::new();
@@ -2098,6 +2143,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
 
+    // FM-CLUSTER-005
     #[test]
     fn test_set_role_replica_primary_not_found() {
         let state = ClusterState::new();
@@ -2114,6 +2160,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-032
     #[test]
     fn test_begin_migration_source_not_found() {
         let state = ClusterState::new();
@@ -2130,6 +2177,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-032
     #[test]
     fn test_begin_migration_target_not_found() {
         let state = ClusterState::new();
@@ -2146,6 +2194,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(_))));
     }
 
+    // FM-CLUSTER-031
     #[test]
     fn test_begin_migration_already_in_progress() {
         let state = ClusterState::new();
@@ -2184,6 +2233,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::MigrationInProgress(42))));
     }
 
+    // FM-CLUSTER-031
     #[test]
     fn test_begin_migration_idempotent() {
         let state = ClusterState::new();
@@ -2218,6 +2268,7 @@ mod tests {
         assert!(matches!(result, Ok((ClusterResponse::Ok, _))));
     }
 
+    // FM-CLUSTER-032
     #[test]
     fn test_begin_migration_wrong_owner() {
         let state = ClusterState::new();
@@ -2245,6 +2296,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
 
+    // FM-CLUSTER-033
     #[test]
     fn test_complete_migration_no_active() {
         let state = ClusterState::new();
@@ -2289,6 +2341,7 @@ mod tests {
         state
     }
 
+    // FM-CLUSTER-040
     #[test]
     fn test_failover_force_removes_old_and_transfers_everything() {
         let state = failover_fixture();
@@ -2322,6 +2375,7 @@ mod tests {
         assert_eq!(new_primary.config_epoch, epoch_before + 1);
     }
 
+    // FM-CLUSTER-041
     #[test]
     fn test_failover_graceful_demotes_old_primary() {
         let state = failover_fixture();
@@ -2350,6 +2404,7 @@ mod tests {
         assert_eq!(state.config_epoch(), epoch_before + 1);
     }
 
+    // FM-CLUSTER-039
     #[test]
     fn test_failover_validation_failure_mutates_nothing() {
         let state = failover_fixture();
@@ -2371,6 +2426,7 @@ mod tests {
         assert_eq!(state.get_node(2).unwrap().primary_id, Some(1));
     }
 
+    // FM-CLUSTER-039
     #[test]
     fn test_failover_graceful_requires_old_node() {
         let state = failover_fixture();
@@ -2386,6 +2442,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(1))));
     }
 
+    // FM-CLUSTER-039
     #[test]
     fn test_failover_same_node_rejected() {
         let state = failover_fixture();
@@ -2397,6 +2454,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
 
+    // FM-CLUSTER-042
     #[test]
     fn test_failover_force_replay_is_safe() {
         let state = failover_fixture();
@@ -2417,6 +2475,7 @@ mod tests {
         assert_eq!(state.get_slot_owner(50), Some(2));
     }
 
+    // FM-CLUSTER-036
     #[test]
     fn test_failover_force_cancels_migrations_of_removed_node() {
         let state = failover_fixture();
@@ -2447,6 +2506,7 @@ mod tests {
         assert!(!state.is_slot_migrating(42));
     }
 
+    // FM-CLUSTER-036
     #[test]
     fn test_failover_graceful_keeps_unrelated_migrations() {
         let state = failover_fixture();
@@ -2483,6 +2543,7 @@ mod tests {
         assert!(state.is_slot_migrating(200));
     }
 
+    // FM-CLUSTER-040
     #[test]
     fn test_failover_absorb_between_primaries() {
         // A primary absorbing a failed primary's slots (CLUSTER FAILOVER FORCE
@@ -2523,6 +2584,7 @@ mod tests {
         assert!(state.get_node(2).unwrap().is_primary());
     }
 
+    // FM-CLUSTER-013
     #[test]
     fn test_mark_node_failed_bumps_epoch_atomically() {
         let state = ClusterState::new();
@@ -2540,6 +2602,7 @@ mod tests {
         assert_eq!(state.config_epoch(), epoch_before + 1);
     }
 
+    // FM-CLUSTER-013
     #[test]
     fn test_mark_node_failed_missing_node_does_not_bump_epoch() {
         let state = ClusterState::new();
@@ -2549,6 +2612,7 @@ mod tests {
         assert_eq!(state.config_epoch(), epoch_before);
     }
 
+    // FM-CLUSTER-042
     #[test]
     fn test_failover_command_serde_roundtrip() {
         let cmd = ClusterCommand::Failover {
@@ -2572,6 +2636,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-042
     #[test]
     fn test_state_snapshot_roundtrip_after_failover() {
         // The Raft snapshot path serializes ClusterStateInner as JSON
@@ -2596,6 +2661,7 @@ mod tests {
         assert_eq!(restored.migrations, original.migrations);
     }
 
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_demotion_detection_fires_for_graceful_failover_of_self() {
         let cluster = failover_fixture();
@@ -2620,6 +2686,7 @@ mod tests {
         assert_eq!(event.new_primary_id, Some(2));
     }
 
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_promotion_detection_fires_for_failover_successor() {
         let cluster = failover_fixture();
@@ -2646,6 +2713,7 @@ mod tests {
         assert_eq!(event.epoch, sm.state().get_node(2).unwrap().config_epoch);
     }
 
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_force_failover_still_promotes_the_successor() {
         // Force failover emits no demotion (the old primary is removed, not
@@ -2670,6 +2738,7 @@ mod tests {
         assert_eq!(expect_promotion(&mut rx).promoted_node_id, 2);
     }
 
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_promotion_detection_fires_for_self_set_role() {
         let cluster = failover_fixture();
@@ -2696,6 +2765,7 @@ mod tests {
     /// must stay silent. A data-path promotion mints a new replication ID and
     /// forces every attached replica into a full resync, so a replayed or
     /// duplicated log entry has to be inert.
+    // FM-CLUSTER-043
     #[tokio::test]
     async fn test_promotion_detection_silent_when_already_primary() {
         let cluster = failover_fixture();
@@ -2721,6 +2791,7 @@ mod tests {
     /// Demotions and promotions travel one channel, so a flap arrives in apply
     /// order. Two channels would let the consumer settle on the wrong terminal
     /// role.
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_role_changes_preserve_apply_order() {
         let cluster = failover_fixture();
@@ -2777,6 +2848,7 @@ mod tests {
     /// reconcile this node's role itself, or a node that fell far enough behind
     /// to need a snapshot keeps serving in the role it had before it fell
     /// behind.
+    // FM-CLUSTER-045
     #[tokio::test]
     async fn test_install_snapshot_emits_promotion_when_self_role_flipped() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2800,6 +2872,7 @@ mod tests {
         assert_eq!(expect_promotion(&mut rx).promoted_node_id, 2);
     }
 
+    // FM-CLUSTER-045
     #[tokio::test]
     async fn test_install_snapshot_emits_demotion_when_self_role_flipped() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2826,6 +2899,7 @@ mod tests {
 
     /// An install that does not change this node's role must stay silent, so
     /// routine snapshot catch-up never churns the data path.
+    // FM-CLUSTER-045
     #[tokio::test]
     async fn test_install_snapshot_silent_when_self_role_unchanged() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2852,6 +2926,7 @@ mod tests {
     /// to replay: the state came off disk, not out of the log. A node that was
     /// a replica when the snapshot was cut boots with a data path that still
     /// believes it is a primary, so the reconciliation has to demote it.
+    // FM-CLUSTER-046
     #[test]
     fn test_reconcile_self_role_demotes_a_restored_replica() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2865,6 +2940,7 @@ mod tests {
         assert_eq!(event.new_primary_id, Some(1));
     }
 
+    // FM-CLUSTER-046
     #[test]
     fn test_reconcile_self_role_promotes_a_restored_primary() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2879,6 +2955,7 @@ mod tests {
     /// The common boot: both views already agree. Emitting anyway would mint a
     /// fresh replication identity on every restart of a healthy primary and
     /// force its replicas into a full resync.
+    // FM-CLUSTER-046
     #[test]
     fn test_reconcile_self_role_silent_when_views_agree() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2898,6 +2975,7 @@ mod tests {
     /// must keep emitting, and it must stop the moment the data path catches
     /// up. A one-shot boot-time reconcile would leave a failed role change
     /// stranded until the process restarted.
+    // FM-CLUSTER-046
     #[test]
     fn test_reconciler_re_emits_while_the_views_disagree() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2927,6 +3005,7 @@ mod tests {
     /// a strong sender here left a shut-down node holding its RocksDB lock and
     /// broke restart-in-process. Dropping the receiver stands in for that
     /// shutdown: the next tick reports `Detached` instead of emitting.
+    // FM-CLUSTER-046
     #[test]
     fn test_reconciler_detaches_once_the_consumer_is_gone() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2957,6 +3036,7 @@ mod tests {
 
     /// The handle exists only once role-change detection is enabled — without
     /// this node's id and the channel there is nothing to reconcile against.
+    // FM-CLUSTER-046
     #[test]
     fn test_self_role_reconciler_absent_until_detection_is_enabled() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2967,6 +3047,7 @@ mod tests {
 
     /// A node not (yet) in the restored state has no cluster-state role to
     /// reconcile against — first boot, before self-registration commits.
+    // FM-CLUSTER-046
     #[test]
     fn test_reconcile_self_role_noop_when_self_absent() {
         let mut sm = ClusterStateMachine::with_state(failover_fixture());
@@ -2975,6 +3056,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_demotion_detection_not_fired_for_failed_failover() {
         let cluster = failover_fixture();
@@ -2998,6 +3080,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    // FM-CLUSTER-044
     #[tokio::test]
     async fn test_demotion_detection_not_fired_for_force_failover() {
         // Force failover removes the old primary; that is not a demotion.
@@ -3021,6 +3104,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    // FM-CLUSTER-033
     #[test]
     fn test_complete_migration_params_mismatch() {
         let state = ClusterState::new();
@@ -3084,6 +3168,7 @@ mod tests {
         state
     }
 
+    // FM-CLUSTER-043
     #[test]
     fn set_role_replica_emits_node_demoted() {
         let state = two_primaries();
@@ -3105,6 +3190,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-043
     #[test]
     fn set_role_primary_emits_no_event() {
         // Promoting to (or reasserting) Primary is not a demotion.
@@ -3119,6 +3205,7 @@ mod tests {
         assert!(events.is_empty());
     }
 
+    // FM-CLUSTER-043
     #[test]
     fn set_role_self_demotion_emits_no_event_on_error() {
         // The previously-missing coverage: a rejected SetRole self-demotion
@@ -3139,6 +3226,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::NodeNotFound(2))));
     }
 
+    // FM-CLUSTER-044
     #[test]
     fn graceful_failover_emits_node_demoted_for_old_primary() {
         let state = failover_fixture();
@@ -3169,6 +3257,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-015
     #[test]
     fn increment_epoch_returns_typed_epoch() {
         // IncrementEpoch returns the post-increment config epoch as a typed
@@ -3181,6 +3270,7 @@ mod tests {
         assert_eq!(state.config_epoch(), 1);
     }
 
+    // FM-CLUSTER-044
     #[test]
     fn force_failover_emits_promotion_only() {
         // Force failover removes the old primary; that is not a demotion. The
@@ -3202,6 +3292,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-034
     #[test]
     fn complete_migration_emits_event_on_success() {
         let state = ClusterState::new();
@@ -3247,6 +3338,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-034
     #[test]
     fn complete_migration_emits_no_event_on_error() {
         // No migration in progress -> Err -> no events.
@@ -3259,6 +3351,7 @@ mod tests {
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
 
+    // FM-CLUSTER-015
     #[test]
     fn non_event_command_returns_no_events() {
         // A plain successful mutation with no associated event.

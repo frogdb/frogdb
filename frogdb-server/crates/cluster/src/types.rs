@@ -660,6 +660,7 @@ impl ClusterSnapshot {
 mod tests {
     use super::*;
 
+    // FM-CLUSTER-075
     #[test]
     fn test_slot_range_contains() {
         let range = SlotRange::new(100, 200);
@@ -670,12 +671,14 @@ mod tests {
         assert!(!range.contains(201));
     }
 
+    // FM-CLUSTER-075
     #[test]
     fn test_slot_range_display() {
         assert_eq!(SlotRange::new(0, 100).to_string(), "0-100");
         assert_eq!(SlotRange::single(42).to_string(), "42");
     }
 
+    // FM-CLUSTER-075
     #[test]
     fn test_slot_range_parse() {
         assert_eq!(
@@ -688,6 +691,7 @@ mod tests {
         assert!("20000".parse::<SlotRange>().is_err()); // out of range
     }
 
+    // FM-CLUSTER-072
     #[test]
     fn test_cluster_snapshot_get_node_slots() {
         let mut snapshot = ClusterSnapshot::new();
@@ -707,6 +711,7 @@ mod tests {
         assert_eq!(ranges[1], SlotRange::new(20, 24));
     }
 
+    // FM-CLUSTER-015
     #[test]
     fn test_cluster_response_as_error() {
         // Error carries the typed variant, retrievable via as_error().
@@ -721,6 +726,7 @@ mod tests {
         assert!(ClusterResponse::Epoch(3).as_error().is_none());
     }
 
+    // FM-CLUSTER-015
     #[test]
     fn test_cluster_response_serde_round_trip() {
         // The new derives + the openraft `R: Serialize + Deserialize` bound:
@@ -743,6 +749,7 @@ mod tests {
     /// non-divisors, and edges), the partition covers every slot in
     /// `0..CLUSTER_SLOTS` exactly once with disjoint, contiguous ranges, and the
     /// remainder always lands on the last node.
+    // FM-CLUSTER-007
     #[test]
     fn test_even_slot_ranges_partition_correctness() {
         for num_nodes in [1usize, 2, 3, 5, 7, 16] {
@@ -793,6 +800,7 @@ mod tests {
     /// Order-in equals partition-out: the node at index 0 always owns the range
     /// starting at slot 0, regardless of the node ids' numeric order. This pins
     /// the "position i -> node i" contract both bootstrap call sites rely on.
+    // FM-CLUSTER-007
     #[test]
     fn test_even_slot_ranges_order_preservation() {
         let ascending = even_slot_ranges(&[10, 20, 30]);
@@ -812,6 +820,7 @@ mod tests {
 
     /// Exact boundaries for the common cases — the literal values a regression in
     /// either bootstrap block would change.
+    // FM-CLUSTER-007
     #[test]
     fn test_even_slot_ranges_exact_boundaries() {
         let three = even_slot_ranges(&[1, 2, 3]);
@@ -829,6 +838,7 @@ mod tests {
     }
 
     /// Degenerate input: an empty slice yields an empty partition.
+    // FM-CLUSTER-007
     #[test]
     fn test_even_slot_ranges_empty() {
         assert!(even_slot_ranges(&[]).is_empty());
@@ -839,6 +849,7 @@ mod tests {
     /// sequence for the "local" and "raft" bootstrap paths. Trivially true now
     /// that both share the function — the test documents the invariant the
     /// hand-synced comment used to assert.
+    // FM-CLUSTER-007
     #[test]
     fn test_even_slot_ranges_cross_path_equivalence() {
         let node_ids: Vec<NodeId> = vec![7, 11, 13];

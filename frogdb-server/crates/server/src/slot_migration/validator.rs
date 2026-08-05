@@ -72,18 +72,21 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-019
     #[test]
     fn same_shard_empty_is_none() {
         let keys: [Bytes; 0] = [];
         assert_eq!(SlotValidator::same_shard(&keys, 4), Ok(None));
     }
 
+    // FM-CLUSTER-019
     #[test]
     fn same_slot_empty_is_none() {
         let keys: [Bytes; 0] = [];
         assert_eq!(SlotValidator::same_slot(&keys), Ok(None));
     }
 
+    // FM-CLUSTER-018
     #[test]
     fn same_shard_single_key_co_locates() {
         let keys = [Bytes::from_static(b"only")];
@@ -93,12 +96,14 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-018
     #[test]
     fn same_slot_single_key_co_locates() {
         let keys = [Bytes::from_static(b"only")];
         assert_eq!(SlotValidator::same_slot(&keys), Ok(Some(slot(b"only"))));
     }
 
+    // FM-CLUSTER-018
     #[test]
     fn hash_tagged_keys_co_locate() {
         // Keys sharing a `{tag}` hash to one slot (and therefore one shard).
@@ -111,6 +116,7 @@ mod tests {
         assert!(SlotValidator::same_shard(&keys, 4).is_ok());
     }
 
+    // FM-CLUSTER-020
     #[test]
     fn cross_slot_pair_rejects_with_seam_string() {
         // "a" and "b" hash to different CRC16 slots.
@@ -119,6 +125,7 @@ mod tests {
         assert_eq!(err_text(&err), err_text(&redirect::crossslot()));
     }
 
+    // FM-CLUSTER-018
     #[test]
     fn accepts_borrowed_slice_keys() {
         // Routing passes `&[&[u8]]` (handler.keys); scripts pass `&[Bytes]`. Both
@@ -130,6 +137,7 @@ mod tests {
         assert!(SlotValidator::same_slot(&keys).is_ok());
     }
 
+    // FM-CLUSTER-018
     #[test]
     fn same_slot_implies_same_shard_over_many_keys() {
         // The whole reason there are two methods: a set that passes the strict

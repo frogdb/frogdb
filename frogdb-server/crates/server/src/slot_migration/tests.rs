@@ -46,6 +46,7 @@ fn migration(source: u64, target: u64) -> SlotMigration {
     }
 }
 
+// FM-CLUSTER-021
 #[test]
 fn route_local_serve_when_self_owns_no_migration() {
     let mut snap = empty_snapshot();
@@ -55,6 +56,7 @@ fn route_local_serve_when_self_owns_no_migration() {
     assert_eq!(decision, RouteDecision::LocalServe);
 }
 
+// FM-CLUSTER-028
 #[test]
 fn route_local_serve_migrating_when_self_is_source() {
     let mut snap = empty_snapshot();
@@ -66,6 +68,7 @@ fn route_local_serve_migrating_when_self_is_source() {
     assert_eq!(decision, RouteDecision::LocalServeMigrating);
 }
 
+// FM-CLUSTER-022
 #[test]
 fn route_moved_when_other_node_owns_no_asking() {
     let mut snap = empty_snapshot();
@@ -82,6 +85,7 @@ fn route_moved_when_other_node_owns_no_asking() {
     );
 }
 
+// FM-CLUSTER-023
 #[test]
 fn route_moved_with_no_addr_when_owner_node_unknown() {
     let mut snap = empty_snapshot();
@@ -99,6 +103,7 @@ fn route_moved_with_no_addr_when_owner_node_unknown() {
     );
 }
 
+// FM-CLUSTER-026
 #[test]
 fn route_accept_importing_when_self_is_target_and_asking() {
     let mut snap = empty_snapshot();
@@ -110,6 +115,7 @@ fn route_accept_importing_when_self_is_target_and_asking() {
     assert_eq!(decision, RouteDecision::AcceptImporting);
 }
 
+// FM-CLUSTER-026
 #[test]
 fn route_moved_when_self_is_target_but_no_asking() {
     let mut snap = empty_snapshot();
@@ -129,6 +135,7 @@ fn route_moved_when_self_is_target_but_no_asking() {
     );
 }
 
+// FM-CLUSTER-027
 #[test]
 fn route_accept_importing_for_restore_without_asking() {
     let mut snap = empty_snapshot();
@@ -141,6 +148,7 @@ fn route_accept_importing_for_restore_without_asking() {
     assert_eq!(decision, RouteDecision::AcceptImporting);
 }
 
+// FM-CLUSTER-024
 #[test]
 fn route_unassigned_when_no_owner_no_migration() {
     let snap = empty_snapshot();
@@ -149,6 +157,7 @@ fn route_unassigned_when_no_owner_no_migration() {
     assert_eq!(decision, RouteDecision::Unassigned { slot: SLOT });
 }
 
+// FM-CLUSTER-026
 #[test]
 fn route_accept_importing_when_unassigned_self_target_with_asking() {
     let mut snap = empty_snapshot();
@@ -160,6 +169,7 @@ fn route_accept_importing_when_unassigned_self_target_with_asking() {
     assert_eq!(decision, RouteDecision::AcceptImporting);
 }
 
+// FM-CLUSTER-026
 #[test]
 fn route_unassigned_when_self_is_target_but_no_asking_or_restore() {
     let mut snap = empty_snapshot();
@@ -170,6 +180,7 @@ fn route_unassigned_when_self_is_target_but_no_asking_or_restore() {
     assert_eq!(decision, RouteDecision::Unassigned { slot: SLOT });
 }
 
+// FM-CLUSTER-028
 #[test]
 fn route_moved_when_self_is_source_but_other_owns() {
     // Source node during a slot move-out: the slot is still owned by us in the
@@ -213,6 +224,7 @@ fn reply_text(outcome: RouteOutcome) -> String {
     }
 }
 
+// FM-CLUSTER-021
 #[test]
 fn to_response_local_arms_serve_locally() {
     for decision in [
@@ -226,6 +238,7 @@ fn to_response_local_arms_serve_locally() {
     }
 }
 
+// FM-CLUSTER-022
 #[test]
 fn to_response_moved_with_addr_emits_moved() {
     let decision = moved_decision(Some(test_addr(6380)));
@@ -235,6 +248,7 @@ fn to_response_moved_with_addr_emits_moved() {
     );
 }
 
+// FM-CLUSTER-023
 #[test]
 fn to_response_moved_without_addr_emits_clusterdown() {
     let decision = moved_decision(None);
@@ -244,6 +258,7 @@ fn to_response_moved_without_addr_emits_clusterdown() {
     );
 }
 
+// FM-CLUSTER-025
 #[test]
 fn to_response_moved_readonly_eligible_serves_locally() {
     // A READONLY replica serving a read for a slot its master owns.
@@ -251,6 +266,7 @@ fn to_response_moved_readonly_eligible_serves_locally() {
     assert_eq!(decision.to_response(true), RouteOutcome::ServeLocal);
 }
 
+// FM-CLUSTER-024
 #[test]
 fn to_response_unassigned_emits_clusterdown() {
     let decision = RouteDecision::Unassigned { slot: SLOT };
@@ -260,6 +276,7 @@ fn to_response_unassigned_emits_clusterdown() {
     );
 }
 
+// FM-CLUSTER-025
 #[test]
 fn to_response_unassigned_ignores_readonly_override() {
     // READONLY never rescues an unassigned slot — no replica relationship exists.
@@ -270,6 +287,7 @@ fn to_response_unassigned_ignores_readonly_override() {
     );
 }
 
+// FM-CLUSTER-022
 #[test]
 fn to_response_moved_ipv6_is_bracketed() {
     let addr: SocketAddr = "[2001:db8::1]:6379".parse().unwrap();
@@ -316,7 +334,7 @@ fn batch_reply_text(route: BatchRoute) -> String {
     }
 }
 
-// FM-TXN-029
+// FM-CLUSTER-019, FM-TXN-029
 #[test]
 fn batch_with_no_keyed_command_serves_locally() {
     // A MULTI of PING/INFO/… touches no slot. Redis's `getNodeByQuery` returns
@@ -329,6 +347,7 @@ fn batch_with_no_keyed_command_serves_locally() {
     );
 }
 
+// FM-CLUSTER-021, FM-CLUSTER-037
 #[test]
 fn batch_on_owned_stable_slot_serves_locally() {
     let (batch, slot) = tagged_batch();
@@ -339,7 +358,7 @@ fn batch_on_owned_stable_slot_serves_locally() {
     );
 }
 
-// FM-TXN-019
+// FM-CLUSTER-020, FM-TXN-019
 #[test]
 fn batch_spanning_two_slots_is_crossslot() {
     // Individually valid commands whose slots diverged (one slot migrated)
@@ -359,7 +378,7 @@ fn batch_spanning_two_slots_is_crossslot() {
     );
 }
 
-// FM-TXN-022
+// FM-CLUSTER-022, FM-CLUSTER-037, FM-TXN-022
 #[test]
 fn batch_on_foreign_slot_is_moved_to_the_owner() {
     let (batch, slot) = tagged_batch();
@@ -370,6 +389,7 @@ fn batch_on_foreign_slot_is_moved_to_the_owner() {
     );
 }
 
+// FM-CLUSTER-026
 #[test]
 fn batch_on_import_target_with_asking_probes_importing() {
     let (batch, slot) = tagged_batch();
@@ -388,7 +408,7 @@ fn batch_on_import_target_with_asking_probes_importing() {
     );
 }
 
-// FM-TXN-015
+// FM-CLUSTER-026, FM-TXN-015
 #[test]
 fn batch_on_import_target_without_asking_is_moved() {
     // Sticky ASKING is what makes the arm above reachable at EXEC; without it
@@ -409,7 +429,7 @@ fn batch_on_import_target_without_asking_is_moved() {
     );
 }
 
-// FM-TXN-023
+// FM-CLUSTER-028, FM-TXN-023
 #[test]
 fn batch_on_migrating_source_probes_with_the_ask_target() {
     let (batch, slot) = tagged_batch();
@@ -431,7 +451,7 @@ fn batch_on_migrating_source_probes_with_the_ask_target() {
     );
 }
 
-// FM-TXN-027
+// FM-CLUSTER-028, FM-TXN-027
 #[test]
 fn batch_on_migrating_source_with_unknown_target_serves_locally() {
     // No renderable ASK address — the per-command path bails the same way
@@ -453,7 +473,7 @@ fn batch_on_migrating_source_with_unknown_target_serves_locally() {
     );
 }
 
-// FM-TXN-025
+// FM-CLUSTER-024, FM-TXN-025
 #[test]
 fn batch_on_unassigned_slot_is_clusterdown() {
     let (batch, slot) = tagged_batch();
@@ -464,7 +484,7 @@ fn batch_on_unassigned_slot_is_clusterdown() {
     );
 }
 
-// FM-TXN-028
+// FM-CLUSTER-025, FM-TXN-028
 #[test]
 fn batch_readonly_eligible_serves_a_foreign_slot_locally() {
     // READONLY connection + an all-reads batch on a slot this replica's master
@@ -477,7 +497,7 @@ fn batch_readonly_eligible_serves_a_foreign_slot_locally() {
     );
 }
 
-// FM-TXN-028
+// FM-CLUSTER-025, FM-TXN-028
 #[test]
 fn batch_readonly_ineligible_when_it_contains_a_write() {
     // The caller folds write-ness across the whole batch, so one queued write
@@ -491,7 +511,7 @@ fn batch_readonly_ineligible_when_it_contains_a_write() {
     );
 }
 
-// FM-TXN-025
+// FM-CLUSTER-025, FM-TXN-025
 #[test]
 fn batch_readonly_never_rescues_an_unassigned_slot() {
     let (batch, slot) = tagged_batch();
@@ -522,7 +542,7 @@ fn watch_reply_text(verdict: Option<frogdb_protocol::Response>) -> String {
     }
 }
 
-// FM-TXN-048
+// FM-CLUSTER-029, FM-TXN-048
 #[test]
 fn watch_on_a_foreign_slot_is_refused_with_moved() {
     // Recording the watch here would hand the client a CAS no writer on the
@@ -538,7 +558,7 @@ fn watch_on_a_foreign_slot_is_refused_with_moved() {
     );
 }
 
-// FM-TXN-048
+// FM-CLUSTER-020, FM-TXN-048
 #[test]
 fn watch_across_two_slots_is_crossslot() {
     let mut keys = BatchKeys::default();
@@ -556,7 +576,7 @@ fn watch_across_two_slots_is_crossslot() {
     );
 }
 
-// FM-TXN-048
+// FM-CLUSTER-029, FM-TXN-048
 #[test]
 fn watch_on_an_open_migration_is_accepted() {
     // An open migration does not make the watch unserviceable: MIGRATE's delete
@@ -576,7 +596,7 @@ fn watch_on_an_open_migration_is_accepted() {
     assert_eq!(route_watched_keys(&snap, &keys, false, SELF_NODE), None);
 }
 
-// FM-TXN-048
+// FM-CLUSTER-024, FM-TXN-048
 #[test]
 fn watch_on_an_unassigned_slot_is_clusterdown() {
     let (keys, slot) = tagged_batch();
@@ -587,7 +607,7 @@ fn watch_on_an_unassigned_slot_is_clusterdown() {
     );
 }
 
-// FM-TXN-049
+// FM-CLUSTER-029, FM-TXN-049
 #[test]
 fn watch_slot_locally_served_accepts_an_open_migration() {
     // Same reasoning as at WATCH time: the version check owns the open window.
@@ -606,7 +626,7 @@ fn watch_slot_locally_served_accepts_an_open_migration() {
     ));
 }
 
-// FM-TXN-049
+// FM-CLUSTER-029, FM-TXN-049
 #[test]
 fn watch_slot_locally_served_rejects_a_slot_owned_elsewhere() {
     // The slot changed hands: this node's copy of the watched key is stale and

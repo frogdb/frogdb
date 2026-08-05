@@ -222,6 +222,7 @@ mod tests {
 
     // --- resolve_redirect: the pure fallback ---------------------------------
 
+    // FM-CLUSTER-048
     #[test]
     fn resolve_redirect_known_leader_yields_redirect() {
         let cs = state_with_leader(7, "127.0.0.1:6379");
@@ -233,6 +234,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-049
     #[test]
     fn resolve_redirect_leader_not_in_state_yields_clusterdown() {
         let cs = state_with_leader(7, "127.0.0.1:6379");
@@ -242,6 +244,7 @@ mod tests {
         assert_eq!(r.leader_client_addr, None);
     }
 
+    // FM-CLUSTER-049
     #[test]
     fn resolve_redirect_no_leader_yields_clusterdown() {
         let cs = ClusterState::new();
@@ -290,6 +293,7 @@ mod tests {
         ClusterWriter::new(proposer, forwarder, Arc::new(cs))
     }
 
+    // FM-CLUSTER-047
     #[tokio::test]
     async fn leader_commit_ok_is_committed() {
         // Forward would panic-fail if reached; leader commit must not forward.
@@ -304,6 +308,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-047
     #[tokio::test]
     async fn leader_commit_state_machine_error_is_committed_error() {
         // The state machine rejected the write; the caller still inspects it.
@@ -322,6 +327,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-048
     #[tokio::test]
     async fn follower_forward_success_is_forwarded() {
         let w = writer(
@@ -338,6 +344,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-048
     #[tokio::test]
     async fn follower_forward_failure_is_redirect() {
         let w = writer(
@@ -357,6 +364,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-049
     #[tokio::test]
     async fn follower_forward_failure_unknown_leader_is_clusterdown_redirect() {
         // Forward fails and the leader is not in cluster state -> CLUSTERDOWN.
@@ -374,6 +382,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-050
     #[tokio::test]
     async fn non_forward_raft_error_is_raft_error() {
         let w = writer(

@@ -118,22 +118,26 @@ mod tests {
 
     // Tests against the static (empty) registry
 
+    // FM-CLUSTER-009
     #[test]
     fn no_gates_means_nothing_active() {
         assert!(!is_gate_active("nonexistent", Some("1.0.0")));
         assert!(!is_gate_active("nonexistent", None));
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn none_active_version_means_inactive() {
         assert!(!is_gate_active("compact_type_bytes", None));
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn invalid_active_version_means_inactive() {
         assert!(!is_gate_active("compact_type_bytes", Some("not-a-version")));
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn pending_gates_static_registry() {
         // With extended_info_fields at 0.2.0, upgrading to 0.2.0 should show it pending
@@ -146,6 +150,7 @@ mod tests {
         assert!(pending.is_empty());
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn static_gate_active_when_version_sufficient() {
         assert!(is_gate_active("extended_info_fields", Some("0.2.0")));
@@ -156,6 +161,7 @@ mod tests {
 
     // Tests against test gates (real gate logic)
 
+    // FM-CLUSTER-009
     #[test]
     fn gate_active_when_version_meets_minimum() {
         let gates = test_gates();
@@ -165,6 +171,7 @@ mod tests {
         assert!(is_gate_active_in("feature_b", Some("1.0.0"), &gates));
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn gate_inactive_when_version_below_minimum() {
         let gates = test_gates();
@@ -172,6 +179,7 @@ mod tests {
         assert!(!is_gate_active_in("feature_b", Some("0.2.0"), &gates));
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn gate_inactive_when_no_active_version() {
         let gates = test_gates();
@@ -179,6 +187,7 @@ mod tests {
         assert!(!is_gate_active_in("feature_b", None, &gates));
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn pending_gates_returns_unlockable_gates() {
         let gates = test_gates();
@@ -192,6 +201,7 @@ mod tests {
         assert_eq!(pending.len(), 2);
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn pending_gates_excludes_already_active() {
         let gates = test_gates();
@@ -201,6 +211,7 @@ mod tests {
         assert_eq!(pending[0].name, "feature_b");
     }
 
+    // FM-CLUSTER-009
     #[test]
     fn pending_gates_empty_for_patch_upgrade() {
         let gates = test_gates();

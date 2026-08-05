@@ -348,6 +348,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::atomic::AtomicBool;
 
+    // FM-CLUSTER-065
     #[test]
     fn strict_mode_always_requires_tls() {
         assert_eq!(choose_transport(false, Some(0x16)), BusTransport::Tls);
@@ -355,6 +356,7 @@ mod tests {
         assert_eq!(choose_transport(false, None), BusTransport::Tls);
     }
 
+    // FM-CLUSTER-066
     #[test]
     fn dual_accept_sniffs_the_client_hello() {
         assert_eq!(choose_transport(true, Some(0x16)), BusTransport::Tls);
@@ -365,6 +367,7 @@ mod tests {
 
     /// The bus reads the dual-accept flag per connection, so flipping it on the
     /// TLS runtime handle changes what the *next* connection does.
+    // FM-CLUSTER-066
     #[test]
     fn flipping_the_runtime_flag_changes_the_next_connection() {
         let flag = std::sync::Arc::new(AtomicBool::new(false));
@@ -391,6 +394,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-066
     #[tokio::test]
     async fn test_cluster_bus_bind_fails_on_invalid_addr() {
         // Trying to bind to a privileged port should fail (unless running as root)

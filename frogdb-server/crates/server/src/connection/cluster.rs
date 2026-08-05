@@ -203,6 +203,7 @@ mod tests {
     /// Pin the exact `REDIRECT`/`CLUSTERDOWN` wire bytes so the collapse of the
     /// two former byte-identical copies into `redirect_to_response` is provably
     /// lossless.
+    // FM-CLUSTER-049
     #[test]
     fn redirect_to_response_renders_wire_strings() {
         let redirect = redirect_to_response(LeaderRedirect {

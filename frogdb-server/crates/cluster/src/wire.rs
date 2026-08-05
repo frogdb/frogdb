@@ -283,6 +283,7 @@ mod tests {
         snap
     }
 
+    // FM-CLUSTER-071
     #[test]
     fn test_format_node_id_is_40_hex() {
         let s = format_node_id(1);
@@ -294,6 +295,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-071
     #[test]
     fn test_node_flags_label() {
         // myself primary.
@@ -319,6 +321,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-071
     #[test]
     fn test_node_health() {
         let mut flags = NodeFlags::default();
@@ -329,6 +332,7 @@ mod tests {
         assert_eq!(node_health(&flags), "fail");
     }
 
+    // FM-CLUSTER-071
     #[test]
     fn test_render_cluster_nodes_golden() {
         let snap = fixture();
@@ -348,6 +352,7 @@ mod tests {
         assert_eq!(out, expected);
     }
 
+    // FM-CLUSTER-071
     #[test]
     fn test_render_cluster_nodes_standalone() {
         // The standalone snapshot renders the historical single-primary line.
@@ -359,6 +364,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-072
     #[test]
     fn test_shard_views_grouping_and_order() {
         // Two primaries (ids 10 and 5) each with a replica; primaries must come
@@ -406,6 +412,7 @@ mod tests {
         assert_eq!(views[1].replicas[0].id, 11);
     }
 
+    // FM-CLUSTER-072
     #[test]
     fn test_shard_views_includes_zero_slot_primary() {
         // A primary owning zero slots is still enumerated (SHARDS needs it; the

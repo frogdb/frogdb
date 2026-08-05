@@ -656,21 +656,6 @@ mod tests {
         );
     }
 
-    // FM-CLUSTER-015
-    #[test]
-    fn increment_epoch_returns_typed_epoch() {
-        let state = ClusterState::new();
-        let (response, events) = state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
-        assert!(
-            matches!(response, ClusterResponse::Epoch(1)),
-            "expected the new epoch as a typed value, got {response:?}"
-        );
-        assert!(events.is_empty(), "an epoch bump is not a role change");
-        let (response, _) = state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
-        assert!(matches!(response, ClusterResponse::Epoch(2)));
-        assert_eq!(state.config_epoch(), 2);
-    }
-
     // FM-CLUSTER-032
     #[test]
     fn begin_migration_accepts_an_unassigned_slot() {

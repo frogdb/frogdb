@@ -553,6 +553,7 @@ mod spec_exhaustiveness {
     /// The per-subcommand admin table and the whole-command `ADMIN` flag are one
     /// description, not two: a command with a split surface must not also claim
     /// to be wholly admin, and every split entry must name a live command.
+    // FM-CLUSTER-064
     #[test]
     fn split_admin_surfaces_agree_with_command_flags() {
         let r = full_registry();

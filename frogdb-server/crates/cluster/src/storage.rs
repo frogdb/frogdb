@@ -610,6 +610,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_storage_open_and_close() {
         let dir = tempdir().unwrap();
@@ -620,6 +621,7 @@ mod tests {
         let _storage = ClusterStorage::open(dir.path()).unwrap();
     }
 
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_storage_vote() {
         let dir = tempdir().unwrap();
@@ -637,6 +639,7 @@ mod tests {
         assert_eq!(loaded.leader_id().voted_for(), Some(42));
     }
 
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_storage_metadata() {
         let dir = tempdir().unwrap();
@@ -648,6 +651,7 @@ mod tests {
         assert!(log_state.last_purged_log_id.is_none());
     }
 
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_storage_committed() {
         let dir = tempdir().unwrap();
@@ -677,6 +681,7 @@ mod tests {
     /// and encoding `append` uses), the store is closed and reopened
     /// (simulating a process restart with no election involved), and the
     /// recovered entries are replayed into a brand-new state machine.
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_config_epoch_round_trips_through_storage_restart() {
         use crate::state::ClusterStateMachine;
@@ -742,6 +747,7 @@ mod tests {
     /// purged prefix outright. This test reproduces exactly that shape -- a
     /// snapshot is built, the process "restarts", and no log entry is ever
     /// replayed -- and asserts the state comes back anyway.
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_state_machine_snapshot_survives_restart_without_log_replay() {
         use crate::state::ClusterStateMachine;
@@ -855,6 +861,7 @@ mod tests {
     /// newer snapshot from the leader. The builder started earlier and finishes
     /// later, so last-writer-wins would move the durable snapshot *backwards*,
     /// behind log entries purge already deleted.
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_snapshot_save_never_moves_backwards() {
         let dir = tempdir().unwrap();
@@ -897,6 +904,7 @@ mod tests {
     /// Without a store attached the state machine keeps its old purely
     /// in-memory behaviour: nothing is written, and `get_current_snapshot`
     /// synthesizes from live state.
+    // FM-CLUSTER-017
     #[tokio::test]
     async fn test_snapshot_store_is_opt_in() {
         use crate::state::ClusterStateMachine;

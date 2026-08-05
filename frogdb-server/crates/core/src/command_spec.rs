@@ -1608,6 +1608,7 @@ mod tests {
     // Admin surface
     // ---------------------------------------------------------------------
 
+    // FM-CLUSTER-064
     #[test]
     fn admin_surface_open_when_no_admin_flag_and_no_split() {
         let surface = admin_surface("GET", CommandFlags::READONLY);
@@ -1619,6 +1620,7 @@ mod tests {
 
     /// A non-container command that carries `ADMIN` is gated whatever its
     /// arguments look like — the pre-split behavior, unchanged.
+    // FM-CLUSTER-064
     #[test]
     fn admin_surface_whole_command_gates_every_form() {
         let surface = admin_surface("DEBUG", CommandFlags::ADMIN);
@@ -1629,6 +1631,7 @@ mod tests {
         assert!(surface.requires_admin(Some("JMAP")));
     }
 
+    // FM-CLUSTER-061
     #[test]
     fn admin_surface_split_allows_public_subcommands() {
         let surface = admin_surface("CLUSTER", CommandFlags::STALE);
@@ -1650,6 +1653,7 @@ mod tests {
 
     /// Fail-closed default #1: a container command sent with no subcommand at
     /// all is gated.
+    // FM-CLUSTER-062
     #[test]
     fn admin_surface_split_gates_missing_subcommand() {
         for command in ["CLUSTER", "CONFIG", "ACL", "CLIENT", "MEMORY"] {
@@ -1662,6 +1666,7 @@ mod tests {
 
     /// Fail-closed default #2: a subcommand the table does not name is gated,
     /// so a newly added subcommand is admin-only until it is declared public.
+    // FM-CLUSTER-063
     #[test]
     fn admin_surface_split_gates_unknown_subcommand() {
         for command in ["CLUSTER", "CONFIG", "ACL", "CLIENT", "MEMORY"] {
@@ -1673,6 +1678,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-061
     #[test]
     fn admin_surface_matches_names_case_insensitively() {
         let surface = admin_surface("cluster", CommandFlags::STALE);
@@ -1682,6 +1688,7 @@ mod tests {
 
     /// The split table's per-command classification, pinned so a change to the
     /// admin-port contract shows up in a diff.
+    // FM-CLUSTER-064
     #[test]
     fn admin_surface_split_table_classification() {
         let cases: &[(&str, &[&str], &[&str])] = &[
