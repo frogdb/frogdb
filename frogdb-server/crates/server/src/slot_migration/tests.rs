@@ -3,7 +3,7 @@
 //! These cover the pure routing logic in [`super::routing::route_with_snapshot`]
 //! exhaustively. Lifecycle methods that go through Raft (`begin`, `complete`,
 //! `cancel`) and the event dispatcher are exercised by the integration suite
-//! (`tests/integration_cluster.rs::test_*_slot_migration*`,
+//! (`tests/cluster_migration.rs::test_*_slot_migration*`,
 //! `cluster/src/state.rs::test_migration_complete_event_fires`).
 
 use std::net::SocketAddr;

@@ -16,8 +16,6 @@ mod integration_admin_port;
 mod integration_basic;
 #[cfg(not(feature = "turmoil"))]
 mod integration_client;
-#[cfg(not(feature = "turmoil"))]
-mod integration_cluster;
 #[cfg(all(not(feature = "turmoil"), feature = "cmd-cms"))]
 mod integration_cms;
 #[cfg(not(feature = "turmoil"))]

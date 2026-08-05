@@ -11,6 +11,32 @@ autotests = false
 name = "main"
 path = "tests/main.rs"
 
+# Cluster integration tests, split per concern out of the former
+# `tests/integration_cluster.rs` (hardening campaign Phase 4). Kept as separate
+# binaries rather than `main` modules so nextest can target them as a group
+# (`binary(/^cluster_/)` — see `.config/nextest.toml` and `just core-test-e2e
+# cluster`). Each file is `#![cfg(not(feature = "turmoil"))]`, matching the gate
+# the module carried in `tests/main.rs`.
+[[test]]
+name = "cluster_topology"
+path = "tests/cluster_topology.rs"
+
+[[test]]
+name = "cluster_slots"
+path = "tests/cluster_slots.rs"
+
+[[test]]
+name = "cluster_migration"
+path = "tests/cluster_migration.rs"
+
+[[test]]
+name = "cluster_failover"
+path = "tests/cluster_failover.rs"
+
+[[test]]
+name = "cluster_misc"
+path = "tests/cluster_misc.rs"
+
 [[bin]]
 name = "frogdb-server"
 path = "src/main.rs"

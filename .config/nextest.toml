@@ -22,8 +22,14 @@ max-threads = 2
 # Cluster integration tests need 5-80s solo and even longer under parallel
 # load. Give them 30s slow / 120s hard kill, cap concurrency via test group,
 # and allow retries for transient resource-contention failures.
+#
+# `frogdb-server`'s cluster suite lives in the per-concern `cluster_*` test
+# binaries (`tests/cluster_{topology,slots,migration,failover,misc}.rs`), so it
+# is selected by binary name, not by module path. The `test(integration_cluster::)`
+# arm still covers frogctl's `integration_cluster` module (a `main`-binary
+# submodule, reachable via `just frogctl-test`).
 [[profile.default.overrides]]
-filter = "test(integration_cluster::)"
+filter = "(package(frogdb-server) & binary(/^cluster_/)) | test(integration_cluster::)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 test-group = "cluster"
 retries = 2

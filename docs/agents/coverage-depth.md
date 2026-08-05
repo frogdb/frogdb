@@ -71,7 +71,7 @@ Each function gets exactly one class, assigned in this priority order:
 | `well-covered` | `>= 5` tests across `>= 2` suites | — |
 | `covered` | anything else | middling breadth |
 
-A "suite" is `<test-binary>::<top-level test module>`, so `integration_cluster::…`
+A "suite" is `<test-binary>::<top-level test module>`, so `cluster_topology::…`
 tests and `frogdb_core` unit tests count as different suites.
 
 **Cold lines** (`count == 1`) are reported separately: executed exactly once across the
@@ -118,6 +118,6 @@ every report.
   does not invalidate the profiles: the pipeline continues past a non-zero nextest exit and
   reports on whatever ran. Confirm any failure by rerunning it with plain `just test` before
   treating it as a real bug.
-- `integration_cluster::` tests have `retries = 2`, so one test can produce up to three
+- The `cluster_*` binaries' tests have `retries = 2`, so one test can produce up to three
   profiles; profile filenames carry the pid to keep them from clobbering each other, and
   the report de-duplicates by test name.

@@ -73,7 +73,7 @@ AUDIT_DIR = REPO / ".scratch" / "testing-improvements" / "audit"
 # Matches what `cargo llvm-cov` reports on: dependency and toolchain sources are
 # out of scope, and so are the test/bench/example targets' own sources — a test
 # function trivially "covers itself", which would swamp both the totals
-# (integration_cluster.rs alone is 9k lines) and the diversity classes. Keeping
+# (the cluster_*.rs suite alone is 14k lines) and the diversity classes. Keeping
 # them out also makes the totals comparable to coverage-nightly.yml.
 IGNORE_REGEX = (
     r"(^/rustc/|/\.cargo/registry/|/\.rustup/toolchains/|/target/"
