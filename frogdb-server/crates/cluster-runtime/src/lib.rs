@@ -14,6 +14,8 @@
 //!   atomics, read at the point of use so `CONFIG SET` needs no restart.
 //! - [`failure_detector`] probes peers over TCP, keeps a local health table,
 //!   and — on the leader — reconciles that view into the replicated topology.
+//! - [`migration_events`] wakes the clients blocked on a slot that just moved
+//!   away, translating each completion event into a per-shard notification.
 //!
 //! Nothing here reaches back into `frogdb-server`: the network primitives come
 //! from [`frogdb_net`] (so the turmoil swap reaches this crate — see the
@@ -23,11 +25,15 @@
 pub mod bus;
 pub mod failure_detector;
 pub mod flags;
+pub mod migration_events;
 pub mod pubsub;
 
 pub use bus::{ClusterBusContext, run as run_cluster_bus};
 pub use failure_detector::{FailureDetector, FailureDetectorConfig, spawn_failure_detector_task};
 pub use flags::{ClusterRuntimeFlags, SelfFenceGate};
+pub use migration_events::{
+    MigrationNotice, plan_migration_notice, run_slot_migration_event_dispatcher,
+};
 pub use pubsub::{ClusterPubSubForwarder, ShardRoute, SpublishOutcome};
 
 #[cfg(not(feature = "turmoil"))]

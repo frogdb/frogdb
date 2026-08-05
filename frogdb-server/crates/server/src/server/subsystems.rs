@@ -350,6 +350,13 @@ impl Server {
                     .shared_replication_offset
                     .clone()
                     .unwrap_or_else(|| Arc::new(AtomicU64::new(0))),
+                // Both bus directions accumulate into the network factory's
+                // counter pair, which is what `CLUSTER INFO` reads.
+                bus_stats: self
+                    .network_factory
+                    .as_ref()
+                    .map(|nf| nf.bus_stats().clone())
+                    .unwrap_or_default(),
                 #[cfg(not(feature = "turmoil"))]
                 tls: if self.config.tls.enabled && self.config.tls.tls_cluster {
                     self.tls_runtime.as_ref().map(|h| {

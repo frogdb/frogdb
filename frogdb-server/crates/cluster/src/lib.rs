@@ -45,6 +45,7 @@
 mod commands;
 pub mod network;
 pub mod state;
+pub mod stats;
 pub mod storage;
 pub mod types;
 pub mod version_gate;
@@ -60,6 +61,7 @@ pub use state::{
     ClusterState, ClusterStateMachine, DemotionEvent, PromotionEvent, RoleChangeEvent,
     RoleReconcile, SelfRoleReconciler, SlotMigrationCompleteEvent,
 };
+pub use stats::{ClusterBusStats, ClusterBusStatsSnapshot};
 pub use storage::{ClusterSnapshotStore, ClusterStorage, StoredClusterSnapshot};
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,

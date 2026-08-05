@@ -11,8 +11,8 @@ use std::sync::atomic::Ordering;
 use frogdb_core::PubSubMsg;
 use frogdb_core::ShardSender;
 use frogdb_core::cluster::{
-    BusRpc, ClusterRaft, ClusterRpcRequest, ClusterRpcResponse, NodeId, handle_rpc_request,
-    parse_rpc_message, send_rpc_response,
+    BusRpc, ClusterBusStats, ClusterRaft, ClusterRpcRequest, ClusterRpcResponse, NodeId,
+    handle_rpc_request, parse_rpc_message, send_rpc_response,
 };
 // Framing helpers diverge by transport: production wraps a `tokio::net::TcpStream`
 // (optionally TLS) via `new_framed_tcp`; under turmoil the accepted stream is a
@@ -69,6 +69,10 @@ pub struct ClusterBusContext {
     pub num_shards: usize,
     pub node_id: NodeId,
     pub replication_offset: Arc<AtomicU64>,
+    /// The node-wide cluster-bus packet counters, shared with the outbound
+    /// direction (`ClusterNetworkFactory::bus_stats`) so `CLUSTER INFO` reports
+    /// one pair for the whole bus.
+    pub bus_stats: Arc<ClusterBusStats>,
     /// TLS seam for accepting encrypted cluster bus connections. `None` when
     /// the bus serves plaintext only.
     #[cfg(not(feature = "turmoil"))]
@@ -186,7 +190,7 @@ async fn handle_connection(
 
     loop {
         // Parse the incoming RPC request
-        let request = match parse_rpc_message(&mut framed).await {
+        let request = match parse_rpc_message(&mut framed, &ctx.bus_stats).await {
             Ok(req) => req,
             Err(e) => {
                 let error_msg = e.to_string();
@@ -213,7 +217,7 @@ async fn handle_connection(
         };
 
         // Send the response
-        if let Err(e) = send_rpc_response(&mut framed, response).await {
+        if let Err(e) = send_rpc_response(&mut framed, response, &ctx.bus_stats).await {
             warn!(error = %e, "Failed to send cluster RPC response");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -239,7 +243,7 @@ async fn handle_connection(
     let mut framed = new_framed(Box::new(stream));
 
     loop {
-        let request = match parse_rpc_message(&mut framed).await {
+        let request = match parse_rpc_message(&mut framed, &ctx.bus_stats).await {
             Ok(req) => req,
             Err(e) => {
                 let error_msg = e.to_string();
@@ -262,7 +266,7 @@ async fn handle_connection(
             ClusterRpcRequest::Raft(raft_rpc) => handle_rpc_request(&ctx.raft, raft_rpc).await,
         };
 
-        if let Err(e) = send_rpc_response(&mut framed, response).await {
+        if let Err(e) = send_rpc_response(&mut framed, response, &ctx.bus_stats).await {
             warn!(error = %e, "Failed to send cluster RPC response");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,

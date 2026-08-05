@@ -24,12 +24,13 @@
 //!
 //! ## Events
 //!
-//! [`run_event_dispatcher`](Self::run_event_dispatcher) is a background task
-//! that consumes [`SlotMigrationCompleteEvent`]s emitted by the Raft state
-//! machine and fans them out to the per-shard `ClusterMsg::SlotMigrated`
-//! channel used to wake blocked clients with the correct MOVED address.
+//! [`spawn_event_dispatcher`](Self::spawn_event_dispatcher) spawns the loop that
+//! consumes [`SlotMigrationCompleteEvent`]s emitted by the Raft state machine
+//! and fans them out to the per-shard `ClusterMsg::SlotMigrated` channel used to
+//! wake blocked clients. The loop itself lives in
+//! [`frogdb_cluster_runtime::run_slot_migration_event_dispatcher`], next to the
+//! rest of the cluster runtime; the coordinator only owns the spawn.
 
-mod events;
 pub(crate) mod redirect;
 mod routing;
 #[cfg(test)]
@@ -87,7 +88,13 @@ impl SlotMigrationCoordinator {
     ) {
         let cluster_state = self.cluster_state.clone();
         spawn(async move {
-            Self::run_event_dispatcher(cluster_state, migration_rx, shard_senders, num_shards).await
+            frogdb_cluster_runtime::run_slot_migration_event_dispatcher(
+                cluster_state,
+                migration_rx,
+                shard_senders,
+                num_shards,
+            )
+            .await
         });
     }
 

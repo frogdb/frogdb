@@ -32,8 +32,9 @@ Scope. The cluster area is one replicated state machine plus the seams that read
   (`cluster-runtime/src/{failure_detector,flags}.rs`).
 * **Admin gating (061..064)** — the per-subcommand admin surface for `CLUSTER`, including both
   fail-closed defaults (`core/src/command_spec.rs`, `server/src/connection/guards.rs`).
-* **Bus, pub/sub, and reporting (065..075)** — the cluster bus transport decision, the pub/sub RPC
-  outcome mapping, and what `CLUSTER NODES`/`SLOTS`/`SHARDS`/`INFO` render
+* **Bus, pub/sub, and reporting (065..075, 077)** — the cluster bus transport decision, the pub/sub
+  RPC outcome mapping, the bus packet counters, and what `CLUSTER NODES`/`SLOTS`/`SHARDS`/`INFO`
+  render
   (`cluster-runtime/src/{bus,pubsub}.rs`, `cluster/src/wire.rs`,
   `server/src/commands/cluster/mod.rs`).
 
@@ -564,17 +565,17 @@ folded in here.
 | Field | Value |
 |---|---|
 | Trigger | A `SlotMigrationCompleteEvent` reaching the per-node dispatcher while clients are blocked (`BLPOP` and friends) on keys in that slot. |
-| Observable | Blocked clients are woken with `MOVED` to the migration target. |
-| NOT observable | A client left blocked forever on a slot this node no longer owns — its key can never be written here again, so nothing will ever wake it. |
-| Invariant | `run_event_dispatcher` resolves the target node's address and sends `ClusterMsg::SlotMigrated{slot, target_addr}` to the owning shard (`slot_migration/events.rs:18-47`). |
-| Outcome variant | `ClusterMsg::SlotMigrated` |
-| Forced by | MISSING ([gap: 35-migration-complete-event-dropped-when-target-unknown.md](../issues/open/35-migration-complete-event-dropped-when-target-unknown.md)) |
-| Bug refs | `.scratch/hardening/issues/open/35-migration-complete-event-dropped-when-target-unknown.md` |
+| Observable | Blocked clients are woken with `MOVED` to the migration target — or, when this node cannot name the target, with `CLUSTERDOWN Hash slot <n> not served` (the rendering routing already uses for "owner known, address unknown", FM-CLUSTER-023). Both losses of contact — a shard index that does not exist, a shard channel that is closed — are logged at `error`. |
+| NOT observable | A client left blocked forever on a slot this node no longer owns — its key can never be written here again, so nothing will ever wake it. In particular an event is never `continue`d past because its target is unresolvable. |
+| Invariant | `plan_migration_notice` maps the event to a `MigrationNotice{shard, slot, target_addr: Option<SocketAddr>}` and `run_slot_migration_event_dispatcher` delivers *every* notice (`cluster-runtime/src/migration_events.rs`); the shard renders `MOVED` for `Some` and `CLUSTERDOWN` for `None` (`core/src/shard/blocking.rs:118`). |
+| Outcome variant | `MigrationNotice` / `ClusterMsg::SlotMigrated{target_addr: Option<SocketAddr>}` |
+| Forced by | `migration_event_with_a_known_target_notifies_the_owning_shard`, `migration_event_with_an_unknown_target_still_wakes_blocked_clients`, `migration_event_routes_to_slot_modulo_num_shards`, `migration_event_reports_a_closed_shard_channel`, `slot_migrated_without_a_known_target_replies_clusterdown` |
+| Bug refs | fixed: [35-migration-complete-event-dropped-when-target-unknown.md](../issues/done/35-migration-complete-event-dropped-when-target-unknown.md) |
 
-The dispatcher has no unit tests at all, and two of its paths swallow failure: an event whose target
-node is absent from cluster state is logged and *dropped* (blocked clients are never woken), and the
-shard send discards its result. Both are in the filed issue; this row stays `MISSING` until the
-dispatcher grows a seam that can be driven without a live cluster.
+The dispatcher moved out of `frogdb-server` (`slot_migration/events.rs`, deleted) into the
+mutation-gated `frogdb-cluster-runtime`, split into a pure planning function and a delivery step that
+reports its own failures. `BlockedMigrationMoved` counts only the `MOVED` wake-ups, so the counter
+keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in the logs instead.
 
 ---
 
@@ -1023,7 +1024,7 @@ than disguised as correct ownership.
 | Invariant | `count_slot_health` walks the assignment map once and assigns each slot to exactly one bucket, with the unknown-owner case landing in `ok` explicitly rather than falling out of the loop. |
 | Outcome variant | `SlotHealthCounts` |
 | Forced by | `test_count_slot_health_totals_always_equal_slots_assigned`, `test_count_slot_health_all_ok_when_no_node_flagged`, `test_count_slot_health_fail_flagged_owner_counts_as_fail_not_ok`, `test_count_slot_health_pfail_flagged_owner_counts_distinct_from_fail`, `test_count_slot_health_fail_takes_precedence_over_pfail`, `test_count_slot_health_recovery_restores_full_ok`, `test_count_slot_health_only_counts_flagged_owners_slots_others_unaffected`, `test_count_slot_health_fail_flagged_slotless_primary_leaves_slots_ok`, `test_count_slot_health_unknown_owner_counted_ok_not_dropped` |
-| Bug refs | `.scratch/hardening/issues/open/37-cluster-stats-messages-hardcoded-zero.md` |
+| Bug refs | fixed: [37-cluster-stats-messages-hardcoded-zero.md](../issues/done/37-cluster-stats-messages-hardcoded-zero.md) |
 
 ## FM-CLUSTER-074 — `CLUSTER INFO` is CRLF-framed `key:value` lines
 
@@ -1035,7 +1036,7 @@ than disguised as correct ownership.
 | Invariant | One `render` builds the whole body, so a field added later inherits the framing rather than choosing its own. |
 | Outcome variant | `CLUSTER INFO` body |
 | Forced by | `test_cluster_info_render_is_crlf_framed_key_value_lines` |
-| Bug refs | `.scratch/hardening/issues/open/37-cluster-stats-messages-hardcoded-zero.md` |
+| Bug refs | fixed: [37-cluster-stats-messages-hardcoded-zero.md](../issues/done/37-cluster-stats-messages-hardcoded-zero.md) |
 
 ## FM-CLUSTER-075 — slot ranges parse and render Redis-style
 
@@ -1048,6 +1049,18 @@ than disguised as correct ownership.
 | Outcome variant | `ClusterError::InvalidSlot` |
 | Forced by | `test_slot_range_contains`, `test_slot_range_display`, `test_slot_range_parse` |
 | Bug refs | — |
+
+## FM-CLUSTER-077 — `CLUSTER INFO`'s bus counters are measured or absent, never fabricated
+
+| Field | Value |
+|---|---|
+| Trigger | `CLUSTER INFO` on a node whose bus has carried traffic, on a node whose bus has carried none, and on a node with no handle on a bus at all. |
+| Observable | `cluster_stats_messages_sent`/`_received` are live counts of frames that crossed the cluster bus — requests written and responses read by the client side, requests read and responses written by the bus loop, both directions accumulating into one node-wide pair. A node that cannot read them omits both lines. `total_cluster_links_buffer_limit_exceeded` is `0` because there is no per-link output buffer limit to exceed. |
+| NOT observable | A `ping`/`pong` per-type line: FrogDB runs no gossip protocol, and Redis omits a per-type line whose counter is zero. Nor a counted frame that never crossed the wire — a request that failed to serialize, or a connection that never opened, is not traffic. |
+| Invariant | Counting happens at the four wire seams and nowhere else: `try_send_on_framed` after the write and after the response frame (`network.rs`), `parse_rpc_message` after a frame arrives, `send_rpc_response` after the write. The rendering treats an unreadable counter as `None` and omits the line, the way `cluster_raft_term` already does. |
+| Outcome variant | `ClusterBusStatsSnapshot` / `CLUSTER INFO` body |
+| Forced by | `a_fresh_counter_pair_reads_zero`, `the_two_directions_are_counted_independently`, `counters_accumulate_across_threads`, `cluster_stats_messages_sent_grows_with_bus_traffic`, `cluster_stats_messages_received_grows_on_the_receiving_node`, `a_connection_that_never_opens_counts_nothing`, `cluster_info_omits_gossip_counters_that_have_no_source`, `cluster_info_reports_the_live_bus_counters`, `cluster_info_omits_the_bus_totals_when_they_cannot_be_read` |
+| Bug refs | fixed: [37-cluster-stats-messages-hardcoded-zero.md](../issues/done/37-cluster-stats-messages-hardcoded-zero.md) |
 
 ---
 
@@ -1070,16 +1083,15 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 4. **`check_node_reachable`** — liveness is a bare TCP connect, so a wedged-but-listening node reads
    as healthy. Nothing pins that, and nothing pins that the bus `HealthProbe` answers
    unconditionally without consulting quorum, fence, or loading state.
-5. **`run_event_dispatcher`** — see FM-CLUSTER-038; no tests at all, and two swallowed failures.
-6. **The `Cluster` arm of `broadcast_publish`** — self-skip, the `flags.fail` skip, `JoinSet`
+5. **The `Cluster` arm of `broadcast_publish`** — self-skip, the `flags.fail` skip, `JoinSet`
    aggregation, and the silently dropped `JoinError` from a panicked fan-out task. The new tests
    added for FM-CLUSTER-069/070 cover the early returns and the forward path, not the fan-out.
-7. **`ClusterState::from_snapshot` zeroing `last_applied_log`**, and `apply` advancing
+6. **`ClusterState::from_snapshot` zeroing `last_applied_log`**, and `apply` advancing
    `last_applied_log` even for entries whose command errored (`state.rs:65, 742`).
-8. **Storage corruption paths** — `try_get_log_entries` with an `Excluded(0)` end bound silently
+7. **Storage corruption paths** — `try_get_log_entries` with an `Excluded(0)` end bound silently
    reads to the end of the log; `purge` writes `last_purged` before the delete batch; the CF
    `.expect`s and `decode_log_key`'s fixed-width copy panic on a tampered DB.
-9. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
+8. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
     huge `fail_threshold` panics the staleness multiply. Nothing rejects either at load.
 
 ## Tagging notes for whoever lands these
@@ -1104,7 +1116,7 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 | Topology consensus | Raft (openraft) over a dedicated bus, metadata only | Gossip with per-node config epochs and majority agreement on failover | A replicated log gives an ordered, atomic `Failover` entry (FM-CLUSTER-040); gossip needs a multi-step protocol to reach the same place. Data replication is still PSYNC, so this is a control-plane change only. |
 | Slot migration states | Two-point ownership swap; no intermediate migration state machine | `MIGRATING`/`IMPORTING` per-slot flags with the same two endpoints | The intermediate enum existed and only ever had one variant constructed. The importing/migrating *roles* are still derived, by comparing the local id against the migration's source and target. |
 | `CLUSTER SETSLOT IMPORTING`/`MIGRATING` | Both lower to the same replicated `BeginSlotMigration` | Two independent local flags on two different nodes | Replication makes the pair converge on one record, which is why idempotency is load-bearing (FM-CLUSTER-031). |
-| Gossip counters in `CLUSTER INFO` | `cluster_stats_messages_*` and `total_cluster_links_buffer_limit_exceeded` reported as `0` | Real message counts | There is no gossip layer to count. Reporting zeros rather than omitting the fields is the deviation, and it is filed as issue 37 — a fabricated zero is indistinguishable from a real one. |
+| Gossip counters in `CLUSTER INFO` | No per-type lines at all; `cluster_stats_messages_sent`/`_received` count real bus frames | Per-type lines for every non-zero counter, then the same two totals | Not a deviation any more. Redis skips a per-type line whose counter is zero, and FrogDB's per-type counters are *structurally* zero (no gossip protocol), so the lines are absent for the same reason they would be absent on an idle Redis node. `total_cluster_links_buffer_limit_exceeded` stays `0`: there is no per-link output buffer limit to exceed, so zero is measured, not fabricated. See FM-CLUSTER-077. |
 | `ping-sent`/`pong-recv` in `CLUSTER NODES` | Always `0 0` | Real timestamps | Same reason; positional fields cannot be omitted without breaking every client's parser, so `0` is the honest placeholder here. |
 | `PFAIL` | Structurally supported, never produced | Set by gossip suspicion before a majority confirms `FAIL` | Leader-only detection has no suspicion phase: the leader either has enough consecutive failures to latch or it does not. |
 | Shard pub/sub slot routing | `SPUBLISH` forwards to the slot owner when it can name one, and otherwise delivers locally; `SSUBSCRIBE` does not slot-route subscribers | Both are slot-routed like keyed commands, answering `MOVED`/`CLUSTERDOWN` | Since subscribers are not pinned to the owner, refusing a publish would drop a message no other node would deliver. The fallback is named rather than silent (FM-CLUSTER-070); adopting Redis' refusal means routing subscribers first. |

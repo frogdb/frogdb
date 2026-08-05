@@ -743,10 +743,14 @@ pub enum VllMsg {
 #[derive(Debug)]
 pub enum ClusterMsg {
     /// Notify shard that a slot has migrated to a new node.
-    /// All blocked clients waiting on keys in this slot receive `-MOVED`.
+    /// All blocked clients waiting on keys in this slot receive `-MOVED`, or
+    /// `-CLUSTERDOWN` when the notifier could not name the new owner's address
+    /// (it is not in this node's cluster snapshot yet). Waking them imprecisely
+    /// beats leaving them parked: the slot has moved away, so no local write
+    /// can ever wake them.
     SlotMigrated {
         slot: u16,
-        target_addr: std::net::SocketAddr,
+        target_addr: Option<std::net::SocketAddr>,
     },
 
     /// Execute a Raft command asynchronously.

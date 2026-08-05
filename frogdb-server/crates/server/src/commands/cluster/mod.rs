@@ -353,6 +353,10 @@ fn cluster_info(ctx: &mut CommandContext) -> Result<Response, CommandError> {
             current_epoch: snapshot.config_epoch,
             my_epoch,
             raft_term,
+            // Without a network factory this node has no handle on the bus it
+            // is (or is not) running, so the two totals are omitted rather than
+            // reported as zero traffic.
+            bus_stats: ctx.network_factory.map(|nf| nf.bus_stats().snapshot()),
         }
     } else {
         ClusterInfoReport::standalone()
@@ -382,6 +386,9 @@ struct ClusterInfoReport {
     /// mode, where there is no Raft group: the line is omitted rather than
     /// reported as a fake `0`.
     raft_term: Option<u64>,
+    /// Cluster-bus packet totals. `None` when this node has no handle on the
+    /// bus, which omits both lines instead of claiming an idle bus.
+    bus_stats: Option<frogdb_cluster::ClusterBusStatsSnapshot>,
 }
 
 impl ClusterInfoReport {
@@ -401,17 +408,37 @@ impl ClusterInfoReport {
             current_epoch: 0,
             my_epoch: 0,
             raft_term: None,
+            // A standalone server runs no cluster bus, so zero packets is the
+            // measured truth, not a placeholder.
+            bus_stats: Some(frogdb_cluster::ClusterBusStatsSnapshot {
+                messages_sent: 0,
+                messages_received: 0,
+            }),
         }
     }
 
     /// Render the `key:value\r\n` bulk-string body.
     ///
-    /// `cluster_raft_term` is the one optional line: standalone servers have no
-    /// Raft group, and a term of `0` there would read as "term zero" rather
-    /// than "no term".
+    /// Two groups of lines are conditional. `cluster_raft_term` is a FrogDB
+    /// extension omitted when there is no Raft group, because a term of `0`
+    /// would read as "term zero" rather than "no term". The two
+    /// `cluster_stats_messages_*` totals are omitted when this node has no
+    /// handle on the bus, for the same reason.
+    ///
+    /// The per-message-type breakdown (`..._ping_sent` and friends) is absent
+    /// entirely: FrogDB has no gossip protocol, so those messages are never
+    /// sent, and Redis itself omits a per-type line whose counter is zero. See
+    /// FM-CLUSTER-077.
     fn render(&self) -> String {
         let raft_term = match self.raft_term {
             Some(term) => format!("cluster_raft_term:{term}\r\n"),
+            None => String::new(),
+        };
+        let bus_stats = match self.bus_stats {
+            Some(stats) => format!(
+                "cluster_stats_messages_sent:{}\r\ncluster_stats_messages_received:{}\r\n",
+                stats.messages_sent, stats.messages_received
+            ),
             None => String::new(),
         };
         format!(
@@ -426,12 +453,7 @@ cluster_size:{}\r\n\
 cluster_current_epoch:{}\r\n\
 cluster_my_epoch:{}\r\n\
 {}\
-cluster_stats_messages_ping_sent:0\r\n\
-cluster_stats_messages_pong_sent:0\r\n\
-cluster_stats_messages_sent:0\r\n\
-cluster_stats_messages_ping_received:0\r\n\
-cluster_stats_messages_pong_received:0\r\n\
-cluster_stats_messages_received:0\r\n\
+{}\
 total_cluster_links_buffer_limit_exceeded:0\r\n",
             self.state,
             self.slots_assigned,
@@ -443,6 +465,7 @@ total_cluster_links_buffer_limit_exceeded:0\r\n",
             self.current_epoch,
             self.my_epoch,
             raft_term,
+            bus_stats,
         )
     }
 }
@@ -887,6 +910,7 @@ mod tests {
             current_epoch,
             my_epoch,
             raft_term: Some(raft_term),
+            bus_stats: Some(frogdb_cluster::ClusterBusStatsSnapshot::default()),
         }
     }
 
@@ -967,6 +991,68 @@ mod tests {
         assert_eq!(info_field(&body, "cluster_state"), "ok");
         assert_eq!(info_field(&body, "cluster_slots_assigned"), "16384");
         assert_eq!(info_field(&body, "cluster_slots_ok"), "16384");
+    }
+
+    /// FrogDB has no gossip protocol, so `ping`/`pong` messages are not merely
+    /// uncounted — they are never sent. Redis omits a per-type counter line
+    /// whose value is zero, so omitting them is parity, and a confident
+    /// `cluster_stats_messages_ping_sent:0` on a busy bus is exactly the
+    /// misleading value the observability rule forbids.
+    // FM-CLUSTER-077
+    #[test]
+    fn cluster_info_omits_gossip_counters_that_have_no_source() {
+        let body = epoch_report(1, 1, 1).render();
+        for absent in [
+            "cluster_stats_messages_ping_sent",
+            "cluster_stats_messages_pong_sent",
+            "cluster_stats_messages_ping_received",
+            "cluster_stats_messages_pong_received",
+        ] {
+            assert!(
+                !body.contains(absent),
+                "CLUSTER INFO must not report `{absent}`, which has no source; got:\n{body}"
+            );
+        }
+        // The totals and the link-buffer counter, which Redis always emits,
+        // stay. `total_cluster_links_buffer_limit_exceeded` is a measured zero:
+        // there is no per-link output buffer limit to exceed.
+        assert_eq!(info_field(&body, "cluster_stats_messages_sent"), "0");
+        assert_eq!(info_field(&body, "cluster_stats_messages_received"), "0");
+        assert_eq!(
+            info_field(&body, "total_cluster_links_buffer_limit_exceeded"),
+            "0"
+        );
+    }
+
+    // FM-CLUSTER-077
+    #[test]
+    fn cluster_info_reports_the_live_bus_counters() {
+        let mut report = epoch_report(1, 1, 1);
+        report.bus_stats = Some(frogdb_cluster::ClusterBusStatsSnapshot {
+            messages_sent: 17,
+            messages_received: 4,
+        });
+        let body = report.render();
+        assert_eq!(info_field(&body, "cluster_stats_messages_sent"), "17");
+        assert_eq!(info_field(&body, "cluster_stats_messages_received"), "4");
+    }
+
+    /// A node with no handle on the bus cannot report its traffic, so it
+    /// reports nothing rather than an idle bus. `CLUSTER INFO` is a key-value
+    /// block; clients look keys up rather than reading fixed positions.
+    // FM-CLUSTER-077
+    #[test]
+    fn cluster_info_omits_the_bus_totals_when_they_cannot_be_read() {
+        let mut report = epoch_report(1, 1, 1);
+        report.bus_stats = None;
+        let body = report.render();
+        assert!(
+            !body.contains("cluster_stats_messages_sent")
+                && !body.contains("cluster_stats_messages_received"),
+            "unknown bus traffic must be absent, not zero; got:\n{body}"
+        );
+        // The rest of the report still renders.
+        assert_eq!(info_field(&body, "cluster_current_epoch"), "1");
     }
 
     // FM-CLUSTER-074

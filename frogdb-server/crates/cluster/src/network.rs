@@ -38,6 +38,7 @@ use tokio::net::TcpStream;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
+use crate::stats::ClusterBusStats;
 use crate::types::{ClusterCommand, ClusterError, ClusterResponse, NodeId, TypeConfig};
 use openraft::ChangeMembers;
 
@@ -232,6 +233,9 @@ pub struct ClusterNetworkFactory {
     request_timeout_ms: u64,
     /// Factory for creating connections to peers.
     connect_factory: ConnectFactory,
+    /// Bus packet counters shared with every peer handle this factory makes,
+    /// and with the inbound bus loop (see [`ClusterNetworkFactory::bus_stats`]).
+    bus_stats: Arc<ClusterBusStats>,
 }
 
 impl std::fmt::Debug for ClusterNetworkFactory {
@@ -247,14 +251,7 @@ impl std::fmt::Debug for ClusterNetworkFactory {
 impl ClusterNetworkFactory {
     /// Create a new network factory.
     pub fn new() -> Self {
-        let connect_timeout_ms = 5000;
-        Self {
-            node_addrs: Arc::new(RwLock::new(BTreeMap::new())),
-            pool: Arc::new(ConnectionPool::default()),
-            connect_timeout_ms,
-            request_timeout_ms: 10000,
-            connect_factory: plain_tcp_connect_factory(connect_timeout_ms),
-        }
+        Self::with_timeouts(5000, 10000)
     }
 
     /// Create a network factory with custom timeouts.
@@ -265,7 +262,16 @@ impl ClusterNetworkFactory {
             connect_timeout_ms,
             request_timeout_ms,
             connect_factory: plain_tcp_connect_factory(connect_timeout_ms),
+            bus_stats: Arc::new(ClusterBusStats::new()),
         }
+    }
+
+    /// The node-wide cluster-bus packet counters.
+    ///
+    /// Handed to the inbound bus loop at startup so both directions accumulate
+    /// into the one pair `CLUSTER INFO` reports.
+    pub fn bus_stats(&self) -> &Arc<ClusterBusStats> {
+        &self.bus_stats
     }
 
     /// Set a custom connection factory (e.g. for TLS connections).
@@ -303,6 +309,7 @@ impl ClusterNetworkFactory {
             _connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
             connect_factory: Arc::clone(&self.connect_factory),
+            bus_stats: Arc::clone(&self.bus_stats),
         }
     }
 }
@@ -335,6 +342,7 @@ impl RaftNetworkFactory<TypeConfig> for ClusterNetworkFactory {
             _connect_timeout_ms: self.connect_timeout_ms,
             request_timeout_ms: self.request_timeout_ms,
             connect_factory: Arc::clone(&self.connect_factory),
+            bus_stats: Arc::clone(&self.bus_stats),
         }
     }
 }
@@ -358,6 +366,8 @@ pub struct ClusterNetwork {
     request_timeout_ms: u64,
     /// Factory for creating connections.
     connect_factory: ConnectFactory,
+    /// The node-wide bus packet counters this handle reports into.
+    bus_stats: Arc<ClusterBusStats>,
 }
 
 impl std::fmt::Debug for ClusterNetwork {
@@ -384,7 +394,16 @@ impl ClusterNetwork {
             _connect_timeout_ms: 5000,
             request_timeout_ms: 10000,
             connect_factory: plain_tcp_connect_factory(5000),
+            // A bootstrap handle predates the factory, so it counts into its
+            // own pair rather than the node's. Reachable through
+            // [`Self::bus_stats`] so the counting itself stays observable.
+            bus_stats: Arc::new(ClusterBusStats::new()),
         }
+    }
+
+    /// The bus packet counters this handle reports into.
+    pub fn bus_stats(&self) -> &Arc<ClusterBusStats> {
+        &self.bus_stats
     }
 
     /// Send a lightweight health probe to query a node's replication offset.
@@ -453,7 +472,14 @@ impl ClusterNetwork {
         if let Some(mut framed) = cached {
             // Cap timeout on cached connections to detect stale ones quickly.
             let stale_timeout = timeout.min(std::time::Duration::from_millis(500));
-            match Self::try_send_on_framed(&mut framed, &request_bytes, stale_timeout).await {
+            match Self::try_send_on_framed(
+                &mut framed,
+                &request_bytes,
+                stale_timeout,
+                &self.bus_stats,
+            )
+            .await
+            {
                 Ok(response) => {
                     *slot.lock().await = Some(framed);
                     return Ok(response);
@@ -467,7 +493,8 @@ impl ClusterNetwork {
         // Open a fresh connection
         let mut framed = self.open_framed_connection().await?;
 
-        match Self::try_send_on_framed(&mut framed, &request_bytes, timeout).await {
+        match Self::try_send_on_framed(&mut framed, &request_bytes, timeout, &self.bus_stats).await
+        {
             Ok(response) => {
                 *slot.lock().await = Some(framed);
                 Ok(response)
@@ -484,7 +511,8 @@ impl ClusterNetwork {
     ) -> Result<ClusterRpcResponse, ClusterError> {
         let mut framed = self.open_framed_connection().await?;
 
-        let result = Self::try_send_on_framed(&mut framed, &request_bytes, timeout).await;
+        let result =
+            Self::try_send_on_framed(&mut framed, &request_bytes, timeout, &self.bus_stats).await;
 
         match result {
             Ok(r) => Ok(r),
@@ -493,10 +521,15 @@ impl ClusterNetwork {
     }
 
     /// Attempt to send a serialized request and read the response on a framed stream.
+    ///
+    /// Both directions are counted here, where the frame actually crosses the
+    /// wire: a request the peer never accepted, and a response that never
+    /// arrived, are not bus traffic and must not be reported as any.
     async fn try_send_on_framed(
         framed: &mut FramedStream,
         request_bytes: &[u8],
         timeout: std::time::Duration,
+        bus_stats: &ClusterBusStats,
     ) -> Result<ClusterRpcResponse, ClusterError> {
         let result = tokio::time::timeout(timeout, async {
             framed
@@ -505,6 +538,7 @@ impl ClusterNetwork {
                 .map_err(|e| {
                     ClusterError::NetworkError(format!("failed to send request: {}", e))
                 })?;
+            bus_stats.record_sent();
 
             let response_frame = framed
                 .next()
@@ -513,6 +547,7 @@ impl ClusterNetwork {
                 .map_err(|e| {
                     ClusterError::NetworkError(format!("failed to read response: {}", e))
                 })?;
+            bus_stats.record_received();
 
             postcard::from_bytes(&response_frame)
                 .map_err(|e| ClusterError::NetworkError(format!("deserialization failed: {}", e)))
@@ -759,12 +794,15 @@ pub fn new_framed_tcp(stream: TcpStream) -> FramedStream {
 /// Parse an incoming message from a cluster bus connection.
 pub async fn parse_rpc_message(
     stream: &mut FramedStream,
+    bus_stats: &ClusterBusStats,
 ) -> Result<ClusterRpcRequest, ClusterError> {
     let frame = stream
         .next()
         .await
         .ok_or_else(|| ClusterError::NetworkError("connection closed".to_string()))?
         .map_err(|e| ClusterError::NetworkError(format!("failed to read message: {}", e)))?;
+    // A frame arrived, so it is bus traffic whether or not it decodes.
+    bus_stats.record_received();
 
     postcard::from_bytes(&frame)
         .map_err(|e| ClusterError::NetworkError(format!("deserialization failed: {}", e)))
@@ -774,6 +812,7 @@ pub async fn parse_rpc_message(
 pub async fn send_rpc_response(
     stream: &mut FramedStream,
     response: ClusterRpcResponse,
+    bus_stats: &ClusterBusStats,
 ) -> Result<(), ClusterError> {
     let response_bytes = postcard::to_allocvec(&response)
         .map_err(|e| ClusterError::NetworkError(format!("serialization failed: {}", e)))?;
@@ -782,6 +821,7 @@ pub async fn send_rpc_response(
         .send(Bytes::from(response_bytes))
         .await
         .map_err(|e| ClusterError::NetworkError(format!("failed to send response: {}", e)))?;
+    bus_stats.record_sent();
 
     Ok(())
 }
@@ -789,6 +829,7 @@ pub async fn send_rpc_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stats::ClusterBusStatsSnapshot;
 
     // FM-CLUSTER-051
     #[test]
@@ -938,5 +979,142 @@ mod tests {
             decoded,
             ClusterRpcResponse::HealthProbeResponse { .. }
         ));
+    }
+
+    // ---- Cluster-bus packet counters (CLUSTER INFO) ------------------------
+
+    /// A connect factory that hands out one in-memory stream, so a peer can be
+    /// played by a task instead of a socket.
+    fn duplex_connect_factory(client_end: tokio::io::DuplexStream) -> ConnectFactory {
+        let slot = Arc::new(parking_lot::Mutex::new(Some(client_end)));
+        Arc::new(move |_addr| {
+            let taken = slot.lock().take();
+            Box::pin(async move {
+                match taken {
+                    Some(stream) => Ok(Box::new(stream) as BoxedStream),
+                    None => Err(io::Error::other("connect factory exhausted")),
+                }
+            })
+        })
+    }
+
+    /// The peer half of a bus connection: read one request, answer it.
+    async fn serve_one_health_probe(server_end: tokio::io::DuplexStream) {
+        let mut framed = new_framed(Box::new(server_end));
+        let stats = ClusterBusStats::new();
+        let request = parse_rpc_message(&mut framed, &stats).await.unwrap();
+        assert!(matches!(
+            request,
+            ClusterRpcRequest::Bus(BusRpc::HealthProbe)
+        ));
+        send_rpc_response(
+            &mut framed,
+            ClusterRpcResponse::HealthProbeResponse {
+                node_id: 7,
+                replication_offset: 99,
+            },
+            &stats,
+        )
+        .await
+        .unwrap();
+    }
+
+    // FM-CLUSTER-077
+    #[tokio::test]
+    async fn cluster_stats_messages_sent_grows_with_bus_traffic() {
+        let (client_end, server_end) = tokio::io::duplex(64 * 1024);
+        let peer = tokio::spawn(serve_one_health_probe(server_end));
+
+        let mut factory = ClusterNetworkFactory::new();
+        factory.set_connect_factory(duplex_connect_factory(client_end));
+        assert_eq!(
+            factory.bus_stats().snapshot(),
+            ClusterBusStatsSnapshot::default(),
+            "a node that has not spoken to anyone reports no traffic"
+        );
+
+        let addr: SocketAddr = "127.0.0.1:16379".parse().unwrap();
+        let probe = factory.connect(1, addr).health_probe().await.unwrap();
+        assert_eq!(probe, (7, 99));
+        peer.await.unwrap();
+
+        // One request out, one response back — and the peer handle counts into
+        // the same node-wide pair the factory exposes.
+        assert_eq!(
+            factory.bus_stats().snapshot(),
+            ClusterBusStatsSnapshot {
+                messages_sent: 1,
+                messages_received: 1
+            }
+        );
+    }
+
+    /// The receiving side counts the request it reads and the response it
+    /// writes, using the same counter pair as the outbound direction.
+    // FM-CLUSTER-077
+    #[tokio::test]
+    async fn cluster_stats_messages_received_grows_on_the_receiving_node() {
+        let (client_end, server_end) = tokio::io::duplex(64 * 1024);
+        let stats = Arc::new(ClusterBusStats::new());
+
+        let client = tokio::spawn(async move {
+            let mut framed = new_framed(Box::new(client_end));
+            let request: ClusterRpcRequest = BusRpc::HealthProbe.into();
+            framed
+                .send(Bytes::from(postcard::to_allocvec(&request).unwrap()))
+                .await
+                .unwrap();
+            framed.next().await.unwrap().unwrap();
+        });
+
+        let mut framed = new_framed(Box::new(server_end));
+        parse_rpc_message(&mut framed, &stats).await.unwrap();
+        assert_eq!(
+            stats.snapshot(),
+            ClusterBusStatsSnapshot {
+                messages_sent: 0,
+                messages_received: 1
+            },
+            "reading a request is inbound traffic only"
+        );
+
+        send_rpc_response(
+            &mut framed,
+            ClusterRpcResponse::HealthProbeResponse {
+                node_id: 7,
+                replication_offset: 99,
+            },
+            &stats,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            stats.snapshot(),
+            ClusterBusStatsSnapshot {
+                messages_sent: 1,
+                messages_received: 1
+            }
+        );
+
+        client.await.unwrap();
+    }
+
+    /// A frame that never crossed the wire is not traffic. Reporting the
+    /// attempt would tell an operator the bus is working when it is not.
+    // FM-CLUSTER-077
+    #[tokio::test]
+    async fn a_connection_that_never_opens_counts_nothing() {
+        let mut factory = ClusterNetworkFactory::new();
+        factory.set_connect_factory(Arc::new(|_addr| {
+            Box::pin(async { Err(io::Error::other("peer is down")) })
+        }));
+
+        let addr: SocketAddr = "127.0.0.1:16379".parse().unwrap();
+        assert!(factory.connect(1, addr).health_probe().await.is_err());
+
+        assert_eq!(
+            factory.bus_stats().snapshot(),
+            ClusterBusStatsSnapshot::default()
+        );
     }
 }

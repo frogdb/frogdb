@@ -112,8 +112,14 @@ impl ShardWorker {
     }
 
     /// Handle a slot migration completion by sending `-MOVED` to all blocked clients
-    /// waiting on keys in the migrated slot.
-    pub(crate) fn handle_slot_migrated(&mut self, slot: u16, target_addr: std::net::SocketAddr) {
+    /// waiting on keys in the migrated slot — or `-CLUSTERDOWN` when the notifier
+    /// could not name the new owner (`target_addr: None`), which is the same
+    /// rendering routing uses for "owner known, address unknown".
+    pub(crate) fn handle_slot_migrated(
+        &mut self,
+        slot: u16,
+        target_addr: Option<std::net::SocketAddr>,
+    ) {
         let drained = self.wait_queue.drain_waiters_for_slot(slot);
 
         if drained.is_empty() {
@@ -128,23 +134,31 @@ impl ShardWorker {
                 shard_id = self.shard_id(),
                 conn_id = entry.conn_id,
                 slot,
-                "Sending MOVED to blocked client after slot migration"
+                target_addr = ?target_addr,
+                "Waking blocked client after slot migration"
             );
 
             // Route through the shared redirect seam so the address is rendered
             // once, bracketing IPv6 (`MOVED <slot> [<v6>]:<port>`). The inline
             // `ip():port()` form joined with a bare colon was unparseable for
             // IPv6 targets.
-            let _ = entry
-                .response_tx
-                .send(frogdb_types::redirect::moved(slot, target_addr));
+            let reply = match target_addr {
+                Some(addr) => frogdb_types::redirect::moved(slot, addr),
+                None => frogdb_types::redirect::clusterdown_slot(slot),
+            };
+            let _ = entry.response_tx.send(reply);
         }
 
-        BlockedMigrationMoved::inc_by(
-            self.observability.metrics(),
-            moved_count as u64,
-            &shard_label,
-        );
+        // The counter names the `-MOVED` redirect, so only those count: a
+        // `-CLUSTERDOWN` wake-up is under-reported rather than reported as
+        // something it is not (it is loud in the dispatcher's logs instead).
+        if target_addr.is_some() {
+            BlockedMigrationMoved::inc_by(
+                self.observability.metrics(),
+                moved_count as u64,
+                &shard_label,
+            );
+        }
 
         BlockedClients::set(
             self.observability.metrics(),
@@ -2007,7 +2021,7 @@ mod tests {
         worker.wait_queue.register(entry).unwrap();
 
         let addr: SocketAddr = "[2001:db8::1]:6379".parse().unwrap();
-        worker.handle_slot_migrated(slot, addr);
+        worker.handle_slot_migrated(slot, Some(addr));
 
         // handle_slot_migrated sends synchronously, so the reply is ready.
         match rx.try_recv().expect("waiter received the MOVED reply") {
@@ -2033,7 +2047,7 @@ mod tests {
         worker.wait_queue.register(entry).unwrap();
 
         let addr: SocketAddr = "127.0.0.1:6380".parse().unwrap();
-        worker.handle_slot_migrated(slot, addr);
+        worker.handle_slot_migrated(slot, Some(addr));
 
         match rx.try_recv().expect("waiter received the MOVED reply") {
             Response::Error(bytes) => assert_eq!(
@@ -2042,5 +2056,35 @@ mod tests {
             ),
             other => panic!("expected MOVED error, got {other:?}"),
         }
+    }
+
+    /// A migration notice whose new owner this node cannot name still wakes the
+    /// blocked client — with `-CLUSTERDOWN`, the same rendering routing uses for
+    /// "owner known, address unknown". Dropping the notice would park a
+    /// zero-timeout `BLPOP` forever on a slot this node no longer serves.
+    // FM-CLUSTER-038
+    #[test]
+    fn slot_migrated_without_a_known_target_replies_clusterdown() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"blocked-key-unknown-target");
+        let slot = crate::shard::partition::slot_for_key(&key);
+
+        let (entry, mut rx) = make_entry(BlockingOp::BLPop, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+
+        worker.handle_slot_migrated(slot, None);
+
+        match rx.try_recv().expect("waiter is woken, not left parked") {
+            Response::Error(bytes) => assert_eq!(
+                &bytes[..],
+                format!("CLUSTERDOWN Hash slot {slot} not served").as_bytes(),
+            ),
+            other => panic!("expected CLUSTERDOWN error, got {other:?}"),
+        }
+        assert_eq!(
+            worker.wait_queue.waiter_count(),
+            0,
+            "the waiter is drained, not merely replied to"
+        );
     }
 }
