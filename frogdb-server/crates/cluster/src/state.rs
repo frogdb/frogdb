@@ -883,6 +883,10 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
     async fn begin_receiving_snapshot(
         &mut self,
     ) -> Result<Box<Cursor<Vec<u8>>>, StorageError<NodeId>> {
+        // `Cursor::new(Vec::new())` and `Cursor::new(vec![])` are the same
+        // value, so the mutation that swaps one for the other is a documented
+        // equivalent. The buffer being *empty* is the part that matters and is
+        // forced by `begin_receiving_snapshot_hands_back_an_empty_buffer`.
         Ok(Box::new(Cursor::new(Vec::new())))
     }
 
@@ -3691,5 +3695,256 @@ mod tests {
             .unwrap();
         assert!(matches!(resp, ClusterResponse::Ok));
         assert!(events.is_empty());
+    }
+
+    // ---- Readers over the replicated state ---------------------------------
+
+    /// The three whole-table readers report the table, not a constant: a caller
+    /// that lists nodes, asks for a node's slot ranges, or checks slot coverage
+    /// must see what was applied.
+    // FM-CLUSTER-078
+    #[test]
+    fn state_readers_report_the_applied_table() {
+        let state = ClusterState::new();
+        assert!(state.get_all_nodes().is_empty());
+        assert!(state.get_node_slots(1).is_empty());
+        assert!(
+            !state.all_slots_assigned(),
+            "an empty slot table is not full coverage"
+        );
+
+        for id in [1u64, 2] {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: NodeInfo::new_primary(
+                        id,
+                        test_addr(6378 + id as u16),
+                        test_addr(16378 + id as u16),
+                    ),
+                })
+                .unwrap();
+        }
+        let ids: Vec<NodeId> = state.get_all_nodes().iter().map(|n| n.id).collect();
+        assert_eq!(ids, vec![1, 2]);
+
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 9), SlotRange::new(20, 24)],
+            })
+            .unwrap();
+        assert_eq!(
+            state.get_node_slots(1),
+            vec![SlotRange::new(0, 9), SlotRange::new(20, 24)],
+            "get_node_slots compacts the owned slots into ranges"
+        );
+        assert!(state.get_node_slots(2).is_empty());
+        assert!(
+            !state.all_slots_assigned(),
+            "15 of 16384 slots is not full coverage"
+        );
+
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 2,
+                slots: vec![
+                    SlotRange::new(10, 19),
+                    SlotRange::new(25, CLUSTER_SLOTS - 1),
+                ],
+            })
+            .unwrap();
+        assert!(
+            state.all_slots_assigned(),
+            "every slot is now owned by someone"
+        );
+    }
+
+    /// `self_node_id` is local, not replicated, and `0` is its "unset"
+    /// sentinel — never a node id in its own right.
+    // FM-CLUSTER-006
+    #[test]
+    fn self_node_id_treats_zero_as_unset() {
+        let state = ClusterState::new();
+        assert_eq!(
+            state.self_node_id(),
+            None,
+            "a node that has not been given an id reports none"
+        );
+
+        state.set_self_node_id(7);
+        assert_eq!(state.self_node_id(), Some(7));
+
+        state.set_self_node_id(1);
+        assert_eq!(state.self_node_id(), Some(1));
+
+        state.set_self_node_id(0);
+        assert_eq!(
+            state.self_node_id(),
+            None,
+            "0 is the unset sentinel, not node 0"
+        );
+    }
+
+    /// `from_snapshot` rebuilds the replicated half from the DTO and *keeps* the
+    /// caller's `self_node_id` cell — the identity is local state a restore must
+    /// not clear, and the cell is shared so a later `set_self_node_id` is
+    /// visible through both handles.
+    // FM-CLUSTER-006
+    #[test]
+    fn from_snapshot_restores_the_table_and_keeps_the_local_identity() {
+        let original = ClusterState::new();
+        original.set_self_node_id(4);
+        original
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(4, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        original
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 4,
+                slots: vec![SlotRange::new(0, 10)],
+            })
+            .unwrap();
+        original
+            .apply_command(ClusterCommand::IncrementEpoch)
+            .unwrap();
+
+        let snapshot = (*original.snapshot()).clone();
+        let restored = ClusterState::from_snapshot(snapshot, original.self_node_id_atomic());
+
+        assert_eq!(restored.self_node_id(), Some(4), "identity survives");
+        assert_eq!(restored.get_all_nodes().len(), 1);
+        assert_eq!(restored.get_slot_owner(5), Some(4));
+        assert_eq!(restored.config_epoch(), original.config_epoch());
+        assert!(restored.config_epoch() > 0);
+        assert_eq!(
+            restored.snapshot().get_slot_owner(5),
+            Some(4),
+            "the reader snapshot is published from the restored table"
+        );
+
+        // The identity cell is shared, not copied.
+        restored.set_self_node_id(9);
+        assert_eq!(original.self_node_id(), Some(9));
+    }
+
+    /// The epoch minter is bounded below by the highest epoch any node claims,
+    /// which is what keeps the cluster counter dominating every per-node value
+    /// even when a node joins claiming an epoch above the counter.
+    // FM-CLUSTER-010
+    #[test]
+    fn max_node_epoch_tracks_the_highest_claim() {
+        let state = ClusterState::new();
+        assert_eq!(
+            state.read_inner().max_node_epoch(),
+            0,
+            "no nodes, no claims"
+        );
+
+        let mut high = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));
+        high.config_epoch = 9;
+        state
+            .apply_command(ClusterCommand::AddNode { node: high })
+            .unwrap();
+        let mut low = NodeInfo::new_primary(2, test_addr(6380), test_addr(16380));
+        low.config_epoch = 3;
+        state
+            .apply_command(ClusterCommand::AddNode { node: low })
+            .unwrap();
+
+        assert_eq!(state.read_inner().max_node_epoch(), 9);
+        assert_eq!(
+            state.write_inner().mint_config_epoch(),
+            10,
+            "the next minted epoch clears every claim"
+        );
+    }
+
+    // ---- openraft state-machine surface ------------------------------------
+
+    /// A membership entry is openraft bookkeeping, but it still has to land:
+    /// `applied_state` is what openraft reads back at startup to decide who the
+    /// voters are.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn membership_entries_are_recorded_for_applied_state() {
+        let mut sm = ClusterStateMachine::new();
+        let (before_applied, before_membership) = sm.applied_state().await.unwrap();
+        assert!(before_applied.is_none());
+        assert!(before_membership.voter_ids().next().is_none());
+
+        let log_id = LogId::new(openraft::CommittedLeaderId::new(1, 1), 7);
+        let membership = openraft::Membership::new(
+            vec![std::collections::BTreeSet::from([1u64, 2])],
+            std::collections::BTreeMap::from([
+                (1u64, openraft::BasicNode { addr: "a".into() }),
+                (2u64, openraft::BasicNode { addr: "b".into() }),
+            ]),
+        );
+        sm.apply(vec![openraft::Entry {
+            log_id,
+            payload: EntryPayload::Membership(membership),
+        }])
+        .await
+        .unwrap();
+
+        let (applied, stored) = sm.applied_state().await.unwrap();
+        assert_eq!(applied, Some(log_id));
+        assert_eq!(
+            stored.voter_ids().collect::<Vec<_>>(),
+            vec![1, 2],
+            "the committed membership must be readable after a restart"
+        );
+        assert_eq!(stored.log_id(), &Some(log_id));
+    }
+
+    /// The snapshot builder is a handle onto the *same* state, not a fresh empty
+    /// one — a builder over a blank state would hand openraft a snapshot that
+    /// silently erases the topology it purges log entries for.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn snapshot_builder_shares_the_live_state() {
+        use openraft::storage::RaftSnapshotBuilder;
+
+        let mut sm = ClusterStateMachine::new();
+        sm.state()
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(5, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        sm.state()
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 5,
+                slots: vec![SlotRange::new(0, 3)],
+            })
+            .unwrap();
+
+        let mut builder = sm.get_snapshot_builder().await;
+        assert_eq!(
+            builder.state().get_all_nodes().len(),
+            1,
+            "the builder reads the state machine's own state"
+        );
+
+        let snapshot = builder.build_snapshot().await.unwrap();
+        let encoded: ClusterStateInner =
+            serde_json::from_slice(snapshot.snapshot.get_ref()).unwrap();
+        assert!(encoded.nodes.contains_key(&5));
+        assert_eq!(encoded.slot_assignment.get(&3), Some(&5));
+    }
+
+    /// The receive buffer openraft streams a snapshot into starts empty and at
+    /// position zero. A buffer that already held bytes would leave whatever it
+    /// held in front of a snapshot shorter than itself.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn begin_receiving_snapshot_hands_back_an_empty_buffer() {
+        let mut sm = ClusterStateMachine::new();
+        let cursor = sm.begin_receiving_snapshot().await.unwrap();
+        assert!(
+            cursor.get_ref().is_empty(),
+            "a receive buffer that starts non-empty corrupts the received snapshot"
+        );
+        assert_eq!(cursor.position(), 0);
     }
 }
