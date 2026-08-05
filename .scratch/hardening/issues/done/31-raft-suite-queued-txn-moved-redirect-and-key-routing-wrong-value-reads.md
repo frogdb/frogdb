@@ -1,9 +1,7 @@
 # 31 — Raft-suite real failures: queued-txn MOVED redirect during slot migration, and
 key-routing wrong-value reads under raft-chaos
 
-Status: ready-for-agent (see "Root cause analysis (2026-08-05)" — all three reported
-failures are harness/checker artifacts; the investigation found one *unreported* real
-server bug in the same evidence, split out below as the priority item)
+Status: done
 Type: bug (test harness — jepsen checkers) + bug (correctness — cluster slot migration)
 Origin: split out of issue 26 while investigating jepsen-nightly manual dispatch run
 30828159222 (2026-08-03). Issue 26 originally attributed the raft suite's 3 failures to a
@@ -384,9 +382,15 @@ never regress silently:
 - [x] **(P2)** Harness: order-aware value rule + admit `:info` writes (`key_routing.clj:437-445`).
 - [x] **(P3)** Harness: stop gating on bare `checker/stats` for `:f`s with legal all-fail
       outcomes (`core.clj:210`).
-- [ ] **(P3)** Tighten `slot_migration.clj` orphan/durability gating (see above) so Bug X
-      cannot regress silently.
+- [x] **(P3)** Tighten `slot_migration.clj` orphan/durability gating (see above) so Bug X
+      cannot regress silently. → see "P3 residue" resolution below (2026-08-05).
 - [ ] Unchanged from the original filing: consider tightening `check-hash-history` (issue 26).
+      Not addressed by this pass — issue 26 (done) fixed the concrete NPE this pointed at via a
+      defensive nil-field guard in `hash.clj` instead of widening the checker itself, and this
+      bullet was always an optional "consider" follow-up, not a blocking failure for issue 31's
+      three reported anomalies (all three are independently resolved above). Left open as a
+      standalone future-hardening idea rather than reopened here; not filed as its own numbered
+      issue since it has no known live symptom.
 
 ### Reproduction notes
 
@@ -457,3 +461,56 @@ Verification: `lein check` (unsandboxed — sandboxed run hit `mkstemp` `EPERM` 
 three edited files, only pre-existing unrelated reflection warnings. `just workflow-gen
 --check` — all 11 generated workflows including `jepsen-nightly.yml` OK (no change needed
 there, confirmed in sync).
+
+---
+
+## P3 residue: tighten the `:orphaned-keys` gate (2026-08-05)
+
+The one remaining unchecked item above. Bug X (hardening issue 40, the migrating-source
+single-key write that got served locally and silently orphaned instead of `ASK`ing) is now
+fixed and covered end-to-end by
+`test_single_key_write_on_migrating_source_asks_and_never_orphans`
+(`frogdb-server/crates/server/tests/cluster_migration.rs`) — the carve-out that scoped
+`slot_migration.clj`'s `:orphaned-keys` gate to transaction keys only (because non-txn orphans
+used to be a known, accepted false positive from Bug X) is no longer needed.
+
+Change (`58989d6e`, `testing/jepsen/frogdb/src/jepsen/frogdb/slot_migration.clj`, `checker`
+~line 610-837):
+
+- Added `acked-keys`, the union of the transaction's key and every key the workload's ordinary
+  `:write` ops acknowledged (`into txn-keys written-keys`; `written-keys` was already computed
+  earlier in the same `let` for the durability check).
+- Added `orphaned-acked-keys`, filtering `orphaned-keys` down to `acked-keys` instead of just
+  `txn-keys`.
+- `no-orphans?` (the gating boolean) now checks `(empty? orphaned-acked-keys)` instead of
+  `(empty? orphaned-txn-keys)` — any acked write left orphaned on the former owner now fails
+  the run, not just a transactional one.
+- Kept `orphaned-txn-keys` and the raw, ungated `orphaned-keys` in the result map for backward
+  compatibility, and added `:orphaned-acked-keys` alongside them so the new gate's basis is
+  directly visible in reports.
+- Updated the docstring's "No orphaned writes" bullet to "No orphaned acked writes" with the
+  Bug X history and why the fix makes the wider gate safe.
+
+Why the existing settle window is still enough margin against FM-CLUSTER-037 (the accepted,
+microsecond-scale raft commit→apply window) without adding new sleeps: the slot-migration
+generator already runs `finish-migration` → `(gen/sleep 2)` → `exec-queued-txn` →
+`(gen/sleep 1)` → `read-slot-owner` → `read-orphans`, i.e. ~3 seconds separate finalization from
+the orphan read, several orders of magnitude larger than FM-CLUSTER-037's window.
+
+Verification: `lein check` (unsandboxed) clean compile after fixing an unescaped-quote
+docstring syntax error caught by the first check run. Ran both workloads individually against
+a live 5-node raft cluster (`python3 testing/jepsen/run.py run slot-migration --no-build` and
+`... run slot-migration-partition --no-build`) — both PASS with the widened gate:
+
+```
+slot-migration            raft  0:25  PASS   :orphaned-acked-keys [], :orphaned-txn-keys []
+slot-migration-partition  raft  1:51  PASS   :orphaned-acked-keys [], :orphaned-txn-keys []
+```
+
+`slot-migration-partition`'s report shows `:exec-queued-txn {:valid? false, :fail-count 1}`
+(the expected MOVED-redirect-during-migration failure this issue already diagnosed as
+Redis-correct, excluded from the top-level gate by the P3 `stats-ignoring` fix) alongside
+`:no-orphaned-writes? true` and `:orphaned-keys []`, `:orphaned-acked-keys []`,
+`:orphaned-txn-keys []` all empty — the widened gate does not false-positive against the
+now-fixed server, confirming both that Bug X's fix (issue 40) holds under this workload and
+that the tightened gate is safe to ship.
