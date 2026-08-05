@@ -641,7 +641,9 @@ partially — see disagreements). Files touched: `crates/cluster/src/{storage,st
   `.scratch/replication-cluster-rework/issues/05`
   (`needs-triage`) and added
   `test_admin_port_blocks_cluster_discovery_subcommands_on_regular_port`, which pins today's
-  behaviour and says in its doc block that fixing issue 05 must *invert* it.
+  behaviour and says in its doc block that fixing issue 05 must *invert* it. (Issue 05 has since
+  shipped; the test is now
+  `test_admin_port_allows_cluster_discovery_subcommands_on_regular_port`.)
 
 ### Cheap
 
