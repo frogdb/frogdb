@@ -207,6 +207,20 @@ impl ReplicationTrackerImpl {
         );
     }
 
+    /// Forget the recorded departure because a replica has just started
+    /// streaming (FM-REPLICATION-062).
+    ///
+    /// A departure describes the replica set as it was *before* this one
+    /// arrived. Left standing, a graceful record from the previous replica
+    /// would answer for the new one the moment its link dies — disarming the
+    /// fence on exactly the failure it exists for. Clearing at the start of
+    /// each streaming generation makes the unknown state, which fences, the
+    /// state a new replica begins in.
+    pub fn clear_streaming_departure(&self) {
+        self.last_streaming_departure
+            .store(ReplicaDeparture::NONE, Ordering::Release);
+    }
+
     /// How the most recent streaming replica left, or `None` if none has (or
     /// the departure was never classified).
     pub fn last_streaming_departure(&self) -> Option<ReplicaDeparture> {
@@ -545,6 +559,45 @@ mod tests {
         assert_eq!(tracker.replica_count(), 1);
         tracker.unregister_replica(session.id());
         assert_eq!(tracker.replica_count(), 0);
+    }
+
+    // FM-REPLICATION-062
+    /// The record answers "how did the replica set *last* end", so the newest
+    /// departure decides and a stale one never outvotes it. Both directions
+    /// matter: a graceful departure after a loss must clear the fence, and a
+    /// loss after a graceful departure must restore it.
+    #[test]
+    fn the_last_streaming_departure_wins() {
+        let tracker = ReplicationTrackerImpl::new();
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            None,
+            "nothing has departed yet, and 'unknown' is not 'graceful'"
+        );
+
+        tracker.record_streaming_departure(ReplicaDeparture::Graceful);
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Graceful)
+        );
+
+        tracker.record_streaming_departure(ReplicaDeparture::Lost);
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Lost),
+            "the newer loss must not be masked by the older clean departure"
+        );
+
+        tracker.record_streaming_departure(ReplicaDeparture::Graceful);
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Graceful)
+        );
+
+        // A new streaming generation returns the record to "unknown", which is
+        // the fencing answer — not to the last value it happened to hold.
+        tracker.clear_streaming_departure();
+        assert_eq!(tracker.last_streaming_departure(), None);
     }
 
     // FM-REPLICATION-039

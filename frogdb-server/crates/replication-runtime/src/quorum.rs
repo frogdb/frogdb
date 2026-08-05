@@ -617,4 +617,180 @@ mod tests {
         assert!(!checker.is_armed());
         assert_eq!(checker.write_fence_reason(), None);
     }
+
+    // FM-REPLICATION-041
+    /// The refusal a fenced client receives names *this* mechanism and the knob
+    /// that turns it off. It is deliberately not the cluster's `-CLUSTERDOWN`:
+    /// that string sent operators of non-cluster primaries to debug a subsystem
+    /// that was not even running (issue 30). Pinned literally, because the
+    /// string is the entire diagnostic an operator gets.
+    #[test]
+    fn the_self_fence_names_itself_and_its_knob() {
+        let checker = ReplicationQuorumChecker::new(make_tracker(), true, Duration::from_secs(3));
+
+        assert_eq!(
+            checker.quorum_lost_error(),
+            "SELFFENCE writes rejected: no fresh streaming replica (self-fence-on-replica-loss)"
+        );
+        // The three properties the wording carries, asserted as properties so a
+        // reworded string still has to keep them.
+        let error = checker.quorum_lost_error();
+        assert!(
+            error.starts_with("SELFFENCE "),
+            "clients match on the leading error code, got {error}"
+        );
+        assert!(
+            error.contains("self-fence-on-replica-loss"),
+            "the refusal must name the knob that turns it off, got {error}"
+        );
+        assert!(
+            !error.contains("CLUSTERDOWN"),
+            "a replication fence must not claim the cluster is down, got {error}"
+        );
+        // The cluster's own wording is still available to the cluster checker,
+        // and is a different string.
+        assert_ne!(
+            checker.quorum_lost_error(),
+            frogdb_core::command::CLUSTER_DOWN_QUORUM_LOST
+        );
+    }
+
+    /// Arm the checker off a streaming replica, then take that replica away with
+    /// the given departure classification — the shape every disarm test starts
+    /// from. `None` models a teardown that never recorded one.
+    fn armed_then_departed(
+        departure: Option<ReplicaDeparture>,
+    ) -> (Arc<ReplicationTrackerImpl>, ReplicationQuorumChecker) {
+        let tracker = make_tracker();
+        let session = tracker.register_replica(addr(9001));
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(session.id(), 100);
+
+        let checker = ReplicationQuorumChecker::new(tracker.clone(), true, Duration::from_secs(3));
+        assert!(
+            checker.has_quorum(),
+            "a fresh streaming replica carries quorum"
+        );
+        assert!(checker.is_armed());
+
+        tracker.unregister_replica(session.id());
+        if let Some(departure) = departure {
+            tracker.record_streaming_departure(departure);
+        }
+        (tracker, checker)
+    }
+
+    // FM-REPLICATION-062
+    /// A replica that was *decommissioned* is not a replica that was lost. The
+    /// fence exists to protect against a partition, and a clean departure is
+    /// evidence there was none — so it takes the arming latch with it rather
+    /// than merely being tolerated, and the primary stays writable.
+    #[test]
+    fn a_graceful_departure_disarms_the_fence() {
+        let (_tracker, checker) = armed_then_departed(Some(ReplicaDeparture::Graceful));
+
+        assert!(
+            checker.has_quorum(),
+            "a decommissioned replica must leave a writable primary"
+        );
+        assert!(
+            !checker.is_armed(),
+            "the latch is dropped, not just overridden: this primary is back to \
+             the never-had-a-replica state"
+        );
+        assert_eq!(checker.write_fence_reason(), None);
+    }
+
+    // FM-REPLICATION-062
+    /// The failure this fence exists for: the link died. An ungraceful
+    /// departure leaves the latch armed and writes rejected, exactly as before
+    /// the disarm seam existed.
+    #[test]
+    fn a_lost_departure_keeps_the_fence_armed() {
+        let (_tracker, checker) = armed_then_departed(Some(ReplicaDeparture::Lost));
+
+        assert!(!checker.has_quorum(), "a lost replica must fence writes");
+        assert!(checker.is_armed());
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
+    }
+
+    // FM-REPLICATION-062
+    /// The unknown case is the fencing case. Any teardown path that forgets to
+    /// classify itself — or a future one that has not been taught to — must fail
+    /// closed, or the fence becomes a coin flip decided by which code path
+    /// happened to run.
+    #[test]
+    fn an_unrecorded_departure_keeps_the_fence_armed() {
+        let (tracker, checker) = armed_then_departed(None);
+
+        assert_eq!(tracker.last_streaming_departure(), None);
+        assert!(
+            !checker.has_quorum(),
+            "an unclassified departure must fence, not be assumed clean"
+        );
+        assert!(checker.is_armed());
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
+    }
+
+    // FM-REPLICATION-062
+    /// Silence, not absence, is what fences — and the disarm must not weaken
+    /// that. A replica whose link is dead but whose session is still registered
+    /// is the partition case: a *stale* graceful record from some earlier
+    /// replica must not be read as "this one left cleanly".
+    #[test]
+    fn a_registered_but_silent_replica_still_fences() {
+        let tracker = make_tracker();
+        let first = tracker.register_replica(addr(9001));
+        first.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(first.id(), 100);
+
+        let checker = ReplicationQuorumChecker::new(tracker.clone(), true, Duration::from_secs(3));
+        assert!(checker.has_quorum());
+
+        // An earlier replica left cleanly...
+        tracker.unregister_replica(first.id());
+        tracker.record_streaming_departure(ReplicaDeparture::Graceful);
+        assert!(checker.has_quorum());
+
+        // ...and a new one streamed, then went silent without ever tearing down.
+        let second = tracker.register_replica(addr(9002));
+        second.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(second.id(), 200);
+        second.backdate_last_ack_for_test(Duration::from_secs(3600));
+
+        assert!(
+            !checker.has_quorum(),
+            "a registered-but-stale replica is the partition this fence exists \
+             for; the stale graceful record must not excuse it"
+        );
+        assert!(checker.is_armed());
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
+    }
+
+    // FM-REPLICATION-062
+    /// Disarming is a return to the initial state, not a permanent opt-out: the
+    /// next replica to stream re-arms the checker, so a later ungraceful loss
+    /// fences again. A disarm that latched the other way would silently disable
+    /// fencing for the lifetime of the process.
+    #[test]
+    fn a_disarmed_fence_re_arms_on_the_next_streaming_replica() {
+        let (tracker, checker) = armed_then_departed(Some(ReplicaDeparture::Graceful));
+        assert!(checker.has_quorum());
+        assert!(!checker.is_armed());
+
+        let next = tracker.register_replica(addr(9002));
+        next.force_phase_for_test(Phase::Streaming);
+        tracker.record_ack(next.id(), 200);
+        assert!(checker.has_quorum());
+        assert!(
+            checker.is_armed(),
+            "the new streaming replica re-arms the fence"
+        );
+
+        // This one dies rather than leaving.
+        tracker.unregister_replica(next.id());
+        tracker.record_streaming_departure(ReplicaDeparture::Lost);
+        assert!(!checker.has_quorum());
+        assert_eq!(checker.write_fence_reason(), Some(FENCE_REASON));
+    }
 }

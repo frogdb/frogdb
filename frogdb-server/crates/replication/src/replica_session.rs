@@ -630,16 +630,15 @@ impl ReplicaSession {
             );
         }
 
-        // Drop the session from the registry, last: leaving the registry is
-        // what tells a waiting
-        // [`PrimaryReplicationHandler::shutdown_downstream_sessions`] that this
-        // session is done with its per-sync resources, so the removal must
-        // follow the cleanup above rather than precede it.
-        handler.tracker.unregister_replica(self.id);
-
-        // Recorded after the unregistration, so a reader that can see the
-        // departure can no longer see the session that produced it — the
-        // self-fence's disarm reads both and must never see them disagree.
+        // Recorded *before* the unregistration, and that order is load-bearing.
+        // The self-fence's disarm reads "nothing is streaming" and "the last
+        // departure was graceful" as two separate loads (FM-REPLICATION-062);
+        // between them it can only ever observe a record from an *earlier*
+        // session. Unregistering first would open a window in which this
+        // session is already gone and its own record has not landed yet, so a
+        // predecessor's graceful departure would be read as this one's and
+        // disarm the fence on a link that actually died. Recorded first, the
+        // window shows a session still registered instead — which fences.
         // An error out of any phase is a lost link by construction.
         if was_streaming {
             let departure = match &result {
@@ -648,6 +647,13 @@ impl ReplicaSession {
             };
             handler.tracker.record_streaming_departure(departure);
         }
+
+        // Drop the session from the registry, last: leaving the registry is
+        // what tells a waiting
+        // [`PrimaryReplicationHandler::shutdown_downstream_sessions`] that this
+        // session is done with its per-sync resources, so the removal must
+        // follow the cleanup above rather than precede it.
+        handler.tracker.unregister_replica(self.id);
 
         tracing::info!(
             replica_id = self.id,
@@ -1069,6 +1075,13 @@ impl ReplicaSession {
         resume: ResumeSource,
     ) -> io::Result<ReplicaDeparture> {
         self.set_phase(Phase::Streaming);
+
+        // A new streaming generation begins here, so the departure recorded by
+        // the *previous* one stops answering for the replica set
+        // (FM-REPLICATION-062). Without this, a predecessor's graceful
+        // departure would still be on record when this session's link dies,
+        // and the self-fence would read it as this replica having left cleanly.
+        handler.tracker.clear_streaming_departure();
 
         // Subscribe BEFORE reading the head / extracting the backlog so the live
         // receiver and the replayed tail cannot leave a gap (step 1 above).
@@ -3776,5 +3789,298 @@ mod tests {
         // And back off again on the same policy object.
         handler.set_lag_threshold_secs(0);
         assert!(!drive_one_interval(&mut policy, &tracker, session.id()));
+    }
+
+    // ------------------------------------------------------------------
+    // Departure classification: how a streaming link ended (FM-REPLICATION-062).
+    // ------------------------------------------------------------------
+
+    /// Serve one `PSYNC` on a background task, exactly as the connection loop
+    /// does, so a test can watch the session end and read the classification it
+    /// left behind.
+    fn spawn_psync(
+        handler: Arc<PrimaryReplicationHandler>,
+        stream: BoxedStream,
+        replication_id: String,
+        offset: i64,
+    ) -> tokio::task::JoinHandle<io::Result<()>> {
+        tokio::spawn(async move {
+            handler
+                .handle_psync(
+                    stream,
+                    addr(),
+                    &replication_id,
+                    offset,
+                    ReplicaAnnouncement::default(),
+                )
+                .await
+        })
+    }
+
+    /// A primary with a streaming replica, parked on the WAL stream. Returns the
+    /// client half, the session task, and the handler.
+    async fn streaming_primary(
+        tracker: Arc<ReplicationTrackerImpl>,
+        dir: &TempDir,
+    ) -> (
+        tokio::io::DuplexStream,
+        tokio::task::JoinHandle<io::Result<()>>,
+        Arc<PrimaryReplicationHandler>,
+    ) {
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        let (mut client, server) = tokio::io::duplex(256 * 1024);
+        let task = spawn_psync(
+            handler.clone(),
+            Box::new(server),
+            repl_id,
+            resume_point as i64,
+        );
+        let line = read_response_line(&mut client).await;
+        assert!(
+            line.starts_with("+CONTINUE"),
+            "the session must reach streaming, got: {line:?}"
+        );
+        // `+CONTINUE` is written *before* the streaming phase is entered, so the
+        // caller waits for the phase itself rather than for the line.
+        for _ in 0..1_000 {
+            if tracker.has_streaming_replica() {
+                return (client, task, handler);
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("the session never reached the streaming phase");
+    }
+
+    // FM-REPLICATION-062
+    /// A replica that closes its socket has *left*, and that is what an orderly
+    /// EOF means on the primary side. It is the observable a decommission
+    /// produces, and the only one that may drop the self-fence — so it must be
+    /// classified apart from every other way a link can end.
+    #[tokio::test]
+    async fn an_orderly_eof_is_a_graceful_departure() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (client, task, _handler) = streaming_primary(tracker.clone(), &dir).await;
+
+        drop(client);
+        task.await
+            .unwrap()
+            .expect("an orderly close is not an error");
+
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Graceful),
+            "a replica that closed its end departed cleanly"
+        );
+    }
+
+    /// A stream whose reads always fail: a link that broke rather than closed.
+    /// Writes still succeed, so the session reaches streaming before the read
+    /// half reports the failure.
+    struct ReadErrorStream(tokio::io::DuplexStream);
+
+    impl tokio::io::AsyncRead for ReadErrorStream {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "connection reset by peer",
+            )))
+        }
+    }
+
+    impl AsyncWrite for ReadErrorStream {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<io::Result<usize>> {
+            std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+        }
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::pin::Pin::new(&mut self.0).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::pin::Pin::new(&mut self.0).poll_shutdown(cx)
+        }
+    }
+
+    // FM-REPLICATION-062
+    /// A reset link is the failure the self-fence exists for. It must never be
+    /// confused with the replica closing its end: both end the session and both
+    /// unregister it, and the only thing separating "my replica was
+    /// decommissioned" from "my replica is unreachable" is this classification.
+    #[tokio::test]
+    async fn a_read_error_is_a_lost_departure() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        let (_client, server) = tokio::io::duplex(64 * 1024);
+        let task = spawn_psync(
+            handler.clone(),
+            Box::new(ReadErrorStream(server)),
+            repl_id,
+            resume_point as i64,
+        );
+        let _ = task.await.unwrap();
+
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Lost),
+            "a reset link is a lost replica, not a departed one"
+        );
+    }
+
+    // FM-REPLICATION-062
+    /// A replica the primary drops for lagging is *unreachable enough to
+    /// matter* — the primary gave up on it, it did not leave. Classifying this
+    /// as graceful would disarm the fence on the one case where the replica is
+    /// demonstrably not keeping up with the writes being fenced.
+    #[tokio::test]
+    async fn a_lag_disconnect_is_a_lost_departure() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (_client, task, handler) = streaming_primary(tracker.clone(), &dir).await;
+
+        // Any lag at all is a breach, and the replica never ACKs.
+        handler.set_lag_threshold_bytes(1);
+        for i in 0..LAG_CHECK_INTERVAL {
+            handler.broadcast_control_command(
+                "SET",
+                &[Bytes::from(format!("k{i}")), Bytes::from("v")],
+            );
+        }
+
+        let _ = task.await.unwrap();
+
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Lost),
+            "the primary dropping a lagging replica is a loss, not a departure"
+        );
+    }
+
+    // FM-REPLICATION-062
+    /// The primary ending its own downstream sessions — shutdown, demotion —
+    /// is the other clean ending. The replicas are being sent away on purpose,
+    /// so a node that comes back as a primary must not find itself fenced by
+    /// the sessions its previous stint closed.
+    #[tokio::test]
+    async fn a_primary_initiated_disconnect_is_graceful() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let (_client, task, handler) = streaming_primary(tracker.clone(), &dir).await;
+
+        let signalled = handler
+            .shutdown_downstream_sessions(Duration::from_secs(5))
+            .await;
+        assert_eq!(signalled, 1, "the streaming session must be signalled");
+        task.await.unwrap().unwrap();
+
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Graceful),
+            "sessions this primary closed itself did not go missing"
+        );
+    }
+
+    // FM-REPLICATION-062
+    /// Only a session that reached `Streaming` can arm the self-fence, so only
+    /// one that reached `Streaming` may report a departure. A sync that died
+    /// half-way through never armed anything, and a departure record from it
+    /// would answer for a replica set it was never part of.
+    #[tokio::test]
+    async fn a_session_that_never_streamed_records_no_departure() {
+        let dir = TempDir::new().unwrap();
+        let rocks_path = dir.path().join("rocks");
+        let store = Arc::new(
+            RocksStore::open(&rocks_path, 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"k", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), Some(store), dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+
+        // A 64-byte duplex: the checkpoint stream blocks long before it is done.
+        let (client, server) = tokio::io::duplex(64);
+        let session = tracker.register_replica(addr());
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(
+                        server,
+                        SyncKind::Full {
+                            replication_id: repl_id,
+                        },
+                        handler,
+                    )
+                    .await
+            }
+        });
+        drop(client);
+        let _ = task.await.unwrap();
+
+        assert_ne!(
+            session.phase(),
+            Phase::Streaming,
+            "this session died during the full sync"
+        );
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            None,
+            "a session that never streamed must leave the record untouched"
+        );
+    }
+
+    // FM-REPLICATION-062
+    /// A departure describes the replica set *before* the current one. The
+    /// moment a replica starts streaming, the previous record stops answering
+    /// for it — otherwise a predecessor's clean departure would still be on
+    /// record when this replica's link dies, and the fence would read the death
+    /// as a decommission.
+    #[tokio::test]
+    async fn a_new_streaming_generation_clears_the_previous_departure() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+
+        // A predecessor left cleanly.
+        tracker.record_streaming_departure(ReplicaDeparture::Graceful);
+
+        let (client, task, _handler) = streaming_primary(tracker.clone(), &dir).await;
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            None,
+            "a streaming replica cancels the record its predecessor left"
+        );
+
+        // ...and this one's own ending is what the record then reports.
+        drop(client);
+        task.await.unwrap().unwrap();
+        assert_eq!(
+            tracker.last_streaming_departure(),
+            Some(ReplicaDeparture::Graceful)
+        );
     }
 }
