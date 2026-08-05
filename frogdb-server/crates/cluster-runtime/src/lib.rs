@@ -29,7 +29,9 @@ pub mod migration_events;
 pub mod pubsub;
 
 pub use bus::{ClusterBusContext, run as run_cluster_bus};
-pub use failure_detector::{FailureDetector, FailureDetectorConfig, spawn_failure_detector_task};
+pub use failure_detector::{
+    DetectorRaft, FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
+};
 pub use flags::{ClusterRuntimeFlags, SelfFenceGate};
 pub use migration_events::{
     MigrationNotice, plan_migration_notice, run_slot_migration_event_dispatcher,

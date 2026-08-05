@@ -488,7 +488,6 @@ mod tests {
 
     /// Each disconnect phrase independently ends the connection quietly; a
     /// parse error that names none of them is a protocol error.
-    // FM-CLUSTER-065
     #[test]
     fn every_disconnect_phrase_ends_the_connection_quietly() {
         for msg in [
@@ -552,7 +551,6 @@ mod tests {
 
     /// A peer that simply goes away ends the connection with `Ok`, so the accept
     /// loop logs nothing on an ordinary restart.
-    // FM-CLUSTER-065
     #[tokio::test]
     async fn a_vanished_peer_closes_the_connection_cleanly() {
         let ctx = test_context(1, 0);

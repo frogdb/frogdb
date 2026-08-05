@@ -27,12 +27,39 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use frogdb_core::cluster::{
-    ClusterCommand, ClusterNetworkFactory, ClusterRaft, ClusterState, NodeId, NodeInfo,
+    ClusterCommand, ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterState, NodeId,
+    NodeInfo, RaftProposer,
 };
 use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
 
 use crate::flags::ClusterRuntimeFlags;
+
+/// The consensus surface the failure detector actually uses, as a seam.
+///
+/// Two things only: propose a topology command (inherited from
+/// [`RaftProposer`], whose blanket impl for `Arc<ClusterRaft>` the detector
+/// reuses verbatim) and read this node's Raft role. Naming them as a trait is
+/// what makes the detector testable at all — an `openraft::Raft` needs storage,
+/// a network factory and a won election before it can answer either question,
+/// none of which a unit test can stand up.
+pub trait DetectorRaft: RaftProposer + 'static {
+    /// This node's current Raft server state, read at the moment of the call.
+    fn server_state(&self) -> ServerState;
+}
+
+impl DetectorRaft for Arc<ClusterRaft> {
+    // DOCUMENTED EQUIVALENT (mutation testing): `server_state -> Default::default()`
+    // (`ServerState::Learner`) survives and cannot be killed from this crate.
+    // The body is a single field read off a live `openraft::Raft`'s metrics
+    // watch, and constructing one requires storage plus a real election, so no
+    // test here can ever observe a state other than the default. Everything
+    // this crate *decides* from the value — the `== ServerState::Leader`
+    // comparison — lives in `FailureDetector::is_leader`, which is forced.
+    fn server_state(&self) -> ServerState {
+        self.metrics().borrow().state
+    }
+}
 
 /// Startup-fixed timing configuration for failure detection.
 ///
@@ -104,12 +131,12 @@ enum ReconcileAction {
 /// the write path would otherwise leave the slot occupied for the life of the
 /// process — and a peer whose slot is stuck is a peer whose FAIL flag is never
 /// set or cleared again, silently.
-struct InflightGuard {
-    detector: Arc<FailureDetector>,
+struct InflightGuard<R> {
+    detector: Arc<FailureDetector<R>>,
     node_id: NodeId,
 }
 
-impl Drop for InflightGuard {
+impl<R> Drop for InflightGuard<R> {
     fn drop(&mut self) {
         // This can run while unwinding, where a second panic aborts the
         // process; a poisoned lock still guards a consistent `HashSet`, so
@@ -267,7 +294,10 @@ impl HealthTable {
 /// result in a local [`HealthTable`]; only the leader turns that local view
 /// into `MarkNodeFailed` / `MarkNodeRecovered` Raft writes, via
 /// [`Self::reconcile_topology`].
-pub struct FailureDetector {
+///
+/// Generic over the [`DetectorRaft`] seam; production uses the default
+/// (`Arc<ClusterRaft>`), so no call site names the parameter.
+pub struct FailureDetector<R = Arc<ClusterRaft>> {
     /// This node's ID.
     self_node_id: NodeId,
     /// Startup-fixed timing configuration for failure detection.
@@ -280,7 +310,7 @@ pub struct FailureDetector {
     /// Cluster state for reading node information.
     cluster_state: Arc<ClusterState>,
     /// Raft instance for writing failure/recovery commands.
-    raft: Arc<ClusterRaft>,
+    raft: R,
     /// Network factory for pooled connections to peers.
     network_factory: Arc<ClusterNetworkFactory>,
     /// Peers with a reconciliation write already in flight. Reconciliation is
@@ -290,14 +320,14 @@ pub struct FailureDetector {
     inflight: RwLock<HashSet<NodeId>>,
 }
 
-impl FailureDetector {
+impl<R: DetectorRaft> FailureDetector<R> {
     /// Create a new failure detector.
     pub fn new(
         self_node_id: NodeId,
         config: FailureDetectorConfig,
         flags: Arc<ClusterRuntimeFlags>,
         cluster_state: Arc<ClusterState>,
-        raft: Arc<ClusterRaft>,
+        raft: R,
         network_factory: Arc<ClusterNetworkFactory>,
     ) -> Self {
         let health = HealthTable::new(
@@ -327,8 +357,7 @@ impl FailureDetector {
 
     /// Check if this node is currently the Raft leader.
     fn is_leader(&self) -> bool {
-        let metrics = self.raft.metrics().borrow().clone();
-        metrics.state == ServerState::Leader
+        self.raft.server_state() == ServerState::Leader
     }
 
     /// Record a successful connection to a node (local tracking only).
@@ -440,7 +469,7 @@ impl FailureDetector {
                 );
             }
             Ok(Ok(resp)) => {
-                if let frogdb_core::cluster::ClusterResponse::Error(msg) = &resp.data {
+                if let ClusterResponse::Error(msg) = &resp {
                     tracing::warn!(node_id, error = %msg, "MarkNodeFailed rejected by state machine");
                     return;
                 }
@@ -594,7 +623,7 @@ impl FailureDetector {
                     );
                 }
                 Ok(Ok(resp)) => {
-                    if let frogdb_core::cluster::ClusterResponse::Error(msg) = &resp.data {
+                    if let ClusterResponse::Error(msg) = &resp {
                         // The state machine rejected the transition (e.g. the
                         // successor vanished); retrying the same command cannot
                         // succeed, so surface and stop.
@@ -706,7 +735,7 @@ fn select_failover_target<'a>(
         })
 }
 
-impl QuorumChecker for FailureDetector {
+impl<R: DetectorRaft> QuorumChecker for FailureDetector<R> {
     fn has_quorum(&self) -> bool {
         FailureDetector::has_quorum(self)
     }
@@ -730,7 +759,9 @@ async fn check_node_reachable(addr: SocketAddr, timeout: Duration) -> bool {
 /// All nodes track node reachability locally, but only the leader writes
 /// MarkNodeFailed/MarkNodeRecovered commands via Raft consensus.
 /// Returns a JoinHandle that can be used to abort the task on shutdown.
-pub fn spawn_failure_detector_task(detector: Arc<FailureDetector>) -> tokio::task::JoinHandle<()> {
+pub fn spawn_failure_detector_task<R: DetectorRaft>(
+    detector: Arc<FailureDetector<R>>,
+) -> tokio::task::JoinHandle<()> {
     let interval = Duration::from_millis(detector.config.check_interval_ms);
     let timeout = Duration::from_millis(detector.config.connect_timeout_ms);
     let self_node_id = detector.self_node_id;
@@ -1234,5 +1265,636 @@ mod tests {
         let replicas = vec![&a, &b];
         let offsets = vec![(10, 1u64), (11, 2)];
         assert!(select_failover_target(&replicas, &offsets, &|n| n.replica_priority).is_none());
+    }
+
+    // ---- The detector itself: consensus, reconciliation, auto-failover -----
+    //
+    // Everything below drives a real `FailureDetector` through the
+    // `DetectorRaft` seam. The pure tests above cover the health table; these
+    // cover what the detector *does* with it.
+
+    use frogdb_core::cluster::network::ConnectFactory;
+    use frogdb_core::cluster::{
+        BoxedStream, BusRpc, ClusterBusStats, ClusterRpcRequest, ClusterRpcResponse,
+        RaftClientWriteError, new_framed, parse_rpc_message, send_rpc_response,
+    };
+    use openraft::error::{ClientWriteError, ForwardToLeader, RaftError};
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    fn client_addr(id: NodeId) -> SocketAddr {
+        format!("127.0.0.1:{}", 7000 + id).parse().unwrap()
+    }
+
+    fn bus_addr(id: NodeId) -> SocketAddr {
+        format!("127.0.0.1:{}", 17000 + id).parse().unwrap()
+    }
+
+    fn primary_node(id: NodeId) -> NodeInfo {
+        NodeInfo::new_primary(id, client_addr(id), bus_addr(id))
+    }
+
+    fn replica_node(id: NodeId, primary_id: NodeId) -> NodeInfo {
+        NodeInfo::new_replica(id, client_addr(id), bus_addr(id), primary_id)
+    }
+
+    /// A scripted stand-in for `openraft::Raft`.
+    ///
+    /// Records every proposed command, answers with a settable outcome after a
+    /// settable delay, and reports a settable server state. Cloning shares the
+    /// recording, so a test can hold one handle while the detector holds another.
+    #[derive(Clone, Default)]
+    struct FakeRaft(Arc<FakeRaftInner>);
+
+    struct FakeRaftInner {
+        state: Mutex<ServerState>,
+        outcome: Mutex<Result<ClusterResponse, RaftClientWriteError>>,
+        delay: Mutex<Duration>,
+        writes: Mutex<Vec<ClusterCommand>>,
+    }
+
+    impl Default for FakeRaftInner {
+        fn default() -> Self {
+            Self {
+                state: Mutex::new(ServerState::Follower),
+                outcome: Mutex::new(Ok(ClusterResponse::Ok)),
+                delay: Mutex::new(Duration::ZERO),
+                writes: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl FakeRaft {
+        fn with_state(state: ServerState) -> Self {
+            let raft = Self::default();
+            raft.set_state(state);
+            raft
+        }
+
+        fn set_state(&self, state: ServerState) {
+            *self.0.state.lock().unwrap() = state;
+        }
+
+        fn set_outcome(&self, outcome: Result<ClusterResponse, RaftClientWriteError>) {
+            *self.0.outcome.lock().unwrap() = outcome;
+        }
+
+        fn set_delay(&self, delay: Duration) {
+            *self.0.delay.lock().unwrap() = delay;
+        }
+
+        fn write_count(&self) -> usize {
+            self.0.writes.lock().unwrap().len()
+        }
+
+        /// The proposals seen so far. `ClusterCommand` carries no `PartialEq`,
+        /// so they are compared through `Debug`.
+        fn writes(&self) -> Vec<String> {
+            self.0
+                .writes
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|cmd| format!("{cmd:?}"))
+                .collect()
+        }
+    }
+
+    impl RaftProposer for FakeRaft {
+        async fn client_write(
+            &self,
+            cmd: ClusterCommand,
+        ) -> Result<ClusterResponse, RaftClientWriteError> {
+            let delay = *self.0.delay.lock().unwrap();
+            self.0.writes.lock().unwrap().push(cmd);
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            let outcome = self.0.outcome.lock().unwrap();
+            outcome.clone()
+        }
+    }
+
+    impl DetectorRaft for FakeRaft {
+        fn server_state(&self) -> ServerState {
+            *self.0.state.lock().unwrap()
+        }
+    }
+
+    /// Render an expected proposal the same way [`FakeRaft::writes`] does.
+    fn proposed(cmd: ClusterCommand) -> String {
+        format!("{cmd:?}")
+    }
+
+    fn forward_to_leader_err() -> RaftClientWriteError {
+        RaftError::APIError(ClientWriteError::ForwardToLeader(ForwardToLeader {
+            leader_id: None,
+            leader_node: None,
+        }))
+    }
+
+    struct Fixture {
+        detector: Arc<FailureDetector<FakeRaft>>,
+        raft: FakeRaft,
+        state: Arc<ClusterState>,
+    }
+
+    fn build(
+        self_id: NodeId,
+        nodes: Vec<NodeInfo>,
+        config: FailureDetectorConfig,
+        flags: ClusterRuntimeFlags,
+        network: Arc<ClusterNetworkFactory>,
+    ) -> Fixture {
+        let state = ClusterState::new();
+        for node in nodes {
+            state
+                .apply_local(ClusterCommand::AddNode { node })
+                .expect("seeding the topology must succeed");
+        }
+        let state = Arc::new(state);
+        let raft = FakeRaft::with_state(ServerState::Leader);
+        let detector = Arc::new(FailureDetector::new(
+            self_id,
+            config,
+            Arc::new(flags),
+            Arc::clone(&state),
+            raft.clone(),
+            network,
+        ));
+        Fixture {
+            detector,
+            raft,
+            state,
+        }
+    }
+
+    /// A leader detector with the default timings, auto-failover off, and a
+    /// network on which no peer answers.
+    fn leader_fixture(self_id: NodeId, nodes: Vec<NodeInfo>) -> Fixture {
+        build(
+            self_id,
+            nodes,
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(false, true, 100),
+            network_reporting(&[]),
+        )
+    }
+
+    /// A network whose peers answer `HealthProbe` with a scripted replication
+    /// offset; a node absent from the map refuses the connection, which is how
+    /// an unreachable candidate is exercised without a real partition.
+    fn network_reporting(offsets: &[(NodeId, u64)]) -> Arc<ClusterNetworkFactory> {
+        let by_addr: BTreeMap<SocketAddr, (NodeId, u64)> = offsets
+            .iter()
+            .map(|&(id, offset)| (bus_addr(id), (id, offset)))
+            .collect();
+        let mut factory = ClusterNetworkFactory::new();
+        factory.set_connect_factory(probe_factory(by_addr));
+        Arc::new(factory)
+    }
+
+    fn probe_factory(by_addr: BTreeMap<SocketAddr, (NodeId, u64)>) -> ConnectFactory {
+        Arc::new(move |addr: SocketAddr| {
+            let probe = by_addr.get(&addr).copied();
+            Box::pin(async move {
+                let Some((node_id, offset)) = probe else {
+                    return Err(std::io::Error::other("peer unreachable"));
+                };
+                let (client, server) = tokio::io::duplex(64 * 1024);
+                tokio::spawn(serve_health_probes(server, node_id, offset));
+                Ok(Box::new(client) as BoxedStream)
+            })
+        })
+    }
+
+    /// The peer half of a bus connection: answer every health probe with `offset`.
+    async fn serve_health_probes(server: tokio::io::DuplexStream, node_id: NodeId, offset: u64) {
+        let mut framed = new_framed(Box::new(server));
+        let stats = ClusterBusStats::new();
+        while let Ok(request) = parse_rpc_message(&mut framed, &stats).await {
+            let response = match request {
+                ClusterRpcRequest::Bus(BusRpc::HealthProbe) => {
+                    ClusterRpcResponse::HealthProbeResponse {
+                        node_id,
+                        replication_offset: offset,
+                    }
+                }
+                other => ClusterRpcResponse::Error(format!("unexpected request: {other:?}")),
+            };
+            if send_rpc_response(&mut framed, response, &stats)
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
+
+    /// Give spawned reconciliation tasks time to run to completion.
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    /// Poll `ready` until it holds, failing the test rather than hanging.
+    async fn eventually(label: &str, mut ready: impl FnMut() -> bool) {
+        for _ in 0..2_000 {
+            if ready() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("timed out waiting for {label}");
+    }
+
+    /// Five check intervals, floored at a second: long enough to ride out an
+    /// election, short enough that a wedged write frees the peer's slot.
+    #[tokio::test]
+    async fn the_raft_write_timeout_is_five_intervals_with_a_one_second_floor() {
+        for (interval_ms, expected_ms) in
+            [(1_000u64, 5_000u64), (400, 2_000), (10, 1_000), (0, 1_000)]
+        {
+            let f = build(
+                1,
+                vec![primary_node(1)],
+                FailureDetectorConfig {
+                    check_interval_ms: interval_ms,
+                    ..Default::default()
+                },
+                ClusterRuntimeFlags::default(),
+                network_reporting(&[]),
+            );
+            assert_eq!(
+                f.detector.raft_write_timeout(),
+                Duration::from_millis(expected_ms),
+                "check interval {interval_ms}ms"
+            );
+        }
+    }
+
+    /// Only `Leader` reconciles. Every other Raft role — including `Learner`,
+    /// which is what a default-constructed `ServerState` is — must not write.
+    #[tokio::test]
+    async fn only_the_leader_role_reconciles() {
+        let f = leader_fixture(1, vec![primary_node(1)]);
+        for state in [
+            ServerState::Learner,
+            ServerState::Follower,
+            ServerState::Candidate,
+            ServerState::Shutdown,
+        ] {
+            f.raft.set_state(state);
+            assert!(!f.detector.is_leader(), "{state:?} is not the leader");
+        }
+        f.raft.set_state(ServerState::Leader);
+        assert!(f.detector.is_leader());
+    }
+
+    /// The local probe recorders actually move the health table: a success
+    /// makes a peer `Healthy`, a full run of failures latches it `Failed`, and
+    /// a full run of successes clears it again.
+    // FM-CLUSTER-052
+    #[tokio::test]
+    async fn local_probe_results_land_in_the_health_table() {
+        let f = leader_fixture(1, vec![primary_node(1), primary_node(2)]);
+        let threshold = f.detector.config().fail_threshold;
+        let verdict = || f.detector.health.read().unwrap().verdict(2, Instant::now());
+
+        assert_eq!(verdict(), LocalVerdict::Unknown, "never probed");
+
+        f.detector.record_success_local(2);
+        assert_eq!(verdict(), LocalVerdict::Healthy);
+
+        for _ in 0..threshold {
+            f.detector.record_failure_local(2);
+        }
+        assert_eq!(verdict(), LocalVerdict::Failed);
+
+        for _ in 0..threshold {
+            f.detector.record_success_local(2);
+        }
+        assert_eq!(verdict(), LocalVerdict::Healthy);
+    }
+
+    /// Reconciliation is a diff, not a broadcast: it writes exactly when the
+    /// local verdict and the replicated flag disagree, and stays silent in
+    /// every other combination — including both `Unknown` cases, where this
+    /// node has no basis for an opinion.
+    #[tokio::test]
+    async fn reconciliation_writes_only_where_the_local_view_diverges() {
+        enum Local {
+            Failed,
+            Healthy,
+            Unknown,
+        }
+        let cases = [
+            (
+                Local::Failed,
+                false,
+                vec![proposed(ClusterCommand::MarkNodeFailed { node_id: 2 })],
+            ),
+            (Local::Failed, true, vec![]),
+            (
+                Local::Healthy,
+                true,
+                vec![proposed(ClusterCommand::MarkNodeRecovered { node_id: 2 })],
+            ),
+            (Local::Healthy, false, vec![]),
+            (Local::Unknown, false, vec![]),
+            (Local::Unknown, true, vec![]),
+        ];
+
+        for (local, marked_failed, expected) in cases {
+            let f = leader_fixture(1, vec![primary_node(1), primary_node(2)]);
+            match local {
+                Local::Failed => {
+                    for _ in 0..f.detector.config().fail_threshold {
+                        f.detector.record_failure_local(2);
+                    }
+                }
+                Local::Healthy => f.detector.record_success_local(2),
+                Local::Unknown => {}
+            }
+            if marked_failed {
+                f.state
+                    .apply_local(ClusterCommand::MarkNodeFailed { node_id: 2 })
+                    .expect("flagging the peer must succeed");
+            }
+
+            f.detector.reconcile_topology();
+            settle().await;
+            assert_eq!(f.raft.writes(), expected, "marked_failed={marked_failed}");
+        }
+    }
+
+    /// Reconciliation judges peers, never this node. A node cannot probe
+    /// itself, so acting on its own entry would flag the leader as failed on
+    /// the strength of a probe that never ran.
+    #[tokio::test]
+    async fn reconciliation_never_judges_this_node() {
+        let f = leader_fixture(1, vec![primary_node(1), primary_node(2)]);
+        for _ in 0..f.detector.config().fail_threshold {
+            f.detector.record_failure_local(1);
+            f.detector.record_failure_local(2);
+        }
+
+        f.detector.reconcile_topology();
+        settle().await;
+        assert_eq!(
+            f.raft.writes(),
+            vec![proposed(ClusterCommand::MarkNodeFailed { node_id: 2 })],
+            "only the peer is reconciled"
+        );
+    }
+
+    /// The in-flight set is what keeps a level-triggered reconciliation from
+    /// re-issuing a slow write once per tick — and the guard is what gives the
+    /// slot back afterwards, so a write that needs retrying still gets one.
+    #[tokio::test]
+    async fn an_in_flight_reconciliation_blocks_the_next_tick_then_frees_the_slot() {
+        let f = leader_fixture(1, vec![primary_node(1), primary_node(2)]);
+        f.raft.set_delay(Duration::from_millis(300));
+        for _ in 0..f.detector.config().fail_threshold {
+            f.detector.record_failure_local(2);
+        }
+
+        f.detector.reconcile_topology();
+        f.detector.reconcile_topology();
+        settle().await;
+        assert_eq!(
+            f.raft.write_count(),
+            1,
+            "the second tick must not re-issue an in-flight write"
+        );
+
+        eventually("the in-flight slot to clear", || {
+            f.detector.inflight.read().unwrap().is_empty()
+        })
+        .await;
+
+        f.detector.reconcile_topology();
+        eventually("the retry write", || f.raft.write_count() == 2).await;
+    }
+
+    /// Quorum is counted from locally probed peers, through both the inherent
+    /// method and the `QuorumChecker` the write gate holds.
+    // FM-CLUSTER-055
+    #[tokio::test]
+    async fn quorum_follows_the_locally_probed_peers() {
+        let f = leader_fixture(1, vec![primary_node(1), primary_node(2), primary_node(3)]);
+        let checker: Arc<dyn QuorumChecker> = f.detector.clone();
+
+        assert!(
+            !f.detector.has_quorum(),
+            "unprobed peers do not count: 1 of 3 is not a majority"
+        );
+        assert!(!checker.has_quorum(), "the gate sees the same verdict");
+
+        f.detector.record_success_local(2);
+        assert!(f.detector.has_quorum(), "self plus one peer is 2 of 3");
+        assert!(checker.has_quorum());
+    }
+
+    /// The offsets that drive promotion are the ones the probes returned. Here
+    /// the freshest replica also holds the *higher* node id, so a detector that
+    /// ignored the probe results would fall through to the id tiebreak and
+    /// promote the laggard.
+    // FM-CLUSTER-056
+    #[tokio::test]
+    async fn auto_failover_promotes_the_replica_with_the_freshest_offset() {
+        let f = build(
+            1,
+            vec![
+                primary_node(1),
+                primary_node(2),
+                replica_node(3, 2),
+                replica_node(4, 2),
+            ],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100),
+            network_reporting(&[(3, 100), (4, 900)]),
+        );
+
+        f.detector.trigger_auto_failover(2).await;
+
+        assert_eq!(
+            f.raft.writes(),
+            vec![proposed(ClusterCommand::Failover {
+                old_primary_id: 2,
+                new_primary_id: 4,
+                force: true,
+            })],
+            "the least-lagged replica wins despite losing the id tiebreak"
+        );
+    }
+
+    /// A replica's death is not a failover. Node 3 is a replica of 2 and node 4
+    /// replicates 3, so a detector that skipped the primary check would find a
+    /// candidate and promote it.
+    #[tokio::test]
+    async fn auto_failover_ignores_a_failed_replica() {
+        let f = build(
+            1,
+            vec![
+                primary_node(1),
+                primary_node(2),
+                replica_node(3, 2),
+                replica_node(4, 3),
+            ],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100),
+            network_reporting(&[(4, 500)]),
+        );
+
+        f.detector.trigger_auto_failover(3).await;
+
+        assert!(
+            f.raft.writes().is_empty(),
+            "only a primary's failure triggers a promotion"
+        );
+    }
+
+    /// The failover write is retried, and the backoff between attempts is real:
+    /// three attempts means exactly two 500ms sleeps, with none after the last.
+    #[tokio::test(start_paused = true)]
+    async fn auto_failover_retries_the_failover_write_with_backoff() {
+        let f = build(
+            1,
+            vec![primary_node(1), primary_node(2), replica_node(3, 2)],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100),
+            network_reporting(&[]),
+        );
+        f.raft.set_outcome(Err(forward_to_leader_err()));
+
+        let started = tokio::time::Instant::now();
+        f.detector.trigger_auto_failover(2).await;
+
+        assert_eq!(f.raft.write_count(), 3, "three attempts");
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_millis(1_000),
+            "two backoffs between three attempts, none trailing the last"
+        );
+    }
+
+    /// The accessors hand back the instances the detector actually decides
+    /// from, not fresh defaults — so an operator's `CONFIG SET` is visible
+    /// through them.
+    #[tokio::test]
+    async fn the_detector_exposes_the_config_and_flags_it_decides_from() {
+        let f = build(
+            1,
+            vec![primary_node(1)],
+            FailureDetectorConfig {
+                check_interval_ms: 37,
+                connect_timeout_ms: 11,
+                fail_threshold: 2,
+            },
+            ClusterRuntimeFlags::new(true, false, 42),
+            network_reporting(&[]),
+        );
+
+        assert_eq!(f.detector.config().check_interval_ms, 37);
+        assert_eq!(f.detector.config().connect_timeout_ms, 11);
+        assert_eq!(f.detector.config().fail_threshold, 2);
+
+        assert!(f.detector.flags().auto_failover());
+        assert!(!f.detector.flags().self_fence_on_quorum_loss());
+        assert_eq!(f.detector.flags().replica_priority(), 42);
+
+        f.detector.flags().set_replica_priority(7);
+        assert_eq!(
+            f.detector.flags().replica_priority(),
+            7,
+            "the accessor exposes the shared instance, not a copy"
+        );
+    }
+
+    /// This node scores itself from the live flag; peers are scored from the
+    /// value they published through Raft, which is the only value this node can
+    /// know for them.
+    // FM-CLUSTER-058
+    #[tokio::test]
+    async fn effective_priority_is_live_for_this_node_and_published_for_peers() {
+        let mut me = primary_node(1);
+        me.replica_priority = 7; // the stale value this node published at boot
+        let mut peer = primary_node(2);
+        peer.replica_priority = 99;
+        let f = build(
+            1,
+            vec![me.clone(), peer.clone()],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(false, true, 42),
+            network_reporting(&[]),
+        );
+
+        assert_eq!(f.detector.effective_priority(&me), 42, "live flag wins");
+        assert_eq!(f.detector.effective_priority(&peer), 99, "published value");
+
+        f.detector.flags().set_replica_priority(3);
+        assert_eq!(f.detector.effective_priority(&me), 3);
+        assert_eq!(f.detector.effective_priority(&peer), 99);
+    }
+
+    /// The reachability probe is a real TCP connect: a bound listener answers,
+    /// a port nobody is listening on does not.
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn a_probe_tells_a_live_listener_from_a_closed_port() {
+        let listener = frogdb_net::tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("binding an ephemeral port must succeed");
+        let live = listener.local_addr().unwrap();
+        assert!(check_node_reachable(live, Duration::from_secs(1)).await);
+
+        let doomed = frogdb_net::tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("binding an ephemeral port must succeed");
+        let closed = doomed.local_addr().unwrap();
+        drop(doomed);
+        assert!(!check_node_reachable(closed, Duration::from_millis(500)).await);
+    }
+
+    /// The detector task probes peers and skips itself. This node's own bus
+    /// address is closed here, so a loop that probed itself would record a
+    /// failure for the one node that is by definition reachable — and would
+    /// never learn that the peer is up, leaving quorum permanently lost.
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn the_detector_task_probes_every_peer_except_itself() {
+        let peer_listener = frogdb_net::tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("binding an ephemeral port must succeed");
+        let doomed = frogdb_net::tcp_listener_reusable("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("binding an ephemeral port must succeed");
+        let dead = doomed.local_addr().unwrap();
+        drop(doomed);
+
+        let mut me = primary_node(1);
+        me.cluster_addr = dead;
+        let mut peer = primary_node(2);
+        peer.cluster_addr = peer_listener.local_addr().unwrap();
+
+        let f = build(
+            1,
+            vec![me, peer],
+            FailureDetectorConfig {
+                check_interval_ms: 20,
+                connect_timeout_ms: 200,
+                fail_threshold: 5,
+            },
+            ClusterRuntimeFlags::default(),
+            network_reporting(&[]),
+        );
+        f.raft.set_state(ServerState::Follower);
+
+        let handle = spawn_failure_detector_task(Arc::clone(&f.detector));
+        eventually("quorum to form from the probed peer", || {
+            f.detector.has_quorum()
+        })
+        .await;
+        handle.abort();
     }
 }

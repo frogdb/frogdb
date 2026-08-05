@@ -744,7 +744,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | A bus RPC being dispatched into the Raft handler or vice versa — the handler for one would treat the other's payload as a consensus message. |
 | Invariant | `ClusterRpcRequest::{Raft, Bus}` is a typed split and `BusRpc` names only the serviceable variants, so `handle_bus_rpc` is exhaustive by construction and cannot receive a Raft RPC. |
 | Outcome variant | `ClusterRpcRequest` / `ClusterRpcResponse` |
-| Forced by | `test_from_shims_wrap_correct_arm`, `test_all_rpc_variants_roundtrip`, `test_rpc_request_serialization`, `test_network_factory_node_registration` |
+| Forced by | `test_from_shims_wrap_correct_arm`, `test_all_rpc_variants_roundtrip`, `test_rpc_request_serialization`, `test_network_factory_node_registration`, `the_bus_serves_probes_and_raft_rpcs_on_one_connection` |
 | Bug refs | — |
 
 ---
@@ -758,7 +758,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | A flapping peer churning `MarkNodeFailed`/`MarkNodeRecovered` pairs — each one is a replicated entry and each `MarkNodeFailed` bumps the config epoch (FM-CLUSTER-013), so an unhysteretic detector turns a marginal link into unbounded epoch churn across the whole cluster. |
 | Invariant | `record_failure` zeroes `success_count` and `record_success` zeroes `failure_count`, and the un-latch branch runs only while latched (`failure_detector.rs:162-188`) — the hysteresis is symmetric because both counters are consecutive-run counters, not totals. |
 | Outcome variant | `NodeHealth::is_marked_fail` |
-| Forced by | `test_health_table_threshold_latching_is_symmetric`, `test_health_table_latch_survives_flapping_recovery`, `test_health_table_success_resets_failure_run`, `test_node_health_default` |
+| Forced by | `test_health_table_threshold_latching_is_symmetric`, `test_health_table_latch_survives_flapping_recovery`, `test_health_table_success_resets_failure_run`, `test_node_health_default`, `local_probe_results_land_in_the_health_table` |
 | Bug refs | — |
 
 ## FM-CLUSTER-053 — the verdict is level-triggered and a latch never decays
@@ -794,7 +794,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | An unprobed peer counted as reachable. That would let a node that has just booted — or one whose detector task is wedged — believe it has quorum and accept writes it cannot replicate. Optimism here is exactly the split-brain failure the self-fence exists to prevent. |
 | Invariant | The "no entry" arm of `reachable_count` returns false explicitly rather than falling through to a default (`failure_detector.rs:245-249`). |
 | Outcome variant | `bool` |
-| Forced by | `test_health_table_quorum_arithmetic`, `test_health_table_reachable_never_seen_and_failed` |
+| Forced by | `test_health_table_quorum_arithmetic`, `test_health_table_reachable_never_seen_and_failed`, `quorum_follows_the_locally_probed_peers` |
 | Bug refs | — |
 
 ## FM-CLUSTER-056 — the promotion score is priority first, replication lag second
@@ -806,7 +806,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | A more-lagged replica outscoring a less-lagged one at the same priority — that is data loss chosen deliberately. The lag term uses `saturating_sub`, so a stale or absent offset can only make a candidate look worse. |
 | Invariant | `compute_replica_score` is a pure function of three numbers, so the weighting is auditable in one place rather than distributed across the selection loop. |
 | Outcome variant | `u64` score |
-| Forced by | `test_compute_replica_score_formula`, `test_compute_replica_score_lower_priority_is_better`, `test_compute_replica_score_higher_offset_is_better`, `test_compute_replica_score_no_offset_found` |
+| Forced by | `test_compute_replica_score_formula`, `test_compute_replica_score_lower_priority_is_better`, `test_compute_replica_score_higher_offset_is_better`, `test_compute_replica_score_no_offset_found`, `auto_failover_promotes_the_replica_with_the_freshest_offset` |
 | Bug refs | — |
 
 ## FM-CLUSTER-057 — priority 0 is never promoted
@@ -830,7 +830,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | Two nodes disagreeing about the winner. Selection is not itself replicated — the decision is made locally and then proposed — so a nondeterministic tiebreak is a route to two competing `Failover` proposals. |
 | Invariant | `min_by(score).then_with(id)` makes the ordering total; the priority read goes through `ClusterRuntimeFlags`, which is atomics behind an `Arc` read at decision time. |
 | Outcome variant | `Option<&NodeInfo>` |
-| Forced by | `test_compute_replica_score_equal_scores_tiebreak_by_node_id`, `test_replica_priority_store_changes_failover_target` |
+| Forced by | `test_compute_replica_score_equal_scores_tiebreak_by_node_id`, `test_replica_priority_store_changes_failover_target`, `effective_priority_is_live_for_this_node_and_published_for_peers` |
 | Bug refs | — |
 
 Documented asymmetry: a live priority change is authoritative only for *this* node's own score.
@@ -934,7 +934,7 @@ re-registers, so two nodes running selection concurrently mid-change can pick di
 | NOT observable | The transport decision being cached for the lifetime of the listener — a migration would then need a restart at exactly the moment the operator is trying to avoid one. |
 | Invariant | `dual_accept()` and `handshake_timeout()` are read inside `handle_connection`, once per connection; the listener itself is pre-bound and never re-bound, so there is no port TOCTOU. |
 | Outcome variant | `BusTransport::{Tls, Plaintext}` |
-| Forced by | `dual_accept_sniffs_the_client_hello`, `flipping_the_runtime_flag_changes_the_next_connection`, `test_cluster_bus_bind_fails_on_invalid_addr` |
+| Forced by | `dual_accept_sniffs_the_client_hello`, `flipping_the_runtime_flag_changes_the_next_connection`, `test_cluster_bus_bind_fails_on_invalid_addr`, `a_peek_of_zero_bytes_is_not_a_first_byte` |
 | Bug refs | — |
 
 ## FM-CLUSTER-067 — no cross-node pub/sub RPC can hang the publisher
@@ -974,7 +974,7 @@ integer and Redis has the same property; the distinction lives in the logs.
 | NOT observable | A standalone node attempting cluster RPCs, or a single-node cluster broadcasting to itself and double-counting its own subscribers. |
 | Invariant | Both methods `let-else` on the `Cluster` variant at the top, and the cluster path returns early on `all_nodes.len() <= 1` before building any task. |
 | Outcome variant | `usize` = 0 / `Option<usize>` = `None` |
-| Forced by | `test_local_forwarder_broadcast_is_noop`, `test_local_forwarder_forward_returns_none`, `cluster_broadcast_is_a_noop_below_two_nodes` |
+| Forced by | `test_local_forwarder_broadcast_is_noop`, `test_local_forwarder_forward_returns_none`, `cluster_broadcast_is_a_noop_below_two_nodes`, `cluster_broadcast_sums_every_other_reachable_peer_once`, `cluster_broadcast_folds_an_unreachable_peer_into_zero` |
 | Bug refs | — |
 
 ## FM-CLUSTER-070 — `SPUBLISH` falls back to local delivery when it cannot name a remote owner
@@ -986,7 +986,7 @@ integer and Redis has the same property; the distinction lives in the logs.
 | NOT observable | The message being dropped — the local path still runs in every non-`Remote` case, so a subscriber attached to this node still receives it. Nor a fallback delivery reported identically to a correct one: a slot-assignment gap that silently delivers shard messages on the wrong node used to be indistinguishable from correct ownership. |
 | Invariant | `route_shard_channel_in` is a pure function of the slot map plus the address registry and returns a four-variant `ShardRoute`; `forward_spublish` matches it exhaustively, so a new unresolvable case cannot be added as another silent `None`. |
 | Outcome variant | `ShardRoute::{Local, Remote, Unowned, OwnerUnaddressable}` / `SpublishOutcome::{Forwarded, Local}` |
-| Forced by | `cluster_forward_returns_none_when_this_node_owns_the_slot`, `cluster_forward_distinguishes_an_unowned_slot_from_local_ownership`, `cluster_forward_distinguishes_an_unaddressable_owner_from_local_ownership`, `cluster_route_names_a_reachable_remote_owner`, `test_local_forwarder_forward_returns_none` |
+| Forced by | `cluster_forward_returns_none_when_this_node_owns_the_slot`, `cluster_forward_distinguishes_an_unowned_slot_from_local_ownership`, `cluster_forward_distinguishes_an_unaddressable_owner_from_local_ownership`, `cluster_route_names_a_reachable_remote_owner`, `test_local_forwarder_forward_returns_none`, `cluster_forward_reports_the_owners_subscriber_count` |
 | Bug refs | fixed: [36-spublish-conflates-unowned-slot-with-local-ownership.md](../issues/done/36-spublish-conflates-unowned-slot-with-local-ownership.md) |
 
 The local fallback itself stays deliberate: delivering locally is strictly better than dropping,
