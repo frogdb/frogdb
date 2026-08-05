@@ -358,7 +358,7 @@ target even without `ASKING`.
 
 ## Failover
 
-Failure detection is **leader-only** (`frogdb-server/crates/server/src/failure_detector.rs`), like
+Failure detection is **leader-only** (`frogdb-server/crates/cluster-runtime/src/failure_detector.rs`), like
 CockroachDB/FoundationDB rather than peer-to-peer gossip. The Raft leader probes each node with a
 TCP connect; after `fail_threshold` consecutive failures it proposes `MarkNodeFailed` through Raft
 (which sets the `FAIL` flag and bumps the Config Epoch atomically). Only the leader can write

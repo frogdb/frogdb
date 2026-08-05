@@ -59,6 +59,7 @@ NEXTEST_CRATES = [
     "frogdb-core",
     "frogdb-replication",
     "frogdb-replication-runtime",
+    "frogdb-cluster-runtime",
     "frogdb-config",
     "frogdb-telemetry",
 ]
