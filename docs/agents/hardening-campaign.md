@@ -12,15 +12,16 @@ rationale: `.scratch/hardening/` (specs, issues, metrics).
 | 1 | Transactions / VLL | **LOCKED** (2026-08-01) — mutation gate 90%, both crates at 100% |
 | 2 | Persistence / recovery | **LOCKED** (2026-08-02) — mutation gate 85%, frogdb-persistence 99.1%, frogdb-recovery 100% |
 | 3 | Replication runtime | **LOCKED** (2026-08-04) — mutation gate 85%, `frogdb-replication` 98.7% (1180 mutants; 15 survivors all documented equivalents), `frogdb-replication-runtime` 100% of viable. Extracted (`docs/adr/0004-replication-runtime-seams.md`); spec FM-REPLICATION-001..061; issues 12-25 fixed; follow-up findings open: 26 (jepsen raft-suite harness NPE, Phase 4), 27 (no gate reads the announced replica version), 28 (WAIT counts a replica that cannot serve the write), 29 (net repl byte counters hardcoded zero) |
-| 4 | Cluster runtime | pending |
+| 4 | Cluster runtime | **LOCKED** (2026-08-05) — mutation gate 0.80, `frogdb-cluster` 99.6% (496 mutants), `frogdb-cluster-runtime` 99.0% (224 mutants); 4 survivors all documented equivalents. Extracted (`frogdb-cluster-runtime`); spec FM-CLUSTER-001..078; fixed this phase: rework 05/10/11, hardening 26/33-40, issue-31 harness defects. Open follow-ups: rework 02/03 (pause barrier, pending decision), issues 30/32/41 |
 
 Each area goes through: **extract → failure-mode spec → close known bugs → mutation-test →
 fill gaps → lock**. Areas are strictly serial, one PR per step.
 
 **Locked area rules.** Locked crates so far: **txn** — `frogdb-txn` + `frogdb-vll` (gate
-`0.90`) — **persistence** — `frogdb-persistence` + `frogdb-recovery` (gate `0.85`) — and
-**replication** — `frogdb-replication` + `frogdb-replication-runtime` (gate `0.85`). The
-failure-mode specs (`.scratch/hardening/specs/{txn,vll,persistence,replication}-failure-modes.md`,
+`0.90`) — **persistence** — `frogdb-persistence` + `frogdb-recovery` (gate `0.85`) —
+**replication** — `frogdb-replication` + `frogdb-replication-runtime` (gate `0.85`) — and
+**cluster** — `frogdb-cluster` + `frogdb-cluster-runtime` (gate `0.80`). The
+failure-mode specs (`.scratch/hardening/specs/{txn,vll,persistence,replication,cluster}-failure-modes.md`,
 header `Status: LOCKED`) are the contract — behavior changes there are spec-first, and
 `just lint-failure-modes` enforces spec↔test agreement on every commit. Before pushing changes
 that touch a locked crate, run `just mutants-diff <crate>` (CI is manual-only, so this is a
@@ -36,7 +37,11 @@ redundant with its own fallback, two `NoopSnapshotCoordinator` accessors with no
 and a drain-loop disjunct that costs channel round-trips rather than batch contents). The
 replication lock carries fifteen: buffer capacity hints (`BytesMut` grows regardless), guards
 that select only a tracing line, a `Default` impl defined as `Self::new()`, `1 << 0` vs
-`1 >> 0`, and bound arithmetic whose mutated form is re-derived by later checks.
+`1 >> 0`, and bound arithmetic whose mutated form is re-derived by later checks. The cluster
+lock carries four: a turmoil-gated framing shim the default-feature run never compiles, a
+single-field read off a live openraft metrics watch that no unit test can drive off its
+default, and two expressions mutated into themselves (`connected()` is the default flag set;
+`vec![]` is `Vec::new()`).
 
 ## Out of scope — do not touch during the campaign
 

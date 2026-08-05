@@ -1,9 +1,10 @@
 # Cluster — failure modes
 
-Status: DRAFT (2026-08-04) — Phase 4 step 2 of the hardening campaign. The mutation gate for
-`frogdb-cluster` / `frogdb-cluster-runtime` is 0.80 and has not been run yet. Until this area
-locks, rows may be added; once it locks, behavior changes are spec-first (edit the row, update the
-forcing test, then the code). See `docs/agents/hardening-campaign.md`.
+Status: LOCKED (2026-08-05) — Phase 4 mutation gate passed (`frogdb-cluster` 99.6% on 496
+mutants, `frogdb-cluster-runtime` 99.0% on 224, vs an 0.80 gate; the four surviving mutants are
+all documented equivalents at the code). Behavior changes to this area are spec-first: edit the
+row, update the forcing test, then the code. Before pushing changes that touch these crates, run
+`just mutants-diff <crate>`. See `docs/agents/hardening-campaign.md`.
 
 Every way FrogDB's cluster layer can refuse, redirect, reassign, or succeed, one table per mode.
 This is the reference the mutation run is measured against: a mutant that survives is a row nothing

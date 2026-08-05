@@ -1356,7 +1356,7 @@ mod tests {
 
         // An existing voter: nothing is proposed at all, so the membership entry
         // that is in force does not move and node 1 stays a voter.
-        let settled = raft.metrics().borrow().membership_config.log_id().clone();
+        let settled = *raft.metrics().borrow().membership_config.log_id();
         spawn_add_raft_voter(raft.clone(), 1, self_addr);
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert_eq!(
