@@ -1664,3 +1664,74 @@ async fn test_brpoplpush_cross_slot_returns_crossslot_immediately() {
     )
     .await;
 }
+
+// ---------------------------------------------------------------------------
+// Bare-script slot validation (rework issue 11).
+//
+// `PRE_DISPATCH_ORDER` runs `ConnectionCommand` before `ClusterSlotValidation`,
+// and EVAL/EVALSHA/FCALL are
+// `ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)`, so a bare
+// script is consumed by the connection-level executor and never reaches the
+// slot-validation stage. `is_cluster_exempt` (guards.rs) deliberately refuses to
+// exempt Scripting, which says the *intent* is that scripts be slot-routed --
+// but no `MUST_PRECEDE` pair encodes the ordering, so the intent is unenforced.
+//
+// This is the forcing test the issue asked for.
+// ---------------------------------------------------------------------------
+
+/// A bare `EVAL` naming a key owned by another node must be answered with
+/// `-MOVED`, exactly as the equivalent `GET` on the same key is.
+#[tokio::test]
+async fn test_bare_eval_on_non_owner_returns_moved() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // Slot 4483 is the slot the jepsen slot-migration workload uses; any slot
+    // with a distinct owner and non-owner would do.
+    let slot = 4483u16;
+    let key = key_for_slot(slot);
+    let (owner_id, non_owner_id) = find_owner_of_slot(&harness, slot)
+        .await
+        .expect("expected some node to own the probe slot");
+    assert_ne!(owner_id, non_owner_id, "need a distinct non-owner");
+
+    let non_owner = harness.node(non_owner_id).unwrap();
+
+    // Control: the plain command for the same key *is* redirected, so any
+    // difference below is about the script path and not about slot ownership.
+    let get_resp = non_owner.send("GET", &[&key]).await;
+    assert!(
+        is_moved_redirect(&get_resp).is_some(),
+        "control: GET on the non-owner should be MOVED, got: {:?}",
+        get_resp
+    );
+
+    // The script writes, so a local execution is an acked write on the wrong
+    // node -- not merely a stale read.
+    let eval_resp = non_owner
+        .send(
+            "EVAL",
+            &[
+                "redis.call('SET', KEYS[1], 'written-on-non-owner'); return 1",
+                "1",
+                &key,
+            ],
+        )
+        .await;
+
+    assert!(
+        is_moved_redirect(&eval_resp).is_some(),
+        "bare EVAL naming a key owned by another node must be MOVED, got: {:?}",
+        eval_resp
+    );
+
+    harness.shutdown_all().await;
+}
