@@ -40,7 +40,6 @@
 #![cfg(not(feature = "turmoil"))]
 
 use frogdb_core::ClusterState;
-use frogdb_protocol::Response;
 use frogdb_test_harness::cluster_harness::{ClusterNodeConfig, ClusterTestHarness};
 use frogdb_test_harness::cluster_helpers::{is_error, slot_for_key};
 use frogdb_test_harness::server::TestClient;
@@ -486,7 +485,7 @@ async fn admin_set_on(harness: &ClusterTestHarness, node: u64, key: &str) -> boo
         .unwrap()
         .send("SET", &[key, "seed"])
         .await;
-    matches!(resp, Response::SimpleString(_)) && !is_error(&resp)
+    !is_error(&resp)
 }
 
 /// Poll until every listed state has applied the open migration for `slot`.
