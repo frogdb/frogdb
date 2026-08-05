@@ -224,6 +224,44 @@ impl ClusterPubSubForwarder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frogdb_core::cluster::{ClusterCommand, NodeInfo, SlotRange};
+    use std::net::SocketAddr;
+
+    fn test_addr(port: u16) -> SocketAddr {
+        format!("127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// A cluster state with `count` primaries (ids `1..=count`) and every slot
+    /// owned by `slot_owner`, or no slots assigned at all when it is `None`.
+    fn cluster_state(count: u64, slot_owner: Option<u64>) -> Arc<ClusterState> {
+        let state = ClusterState::new();
+        for id in 1..=count {
+            let port = 6379 + id as u16;
+            state
+                .apply_local(ClusterCommand::AddNode {
+                    node: NodeInfo::new_primary(id, test_addr(port), test_addr(port + 10_000)),
+                })
+                .expect("seeding a primary must succeed");
+        }
+        if let Some(owner) = slot_owner {
+            state
+                .apply_local(ClusterCommand::AssignSlots {
+                    node_id: owner,
+                    slots: vec![SlotRange::new(0, 16383)],
+                })
+                .expect("seeding slots must succeed");
+        }
+        Arc::new(state)
+    }
+
+    /// A network factory holding a client address for each of `ids`.
+    fn network_with(ids: &[u64]) -> Arc<ClusterNetworkFactory> {
+        let factory = ClusterNetworkFactory::new();
+        for &id in ids {
+            factory.register_node(id, test_addr(16379 + id as u16));
+        }
+        Arc::new(factory)
+    }
 
     #[tokio::test]
     async fn test_local_forwarder_broadcast_is_noop() {
@@ -237,6 +275,70 @@ mod tests {
         let forwarder = ClusterPubSubForwarder::Local;
         let result = forwarder.forward_spublish(b"chan", b"msg").await;
         assert!(result.is_none());
+    }
+
+    /// A single-node cluster has nobody to fan out to: the broadcast must not
+    /// dial anything, and in particular must not count its own subscribers a
+    /// second time by RPCing itself.
+    // FM-CLUSTER-069
+    #[tokio::test]
+    async fn cluster_broadcast_is_a_noop_below_two_nodes() {
+        // No peers registered at all.
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(1, None),
+            network_factory: network_with(&[]),
+            node_id: 1,
+        };
+        assert_eq!(forwarder.broadcast_publish(b"chan", b"msg").await, 0);
+
+        // Exactly one registered node — this one. Still nothing to send.
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(1, None),
+            network_factory: network_with(&[1]),
+            node_id: 1,
+        };
+        assert_eq!(forwarder.broadcast_publish(b"chan", b"msg").await, 0);
+    }
+
+    /// The slot is owned here: `None` means "the caller delivers locally", and
+    /// it is reached before any address lookup or RPC.
+    // FM-CLUSTER-070
+    #[tokio::test]
+    async fn cluster_forward_returns_none_when_this_node_owns_the_slot() {
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(2, Some(1)),
+            network_factory: network_with(&[1, 2]),
+            node_id: 1,
+        };
+        assert!(forwarder.forward_spublish(b"chan", b"msg").await.is_none());
+    }
+
+    /// Nobody owns the slot (bootstrap, post-FORGET, mid-reset). The message is
+    /// delivered locally rather than dropped — indistinguishable from local
+    /// ownership above, which is hardening issue 36.
+    // FM-CLUSTER-070
+    #[tokio::test]
+    async fn cluster_forward_falls_back_to_local_for_an_unowned_slot() {
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(2, None),
+            network_factory: network_with(&[1, 2]),
+            node_id: 1,
+        };
+        assert!(forwarder.forward_spublish(b"chan", b"msg").await.is_none());
+    }
+
+    /// The owner is another node, but this node has no address for it, so no
+    /// RPC is possible. Same local fallback, still not a drop.
+    // FM-CLUSTER-070
+    #[tokio::test]
+    async fn cluster_forward_falls_back_to_local_when_the_owner_has_no_address() {
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(2, Some(2)),
+            // Node 2 owns every slot but is absent from the address registry.
+            network_factory: network_with(&[1]),
+            node_id: 1,
+        };
+        assert!(forwarder.forward_spublish(b"chan", b"msg").await.is_none());
     }
 
     // `send_pubsub_rpc` is generic over the RPC future, so the timeout + shape

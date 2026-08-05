@@ -519,3 +519,213 @@ impl ClusterState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{NodeInfo, SlotRange};
+    use std::net::SocketAddr;
+
+    fn test_addr(port: u16) -> SocketAddr {
+        format!("127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// Seed `count` primaries with ids `1..=count`.
+    fn state_with_primaries(count: u64) -> ClusterState {
+        let state = ClusterState::new();
+        for id in 1..=count {
+            let port = 6379 + id as u16;
+            state
+                .apply_local(ClusterCommand::AddNode {
+                    node: NodeInfo::new_primary(id, test_addr(port), test_addr(port + 10_000)),
+                })
+                .expect("seeding a primary must succeed");
+        }
+        state
+    }
+
+    fn assign(state: &ClusterState, node_id: u64, start: u16, end: u16) {
+        state
+            .apply_local(ClusterCommand::AssignSlots {
+                node_id,
+                slots: vec![SlotRange::new(start, end)],
+            })
+            .expect("seeding slots must succeed");
+    }
+
+    // FM-CLUSTER-002
+    #[test]
+    fn remove_node_leaves_migrations_and_replicas_dangling() {
+        let state = state_with_primaries(2);
+        // A replica parented to the node that is about to be forgotten.
+        state
+            .apply_local(ClusterCommand::AddNode {
+                node: NodeInfo::new_replica(3, test_addr(6382), test_addr(16382), 1),
+            })
+            .unwrap();
+        assign(&state, 1, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        state
+            .apply_command(ClusterCommand::RemoveNode { node_id: 1 })
+            .expect("forgetting a member must succeed");
+
+        // Specced: the slots are orphaned rather than transferred.
+        assert_eq!(state.get_slot_owner(0), None, "slots must be orphaned");
+        assert_eq!(state.get_slot_owner(10), None);
+        assert!(state.get_node(1).is_none());
+
+        // Accepted non-guarantee: neither the migration nor the child's parent
+        // pointer is cleaned up. Only a *force* Failover does that.
+        let migration = state
+            .get_slot_migration(5)
+            .expect("the migration must survive the removal of its source");
+        assert_eq!(migration.source_node, 1, "and it still names the dead node");
+        assert_eq!(
+            state.get_node(3).unwrap().primary_id,
+            Some(1),
+            "the replica still points at the removed primary"
+        );
+    }
+
+    // FM-CLUSTER-003
+    #[test]
+    fn assign_slots_rejects_the_whole_batch_on_one_conflict() {
+        let state = state_with_primaries(2);
+        assign(&state, 1, 5, 6);
+
+        // Node 2 asks for a clean range *and* a conflicting one, clean range
+        // first so a mutate-as-you-validate implementation would have already
+        // committed it by the time it hit the conflict.
+        let err = state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 2,
+                slots: vec![SlotRange::new(20, 30), SlotRange::new(5, 6)],
+            })
+            .expect_err("a batch containing a conflict must be refused");
+        assert!(
+            matches!(err, ClusterError::SlotAlreadyAssigned(5, 1)),
+            "expected SlotAlreadyAssigned(5, 1), got {err:?}"
+        );
+
+        assert_eq!(
+            state.get_slot_owner(20),
+            None,
+            "the clean prefix of the batch must not have been applied"
+        );
+        assert_eq!(state.get_slot_owner(30), None);
+        assert_eq!(state.get_slot_owner(5), Some(1), "the incumbent keeps it");
+    }
+
+    // FM-CLUSTER-004
+    #[test]
+    fn remove_slots_ignores_the_node_it_names() {
+        let state = state_with_primaries(2);
+        assign(&state, 1, 0, 10);
+
+        // Node 2 asks to remove slots node 1 owns. Today this succeeds: the
+        // arm validates only that each slot is assigned to *someone*.
+        let response = state
+            .apply_command(ClusterCommand::RemoveSlots {
+                node_id: 2,
+                slots: vec![SlotRange::new(0, 10)],
+            })
+            .expect("owner-blind removal is today's behavior — see hardening issue 33");
+        assert!(matches!(response.0, ClusterResponse::Ok));
+        assert_eq!(state.get_slot_owner(5), None);
+
+        // The all-or-nothing shape is still enforced, on assignment alone.
+        assign(&state, 1, 0, 2);
+        let err = state
+            .apply_command(ClusterCommand::RemoveSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 3)],
+            })
+            .expect_err("an unassigned slot in the batch must refuse the batch");
+        assert!(matches!(err, ClusterError::SlotNotAssigned(3)), "{err:?}");
+        assert_eq!(
+            state.get_slot_owner(0),
+            Some(1),
+            "the refused batch must not have removed its valid prefix"
+        );
+    }
+
+    // FM-CLUSTER-015
+    #[test]
+    fn increment_epoch_returns_typed_epoch() {
+        let state = ClusterState::new();
+        let (response, events) = state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+        assert!(
+            matches!(response, ClusterResponse::Epoch(1)),
+            "expected the new epoch as a typed value, got {response:?}"
+        );
+        assert!(events.is_empty(), "an epoch bump is not a role change");
+        let (response, _) = state.apply_command(ClusterCommand::IncrementEpoch).unwrap();
+        assert!(matches!(response, ClusterResponse::Epoch(2)));
+        assert_eq!(state.config_epoch(), 2);
+    }
+
+    // FM-CLUSTER-032
+    #[test]
+    fn begin_migration_accepts_an_unassigned_slot() {
+        let state = state_with_primaries(2);
+        // No AssignSlots at all: a follower's slot map is legitimately empty,
+        // because bootstrap seeds slots locally rather than through Raft.
+        assert_eq!(state.get_slot_owner(100), None);
+
+        state
+            .apply_command(ClusterCommand::BeginSlotMigration {
+                slot: 100,
+                source_node: 1,
+                target_node: 2,
+            })
+            .expect("the owner check must be skipped when the slot has no owner");
+
+        assert!(state.is_slot_migrating(100));
+        let migration = state.get_slot_migration(100).unwrap();
+        assert_eq!((migration.source_node, migration.target_node), (1, 2));
+    }
+
+    // FM-CLUSTER-033
+    #[test]
+    fn complete_migration_transfers_ownership_over_an_existing_owner() {
+        let state = state_with_primaries(2);
+        assign(&state, 1, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+        let epoch_before = state.config_epoch();
+
+        // Slot 5 is still recorded as owned by node 1. Completion inserts over
+        // that owner without consulting the map — the parameter match against
+        // the recorded migration is what authorizes it.
+        let (response, events) = state
+            .apply_command(ClusterCommand::CompleteSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .expect("a matching completion must not hit SlotAlreadyAssigned");
+        assert!(matches!(response, ClusterResponse::Ok));
+        assert_eq!(events.len(), 1, "exactly one completion event");
+
+        assert_eq!(state.get_slot_owner(5), Some(2), "ownership moved");
+        assert_eq!(state.get_slot_owner(4), Some(1), "neighbours untouched");
+        assert!(!state.is_slot_migrating(5), "the migration record is gone");
+        assert_eq!(
+            state.config_epoch(),
+            epoch_before,
+            "completion is authorized by the migration record, not a new epoch"
+        );
+    }
+}

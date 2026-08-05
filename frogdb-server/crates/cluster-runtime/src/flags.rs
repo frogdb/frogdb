@@ -141,6 +141,7 @@ impl frogdb_core::metrics::WriteFenceReporter for SelfFenceGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frogdb_core::metrics::WriteFenceReporter;
 
     struct FixedChecker {
         has_quorum: bool,
@@ -154,6 +155,7 @@ mod tests {
 
     /// `cluster-auto-failover` is read at decision time: a store flips the
     /// answer with no restart and no re-construction of the detector.
+    // FM-CLUSTER-059
     #[test]
     fn auto_failover_flag_is_live() {
         let flags = ClusterRuntimeFlags::new(false, true, 100);
@@ -167,6 +169,7 @@ mod tests {
     /// `cluster-self-fence-on-quorum-loss` gates the *verdict*, not the
     /// installation of the checker: with quorum lost, the gate fences while
     /// enabled and stops fencing the moment it is disabled.
+    // FM-CLUSTER-059
     #[test]
     fn self_fence_gate_follows_live_flag() {
         let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
@@ -185,6 +188,7 @@ mod tests {
     }
 
     /// A healthy inner checker is reported as healthy regardless of the flag.
+    // FM-CLUSTER-059
     #[test]
     fn self_fence_gate_passes_through_healthy_quorum() {
         let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
@@ -192,5 +196,80 @@ mod tests {
         assert!(gate.has_quorum());
         flags.set_self_fence_on_quorum_loss(false);
         assert!(gate.has_quorum());
+    }
+
+    /// The reason `/status` reports is derived from the same call the write
+    /// gate makes, so the two can never disagree: a reason is present exactly
+    /// when the gate fences, and absent in all three non-fencing states.
+    // FM-CLUSTER-059
+    #[test]
+    fn self_fence_gate_reports_the_reason_it_gates_on() {
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let fenced =
+            SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: false }), flags.clone());
+        assert_eq!(fenced.write_fence_reason(), Some("cluster quorum lost"));
+        assert!(!fenced.has_quorum(), "reason present => gate fences");
+
+        // Disabling the flag clears the reason on the same instance.
+        flags.set_self_fence_on_quorum_loss(false);
+        assert_eq!(fenced.write_fence_reason(), None);
+        assert!(fenced.has_quorum(), "no reason => gate does not fence");
+
+        // Healthy quorum never reports a reason, flag either way.
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let healthy =
+            SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: true }), flags.clone());
+        assert_eq!(healthy.write_fence_reason(), None);
+        flags.set_self_fence_on_quorum_loss(false);
+        assert_eq!(healthy.write_fence_reason(), None);
+    }
+
+    /// Each config field lands on its own flag. `auto_failover` and
+    /// `self_fence_on_quorum_loss` are both `bool` with *different* defaults,
+    /// so a transposition silently inverts both policies.
+    // FM-CLUSTER-060
+    #[test]
+    fn runtime_flags_from_config_carry_each_field() {
+        let mut cluster = frogdb_config::ClusterConfigSection {
+            auto_failover: true,
+            self_fence_on_quorum_loss: false,
+            replica_priority: 7,
+            ..Default::default()
+        };
+        let flags = ClusterRuntimeFlags::from_config(&cluster);
+        assert!(flags.auto_failover());
+        assert!(!flags.self_fence_on_quorum_loss());
+        assert_eq!(flags.replica_priority(), 7);
+
+        // Both booleans inverted: a transposed mapping would look identical
+        // under the first case alone.
+        cluster.auto_failover = false;
+        cluster.self_fence_on_quorum_loss = true;
+        cluster.replica_priority = 0;
+        let flags = ClusterRuntimeFlags::from_config(&cluster);
+        assert!(!flags.auto_failover());
+        assert!(flags.self_fence_on_quorum_loss());
+        assert_eq!(flags.replica_priority(), 0, "0 = never promote");
+    }
+
+    /// The runtime defaults are the config defaults, so the same deployment
+    /// behaves identically whether or not a config file was supplied.
+    // FM-CLUSTER-060
+    #[test]
+    fn runtime_flags_default_matches_the_config_default() {
+        let flags = ClusterRuntimeFlags::default();
+        let config = frogdb_config::ClusterConfigSection::default();
+        assert_eq!(flags.auto_failover(), config.auto_failover);
+        assert_eq!(
+            flags.self_fence_on_quorum_loss(),
+            config.self_fence_on_quorum_loss
+        );
+        assert_eq!(flags.replica_priority(), config.replica_priority);
+
+        // Pinned literally as well: an operator reads these from the docs, and
+        // a change to either default is a behavior change, not a refactor.
+        assert!(!flags.auto_failover(), "auto-failover is opt-in");
+        assert!(flags.self_fence_on_quorum_loss(), "fencing is opt-out");
+        assert_eq!(flags.replica_priority(), 100);
     }
 }
