@@ -1,6 +1,6 @@
 # 66 — Mutation testing (cargo-mutants) over the low-diversity modules
 
-Status: needs-triage
+Status: done
 
 ## Why
 
