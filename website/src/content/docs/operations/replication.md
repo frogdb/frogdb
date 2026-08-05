@@ -108,11 +108,13 @@ Query replication state with:
 redis-cli INFO replication
 ```
 
-A primary reports `role:master`, `connected_slaves`, `master_replid`, `master_replid2`, `master_repl_offset`, `second_repl_offset`, and the `repl_backlog_*` fields. A replica additionally reports `master_host`, `master_port`, and `master_link_status`.
+A primary reports `role:master`, `connected_slaves`, `master_replid`, `master_replid2`, `master_repl_offset`, `second_repl_offset`, and the `repl_backlog_*` fields. A replica additionally reports `master_host`, `master_port`, `master_link_status`, and — when the inbound stream has given up permanently — `master_sync_error`.
 
 To measure lag, compare `master_repl_offset` on the primary with `master_repl_offset` reported by the replica — **both sides expose the offset under the same field name** (`master_repl_offset`); there is no `slave_repl_offset` field. An offset that falls persistently behind the primary's is the signal to act on, alongside the primary's `connected_slaves` count and any write rejections from self-fencing.
 
 `master_link_status` reports `up` once the replica has completed the handshake and is actively streaming from the primary, and `down` at any other time — including before the initial connection completes, during a resync, and after the link drops (the replica keeps retrying with backoff; `up` returns once it reconnects and resumes streaming). It's a connectivity signal, not a data-freshness one: `down` means no data is currently arriving over the link, but doesn't by itself say how stale the replica's data is — `master_repl_offset` and the offset gap are what answer that. Alert on `master_link_status:down` alongside the offset gap and the primary-side indicators, not as a standalone signal.
+
+`master_sync_error` fills the gap `master_link_status` leaves: `down` alone cannot distinguish a replica that is reconnecting from one that will never connect again. The field is absent while the link is up and while it is down but still retrying; it appears — and stays latched until an operator re-points or restarts the node — only when the replica has received a full resync it can never install, such as a shard-count or warm-tier disagreement with the primary's checkpoint. A latched `master_sync_error` always needs a human: the replica has stopped retrying, and only reconfiguration will bring the link back.
 
 | Symptom | Likely cause | What to check |
 |---|---|---|
