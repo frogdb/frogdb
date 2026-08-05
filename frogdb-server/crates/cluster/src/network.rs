@@ -674,15 +674,25 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 /// terminal. Failures after all retries are logged at `error` level.
 /// A full reconciliation loop (ClusterState nodes vs. Raft voters) is a
 /// documented follow-up in `todo/proposals/31-atomic-failover-command.md`.
+/// How long [`spawn_add_raft_voter`] waits before retrying the attempt that just
+/// failed, or `None` when that attempt was the last one.
+///
+/// Split out of the retry loop so the schedule is checkable without a live Raft
+/// and without sleeping: `attempt` is 1-based, so attempt `max_attempts` is
+/// terminal, and the backoff grows linearly with the attempt number.
+fn voter_retry_delay(attempt: u32, max_attempts: u32) -> Option<std::time::Duration> {
+    (attempt < max_attempts).then(|| std::time::Duration::from_millis(500 * attempt as u64))
+}
+
 pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std::net::SocketAddr) {
     const MAX_ATTEMPTS: u32 = 5;
 
     tokio::spawn(async move {
         for attempt in 1..=MAX_ATTEMPTS {
             // Skip if the node is already a Raft voter (initial bootstrap
-            // members, or a prior attempt that succeeded). Calling add_learner
-            // on an existing voter would demote it, causing transient quorum
-            // loss. Re-checked on every attempt.
+            // members, or a prior attempt that succeeded). Re-adding one is not
+            // free: `add_learner` proposes a fresh membership entry and then
+            // blocks until the peer is caught up. Re-checked on every attempt.
             {
                 let membership = raft.metrics().borrow().membership_config.clone();
                 if membership.membership().voter_ids().any(|id| id == node_id) {
@@ -710,20 +720,21 @@ pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std
                     tracing::info!(node_id, %addr, "Added node to Raft voter set");
                     return;
                 }
-                Err((step, e)) if attempt < MAX_ATTEMPTS => {
-                    tracing::warn!(node_id, attempt, error = %e, "Failed to {step}; retrying");
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
-                        .await;
-                }
-                Err((step, e)) => {
-                    tracing::error!(
-                        node_id,
-                        %addr,
-                        error = %e,
-                        "Failed to {step} after {MAX_ATTEMPTS} attempts; \
-                         node is in cluster state but NOT a Raft voter"
-                    );
-                }
+                Err((step, e)) => match voter_retry_delay(attempt, MAX_ATTEMPTS) {
+                    Some(delay) => {
+                        tracing::warn!(node_id, attempt, error = %e, "Failed to {step}; retrying");
+                        tokio::time::sleep(delay).await;
+                    }
+                    None => {
+                        tracing::error!(
+                            node_id,
+                            %addr,
+                            error = %e,
+                            "Failed to {step} after {MAX_ATTEMPTS} attempts; \
+                             node is in cluster state but NOT a Raft voter"
+                        );
+                    }
+                },
             }
         }
     });
@@ -1097,6 +1108,265 @@ mod tests {
         );
 
         client.await.unwrap();
+    }
+
+    // ---- Connection pool ---------------------------------------------------
+
+    /// The pool's whole purpose is that a peer's slot is *the same* slot every
+    /// time — a fresh slot per call would mean a fresh connection per RPC — and
+    /// that removing a node drops the slot it cached, so a node that comes back
+    /// on the same id is not answered over the dead peer's socket.
+    // FM-CLUSTER-051
+    #[tokio::test]
+    async fn the_pool_keeps_one_slot_per_peer_until_the_peer_is_removed() {
+        let pool = ConnectionPool::default();
+
+        let first = pool.slot(1);
+        assert!(
+            Arc::ptr_eq(&first, &pool.slot(1)),
+            "the second caller must get the slot the first one created"
+        );
+        assert!(
+            !Arc::ptr_eq(&first, &pool.slot(2)),
+            "different peers never share a slot"
+        );
+
+        // A slot carries state: what is cached in it must still be there.
+        *first.lock().await = None;
+        assert_eq!(pool.connections.read().len(), 2);
+
+        pool.remove(1);
+        assert_eq!(pool.connections.read().len(), 1, "the slot is dropped");
+        assert!(
+            !Arc::ptr_eq(&first, &pool.slot(1)),
+            "a re-registered peer gets a fresh slot, not the dead one"
+        );
+    }
+
+    /// The factory's address book is what `CLUSTER MEET`/`FORGET` and the Raft
+    /// network both read; reporting an empty one would strand every peer.
+    // FM-CLUSTER-051
+    #[test]
+    fn the_factory_reports_every_registered_address() {
+        let factory = ClusterNetworkFactory::new();
+        assert!(factory.get_all_nodes().is_empty());
+
+        let one: SocketAddr = "127.0.0.1:16379".parse().unwrap();
+        let two: SocketAddr = "127.0.0.1:16380".parse().unwrap();
+        factory.register_node(1, one);
+        factory.register_node(2, two);
+        assert_eq!(
+            factory.get_all_nodes(),
+            BTreeMap::from([(1, one), (2, two)])
+        );
+
+        factory.remove_node(1);
+        assert_eq!(factory.get_all_nodes(), BTreeMap::from([(2, two)]));
+    }
+
+    /// Every peer handle a factory makes reports into the factory's counters,
+    /// not into a private pair of its own — `CLUSTER INFO` reports one node-wide
+    /// number.
+    // FM-CLUSTER-077
+    #[test]
+    fn a_peer_handle_shares_the_factorys_counters() {
+        let factory = ClusterNetworkFactory::new();
+        let addr: SocketAddr = "127.0.0.1:16379".parse().unwrap();
+        let peer = factory.connect(1, addr);
+        assert!(
+            Arc::ptr_eq(peer.bus_stats(), factory.bus_stats()),
+            "the handle must count into the node-wide pair"
+        );
+
+        // A bootstrap handle predates the factory and owns its own pair, which
+        // is still reachable rather than fabricated per call.
+        let bootstrap = ClusterNetwork::new(1, addr);
+        assert!(Arc::ptr_eq(bootstrap.bus_stats(), bootstrap.bus_stats()));
+        assert!(!Arc::ptr_eq(bootstrap.bus_stats(), factory.bus_stats()));
+    }
+
+    // ---- Forwarded writes --------------------------------------------------
+
+    /// The peer half of a forwarded write: read the request, answer with the
+    /// caller's chosen response.
+    async fn serve_one_forwarded_write(
+        server_end: tokio::io::DuplexStream,
+        response: ClusterRpcResponse,
+    ) {
+        let mut framed = new_framed(Box::new(server_end));
+        let stats = ClusterBusStats::new();
+        let request = parse_rpc_message(&mut framed, &stats).await.unwrap();
+        assert!(matches!(
+            request,
+            ClusterRpcRequest::Raft(RaftRpc::ForwardedWrite(_))
+        ));
+        send_rpc_response(&mut framed, response, &stats)
+            .await
+            .unwrap();
+    }
+
+    /// Forward one write to a peer that answers with `response`.
+    async fn forward_write_answered_with(response: ClusterRpcResponse) -> Result<(), ClusterError> {
+        let (client_end, server_end) = tokio::io::duplex(64 * 1024);
+        let peer = tokio::spawn(serve_one_forwarded_write(server_end, response));
+
+        let mut factory = ClusterNetworkFactory::new();
+        factory.set_connect_factory(duplex_connect_factory(client_end));
+        let addr: SocketAddr = "127.0.0.1:16379".parse().unwrap();
+        let result = factory
+            .connect(1, addr)
+            .forward_write(ClusterCommand::IncrementEpoch)
+            .await;
+        peer.await.unwrap();
+        result
+    }
+
+    /// A forwarded write reports the leader's verdict verbatim: a remote commit
+    /// is a local success, a remote rejection carries its reason, and an answer
+    /// to some other question is an error rather than a silent success — the
+    /// follower answers its client on the strength of this result.
+    // FM-CLUSTER-048
+    #[tokio::test]
+    async fn a_forwarded_write_reports_the_leaders_verdict() {
+        forward_write_answered_with(ClusterRpcResponse::ForwardedWrite(Ok(())))
+            .await
+            .expect("a remote commit is a local success");
+
+        let rejected = forward_write_answered_with(ClusterRpcResponse::ForwardedWrite(Err(
+            "slot not owned".to_string(),
+        )))
+        .await
+        .expect_err("a remote rejection is not a success");
+        let rendered = rejected.to_string();
+        assert!(
+            rendered.contains("forwarded write failed") && rendered.contains("slot not owned"),
+            "the leader's reason must survive the trip back: {rendered}"
+        );
+
+        let confused = forward_write_answered_with(ClusterRpcResponse::HealthProbeResponse {
+            node_id: 7,
+            replication_offset: 99,
+        })
+        .await
+        .expect_err("an answer to another question is not a commit");
+        assert!(
+            confused.to_string().contains("unexpected response type"),
+            "got {confused}"
+        );
+    }
+
+    // ---- Raft voter promotion ----------------------------------------------
+
+    /// The retry schedule: every attempt but the last earns a linearly growing
+    /// backoff. Retrying past the last attempt would loop forever on a peer that
+    /// is never coming back; stopping before it turns one transient error into a
+    /// node that is in the cluster state but not in the voter set.
+    // FM-CLUSTER-051
+    #[test]
+    fn the_voter_retry_schedule_backs_off_and_then_stops() {
+        use std::time::Duration;
+
+        assert_eq!(voter_retry_delay(1, 5), Some(Duration::from_millis(500)));
+        assert_eq!(voter_retry_delay(2, 5), Some(Duration::from_millis(1000)));
+        assert_eq!(voter_retry_delay(4, 5), Some(Duration::from_millis(2000)));
+        assert_eq!(
+            voter_retry_delay(5, 5),
+            None,
+            "the last attempt is terminal, not another retry"
+        );
+        assert_eq!(voter_retry_delay(6, 5), None);
+    }
+
+    /// A node that is in the cluster state but not in the Raft voter set weakens
+    /// fault tolerance silently, so the promotion really has to run — and it
+    /// must skip nodes that already *are* voters, because re-adding one costs a
+    /// redundant membership entry and a blocking catch-up wait.
+    // FM-CLUSTER-051
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn adding_a_voter_runs_for_a_stranger_and_skips_an_existing_member() {
+        use std::collections::BTreeMap as Map;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = crate::storage::ClusterStorage::open(dir.path()).unwrap();
+        let raft = openraft::Raft::new(
+            1,
+            Arc::new(openraft::Config {
+                election_timeout_min: 100,
+                election_timeout_max: 200,
+                heartbeat_interval: 50,
+                ..Default::default()
+            }),
+            ClusterNetworkFactory::with_timeouts(50, 50),
+            storage,
+            crate::state::ClusterStateMachine::new(),
+        )
+        .await
+        .expect("a single-node Raft must start");
+
+        let self_addr: SocketAddr = "127.0.0.1:16379".parse().unwrap();
+        raft.initialize(Map::from([(
+            1u64,
+            BasicNode {
+                addr: self_addr.to_string(),
+            },
+        )]))
+        .await
+        .expect("bootstrapping one voter must succeed");
+
+        let voters = |raft: &crate::ClusterRaft| {
+            raft.metrics()
+                .borrow()
+                .membership_config
+                .membership()
+                .voter_ids()
+                .collect::<Vec<_>>()
+        };
+        let knows = |raft: &crate::ClusterRaft, id: NodeId| {
+            raft.metrics()
+                .borrow()
+                .membership_config
+                .membership()
+                .nodes()
+                .any(|(known, _)| *known == id)
+        };
+        // The metrics watch is updated asynchronously, so settle on the
+        // bootstrap membership before judging what the promotion did to it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while voters(&raft) != vec![1] {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the bootstrap voter never appeared: {:?}",
+                raft.metrics().borrow().membership_config
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // A stranger: the promotion has to reach Raft. `add_learner` commits the
+        // membership entry before it blocks waiting for the (unreachable) peer
+        // to catch up, so the node appearing in the membership is the signal.
+        spawn_add_raft_voter(raft.clone(), 2, "127.0.0.1:16380".parse().unwrap());
+        while !knows(&raft, 2) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node 2 was never proposed to Raft: {:?}",
+                raft.metrics().borrow().membership_config
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // An existing voter: nothing is proposed at all, so the membership entry
+        // that is in force does not move and node 1 stays a voter.
+        let settled = raft.metrics().borrow().membership_config.log_id().clone();
+        spawn_add_raft_voter(raft.clone(), 1, self_addr);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            raft.metrics().borrow().membership_config.log_id(),
+            &settled,
+            "re-adding an existing voter must propose nothing"
+        );
+        assert!(voters(&raft).contains(&1));
+
+        raft.shutdown().await.unwrap();
     }
 
     /// A frame that never crossed the wire is not traffic. Reporting the
