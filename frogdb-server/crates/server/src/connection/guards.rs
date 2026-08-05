@@ -833,14 +833,10 @@ impl PreDispatchView<'_> {
         }
 
         // Get keys from command
-        let keys = if let Some(cmd_impl) = self.registry.get_entry(&cmd_name) {
-            cmd_impl.keys(&cmd.args)
-        } else {
-            return None;
-        };
-        let Some(first) = keys.first() else {
-            return None;
-        };
+        let keys = self.registry.get_entry(&cmd_name)?.keys(&cmd.args);
+        // Keyless commands are never slot-routed, so nothing here can be
+        // migrating away from us.
+        let first = keys.first()?;
         // Cross-slot key sets were already refused by `ClusterSlotValidation`,
         // so the first key's slot is the whole command's slot.
         let slot = slot_for_key(first);
