@@ -1,6 +1,6 @@
 # `FinalizeUpgrade` on an empty cluster stores an unparseable version as `active_version`
 
-Status: needs-triage
+Status: done
 Type: bug (version gating)
 Severity: likelihood 1/3 (needs a finalize against a cluster with zero members — bootstrap or
 post-`RESET HARD`), consequence 2/3 (`active_version` becomes a string no gate can parse, so every
@@ -57,3 +57,22 @@ for node in state.nodes.values() { .. }
 
 FM-CLUSTER-008's `NOT observable` gains "a target version that no gate can parse being accepted";
 the two tests above join its `Forced by`.
+
+## Resolution
+
+Fixed in `commands.rs` (`FinalizeUpgrade` arm). `semver::Version::parse(&version)` is hoisted above
+the per-node loop it was loop-invariant over, so an unparseable target is
+`InvalidOperation("invalid target version '<v>': <err>")` regardless of how many nodes are
+registered. Previously the parse lived inside `for (node_id, node) in &inner.nodes`, so an empty
+(or single-node-only, pre-registration) topology skipped it entirely and stored the raw string as
+`active_version` — which then silently disabled every version gate, because
+`is_gate_active_in` treats an unparseable active version as "no version" and fails closed
+(FM-CLUSTER-009).
+
+Forcing tests: `finalize_upgrade_rejects_an_unparseable_target_with_no_nodes` (loops
+`["not-a-version", "", "1", "v1.2.3"]`, asserts the refusal and that `active_version()` stays
+`None`) and `finalize_upgrade_with_no_nodes_accepts_a_valid_target` (the empty topology is still a
+legal fast path — it must accept, not refuse). Both in `frogdb-cluster`, `state.rs`.
+
+Spec: FM-CLUSTER-008's Observable / NOT observable / Invariant updated; `Forced by` gained both
+tests.

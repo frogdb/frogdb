@@ -1413,6 +1413,48 @@ mod tests {
 
     // FM-CLUSTER-008
     #[test]
+    fn finalize_upgrade_rejects_an_unparseable_target_with_no_nodes() {
+        // Zero members — bootstrap, or the aftermath of `CLUSTER RESET HARD`.
+        // The per-node validation loop never runs here, so the target parse
+        // has to happen outside it or a garbage string lands in
+        // `active_version` and permanently disables every version gate.
+        let state = ClusterState::new();
+        assert!(state.snapshot().nodes.is_empty());
+
+        for garbage in ["not-a-version", "", "1", "v1.2.3"] {
+            let result = state.apply_command(ClusterCommand::FinalizeUpgrade {
+                version: garbage.to_string(),
+            });
+            match result {
+                Err(ClusterError::InvalidOperation(msg)) => {
+                    assert!(msg.contains("invalid target version"), "{msg}");
+                }
+                other => panic!("expected InvalidOperation for {garbage:?}, got {other:?}"),
+            }
+            assert_eq!(
+                state.active_version(),
+                None,
+                "a refused finalization must leave the active version untouched"
+            );
+        }
+    }
+
+    // FM-CLUSTER-008
+    #[test]
+    fn finalize_upgrade_with_no_nodes_accepts_a_valid_target() {
+        // The empty-cluster success path is legitimate (bootstrap) and must
+        // survive the hoisted parse.
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::FinalizeUpgrade {
+                version: "1.4.0".to_string(),
+            })
+            .expect("a valid target on an empty cluster is accepted");
+        assert_eq!(state.active_version(), Some("1.4.0".to_string()));
+    }
+
+    // FM-CLUSTER-008
+    #[test]
     fn test_finalize_upgrade_idempotent() {
         let state = ClusterState::new();
         let node = NodeInfo::new_primary(1, test_addr(6379), test_addr(16379));

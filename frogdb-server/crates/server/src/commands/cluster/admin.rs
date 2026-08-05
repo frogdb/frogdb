@@ -438,19 +438,25 @@ pub(super) fn cluster_saveconfig(ctx: &mut CommandContext) -> Result<Response, C
     Ok(Response::ok())
 }
 
-/// CLUSTER SET-CONFIG-EPOCH - Sets the configuration epoch.
+/// CLUSTER SET-CONFIG-EPOCH - Sets this node's configuration epoch to exactly
+/// the requested value.
+///
+/// Redis semantics: bootstrap-only. The state machine refuses it unless this
+/// node knows no other member and its own epoch is still 0 (FM-CLUSTER-076).
 ///
 /// Returns `RaftNeeded` response which is intercepted by the connection handler.
 pub(super) fn cluster_set_config_epoch(
     ctx: &mut CommandContext,
     epoch: &Bytes,
 ) -> Result<Response, CommandError> {
+    let node_id = ctx.node_id.ok_or(CommandError::ClusterDisabled)?;
+
     // Verify cluster mode is enabled
     if ctx.raft.is_none() {
         return Err(CommandError::ClusterDisabled);
     }
 
-    let _epoch_num: u64 = std::str::from_utf8(epoch)
+    let epoch_num: u64 = std::str::from_utf8(epoch)
         .map_err(|_| CommandError::InvalidArgument {
             message: "invalid epoch".to_string(),
         })?
@@ -459,10 +465,11 @@ pub(super) fn cluster_set_config_epoch(
             message: "invalid epoch number".to_string(),
         })?;
 
-    // For now, just increment the epoch via Raft
-    // A full implementation would set it to a specific value
     Ok(Response::RaftNeeded {
-        op: RaftClusterOp::IncrementEpoch,
+        op: RaftClusterOp::SetConfigEpoch {
+            node_id,
+            epoch: epoch_num,
+        },
         register_node: None,
         unregister_node: None,
     })

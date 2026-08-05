@@ -314,6 +314,11 @@ pub enum ClusterCommand {
     /// Increment the cluster configuration epoch.
     IncrementEpoch,
 
+    /// Set one node's `config_epoch` to exactly `epoch` (`CLUSTER
+    /// SET-CONFIG-EPOCH`). Redis-compatible bootstrap-only command: accepted
+    /// only while the node knows no other member and its own epoch is still 0.
+    SetConfigEpoch { node_id: NodeId, epoch: ConfigEpoch },
+
     /// Atomically fail over a primary to a successor in one replicated
     /// state-machine transition: transfer every slot owned by
     /// `old_primary_id` to `new_primary_id`, promote the successor to

@@ -14,7 +14,7 @@ Scope. The cluster area is one replicated state machine plus the seams that read
 * **Topology and membership (FM-CLUSTER-001..009)** — the `ClusterCommand` arms that add, remove,
   re-role, and reset nodes, the bootstrap slot split, and the rolling-upgrade gate
   (`frogdb-server/crates/cluster/src/{commands,state,types,version_gate}.rs`).
-* **Config epoch (010..017)** — the two epochs (the replicated counter and the per-node value),
+* **Config epoch (010..017, 076)** — the two epochs (the replicated counter and the per-node value),
   who may raise them, the collision rule, and what survives a restart
   (`cluster/src/{state,commands,storage}.rs`, `server/src/commands/cluster/mod.rs`).
 * **Slot ownership and routing (018..030)** — keyslot mapping, the `RouteDecision` verdicts and
@@ -105,17 +105,17 @@ migration that can never complete; the operator's recovery is `SETSLOT … STABL
 | Forced by | `test_assign_slots`, `test_assign_slots_node_not_found`, `test_assign_slots_already_assigned`, `test_assign_slots_idempotent`, `assign_slots_rejects_the_whole_batch_on_one_conflict` |
 | Bug refs | — |
 
-## FM-CLUSTER-004 — `RemoveSlots` validates that the slots are assigned, not who owns them
+## FM-CLUSTER-004 — `RemoveSlots` unassigns only slots the named node owns
 
 | Field | Value |
 |---|---|
 | Trigger | `CLUSTER DELSLOTS` naming slots that are assigned to a node other than the one in the command. |
-| Observable | The slots are removed. The `node_id` in the command is used only in the log line. Naming a slot nobody owns refuses the whole batch with `SlotNotAssigned(slot)`. |
-| NOT observable | A partially applied batch — the same validate-all-then-apply shape as FM-CLUSTER-003. |
-| Invariant | The validation pass asserts only that each slot has *some* owner (`commands.rs:142-159`). This is the deliberate mirror of Redis' `CLUSTER DELSLOTS`, which is likewise a local unassignment rather than an ownership assertion — but FrogDB's is replicated, so it is strictly wider. The row exists so the widening is specced rather than discovered. |
-| Outcome variant | `ClusterError::SlotNotAssigned` |
-| Forced by | `test_remove_slots_success`, `test_remove_slots_not_assigned`, `remove_slots_ignores_the_node_it_names` |
-| Bug refs | `.scratch/hardening/issues/open/33-remove-slots-is-owner-blind.md` |
+| Observable | The whole batch is refused with `InvalidOperation("slot N is owned by X, not Y")` and no slot changes hands. The owner removing its own slots succeeds. Naming a slot nobody owns refuses the whole batch with `SlotNotAssigned(slot)`. |
+| NOT observable | A partially applied batch — the same validate-all-then-apply shape as FM-CLUSTER-003. Nor a node's slots being unassigned out from under it by a command naming a different node: every key in them would answer `CLUSTERDOWN` until someone re-assigned them. |
+| Invariant | The validation pass asserts both that each slot has an owner and that the owner is `node_id` (`commands.rs:142-170`), matching the strictness of every sibling slot-mutating arm (`AssignSlots`, `BeginSlotMigration`, `CompleteSlotMigration`). Redis' `CLUSTER DELSLOTS` is a *local* unassignment with no node argument, so ownership is structural there; FrogDB's is replicated and carries an explicit id, so the assertion has to be made rather than assumed. The server-layer handler only ever fills `node_id` from `ctx.node_id`, so the check is invisible to a well-formed `CLUSTER DELSLOTS`. |
+| Outcome variant | `ClusterError::{SlotNotAssigned, InvalidOperation}` |
+| Forced by | `test_remove_slots_success`, `test_remove_slots_not_assigned`, `remove_slots_rejects_a_slot_owned_by_another_node`, `remove_slots_rejects_the_whole_batch_when_one_slot_is_foreign` |
+| Bug refs | fixed: [33-remove-slots-is-owner-blind.md](../issues/done/33-remove-slots-is-owner-blind.md) |
 
 ## FM-CLUSTER-005 — a replica role always names a primary that exists
 
@@ -163,12 +163,12 @@ bug will live in.
 | Field | Value |
 |---|---|
 | Trigger | `FinalizeUpgrade{version}` while some member is still running an older binary, a pre-versioning binary (empty version string), or an unparseable one. |
-| Observable | `InvalidOperation` naming the offending node and its version; `active_version` is unchanged, so every version-gated feature stays off. With every node at or above the target it succeeds, and re-finalizing the same version succeeds again. |
-| NOT observable | A finalization that half-applies — the check loop runs to completion before `active_version` is written. Nor a rejection of a node that is *ahead* of the target: a mixed cluster mid-upgrade is the normal state. |
-| Invariant | Every node is semver-parsed and compared before `active_version` is set (`commands.rs:444-476`); the operation is documented irreversible, which is why the gate is strict rather than advisory. |
+| Observable | `InvalidOperation` naming the offending node and its version; `active_version` is unchanged, so every version-gated feature stays off. An unparseable *target* is `InvalidOperation("invalid target version …")` whether or not the cluster has members. With every node at or above the target it succeeds, and re-finalizing the same version succeeds again. A cluster with no members at all accepts a valid target (bootstrap). |
+| NOT observable | A finalization that half-applies — the check loop runs to completion before `active_version` is written. Nor a rejection of a node that is *ahead* of the target: a mixed cluster mid-upgrade is the normal state. Nor a target version that no gate can parse being accepted: `is_gate_active_in` reads an unparseable active version as *inactive* (FM-CLUSTER-009), so storing one silently disables every gate, and the operation is documented irreversible. |
+| Invariant | The target is semver-parsed **before** the per-node loop it is invariant over (`commands.rs:456-470`), so the zero-member case — where the loop body never runs — is validated by the same parse as every other case. Every node is then parsed and compared before `active_version` is set. |
 | Outcome variant | `ClusterError::InvalidOperation` |
-| Forced by | `test_finalize_upgrade_succeeds_when_all_nodes_at_target`, `test_finalize_upgrade_rejects_when_node_behind`, `test_finalize_upgrade_rejects_empty_version_node`, `test_finalize_upgrade_allows_nodes_ahead_of_target`, `test_finalize_upgrade_invalid_target_version`, `test_finalize_upgrade_idempotent` |
-| Bug refs | `.scratch/hardening/issues/open/34-finalize-upgrade-accepts-garbage-with-no-nodes.md` |
+| Forced by | `test_finalize_upgrade_succeeds_when_all_nodes_at_target`, `test_finalize_upgrade_rejects_when_node_behind`, `test_finalize_upgrade_rejects_empty_version_node`, `test_finalize_upgrade_allows_nodes_ahead_of_target`, `test_finalize_upgrade_invalid_target_version`, `test_finalize_upgrade_idempotent`, `finalize_upgrade_rejects_an_unparseable_target_with_no_nodes`, `finalize_upgrade_with_no_nodes_accepts_a_valid_target` |
+| Bug refs | fixed: [34-finalize-upgrade-accepts-garbage-with-no-nodes.md](../issues/done/34-finalize-upgrade-accepts-garbage-with-no-nodes.md) |
 
 ## FM-CLUSTER-009 — a version gate refuses until finalization raises the active version
 
@@ -288,6 +288,21 @@ phase inherits a specced surface.
 | Outcome variant | `StorageError` / `Option<Snapshot>` |
 | Forced by | `test_config_epoch_round_trips_through_storage_restart`, `test_state_machine_snapshot_survives_restart_without_log_replay`, `test_snapshot_save_never_moves_backwards`, `test_snapshot_store_is_opt_in`, `test_storage_open_and_close`, `test_storage_vote`, `test_storage_metadata`, `test_storage_committed` |
 | Bug refs | — |
+
+## FM-CLUSTER-076 — `SET-CONFIG-EPOCH` assigns the exact value, and only at bootstrap
+
+Numbered out of sequence because it was added after the first pass; it belongs to the config-epoch
+group (010..017) and sits here rather than at the end of the file.
+
+| Field | Value |
+|---|---|
+| Trigger | `CLUSTER SET-CONFIG-EPOCH <n>` on any node, at any point in its life. |
+| Observable | On a node that knows no other member and whose own `config_epoch` is still 0, the node's epoch becomes exactly `n` and `cluster_current_epoch` is ratcheted up to `n` if it was lower. Otherwise the command is refused: `InvalidOperation` naming which guard fired, or `NodeNotFound` if the receiving node is not in the topology. A refusal moves no epoch. |
+| NOT observable | Success reported for an assignment that did not happen — the previous behavior parsed `n`, discarded it, and issued a plain `IncrementEpoch`, so a bootstrap script asking for epoch 100 got epoch 1 and a `+OK`. Nor a live cluster renumbering a node by hand: FrogDB resolves collisions through FM-CLUSTER-011, so a manual assignment mid-life could only manufacture one. Nor the counter following an assignment *downwards* (FM-CLUSTER-010). |
+| Invariant | The `SetConfigEpoch` arm applies Redis' two `clusterCommand` guards (`dictSize(server.cluster->nodes) > 1`, `myself->configEpoch != 0`) before mutating, then sets the field and takes `config_epoch.max(epoch)` on the counter (`commands.rs:238-272`). The server handler is a pure adapter: it parses the argument and emits `RaftClusterOp::SetConfigEpoch { node_id: ctx.node_id, epoch }`, so the value can no longer be dropped between parse and apply. |
+| Outcome variant | `ClusterResponse::Epoch` / `ClusterError::{InvalidOperation, NodeNotFound}` |
+| Forced by | `set_config_epoch_assigns_the_exact_value_requested`, `set_config_epoch_never_lowers_the_cluster_counter`, `set_config_epoch_refused_once_the_node_knows_another_node`, `set_config_epoch_refused_once_the_node_holds_an_epoch`, `set_config_epoch_on_an_unknown_node_is_not_found`, `test_cluster_set_config_epoch_assigns_the_exact_value_on_a_lone_node`, `test_cluster_set_config_epoch_refused_once_the_node_knows_a_peer` |
+| Bug refs | fixed: [38-set-config-epoch-discards-its-argument.md](../issues/done/38-set-config-epoch-discards-its-argument.md) |
 
 ---
 
@@ -1058,12 +1073,10 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 8. **Storage corruption paths** — `try_get_log_entries` with an `Excluded(0)` end bound silently
    reads to the end of the log; `purge` writes `last_purged` before the delete batch; the CF
    `.expect`s and `decode_log_key`'s fixed-width copy panic on a tampered DB.
-9. **`SET-CONFIG-EPOCH` parses its argument and discards it**, issuing a plain `IncrementEpoch`.
-   The command reports success for a request it did not perform — issue 38.
-10. **`ResetCluster` bypasses `ClusterWriter` entirely**, calling `raft.client_write` directly, so
-    it has no forward and no redirect: on a follower it surfaces as `ERR Raft error: …
-    ForwardToLeader…` rather than the `REDIRECT` every other admin command produces — issue 39.
-11. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
+9. **`ResetCluster` bypasses `ClusterWriter` entirely**, calling `raft.client_write` directly, so
+   it has no forward and no redirect: on a follower it surfaces as `ERR Raft error: …
+   ForwardToLeader…` rather than the `REDIRECT` every other admin command produces — issue 39.
+10. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
     huge `fail_threshold` panics the staleness multiply. Nothing rejects either at load.
 
 ## Tagging notes for whoever lands these
@@ -1092,6 +1105,6 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 | `ping-sent`/`pong-recv` in `CLUSTER NODES` | Always `0 0` | Real timestamps | Same reason; positional fields cannot be omitted without breaking every client's parser, so `0` is the honest placeholder here. |
 | `PFAIL` | Structurally supported, never produced | Set by gossip suspicion before a majority confirms `FAIL` | Leader-only detection has no suspicion phase: the leader either has enough consecutive failures to latch or it does not. |
 | `CLUSTER BUMPEPOCH` | Not supported | Supported | Epoch changes are authorized by the replicated log; a manual bump would create a claim no entry justifies. |
-| `CLUSTER SET-CONFIG-EPOCH` | Accepts and discards the value, bumping instead | Sets the exact value on an empty node | Listed as gap 9 above: today's behavior reports success for something it did not do. |
+| `CLUSTER SET-CONFIG-EPOCH` | Sets the exact value; refused unless the node knows no peer and holds epoch 0 | Same two guards, same exact assignment | Identical (FM-CLUSTER-076). The command is replicated through Raft rather than applied locally, so the assignment is durable on the log; the guards are Redis' verbatim. |
 | `WAIT` in cluster mode | Per-node, keyless, never redirects | Per-node, keyless, never redirects | Identical. Cluster replicas attach over the same PSYNC link and ACK into the same tracker, so there is no cluster-mode branch to deviate in. |
 | Script slot validation | Currently absent for bare scripts (FM-CLUSTER-030) | Re-validated per `redis.call` (`scriptVerifyClusterState`) | A confirmed bug, not a design choice. |

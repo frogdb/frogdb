@@ -472,9 +472,43 @@ async fn test_cluster_reset_hard_returns_ok() {
     harness.shutdown_all().await;
 }
 
-/// Tests that CLUSTER SET-CONFIG-EPOCH <n> is accepted and epoch incremented.
+/// Tests that CLUSTER SET-CONFIG-EPOCH assigns the exact value asked for on a
+/// node that has met nobody, matching Redis' bootstrap-only contract.
+// FM-CLUSTER-076
 #[tokio::test]
-async fn test_cluster_set_config_epoch_returns_ok() {
+async fn test_cluster_set_config_epoch_assigns_the_exact_value_on_a_lone_node() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(1).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    let only = harness.node_ids()[0];
+    let node = harness.node(only).unwrap();
+
+    let response = node.send("CLUSTER", &["SET-CONFIG-EPOCH", "100"]).await;
+    assert!(
+        !is_error(&response),
+        "CLUSTER SET-CONFIG-EPOCH on a lone node should succeed, got: {:?}",
+        response
+    );
+
+    // Exactly 100, not "some larger number": a bump would have reported 1.
+    let info = harness.get_cluster_info(only).await.unwrap();
+    assert_eq!(
+        info.cluster_current_epoch, 100,
+        "the counter must carry the assigned value verbatim"
+    );
+
+    harness.shutdown_all().await;
+}
+
+/// Tests that CLUSTER SET-CONFIG-EPOCH is refused once the node knows a peer,
+/// and that the refusal moves no epoch — Redis refuses for the same reason.
+// FM-CLUSTER-076
+#[tokio::test]
+async fn test_cluster_set_config_epoch_refused_once_the_node_knows_a_peer() {
     let mut harness = ClusterTestHarness::new();
     harness.start_cluster(3).await.unwrap();
     harness
@@ -489,28 +523,23 @@ async fn test_cluster_set_config_epoch_returns_ok() {
     let leader = harness.get_leader().await.unwrap();
     let node = harness.node(leader).unwrap();
 
-    // Get current epoch
     let info_before = harness.get_cluster_info(leader).await.unwrap();
     let epoch_before = info_before.cluster_current_epoch;
 
-    // SET-CONFIG-EPOCH should succeed (goes through Raft)
     let response = node.send("CLUSTER", &["SET-CONFIG-EPOCH", "100"]).await;
     assert!(
-        !is_error(&response),
-        "CLUSTER SET-CONFIG-EPOCH should succeed, got: {:?}",
+        is_error(&response),
+        "CLUSTER SET-CONFIG-EPOCH on a node that knows peers should be refused, got: {:?}",
         response
     );
 
-    // Wait for Raft propagation
+    // Wait long enough that a Raft-applied bump would have shown up.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Epoch should have changed
     let info_after = harness.get_cluster_info(leader).await.unwrap();
-    assert!(
-        info_after.cluster_current_epoch > epoch_before,
-        "Epoch should have increased from {}, got {}",
-        epoch_before,
-        info_after.cluster_current_epoch
+    assert_eq!(
+        info_after.cluster_current_epoch, epoch_before,
+        "a refused assignment must not move the counter"
     );
 
     harness.shutdown_all().await;
@@ -1831,8 +1860,18 @@ async fn test_cluster_delslots_basic() {
         .await
         .unwrap();
 
-    // Delete slot 0
-    let resp = send_cluster_cmd(&harness, harness.node_ids()[0], &["DELSLOTS", "0"]).await;
+    // DELSLOTS names the node it is issued on, and `RemoveSlots` refuses a
+    // slot owned by anyone else (FM-CLUSTER-004), so it has to go to slot 0's
+    // owner — the bootstrap split orders by node id, not by harness insertion
+    // order. The follower path forwards to the leader on its own.
+    let (owner_id, _) = find_owner_of_slot(&harness, 0)
+        .await
+        .expect("slot 0 must have an owner");
+    let resp = harness
+        .node(owner_id)
+        .unwrap()
+        .send("CLUSTER", &["DELSLOTS", "0"])
+        .await;
     assert!(!is_error(&resp), "DELSLOTS should succeed, got: {:?}", resp);
 
     // Allow Raft propagation
@@ -1864,14 +1903,18 @@ async fn test_cluster_delslots_unassigned_error() {
         .await
         .unwrap();
 
-    // First delete slot 0
-    let resp = send_cluster_cmd(&harness, harness.node_ids()[0], &["DELSLOTS", "0"]).await;
+    // First delete slot 0, on its owner (see `test_cluster_delslots_basic`).
+    let (owner_id, _) = find_owner_of_slot(&harness, 0)
+        .await
+        .expect("slot 0 must have an owner");
+    let owner = harness.node(owner_id).unwrap();
+    let resp = owner.send("CLUSTER", &["DELSLOTS", "0"]).await;
     assert!(!is_error(&resp), "First DELSLOTS should succeed");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Try to delete slot 0 again — should error
-    let resp2 = send_cluster_cmd(&harness, harness.node_ids()[0], &["DELSLOTS", "0"]).await;
+    let resp2 = owner.send("CLUSTER", &["DELSLOTS", "0"]).await;
     assert!(
         is_error(&resp2),
         "DELSLOTS for already-deleted slot should error, got: {:?}",

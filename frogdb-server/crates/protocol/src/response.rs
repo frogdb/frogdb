@@ -546,6 +546,14 @@ pub enum RaftClusterOp {
     },
     /// Increment the config epoch.
     IncrementEpoch,
+    /// Set one node's config epoch to exactly this value
+    /// (`CLUSTER SET-CONFIG-EPOCH`).
+    SetConfigEpoch {
+        /// Node whose epoch is being set (always the receiving node).
+        node_id: u64,
+        /// The exact epoch to assign.
+        epoch: u64,
+    },
     /// Failover: promote replica to primary and transfer slots.
     Failover {
         /// The replica node ID to promote.

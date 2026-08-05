@@ -1,6 +1,6 @@
 # `RemoveSlots` never checks that the node it names owns the slots
 
-Status: needs-triage
+Status: done
 Type: bug (replicated state machine, authorization)
 Severity: likelihood 1/3 (needs a wrong or stale `node_id` on an admin command), consequence 3/3
 (a node's slots are unassigned out from under it — every key in them becomes `CLUSTERDOWN` until
@@ -73,3 +73,29 @@ be inverted by the fix.
 
 FM-CLUSTER-004 flips from "validates that the slots are assigned, not who owns them" to an
 ownership assertion; its `NOT observable` gains the foreign-slot case.
+
+## Resolution
+
+Fixed in `commands.rs` (`RemoveSlots` arm). The validation pass now matches on
+`inner.slot_assignment.get(&slot)`: `None` is still `SlotNotAssigned(slot)`, and a slot whose owner
+is not `node_id` is `InvalidOperation("slot N is owned by X, not Y")`. Validation still runs to
+completion before any removal, so FM-CLUSTER-003's validate-all-then-apply shape survives — a batch
+that straddles two owners removes nothing.
+
+Redis parity: `CLUSTER DELSLOTS` has no node argument at all — it is a purely local unassignment, so
+ownership is structural there. FrogDB's command is replicated and carries an explicit `node_id`, so
+the ownership assertion has to be made explicitly. `cluster_delslots` always fills that field with
+`ctx.node_id`, so the new refusal is invisible to well-formed clients; it only fires on a stale or
+forged id.
+
+Forcing tests: `remove_slots_rejects_a_slot_owned_by_another_node` and
+`remove_slots_rejects_the_whole_batch_when_one_slot_is_foreign` (both in `frogdb-cluster`,
+`commands.rs`). `remove_slots_ignores_the_node_it_names` was deleted — it pinned the bug.
+
+Three integration tests relied on owner-blind DELSLOTS and were corrected to resolve the slot's
+actual owner first (`test_cluster_delslots_basic`, `test_cluster_delslots_unassigned_error` in
+`cluster_topology.rs`, `test_ssubscribe_unassigned_slot_clusterdown_matches_keyed_path` in
+`integration_pubsub.rs`). They passed only by accident: the bootstrap slot split walks
+`initial_members` in node-id order while the harness hands out ids from OS-assigned ports.
+
+Spec: FM-CLUSTER-004 retitled and rewritten.

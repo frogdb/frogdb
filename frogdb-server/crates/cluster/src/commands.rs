@@ -140,11 +140,23 @@ impl ClusterState {
             }
 
             ClusterCommand::RemoveSlots { node_id, slots } => {
-                // Validate all slots are currently assigned before removing any
+                // Validate every slot is assigned *to the named node* before
+                // removing any. Redis' `CLUSTER DELSLOTS` is a local
+                // unassignment with no node argument, so ownership is
+                // structural there; FrogDB's is replicated and carries an
+                // explicit `node_id`, so the ownership assertion has to be
+                // made explicitly or a stale id strips another node's slots.
                 for range in &slots {
                     for slot in range.iter() {
-                        if !inner.slot_assignment.contains_key(&slot) {
-                            return Err(ClusterError::SlotNotAssigned(slot));
+                        match inner.slot_assignment.get(&slot) {
+                            None => return Err(ClusterError::SlotNotAssigned(slot)),
+                            Some(&owner) if owner != node_id => {
+                                return Err(ClusterError::InvalidOperation(format!(
+                                    "slot {} is owned by {}, not {}",
+                                    slot, owner, node_id
+                                )));
+                            }
+                            Some(_) => {}
                         }
                     }
                 }
@@ -221,6 +233,41 @@ impl ClusterState {
                 inner.config_epoch += 1;
                 tracing::debug!(epoch = inner.config_epoch, "Incremented config epoch");
                 Ok((ClusterResponse::Epoch(inner.config_epoch), Vec::new()))
+            }
+
+            ClusterCommand::SetConfigEpoch { node_id, epoch } => {
+                // Redis' two guards, verbatim: a manual epoch assignment is
+                // only safe before the node has met anyone and before the
+                // cluster has assigned it an authority of its own. Under
+                // FrogDB's Raft plane collisions are resolved automatically
+                // (FM-CLUSTER-011), so this exists for bootstrap tooling
+                // parity rather than as a recovery lever — which is exactly
+                // why it stays as narrow as Redis'.
+                if !inner.nodes.contains_key(&node_id) {
+                    return Err(ClusterError::NodeNotFound(node_id));
+                }
+                if inner.nodes.len() > 1 {
+                    return Err(ClusterError::InvalidOperation(
+                        "config epoch can only be set while the node knows no other node"
+                            .to_string(),
+                    ));
+                }
+                let node = inner
+                    .nodes
+                    .get_mut(&node_id)
+                    .expect("membership checked above");
+                if node.config_epoch != 0 {
+                    return Err(ClusterError::InvalidOperation(format!(
+                        "node {} config epoch is already non-zero ({})",
+                        node_id, node.config_epoch
+                    )));
+                }
+                node.config_epoch = epoch;
+                // Keep FM-CLUSTER-010: the cluster counter never sits below
+                // any node's epoch.
+                inner.config_epoch = inner.config_epoch.max(epoch);
+                tracing::info!(node_id, epoch, "Set node config epoch");
+                Ok((ClusterResponse::Epoch(epoch), Vec::new()))
             }
 
             ClusterCommand::Failover {
@@ -442,6 +489,20 @@ impl ClusterState {
             }
 
             ClusterCommand::FinalizeUpgrade { version } => {
+                // Parse the target *before* touching state, and outside the
+                // per-node loop it is invariant over. Inside the loop it is
+                // never reached on an empty cluster, which stored an
+                // unparseable string as `active_version` — and since
+                // `is_gate_active_in` treats an unparseable active version as
+                // inactive (FM-CLUSTER-009), every gate would be silently off
+                // with no way back short of `CLUSTER RESET HARD`.
+                let target_ver = semver::Version::parse(&version).map_err(|e| {
+                    ClusterError::InvalidOperation(format!(
+                        "invalid target version '{}': {}",
+                        version, e
+                    ))
+                })?;
+
                 // Validate all nodes report a version >= target
                 for (node_id, node) in &inner.nodes {
                     if node.version.is_empty() {
@@ -454,12 +515,6 @@ impl ClusterState {
                         ClusterError::InvalidOperation(format!(
                             "node {} has invalid version '{}': {}",
                             node_id, node.version, e
-                        ))
-                    })?;
-                    let target_ver = semver::Version::parse(&version).map_err(|e| {
-                        ClusterError::InvalidOperation(format!(
-                            "invalid target version '{}': {}",
-                            version, e
                         ))
                     })?;
                     if node_ver < target_ver {
@@ -625,35 +680,178 @@ mod tests {
 
     // FM-CLUSTER-004
     #[test]
-    fn remove_slots_ignores_the_node_it_names() {
+    fn remove_slots_rejects_a_slot_owned_by_another_node() {
         let state = state_with_primaries(2);
         assign(&state, 1, 0, 10);
 
-        // Node 2 asks to remove slots node 1 owns. Today this succeeds: the
-        // arm validates only that each slot is assigned to *someone*.
-        let response = state
+        // Node 2 asks to remove slots node 1 owns. The ownership assertion
+        // refuses it; the slots stay with their incumbent.
+        let err = state
             .apply_command(ClusterCommand::RemoveSlots {
                 node_id: 2,
                 slots: vec![SlotRange::new(0, 10)],
             })
-            .expect("owner-blind removal is today's behavior — see hardening issue 33");
-        assert!(matches!(response.0, ClusterResponse::Ok));
-        assert_eq!(state.get_slot_owner(5), None);
+            .expect_err("removing another node's slots must be refused");
+        match err {
+            ClusterError::InvalidOperation(msg) => {
+                assert!(msg.contains("owned by 1"), "{msg}");
+                assert!(msg.contains("not 2"), "{msg}");
+            }
+            other => panic!("expected InvalidOperation, got {other:?}"),
+        }
+        assert_eq!(state.get_slot_owner(5), Some(1), "the incumbent keeps it");
 
-        // The all-or-nothing shape is still enforced, on assignment alone.
+        // The owner itself is still allowed to remove them.
+        state
+            .apply_command(ClusterCommand::RemoveSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 10)],
+            })
+            .expect("the owner may unassign its own slots");
+        assert_eq!(state.get_slot_owner(5), None);
+    }
+
+    // FM-CLUSTER-004
+    #[test]
+    fn remove_slots_rejects_the_whole_batch_when_one_slot_is_foreign() {
+        let state = state_with_primaries(2);
         assign(&state, 1, 0, 2);
+        assign(&state, 2, 3, 3);
+
+        // Node 1 owns 0..=2 and node 2 owns slot 3. A batch spanning both is
+        // refused as a whole — the validate-all-then-apply shape of
+        // FM-CLUSTER-003 must survive the ownership check.
         let err = state
             .apply_command(ClusterCommand::RemoveSlots {
                 node_id: 1,
                 slots: vec![SlotRange::new(0, 3)],
             })
-            .expect_err("an unassigned slot in the batch must refuse the batch");
-        assert!(matches!(err, ClusterError::SlotNotAssigned(3)), "{err:?}");
+            .expect_err("a foreign slot in the batch must refuse the batch");
+        assert!(matches!(err, ClusterError::InvalidOperation(_)), "{err:?}");
         assert_eq!(
             state.get_slot_owner(0),
             Some(1),
             "the refused batch must not have removed its valid prefix"
         );
+        assert_eq!(state.get_slot_owner(3), Some(2));
+
+        // Unassigned slots are still the `SlotNotAssigned` refusal, and still
+        // all-or-nothing.
+        let err = state
+            .apply_command(ClusterCommand::RemoveSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 2), SlotRange::single(9)],
+            })
+            .expect_err("an unassigned slot in the batch must refuse the batch");
+        assert!(matches!(err, ClusterError::SlotNotAssigned(9)), "{err:?}");
+        assert_eq!(state.get_slot_owner(0), Some(1));
+    }
+
+    // FM-CLUSTER-076
+    #[test]
+    fn set_config_epoch_assigns_the_exact_value_requested() {
+        let state = state_with_primaries(1);
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 0);
+
+        let (resp, events) = state
+            .apply_command(ClusterCommand::SetConfigEpoch {
+                node_id: 1,
+                epoch: 100,
+            })
+            .expect("a lone node at epoch 0 must accept the assignment");
+
+        // Exactly 100 — not 1, which is what a bump would have produced.
+        assert!(matches!(resp, ClusterResponse::Epoch(100)), "{resp:?}");
+        assert!(events.is_empty(), "an epoch assignment emits no events");
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 100);
+        // FM-CLUSTER-010: the counter is ratcheted up to the assignment.
+        assert_eq!(state.config_epoch(), 100);
+    }
+
+    // FM-CLUSTER-076
+    #[test]
+    fn set_config_epoch_never_lowers_the_cluster_counter() {
+        let state = state_with_primaries(1);
+        state.apply_local(ClusterCommand::IncrementEpoch).unwrap();
+        state.apply_local(ClusterCommand::IncrementEpoch).unwrap();
+        assert_eq!(state.config_epoch(), 2);
+
+        state
+            .apply_command(ClusterCommand::SetConfigEpoch {
+                node_id: 1,
+                epoch: 1,
+            })
+            .expect("assigning below the counter is still a valid assignment");
+
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 1);
+        assert_eq!(
+            state.config_epoch(),
+            2,
+            "the counter must not follow an assignment downwards"
+        );
+    }
+
+    // FM-CLUSTER-076
+    #[test]
+    fn set_config_epoch_refused_once_the_node_knows_another_node() {
+        let state = state_with_primaries(2);
+
+        let err = state
+            .apply_command(ClusterCommand::SetConfigEpoch {
+                node_id: 1,
+                epoch: 100,
+            })
+            .expect_err("a node that knows a peer must refuse a manual assignment");
+        assert!(
+            matches!(&err, ClusterError::InvalidOperation(m) if m.contains("knows no other node")),
+            "{err:?}"
+        );
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 0);
+        assert_eq!(state.config_epoch(), 0);
+    }
+
+    // FM-CLUSTER-076
+    #[test]
+    fn set_config_epoch_refused_once_the_node_holds_an_epoch() {
+        let state = state_with_primaries(1);
+        state
+            .apply_local(ClusterCommand::SetConfigEpoch {
+                node_id: 1,
+                epoch: 7,
+            })
+            .unwrap();
+
+        let err = state
+            .apply_command(ClusterCommand::SetConfigEpoch {
+                node_id: 1,
+                epoch: 100,
+            })
+            .expect_err("a node already holding an epoch must refuse a reassignment");
+        assert!(
+            matches!(&err, ClusterError::InvalidOperation(m) if m.contains("already non-zero")),
+            "{err:?}"
+        );
+        assert_eq!(
+            state.get_node(1).unwrap().config_epoch,
+            7,
+            "the refusal must leave the held epoch alone"
+        );
+    }
+
+    // FM-CLUSTER-076
+    #[test]
+    fn set_config_epoch_on_an_unknown_node_is_not_found() {
+        let state = state_with_primaries(1);
+
+        let err = state
+            .apply_command(ClusterCommand::SetConfigEpoch {
+                node_id: 42,
+                epoch: 100,
+            })
+            .expect_err("an unknown node id must not be silently created");
+        assert!(matches!(err, ClusterError::NodeNotFound(42)), "{err:?}");
+        assert_eq!(state.get_node(1).unwrap().config_epoch, 0);
+        assert_eq!(state.config_epoch(), 0);
     }
 
     // FM-CLUSTER-032

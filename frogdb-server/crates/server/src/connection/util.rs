@@ -212,6 +212,10 @@ pub(crate) fn raft_op_to_command(op: &RaftClusterOp) -> ClusterCommand {
             primary_id: *primary_id,
         },
         RaftClusterOp::IncrementEpoch => ClusterCommand::IncrementEpoch,
+        RaftClusterOp::SetConfigEpoch { node_id, epoch } => ClusterCommand::SetConfigEpoch {
+            node_id: *node_id,
+            epoch: *epoch,
+        },
         RaftClusterOp::MarkNodeFailed { node_id } => {
             ClusterCommand::MarkNodeFailed { node_id: *node_id }
         }

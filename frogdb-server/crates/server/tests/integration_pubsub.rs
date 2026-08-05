@@ -1882,11 +1882,18 @@ async fn test_ssubscribe_unassigned_slot_clusterdown_matches_keyed_path() {
     let slot = slot_for_key(channel.as_bytes());
     let slot_str = slot.to_string();
 
-    // DELSLOTS is a Raft command — issue it via the leader to unassign the
-    // channel's slot so it is owned by no node.
-    let leader_id = harness.get_leader().await.expect("leader should exist");
-    let leader_node = harness.node(leader_id).unwrap();
-    let del_resp = leader_node.send("CLUSTER", &["DELSLOTS", &slot_str]).await;
+    // DELSLOTS names the node it is issued on, and `RemoveSlots` refuses a
+    // slot owned by anyone else (FM-CLUSTER-004) — so it goes to the slot's
+    // owner, which forwards the Raft write to the leader itself.
+    let owner_id = harness
+        .node(harness.node_ids()[0])
+        .and_then(|n| n.cluster_state())
+        .and_then(|cs| cs.get_slot_owner(slot))
+        .expect("the channel's slot must have an owner");
+    let owner_node = harness
+        .node(owner_id)
+        .expect("the owner must be a harness node");
+    let del_resp = owner_node.send("CLUSTER", &["DELSLOTS", &slot_str]).await;
     assert!(!is_error(&del_resp), "DELSLOTS failed: {:?}", del_resp);
 
     let probe_node = harness.node(harness.node_ids()[0]).unwrap();
