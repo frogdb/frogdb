@@ -142,6 +142,9 @@ fn watch_owner_flip(
 // Behavioral prober: hammer the source with writes across the handover
 // ---------------------------------------------------------------------------
 
+/// Independent client connections hammering the source across the handover.
+const PROBER_CONNECTIONS: usize = 8;
+
 struct ProbeRequest {
     key: String,
     reply: oneshot::Sender<ProbeResult>,
@@ -155,6 +158,30 @@ struct ProbeResult {
     first_reject: Option<Instant>,
     /// Writes acknowledged during this iteration.
     ok_count: u64,
+    /// Summed round-trip time of every `SET` issued, and how many were issued.
+    /// Their ratio is the prober's temporal resolution: `last_ok` can trail the
+    /// true last acked write by up to one round trip.
+    rtt_sum_us: f64,
+    attempts: u64,
+}
+
+impl ProbeResult {
+    /// Fold a second prober's result into this one. `last_ok` is the latest of
+    /// the two (the concern is the *last* write the source acked, from any
+    /// connection); counters add.
+    fn merge(&mut self, other: ProbeResult) {
+        self.last_ok = match (self.last_ok, other.last_ok) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        self.first_reject = match (self.first_reject, other.first_reject) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        self.ok_count += other.ok_count;
+        self.rtt_sum_us += other.rtt_sum_us;
+        self.attempts += other.attempts;
+    }
 }
 
 /// Drive `SET key <n>` against the source until it stops answering `+OK`.
@@ -170,8 +197,11 @@ async fn run_prober(mut client: TestClient, mut rx: mpsc::Receiver<ProbeRequest>
         loop {
             seq += 1;
             let value = seq.to_string();
+            let sent = Instant::now();
             let resp = client.command(&["SET", &req.key, &value]).await;
             let now = Instant::now();
+            result.attempts += 1;
+            result.rtt_sum_us += signed_us(now, sent);
             if is_error(&resp) {
                 result.first_reject = Some(now);
                 break;
@@ -224,6 +254,9 @@ struct Sample {
     write_exposure_us: Option<f64>,
     /// Writes the source acknowledged during the iteration.
     probe_ok_count: u64,
+    /// Mean `SET` round trip during the iteration — the resolution floor of
+    /// `write_exposure_us` divided by the number of prober connections.
+    probe_rtt_us: f64,
 }
 
 struct Stats {
@@ -361,10 +394,19 @@ async fn measure(scenario: Scenario) -> Vec<Sample> {
         }));
     }
 
-    // --- behavioral prober ------------------------------------------------
-    let (probe_tx, probe_rx) = mpsc::channel::<ProbeRequest>(1);
-    let prober_client = harness.node(source).unwrap().connect().await;
-    let prober = tokio::spawn(run_prober(prober_client, probe_rx));
+    // --- behavioral probers ------------------------------------------------
+    // A single serial prober resolves the acked-write exposure only to one
+    // round trip, which is the same order as the window being measured.
+    // `PROBER_CONNECTIONS` independent connections cut the inter-arrival gap by
+    // that factor, so `last_ok` lands much closer to the true final ack.
+    let mut probe_txs = Vec::with_capacity(PROBER_CONNECTIONS);
+    let mut probers = Vec::with_capacity(PROBER_CONNECTIONS);
+    for _ in 0..PROBER_CONNECTIONS {
+        let (probe_tx, probe_rx) = mpsc::channel::<ProbeRequest>(1);
+        let prober_client = harness.node(source).unwrap().connect().await;
+        probers.push(tokio::spawn(run_prober(prober_client, probe_rx)));
+        probe_txs.push(probe_tx);
+    }
 
     // --- admin connection -------------------------------------------------
     let mut admin = harness.node(leader).unwrap().connect().await;
@@ -422,14 +464,18 @@ async fn measure(scenario: Scenario) -> Vec<Sample> {
         }
 
         // Start hammering the source with writes on the migrating slot.
-        let (reply_tx, reply_rx) = oneshot::channel();
-        probe_tx
-            .send(ProbeRequest {
-                key: key.clone(),
-                reply: reply_tx,
-            })
-            .await
-            .expect("prober alive");
+        let mut reply_rxs = Vec::with_capacity(probe_txs.len());
+        for probe_tx in &probe_txs {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            probe_tx
+                .send(ProbeRequest {
+                    key: key.clone(),
+                    reply: reply_tx,
+                })
+                .await
+                .expect("prober alive");
+            reply_rxs.push(reply_rx);
+        }
 
         // Finalize.
         let resp = admin
@@ -440,7 +486,10 @@ async fn measure(scenario: Scenario) -> Vec<Sample> {
         let t_leader = w_leader.join().unwrap();
         let t_source = w_source.join().unwrap();
         let t_target = w_target.join().unwrap();
-        let probe = reply_rx.await.unwrap_or_default();
+        let mut probe = ProbeResult::default();
+        for reply_rx in reply_rxs {
+            probe.merge(reply_rx.await.unwrap_or_default());
+        }
 
         if is_error(&resp) {
             misses += 1;
@@ -458,12 +507,19 @@ async fn measure(scenario: Scenario) -> Vec<Sample> {
             overlap_us: signed_us(t_source, t_target),
             write_exposure_us: probe.last_ok.map(|t| signed_us(t, t_leader)),
             probe_ok_count: probe.ok_count,
+            probe_rtt_us: if probe.attempts > 0 {
+                probe.rtt_sum_us / probe.attempts as f64
+            } else {
+                f64::NAN
+            },
         });
     }
 
     stop.store(true, Ordering::Relaxed);
-    drop(probe_tx);
-    let _ = prober.await;
+    drop(probe_txs);
+    for prober in probers {
+        let _ = prober.await;
+    }
     for task in load_tasks {
         let _ = task.await;
     }
@@ -551,10 +607,24 @@ fn report(scenario: &Scenario, samples: &[Sample]) {
             s.n, s.p50, s.p90, s.p99, s.max
         );
     }
+    let rtt = stats(
+        samples
+            .iter()
+            .map(|s| s.probe_rtt_us)
+            .filter(|v| v.is_finite())
+            .collect(),
+    );
     println!();
     println!(
         "iterations with an acknowledged write after commit: {exposed}/{} ({} writes acked in total across all iterations)",
         window.n, acked
+    );
+    println!(
+        "prober: {PROBER_CONNECTIONS} connections, mean SET round trip p50={:.1}µs p99={:.1}µs \
+         → exposure resolution ≈ {:.1}µs",
+        rtt.p50,
+        rtt.p99,
+        rtt.p50 / PROBER_CONNECTIONS as f64
     );
 }
 
