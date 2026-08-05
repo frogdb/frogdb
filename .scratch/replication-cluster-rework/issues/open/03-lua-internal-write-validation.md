@@ -1,6 +1,8 @@
 # Lua scripts validate keys once, then write later — same shape as the EXEC orphan bug
 
 Status: needs-triage
+
+Disposition (2026-08-04, P3 lock review): cluster-scoped — the replication-area lock does not depend on this. Scheduled into Phase 4 cluster hardening, sequenced after rework 02: if 02's pause barrier is adopted, option (b) subsumes this issue.
 Type: AFK
 Origin: exec-slot-revalidation PRD, task T10(c); same "validated once, executed later" shape as issue 33
 Severity: likelihood 2/3, consequence 3/3 (score 6)

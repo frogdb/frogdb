@@ -2719,8 +2719,15 @@ mod tests {
             !session.seed_acked_position(50),
             "a stale seed is not an advance"
         );
-        assert_eq!(session.acked_offset(), 100, "and never regresses the offset");
-        assert!(session.seed_acked_position(101), "one byte forward is enough");
+        assert_eq!(
+            session.acked_offset(),
+            100,
+            "and never regresses the offset"
+        );
+        assert!(
+            session.seed_acked_position(101),
+            "one byte forward is enough"
+        );
         assert_eq!(session.acked_offset(), 101);
     }
 
@@ -2808,7 +2815,10 @@ mod tests {
             transfer_rate_mbps(2 * 1024 * 1024, Duration::from_secs(2)),
             1.0
         );
-        assert_eq!(transfer_rate_mbps(1024 * 1024, Duration::from_secs(4)), 0.25);
+        assert_eq!(
+            transfer_rate_mbps(1024 * 1024, Duration::from_secs(4)),
+            0.25
+        );
         assert_eq!(
             transfer_rate_mbps(1024 * 1024, Duration::ZERO),
             0.0,

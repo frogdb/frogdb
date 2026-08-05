@@ -202,7 +202,8 @@ mod tests {
     fn a_broadcast_transaction_frames_the_whole_group_on_one_shard() {
         let broadcaster = RecordingBroadcaster::default();
         let empty: &[Bytes] = &[];
-        let offset = broadcaster.broadcast_transaction_on_shard(4, &[("SET", empty), ("DEL", empty)]);
+        let offset =
+            broadcaster.broadcast_transaction_on_shard(4, &[("SET", empty), ("DEL", empty)]);
 
         assert_eq!(
             *broadcaster.emitted.lock().unwrap(),

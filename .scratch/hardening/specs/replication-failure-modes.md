@@ -1,5 +1,11 @@
 # Replication — failure modes
 
+Status: LOCKED (2026-08-04) — Phase 3 mutation gate passed (frogdb-replication 98.7% on 1180
+mutants, frogdb-replication-runtime 100% of viable, vs an 85% gate; the 15 surviving mutants are
+all documented equivalents at the code). Behavior changes to this area are spec-first: edit the
+row, update the forcing test, then the code. See docs/agents/hardening-campaign.md
+"Locked area rules".
+
 Every way FrogDB's replication link can fail, refuse, or succeed, one table per mode. This is the
 reference the mutation run is measured against: a mutant that survives is a row nothing forces.
 
@@ -894,7 +900,7 @@ asserts the *bypass*, so closing the gap is a visible spec edit.
 | NOT observable | **Writes accepted with `min-replicas-to-write N` set and no replicas**, i.e. the gate inheriting the self-fence's arming latch: that would make the knob a no-op on exactly the node it exists to protect (a primary that has never yet had a replica) and is the single most damaging way to get this wrong, because the config reads as enabled. **A stale replica counted as good**: `min-replicas-max-lag` exists to exclude a session whose link is dead but whose teardown has not run, and ignoring it turns the gate into a bare connected-count check. **The value read once at boot** — a `CONFIG SET` that logs success and changes nothing is worse than a rejected `CONFIG SET`. **The tracker read on non-write commands**, or the config read before the WRITE-flag check: this is the hot path, and a `GET` must not pay for a replication policy. **`min-replicas-max-lag 0` excluding everybody** rather than disabling the freshness filter — Redis's 0 means "no lag check", and inverting it fences a healthy primary. |
 | Invariant | The gate is the fourth rung of `run_pre_checks`, immediately after the self-fence (Redis runs `writeCommandsDeniedByDiskError` then its `NOREPLICAS` check in the same relative order). It is entered only for commands whose `get_entry` flags contain `CommandFlags::WRITE`, and only then is `min_replicas_to_write()` read; the tracker walk happens only when that value is `> 0`. "Good" is `ReplicationTrackerImpl::count_good_replicas(max_lag)`, derived from the same `get_streaming_replicas()` projection `WAIT` counts (FM-REPLICATION-039), filtered by `max_lag.is_zero() \|\| r.last_ack_time.elapsed() < max_lag` — the `is_zero()` disjunct *is* Redis's `min-replicas-max-lag 0` semantics, expressed as a disabled filter rather than a zero-length window. Both values come from `ConfigManager` on every check, which is what makes the knobs live. A missing tracker (`replication_tracker == None`, a build with no replication wiring) yields 0 good replicas — the safe direction: refuse rather than assume. Replica apply traffic can never reach this ladder: the replication executor sends `CoreMsg::Execute` straight to the shards under `REPLICA_INTERNAL_CONN_ID` and never builds a `PreDispatchView`, the same carve-out Redis makes with its "unless coming from our master" clause. |
 | Outcome variant | `NOREPLICAS Not enough good replicas to write.` |
-| Forced by | `test_min_replicas_to_write_rejects_without_replicas`, `test_min_replicas_to_write_gate_tracks_replica_health`, `test_min_replicas_to_write_config_set_live`, `test_get_streaming_replicas`, `count_good_replicas_excludes_a_stale_replica_but_zero_disables_the_check`, `count_good_replicas_ignores_non_streaming_replicas`, `noreplicas_still_fires_after_a_replica_goes_silent` |
+| Forced by | `test_min_replicas_to_write_rejects_without_replicas`, `test_min_replicas_to_write_gate_tracks_replica_health`, `test_min_replicas_to_write_config_set_live`, `test_get_streaming_replicas`, `count_good_replicas_excludes_a_stale_replica_but_zero_disables_the_check`, `count_good_replicas_ignores_non_streaming_replicas`, `noreplicas_still_fires_after_a_replica_goes_silent`, `has_streaming_replica_tracks_the_streaming_projection` |
 | Bug refs | `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md` (the shared Lua bypass) |
 
 ---

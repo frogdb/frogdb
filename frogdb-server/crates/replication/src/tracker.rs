@@ -767,7 +767,10 @@ mod tests {
             .get_session(session.id())
             .expect("a registered replica has a session");
         assert_eq!(looked_up.id(), session.id());
-        assert!(Arc::ptr_eq(&looked_up, &session), "same session, not a copy");
+        assert!(
+            Arc::ptr_eq(&looked_up, &session),
+            "same session, not a copy"
+        );
 
         let info = tracker
             .get_replica(session.id())
@@ -790,7 +793,10 @@ mod tests {
     #[test]
     fn has_streaming_replica_tracks_the_streaming_projection() {
         let tracker = ReplicationTrackerImpl::new();
-        assert!(!tracker.has_streaming_replica(), "an empty registry has none");
+        assert!(
+            !tracker.has_streaming_replica(),
+            "an empty registry has none"
+        );
 
         let handshaking = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
         assert!(

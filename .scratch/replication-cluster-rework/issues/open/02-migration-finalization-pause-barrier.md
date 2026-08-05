@@ -1,6 +1,8 @@
 # Pause barrier at slot-migration finalization (Dragonfly parity)
 
 Status: needs-triage
+
+Disposition (2026-08-04, P3 lock review): cluster-scoped — the replication-area lock does not depend on this. Scheduled into Phase 4 cluster hardening (research task: Dragonfly source-side quiesce vs FrogDB's Raft apply). If adopted, subsumes rework 03.
 Type: AFK
 Origin: exec-slot-revalidation PRD, task T10(b) — deferred hardening
 Severity: likelihood 2/3, consequence 2/3 (score 4)

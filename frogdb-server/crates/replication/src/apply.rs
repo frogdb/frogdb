@@ -1054,10 +1054,7 @@ mod tests {
 
         assert_eq!(
             *applier.groups.lock().unwrap(),
-            vec![
-                (0, vec!["SET".to_string()]),
-                (1, vec!["SET".to_string()]),
-            ],
+            vec![(0, vec!["SET".to_string()]), (1, vec!["SET".to_string()]),],
             "only the group the second MULTI opened may reach shard 1"
         );
         assert_eq!(
@@ -1125,7 +1122,11 @@ mod tests {
         assert_eq!(
             *applier.controls.lock().unwrap(),
             vec![
-                vec!["FUNCTION".to_string(), "LOAD".to_string(), "lib".to_string()],
+                vec![
+                    "FUNCTION".to_string(),
+                    "LOAD".to_string(),
+                    "lib".to_string()
+                ],
                 vec!["FUNCTION".to_string(), "FLUSH".to_string()],
             ],
             "both control frames must reach the control seam, in order"
@@ -1233,7 +1234,6 @@ mod tests {
         assert_eq!(bound.record_abandoned(), 2);
         assert_eq!(bound.abandoned(), 2);
     }
-
 
     /// A `MULTI` opened on shard 1 followed by `count` inner `SET`s and no
     /// `EXEC` — the shape of a primary that never closes the group.
