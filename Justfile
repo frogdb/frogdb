@@ -1089,7 +1089,7 @@ lint-failover-atomicity:
         echo "       unaffected: it flows through convert_raft_cluster_op." >&2
         status=1
     fi
-    saga_files="$src/failure_detector.rs $src/connection/cluster.rs"
+    saga_files="{{server-dir}}/crates/cluster-runtime/src/failure_detector.rs $src/connection/cluster.rs"
     if matches=$(grep -nE 'ClusterCommand::(RemoveNode|AssignSlots|SetRole)' $saga_files); then
         echo "ERROR: failover paths must use the atomic ClusterCommand::Failover, not" >&2
         echo "       hand-rolled RemoveNode/SetRole/AssignSlots sequences:" >&2

@@ -25,7 +25,7 @@ use crate::connection::conn_command::ConnectionCommand;
 ///
 /// Two stage flavors:
 /// - **Guard stages** (`PreChecks`, `CommandLookup`, `PubSubPing`,
-///   `TransactionQueue`, `ClusterSlotValidation`, `MigratingTryAgain`) are pure
+///   `TransactionQueue`, `ClusterSlotValidation`, `MigratingSourceProbe`) are pure
 ///   decisions over the socketless
 ///   [`PreDispatchView`](crate::connection::guards::PreDispatchView).
 /// - **Dispatch stages** (`PreAuthIntercept`, `ResetIntercept`,
@@ -66,8 +66,11 @@ pub(crate) enum DispatchStage {
     ServerWide,
     /// CLUSTER GET/COUNTKEYSINSLOT slot routing.
     ClusterSlotSubcommand,
-    /// TRYAGAIN during multi-key slot migration.
-    MigratingTryAgain,
+    /// FM-CLUSTER-028. On the MIGRATING source, decide by key presence before
+    /// the command runs: serve / `ASK` / `TRYAGAIN`. Like
+    /// `ClusterSlotValidation`, runs *before* every stage that can terminate a
+    /// keyed command — scripting included.
+    MigratingSourceProbe,
     /// Terminal: bookkeeping + route_and_execute + post-execution tail.
     Execute,
 }
@@ -96,7 +99,7 @@ impl DispatchStage {
             | Self::PubSubPing
             | Self::TransactionQueue
             | Self::ClusterSlotValidation
-            | Self::MigratingTryAgain => true,
+            | Self::MigratingSourceProbe => true,
             // Dispatch stages: they terminate into a command executor, so an
             // error reply from one is a command that ran and failed.
             Self::PreAuthIntercept
@@ -127,12 +130,12 @@ pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 16] = [
     DispatchStage::CommandLookup,
     DispatchStage::PauseGate,
     DispatchStage::ClusterSlotValidation,
+    DispatchStage::MigratingSourceProbe,
     DispatchStage::ConnectionCommand,
     DispatchStage::ReplicationHandshake,
     DispatchStage::WaitIntercept,
     DispatchStage::ServerWide,
     DispatchStage::ClusterSlotSubcommand,
-    DispatchStage::MigratingTryAgain,
     DispatchStage::Execute,
 ];
 
@@ -540,6 +543,16 @@ impl ConnectionHandler {
                 }
             }
 
+            // FM-CLUSTER-028. We still own the slot, but a migration off it is
+            // open: key presence — not slot ownership — decides whether we serve
+            // this command, `ASK` it at the importing node, or `TRYAGAIN`.
+            DispatchStage::MigratingSourceProbe => {
+                match self.pre_dispatch_view().check_migrating_source(cmd).await {
+                    Some(redirect) => StageOutcome::ShortCircuit(vec![redirect]),
+                    None => StageOutcome::Continue,
+                }
+            }
+
             // Registry-union dispatch: a command registered as
             // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, CLIENT, DEBUG,
             // MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
@@ -676,14 +689,6 @@ impl ConnectionHandler {
                 StageOutcome::Continue
             }
 
-            // Check for TRYAGAIN during slot migration for multi-key commands.
-            DispatchStage::MigratingTryAgain => {
-                match self.pre_dispatch_view().check_migrating_multikey(cmd).await {
-                    Some(tryagain) => StageOutcome::ShortCircuit(vec![tryagain]),
-                    None => StageOutcome::Continue,
-                }
-            }
-
             // Terminal: per-command tracking/no-touch bookkeeping, shard routing,
             // and the post-execution ASK/internal-action/error-record tail. Always
             // short-circuits (never returns `Continue`), which is what makes the
@@ -712,13 +717,6 @@ impl ConnectionHandler {
                 } else {
                     self.route_and_execute(cmd, cmd_name).await
                 };
-
-                // For MIGRATING slots: if the key doesn't exist locally (nil
-                // response), convert to ASK redirect so the client retries on the
-                // importing target.
-                if let Some(ask) = self.migrating_ask_for_nil(cmd, &response) {
-                    return StageOutcome::ShortCircuit(vec![ask]);
-                }
 
                 // Handle internal action signals (blocking, raft, migrate).
                 // The error accounting for whatever this produces is the
@@ -824,12 +822,12 @@ mod tests {
             CommandLookup,
             PauseGate,
             ClusterSlotValidation,
+            MigratingSourceProbe,
             ConnectionCommand,
             ReplicationHandshake,
             WaitIntercept,
             ServerWide,
             ClusterSlotSubcommand,
-            MigratingTryAgain,
             Execute,
         ] {
             assert_eq!(
@@ -904,10 +902,21 @@ mod tests {
             // confirmed. `is_cluster_exempt` refusing to exempt `Scripting`
             // states the intent; this pair is what enforces it.
             (ClusterSlotValidation, ConnectionCommand),
-            // Slot routing (MOVED/ASK/CROSSSLOT) precedes the multi-key
-            // TRYAGAIN check, which precedes the terminal execute stage.
-            (ClusterSlotValidation, MigratingTryAgain),
-            (MigratingTryAgain, Execute),
+            // Slot routing (MOVED/ASK/CROSSSLOT) settles *whether this node owns
+            // the slot* — and consumes ASKING — before the migrating-source
+            // probe asks *whether the keys are still here*. The probe only ever
+            // acts on the `LocalServeMigrating` arm, so it must run second.
+            (ClusterSlotValidation, MigratingSourceProbe),
+            // FM-CLUSTER-028, for the same structural reason as the
+            // `(ClusterSlotValidation, ConnectionCommand)` pair above: the probe
+            // fronts *every* stage that can terminate a keyed command. The
+            // scripting family short-circuits at `ConnectionCommand`, so a bare
+            // `EVAL` running ahead of this stage would write to a key the
+            // migration had already handed over and ack it here — the same
+            // orphaned acked write issue 40 filed for single-key commands.
+            (MigratingSourceProbe, ConnectionCommand),
+            (MigratingSourceProbe, ServerWide),
+            (MigratingSourceProbe, Execute),
         ]
     };
 
@@ -958,12 +967,12 @@ mod tests {
             (CommandLookup, true),
             (PauseGate, false),
             (ClusterSlotValidation, true),
+            (MigratingSourceProbe, true),
             (ConnectionCommand, false),
             (ReplicationHandshake, false),
             (WaitIntercept, false),
             (ServerWide, false),
             (ClusterSlotSubcommand, false),
-            (MigratingTryAgain, true),
             (Execute, false),
         ];
         assert_eq!(

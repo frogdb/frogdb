@@ -431,17 +431,17 @@ group (010..017) and sits here rather than at the end of the file.
 | Forced by | `route_accept_importing_for_restore_without_asking` |
 | Bug refs | — |
 
-## FM-CLUSTER-028 — the migrating source keeps serving and hands out `ASK`
+## FM-CLUSTER-028 — the migrating source serves what it still holds and `ASK`s what has moved
 
 | Field | Value |
 |---|---|
-| Trigger | A key on a slot this node still owns while a migration off it is open. |
-| Observable | The command is served locally with the migration noted, so a key that is still here is answered here. A batch on the migrating source probes with the ASK target. If the target's address is unknown, the source serves locally rather than emitting a redirect it cannot address. A node that is the migration *source* but not the current owner takes the ordinary `MOVED`. |
-| NOT observable | A blanket refusal of a migrating slot: Redis serves what it still holds and `ASK`s only what has moved, and a blanket `TRYAGAIN` would stall the whole slot for the duration of the migration. |
-| Invariant | `LocalServeMigrating` is a separate decision from `LocalServe`, so the migration is carried into the execution path rather than being flattened away; the unknown-target fallback is explicit rather than an `unwrap`. |
-| Outcome variant | `RouteDecision::LocalServeMigrating` |
-| Forced by | `route_local_serve_migrating_when_self_is_source`, `route_moved_when_self_is_source_but_other_owns`, `batch_on_migrating_source_probes_with_the_ask_target`, `batch_on_migrating_source_with_unknown_target_serves_locally` |
-| Bug refs | — |
+| Trigger | A keyed command on a slot this node still owns while a migration off it is open — at **any arity**, plain or scripted, inside or outside `MULTI`. `MIGRATE` deletes each key as it hands it over, so "we own the slot" and "we hold the key" are different questions for the whole duration of the window. |
+| Observable | Key presence decides, and it is consulted **before the command executes**: every key still here → served locally; every key already gone → `-ASK <slot> <importing node>`; some here and some gone → `-TRYAGAIN`. A probe the shard does not answer → `ERR shard unavailable`. The single-key path, the scripting family, and the EXEC/batch path give the same answer for the same key set. If the importing node's address is unknown, the source serves locally rather than emitting a redirect it cannot address. A node that is the migration *source* but not the current owner takes the ordinary `MOVED`. Node-scoped commands (`SCAN`, `MIGRATE`, `CLUSTER`, the connection-level families) are never probed — no slot owns them, so no migration can redirect them. |
+| NOT observable | A write to an already-migrated key answered `+OK` on the source. That re-creates the key behind the migration, and `CLUSTER SETSLOT <slot> NODE` then hands the slot away and destroys the acknowledged write — 11 acked writes lost in a fault-free cluster in the run issue 40 was filed from. Nor a reply-shape stand-in for presence: a nil reply does not mean the key is gone (`HGET` on a live hash, `LPOS` on a live list, a `BLPOP` timeout are all nil) and a non-nil reply does not mean it is here (`SET` answers `+OK` on the key it just re-created), so "convert nil replies to `ASK` after execution" is both over- and under-inclusive and is unsound for writes by construction. Nor the mirror-image over-correction — a blanket refusal of a migrating slot: Redis serves what it still holds, and a blanket `TRYAGAIN` would stall the slot for the migration's whole duration. |
+| Invariant | One decision, one site. `route_migrating_source` (`server/src/slot_migration/routing.rs`) turns "this node owns the slot, a migration off it is open, and the ASK address renders" into a probe instruction, reusing `route_with_snapshot`'s `LocalServeMigrating` arm and the batch path's `migration_target_addr`; both callers — the per-command `MigratingSourceProbe` stage and `validate_queued_batch` — map the shared `probe_key_presence` verdict through the single `KeyPresence::migrating_source_reply`. Arity is not a gate anywhere on that path. The probe is ordered after `ClusterSlotValidation` and before `ConnectionCommand` (`MUST_PRECEDE`), so the scripting family cannot outrun it the way FM-CLUSTER-030 describes; it reads slot state first, so a slot with no open migration costs one snapshot read and no keyspace lookup. |
+| Outcome variant | `RouteDecision::LocalServeMigrating` → `KeyPresence` → `None` / `-ASK` / `-TRYAGAIN` / `ERR shard unavailable` |
+| Forced by | `route_local_serve_migrating_when_self_is_source`, `route_moved_when_self_is_source_but_other_owns`, `migrating_source_probe_names_the_importing_node`, `migrating_source_probe_is_none_without_an_open_migration`, `migrating_source_probe_is_none_when_the_ask_address_is_unknown`, `batch_on_migrating_source_probes_with_the_ask_target`, `batch_on_migrating_source_with_unknown_target_serves_locally`, `migrating_source_asks_a_single_key_write_whose_key_moved`, `migrating_source_serves_a_single_key_command_still_held_here`, `migrating_source_tryagain_when_the_keys_straddle_the_slot`, `migrating_source_probes_the_scripting_family`, `migrating_source_refuses_when_the_shard_does_not_answer`, `migrating_source_probe_is_skipped_when_the_slot_is_not_migrating`, `migrating_source_probe_is_skipped_for_node_scoped_commands`, `test_single_key_write_on_migrating_source_asks_and_never_orphans` |
+| Bug refs | `.scratch/hardening/issues/done/40-single-key-write-on-migrating-source-acks-then-orphans.md` (fixed); issue 31 §"Bug X" (the jepsen forensics it was split out of) |
 
 ## FM-CLUSTER-029 — `WATCH` is routed when it is registered, not when `EXEC` runs
 
@@ -469,11 +469,16 @@ group (010..017) and sits here rather than at the end of the file.
 
 Residual, deliberately out of scope here: a script's *undeclared* runtime writes (`redis.call` on a
 key the invocation never named) are still unvalidated — Redis re-checks on every call via
-`scriptVerifyClusterState`, and that is rework issue 03. The multi-key `MigratingTryAgain` probe
-also still sits after `ConnectionCommand`, so a two-key script against a half-migrated slot is
-served locally rather than answered `TRYAGAIN`; hoisting that stage as well would newly subject
-`MIGRATE` (server-wide, `KeySpec::Dynamic`) to the probe, so it is filed with issue 03 rather than
-folded in here.
+`scriptVerifyClusterState`, and that is rework issue 03.
+
+The sibling gap this section used to record — the migrating-source probe sitting *after*
+`ConnectionCommand`, so a script against a half-migrated slot was served locally instead of
+redirected — is closed. Issue 40 hoisted the stage (now `MigratingSourceProbe`) to the same
+position for the same reason, pinned by the `MUST_PRECEDE` pair
+`(MigratingSourceProbe, ConnectionCommand)`. The concern that blocked the hoist —
+newly subjecting `MIGRATE` (server-wide, `KeySpec::Dynamic`) to the probe — is answered by the
+stage sharing `is_cluster_exempt` with slot validation, so every node-scoped command keeps
+skipping it. See FM-CLUSTER-028.
 
 ---
 
