@@ -362,11 +362,15 @@
    Three properties are computed; two ALWAYS gate :valid?, one is conditional:
 
    - Value-correctness (ALWAYS gates): every successful non-nil read must return
-     a value that was actually written to that key. Written values are globally
-     unique per run, so a value belonging to a different key (routing corruption
-     / cross-slot contamination) or one that was never written (fabrication) is
-     caught. This is timing-independent and topology-independent — a GET must
-     never return the wrong bytes, under any fault schedule — so it always gates.
+     a value that was actually written to that key at or before the read, by
+     history position (both :ok and :info writes count as admissible sources;
+     an :info write's server-side effect is unknown, so a read observing it is
+     not evidence of corruption). Written values are globally unique per run, so
+     a value belonging to a different key (routing corruption / cross-slot
+     contamination), one that was never written (fabrication), or one that is
+     only written LATER in the history (order violation) is caught. This is
+     topology-independent — a GET must never return the wrong bytes, under any
+     fault schedule — so it always gates.
 
    - Routing (ALWAYS gates): no operation exhausted its redirect budget
      (:too-many-redirects).
@@ -388,9 +392,13 @@
   []
   (reify checker/Checker
     (check [this test history opts]
-      (let [completed (filter #(= :ok (:type %)) history)
-            failed (filter #(= :fail (:type %)) history)
-            info-ops (filter #(= :info (:type %)) history)
+      (let [;; Tag every op with its position in the full history so the
+            ;; value-correctness rule below can reason about "at or before
+            ;; this read", the same way sortedset's checker orders ZADDs.
+            indexed (map-indexed (fn [idx op] (assoc op :history-index idx)) history)
+            completed (filter #(= :ok (:type %)) indexed)
+            failed (filter #(= :fail (:type %)) indexed)
+            info-ops (filter #(= :info (:type %)) indexed)
 
             ;; Count redirects
             ops-with-redirects (->> completed
@@ -432,14 +440,40 @@
                              vec)
             no-lost-writes? (empty? lost-writes)
 
-            ;; Value-correctness: a successful non-nil read of a written key must
-            ;; return a value that was actually written to that key.
+            ;; Value-correctness (order-aware): a successful non-nil read of a
+            ;; key must return a value that was actually written to that key
+            ;; at or before the read, by history position — mirroring the
+            ;; ordering discipline the durability rule above already applies
+            ;; to :final-read. Without this, a value written to the same key
+            ;; LATER in the history (or, before the FLUSHALL fix in
+            ;; cluster-db/setup!, in an entirely earlier batch test sharing
+            ;; this bounded key pool) would satisfy `contains?` and mask a
+            ;; real stale/fabricated read.
+            ;;
+            ;; Both :ok and :info writes are admissible sources: an :info
+            ;; (indeterminate) write's server-side effect is unknown, so a
+            ;; read observing its value is not evidence of corruption. Only
+            ;; :ok writes feed `acked`/durability above, since durability
+            ;; must not credit a write that may never have applied.
+            writes-by-key (->> indexed
+                               (filter #(#{:write :targeted-write} (:f %)))
+                               (filter #(#{:ok :info} (:type %)))
+                               (keep (fn [w]
+                                       (let [k (get-in w [:value :key])
+                                             v (get-in w [:value :written])]
+                                         (when (and (some? k) (some? v))
+                                           {:index (:history-index w) :key k :value v}))))
+                               (group-by :key))
             wrong-value-reads (->> reads
                                    (keep (fn [r]
                                            (let [k (get-in r [:value :key])
                                                  v (get-in r [:value :value])
-                                                 ks (get acked k)]
-                                             (when (and (some? v) ks (not (contains? ks v)))
+                                                 read-index (:history-index r)
+                                                 prior-values (->> (get writes-by-key k)
+                                                                  (filter #(<= (:index %) read-index))
+                                                                  (map :value)
+                                                                  set)]
+                                             (when (and (some? v) (not (contains? prior-values v)))
                                                {:key k :read v}))))
                                    vec)
             values-correct? (empty? wrong-value-reads)

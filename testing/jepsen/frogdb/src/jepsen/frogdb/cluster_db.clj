@@ -308,6 +308,49 @@
   [conn host port key dest-db timeout-ms]
   (wcar conn (car/redis-call ["MIGRATE" host (str port) key (str dest-db) (str timeout-ms) "REPLACE"])))
 
+(defn flushall!
+  "Execute FLUSHALL against a single node's connection."
+  [conn]
+  (wcar conn (car/redis-call ["FLUSHALL"])))
+
+(defn dbsize
+  "Execute DBSIZE against a single node's connection and return the key count."
+  [conn]
+  (wcar conn (car/redis-call ["DBSIZE"])))
+
+(defn flush-cluster!
+  "FLUSHALL every primary in the cluster and verify each reports DBSIZE 0.
+
+   Guards against state leaking across batch tests that share this Docker
+   compose cluster: several workloads write to fixed-name or small bounded
+   key pools (e.g. key-routing's `kr-0`..`kr-99`, slot-migration's
+   `{migration-test}:key`), and containers are reused (started/healed, not
+   recreated) between batch tests by `setup!`/`teardown!` below. Without an
+   explicit wipe, a later test's checker can observe a value written by an
+   earlier test and misreport it as a routing/fabrication bug (hardening
+   issue 31's raft-chaos false positive was exactly this).
+
+   FLUSHALL only clears the node it's sent to (Redis Cluster semantics), so
+   this must be issued to every primary individually — a single node's
+   FLUSHALL does not propagate cluster-wide.
+
+   Throws if any node still reports a non-zero DBSIZE after FLUSHALL, so
+   leakage fails loudly instead of silently reappearing as a data-checker
+   false positive downstream."
+  [nodes docker-host? base-port]
+  (doseq [node nodes]
+    (let [conn (conn-for-raft-node node docker-host? base-port)]
+      (flushall! conn)))
+  (doseq [node nodes]
+    (let [conn (conn-for-raft-node node docker-host? base-port)
+          size (dbsize conn)]
+      (when-not (= 0 size)
+        (throw+ {:type :dbsize-not-zero-after-flushall
+                 :message (str "DBSIZE on " node " is " size
+                               " after FLUSHALL — state leaked between batch tests")
+                 :node node
+                 :dbsize size})))))
+
 ;; ===========================================================================
 ;; Cluster State Helpers
 ;; ===========================================================================
@@ -769,7 +812,12 @@
                   (wait-for-node-ready n docker-host? 30000 base-port))
                 ;; Wait for the freshly bootstrapped cluster to converge
                 (wait-for-cluster-converged
-                 initial-nodes docker-host? base-port (count initial-nodes)))))))
+                 initial-nodes docker-host? base-port (count initial-nodes))))
+            ;; The cluster has converged (either path above); wipe any state
+            ;; left behind by the previous batch test before this one's
+            ;; generator starts, so shared bounded key pools start empty (see
+            ;; flush-cluster! docstring / hardening issue 31).
+            (flush-cluster! initial-nodes docker-host? base-port))))
 
       (teardown! [_ test node]
         (info "Tearing down Raft cluster node" node)

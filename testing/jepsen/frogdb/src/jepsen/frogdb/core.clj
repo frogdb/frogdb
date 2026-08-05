@@ -123,6 +123,42 @@
                   ". Available: " (str/join ", " (map clojure.core/name (keys workloads))))))))
 
 ;; ===========================================================================
+;; Checkers
+;; ===========================================================================
+
+(def stats-all-fail-ok-fs
+  "Op :f values with a documented-legal all-:fail outcome, so a bare zero-:ok
+   count for that :f must not sink the run's :valid?.
+
+   :exec-queued-txn (slot-migration / slot-migration-partition) — EXEC of a
+   transaction queued before/during a slot migration legitimately redirects
+   with MOVED every time the migration wins the race; the workload's own
+   generator emits it exactly once per run (gen/once), so a single legal
+   redirect zeroes the :f. See slot_migration.clj:337-339 and :795 (the
+   workload checker itself gates the property that actually matters — no
+   orphaned write — and reports this outcome for visibility, not gating).
+   See hardening issue 31 (\"P3 — stop gating on bare checker/stats\")."
+  #{:exec-queued-txn})
+
+(defn stats-ignoring
+  "Wraps jepsen.checker/stats, recomputing :valid? while ignoring any :f in
+   `ignored-fs` when deciding validity. jepsen's stock stats checker treats
+   any :f with zero :ok operations as invalid (jepsen.checker/stats,
+   `merge-valid` over every :by-f entry) — correct in general, but wrong for
+   an :f whose only legal outcome under some fault schedules is a bare
+   :fail. Per-:f counts for ignored :f's are left untouched in the report
+   (:by-f, :all) so they stay visible; they just don't participate in the
+   :valid? merge. Real signal for every other :f is unaffected."
+  [ignored-fs]
+  (reify checker/Checker
+    (check [this test history opts]
+      (let [result (checker/check (checker/stats) test history opts)
+            gating-valids (->> (:by-f result)
+                               (remove (fn [[f _]] (contains? ignored-fs f)))
+                               (map (fn [[_ v]] (:valid? v))))]
+        (assoc result :valid? (checker/merge-valid gating-valids))))))
+
+;; ===========================================================================
 ;; Test Construction
 ;; ===========================================================================
 
@@ -207,7 +243,7 @@
             :nemesis (:nemesis nemesis-pkg)
             :checker (checker/compose
                        {:workload (:checker workload)
-                        :stats (checker/stats)
+                        :stats (stats-ignoring stats-all-fail-ok-fs)
                         :exceptions (checker/unhandled-exceptions)
                         :perf (checker/perf)})
             :generator (gen/phases

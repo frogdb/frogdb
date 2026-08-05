@@ -374,10 +374,10 @@ never regress silently:
       order-blind value rule; no routing corruption in the history.
 - [ ] **(P1)** File and fix Bug X: single-key write on a MIGRATING source must `ASK`, not
       serve locally. Rewrite FM-CLUSTER-028 to match.
-- [ ] **(P2)** Harness: `FLUSHALL` between batch tests (`cluster_db.clj` `setup!`) + `DBSIZE`
+- [x] **(P2)** Harness: `FLUSHALL` between batch tests (`cluster_db.clj` `setup!`) + `DBSIZE`
       assertion.
-- [ ] **(P2)** Harness: order-aware value rule + admit `:info` writes (`key_routing.clj:437-445`).
-- [ ] **(P3)** Harness: stop gating on bare `checker/stats` for `:f`s with legal all-fail
+- [x] **(P2)** Harness: order-aware value rule + admit `:info` writes (`key_routing.clj:437-445`).
+- [x] **(P3)** Harness: stop gating on bare `checker/stats` for `:f`s with legal all-fail
       outcomes (`core.clj:210`).
 - [ ] **(P3)** Tighten `slot_migration.clj` orphan/durability gating (see above) so Bug X
       cannot regress silently.
@@ -389,3 +389,66 @@ The `Upload jepsen-store` step of run 30828159222 **failed**, so `results.edn` /
 histories were never archived — this analysis is reconstructed entirely from the job log.
 Fixing that upload step is a prerequisite for any future jepsen forensics; without it the
 only record is a 755k-line log that expires.
+
+---
+
+## Harness fixes landed (P2/P3) (2026-08-05)
+
+P1 (Bug X, the migrating-source single-key write loss) is **not** addressed here — that's
+server code, out of scope for this pass, and issue 31 stays open pending it.
+
+- **`testing/jepsen/frogdb/src/jepsen/frogdb/cluster_db.clj`**: added `flushall!`, `dbsize`,
+  and `flush-cluster!` (new, ~line 312 in the "Cluster Commands" section — FLUSHALL is
+  per-node in Redis Cluster, so `flush-cluster!` loops every primary, then re-loops to assert
+  `DBSIZE 0` on each, `throw+`ing loudly if any node isn't empty). Wired into `db/DB`'s
+  `setup!` (~line 815): once the cluster has converged (either the fast path or the
+  clean-restart fallback), `flush-cluster!` runs on `initial-nodes` before the batch test's
+  generator starts. This closes the cross-test keyspace leakage that produced raft-chaos's 7
+  `:wrong-value-reads` false positives (values from `kr-53` etc. surviving from earlier batch
+  tests sharing the bounded `kr-0..kr-99` pool).
+
+- **`testing/jepsen/frogdb/src/jepsen/frogdb/key_routing.clj`**: `checker` (~line 390) now
+  tags every history op with `:history-index` (`map-indexed`, same technique
+  `sortedset.clj`'s checker already uses) and rebuilt `wrong-value-reads` (~line 437) to be
+  order-aware: a read is only flagged if its value doesn't appear among writes to that key at
+  history-index ≤ the read's index (`writes-by-key`, built from both `:ok` and `:info`
+  writes — the "admit `:info` as a possible source" fix). `acked`/`lost-writes` (durability)
+  are untouched — they still count `:ok` writes only, per the analysis's reasoning that
+  durability must not credit a write that may never have applied. Updated the `checker`
+  docstring (~line 364) to match the new order-aware, `:info`-admitting behavior (it
+  previously claimed "timing-independent").
+
+- **`testing/jepsen/frogdb/src/jepsen/frogdb/core.clj`**: `checker/stats` (jepsen 0.3.5,
+  vendored, no built-in exclusion option — confirmed by reading the jar) treats any `:f` with
+  zero `:ok` ops as invalid. Added `stats-ignoring` (wraps `checker/stats`, recomputes
+  `:valid?` via `checker/merge-valid` over `:by-f` entries minus an ignore-list, leaving
+  per-`:f` counts in the report untouched) and `stats-all-fail-ok-fs` (`#{:exec-queued-txn}`,
+  documented with the slot_migration.clj:337-339 rationale). Swapped into the `:checker`
+  composition (~line 208) in place of the bare `(checker/stats)`. `:exec-queued-txn` is
+  unique to the slot-migration workloads, so no other workload's stats gating is weakened.
+
+- **Jepsen-store upload failure**: root-caused precisely, but **already fixed** — no code
+  change needed. Pulled the actual run log (`gh api repos/frogdb/frogdb/actions/jobs/91735040211/logs`)
+  and found the literal error: `The path for one of the files in artifact is not valid:
+  /frogdb-hash-docker/20260803T160106.155Z/independent/:f1/history.edn. Contains ... Colon :`
+  — `actions/upload-artifact` rejecting the raw `store/` tree's colon-bearing
+  independent-checker paths. Cross-checked the job's step list
+  (`gh run view 30828159222 --json jobs`): step 9 "Upload jepsen-store" ran directly against
+  `path: testing/jepsen/frogdb/store` with **no** preceding "Tar jepsen store" step — this run
+  predates the tar-before-upload fix. `git log` on `jepsen_nightly.py` /
+  `jepsen-nightly.yml` shows commit `ccabc080` ("ci(jepsen): tar the store before upload; file
+  raft-suite harness NPE as issue 26", 2026-08-03 18:00:15 UTC) landed ~2.5h *after* this run
+  started (15:34:54 UTC) — the run simply predates its own fix. `ccabc080` is already an
+  ancestor of `HEAD` and both the generator (`jepsen_nightly.py`) and the generated
+  `jepsen-nightly.yml` currently tar `testing/jepsen/frogdb/store` into
+  `/tmp/jepsen-store.tgz` before upload (`just workflow-gen --check` confirms no drift).
+  Verified no suite bypasses it: there is exactly one store root
+  (`testing/jepsen/frogdb/store`, `run.py`'s `cmd_run`) shared by every suite in the loop, and
+  one Tar+Upload step pair at the end of the job covering all of them — not per-suite, so
+  there's nothing to bypass. No further action needed on this point.
+
+Verification: `lein check` (unsandboxed — sandboxed run hit `mkstemp` `EPERM` on
+`javac_options`' temp file under `$TMPDIR`) — clean compile of every namespace including the
+three edited files, only pre-existing unrelated reflection warnings. `just workflow-gen
+--check` — all 11 generated workflows including `jepsen-nightly.yml` OK (no change needed
+there, confirmed in sync).
