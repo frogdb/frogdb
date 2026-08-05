@@ -5,7 +5,7 @@ Type: AFK
 Origin: whole-suite run during rework-05 verification, 2026-08-04
 (`test_replica_handles_rapid_reconnect::case_2_with_persistence` failed with
 `expected OK, got Error(b"CLUSTERDOWN The cluster is down (quorum lost, writes rejected)")`;
-passes 2/2 in isolation, `case_1_in_memory` passed in the same run)
+passes 2/2 in isolation, `case_1_in_memory` passed in the same run; second sighting 2026-08-05 in the rework-10 verification suite run, again isolated-pass after)
 Severity: likelihood 2/3 (needs armed fence + ACK lag past the freshness window; whole-suite CPU
 contention reproduces it), consequence 2/3 (spurious write refusals on standalone primaries;
 misleading operator diagnostics)
