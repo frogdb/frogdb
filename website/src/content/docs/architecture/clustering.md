@@ -198,7 +198,7 @@ A standalone (non-cluster) server omits the `cluster_raft_term` line entirely ra
 fields are still reported as `0` — Redis defines them for standalone servers and clients parse them
 unconditionally.
 
-The relationship regression tests pin (`frogdb-server/crates/server/tests/integration_cluster.rs`,
+The relationship regression tests pin (`frogdb-server/crates/server/tests/cluster_topology.rs`,
 `test_cluster_info_epoch_vs_nodes_epoch_after_reelection_no_topology_change`,
 `test_cluster_info_epoch_monotonic_across_failover` and
 `test_join_with_large_epoch_keeps_current_epoch_above_my_epoch`) is `cluster_current_epoch >=

@@ -1,6 +1,6 @@
 # Bare EVAL/EVALSHA/FCALL appear to bypass cluster slot validation (stage-ordering hole)
 
-Status: done (2026-08-05)
+Status: done
 PRD: [replication-cluster-rework/epoch-fold-redesign.md](../epoch-fold-redesign.md)
 Type: AFK
 Origin: rework-02 design research, 2026-08-04 (see

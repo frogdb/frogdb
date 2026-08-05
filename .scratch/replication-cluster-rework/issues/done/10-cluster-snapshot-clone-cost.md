@@ -1,6 +1,6 @@
 # `ClusterState::snapshot()` deep-clones the 16384-slot table on every read
 
-Status: fixed
+Status: done
 Type: AFK
 Origin: analysis of [issue 01](../) (2026-07-31)
 Severity: likelihood 3/3, consequence 1/3 (score 3) — pure cost, no correctness risk
