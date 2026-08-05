@@ -79,13 +79,11 @@ coverage crate="" pattern="":
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest {{ if crate != "" { "-p " + crate } else { "--all" } }} {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }} --html
     @echo "Report: target/llvm-cov/html/index.html"
 
-# Generate lcov coverage data (for CI upload). Deliberately un-freezes the frozen
-# redis-regression suite and includes frogctl (both excluded from the default `just
-# test`/`just check` dev loop during the hardening campaign): the campaign freeze is
-# about keeping the default dev loop fast, not about hiding code from coverage
-# measurement, so this pulls both back in via --ignore-default-filter.
+# Generate lcov coverage data (for CI upload). Pulls frogctl back in — it is excluded
+# from the default `just test`/`just check` dev loop, and that exclusion is about
+# keeping the dev loop fast, not about hiding code from coverage measurement.
 coverage-lcov:
-    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --features frogdb-redis-regression/regression --features frogctl/cli-tests --ignore-default-filter --lcov --output-path target/llvm-cov/lcov.info
+    {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --features frogctl/cli-tests --ignore-default-filter --lcov --output-path target/llvm-cov/lcov.info
 
 # Coverage *depth*: per-line exec counts + per-function test diversity
 # (see docs/agents/coverage-depth.md). Local-only; uses its own target dir.
@@ -206,13 +204,13 @@ mutants-diff crate:
 mutants-gate crate threshold:
     ./scripts/mutants-gate.py target/mutants/{{crate}}/mutants.out/outcomes.json --min-score {{threshold}}
 
-# Run the frozen Redis compat suite (nightly / on-demand only during the campaign)
+# Run the Redis compat suite on its own (it is also part of the default `just test`)
 regression pattern="":
-    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-redis-regression --features regression {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-redis-regression {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}
 
-# Type-check the frozen suite without running it — the anti-rot guard
+# Type-check the compat suite without running it
 regression-check:
-    {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --features regression --all-targets
+    {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --all-targets
 
 # Gate: failure-mode specs and the tests that force them must agree, both ways.
 # Every `Forced by` test in .scratch/hardening/specs/*-failure-modes.md must
