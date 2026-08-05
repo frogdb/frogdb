@@ -192,6 +192,20 @@ pub async fn real_frogdb_server_fake_persistence(
     num_shards: usize,
     seed: u64,
 ) -> Result<(), BoxError> {
+    // Pin the wall-clock anchor `XADD *` / `XCLAIM TIME` / absolute-expiry replies
+    // read (`clock::system_now`) before this host's paused clock advances at all.
+    // The anchor is process-global state (see `clock::reset_system_epoch`), and a
+    // test process runs several simulated servers back to back — e.g.
+    // `determinism::assert_run_is_reproducible` runs the same workload twice —
+    // so without resetting it per host, the *second* server would inherit the
+    // first's real `SystemTime::now()` reading and mint stream IDs that depend on
+    // how much real wall-clock time separated the two runs, not on the
+    // deterministic virtual schedule. See
+    // `.scratch/concurrency-testing/issues/17-virtual-wall-clock-for-stream-ids.md`.
+    frogdb_core::clock::reset_system_epoch(
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+    );
+
     let config = Config {
         chaos: frogdb_server::config::ChaosConfig::default().with_seed(seed),
         server: ServerConfig {

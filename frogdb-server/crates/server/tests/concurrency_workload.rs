@@ -441,15 +441,15 @@ mod determinism {
     // would block every unrelated change until the last step lands. Each is un-ignored by the
     // step that makes it pass.
     //
-    // The two profiles that generate streams are still ignored, for a cause no in-scope step
-    // addresses: `XADD *` mints its ID from `SystemTime::now()`, and nothing in the codebase
-    // virtualizes wall-clock time, so every stream entry carries a real-time millisecond into
-    // the reply. That is audit item A15; the ignore lifts when a virtual wall clock exists.
+    // The two profiles that generate streams were ignored for audit item A15: `XADD *` minted
+    // its ID from `SystemTime::now()`, which nothing in the codebase virtualized, so every
+    // stream entry carried a real-time millisecond into the reply. `crate::clock::system_now()`
+    // (frogdb-types) now closes that gap — see
+    // `.scratch/concurrency-testing/issues/done/17-virtual-wall-clock-for-stream-ids.md`.
 
     /// Mixed: the broadest command vocabulary (all six type families), including the
     /// TTL-bearing commands whose expiry decisions read the clock.
     #[test]
-    #[ignore = "A15: `XADD *` mints stream IDs from the real wall clock; see determinism audit"]
     fn run_is_reproducible_mixed_seed_0() {
         assert_run_is_reproducible(0, Profile::Mixed, 4, 30, 2);
     }
@@ -467,7 +467,6 @@ mod determinism {
     /// TxHeavy at a longer script length: WATCH/EXEC version checks plus enough sim time
     /// for TTLs to actually elapse, so the active-expiry cycle participates in the run.
     #[test]
-    #[ignore = "A15: `XADD *` mints stream IDs from the real wall clock; see determinism audit"]
     fn run_is_reproducible_txheavy_seed_3() {
         assert_run_is_reproducible(3, Profile::TxHeavy, 4, 60, 2);
     }

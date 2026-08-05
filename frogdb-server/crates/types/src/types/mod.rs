@@ -17,7 +17,7 @@ pub use stream::*;
 pub use string_value::{IncrementError, StringValue};
 
 use bytes::Bytes;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use crate::bloom::BloomFilterValue;
 use crate::cms::CountMinSketchValue;
@@ -499,7 +499,7 @@ impl Expiry {
     /// Convert to an absolute Instant for storage.
     pub fn to_instant(&self) -> Option<Instant> {
         let now = crate::clock::now();
-        let system_now = SystemTime::now();
+        let system_now = crate::clock::system_now();
 
         match self {
             Expiry::Ex(secs) => Some(now + Duration::from_secs(*secs)),
