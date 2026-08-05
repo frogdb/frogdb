@@ -382,7 +382,7 @@ group (010..017) and sits here rather than at the end of the file.
 | Invariant | `RouteDecision::Moved` carries an `Option<SocketAddr>`, so "known owner, unknown address" is representable and `to_response` maps the `None` arm to `CLUSTERDOWN` rather than formatting a hole. |
 | Outcome variant | `RouteDecision::Moved(None)` → `CLUSTERDOWN` |
 | Forced by | `route_moved_with_no_addr_when_owner_node_unknown`, `to_response_moved_without_addr_emits_clusterdown` |
-| Bug refs | `.scratch/hardening/issues/open/30-self-fence-flake-and-misleading-clusterdown.md` |
+| Bug refs | `.scratch/hardening/issues/done/30-self-fence-flake-and-misleading-clusterdown.md` |
 
 ## FM-CLUSTER-024 — an unassigned slot is `CLUSTERDOWN`
 
@@ -716,7 +716,7 @@ keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in t
 | Invariant | `LeaderRedirect` carries `Option<NodeId>` and `Option<SocketAddr>` independently, so "leader known, address unknown" is representable and renders as `CLUSTERDOWN` rather than a hole in a `REDIRECT`. |
 | Outcome variant | `CLUSTERDOWN` |
 | Forced by | `follower_forward_failure_unknown_leader_is_clusterdown_redirect`, `resolve_redirect_leader_not_in_state_yields_clusterdown`, `resolve_redirect_no_leader_yields_clusterdown`, `redirect_to_response_renders_wire_strings` |
-| Bug refs | `.scratch/hardening/issues/open/30-self-fence-flake-and-misleading-clusterdown.md` |
+| Bug refs | `.scratch/hardening/issues/done/30-self-fence-flake-and-misleading-clusterdown.md` |
 
 ## FM-CLUSTER-050 — any other Raft failure is reported as itself
 
@@ -845,10 +845,10 @@ re-registers, so two nodes running selection concurrently mid-change can pick di
 | Trigger | `CONFIG SET cluster-self-fence-on-quorum-loss` and `cluster-auto-failover` on a running node with quorum already lost. |
 | Observable | Disabling the fence makes writes acceptable again on the same gate instance; re-enabling it fences again. With healthy quorum the flag makes no difference. The write-fence reason reported to observability is `"cluster quorum lost"` exactly when the gate fences, and absent when it does not. |
 | NOT observable | A knob that only takes effect at startup. Gating *installation* of the checker rather than its verdict is what made this startup-only before, and an operator riding out a partition cannot restart the node to change it. Nor `/status` claiming a fence reason the write path is not enforcing. |
-| Invariant | `SelfFenceGate::has_quorum` is `!flag || inner.has_quorum()` and `write_fence_reason` is derived from that same call, so the report cannot disagree with the gate (`flags.rs:126-139`). |
+| Invariant | `SelfFenceGate::has_quorum` is `!flag || inner.has_quorum()` and `write_fence_reason` is derived from that same call, so the report cannot disagree with the gate (`flags.rs:126-139`). The wire wording is the *inner* checker's: `quorum_lost_error()` forwards to `inner.quorum_lost_error()`, whose `QuorumChecker` default is `CLUSTER_DOWN_QUORUM_LOST`, so a cluster fence keeps answering `CLUSTERDOWN` while the replication self-fence behind the same write gate answers its own `SELFFENCE` code (FM-REPLICATION-041). The gate never spells the string itself — a wrapper that hardcoded one would re-label whatever it wraps. |
 | Outcome variant | `Option<&'static str>` = `Some("cluster quorum lost")`; `CLUSTERDOWN The cluster is down (quorum lost, writes rejected)` |
-| Forced by | `auto_failover_flag_is_live`, `self_fence_gate_follows_live_flag`, `self_fence_gate_passes_through_healthy_quorum`, `self_fence_gate_reports_the_reason_it_gates_on` |
-| Bug refs | `.scratch/hardening/issues/open/30-self-fence-flake-and-misleading-clusterdown.md` |
+| Forced by | `auto_failover_flag_is_live`, `self_fence_gate_follows_live_flag`, `self_fence_gate_passes_through_healthy_quorum`, `self_fence_gate_reports_the_reason_it_gates_on`, `self_fence_gate_delegates_the_quorum_lost_wording` |
+| Bug refs | `.scratch/hardening/issues/done/30-self-fence-flake-and-misleading-clusterdown.md` |
 
 ## FM-CLUSTER-060 — runtime flags derive from config with no field drift
 

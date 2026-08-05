@@ -155,8 +155,18 @@ pub struct ReplicationConfigSection {
     // change the running buffer never made; Redis's live `repl-backlog-size` resize is unbuilt
     pub backlog_max_mb: usize,
 
-    /// Reject writes when primary loses all replica ACK freshness.
-    /// Prevents zombie writes during network partitions.
+    /// Reject writes when primary loses all replica ACK freshness, with
+    /// `SELFFENCE writes rejected: no fresh streaming replica
+    /// (self-fence-on-replica-loss)`. Prevents zombie writes during network
+    /// partitions.
+    ///
+    /// The fence arms only once a replica has actually streamed, and it drops
+    /// again when the last streaming replica leaves *cleanly* (an orderly
+    /// close, `REPLICAOF NO ONE`, a primary-initiated teardown), so a
+    /// deliberate decommission does not fence the primary. A replica that was
+    /// lost — killed, partitioned, or disconnected for lag — or one that is
+    /// still attached but silent keeps it engaged until a fresh replica
+    /// streams again.
     #[serde(default = "default_self_fence_on_replica_loss")]
     #[param(mutable)]
     pub self_fence_on_replica_loss: bool,

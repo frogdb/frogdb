@@ -2364,10 +2364,14 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
 
     // Attach a real downstream replica to the promoted node. PSYNC is served by
     // the promoted node's primary handler, and its ACKs land in the tracker the
-    // write gate counts.
+    // write gate counts. The link runs through a proxy so the ACK leg can be
+    // frozen later without detaching the replica — a downstream that is shut
+    // down departs *cleanly*, which disarms the fence instead of engaging it
+    // (FM-REPLICATION-062).
+    let proxy = LagProxy::spawn(replica.port()).await;
     assert_ok(
         &downstream
-            .send("REPLICAOF", &["127.0.0.1", &replica.port().to_string()])
+            .send("REPLICAOF", &["127.0.0.1", &proxy.port().to_string()])
             .await,
     );
     let acked = parse_integer(&replica.send("WAIT", &["1", "10000"]).await).unwrap_or(0);
@@ -2387,23 +2391,23 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
         "write on the promoted primary must reach its downstream replica, got: {mirrored:?}"
     );
 
-    // Lose the replica. Self-fencing armed the moment that replica streamed, so
-    // once the freshness window lapses the promoted node fences writes with
-    // CLUSTERDOWN. Relax min-replicas-to-write first so the error under test is
-    // unambiguously the fence.
+    // Lose the replica: it stays attached but stops being heard from. Self-
+    // fencing armed the moment that replica streamed, so once the freshness
+    // window lapses the promoted node fences writes with SELFFENCE. Relax
+    // min-replicas-to-write first so the error under test is unambiguously the
+    // fence.
     assert_ok(
         &replica
             .send("CONFIG", &["SET", "min-replicas-to-write", "0"])
             .await,
     );
-    downstream.shutdown().await;
-    tokio::time::sleep(Duration::from_millis(3000)).await;
-    let fenced = replica.send("SET", &["promoted-gate", "3"]).await;
+    proxy.stall_acks();
+    let fenced = poll_set(&replica, "promoted-gate", Duration::from_secs(10), |r| {
+        err_has_prefix(r, "SELFFENCE")
+    })
+    .await;
     assert!(
-        is_error(&fenced)
-            && get_error_message(&fenced)
-                .unwrap_or_default()
-                .contains("CLUSTERDOWN"),
+        err_has_prefix(&fenced, "SELFFENCE"),
         "promoted node must self-fence after losing its only replica, got: {fenced:?}"
     );
 
@@ -2415,6 +2419,8 @@ async fn test_promoted_replica_enforces_write_gates_set_before_promotion() {
         "an engaged fence must be reported as cluster.write_fence"
     );
 
+    drop(proxy);
+    downstream.shutdown().await;
     replica.shutdown().await;
     primary.shutdown().await;
 }
@@ -2697,7 +2703,7 @@ async fn test_replica_reconnect_within_buffer(#[case] persistence: bool) {
     let config = TestServerConfig {
         persistence,
         // The point of this test is the writes made *while the replica is
-        // gone*. Self-fence would refuse them with `-CLUSTERDOWN` (that
+        // gone*. Self-fence would refuse them with `-SELFFENCE` (that
         // behaviour is pinned by `test_self_fence_engages_on_replica_loss`),
         // leaving nothing to catch up on.
         replication_self_fence_on_replica_loss: Some(false),
@@ -5479,6 +5485,14 @@ async fn test_info_replication_shows_all_replicas() {
 
 // FM-REPLICATION-027
 /// Kill/restart replica 3x rapidly — recovers each time.
+///
+/// Each cycle waits for the replica to be *fence-relevant* fresh rather than
+/// merely connected. The self-fence is on by default and arms on the first
+/// cycle, so from cycle 2 onward the `SET` below is gated on the primary
+/// having a replica that is streaming **and** has ACKed inside the freshness
+/// window (FM-REPLICATION-041). Waiting on `connected_slaves` alone left the
+/// write racing the replica's first ACK, and losing that race is what made
+/// this test flake with a fence refusal rather than an `OK` (issue 30).
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -5496,7 +5510,11 @@ async fn test_replica_handles_rapid_reconnect(#[case] persistence: bool) {
 
     for cycle in 0..3 {
         let replica = TestServer::start_replica_with_config(&primary, config.clone()).await;
-        wait_for_connected_slave(&primary).await;
+        assert!(
+            wait_for_fresh_streaming_replicas(&primary, 1, Duration::from_secs(30)).await,
+            "cycle {cycle}: the replica must be streaming and freshly ACKing before the \
+             primary is written to"
+        );
 
         // Write a key during this cycle
         let key = format!("{{rr}}key{}", cycle + 1);
@@ -5512,6 +5530,15 @@ async fn test_replica_handles_rapid_reconnect(#[case] persistence: bool) {
         );
 
         replica.shutdown().await;
+        // Drain the departing session before the next cycle attaches, so the
+        // freshness wait above cannot be satisfied by the line of a replica
+        // that has already gone (its `lag=` stays 0 for up to a second after
+        // its last ACK).
+        assert_eq!(
+            wait_connected_slaves(&primary, 0, Duration::from_secs(15)).await,
+            Some(0),
+            "cycle {cycle}: the primary must drop the departed replica"
+        );
     }
 
     primary.shutdown().await;
@@ -6666,7 +6693,7 @@ async fn test_served_blpop_multi_waiter_replicates(#[case] persistence: bool) {
 // End-to-end coverage for the two write-safety gates enforced in
 // `connection/guards.rs::run_pre_checks`:
 //
-//   * self-fence-on-replica-loss — rejects writes with `CLUSTERDOWN ...` once a
+//   * self-fence-on-replica-loss — rejects writes with `SELFFENCE ...` once a
 //     primary that *had* a healthy streaming replica loses quorum. It "arms"
 //     only after the first fresh streaming replica, so a primary that never had
 //     a replica keeps accepting writes.
@@ -6692,7 +6719,7 @@ fn fence_config() -> TestServerConfig {
 }
 
 /// `min-replicas-to-write N` with self-fence disabled (so the NOREPLICAS gate
-/// is exercised in isolation, not shadowed by the earlier CLUSTERDOWN check).
+/// is exercised in isolation, not shadowed by the earlier self-fence check).
 fn min_replicas_config(n: u32) -> TestServerConfig {
     TestServerConfig {
         replication_min_replicas_to_write: Some(n),
@@ -6730,82 +6757,132 @@ async fn poll_set<F: Fn(&Response) -> bool>(
     }
 }
 
-// FM-REPLICATION-041
-/// Self-fence engages on replica loss: a primary that had a healthy replica
-/// rejects writes with the exact `CLUSTERDOWN ...` string once the replica
-/// drops, while reads stay allowed.
-#[tokio::test]
-async fn test_self_fence_engages_on_replica_loss() {
-    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+/// Key the fence helper writes to while polling for the refusal. Kept separate
+/// from the caller's seeded key so the successful writes issued before the
+/// fence engages cannot disturb what the caller asserts about its own key.
+const FENCE_PROBE_KEY: &str = "__fence_probe";
 
-    // A streaming replica must exist, then a write arms the fence checker.
+/// Bring up a primary whose only replica is *attached but silent*, and return
+/// once the self-fence has engaged.
+///
+/// The replica reaches the streaming phase through a [`LagProxy`]; a write then
+/// arms the checker; then the proxy freezes the replica→primary leg so the ACKs
+/// stop arriving while the session stays registered and streaming. That is the
+/// partition the fence exists for, and it is the only way to reach a fenced
+/// primary deterministically: a replica that is shut down departs *cleanly*,
+/// which disarms the fence instead (FM-REPLICATION-062).
+///
+/// `seed_key` is left holding `armed`. The returned proxy must be kept alive —
+/// dropping it aborts the accept loop and kills the link.
+async fn fenced_by_a_silent_replica(seed_key: &str) -> (TestServer, TestServer, LagProxy) {
+    let primary = TestServer::start_primary_with_config(fence_config()).await;
+    let proxy = LagProxy::spawn(primary.port()).await;
+    let mut replica_config = fence_config();
+    replica_config.replication_primary_host = Some("127.0.0.1".to_string());
+    replica_config.replication_primary_port = Some(proxy.port());
+    let replica = TestServer::start_with_config(replica_config, ServerRole::Replica).await;
+
     assert!(
-        wait_for_replication(&primary, 3000).await >= 1,
-        "replica never reached streaming"
+        wait_for_replication(&primary, 5000).await >= 1,
+        "replica never reached streaming through the proxy"
     );
-    assert_ok(&primary.send("SET", &["fk", "armed"]).await);
+    // A write while a fresh streaming replica exists is what arms the checker.
+    assert_ok(&primary.send("SET", &[seed_key, "armed"]).await);
 
-    // Drop the replica; the checker loses its only fresh streaming replica.
-    replica.shutdown().await;
+    // Silence the replica without detaching it.
+    proxy.stall_acks();
 
-    // Poll until writes are fenced (freshness window + margin).
-    let fenced = poll_set(&primary, "fk", Duration::from_secs(5), |r| {
-        err_has_prefix(r, "CLUSTERDOWN")
+    let fenced = poll_set(&primary, FENCE_PROBE_KEY, Duration::from_secs(10), |r| {
+        err_has_prefix(r, "SELFFENCE")
     })
     .await;
     assert!(
-        err_has_prefix(&fenced, "CLUSTERDOWN"),
-        "self-fence did not engage after replica loss: {fenced:?}"
+        err_has_prefix(&fenced, "SELFFENCE"),
+        "self-fence did not engage while the replica was attached but silent: {fenced:?}"
     );
 
-    // Exact error string. NOTE: the "cluster is down" wording is surfaced here
-    // on a *non-cluster* primary — a documented divergence from Redis, which has
-    // no CLUSTERDOWN in this configuration and would instead refuse the write
-    // via `min-replicas-to-write` (NOREPLICAS). Pinned so any reword is
+    (primary, replica, proxy)
+}
+
+// FM-REPLICATION-041
+/// Self-fence engages on replica loss: a primary whose only replica has stopped
+/// ACKing rejects writes with the exact `SELFFENCE ...` string, while reads stay
+/// allowed.
+#[tokio::test]
+async fn test_self_fence_engages_on_replica_loss() {
+    let (primary, replica, proxy) = fenced_by_a_silent_replica("fk").await;
+
+    // Exact error string. NOTE: this code is FrogDB's own — Redis has no fence
+    // in this configuration and would refuse the write via
+    // `min-replicas-to-write` (NOREPLICAS) or not at all. It names the mechanism
+    // and the knob that turns it off, deliberately *not* borrowing cluster
+    // mode's CLUSTERDOWN, which pointed the operator at a subsystem a fenced
+    // standalone primary need not even be running. Pinned so any reword is
     // intentional.
     assert_eq!(
         get_error_message(&primary.send("SET", &["fk", "x"]).await),
-        Some("CLUSTERDOWN The cluster is down (quorum lost, writes rejected)"),
+        Some("SELFFENCE writes rejected: no fresh streaming replica (self-fence-on-replica-loss)"),
     );
 
-    // Reads remain allowed while fenced.
-    assert!(!is_error(&primary.send("GET", &["fk"]).await));
+    // Reads remain allowed while fenced, and the seeded value is untouched.
+    assert_eq!(
+        primary.send("GET", &["fk"]).await,
+        Response::Bulk(Some(Bytes::from_static(b"armed"))),
+    );
 
+    drop(proxy);
+    replica.shutdown().await;
     primary.shutdown().await;
 }
 
 // FM-REPLICATION-041
-/// Self-fence recovers: once a fresh replica reconnects and restores quorum,
-/// writes are accepted again.
+/// Self-fence recovers on its own: once the replica's ACKs flow again the
+/// primary's quorum is restored and writes are accepted, with no restart and no
+/// config change.
 #[tokio::test]
 async fn test_self_fence_recovers_after_replica_reconnect() {
-    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
-    assert!(
-        wait_for_replication(&primary, 3000).await >= 1,
-        "replica never reached streaming"
-    );
-    assert_ok(&primary.send("SET", &["rk", "armed"]).await);
+    let (primary, replica, proxy) = fenced_by_a_silent_replica("rk").await;
 
-    replica.shutdown().await;
-    let fenced = poll_set(&primary, "rk", Duration::from_secs(5), |r| {
-        err_has_prefix(r, "CLUSTERDOWN")
-    })
-    .await;
-    assert!(
-        err_has_prefix(&fenced, "CLUSTERDOWN"),
-        "fence never engaged: {fenced:?}"
-    );
+    // Let the replica be heard again.
+    proxy.resume_acks();
 
-    // Bring a fresh replica back; quorum is restored.
-    let replica2 = TestServer::start_replica_with_config(&primary, fence_config()).await;
-
-    let recovered = poll_set(&primary, "rk", Duration::from_secs(10), |r| {
+    let recovered = poll_set(&primary, "rk", Duration::from_secs(15), |r| {
         parse_simple_string(r) == Some("OK")
     })
     .await;
     assert_ok(&recovered);
 
-    replica2.shutdown().await;
+    drop(proxy);
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
+// FM-REPLICATION-062
+/// The fence disarms when the last streaming replica leaves *cleanly*: a
+/// decommissioned replica is a departure the operator performed, so the primary
+/// must stay writable rather than hold writes hostage to a replica nobody
+/// expects back.
+#[tokio::test]
+async fn test_self_fence_disarms_after_a_clean_replica_departure() {
+    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
+    assert!(
+        wait_for_replication(&primary, 3000).await >= 1,
+        "replica never reached streaming"
+    );
+    // Arms the checker.
+    assert_ok(&primary.send("SET", &["dk", "armed"]).await);
+
+    // An orderly shutdown closes the replica's half of the link, which the
+    // primary's session reads as an EOF — a graceful departure.
+    replica.shutdown().await;
+
+    // Writes keep flowing, well past the freshness window that would have
+    // fenced a lost replica.
+    for _ in 0..10 {
+        assert_ok(&primary.send("SET", &["dk", "v"]).await);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
     primary.shutdown().await;
 }
 
@@ -6822,26 +6899,11 @@ async fn test_self_fence_unarmed_allows_writes() {
 
 // FM-TXN-007
 /// The self-fence gate runs at MULTI *queue* time: the queued write is rejected
-/// with CLUSTERDOWN, and the rejection flags the transaction dirty so EXEC
+/// with SELFFENCE, and the rejection flags the transaction dirty so EXEC
 /// aborts with `EXECABORT` (Redis parity — `rejectCommand` → `flagTransaction`).
 #[tokio::test]
 async fn test_self_fence_multi_rejected_at_queue_time() {
-    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
-    assert!(
-        wait_for_replication(&primary, 3000).await >= 1,
-        "replica never reached streaming"
-    );
-    assert_ok(&primary.send("SET", &["mk", "armed"]).await);
-    replica.shutdown().await;
-
-    let fenced = poll_set(&primary, "mk", Duration::from_secs(5), |r| {
-        err_has_prefix(r, "CLUSTERDOWN")
-    })
-    .await;
-    assert!(
-        err_has_prefix(&fenced, "CLUSTERDOWN"),
-        "fence never engaged: {fenced:?}"
-    );
+    let (primary, replica, proxy) = fenced_by_a_silent_replica("mk").await;
 
     let mut c = primary.connect().await;
     assert_eq!(
@@ -6850,7 +6912,7 @@ async fn test_self_fence_multi_rejected_at_queue_time() {
     );
     let queued = c.command(&["SET", "mk", "v"]).await;
     assert!(
-        err_has_prefix(&queued, "CLUSTERDOWN"),
+        err_has_prefix(&queued, "SELFFENCE"),
         "queued write not fenced: {queued:?}"
     );
     // FrogDB applies the fence at MULTI *queue* time rather than at EXEC, but
@@ -6870,6 +6932,8 @@ async fn test_self_fence_multi_rejected_at_queue_time() {
         "fenced MULTI must not have mutated the key"
     );
 
+    drop(proxy);
+    replica.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -6880,22 +6944,7 @@ async fn test_self_fence_multi_rejected_at_queue_time() {
 /// client gets EXECABORT, never a one-element array that looks like success.
 #[tokio::test]
 async fn test_self_fence_multi_partial_queue_aborts_whole_transaction() {
-    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
-    assert!(
-        wait_for_replication(&primary, 3000).await >= 1,
-        "replica never reached streaming"
-    );
-    assert_ok(&primary.send("SET", &["pk", "armed"]).await);
-    replica.shutdown().await;
-
-    let fenced = poll_set(&primary, "pk", Duration::from_secs(5), |r| {
-        err_has_prefix(r, "CLUSTERDOWN")
-    })
-    .await;
-    assert!(
-        err_has_prefix(&fenced, "CLUSTERDOWN"),
-        "fence never engaged: {fenced:?}"
-    );
+    let (primary, replica, proxy) = fenced_by_a_silent_replica("pk").await;
 
     let mut c = primary.connect().await;
     assert_eq!(
@@ -6908,7 +6957,7 @@ async fn test_self_fence_multi_partial_queue_aborts_whole_transaction() {
         Some("QUEUED")
     );
     assert!(
-        err_has_prefix(&c.command(&["SET", "pk", "v"]).await, "CLUSTERDOWN"),
+        err_has_prefix(&c.command(&["SET", "pk", "v"]).await, "SELFFENCE"),
         "queued write not fenced"
     );
 
@@ -6923,6 +6972,8 @@ async fn test_self_fence_multi_partial_queue_aborts_whole_transaction() {
         "aborted MULTI must not have mutated the key"
     );
 
+    drop(proxy);
+    replica.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -6932,23 +6983,8 @@ async fn test_self_fence_multi_partial_queue_aborts_whole_transaction() {
 /// must flip this assertion deliberately. See the NOTE in `guards.rs`.
 #[tokio::test]
 async fn test_self_fence_does_not_gate_lua_writes() {
-    let (primary, replica) = start_primary_replica_pair(fence_config()).await;
-    assert!(
-        wait_for_replication(&primary, 3000).await >= 1,
-        "replica never reached streaming"
-    );
-    assert_ok(&primary.send("SET", &["lk", "armed"]).await);
-    replica.shutdown().await;
-
-    // Direct writes are fenced.
-    let fenced = poll_set(&primary, "lk", Duration::from_secs(5), |r| {
-        err_has_prefix(r, "CLUSTERDOWN")
-    })
-    .await;
-    assert!(
-        err_has_prefix(&fenced, "CLUSTERDOWN"),
-        "fence never engaged: {fenced:?}"
-    );
+    // Direct writes are fenced by the time this returns.
+    let (primary, replica, proxy) = fenced_by_a_silent_replica("lk").await;
 
     // But a Lua-internal write slips through and applies.
     let lua = primary
@@ -6973,6 +7009,8 @@ async fn test_self_fence_does_not_gate_lua_writes() {
         "Lua write did not apply despite bypassing the fence: {got:?}"
     );
 
+    drop(proxy);
+    replica.shutdown().await;
     primary.shutdown().await;
 }
 
@@ -7029,7 +7067,7 @@ async fn test_min_replicas_to_write_multi_and_lua_paths() {
     let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
 
     // MULTI: the queue-time pre-check rejects the write, flags the transaction
-    // dirty, and EXEC aborts (see the CLUSTERDOWN twin test for the full note).
+    // dirty, and EXEC aborts (see the SELFFENCE twin test for the full note).
     let mut c = primary.connect().await;
     assert_eq!(
         parse_simple_string(&c.command(&["MULTI"]).await),
@@ -7115,9 +7153,17 @@ async fn test_min_replicas_to_write_config_set_live() {
 /// close the link the same way). The replica→primary direction (the PSYNC
 /// handshake and ACKs) always flows, so a reconnecting replica can complete a
 /// fresh handshake through the proxy.
+///
+/// The replica→primary direction can be frozen independently
+/// ([`LagProxy::stall_acks`]). That leg carries the ACKs, so freezing it leaves
+/// the replica *attached and streaming but silent* — the partition the
+/// replica-loss self-fence exists for, and the only way to reach that state
+/// deterministically: a replica that is shut down instead closes its socket,
+/// which is a clean departure and disarms the fence (FM-REPLICATION-062).
 struct LagProxy {
     port: u16,
     stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ack_stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     accept_task: tokio::task::JoinHandle<()>,
 }
 
@@ -7144,6 +7190,8 @@ impl LagProxy {
         let port = listener.local_addr().expect("proxy local_addr").port();
         let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stalled_accept = stalled.clone();
+        let ack_stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ack_stalled_accept = ack_stalled.clone();
 
         let accept_task = tokio::spawn(async move {
             loop {
@@ -7160,19 +7208,41 @@ impl LagProxy {
                     .set_recv_buffer_size(LAG_PROXY_RCVBUF_BYTES)
                     .expect("cap lag-proxy SO_RCVBUF");
                 let stalled_conn = stalled_accept.clone();
-                tokio::spawn(proxy_connection(inbound, outbound, stalled_conn));
+                let ack_stalled_conn = ack_stalled_accept.clone();
+                tokio::spawn(proxy_connection(
+                    inbound,
+                    outbound,
+                    stalled_conn,
+                    ack_stalled_conn,
+                ));
             }
         });
 
         Self {
             port,
             stalled,
+            ack_stalled,
             accept_task,
         }
     }
 
     fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Freeze the replica→primary direction: the link stays open and the
+    /// replica keeps streaming, but its ACKs stop arriving. The primary's
+    /// session remains registered, which is exactly what separates a silent
+    /// replica from a departed one.
+    fn stall_acks(&self) {
+        self.ack_stalled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Let the ACKs through again; the buffered ones flush immediately.
+    fn resume_acks(&self) {
+        self.ack_stalled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Freeze the primary→replica direction: the replica stops receiving the
@@ -7196,11 +7266,13 @@ impl Drop for LagProxy {
 }
 
 /// Pump one accepted replica↔primary connection through the proxy, honoring
-/// the shared stall flag on the primary→replica leg.
+/// the shared stall flags: `stalled` freezes the primary→replica leg,
+/// `ack_stalled` the replica→primary one.
 async fn proxy_connection(
     inbound: tokio::net::TcpStream,
     outbound: tokio::net::TcpStream,
     stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ack_stalled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     use std::sync::atomic::Ordering;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -7208,10 +7280,17 @@ async fn proxy_connection(
     let (mut replica_rx, mut replica_tx) = inbound.into_split();
     let (mut primary_rx, mut primary_tx) = outbound.into_split();
 
-    // replica → primary: always flowing (handshake commands + ACKs).
+    // replica → primary: the handshake commands and the ACKs. Stalled on
+    // demand, the same way as the other leg: we stop reading the replica's
+    // socket, so nothing it sends reaches the primary. The connection itself
+    // stays open, so the primary's session stays registered and merely goes
+    // quiet.
     let mut up = tokio::spawn(async move {
         let mut buf = [0u8; 16 * 1024];
         loop {
+            while ack_stalled.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             match replica_rx.read(&mut buf).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
@@ -7278,6 +7357,52 @@ async fn wait_connected_slaves(server: &TestServer, want: i64, within: Duration)
         last = connected_slaves(server).await;
     }
     last
+}
+
+/// Poll `INFO replication` until `server` has exactly `want` replicas that are
+/// *fresh* in the sense the write fences use, or the deadline elapses. Returns
+/// whether that state was reached.
+///
+/// `connected_slaves` alone is the wrong wait for anything that then writes:
+/// a replica is counted the moment its session registers, but both write gates
+/// count only replicas that are streaming **and** have ACKed recently
+/// (FM-REPLICATION-041, FM-REPLICATION-042). This reads the same registry
+/// through the projection that renders it: `state=online` is `Phase::Streaming`
+/// and `lag=0` is an ACK inside the last whole second — comfortably inside the
+/// default 3s freshness window, and never true of a replica that has attached
+/// but not yet ACKed.
+async fn wait_for_fresh_streaming_replicas(
+    server: &TestServer,
+    want: usize,
+    within: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        if let Some(info) = parse_info_replication(&server.send("INFO", &["replication"]).await) {
+            let count = info
+                .get("connected_slaves")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let fresh = (0..count)
+                .filter_map(|i| info.get(&format!("slave{i}")))
+                .filter(|line| {
+                    let field = |name: &str| {
+                        line.split(',')
+                            .find_map(|p| p.strip_prefix(name))
+                            .unwrap_or("")
+                    };
+                    field("state=") == "online" && field("lag=") == "0"
+                })
+                .count();
+            if count == want && fresh == want {
+                return true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Poll `WAIT want …` until the primary reports `want` acking replicas, or the

@@ -63,7 +63,7 @@ pub use primary::{
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{
     AnnouncedOption, AnnouncementError, Phase, ReplicaAnnouncement, ReplicaCapabilities,
-    ReplicaInfo, ReplicaSession, SyncKind, ack_age_secs,
+    ReplicaDeparture, ReplicaInfo, ReplicaSession, SyncKind, ack_age_secs,
 };
 pub use state::{
     ReplicationState, StagedReplicationMetadata, consume_staged_replication_metadata,

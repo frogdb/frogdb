@@ -823,7 +823,7 @@
           "name": "self-fence-on-replica-loss",
           "type": "boolean",
           "default": true,
-          "description": "Reject writes when primary loses all replica ACK freshness.\nPrevents zombie writes during network partitions.",
+          "description": "Reject writes when primary loses all replica ACK freshness, with\n`SELFFENCE writes rejected: no fresh streaming replica\n(self-fence-on-replica-loss)`. Prevents zombie writes during network\npartitions.\n\nThe fence arms only once a replica has actually streamed, and it drops\nagain when the last streaming replica leaves *cleanly* (an orderly\nclose, `REPLICAOF NO ONE`, a primary-initiated teardown), so a\ndeliberate decommission does not fence the primary. A replica that was\nlost — killed, partitioned, or disconnected for lag — or one that is\nstill attached but silent keeps it engaged until a fresh replica\nstreams again.",
           "config_param": "self-fence-on-replica-loss",
           "mutable": true
         },

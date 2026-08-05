@@ -66,6 +66,40 @@ Also wanted:
 - `wait_does_not_count_a_seeded_position_that_was_never_acked` — unit level, at the
   `ReplicaSession`/`WaitCoordinator` seam.
 
+## It already fails a suite test (2026-08-05)
+
+The window is no longer only reachable through the deliberately-unasserted probe: it fails
+`integration_replication::test_broadcast_lag_disconnect_and_resync::case_2_with_persistence`
+under whole-suite parallel load, at ~0.5 s into the test (so not a timeout — the wait is
+*satisfied*, wrongly):
+
+```
+assertion `left == right` failed: keyspace sizes should match before the stall
+  left: Integer(1)
+ right: Integer(0)
+```
+
+That test waits for `connected_slaves:1`, writes one seed key, polls `WAIT 1 1000` until it
+returns 1, and then compares `DBSIZE` on both nodes. `WAIT` returns 1 while the replica's
+keyspace is still empty — the durability claim this issue is about, in an assertion that is
+already in the suite.
+
+Sequence: `start_streaming` publishes `Phase::Streaming` at its top (candidate 1), the test's
+`wait_connected_slaves` sees it, the seed `SET` lands and advances the live offset, and then
+`seed_replica_position` (candidate 2) credits the session's `acked_offset` with the backlog tail
+— which now covers that `SET` — before the replica has decoded, let alone applied, any of it.
+The persistence case is the one that fails because its full resync goes through the checkpoint
+branch (drain → `spawn_blocking(create_checkpoint)` → file transfer), which holds the window open
+far longer than the diskless branch.
+
+Reproduced 3/3 on whole-suite runs, including at `6cfdb026` with no local changes, so it is not a
+regression from any in-flight work; it passes when run in isolation, where the seed lands before
+the test's `SET`. Distinct from issue 01 (that one was frame loss on the receive→stream handoff
+and failed the *earlier* `seed write should be acked by the healthy replica` assertion; it is
+fixed).
+
+Whichever remedy is chosen above, this assertion is the second acceptance test.
+
 ## Spec impact
 
 FM-REPLICATION-037's NOT-observable half gains the case: a `WAIT` count that includes a replica

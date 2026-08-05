@@ -295,15 +295,17 @@ impl PreDispatchView<'_> {
             return Some(Response::error(SAVE_ERROR_REFUSAL));
         }
 
-        // Self-fence: reject writes when quorum is lost in cluster mode
+        // Self-fence: reject writes when quorum is lost. Two checkers reach this
+        // rung — the cluster's Raft quorum (via `SelfFenceGate`) and the
+        // replication replica-loss fence — so the *wording* comes from the
+        // checker that refused (`quorum_lost_error`), not from here: a
+        // standalone primary must not be told its cluster is down.
         if let Some(ref qc) = self.cluster.quorum_checker
             && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
             && !qc.has_quorum()
         {
-            return Some(Response::error(
-                "CLUSTERDOWN The cluster is down (quorum lost, writes rejected)",
-            ));
+            return Some(Response::error(qc.quorum_lost_error()));
         }
 
         // min-replicas-to-write: reject writes when fewer than the configured
