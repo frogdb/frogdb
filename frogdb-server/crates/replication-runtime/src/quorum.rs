@@ -2,12 +2,17 @@
 //!
 //! Monitors replica ACK freshness via the ReplicationTrackerImpl. When no
 //! replica has ACKed recently, `has_quorum()` returns false, causing the
-//! server's write gate (`commands/guards.rs`) to reject writes with
-//! CLUSTERDOWN — fencing the primary during partitions.
+//! server's write gate (`connection/guards.rs`) to reject writes with
+//! `-SELFFENCE` — fencing the primary during partitions.
+//!
+//! Silence is the trigger, not absence: a replica that *departed cleanly* takes
+//! the arming latch with it (FM-REPLICATION-062), so a decommissioned replica
+//! leaves a writable primary while a lost one leaves a fenced one.
 
 use frogdb_core::command::QuorumChecker;
 use frogdb_core::metrics::WriteFenceReporter;
 use frogdb_core::{ReplicationTrackerImpl, ack_is_fresh};
+use frogdb_replication::ReplicaDeparture;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -15,6 +20,16 @@ use std::time::Duration;
 /// The `/status` + log wording for an active replica-loss fence. One constant so
 /// the operator surface and the transition warning cannot drift apart.
 const FENCE_REASON: &str = "replica quorum lost";
+
+/// The wire refusal a fenced write is answered with.
+///
+/// Deliberately **not** `-CLUSTERDOWN`: this fence runs on every primary, most
+/// of which are not cluster nodes, and an operator told their cluster is down
+/// has been sent to diagnose a subsystem that may not even be running (issue
+/// 30). The code names the mechanism and the string names the knob that turns
+/// it off, because the refusal is otherwise indistinguishable from a bug.
+const SELF_FENCE_REFUSAL: &str =
+    "SELFFENCE writes rejected: no fresh streaming replica (self-fence-on-replica-loss)";
 
 /// Quorum checker for replication mode (primary + N replicas).
 ///
@@ -83,7 +98,7 @@ impl ReplicationQuorumChecker {
                 reason = FENCE_REASON,
                 freshness_timeout_ms = self.freshness_timeout_ms.load(Ordering::Relaxed),
                 "replication self-fencing enabled while replica quorum was already lost: writes \
-                 are now rejected with CLUSTERDOWN until a replica streams and ACKs again"
+                 are now rejected with SELFFENCE until a replica streams and ACKs again"
             );
         }
     }
@@ -153,11 +168,49 @@ impl ReplicationQuorumChecker {
         false
     }
 
+    /// Whether the fence may be dropped because the replica set left rather
+    /// than went silent (FM-REPLICATION-062).
+    ///
+    /// Three conjuncts, each load-bearing:
+    ///
+    /// - nothing is registered as streaming, so a session whose link is dead
+    ///   but whose teardown has not run — the partition this fence exists for —
+    ///   still fences;
+    /// - the last streaming departure was recorded, and
+    /// - it was `Graceful`. An unknown departure (`None`) keeps the fence, so
+    ///   the permissive answer is never the default.
+    fn departed_cleanly(&self) -> bool {
+        !self.tracker.has_streaming_replica()
+            && self.tracker.last_streaming_departure() == Some(ReplicaDeparture::Graceful)
+    }
+
+    /// Drop the arming latch if the replica set left cleanly, and report
+    /// whether writes may proceed.
+    ///
+    /// Un-latching rather than merely allowing the write matters: a primary
+    /// whose replica was decommissioned is back to the never-had-a-replica
+    /// state, so the *next* replica to stream re-arms it and a later silent
+    /// loss fences again.
+    fn disarm_if_departed_cleanly(&self) -> bool {
+        if !self.departed_cleanly() {
+            return false;
+        }
+        if self.armed.swap(false, Ordering::Relaxed) {
+            tracing::info!(
+                "Last streaming replica departed cleanly; replica-loss self-fence disarmed"
+            );
+        }
+        true
+    }
+
     /// Whether a fence decision made *right now* would reject writes.
     fn fence_engaged(&self) -> bool {
         self.self_fence_enabled()
             && self.armed.load(Ordering::Relaxed)
             && self.count_fresh_streaming_replicas() == 0
+            // Read-only twin of the disarm step, so the reported state cannot
+            // claim a fence the write gate would drop on its next call.
+            && !self.departed_cleanly()
     }
 }
 
@@ -179,7 +232,18 @@ impl QuorumChecker for ReplicationQuorumChecker {
         }
 
         // Armed: require at least 1 fresh streaming replica
-        self.count_fresh_streaming_replicas() >= 1
+        if self.count_fresh_streaming_replicas() >= 1 {
+            return true;
+        }
+
+        // Out of fresh replicas — but "lost my replica" and "my replica left"
+        // are different states, and only the first one is what this fence
+        // protects against (FM-REPLICATION-062).
+        self.disarm_if_departed_cleanly()
+    }
+
+    fn quorum_lost_error(&self) -> &'static str {
+        SELF_FENCE_REFUSAL
     }
 }
 
@@ -478,7 +542,7 @@ mod tests {
             "the warning must name the fence reason, got {warning}"
         );
         assert!(
-            warning.contains("CLUSTERDOWN"),
+            warning.contains("SELFFENCE"),
             "the warning must name what clients will see, got {warning}"
         );
         assert!(

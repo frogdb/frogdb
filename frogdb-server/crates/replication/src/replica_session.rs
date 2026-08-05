@@ -72,6 +72,56 @@ impl std::fmt::Display for Phase {
     }
 }
 
+/// How a *streaming* replica's link ended (FM-REPLICATION-062).
+///
+/// The self-fence is the only consumer: a primary that lost its last replica
+/// keeps refusing writes, while one whose last replica closed the link keeps
+/// accepting them. The distinction it can actually draw is between **silence**
+/// (a link that stopped answering — timeouts, lag, transport errors, a
+/// partition, and the case the fence exists for) and **closure** (a link this
+/// primary saw end). It is not a claim about operator intent: a killed replica
+/// closes its socket the way an orderly one does.
+///
+/// Sessions that never reached [`Phase::Streaming`] produce no departure at
+/// all — they never armed the fence, so they must not be able to disarm it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplicaDeparture {
+    /// The link ended the way a finished link ends: an orderly EOF from the
+    /// replica's half, the primary's own broadcaster going away, or a teardown
+    /// this primary asked for (demotion / decommission).
+    Graceful,
+    /// The link was lost: a transport error either way, a write timeout, a lag
+    /// disconnect, a broadcast overrun, or a frame that could not be encoded.
+    /// Also every error propagated out of the sync phases, so a new failure
+    /// path is classified conservatively without being touched.
+    Lost,
+}
+
+impl ReplicaDeparture {
+    /// The atomic encoding the tracker stores. `0` is reserved for "no
+    /// streaming replica has departed", which is why neither variant uses it.
+    pub(crate) const NONE: u8 = 0;
+
+    pub(crate) fn as_code(self) -> u8 {
+        match self {
+            ReplicaDeparture::Graceful => 1,
+            ReplicaDeparture::Lost => 2,
+        }
+    }
+
+    /// The inverse of [`Self::as_code`]. Anything that is not a departure this
+    /// crate wrote — [`Self::NONE`], or a value no writer can produce — reads
+    /// as `None`, i.e. *unknown*, which every consumer must treat as the
+    /// unsafe-to-assume case (FM-REPLICATION-062).
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(ReplicaDeparture::Graceful),
+            2 => Some(ReplicaDeparture::Lost),
+            _ => None,
+        }
+    }
+}
+
 /// Capabilities advertised by the replica during REPLCONF capa negotiation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReplicaCapabilities {
@@ -557,6 +607,13 @@ impl ReplicaSession {
     ) -> io::Result<()> {
         let result = self.clone().run_inner(stream, sync_kind, &handler).await;
 
+        // Sampled *before* the phase moves to `Disconnecting`: only a session
+        // that actually streamed can arm the self-fence, so only one that
+        // actually streamed may report a departure that could disarm it
+        // (FM-REPLICATION-062). Read after the exit, it would be false for
+        // every session.
+        let was_streaming = self.is_streaming();
+
         // Single exit handler — runs regardless of which `?` returned.
         self.set_phase(Phase::Disconnecting);
 
@@ -580,13 +637,25 @@ impl ReplicaSession {
         // follow the cleanup above rather than precede it.
         handler.tracker.unregister_replica(self.id);
 
+        // Recorded after the unregistration, so a reader that can see the
+        // departure can no longer see the session that produced it — the
+        // self-fence's disarm reads both and must never see them disagree.
+        // An error out of any phase is a lost link by construction.
+        if was_streaming {
+            let departure = match &result {
+                Ok(departure) => *departure,
+                Err(_) => ReplicaDeparture::Lost,
+            };
+            handler.tracker.record_streaming_departure(departure);
+        }
+
         tracing::info!(
             replica_id = self.id,
             addr = %self.address,
             "Replica disconnected"
         );
 
-        result
+        result.map(|_| ())
     }
 
     async fn run_inner(
@@ -594,7 +663,7 @@ impl ReplicaSession {
         stream: BoxedStream,
         sync_kind: SyncKind,
         handler: &Arc<PrimaryReplicationHandler>,
-    ) -> io::Result<()> {
+    ) -> io::Result<ReplicaDeparture> {
         match sync_kind {
             SyncKind::Partial { replay_from } => {
                 self.handle_partial(stream, replay_from, handler).await
@@ -618,7 +687,7 @@ impl ReplicaSession {
         mut stream: BoxedStream,
         replay_from: u64,
         handler: &Arc<PrimaryReplicationHandler>,
-    ) -> io::Result<()> {
+    ) -> io::Result<ReplicaDeparture> {
         let replication_id = handler.state.read().replication_id.clone();
         let response = format!("+CONTINUE {}\r\n", replication_id);
         stream.write_all(response.as_bytes()).await?;
@@ -631,7 +700,7 @@ impl ReplicaSession {
         mut stream: BoxedStream,
         replication_id: String,
         handler: &Arc<PrimaryReplicationHandler>,
-    ) -> io::Result<()> {
+    ) -> io::Result<ReplicaDeparture> {
         // Capture the live stream head from the tracker *before* cutting the
         // checkpoint, and use this single value for both the FULLRESYNC reply
         // and the checkpoint metadata so the granted offset and the snapshot
@@ -998,7 +1067,7 @@ impl ReplicaSession {
         handler: &Arc<PrimaryReplicationHandler>,
         replay_from: u64,
         resume: ResumeSource,
-    ) -> io::Result<()> {
+    ) -> io::Result<ReplicaDeparture> {
         self.set_phase(Phase::Streaming);
 
         // Subscribe BEFORE reading the head / extracting the backlog so the live
@@ -1067,7 +1136,9 @@ impl ReplicaSession {
             let mut buf = BytesMut::with_capacity(1024);
             loop {
                 match read_half.read_buf(&mut buf).await {
-                    Ok(0) => break,
+                    // The replica closed its half: the link ended the way a
+                    // finished link ends (FM-REPLICATION-062).
+                    Ok(0) => break ReplicaDeparture::Graceful,
                     Ok(_) => {
                         while let Some((ack_offset, consumed)) = ReplconfCodec::parse_ack(&buf) {
                             read_offsets.ingest_replica_ack(read_replica_id, ack_offset);
@@ -1076,7 +1147,7 @@ impl ReplicaSession {
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Error reading from replica");
-                        break;
+                        break ReplicaDeparture::Lost;
                     }
                 }
             }
@@ -1112,14 +1183,14 @@ impl ReplicaSession {
                                     error = %e,
                                     "Replication frame exceeds the link's frame ceiling; dropping the replica link"
                                 );
-                                break;
+                                break ReplicaDeparture::Lost;
                             }
                         };
                         if let Forward::Break =
                             forward_frame(&mut write_half, &encoded, write_timeout, lag_replica_id)
                                 .await
                         {
-                            break;
+                            break ReplicaDeparture::Lost;
                         }
                         if let Some(breach) =
                             lag_policy.should_disconnect(&lag_tracker, lag_replica_id)
@@ -1131,17 +1202,20 @@ impl ReplicaSession {
                                 "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
                             );
                             lag_tracker.record_lag_disconnect(lag_replica_id);
-                            break;
+                            break ReplicaDeparture::Lost;
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    // The primary's own broadcaster went away (this node is
+                    // shutting down or ending its primary stint): the link is
+                    // being closed from this side, not lost.
+                    Err(broadcast::error::RecvError::Closed) => break ReplicaDeparture::Graceful,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(
                             replica_id = lag_replica_id,
                             lagged = n,
                             "Replica lagged in WAL stream, disconnecting for resync"
                         );
-                        break;
+                        break ReplicaDeparture::Lost;
                     }
                 }
             }
@@ -1158,9 +1232,12 @@ impl ReplicaSession {
         // session to end so the replicas resync against the new primary.
         let mut read_task = read_task;
         let mut write_task = write_task;
-        tokio::select! {
-            _ = &mut read_task => { write_task.abort(); }
-            _ = &mut write_task => { read_task.abort(); }
+        // A task that panicked or was cancelled tells us nothing about how the
+        // link ended, so it classifies as `Lost`: the fence's safe direction is
+        // to stay armed (FM-REPLICATION-062).
+        let departure = tokio::select! {
+            read = &mut read_task => { write_task.abort(); read.unwrap_or(ReplicaDeparture::Lost) }
+            write = &mut write_task => { read_task.abort(); write.unwrap_or(ReplicaDeparture::Lost) }
             _ = self.disconnect_requested() => {
                 tracing::info!(
                     replica_id = self.id,
@@ -1168,9 +1245,10 @@ impl ReplicaSession {
                 );
                 read_task.abort();
                 write_task.abort();
+                ReplicaDeparture::Graceful
             }
-        }
-        Ok(())
+        };
+        Ok(departure)
     }
 }
 

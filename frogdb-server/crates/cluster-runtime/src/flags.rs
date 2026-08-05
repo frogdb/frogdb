@@ -128,6 +128,13 @@ impl QuorumChecker for SelfFenceGate {
         // fence": the caller's only use of this verdict is the write gate.
         !self.flags.self_fence_on_quorum_loss() || self.inner.has_quorum()
     }
+
+    /// Delegated, never spelled here: this gate only decides *whether* the
+    /// checker it wraps may fence, so answering with a string of its own would
+    /// re-label whatever verdict came from inside (FM-CLUSTER-059).
+    fn quorum_lost_error(&self) -> &'static str {
+        self.inner.quorum_lost_error()
+    }
 }
 
 impl frogdb_core::metrics::WriteFenceReporter for SelfFenceGate {

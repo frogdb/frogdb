@@ -303,11 +303,31 @@ pub trait RoleController: Send + Sync {
     fn sync_refusal(&self) -> Option<String>;
 }
 
+/// The write refusal a *cluster* quorum loss produces, and the default wording
+/// for any checker that does not name itself.
+///
+/// Kept beside the trait rather than in the write gate: the gate serves whichever
+/// checker is installed and must not spell either fence's error itself.
+pub const CLUSTER_DOWN_QUORUM_LOST: &str =
+    "CLUSTERDOWN The cluster is down (quorum lost, writes rejected)";
+
 /// Trait for checking if the local node can form a quorum.
 /// This is implemented by the failure detector to provide local quorum status.
 pub trait QuorumChecker: Send + Sync {
     /// Check if this node can form a quorum with reachable nodes.
     fn has_quorum(&self) -> bool;
+
+    /// The error a WRITE refused by [`Self::has_quorum`] is answered with.
+    ///
+    /// The wording belongs to the checker, not to the write gate: one gate
+    /// serves the cluster's Raft quorum and the replication self-fence, and an
+    /// operator can only act on a refusal that names the mechanism that
+    /// produced it (a standalone primary told `CLUSTERDOWN` goes looking for a
+    /// cluster it is not running). The default is the cluster wording, so a
+    /// checker that has nothing more specific to say keeps it.
+    fn quorum_lost_error(&self) -> &'static str {
+        CLUSTER_DOWN_QUORUM_LOST
+    }
 }
 
 /// What kind of blocking waiter a write command may satisfy.

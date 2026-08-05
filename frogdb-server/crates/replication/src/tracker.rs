@@ -13,13 +13,13 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
 use crate::primary::ring_buffer::{BacklogGeometry, ReplicationRingBuffer};
 use crate::replica_session::{
-    Phase, ReplicaAnnouncement, ReplicaInfo, ReplicaSession, ack_age_secs,
+    Phase, ReplicaAnnouncement, ReplicaDeparture, ReplicaInfo, ReplicaSession, ack_age_secs,
 };
 use crate::sync_counters::{SyncCounters, SyncCountersSnapshot, SyncOutcome};
 
@@ -98,6 +98,17 @@ pub struct ReplicationTrackerImpl {
     /// reads as "this node has no backlog" — the honest answer for a tracker
     /// that never got one.
     backlog: RwLock<Option<Arc<ReplicationRingBuffer>>>,
+
+    /// How the most recent *streaming* replica's link ended, encoded per
+    /// [`ReplicaDeparture::as_code`] (`0` = none yet / unknown).
+    ///
+    /// Cross-session state for the same reason [`Self::sync_counters`] is: the
+    /// fact it records is about a session that has already left the map, and
+    /// the self-fence reads it precisely when there is nothing left to read
+    /// (FM-REPLICATION-062). Last-writer-wins over streaming departures, so the
+    /// most recent one decides — a graceful departure from an hour ago must not
+    /// disarm a fence armed by the replica lost since.
+    last_streaming_departure: AtomicU8,
 }
 
 impl Default for ReplicationTrackerImpl {
@@ -117,6 +128,7 @@ impl ReplicationTrackerImpl {
             lag_disconnect_times: RwLock::new(HashMap::new()),
             sync_counters: SyncCounters::default(),
             backlog: RwLock::new(None),
+            last_streaming_departure: AtomicU8::new(ReplicaDeparture::NONE),
         }
     }
 
@@ -179,6 +191,26 @@ impl ReplicationTrackerImpl {
                 "Unregistered replica"
             );
         }
+    }
+
+    /// Record how a replica that *was streaming* left (FM-REPLICATION-062).
+    ///
+    /// Written by [`ReplicaSession::run`]'s exit handler and nowhere else: a
+    /// bare [`Self::unregister_replica`] deliberately records nothing, so an
+    /// unclassified removal stays "unknown" and the self-fence keeps fencing.
+    pub fn record_streaming_departure(&self, departure: ReplicaDeparture) {
+        self.last_streaming_departure
+            .store(departure.as_code(), Ordering::Release);
+        tracing::debug!(
+            departure = ?departure,
+            "Recorded streaming replica departure"
+        );
+    }
+
+    /// How the most recent streaming replica left, or `None` if none has (or
+    /// the departure was never classified).
+    pub fn last_streaming_departure(&self) -> Option<ReplicaDeparture> {
+        ReplicaDeparture::from_code(self.last_streaming_departure.load(Ordering::Acquire))
     }
 
     /// Ask every registered session to tear down — Redis's `disconnectSlaves`.
