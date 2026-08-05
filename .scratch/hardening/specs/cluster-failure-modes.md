@@ -469,11 +469,16 @@ group (010..017) and sits here rather than at the end of the file.
 
 Residual, deliberately out of scope here: a script's *undeclared* runtime writes (`redis.call` on a
 key the invocation never named) are still unvalidated — Redis re-checks on every call via
-`scriptVerifyClusterState`, and that is rework issue 03. The multi-key `MigratingTryAgain` probe
-also still sits after `ConnectionCommand`, so a two-key script against a half-migrated slot is
-served locally rather than answered `TRYAGAIN`; hoisting that stage as well would newly subject
-`MIGRATE` (server-wide, `KeySpec::Dynamic`) to the probe, so it is filed with issue 03 rather than
-folded in here.
+`scriptVerifyClusterState`, and that is rework issue 03.
+
+The sibling gap this section used to record — the migrating-source probe sitting *after*
+`ConnectionCommand`, so a script against a half-migrated slot was served locally instead of
+redirected — is closed. Issue 40 hoisted the stage (now `MigratingSourceProbe`) to the same
+position for the same reason, pinned by the `MUST_PRECEDE` pair
+`(MigratingSourceProbe, ConnectionCommand)`. The concern that blocked the hoist —
+newly subjecting `MIGRATE` (server-wide, `KeySpec::Dynamic`) to the probe — is answered by the
+stage sharing `is_cluster_exempt` with slot validation, so every node-scoped command keeps
+skipping it. See FM-CLUSTER-028.
 
 ---
 

@@ -372,8 +372,14 @@ never regress silently:
       spec'd (FM-CLUSTER-029 / `route_queued_batch`).
 - [x] Determine the exact anomaly for `raft-chaos` — cross-test keyspace leakage plus an
       order-blind value rule; no routing corruption in the history.
-- [ ] **(P1)** File and fix Bug X: single-key write on a MIGRATING source must `ASK`, not
-      serve locally. Rewrite FM-CLUSTER-028 to match.
+- [x] **(P1)** File and fix Bug X: single-key write on a MIGRATING source must `ASK`, not
+      serve locally. Rewrite FM-CLUSTER-028 to match. → hardening issue 40, **fixed**
+      2026-08-05. The presence probe now runs before execution at every arity (and ahead of
+      the scripting dispatch stage); `migrating_ask_for_nil` is gone; FM-CLUSTER-028 rewritten.
+      The end-to-end no-orphan proof the P3 item below should gate against is
+      `test_single_key_write_on_migrating_source_asks_and_never_orphans`
+      (`frogdb-server/crates/server/tests/cluster_migration.rs`). This issue stays open for
+      the harness-side items.
 - [ ] **(P2)** Harness: `FLUSHALL` between batch tests (`cluster_db.clj` `setup!`) + `DBSIZE`
       assertion.
 - [ ] **(P2)** Harness: order-aware value rule + admit `:info` writes (`key_routing.clj:437-445`).
