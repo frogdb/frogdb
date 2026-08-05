@@ -59,20 +59,24 @@ impl ClusterState {
 
                 // Warn on version mismatch when a node joins or updates
                 if !node.version.is_empty() {
-                    // Check against the majority version in the cluster
-                    let majority_version = inner
+                    // Compare against the highest version any other versioned
+                    // peer reports. This is *not* a majority or consensus
+                    // version — with only two distinct versions present it is
+                    // whichever one happens to sort higher — so the log field
+                    // below is named for what it actually is.
+                    let max_peer_version = inner
                         .nodes
                         .values()
                         .filter(|n| !n.version.is_empty() && n.id != node.id)
                         .map(|n| n.version.as_str())
                         .max();
-                    if let Some(majority) = majority_version
-                        && node.version != majority
+                    if let Some(max_peer_version) = max_peer_version
+                        && node.version != max_peer_version
                     {
                         tracing::warn!(
                             node_id = node.id,
                             node_version = %node.version,
-                            cluster_version = %majority,
+                            max_peer_version = %max_peer_version,
                             "Node joining with different binary version (mixed-version cluster)"
                         );
                     }
@@ -1009,6 +1013,12 @@ mod tests {
     /// *other* versioned node reports — the joining node's own recorded entry
     /// and versionless peers are not part of that comparison, or the warning
     /// would tell an operator to chase a mismatch against the node itself.
+    /// The field carrying that value is named `max_peer_version`, not
+    /// `cluster_version` — it is the maximum of whatever versions happen to
+    /// be present, not the cluster's majority or consensus version, and a
+    /// field name that implied otherwise would mislead an operator reading
+    /// the log (issue 41).
+    // FM-CLUSTER-001
     #[test]
     fn mixed_version_warning_compares_against_the_other_versioned_nodes() {
         let state = ClusterState::new();
@@ -1031,9 +1041,14 @@ mod tests {
         assert_eq!(event.field("node_id"), Some("3"));
         assert_eq!(event.field("node_version"), Some("2.0.0"));
         assert_eq!(
-            event.field("cluster_version"),
+            event.field("max_peer_version"),
             Some("1.0.0"),
             "only other nodes that report a version count"
+        );
+        assert_eq!(
+            event.field("cluster_version"),
+            None,
+            "the field must not be named as if it were the cluster's consensus version"
         );
 
         // A node that reports no version at all cannot be mismatched.
