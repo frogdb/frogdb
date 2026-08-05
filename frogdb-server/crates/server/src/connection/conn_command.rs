@@ -210,8 +210,9 @@ impl ConnectionHandler {
 static CONFIG_SPEC: CommandSpec = CommandSpec {
     name: "CONFIG",
     arity: Arity::AtLeast(1),
-    flags: CommandFlags::ADMIN
-        .union(CommandFlags::NOSCRIPT)
+    // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; CONFIG's split
+    // leaves only HELP public.
+    flags: CommandFlags::NOSCRIPT
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     keys: KeySpec::None,

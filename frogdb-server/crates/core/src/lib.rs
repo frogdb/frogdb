@@ -73,8 +73,8 @@ pub use command::{
     ServerWideOp, SynthesizedCommand, WaiterKind, WaiterWake, WalAction, WalStrategy,
 };
 pub use command_spec::{
-    AccessSpec, CommandSpec, EventSpec, IndexKind, KeySpec, LookupOutcome, LookupSpec,
-    ReindexAction, ReindexSpec, SpecError,
+    AccessSpec, AdminSurface, CommandSpec, EventSpec, IndexKind, KeySpec, LookupOutcome,
+    LookupSpec, ReindexAction, ReindexSpec, SpecError, admin_surface, split_admin_surface_commands,
 };
 pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,

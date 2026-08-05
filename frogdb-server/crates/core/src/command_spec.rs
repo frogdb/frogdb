@@ -508,6 +508,154 @@ pub struct CommandSpec {
     pub reindex: ReindexSpec,
 }
 
+/// Which invocations of a command the admin-port gate refuses on a plain client
+/// port.
+///
+/// Redis marks `admin` per *subcommand*, not per container command: `CLUSTER
+/// SLOTS` and `ACL WHOAMI` are ordinary client commands while `CLUSTER SETSLOT`
+/// and `ACL SETUSER` are not. A single whole-command [`CommandFlags::ADMIN`]
+/// cannot express that, so a container command with a split surface drops the
+/// flag and declares its public subcommands in [`SPLIT_ADMIN_SURFACES`].
+///
+/// Resolve one with [`admin_surface`]; never match on a command name elsewhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdminSurface {
+    /// No invocation of the command is admin-only.
+    Open,
+    /// Every invocation is admin-only — the whole-command
+    /// [`CommandFlags::ADMIN`] mark (DEBUG, SHUTDOWN, REPLICAOF, …).
+    Whole,
+    /// A container command whose admin surface is split per subcommand.
+    ///
+    /// `public` names the subcommands a plain client may call; **everything
+    /// else the command accepts is admin-only**. Listing the public half rather
+    /// than the admin half is what makes the gate fail closed: an invocation
+    /// with no subcommand, or with a subcommand nobody declared, is refused.
+    SplitBySubcommand { public: &'static [&'static str] },
+}
+
+impl AdminSurface {
+    /// Whether this invocation must be refused on a non-admin port.
+    ///
+    /// `subcommand` is the subcommand already extracted from the arguments
+    /// (`None` when the command has none, or when the client sent no arguments
+    /// at all — which is gated, see [`AdminSurface::SplitBySubcommand`]).
+    pub fn requires_admin(&self, subcommand: Option<&str>) -> bool {
+        match self {
+            AdminSurface::Open => false,
+            AdminSurface::Whole => true,
+            AdminSurface::SplitBySubcommand { public } => match subcommand {
+                Some(sub) => !public.iter().any(|p| p.eq_ignore_ascii_case(sub)),
+                None => true,
+            },
+        }
+    }
+
+    /// Whether *every* invocation is admin-only. This is the whole-command
+    /// summary `COMMAND INFO` and docs-gen report as the `admin` flag, and it is
+    /// exactly [`CommandFlags::ADMIN`] — a split command reports no `admin`
+    /// flag on the container, matching Redis.
+    pub fn is_whole_command(&self) -> bool {
+        matches!(self, AdminSurface::Whole)
+    }
+}
+
+/// Container commands whose admin surface is split per subcommand.
+///
+/// Each entry maps a command name to the subcommands reachable from a plain
+/// client port; every other subcommand it dispatches — and every unrecognized
+/// one — is admin-only. Names are matched case-insensitively.
+///
+/// A command listed here must **not** also carry [`CommandFlags::ADMIN`]: the
+/// flag means "wholly admin", which contradicts a split. `register.rs`'s
+/// `split_admin_surfaces_agree_with_command_flags` walks the live registry to
+/// enforce that, so this table plus the flag stay one description, not two.
+///
+/// Classification mirrors Redis's per-subcommand `admin` marks, verified against
+/// a live Redis 8.6.1 with `COMMAND INFO <cmd>|<sub>`. The one deliberate FrogDB
+/// deviation is recorded in
+/// `.scratch/replication-cluster-rework/issues/done/05-*.md`: `MEMORY PURGE` is
+/// gated, which Redis leaves open, because it is an allocator-wide operation
+/// rather than a read.
+///
+/// Commands Redis marks admin on *every* subcommand — `SLOWLOG`, `LATENCY`, and
+/// FrogDB's own `HOTKEYS` — do not belong here. They keep the whole-command
+/// [`CommandFlags::ADMIN`] instead: `SLOWLOG GET` discloses the arguments of
+/// executed commands, and `HOTKEYS GET` discloses key names and access
+/// frequencies.
+static SPLIT_ADMIN_SURFACES: &[(&str, &[&str])] = &[
+    // Discovery is public; everything that reshapes the cluster is not.
+    (
+        "CLUSTER",
+        &[
+            "INFO",
+            "NODES",
+            "MYID",
+            "SLOTS",
+            "SHARDS",
+            "KEYSLOT",
+            "COUNTKEYSINSLOT",
+            "GETKEYSINSLOT",
+            "HELP",
+        ],
+    ),
+    // Redis marks CONFIG GET admin too — reading the configuration is a
+    // disclosure surface. Only HELP is public.
+    ("CONFIG", &["HELP"]),
+    // Anything that reads or edits *other* users' ACLs is admin; a client may
+    // only ask about itself and about the static category/password helpers.
+    ("ACL", &["WHOAMI", "CAT", "GENPASS", "HELP"]),
+    // Self-directed connection control is public; anything that observes or
+    // disturbs other connections (LIST/STATS/KILL/PAUSE/UNBLOCK/NO-EVICT) is not.
+    (
+        "CLIENT",
+        &[
+            "ID",
+            "SETNAME",
+            "GETNAME",
+            "INFO",
+            "SETINFO",
+            "NO-TOUCH",
+            "TRACKING",
+            "TRACKINGINFO",
+            "GETREDIR",
+            "CACHING",
+            "REPLY",
+            "HELP",
+        ],
+    ),
+    (
+        "MEMORY",
+        &["DOCTOR", "HELP", "MALLOC-SIZE", "STATS", "USAGE"],
+    ),
+];
+
+/// Resolve a command's [`AdminSurface`] from its name and its whole-command
+/// flags.
+///
+/// The single entry point for admin gating: a split declared in
+/// [`SPLIT_ADMIN_SURFACES`] wins, otherwise [`CommandFlags::ADMIN`] means the
+/// whole command is admin and its absence means none of it is.
+pub fn admin_surface(command: &str, flags: CommandFlags) -> AdminSurface {
+    if let Some((_, public)) = SPLIT_ADMIN_SURFACES
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(command))
+    {
+        return AdminSurface::SplitBySubcommand { public };
+    }
+    if flags.contains(CommandFlags::ADMIN) {
+        AdminSurface::Whole
+    } else {
+        AdminSurface::Open
+    }
+}
+
+/// The command names carrying a split admin surface — for registry-walking
+/// coherence checks.
+pub fn split_admin_surface_commands() -> impl Iterator<Item = &'static str> {
+    SPLIT_ADMIN_SURFACES.iter().map(|(name, _)| *name)
+}
+
 /// A cross-field inconsistency detected by [`CommandSpec::validate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpecError {
@@ -1454,5 +1602,172 @@ mod tests {
         spec.arity = Arity::AtLeast(2);
         spec.event = EventSpec::Dynamic;
         assert_eq!(spec.validate(), Ok(()));
+    }
+
+    // ---------------------------------------------------------------------
+    // Admin surface
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn admin_surface_open_when_no_admin_flag_and_no_split() {
+        let surface = admin_surface("GET", CommandFlags::READONLY);
+        assert_eq!(surface, AdminSurface::Open);
+        assert!(!surface.requires_admin(None));
+        assert!(!surface.requires_admin(Some("ANYTHING")));
+        assert!(!surface.is_whole_command());
+    }
+
+    /// A non-container command that carries `ADMIN` is gated whatever its
+    /// arguments look like — the pre-split behavior, unchanged.
+    #[test]
+    fn admin_surface_whole_command_gates_every_form() {
+        let surface = admin_surface("DEBUG", CommandFlags::ADMIN);
+        assert_eq!(surface, AdminSurface::Whole);
+        assert!(surface.is_whole_command());
+        assert!(surface.requires_admin(None));
+        assert!(surface.requires_admin(Some("SLEEP")));
+        assert!(surface.requires_admin(Some("JMAP")));
+    }
+
+    #[test]
+    fn admin_surface_split_allows_public_subcommands() {
+        let surface = admin_surface("CLUSTER", CommandFlags::STALE);
+        assert!(matches!(surface, AdminSurface::SplitBySubcommand { .. }));
+        assert!(!surface.is_whole_command());
+        for public in ["SLOTS", "SHARDS", "INFO", "NODES", "MYID", "HELP"] {
+            assert!(
+                !surface.requires_admin(Some(public)),
+                "CLUSTER {public} must be reachable from the client port"
+            );
+        }
+        for admin in ["SETSLOT", "FORGET", "MEET", "RESET", "FAILOVER", "ADDSLOTS"] {
+            assert!(
+                surface.requires_admin(Some(admin)),
+                "CLUSTER {admin} must stay admin-only"
+            );
+        }
+    }
+
+    /// Fail-closed default #1: a container command sent with no subcommand at
+    /// all is gated.
+    #[test]
+    fn admin_surface_split_gates_missing_subcommand() {
+        for command in ["CLUSTER", "CONFIG", "ACL", "CLIENT", "MEMORY"] {
+            assert!(
+                admin_surface(command, CommandFlags::empty()).requires_admin(None),
+                "{command} with no subcommand must fail closed"
+            );
+        }
+    }
+
+    /// Fail-closed default #2: a subcommand the table does not name is gated,
+    /// so a newly added subcommand is admin-only until it is declared public.
+    #[test]
+    fn admin_surface_split_gates_unknown_subcommand() {
+        for command in ["CLUSTER", "CONFIG", "ACL", "CLIENT", "MEMORY"] {
+            assert!(
+                admin_surface(command, CommandFlags::empty())
+                    .requires_admin(Some("NOT-A-SUBCOMMAND")),
+                "{command} with an unknown subcommand must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_surface_matches_names_case_insensitively() {
+        let surface = admin_surface("cluster", CommandFlags::STALE);
+        assert!(!surface.requires_admin(Some("slots")));
+        assert!(surface.requires_admin(Some("setslot")));
+    }
+
+    /// The split table's per-command classification, pinned so a change to the
+    /// admin-port contract shows up in a diff.
+    #[test]
+    fn admin_surface_split_table_classification() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            ("CONFIG", &["HELP"], &["GET", "SET", "RESETSTAT", "REWRITE"]),
+            (
+                "ACL",
+                &["WHOAMI", "CAT", "GENPASS", "HELP"],
+                &[
+                    "SETUSER", "DELUSER", "GETUSER", "LIST", "USERS", "LOG", "DRYRUN", "SAVE",
+                    "LOAD",
+                ],
+            ),
+            (
+                "CLIENT",
+                &[
+                    "ID",
+                    "SETNAME",
+                    "GETNAME",
+                    "INFO",
+                    "SETINFO",
+                    "NO-TOUCH",
+                    "TRACKING",
+                    "TRACKINGINFO",
+                    "GETREDIR",
+                    "CACHING",
+                    "REPLY",
+                    "HELP",
+                ],
+                &[
+                    "KILL", "LIST", "PAUSE", "UNPAUSE", "UNBLOCK", "NO-EVICT", "STATS",
+                ],
+            ),
+            (
+                "MEMORY",
+                &["DOCTOR", "HELP", "MALLOC-SIZE", "STATS", "USAGE"],
+                &["PURGE"],
+            ),
+        ];
+
+        for (command, public, admin) in cases {
+            let surface = admin_surface(command, CommandFlags::empty());
+            for sub in *public {
+                assert!(
+                    !surface.requires_admin(Some(sub)),
+                    "{command} {sub} must be reachable from the client port"
+                );
+            }
+            for sub in *admin {
+                assert!(
+                    surface.requires_admin(Some(sub)),
+                    "{command} {sub} must stay admin-only"
+                );
+            }
+        }
+    }
+
+    /// The observability containers Redis marks admin on *every* subcommand stay
+    /// whole-command admin here — no split entry, so even their read-only
+    /// subcommands are refused on a client port. `SLOWLOG GET` discloses executed
+    /// commands' arguments and `HOTKEYS GET` discloses key names and access
+    /// frequencies; splitting them would widen the client port's disclosure
+    /// surface past Redis's.
+    #[test]
+    fn observability_containers_are_wholly_admin() {
+        for command in ["SLOWLOG", "LATENCY", "HOTKEYS"] {
+            let surface = admin_surface(command, CommandFlags::ADMIN);
+            assert_eq!(
+                surface,
+                AdminSurface::Whole,
+                "{command} must not carry a split admin surface"
+            );
+            for sub in ["GET", "LEN", "LATEST", "HISTORY", "RESET", "HELP"] {
+                assert!(
+                    surface.requires_admin(Some(sub)),
+                    "{command} {sub} must stay admin-only"
+                );
+            }
+        }
+    }
+
+    /// A split declaration wins over a stray whole-command `ADMIN` flag, so the
+    /// resolver has exactly one answer even mid-refactor. (The registry-walking
+    /// test in `server/register.rs` forbids the combination outright.)
+    #[test]
+    fn admin_surface_split_wins_over_whole_command_flag() {
+        let surface = admin_surface("CLUSTER", CommandFlags::ADMIN);
+        assert!(!surface.requires_admin(Some("SLOTS")));
     }
 }

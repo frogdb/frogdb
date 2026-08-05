@@ -357,15 +357,15 @@ impl ClusterTestNode {
         Ok(client.command(&all_args).await)
     }
 
-    /// Send an ADMIN-flagged command to whichever port will answer it.
+    /// Send an admin-only command to whichever port will answer it.
     ///
-    /// `CLUSTER` carries [`CommandFlags::ADMIN`], so on a node started with an
-    /// admin port the *client* port answers `NOADMIN` and only the admin port
-    /// serves `CLUSTER INFO`. Harness polling helpers must not read that
-    /// rejection as "not converged yet", so they route through here; nodes
-    /// without an admin port keep using the client port.
-    ///
-    /// [`CommandFlags::ADMIN`]: frogdb_core::command::CommandFlags
+    /// `CLUSTER`'s admin surface is split per subcommand, so discovery
+    /// (`INFO`/`NODES`/`SLOTS`/`SHARDS`/`MYID`) answers on the client port and
+    /// needs no help from here. The *mutating* subcommands — `FAILOVER`,
+    /// `REPLICATE`, … — are still refused with `NOADMIN` on a node started with
+    /// an admin port, and harness polling helpers must not read that rejection
+    /// as "not converged yet"; they route through here. Nodes without an admin
+    /// port keep using the client port.
     pub async fn try_send_admin_aware(
         &self,
         cmd: &str,
@@ -749,7 +749,7 @@ impl ClusterTestHarness {
         let node = self
             .node(node_id)
             .ok_or_else(|| ClusterError::new(format!("Node {} not found", node_id)))?;
-        let response = node.try_send_admin_aware("CLUSTER", &["INFO"]).await?;
+        let response = node.try_send("CLUSTER", &["INFO"]).await?;
         parse_cluster_info(&response)
     }
 
@@ -873,7 +873,7 @@ impl ClusterTestHarness {
             .node(node_id)
             .ok_or_else(|| ClusterError::new(format!("Node {} not found", node_id)))?;
         let info = self.get_cluster_info(node_id).await?;
-        let response = node.try_send_admin_aware("CLUSTER", &["NODES"]).await?;
+        let response = node.try_send("CLUSTER", &["NODES"]).await?;
         let text = match &response {
             Response::Bulk(Some(bytes)) => String::from_utf8_lossy(bytes).into_owned(),
             other => {

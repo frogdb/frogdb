@@ -550,6 +550,31 @@ mod spec_exhaustiveness {
         }
     }
 
+    /// The per-subcommand admin table and the whole-command `ADMIN` flag are one
+    /// description, not two: a command with a split surface must not also claim
+    /// to be wholly admin, and every split entry must name a live command.
+    #[test]
+    fn split_admin_surfaces_agree_with_command_flags() {
+        let r = full_registry();
+        for name in frogdb_core::split_admin_surface_commands() {
+            let entry = r.get_entry(name).unwrap_or_else(|| {
+                panic!("{name} declares a split admin surface but is not registered")
+            });
+            assert!(
+                !entry.flags().contains(CommandFlags::ADMIN),
+                "{name} declares a split admin surface, so it must not also carry the \
+                 whole-command ADMIN flag",
+            );
+            assert!(
+                matches!(
+                    frogdb_core::admin_surface(name, entry.flags()),
+                    frogdb_core::AdminSurface::SplitBySubcommand { .. }
+                ),
+                "{name} must resolve to a split admin surface",
+            );
+        }
+    }
+
     /// Structural inverse (automatic, enforced by `CommandSpec::validate`): no
     /// non-WRITE command may declare a non-`None` reindex fact — reindexing is a
     /// write side effect. This iterates the whole registry and trips on any

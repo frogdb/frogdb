@@ -33,7 +33,9 @@ use crate::connection::util::{
 static ACL_SPEC: CommandSpec = CommandSpec {
     name: "ACL",
     arity: Arity::AtLeast(1),
-    flags: CommandFlags::ADMIN,
+    // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; only the
+    // self-directed subcommands (WHOAMI/CAT/GENPASS/HELP) are public.
+    flags: CommandFlags::empty(),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

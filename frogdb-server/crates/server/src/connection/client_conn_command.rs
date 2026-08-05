@@ -34,8 +34,9 @@ use frogdb_protocol::Response;
 static CLIENT_SPEC: CommandSpec = CommandSpec {
     name: "CLIENT",
     arity: Arity::AtLeast(1),
-    flags: CommandFlags::ADMIN
-        .union(CommandFlags::NOSCRIPT)
+    // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; the subcommands that
+    // observe or disturb *other* connections stay admin-only.
+    flags: CommandFlags::NOSCRIPT
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     keys: KeySpec::None,

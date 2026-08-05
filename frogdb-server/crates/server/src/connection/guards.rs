@@ -34,7 +34,8 @@
 use bytes::Bytes;
 use frogdb_core::{
     AclManager, CommandFlags, CommandRegistry, ConnectionLevelOp, CoreMsg, ExecutionStrategy,
-    RateLimitExceeded, ScatterOp, ShardSender, WatchEntry, shard_for_key, slot_for_key,
+    RateLimitExceeded, ScatterOp, ShardSender, WatchEntry, admin_surface, shard_for_key,
+    slot_for_key,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use std::net::SocketAddr;
@@ -388,11 +389,15 @@ impl PreDispatchView<'_> {
             }
         }
 
-        // Block admin commands on regular port when admin port is enabled
+        // Block admin commands on regular port when admin port is enabled.
+        // Container commands are gated per subcommand — `CLUSTER SLOTS` is a
+        // client command, `CLUSTER SETSLOT` is not — so the surface is resolved
+        // from the declarative table rather than the whole-command flag alone.
         if self.admin_enabled
             && !self.is_admin
             && let Some(cmd_info) = self.registry.get_entry(cmd_name)
-            && cmd_info.flags().contains(CommandFlags::ADMIN)
+            && admin_surface(cmd_name, cmd_info.flags())
+                .requires_admin(extract_subcommand(cmd_name, args).as_deref())
         {
             return Some(Response::error(
                 "NOADMIN Admin commands are disabled on this port. Use the admin port.",

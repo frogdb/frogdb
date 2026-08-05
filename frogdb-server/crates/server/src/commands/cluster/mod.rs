@@ -87,7 +87,10 @@ impl Command for ClusterCommand {
         static SPEC: CommandSpec = CommandSpec {
             name: "cluster",
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::ADMIN.union(CommandFlags::STALE),
+            // No whole-command ADMIN: the admin surface is split per subcommand
+            // (`SPLIT_ADMIN_SURFACES` in `frogdb_core::command_spec`), so
+            // discovery stays reachable from the client port.
+            flags: CommandFlags::STALE,
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
