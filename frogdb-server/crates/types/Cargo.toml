@@ -31,3 +31,6 @@ tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 proptest.workspace = true
+# `rt`/`macros`/`test-util`: `clock::system_now` tests drive a paused runtime
+# via `#[tokio::test(start_paused = true)]` + `tokio::time::advance`.
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }

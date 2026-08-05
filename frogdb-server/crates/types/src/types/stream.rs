@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 // ============================================================================
 // Stream Type
@@ -123,7 +123,7 @@ impl StreamId {
     /// Generate a new stream ID based on current time and the last ID.
     /// Returns None if all IDs are exhausted.
     pub fn generate(last: &StreamId) -> Option<Self> {
-        let now_ms = SystemTime::now()
+        let now_ms = crate::clock::system_now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
@@ -173,6 +173,79 @@ impl Ord for StreamId {
 impl PartialOrd for StreamId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// `XADD *` auto-ID generation reads `crate::clock::system_now()` (see
+/// `.scratch/concurrency-testing/issues/17-virtual-wall-clock-for-stream-ids.md`),
+/// so a paused + explicitly-advanced runtime drives it deterministically
+/// instead of racing the real OS clock.
+#[cfg(test)]
+mod id_generation_tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    /// `StreamId::generate` mints its `ms` half from `system_now()`, so
+    /// pinning the epoch and stepping the paused clock must step the
+    /// generated ID by exactly the same amount — the property this issue
+    /// exists to establish (previously `SystemTime::now()` made this
+    /// unobservable without racing the real clock).
+    #[tokio::test(start_paused = true)]
+    async fn generate_tracks_the_paused_clock() {
+        let _guard = crate::clock::system_epoch_test_lock();
+        let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        crate::clock::reset_system_epoch(epoch);
+
+        let last = StreamId::min();
+        let first = StreamId::generate(&last).expect("clock is ahead of `last`");
+        assert_eq!(
+            first.ms,
+            epoch.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+        );
+        assert_eq!(first.seq, 0);
+
+        tokio::time::advance(Duration::from_millis(250)).await;
+
+        let second = StreamId::generate(&first).expect("clock advanced past `first`");
+        assert_eq!(second.ms, first.ms + 250);
+        assert_eq!(second.seq, 0);
+    }
+
+    /// Two back-to-back "runs" (re-latched via `reset_system_epoch`, mirroring
+    /// the turmoil harness resetting between simulated servers) that advance
+    /// the paused clock identically must mint byte-identical stream IDs —
+    /// this is what unblocks the `Mixed`/`TxHeavy` determinism digests
+    /// (issue 14 criterion 5).
+    #[tokio::test(start_paused = true)]
+    async fn generate_reproduces_across_resets() {
+        let _guard = crate::clock::system_epoch_test_lock();
+        let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        crate::clock::reset_system_epoch(epoch);
+        tokio::time::advance(Duration::from_millis(37)).await;
+        let run_a = StreamId::generate(&StreamId::min()).unwrap();
+
+        crate::clock::reset_system_epoch(epoch);
+        tokio::time::advance(Duration::from_millis(37)).await;
+        let run_b = StreamId::generate(&StreamId::min()).unwrap();
+
+        assert_eq!(run_a, run_b);
+    }
+
+    /// Same millisecond as `last`: the sequence increments instead of the
+    /// clock being consulted again — unaffected by the seam change, but
+    /// pinned here since it's the other half of `generate`'s contract.
+    #[tokio::test(start_paused = true)]
+    async fn generate_bumps_sequence_within_same_millisecond() {
+        let _guard = crate::clock::system_epoch_test_lock();
+        let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        crate::clock::reset_system_epoch(epoch);
+
+        let last = StreamId::generate(&StreamId::min()).unwrap();
+        // No time advance: `system_now()` still reads `epoch`, equal to `last.ms`.
+        let next = StreamId::generate(&last).unwrap();
+        assert_eq!(next.ms, last.ms);
+        assert_eq!(next.seq, last.seq + 1);
     }
 }
 
@@ -492,8 +565,8 @@ impl ClaimClock {
     /// wall-clock millisecond together so the two stay consistent.
     pub fn sample() -> Self {
         Self {
-            now: Instant::now(),
-            unix_ms: SystemTime::now()
+            now: crate::clock::now(),
+            unix_ms: crate::clock::system_now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0),
