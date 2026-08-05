@@ -1,6 +1,11 @@
 # CLUSTER's blanket ADMIN flag blocks client slot-map bootstrap on the client port
 
-Status: needs-triage
+Status: ready-for-agent
+Triage decision (2026-08-04, user): Option 1 — per-subcommand flags — AND full sweep of the other
+blanket-ADMIN commands (`CONFIG`, `ACL`, `CLIENT`, `DEBUG`, `MEMORY`) in the same change, mirroring
+Redis's per-subcommand admin marks. One client-breaking change to the admin-port contract, not
+several. Scheduled into Phase 4 (cluster hardening); the cluster failure-mode spec describes the
+final shape.
 PRD: [replication-cluster-rework/epoch-fold-redesign.md](../epoch-fold-redesign.md)
 Type: AFK
 Origin: adversarial review of the epoch-fold redesign implementation, 2026-07-28
