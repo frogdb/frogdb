@@ -207,12 +207,30 @@
                 local? ["n1"]
                 cluster-mode? (vec (map #(str "n" (inc %)) (range cluster-node-count)))
                 ;; Multi-node (replication) defaults to the full 3-node set, but an
-                ;; explicit --node/:nodes list (non-empty) pins the client to a subset.
-                ;; This lets a single-key linearizable workload (register) run on the
-                ;; replication topology while only ever talking to the primary — the
-                ;; async replicas stay reachable by the partition nemesis (by IP) yet
-                ;; never serve the client, so Knossos linearizability stays valid.
-                multi-node? (if (seq (:nodes opts)) (vec (:nodes opts)) ["n1" "n2" "n3"])
+                ;; explicit --node/:nodes list pins the client to a subset. This lets a
+                ;; single-key linearizable workload (register) run on the replication
+                ;; topology while only ever talking to the primary — the async replicas
+                ;; stay reachable by the partition nemesis (by IP) yet never serve the
+                ;; client, so Knossos linearizability stays valid.
+                ;;
+                ;; A bare `(seq (:nodes opts))` cannot detect "explicit" here: jepsen's
+                ;; own CLI (`jepsen.cli/parse-nodes`, run as part of `cli/test-opt-fn`
+                ;; before this ever executes) ALWAYS populates :nodes, defaulting to
+                ;; `cli/default-nodes` (a 5-node ["n1".."n5"] list sized for the 5-node
+                ;; Raft topology) whenever no --node/--nodes/--nodes-file flag was
+                ;; passed at all. That made this branch pick up the 5-node default for
+                ;; every ordinary replication test (nothing pins client_nodes except
+                ;; register-partition), which the 3-node replication Docker topology
+                ;; doesn't have containers for — n4/n5 setup! spins forever waiting for
+                ;; a server that never starts, timing out the whole suite (hardening
+                ;; issue 32). Compare by value against cli/default-nodes (parse-nodes
+                ;; rebuilds the vector via concat+vec, so it's no longer `identical?`
+                ;; to the original default) to tell a real override apart from jepsen's
+                ;; own unrequested default.
+                multi-node? (if (and (seq (:nodes opts))
+                                      (not= (vec (:nodes opts)) cli/default-nodes))
+                              (vec (:nodes opts))
+                              ["n1" "n2" "n3"])
                 docker? ["n1"]
                 :else (or (:nodes opts) ["n1"]))]
     (merge tests/noop-test
