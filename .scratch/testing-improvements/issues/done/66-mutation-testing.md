@@ -64,3 +64,10 @@ survivors are expected to be.
 
 Filed 2026-07-28 as the explicit follow-up recorded in the coverage-depth plan. The plan
 text said "17 is next"; the directory is actually at 65, so this is 66.
+
+## Resolution
+
+Closed 2026-08-05 as fulfilled by the foundation-hardening campaign: `cargo-mutants` adopted
+workspace-wide (`just mutants`, `just mutants-diff`, `just mutants-gate`), per-area gates
+enforced on all four locked areas (txn 0.90, persistence 0.85, replication 0.85, cluster 0.80),
+surviving mutants documented as equivalents at the code. Exceeds this issue's proposal.
