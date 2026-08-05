@@ -192,7 +192,7 @@ mod id_generation_tests {
     /// unobservable without racing the real clock).
     #[tokio::test(start_paused = true)]
     async fn generate_tracks_the_paused_clock() {
-        let _guard = crate::clock::system_epoch_test_lock();
+        let _guard = crate::clock::system_epoch_test_lock().lock().await;
         let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         crate::clock::reset_system_epoch(epoch);
 
@@ -218,7 +218,7 @@ mod id_generation_tests {
     /// (issue 14 criterion 5).
     #[tokio::test(start_paused = true)]
     async fn generate_reproduces_across_resets() {
-        let _guard = crate::clock::system_epoch_test_lock();
+        let _guard = crate::clock::system_epoch_test_lock().lock().await;
         let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
 
         crate::clock::reset_system_epoch(epoch);
@@ -237,7 +237,7 @@ mod id_generation_tests {
     /// pinned here since it's the other half of `generate`'s contract.
     #[tokio::test(start_paused = true)]
     async fn generate_bumps_sequence_within_same_millisecond() {
-        let _guard = crate::clock::system_epoch_test_lock();
+        let _guard = crate::clock::system_epoch_test_lock().lock().await;
         let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         crate::clock::reset_system_epoch(epoch);
 

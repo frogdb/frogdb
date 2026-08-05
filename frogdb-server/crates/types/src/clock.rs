@@ -99,11 +99,12 @@ pub fn reset_system_epoch(system: SystemTime) {
 /// process-global state, so two such tests running as threads inside one
 /// process (as plain `cargo test` — unlike this repo's default `cargo
 /// nextest`, which process-isolates every test — would do) could otherwise
-/// interleave resets. Acquire the guard for the duration of the test.
+/// interleave resets. Hold the guard for the duration of the test; it is an
+/// async mutex because the guard spans `tokio::time::advance` awaits.
 #[cfg(test)]
-pub(crate) fn system_epoch_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+pub(crate) fn system_epoch_test_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    &LOCK
 }
 
 #[cfg(test)]
@@ -117,7 +118,7 @@ mod tests {
     /// deterministic test instead of racing the OS clock.
     #[tokio::test(start_paused = true)]
     async fn system_now_tracks_the_paused_clock() {
-        let _guard = system_epoch_test_lock();
+        let _guard = system_epoch_test_lock().lock().await;
         reset_system_epoch(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000));
 
         let first = system_now();
@@ -138,7 +139,7 @@ mod tests {
     /// values — the reproducibility property issue 17 exists to establish.
     #[tokio::test(start_paused = true)]
     async fn system_now_reproduces_across_resets() {
-        let _guard = system_epoch_test_lock();
+        let _guard = system_epoch_test_lock().lock().await;
         let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
 
         reset_system_epoch(epoch);
