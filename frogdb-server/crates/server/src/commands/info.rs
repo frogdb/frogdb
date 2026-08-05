@@ -293,16 +293,7 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
     // WAL lag lives on the shard worker's writer, out of reach of command
     // execution; the connection-level builder reports the real aggregated
     // values. No placeholder wal_* fields are emitted here.
-    //
-    // The `rdb_*` save fields below are *static placeholders* on this
-    // shard-local path (`redis.call('INFO')` inside a script): the snapshot
-    // coordinator is a connection-level dependency and a shard's
-    // `CommandContext` cannot reach it. A client's INFO goes through
-    // `crate::info::sections::PersistenceSection`, which reports the real save
-    // status, counters, and timestamp. Making the script path agree needs the
-    // coordinator plumbed onto the shard context — tracked by
-    // `.scratch/hardening/issues/open/03-bgsave-failure-invisible-to-clients.md`.
-    format!(
+    let mut info = format!(
         "# Persistence\r\n\
          loading:0\r\n\
          async_loading:0\r\n\
@@ -312,14 +303,26 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
          current_fork_perc:0.00\r\n\
          current_save_keys_processed:0\r\n\
          current_save_keys_total:0\r\n\
-         rdb_changes_since_last_save:{}\r\n\
-         rdb_bgsave_in_progress:0\r\n\
-         rdb_last_save_time:0\r\n\
-         rdb_last_bgsave_status:ok\r\n\
-         rdb_last_bgsave_time_sec:-1\r\n\
-         rdb_current_bgsave_time_sec:-1\r\n\
-         rdb_saves:0\r\n\
-         rdb_last_cow_size:0\r\n\
+         rdb_changes_since_last_save:{}\r\n",
+        dirty,
+    );
+    // The save outcome, counters, and durations: the same field list the
+    // connection-level renderer uses (`persistence_snapshot_fields`), read
+    // from the same `SnapshotCoordinator` every shard is constructed with —
+    // no longer static literals (issue 10 / FM-PERSISTENCE-022).
+    for (name, value) in
+        crate::info::persistence_snapshot_fields(&ctx.snapshot_stats, ctx.bgsave_in_progress)
+    {
+        info.push_str(&format!("{name}:{value}\r\n"));
+    }
+    // `rdb_last_load_keys_expired`/`loaded` describe this boot's recovery,
+    // which `frogdb-recovery` aggregates node-wide rather than per-shard; a
+    // shard's `CommandContext` has no per-shard recovery counters to report
+    // here, so these stay 0 rather than plumbing a second, unrelated
+    // dependency into the shard-local path. Tracked as a follow-up:
+    // `.scratch/hardening/issues/open/42-script-info-load-keys-still-static.md`.
+    info.push_str(
+        "rdb_last_cow_size:0\r\n\
          rdb_last_load_keys_expired:0\r\n\
          rdb_last_load_keys_loaded:0\r\n\
          aof_enabled:0\r\n\
@@ -334,8 +337,8 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
          aof_last_cow_size:0\r\n\
          module_fork_in_progress:0\r\n\
          module_fork_last_cow_size:0\r\n\r\n",
-        dirty,
-    )
+    );
+    info
 }
 
 /// Build the Stats section from shard-local truth only.

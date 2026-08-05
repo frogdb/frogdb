@@ -253,43 +253,17 @@ impl InfoSection for PersistenceSection {
             .field("current_fork_perc", "0.00")
             .field("current_save_keys_processed", 0)
             .field("current_save_keys_total", 0)
-            .field("rdb_changes_since_last_save", sh.dirty)
-            .field("rdb_bgsave_in_progress", u8::from(p.bgsave_in_progress))
-            .field("rdb_last_save_time", p.last_save_unix.unwrap_or(0))
-            // Real save outcome, not a literal: `err` while the most recent
-            // finished save failed, back to `ok` on the next success (Redis
-            // semantics). The cause and the cumulative failure count are FrogDB
-            // extensions next to it — a status that flips back to `ok` must not
-            // erase the fact that saves were failing.
-            .field(
-                "rdb_last_bgsave_status",
-                if p.last_bgsave_error.is_some() {
-                    "err"
-                } else {
-                    "ok"
-                },
-            )
-            .field_opt(
-                "rdb_last_bgsave_error",
-                // INFO is a line-oriented format: fold any CR/LF in the cause
-                // into spaces so one error cannot forge extra fields.
-                p.last_bgsave_error
-                    .as_deref()
-                    .map(|e| e.replace(['\r', '\n'], " ")),
-            )
-            // Redis' sentinel for "no such save": `-1` until one completes, and
-            // `-1` for the current save whenever none is running.
-            .field(
-                "rdb_last_bgsave_time_sec",
-                p.last_bgsave_secs.map_or(-1, |s| s as i64),
-            )
-            .field(
-                "rdb_current_bgsave_time_sec",
-                p.current_bgsave_secs.map_or(-1, |s| s as i64),
-            )
-            .field("rdb_saves", p.saves)
-            .field("rdb_bgsave_failures", p.bgsave_failures)
-            .field("rdb_last_cow_size", 0)
+            .field("rdb_changes_since_last_save", sh.dirty);
+        // The save outcome, counters, and durations: one field list shared
+        // with the shard-local `redis.call('INFO')` renderer
+        // (`persistence_snapshot_fields`, issue 10 / FM-PERSISTENCE-022) so
+        // the two cannot report different save health for the same node.
+        for (name, value) in
+            crate::info::persistence_snapshot_fields(&p.snapshot_stats, p.bgsave_in_progress)
+        {
+            w.field(name, value);
+        }
+        w.field("rdb_last_cow_size", 0)
             // What this boot's recovery did, fixed for the life of the process
             // (Redis reports the same two about its last RDB load). The failed
             // count is a FrogDB extension: an undecodable value is skipped
@@ -861,10 +835,12 @@ mod tests {
         // Last save failed: `err`, the cause, and the failure counted. The
         // save time still reports the last *successful* save.
         let mut src = sources();
-        src.persistence.saves = 2;
-        src.persistence.bgsave_failures = 1;
-        src.persistence.last_save_unix = Some(1_700_000_000);
-        src.persistence.last_bgsave_error = Some("IO error: No space left\non device".to_string());
+        src.persistence.snapshot_stats.saves = 2;
+        src.persistence.snapshot_stats.failures = 1;
+        src.persistence.snapshot_stats.last_save_time =
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000));
+        src.persistence.snapshot_stats.last_error =
+            Some("IO error: No space left\non device".to_string());
         let out = render(&PersistenceSection, &src);
         assert!(out.contains("rdb_last_bgsave_status:err\r\n"), "{out}");
         assert!(
@@ -876,8 +852,8 @@ mod tests {
         assert!(out.contains("rdb_last_save_time:1700000000\r\n"), "{out}");
 
         // Recovered: status back to `ok`, cause gone, failure count retained.
-        src.persistence.last_bgsave_error = None;
-        src.persistence.saves = 3;
+        src.persistence.snapshot_stats.last_error = None;
+        src.persistence.snapshot_stats.saves = 3;
         let out = render(&PersistenceSection, &src);
         assert!(out.contains("rdb_last_bgsave_status:ok\r\n"), "{out}");
         assert!(!out.contains("rdb_last_bgsave_error"), "{out}");
@@ -928,8 +904,9 @@ mod tests {
 
         let mut src = sources();
         src.persistence.bgsave_in_progress = true;
-        src.persistence.last_bgsave_secs = Some(7);
-        src.persistence.current_bgsave_secs = Some(2);
+        src.persistence.snapshot_stats.last_duration = Some(std::time::Duration::from_secs(7));
+        src.persistence.snapshot_stats.current_started_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
         let out = render(&PersistenceSection, &src);
         assert!(out.contains("rdb_last_bgsave_time_sec:7\r\n"), "{out}");
         assert!(out.contains("rdb_current_bgsave_time_sec:2\r\n"), "{out}");
@@ -938,7 +915,7 @@ mod tests {
         // A save that finished in under a second reports 0, not the -1 that
         // would claim no save ever ran.
         let mut src = sources();
-        src.persistence.last_bgsave_secs = Some(0);
+        src.persistence.snapshot_stats.last_duration = Some(std::time::Duration::from_secs(0));
         let out = render(&PersistenceSection, &src);
         assert!(out.contains("rdb_last_bgsave_time_sec:0\r\n"), "{out}");
         assert!(out.contains("rdb_current_bgsave_time_sec:-1\r\n"), "{out}");
