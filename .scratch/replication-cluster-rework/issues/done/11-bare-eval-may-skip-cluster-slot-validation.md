@@ -70,7 +70,7 @@ through its own seam, or is exempt on purpose:
 - `CONTAINER_COMMANDS` (`connection/util.rs:246`) is only a subcommand-name lookup table for
   ACL/stats attribution — it has no dispatch role and no key handling.
 
-**Commits** — `c41454e6` (the hoist), plus the tests/spec/issue commit that follows it.
+**Commits** — `c41454e6` (the hoist), `7ac577d4` (tests, spec, issue move).
 
 ## Finding
 
