@@ -51,6 +51,13 @@
             [field v] (if (vector? (:value op))
                        (:value op)
                        [(:field op (:value op)) (:value op)])]
+        (if (nil? field)
+          ;; Defensive: a value-less op (e.g. a bare {:f :read} handed to us by
+          ;; a generator composition bug — such as core.clj's generic
+          ;; final-reads fallback, which this workload must never fall through
+          ;; to; see workload's :final-generator below) cannot be attributed to
+          ;; a field. Fail it loudly rather than NPE on (name nil).
+          (assoc op :type :fail :error :no-field)
         (case (:f op)
           ;; Read a field
           :read
@@ -78,7 +85,7 @@
                                (do
                                  (car/unwatch)
                                  false))))]
-              (assoc op :type (if result :ok :fail) :value [field [expected new-val]])))))))
+              (assoc op :type (if result :ok :fail) :value [field [expected new-val]]))))))))
 
   (teardown! [this test]
     nil)
@@ -313,9 +320,14 @@
      :final-generator (independent-final-read-generator)
      :checker (independent-checker)}
     {:client (create-client)
-     :generator (gen/phases
-                  (generator opts)
-                  ;; Final reads
-                  (gen/clients (final-read-generator)))
+     :generator (generator opts)
+     ;; Explicit :final-generator, mirroring the independent branch above.
+     ;; Without this, core.clj's generic final-reads fallback
+     ;; (gen/repeat {:f :read}) — a bare, value-less op — reaches this
+     ;; workload's HashClient, which needs a :field to look up. HashClient
+     ;; now fails such ops loudly (:error :no-field) instead of NPE-ing on
+     ;; (name nil), but the real fix is to never let that generic fallback
+     ;; run for this workload in the first place.
+     :final-generator (final-read-generator)
      :checker (checker/compose
                 {:hash (checker)})}))
