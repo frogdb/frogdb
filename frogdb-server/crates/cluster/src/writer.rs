@@ -582,4 +582,79 @@ mod tests {
             _ => panic!("expected Raft error"),
         }
     }
+
+    // --- the production forwarder over the cluster bus -----------------------
+
+    /// The peer half of a forwarded write: read the request, commit it.
+    async fn serve_one_forwarded_write(server_end: tokio::io::DuplexStream) {
+        let mut framed = crate::network::new_framed(Box::new(server_end));
+        let stats = crate::stats::ClusterBusStats::new();
+        crate::network::parse_rpc_message(&mut framed, &stats)
+            .await
+            .unwrap();
+        crate::network::send_rpc_response(
+            &mut framed,
+            crate::network::ClusterRpcResponse::ForwardedWrite(Ok(())),
+            &stats,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The real forwarder answers with what the bus leg did: a remote commit is
+    /// `Ok`, and every way of not reaching the leader — an address the factory
+    /// never learned, or a connection that will not open — is `Err`, which is
+    /// what turns the write into a redirect instead of a silent success.
+    // FM-CLUSTER-048
+    #[tokio::test]
+    async fn the_bus_forwarder_reports_whether_the_leader_took_the_write() {
+        let bus_addr: SocketAddr = "127.0.0.1:26379".parse().unwrap();
+
+        // The leader's bus address is not in the factory's address book.
+        let stranger = Arc::new(ClusterNetworkFactory::new());
+        assert!(
+            stranger
+                .forward_write(7, ClusterCommand::IncrementEpoch)
+                .await
+                .is_err(),
+            "a leader with no known bus address cannot be forwarded to"
+        );
+
+        // The address is known, but the connection never opens.
+        let mut unreachable = ClusterNetworkFactory::new();
+        unreachable.set_connect_factory(Arc::new(|_addr| {
+            Box::pin(async { Err(std::io::Error::other("peer is down")) })
+        }));
+        unreachable.register_node(7, bus_addr);
+        assert!(
+            Arc::new(unreachable)
+                .forward_write(7, ClusterCommand::IncrementEpoch)
+                .await
+                .is_err(),
+            "an unreachable leader cannot be forwarded to"
+        );
+
+        // The leader is reachable and commits.
+        let (client_end, server_end) = tokio::io::duplex(64 * 1024);
+        let peer = tokio::spawn(serve_one_forwarded_write(server_end));
+        let mut reachable = ClusterNetworkFactory::new();
+        let slot = Arc::new(parking_lot::Mutex::new(Some(client_end)));
+        reachable.set_connect_factory(Arc::new(move |_addr| {
+            let taken = slot.lock().take();
+            Box::pin(async move {
+                taken
+                    .map(|s| Box::new(s) as crate::network::BoxedStream)
+                    .ok_or_else(|| std::io::Error::other("connect factory exhausted"))
+            })
+        }));
+        reachable.register_node(7, bus_addr);
+        assert_eq!(
+            Arc::new(reachable)
+                .forward_write(7, ClusterCommand::IncrementEpoch)
+                .await,
+            Ok(()),
+            "a remote commit is a successful forward"
+        );
+        peer.await.unwrap();
+    }
 }

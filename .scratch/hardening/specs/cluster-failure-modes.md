@@ -72,7 +72,7 @@ Test names are bare function names, resolved against the crate list in `scripts/
 | NOT observable | A restart flipping a replica back to `master` in `CLUSTER NODES` — which would point its replication stream at itself and orphan the primary's write path. Nor `NodeAlreadyExists`: that variant exists in `ClusterError` but `AddNode` never constructs it, so a re-register is never an error. Nor a role/promotion event: an `AddNode` that changes nothing emits nothing. |
 | Invariant | `apply_command`'s `AddNode` arm overwrites the incoming `role`/`primary_id` from the existing record before inserting (`commands.rs:43-54`), so role transitions have exactly one source — `SetRole` and `Failover` — and re-registration is not one of them. A binary-version mismatch against the highest-versioned peer warns and never rejects, so a mixed-version cluster still converges on membership. |
 | Outcome variant | `ClusterResponse::Ok` |
-| Forced by | `test_add_node`, `test_add_duplicate_node`, `test_add_node_reregistration_keeps_recorded_role`, `test_add_node_mixed_version_succeeds`, `test_apply_local_shares_validated_path` |
+| Forced by | `test_add_node`, `test_add_duplicate_node`, `test_add_node_reregistration_keeps_recorded_role`, `test_add_node_mixed_version_succeeds`, `test_apply_local_shares_validated_path`, `a_disagreeing_re_registration_is_reported_on_either_half`, `test_node_flags_handshaking_sets_only_the_handshake_bit` |
 | Bug refs | — |
 
 `MEET` and `FORGET` have no `ClusterCommand` of their own: they are server-layer verbs that lower to
@@ -140,7 +140,7 @@ migration that can never complete; the operator's recovery is `SETSLOT … STABL
 | NOT observable | A reset that fails: the arm is infallible by construction, because a half-reset node is worse than a fully reset one. Nor a raw `ERR Raft error: APIError(ForwardToLeader(..))` on a follower — the `Debug` rendering of an openraft internal is not a redirect any client can follow. Nor a node that re-keyed itself locally after a reset that never landed. |
 | Invariant | `commands.rs:478-518` clears the slot map and migrations unconditionally before it branches, so no slot or migration can survive either form. `ClusterWriter::propose_reset` snapshots the peer list *before* proposing (a committed reset empties the topology), routes through `propose`, and applies the local identity update only on `Applied`. |
 | Outcome variant | `ClusterResponse::Ok` / `ResetProposed::{Applied, Rejected}` / `ProposeError::{Redirect, Raft}` |
-| Forced by | `test_reset_cluster_soft`, `test_reset_cluster_hard`, `test_reset_cluster_nonexistent_node`, `reset_on_a_follower_yields_a_redirect_not_a_raft_error`, `reset_forwarded_to_the_leader_reports_forwarded`, `reset_committed_on_the_leader_keeps_a_soft_reset_identity`, `reset_rejected_by_the_state_machine_changes_nothing_local` |
+| Forced by | `test_reset_cluster_soft`, `test_reset_cluster_hard`, `test_reset_cluster_nonexistent_node`, `reset_on_a_follower_yields_a_redirect_not_a_raft_error`, `reset_forwarded_to_the_leader_reports_forwarded`, `reset_committed_on_the_leader_keeps_a_soft_reset_identity`, `reset_rejected_by_the_state_machine_changes_nothing_local`, `self_node_id_treats_zero_as_unset`, `from_snapshot_restores_the_table_and_keeps_the_local_identity` |
 | Bug refs | fixed: [39-cluster-reset-bypasses-the-cluster-writer.md](../issues/done/39-cluster-reset-bypasses-the-cluster-writer.md) |
 
 `CLUSTER RESET HARD` is why the config epoch is **not** globally monotonic — see FM-CLUSTER-010's
@@ -184,7 +184,7 @@ crate cannot reach.
 | NOT observable | A gate defaulting to *on* in any ambiguous state — a feature that half the cluster cannot parse is the failure this exists to prevent. An unparseable target version yields an empty pending list rather than an error, so the caller never treats a parse failure as "everything is unlocked". |
 | Invariant | `is_gate_active_in` is a pure lookup with a single `>=` comparison and `find(..).is_some_and(..)`, so every refusal path collapses to `false` (`version_gate.rs:47-75`). |
 | Outcome variant | `bool` / `Vec<&VersionGateEntry>` |
-| Forced by | `gate_active_when_version_meets_minimum`, `gate_inactive_when_version_below_minimum`, `gate_inactive_when_no_active_version`, `none_active_version_means_inactive`, `invalid_active_version_means_inactive`, `no_gates_means_nothing_active`, `static_gate_active_when_version_sufficient`, `pending_gates_static_registry`, `pending_gates_returns_unlockable_gates`, `pending_gates_excludes_already_active`, `pending_gates_empty_for_patch_upgrade` |
+| Forced by | `gate_active_when_version_meets_minimum`, `gate_inactive_when_version_below_minimum`, `gate_inactive_when_no_active_version`, `none_active_version_means_inactive`, `invalid_active_version_means_inactive`, `no_gates_means_nothing_active`, `static_gate_active_when_version_sufficient`, `pending_gates_static_registry`, `pending_gates_returns_unlockable_gates`, `pending_gates_excludes_already_active`, `pending_gates_empty_for_patch_upgrade`, `gate_suppression_is_reported_once_and_only_when_suppressed` |
 | Bug refs | — |
 
 ---
@@ -198,7 +198,7 @@ crate cannot reach.
 | NOT observable | Two primaries claiming the same nonzero epoch — the state in which neither can be said to have superseded the other. Nor a mint that produces a value some node already holds. |
 | Invariant | `mint_config_epoch` is `counter.max(max_node_epoch()) + 1` (`state.rs:261-264`), so the mint reads the node epochs rather than trusting the counter, and the uncontested branch of `reconcile_incoming_epoch` ratchets the counter up to any accepted claim. |
 | Outcome variant | `EpochReconciliation::{Accepted, Reassigned}` |
-| Forced by | `test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence`, `test_add_node_collision_mints_above_cluster_counter`, `test_add_node_uncontested_epoch_raises_cluster_counter` |
+| Forced by | `test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence`, `test_add_node_collision_mints_above_cluster_counter`, `test_add_node_uncontested_epoch_raises_cluster_counter`, `max_node_epoch_tracks_the_highest_claim` |
 | Bug refs | — |
 
 Deliberate non-guarantee: the epoch is **not** globally monotonic across `CLUSTER RESET HARD`, which
@@ -291,7 +291,7 @@ phase inherits a specced surface.
 | NOT observable | A snapshot going backwards, or a snapshot openraft believes exists that is not on disk — openraft purges log entries on the strength of an advertised snapshot, so a synthesized one would discard entries nothing can reproduce. |
 | Invariant | `ClusterSnapshotStore::save` compares `last_log_id.index` under a mutex and writes meta plus payload in one `WriteBatch` with `set_sync(true)`; `get_current_snapshot` reads the store rather than the live state whenever a store is attached (`storage.rs:111-147`, `state.rs:808-837`). |
 | Outcome variant | `StorageError` / `Option<Snapshot>` |
-| Forced by | `test_config_epoch_round_trips_through_storage_restart`, `test_state_machine_snapshot_survives_restart_without_log_replay`, `test_snapshot_save_never_moves_backwards`, `test_snapshot_store_is_opt_in`, `test_storage_open_and_close`, `test_storage_vote`, `test_storage_metadata`, `test_storage_committed` |
+| Forced by | `test_config_epoch_round_trips_through_storage_restart`, `test_state_machine_snapshot_survives_restart_without_log_replay`, `test_snapshot_save_never_moves_backwards`, `test_snapshot_store_is_opt_in`, `test_storage_open_and_close`, `test_storage_vote`, `test_storage_metadata`, `test_storage_committed`, `membership_entries_are_recorded_for_applied_state`, `snapshot_builder_shares_the_live_state`, `begin_receiving_snapshot_hands_back_an_empty_buffer`, `log_keys_round_trip_and_sort_in_index_order`, `save_committed_writes_then_deletes_the_persisted_key`, `cache_evicts_the_oldest_only_once_over_the_bound`, `cache_invalidation_respects_both_range_ends`, `excluded_start_bound_skips_that_index`, `append_persists_entries_and_log_state_reports_the_tail`, `truncate_drops_only_the_tail_after_the_kept_index` |
 | Bug refs | — |
 
 ## FM-CLUSTER-076 — `SET-CONFIG-EPOCH` assigns the exact value, and only at bootstrap
@@ -551,7 +551,7 @@ skipping it. See FM-CLUSTER-028.
 | NOT observable | A migration left pointing at a node that is no longer a member — it can never complete, and its slot stays in a migrating state that nothing will clear except manual intervention. |
 | Invariant | The force branch applies `migrations.retain(source != old && target != old)` in the same transition that removes the node (`commands.rs:271-280`), so no window exists in which the node is gone and its migrations are not. |
 | Outcome variant | `ClusterResponse::Epoch` |
-| Forced by | `test_failover_force_cancels_migrations_of_removed_node`, `test_failover_graceful_keeps_unrelated_migrations` |
+| Forced by | `test_failover_force_cancels_migrations_of_removed_node`, `test_failover_graceful_keeps_unrelated_migrations`, `force_failover_reports_moved_slots_and_prunes_only_related_migrations` |
 | Bug refs | — |
 
 ## FM-CLUSTER-037 — the commit-to-apply window is a known, bounded, accepted mode
@@ -618,7 +618,7 @@ keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in t
 | NOT observable | A healthy node being evicted from the cluster by a planned failover — it is the new replica, and removing it would force a full re-`MEET` and a full resync. |
 | Invariant | The `force` flag selects between remove and demote inside the one atomic entry, so both shapes share the transfer/promote/bump path and cannot drift. |
 | Outcome variant | `ClusterResponse::Epoch` |
-| Forced by | `test_failover_graceful_demotes_old_primary` |
+| Forced by | `test_failover_graceful_demotes_old_primary`, `failover_re_parents_only_the_old_primarys_replicas` |
 | Bug refs | — |
 
 ## FM-CLUSTER-042 — a replayed failover is safe
@@ -702,7 +702,7 @@ keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in t
 | NOT observable | The follower performing the leader's *side effects* on a forwarded write — the leader already added the Raft voter, and doing it twice on an existing voter would demote it to a learner and cost the cluster a quorum member. |
 | Invariant | `Forwarded` is a distinct variant from `Committed`, so the caller can tell "the leader did it" from "I did it" and skip the local side effects; `resolve_redirect` is a pure function of `(leader_id, cluster_state)`. |
 | Outcome variant | `Proposed::Forwarded` / `ProposeError::Redirect` |
-| Forced by | `follower_forward_success_is_forwarded`, `follower_forward_failure_is_redirect`, `resolve_redirect_known_leader_yields_redirect` |
+| Forced by | `follower_forward_success_is_forwarded`, `follower_forward_failure_is_redirect`, `resolve_redirect_known_leader_yields_redirect`, `a_forwarded_write_reports_the_leaders_verdict`, `the_bus_forwarder_reports_whether_the_leader_took_the_write` |
 | Bug refs | — |
 
 ## FM-CLUSTER-049 — no addressable leader degrades to `CLUSTERDOWN`
@@ -744,7 +744,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | A bus RPC being dispatched into the Raft handler or vice versa — the handler for one would treat the other's payload as a consensus message. |
 | Invariant | `ClusterRpcRequest::{Raft, Bus}` is a typed split and `BusRpc` names only the serviceable variants, so `handle_bus_rpc` is exhaustive by construction and cannot receive a Raft RPC. |
 | Outcome variant | `ClusterRpcRequest` / `ClusterRpcResponse` |
-| Forced by | `test_from_shims_wrap_correct_arm`, `test_all_rpc_variants_roundtrip`, `test_rpc_request_serialization`, `test_network_factory_node_registration`, `the_bus_serves_probes_and_raft_rpcs_on_one_connection` |
+| Forced by | `test_from_shims_wrap_correct_arm`, `test_all_rpc_variants_roundtrip`, `test_rpc_request_serialization`, `test_network_factory_node_registration`, `the_bus_serves_probes_and_raft_rpcs_on_one_connection`, `the_pool_keeps_one_slot_per_peer_until_the_peer_is_removed`, `the_factory_reports_every_registered_address`, `the_voter_retry_schedule_backs_off_and_then_stops`, `adding_a_voter_runs_for_a_stranger_and_skips_an_existing_member` |
 | Bug refs | — |
 
 ---
@@ -818,7 +818,7 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 | NOT observable | A node the operator marked never-promote being promoted anyway — that setting is how a cross-region or backup-only replica is kept out of the primary role, and violating it is a latency or durability regression the operator explicitly ruled out. |
 | Invariant | Belt and braces: an explicit `filter(priority != 0)` *and* the `u64::MAX` score, so removing either one alone still refuses. |
 | Outcome variant | `Option<&NodeInfo>` = `None` |
-| Forced by | `test_compute_replica_score_priority_zero_excluded`, `test_select_failover_target_all_never_promote` |
+| Forced by | `test_compute_replica_score_priority_zero_excluded`, `test_select_failover_target_all_never_promote`, `test_missing_replica_priority_defaults_to_the_neutral_value` |
 | Bug refs | — |
 
 ## FM-CLUSTER-058 — failover target selection is deterministic and live-tunable
@@ -1005,7 +1005,7 @@ than disguised as correct ownership.
 | NOT observable | A node id that is not 40 hex characters — every Redis client parses this field positionally and by width. Nor fabricated gossip timings: FrogDB has no gossip layer, so `0 0` is the honest value rather than a synthesized one. |
 | Invariant | One renderer serves both the clustered and standalone paths (`standalone_snapshot` builds a snapshot rather than a second formatter), and the golden test pins the whole line including the whitespace artifact. |
 | Outcome variant | `CLUSTER NODES` body |
-| Forced by | `test_render_cluster_nodes_golden`, `test_render_cluster_nodes_standalone`, `test_format_node_id_is_40_hex`, `test_node_flags_label`, `test_node_health` |
+| Forced by | `test_render_cluster_nodes_golden`, `test_render_cluster_nodes_standalone`, `test_format_node_id_is_40_hex`, `test_node_flags_label`, `test_node_health`, `test_cluster_snapshot_partitions_nodes_by_role` |
 | Bug refs | — |
 
 ## FM-CLUSTER-072 — `SLOTS` drops slotless primaries, `SHARDS` keeps them
@@ -1029,7 +1029,7 @@ than disguised as correct ownership.
 | NOT observable | Counters that do not sum to the assigned total. An operator sizing an incident from these numbers needs them to partition the slot space; a dropped slot understates the outage. |
 | Invariant | `count_slot_health` walks the assignment map once and assigns each slot to exactly one bucket, with the unknown-owner case landing in `ok` explicitly rather than falling out of the loop. |
 | Outcome variant | `SlotHealthCounts` |
-| Forced by | `test_count_slot_health_totals_always_equal_slots_assigned`, `test_count_slot_health_all_ok_when_no_node_flagged`, `test_count_slot_health_fail_flagged_owner_counts_as_fail_not_ok`, `test_count_slot_health_pfail_flagged_owner_counts_distinct_from_fail`, `test_count_slot_health_fail_takes_precedence_over_pfail`, `test_count_slot_health_recovery_restores_full_ok`, `test_count_slot_health_only_counts_flagged_owners_slots_others_unaffected`, `test_count_slot_health_fail_flagged_slotless_primary_leaves_slots_ok`, `test_count_slot_health_unknown_owner_counted_ok_not_dropped` |
+| Forced by | `test_count_slot_health_totals_always_equal_slots_assigned`, `test_count_slot_health_all_ok_when_no_node_flagged`, `test_count_slot_health_fail_flagged_owner_counts_as_fail_not_ok`, `test_count_slot_health_pfail_flagged_owner_counts_distinct_from_fail`, `test_count_slot_health_fail_takes_precedence_over_pfail`, `test_count_slot_health_recovery_restores_full_ok`, `test_count_slot_health_only_counts_flagged_owners_slots_others_unaffected`, `test_count_slot_health_fail_flagged_slotless_primary_leaves_slots_ok`, `test_count_slot_health_unknown_owner_counted_ok_not_dropped`, `test_cluster_snapshot_slot_coverage_readers_agree` |
 | Bug refs | fixed: [37-cluster-stats-messages-hardcoded-zero.md](../issues/done/37-cluster-stats-messages-hardcoded-zero.md) |
 
 ## FM-CLUSTER-074 — `CLUSTER INFO` is CRLF-framed `key:value` lines
@@ -1053,7 +1053,7 @@ than disguised as correct ownership.
 | NOT observable | An inverted or out-of-range range being accepted from a string — every downstream length computation assumes `start <= end < 16384`, and an inverted range underflows it. |
 | Invariant | `FromStr` validates the ordering and the upper bound before constructing, so the parse boundary is where the invariant is established. |
 | Outcome variant | `ClusterError::InvalidSlot` |
-| Forced by | `test_slot_range_contains`, `test_slot_range_display`, `test_slot_range_parse` |
+| Forced by | `test_slot_range_contains`, `test_slot_range_display`, `test_slot_range_parse`, `test_slot_range_len_counts_both_endpoints`, `test_slot_range_parse_accepts_a_degenerate_range` |
 | Bug refs | — |
 
 ## FM-CLUSTER-077 — `CLUSTER INFO`'s bus counters are measured or absent, never fabricated
@@ -1065,7 +1065,7 @@ than disguised as correct ownership.
 | NOT observable | A `ping`/`pong` per-type line: FrogDB runs no gossip protocol, and Redis omits a per-type line whose counter is zero. Nor a counted frame that never crossed the wire — a request that failed to serialize, or a connection that never opened, is not traffic. |
 | Invariant | Counting happens at the four wire seams and nowhere else: `try_send_on_framed` after the write and after the response frame (`network.rs`), `parse_rpc_message` after a frame arrives, `send_rpc_response` after the write. The rendering treats an unreadable counter as `None` and omits the line, the way `cluster_raft_term` already does. |
 | Outcome variant | `ClusterBusStatsSnapshot` / `CLUSTER INFO` body |
-| Forced by | `a_fresh_counter_pair_reads_zero`, `the_two_directions_are_counted_independently`, `counters_accumulate_across_threads`, `cluster_stats_messages_sent_grows_with_bus_traffic`, `cluster_stats_messages_received_grows_on_the_receiving_node`, `a_connection_that_never_opens_counts_nothing`, `cluster_info_omits_gossip_counters_that_have_no_source`, `cluster_info_reports_the_live_bus_counters`, `cluster_info_omits_the_bus_totals_when_they_cannot_be_read` |
+| Forced by | `a_fresh_counter_pair_reads_zero`, `the_two_directions_are_counted_independently`, `counters_accumulate_across_threads`, `cluster_stats_messages_sent_grows_with_bus_traffic`, `cluster_stats_messages_received_grows_on_the_receiving_node`, `a_connection_that_never_opens_counts_nothing`, `cluster_info_omits_gossip_counters_that_have_no_source`, `cluster_info_reports_the_live_bus_counters`, `cluster_info_omits_the_bus_totals_when_they_cannot_be_read`, `a_peer_handle_shares_the_factorys_counters` |
 | Bug refs | fixed: [37-cluster-stats-messages-hardcoded-zero.md](../issues/done/37-cluster-stats-messages-hardcoded-zero.md) |
 
 ## FM-CLUSTER-078 — the published snapshot is never older than an applied mutation
@@ -1077,7 +1077,7 @@ than disguised as correct ownership.
 | NOT observable | A reader routing against a topology the state machine has already moved past — a stale slot table is a `MOVED` to the wrong node or a local serve of a slot this node no longer owns. Nor a per-read copy of the 16384-entry slot table: `snapshot()` is on the keyed-command path (`SlotMigrationCoordinator::route`), so a copy there is per-command cost. |
 | Invariant | `StateCell` holds the authoritative `ClusterStateInner` and the published `Arc<ClusterSnapshot>` under one lock, and `PublishOnDrop` — the only handle that hands out a `&mut ClusterStateInner` — rebuilds the published value in its `Drop`, inside the same critical section. An early `return`, a `?`, or an unwinding panic all run that `Drop`. The openraft bookkeeping fields (`last_applied_log`, `last_membership`) are deliberately not snapshot-visible and have their own no-republish setters (`state.rs`). |
 | Outcome variant | `Arc<ClusterSnapshot>` |
-| Forced by | `test_snapshot_observes_topology_applied_since_the_last_read`, `test_repeated_snapshots_without_mutation_share_one_allocation`, `test_rejected_command_leaves_snapshot_agreeing_with_state`, `test_snapshot_install_republishes_the_reader_view` |
+| Forced by | `test_snapshot_observes_topology_applied_since_the_last_read`, `test_repeated_snapshots_without_mutation_share_one_allocation`, `test_rejected_command_leaves_snapshot_agreeing_with_state`, `test_snapshot_install_republishes_the_reader_view`, `state_readers_report_the_applied_table` |
 | Bug refs | fixed: [10-cluster-snapshot-clone-cost.md](../../replication-cluster-rework/issues/done/10-cluster-snapshot-clone-cost.md) |
 
 ---

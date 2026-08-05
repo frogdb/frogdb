@@ -915,4 +915,262 @@ mod tests {
             "completion is authorized by the migration record, not a new epoch"
         );
     }
+
+    // ---- AddNode: what a re-registration reports ---------------------------
+
+    /// A node re-registering with a role or parent that disagrees with the
+    /// recorded one keeps the recorded one — silently dropping the claim would
+    /// leave an operator staring at a node that reports one role and behaves as
+    /// another, so the disagreement is logged. Either half of the disagreement
+    /// is enough to report it.
+    // FM-CLUSTER-001
+    #[test]
+    fn a_disagreeing_re_registration_is_reported_on_either_half() {
+        let state = state_with_primaries(2);
+        state
+            .apply_local(ClusterCommand::AddNode {
+                node: NodeInfo::new_replica(3, test_addr(6382), test_addr(16382), 1),
+            })
+            .unwrap();
+
+        // Role differs, parent agrees (both `None`).
+        let demoted_claim = NodeInfo {
+            role: NodeRole::Replica,
+            ..NodeInfo::new_primary(1, test_addr(6380), test_addr(16380))
+        };
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: demoted_claim,
+                })
+                .unwrap()
+        });
+        let event = capture.only("re-registered with a different role");
+        assert_eq!(event.field("node_id"), Some("1"));
+        assert_eq!(event.field("recorded_role"), Some("master"));
+        assert_eq!(event.field("claimed_role"), Some("slave"));
+        assert_eq!(
+            state.get_node(1).unwrap().role,
+            NodeRole::Primary,
+            "the claim is reported, never applied"
+        );
+
+        // Role agrees, parent differs.
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: NodeInfo::new_replica(3, test_addr(6382), test_addr(16382), 2),
+                })
+                .unwrap()
+        });
+        assert_eq!(
+            capture
+                .only("re-registered with a different role")
+                .field("node_id"),
+            Some("3")
+        );
+        assert_eq!(
+            state.get_node(3).unwrap().primary_id,
+            Some(1),
+            "the recorded parent survives the claim too"
+        );
+
+        // Both agree: nothing to report.
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: NodeInfo::new_replica(3, test_addr(6382), test_addr(16382), 1),
+                })
+                .unwrap()
+        });
+        assert!(
+            capture
+                .matching("re-registered with a different role")
+                .is_empty(),
+            "an agreeing re-registration is not a disagreement: {:?}",
+            capture.events()
+        );
+    }
+
+    /// Seed a node carrying a specific binary version.
+    fn add_versioned(state: &ClusterState, id: crate::NodeId, version: &str) {
+        let port = 6379 + id as u16;
+        state
+            .apply_local(ClusterCommand::AddNode {
+                node: NodeInfo {
+                    version: version.to_string(),
+                    ..NodeInfo::new_primary(id, test_addr(port), test_addr(port + 10_000))
+                },
+            })
+            .expect("seeding a versioned node must succeed");
+    }
+
+    /// The mixed-version warning compares against the highest version any
+    /// *other* versioned node reports — the joining node's own recorded entry
+    /// and versionless peers are not part of that comparison, or the warning
+    /// would tell an operator to chase a mismatch against the node itself.
+    #[test]
+    fn mixed_version_warning_compares_against_the_other_versioned_nodes() {
+        let state = ClusterState::new();
+        add_versioned(&state, 1, "1.0.0");
+        add_versioned(&state, 2, ""); // pre-version-tracking peer
+        add_versioned(&state, 3, "9.9.9"); // the joiner's own recorded entry
+
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: NodeInfo {
+                        version: "2.0.0".to_string(),
+                        ..NodeInfo::new_primary(3, test_addr(6382), test_addr(16382))
+                    },
+                })
+                .unwrap()
+        });
+        let event = capture.only("mixed-version cluster");
+        assert_eq!(event.level, tracing::Level::WARN);
+        assert_eq!(event.field("node_id"), Some("3"));
+        assert_eq!(event.field("node_version"), Some("2.0.0"));
+        assert_eq!(
+            event.field("cluster_version"),
+            Some("1.0.0"),
+            "only other nodes that report a version count"
+        );
+
+        // A node that reports no version at all cannot be mismatched.
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: NodeInfo {
+                        version: String::new(),
+                        ..NodeInfo::new_primary(4, test_addr(6383), test_addr(16383))
+                    },
+                })
+                .unwrap()
+        });
+        assert!(
+            capture.matching("mixed-version cluster").is_empty(),
+            "a versionless node has nothing to compare: {:?}",
+            capture.events()
+        );
+
+        // Agreement is not a mismatch either. Node 3 now reports 2.0.0, so
+        // that is the version a joiner has to match.
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::AddNode {
+                    node: NodeInfo {
+                        version: "2.0.0".to_string(),
+                        ..NodeInfo::new_primary(5, test_addr(6384), test_addr(16384))
+                    },
+                })
+                .unwrap()
+        });
+        assert!(
+            capture.matching("mixed-version cluster").is_empty(),
+            "matching the cluster version is the normal case: {:?}",
+            capture.events()
+        );
+    }
+
+    // ---- Failover: transferred slots, migration pruning, re-parenting ------
+
+    /// A force failover reports how many slots it moved and cancels exactly the
+    /// migrations that name the removed node — on either leg. Cancelling an
+    /// unrelated migration would abort a slot move nobody asked to stop.
+    // FM-CLUSTER-036
+    #[test]
+    fn force_failover_reports_moved_slots_and_prunes_only_related_migrations() {
+        let state = state_with_primaries(4);
+        assign(&state, 1, 0, 2);
+        assign(&state, 2, 3, 5);
+        assign(&state, 3, 6, 8);
+        for (slot, source_node, target_node) in [(0u16, 1u64, 2u64), (3, 2, 1), (6, 3, 4)] {
+            state
+                .apply_local(ClusterCommand::BeginSlotMigration {
+                    slot,
+                    source_node,
+                    target_node,
+                })
+                .unwrap();
+        }
+
+        let (_, capture) = crate::test_tracing::capture_events(|| {
+            state
+                .apply_command(ClusterCommand::Failover {
+                    old_primary_id: 1,
+                    new_primary_id: 2,
+                    force: true,
+                })
+                .unwrap()
+        });
+
+        let event = capture.only("Applied atomic failover");
+        assert_eq!(
+            event.field("slots_transferred"),
+            Some("3"),
+            "the old primary owned slots 0..=2"
+        );
+        assert_eq!(event.field("old_primary"), Some("1"));
+        assert_eq!(event.field("new_primary"), Some("2"));
+        assert_eq!(state.get_slot_owner(0), Some(2));
+        assert_eq!(state.get_slot_owner(2), Some(2));
+
+        assert!(
+            state.get_slot_migration(0).is_none(),
+            "a migration out of the removed node cannot complete"
+        );
+        assert!(state.get_slot_migration(3).is_none(), "nor can one into it");
+        let survivor = state
+            .get_slot_migration(6)
+            .expect("a migration between two live nodes must survive the failover");
+        assert_eq!((survivor.source_node, survivor.target_node), (3, 4));
+    }
+
+    /// Failover re-parents the old primary's replicas onto the successor —
+    /// *only* those. Re-parenting a bystander would hand the successor replicas
+    /// that belong to another shard, and hand a primary a parent of its own.
+    // FM-CLUSTER-041
+    #[test]
+    fn failover_re_parents_only_the_old_primarys_replicas() {
+        let state = state_with_primaries(3);
+        state
+            .apply_local(ClusterCommand::AddNode {
+                node: NodeInfo::new_replica(4, test_addr(6383), test_addr(16383), 1),
+            })
+            .unwrap();
+        state
+            .apply_local(ClusterCommand::AddNode {
+                node: NodeInfo::new_replica(5, test_addr(6384), test_addr(16384), 3),
+            })
+            .unwrap();
+
+        state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 1,
+                new_primary_id: 2,
+                force: false,
+            })
+            .unwrap();
+
+        assert_eq!(
+            state.get_node(4).unwrap().primary_id,
+            Some(2),
+            "the old primary's replica follows the successor"
+        );
+        assert_eq!(
+            state.get_node(5).unwrap().primary_id,
+            Some(3),
+            "another shard's replica keeps its own primary"
+        );
+        assert_eq!(
+            state.get_node(3).unwrap().primary_id,
+            None,
+            "an uninvolved primary is nobody's replica"
+        );
+        assert_eq!(
+            state.get_node(2).unwrap().primary_id,
+            None,
+            "the successor is not re-parented onto itself"
+        );
+    }
 }

@@ -928,4 +928,230 @@ mod tests {
             "an attached store with nothing persisted must not synthesize a snapshot"
         );
     }
+
+    // ---- Log key codec, cache, and the RaftLogStorage surface --------------
+
+    /// Build a log entry at `index` under term 1.
+    fn entry_at(index: u64) -> Entry<TypeConfig> {
+        Entry {
+            log_id: LogId::new(openraft::CommittedLeaderId::new(1, 1), index),
+            payload: openraft::EntryPayload::Normal(crate::types::ClusterCommand::IncrementEpoch),
+        }
+    }
+
+    /// The key codec is a round trip, and the encoding is big-endian so RocksDB's
+    /// byte order *is* index order — every range scan in this file (log reads,
+    /// truncate, purge) depends on both halves.
+    // FM-CLUSTER-017
+    #[test]
+    fn log_keys_round_trip_and_sort_in_index_order() {
+        for index in [0u64, 1, 2, 42, 16_384, u64::MAX] {
+            let key = ClusterStorage::encode_log_key(index);
+            assert_eq!(
+                ClusterStorage::decode_log_key(&key),
+                index,
+                "decode must invert encode for index {index}"
+            );
+        }
+
+        assert!(
+            ClusterStorage::encode_log_key(2) < ClusterStorage::encode_log_key(10),
+            "byte order must match index order, or forward scans skip entries"
+        );
+    }
+
+    /// `save_committed(None)` has to *delete* the key, not leave the previous
+    /// value behind: a stale committed index outlives the log it names.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn save_committed_writes_then_deletes_the_persisted_key() {
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        let log_id = LogId::new(openraft::CommittedLeaderId::new(1, 1), 5);
+
+        storage.save_committed(Some(log_id)).await.unwrap();
+        assert_eq!(
+            storage
+                .get_meta::<LogId<NodeId>>(KEY_COMMITTED)
+                .unwrap()
+                .expect("the committed index must be on disk"),
+            log_id
+        );
+
+        storage.save_committed(None).await.unwrap();
+        assert_eq!(
+            storage.get_meta::<LogId<NodeId>>(KEY_COMMITTED).unwrap(),
+            None,
+            "clearing the committed index must remove the key, not keep the old one"
+        );
+    }
+
+    /// The log cache holds up to `cache_size` entries and evicts the *oldest*
+    /// index once it is over that bound — never at it, or the cache would run
+    /// one entry short of its configured size forever.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn cache_evicts_the_oldest_only_once_over_the_bound() {
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        storage.cache_size = 2;
+
+        storage.cache_entry(entry_at(1));
+        storage.cache_entry(entry_at(2));
+        assert_eq!(
+            storage.log_cache.read().len(),
+            2,
+            "a full cache is not over"
+        );
+        assert!(
+            storage.get_cached(1).is_some(),
+            "entry 1 must survive while the cache is merely full"
+        );
+        assert_eq!(storage.get_cached(2).unwrap().log_id.index, 2);
+
+        storage.cache_entry(entry_at(3));
+        assert_eq!(storage.log_cache.read().len(), 2);
+        assert!(
+            storage.get_cached(1).is_none(),
+            "the oldest index is the one evicted"
+        );
+        assert!(storage.get_cached(2).is_some());
+        assert!(storage.get_cached(3).is_some());
+        assert!(storage.get_cached(4).is_none(), "never cached, never found");
+    }
+
+    /// Cache invalidation is bounded on *both* ends: `[start, end]` inclusive,
+    /// with `None` meaning "to the tail". Widening it drops live entries;
+    /// narrowing it leaves stale ones that a later read would serve in place of
+    /// what is on disk.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn cache_invalidation_respects_both_range_ends() {
+        let dir = tempdir().unwrap();
+        let storage = ClusterStorage::open(dir.path()).unwrap();
+        for index in 1..=5 {
+            storage.cache_entry(entry_at(index));
+        }
+
+        storage.invalidate_cache_range(2, Some(4));
+        assert!(storage.get_cached(1).is_some(), "below start, kept");
+        assert!(storage.get_cached(2).is_none(), "start is inclusive");
+        assert!(storage.get_cached(3).is_none());
+        assert!(storage.get_cached(4).is_none(), "end is inclusive");
+        assert!(storage.get_cached(5).is_some(), "above end, kept");
+
+        storage.invalidate_cache_range(5, None);
+        assert!(
+            storage.get_cached(5).is_none(),
+            "an open end reaches the tail"
+        );
+        assert!(storage.get_cached(1).is_some(), "still below start, kept");
+    }
+
+    /// An excluded start bound means "after this index" — off by one here and a
+    /// follower re-reads an entry the leader already acknowledged.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn excluded_start_bound_skips_that_index() {
+        use openraft::storage::RaftLogStorageExt;
+        use std::ops::Bound;
+
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        storage
+            .blocking_append((1..=4).map(entry_at).collect::<Vec<_>>())
+            .await
+            .unwrap();
+
+        let indexes = |entries: Vec<Entry<TypeConfig>>| {
+            entries.iter().map(|e| e.log_id.index).collect::<Vec<_>>()
+        };
+
+        let excluded = storage
+            .try_get_log_entries((Bound::Excluded(2), Bound::Included(4)))
+            .await
+            .unwrap();
+        assert_eq!(
+            indexes(excluded),
+            vec![3, 4],
+            "an excluded start begins at start + 1"
+        );
+
+        let included = storage.try_get_log_entries(2..=4).await.unwrap();
+        assert_eq!(indexes(included), vec![2, 3, 4]);
+    }
+
+    /// Appended entries reach RocksDB and `get_log_state` reports the real tail:
+    /// a state that always looks empty makes openraft replay the whole log.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn append_persists_entries_and_log_state_reports_the_tail() {
+        use openraft::storage::RaftLogStorageExt;
+
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        storage
+            .blocking_append((1..=3).map(entry_at).collect::<Vec<_>>())
+            .await
+            .unwrap();
+
+        let state = storage.get_log_state().await.unwrap();
+        assert_eq!(
+            state.last_log_id.map(|id| id.index),
+            Some(3),
+            "the log state must name the last appended entry"
+        );
+        assert!(state.last_purged_log_id.is_none());
+
+        // Reopen: the entries are on disk, not merely in the cache.
+        drop(storage);
+        let mut reopened = ClusterStorage::open(dir.path()).unwrap();
+        let recovered = reopened.try_get_log_entries(1..=3).await.unwrap();
+        assert_eq!(recovered.len(), 3);
+        assert_eq!(recovered[2].log_id.index, 3);
+    }
+
+    /// Truncation drops everything *after* the kept index — in RocksDB and in
+    /// the cache alike, and starting one past the kept index in both. A cache
+    /// that keeps a truncated entry would serve a conflicting entry the leader
+    /// has already overwritten.
+    // FM-CLUSTER-017
+    #[tokio::test]
+    async fn truncate_drops_only_the_tail_after_the_kept_index() {
+        use openraft::storage::RaftLogStorageExt;
+
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        storage
+            .blocking_append((1..=5).map(entry_at).collect::<Vec<_>>())
+            .await
+            .unwrap();
+        assert!(
+            storage.get_cached(3).is_some(),
+            "append populates the cache"
+        );
+
+        storage
+            .truncate(LogId::new(openraft::CommittedLeaderId::new(1, 1), 3))
+            .await
+            .unwrap();
+
+        // Inspect the cache *before* any read, which would refill it from disk.
+        assert!(
+            storage.get_cached(3).is_some(),
+            "invalidation starts one past the kept index"
+        );
+        assert!(
+            storage.get_cached(4).is_none(),
+            "the truncated tail must leave the cache too"
+        );
+        assert!(storage.get_cached(5).is_none());
+
+        let remaining = storage.try_get_log_entries(..).await.unwrap();
+        assert_eq!(
+            remaining.iter().map(|e| e.log_id.index).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "the kept index and everything below it survive"
+        );
+    }
 }
