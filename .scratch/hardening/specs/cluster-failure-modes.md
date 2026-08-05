@@ -435,23 +435,25 @@ phase inherits a specced surface.
 | Forced by | `watch_on_a_foreign_slot_is_refused_with_moved`, `watch_on_an_open_migration_is_accepted`, `watch_slot_locally_served_accepts_an_open_migration`, `watch_slot_locally_served_rejects_a_slot_owned_elsewhere` |
 | Bug refs | — |
 
-## FM-CLUSTER-030 — KNOWN BUG: a bare script is executed locally instead of being redirected
+## FM-CLUSTER-030 — A bare script is redirected, never executed on a non-owner
 
 | Field | Value |
 |---|---|
-| Trigger | A bare `EVAL` / `EVALSHA` / `FCALL` (outside `MULTI`) naming a key owned by another node, sent to the non-owner. |
-| Observable | **Today**: the script runs to completion on the non-owner and its return value is sent back — the confirming run got `Integer(1)` from a script whose body was `redis.call('SET', KEYS[1], …); return 1`, while the control `GET` on the same key and connection was correctly `MOVED`. So the script's write is acked on a node that does not own the slot. **Required**: `MOVED <slot> <owner>`, identical to the plain command on the same key. |
-| NOT observable | (once fixed) any script side effect on a non-owner. Note this is strictly wider than the finalization window of rework 02/03: it is not a race, it is unconditional for every bare script on a non-owner. |
-| Invariant | (intended, currently unenforced) `is_cluster_exempt` deliberately refuses to exempt `ConnectionLevelOp::Scripting` (`guards.rs:696-708`), which states the intent that scripts be slot-routed. But `PRE_DISPATCH_ORDER` runs `ConnectionCommand` (index 8) before `ClusterSlotValidation` (index 13) and the connection-level executor short-circuits dispatch, and no `MUST_PRECEDE` pair encodes the required ordering — so the intent is documented and not enforced. |
-| Outcome variant | (required) `MOVED` |
-| Forced by | MISSING ([gap: 11-bare-eval-may-skip-cluster-slot-validation.md](../../replication-cluster-rework/issues/open/11-bare-eval-may-skip-cluster-slot-validation.md)) |
-| Bug refs | `.scratch/replication-cluster-rework/issues/open/11-bare-eval-may-skip-cluster-slot-validation.md` (confirmed); rework issues 02 and 03 (the narrower finalization-window form) |
+| Trigger | A bare `EVAL` / `EVAL_RO` / `EVALSHA` / `EVALSHA_RO` / `FCALL` / `FCALL_RO` (outside `MULTI`) naming a key owned by another node, sent to the non-owner. |
+| Observable | `MOVED <slot> <owner>`, identical to the plain command on the same key — for every member of the family, and before the script body or function ever runs. A script that declares `numkeys 0` (and the keyless `SCRIPT LOAD`) still runs on any node. |
+| NOT observable | Any script side effect on a non-owner. Before the fix the non-owner answered `Integer(1)` to a script whose body was `redis.call('SET', KEYS[1], …); return 1` — an acked write on a node that does not own the slot — while the control `GET` on the same key and connection was correctly `MOVED`. That is strictly wider than the finalization window of rework 02/03: not a race, but unconditional for every bare script on a non-owner. Nor the inverse over-correction: a keyless script being assigned a slot and redirected. |
+| Invariant | `is_cluster_exempt` refuses to exempt `ConnectionLevelOp::Scripting` (`guards.rs:696-713`), and `PRE_DISPATCH_ORDER` runs `ClusterSlotValidation` *before* `ConnectionCommand`, the stage that dispatches the scripting family. The ordering is pinned structurally by the `MUST_PRECEDE` pair `(ClusterSlotValidation, ConnectionCommand)` (`dispatch.rs`), validated by `load_bearing_ordering_invariants` — so a reorder that compiles but re-opens the hole fails the unit test. The verdict itself has one source: `validate_cluster_slots` → `coordinator.route`, the same seam every keyed command uses. |
+| Outcome variant | `RouteDecision::Moved` → `RouteOutcome::Reply(MOVED)` |
+| Forced by | `test_bare_eval_on_non_owner_returns_moved`, `test_bare_script_family_on_non_owner_returns_moved`, `test_keyless_script_is_never_redirected`, `load_bearing_ordering_invariants` |
+| Bug refs | `.scratch/replication-cluster-rework/issues/done/11-bare-eval-may-skip-cluster-slot-validation.md` (fixed); rework issues 02 and 03 (the narrower finalization-window form) |
 
-The forcing test exists — `test_bare_eval_on_non_owner_returns_moved` in
-`frogdb-server/crates/server/tests/cluster_slots.rs` — but is `#[ignore]`d until the ordering is
-fixed, and `cargo nextest list` omits ignored tests, so the lint cannot resolve it as a witness.
-Re-point this row's `Forced by` at that test as part of the fix. Do not fix the dispatch ordering
-under this row: it belongs to the bug-closing step of the phase.
+Residual, deliberately out of scope here: a script's *undeclared* runtime writes (`redis.call` on a
+key the invocation never named) are still unvalidated — Redis re-checks on every call via
+`scriptVerifyClusterState`, and that is rework issue 03. The multi-key `MigratingTryAgain` probe
+also still sits after `ConnectionCommand`, so a two-key script against a half-migrated slot is
+served locally rather than answered `TRYAGAIN`; hoisting that stage as well would newly subject
+`MIGRATE` (server-wide, `KeySpec::Dynamic`) to the probe, so it is filed with issue 03 rather than
+folded in here.
 
 ---
 

@@ -911,7 +911,7 @@ mod tests {
         ]
     };
 
-    // FM-TXN-006
+    // FM-TXN-006, FM-CLUSTER-030
     /// Validates [`PRE_DISPATCH_ORDER`] against every declared constraint — the
     /// endpoint invariants plus all [`MUST_PRECEDE`] pairs. Would catch a
     /// reorder that compiles but breaks a correctness invariant.

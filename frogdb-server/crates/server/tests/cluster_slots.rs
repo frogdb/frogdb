@@ -1666,34 +1666,30 @@ async fn test_brpoplpush_cross_slot_returns_crossslot_immediately() {
 }
 
 // ---------------------------------------------------------------------------
-// Bare-script slot validation (rework issue 11).
+// Bare-script slot validation (FM-CLUSTER-030, rework issue 11).
 //
-// `PRE_DISPATCH_ORDER` runs `ConnectionCommand` before `ClusterSlotValidation`,
-// and EVAL/EVALSHA/FCALL are
-// `ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)`, so a bare
-// script is consumed by the connection-level executor and never reaches the
-// slot-validation stage. `is_cluster_exempt` (guards.rs) deliberately refuses to
-// exempt Scripting, which says the *intent* is that scripts be slot-routed --
-// but no `MUST_PRECEDE` pair encodes the ordering, so the intent is unenforced.
+// EVAL/EVALSHA/FCALL are
+// `ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Scripting)` and are
+// dispatched at the `ConnectionCommand` stage, which used to run *before*
+// `ClusterSlotValidation` — so a bare script naming a foreign key executed to
+// completion on the non-owner and acked its writes there. `is_cluster_exempt`
+// (guards.rs) deliberately refuses to exempt Scripting, stating the intent that
+// scripts be slot-routed; the fix hoisted `ClusterSlotValidation` ahead of
+// `ConnectionCommand` and pinned the ordering with the `MUST_PRECEDE` pair
+// `(ClusterSlotValidation, ConnectionCommand)`.
 //
-// This is the forcing test the issue asked for.
+// The three tests below cover the whole family: `EVAL` (the original forcing
+// test), the remaining five script entry points, and the keyless case that must
+// stay legal on every node.
 // ---------------------------------------------------------------------------
 
+// FM-CLUSTER-030
 /// A bare `EVAL` naming a key owned by another node must be answered with
 /// `-MOVED`, exactly as the equivalent `GET` on the same key is.
 ///
-/// CONFIRMED FAILING — see
-/// `.scratch/replication-cluster-rework/issues/open/11-bare-eval-may-skip-cluster-slot-validation.md`.
-/// The non-owner answers `Integer(1)`: the script ran locally and its `SET`
-/// landed on a node that does not own the slot. Ignored until the dispatch
-/// ordering is fixed (a later step of the cluster hardening phase); un-`ignore`
-/// it as part of that fix.
-///
-/// Specced as the known-bug row FM-CLUSTER-030. That row cites the issue as its
-/// gap rather than naming this test, because `cargo nextest list` omits
-/// `#[ignore]`d tests and the failure-mode lint resolves every `Forced by` name
-/// against that listing. Re-point the row at this test when the `#[ignore]` goes.
-#[ignore = "rework issue 11: bare EVAL skips cluster slot validation (confirmed hole)"]
+/// This is the forcing test rework issue 11 asked for: before the fix the
+/// non-owner answered `Integer(1)` — the script ran locally and its `SET`
+/// landed on a node that does not own the slot.
 #[tokio::test]
 async fn test_bare_eval_on_non_owner_returns_moved() {
     let mut harness = ClusterTestHarness::new();
@@ -1745,6 +1741,132 @@ async fn test_bare_eval_on_non_owner_returns_moved() {
         "bare EVAL naming a key owned by another node must be MOVED, got: {:?}",
         eval_resp
     );
+
+    harness.shutdown_all().await;
+}
+
+/// The payload of a `Bulk` reply, or `None` for anything else.
+fn bulk_string(resp: &frogdb_protocol::Response) -> Option<String> {
+    match resp {
+        frogdb_protocol::Response::Bulk(Some(bytes)) => {
+            Some(String::from_utf8_lossy(bytes).into_owned())
+        }
+        _ => None,
+    }
+}
+
+// FM-CLUSTER-030
+/// The rest of the scripting family takes the identical `-MOVED`: `EVAL_RO`,
+/// `EVALSHA`, `EVALSHA_RO`, `FCALL` and `FCALL_RO` all declare their keys
+/// through `numkeys` and all dispatch at the same `ConnectionCommand` stage, so
+/// the fix has to cover the family and not just `EVAL`.
+///
+/// The script and the function library are loaded *on the non-owner itself*
+/// (`SCRIPT LOAD` / `FUNCTION LOAD` are keyless and legal on every node), so a
+/// `NOSCRIPT` or "function not found" error cannot masquerade as the redirect
+/// this test is looking for.
+#[tokio::test]
+async fn test_bare_script_family_on_non_owner_returns_moved() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let slot = 4483u16;
+    let key = key_for_slot(slot);
+    let (owner_id, non_owner_id) = find_owner_of_slot(&harness, slot)
+        .await
+        .expect("expected some node to own the probe slot");
+    assert_ne!(owner_id, non_owner_id, "need a distinct non-owner");
+
+    let non_owner = harness.node(non_owner_id).unwrap();
+
+    // Control, as in the EVAL test above: the plain command is redirected.
+    let get_resp = non_owner.send("GET", &[&key]).await;
+    assert!(
+        is_moved_redirect(&get_resp).is_some(),
+        "control: GET on the non-owner should be MOVED, got: {:?}",
+        get_resp
+    );
+
+    let script = "return redis.call('GET', KEYS[1])";
+    let script_load = non_owner.send("SCRIPT", &["LOAD", script]).await;
+    let sha = bulk_string(&script_load)
+        .unwrap_or_else(|| panic!("SCRIPT LOAD should return a sha1, got: {script_load:?}"));
+
+    let library = "#!lua name=slotlib\nredis.register_function('slotfn', function(keys, args) return redis.call('GET', keys[1]) end)\n";
+    let fn_load = non_owner.send("FUNCTION", &["LOAD", library]).await;
+    assert!(
+        !is_error(&fn_load),
+        "FUNCTION LOAD is keyless and must succeed on any node, got: {:?}",
+        fn_load
+    );
+
+    let cases: [(&str, &str); 5] = [
+        ("EVAL_RO", script),
+        ("EVALSHA", &sha),
+        ("EVALSHA_RO", &sha),
+        ("FCALL", "slotfn"),
+        ("FCALL_RO", "slotfn"),
+    ];
+    for (command, first_arg) in cases {
+        let resp = non_owner.send(command, &[first_arg, "1", &key]).await;
+        assert!(
+            is_moved_redirect(&resp).is_some(),
+            "bare {command} naming a key owned by another node must be MOVED, got: {:?}",
+            resp
+        );
+    }
+
+    harness.shutdown_all().await;
+}
+
+// FM-CLUSTER-030
+/// `numkeys 0` is the other half of the contract: a script that declares no
+/// keys is node-scoped, hashes to no slot, and stays legal on *every* node.
+/// Hoisting slot validation ahead of connection-level dispatch must not
+/// manufacture a slot for it — an over-eager fix that redirected keyless
+/// scripts would break `EVAL "return 1" 0` everywhere, so this pins the
+/// negative.
+#[tokio::test]
+async fn test_keyless_script_is_never_redirected() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    for node_id in harness.node_ids() {
+        let node = harness.node(node_id).unwrap();
+
+        let eval = node.send("EVAL", &["return 7", "0"]).await;
+        assert_eq!(
+            eval,
+            frogdb_protocol::Response::Integer(7),
+            "keyless EVAL must run locally on node {node_id}, got: {:?}",
+            eval
+        );
+
+        // `SCRIPT LOAD` is the other keyless member of the family (KeySpec::None
+        // rather than an empty `numkeys`), and must likewise never redirect.
+        let loaded = node.send("SCRIPT", &["LOAD", "return 7"]).await;
+        assert!(
+            bulk_string(&loaded).is_some(),
+            "keyless SCRIPT LOAD must run locally on node {node_id}, got: {:?}",
+            loaded
+        );
+    }
 
     harness.shutdown_all().await;
 }
