@@ -3,6 +3,8 @@
 pub mod acl_helpers;
 #[cfg(feature = "turmoil")]
 pub mod chaos_configs;
+#[cfg(not(feature = "turmoil"))]
+pub mod cluster_support;
 #[cfg(feature = "turmoil")]
 pub mod invariants;
 #[cfg(feature = "turmoil")]

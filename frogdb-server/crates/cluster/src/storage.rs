@@ -666,7 +666,7 @@ mod tests {
 
     /// Config epoch round-trips through the persistence layer alone (issue 16).
     ///
-    /// `test_cluster_epoch_persists` (integration_cluster.rs) restarts a whole
+    /// `test_cluster_epoch_persists` (tests/cluster_topology.rs) restarts a whole
     /// harness node, which also triggers a fresh Raft election. Historically
     /// `cluster_current_epoch` was reported as `max(config_epoch, raft_term)`,
     /// so the bumped term could mask a `config_epoch` that had been lost; the

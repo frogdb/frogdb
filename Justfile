@@ -186,7 +186,7 @@ core-test-e2e area:
       txn)         filter="test(integration_transactions::)" ;;
       persistence) filter="test(integration_persistence::)" ;;
       replication) filter="test(integration_replication::)" ;;
-      cluster)     filter="test(integration_cluster::)" ;;
+      cluster)     filter="binary(/^cluster_/)" ;;
       *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
     esac
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-server -E "$filter"

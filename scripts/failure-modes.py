@@ -45,7 +45,8 @@ SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
 
 # Crates whose tests a failure-mode row may name. `cargo nextest list` over
 # these compiles their test binaries: seconds warm for frogdb-txn/frogdb-vll/
-# frogdb-recovery, ~15-25s for frogdb-server (one big `main` binary).
+# frogdb-recovery, ~15-25s for frogdb-server (the big `main` binary plus the
+# per-concern `cluster_*` binaries).
 # frogdb-persistence, frogdb-recovery and frogdb-core carry the storage-side
 # rows (see persistence-failure-modes.md); frogdb-replication carries the
 # full-sync wire rows (see replication-failure-modes.md).
