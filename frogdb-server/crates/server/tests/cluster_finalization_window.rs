@@ -4,8 +4,8 @@
 //! `CLUSTER SETSLOT <slot> NODE <target>` finalizes a migration by proposing
 //! `ClusterCommand::CompleteSlotMigration` to Raft
 //! (`cluster/src/writer.rs` → `cluster/src/commands.rs`). The entry commits on
-//! the Raft leader, and every other node applies it when the leader's next
-//! `AppendEntries` carries the new commit index. Between those two instants the
+//! the Raft leader, and every other node applies it once an `AppendEntries`
+//! carries the new commit index to it. Between those two instants the
 //! *losing* (source) node's published `ClusterSnapshot` still names itself the
 //! slot's owner, so `route_with_snapshot` answers `LocalServe` /
 //! `LocalServeMigrating` and the node validates and serves — and acknowledges —
@@ -16,8 +16,13 @@
 //! explicitly:
 //!
 //! ```text
-//! just test frogdb-server finalization_window -- --ignored --nocapture
+//! cargo test -p frogdb-server --test cluster_finalization_window -- \
+//!     --ignored --nocapture --test-threads=1
 //! ```
+//!
+//! The 2026-08-05 results and the build-vs-accept recommendation they support
+//! live in `.scratch/replication-cluster-rework/`
+//! `finalization-window-measurement-2026-08-05.md`.
 //!
 //! Everything here is test-only. No production code is instrumented: the
 //! per-node `Arc<ClusterState>` the harness already exposes
