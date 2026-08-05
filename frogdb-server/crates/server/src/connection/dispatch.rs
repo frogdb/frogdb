@@ -52,6 +52,9 @@ pub(crate) enum DispatchStage {
     CommandLookup,
     /// CLIENT PAUSE wait, after queuing.
     PauseGate,
+    /// MOVED/ASK/CROSSSLOT (consumes take_asking). Runs *before* every stage
+    /// that can terminate a keyed command, connection-level scripting included.
+    ClusterSlotValidation,
     /// CONFIG/CLIENT/INFO/ASKING/… registry union (capability from the spec).
     ConnectionCommand,
     /// The replica handshake: `REPLCONF` identity announcement, then the PSYNC
@@ -63,8 +66,6 @@ pub(crate) enum DispatchStage {
     ServerWide,
     /// CLUSTER GET/COUNTKEYSINSLOT slot routing.
     ClusterSlotSubcommand,
-    /// MOVED/ASK/CROSSSLOT (consumes take_asking).
-    ClusterSlotValidation,
     /// TRYAGAIN during multi-key slot migration.
     MigratingTryAgain,
     /// Terminal: bookkeeping + route_and_execute + post-execution tail.
@@ -125,12 +126,12 @@ pub(crate) const PRE_DISPATCH_ORDER: [DispatchStage; 16] = [
     DispatchStage::TransactionQueue,
     DispatchStage::CommandLookup,
     DispatchStage::PauseGate,
+    DispatchStage::ClusterSlotValidation,
     DispatchStage::ConnectionCommand,
     DispatchStage::ReplicationHandshake,
     DispatchStage::WaitIntercept,
     DispatchStage::ServerWide,
     DispatchStage::ClusterSlotSubcommand,
-    DispatchStage::ClusterSlotValidation,
     DispatchStage::MigratingTryAgain,
     DispatchStage::Execute,
 ];
@@ -521,6 +522,24 @@ impl ConnectionHandler {
                 StageOutcome::Continue
             }
 
+            // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK
+            // errors). Sits ahead of *every* stage that can terminate a keyed
+            // command — `ConnectionCommand` included — because the scripting
+            // family (`EVAL`/`EVALSHA`/`FCALL`/…) is dispatched there and
+            // declares its keys through `numkeys`. Running after it let a bare
+            // script execute to completion on a node that does not own its
+            // slot, acking a write the real owner never saw (FM-CLUSTER-030).
+            // Everything between here and the old position is either
+            // cluster-exempt by strategy (`ServerWide`, the non-scripting
+            // connection families) or keyless (`REPLCONF`/`PSYNC`/`WAIT`), so
+            // the hoist changes nothing but the script path.
+            DispatchStage::ClusterSlotValidation => {
+                match self.pre_dispatch_view().validate_cluster_slots(cmd) {
+                    Some(cluster_error) => StageOutcome::ShortCircuit(vec![cluster_error]),
+                    None => StageOutcome::Continue,
+                }
+            }
+
             // Registry-union dispatch: a command registered as
             // `CommandImpl::Connection` (CONFIG, BGSAVE/LASTSAVE, CLIENT, DEBUG,
             // MONITOR, ACL, INFO, HOTKEYS, FT.CURSOR, SLOWLOG, MEMORY, LATENCY,
@@ -655,14 +674,6 @@ impl ConnectionHandler {
                     }
                 }
                 StageOutcome::Continue
-            }
-
-            // Validate cluster slot ownership (returns CROSSSLOT/MOVED/ASK errors).
-            DispatchStage::ClusterSlotValidation => {
-                match self.pre_dispatch_view().validate_cluster_slots(cmd) {
-                    Some(cluster_error) => StageOutcome::ShortCircuit(vec![cluster_error]),
-                    None => StageOutcome::Continue,
-                }
             }
 
             // Check for TRYAGAIN during slot migration for multi-key commands.
@@ -812,12 +823,12 @@ mod tests {
             TransactionQueue,
             CommandLookup,
             PauseGate,
+            ClusterSlotValidation,
             ConnectionCommand,
             ReplicationHandshake,
             WaitIntercept,
             ServerWide,
             ClusterSlotSubcommand,
-            ClusterSlotValidation,
             MigratingTryAgain,
             Execute,
         ] {
@@ -880,6 +891,19 @@ mod tests {
             // stage — it is a batch decision, not a per-command pre-dispatch
             // concern, and adding a 17th stage for it would be wrong.
             (TransactionQueue, ClusterSlotValidation),
+            // Unknown-command/arity errors outrank a redirect: Redis reports an
+            // unknown command before it would report `MOVED`.
+            (CommandLookup, ClusterSlotValidation),
+            // FM-CLUSTER-030. Slot routing fronts *every* stage that can
+            // terminate a keyed command, not just `Execute`. The scripting
+            // family (`EVAL`/`EVALSHA`/`FCALL`/…) is
+            // `ConnectionLevel(Scripting)` and declares its keys through
+            // `numkeys`, so a bare script short-circuiting at
+            // `ConnectionCommand` ahead of this stage ran to completion on a
+            // non-owner and acked its writes there — the hole rework issue 11
+            // confirmed. `is_cluster_exempt` refusing to exempt `Scripting`
+            // states the intent; this pair is what enforces it.
+            (ClusterSlotValidation, ConnectionCommand),
             // Slot routing (MOVED/ASK/CROSSSLOT) precedes the multi-key
             // TRYAGAIN check, which precedes the terminal execute stage.
             (ClusterSlotValidation, MigratingTryAgain),
@@ -933,12 +957,12 @@ mod tests {
             (TransactionQueue, true),
             (CommandLookup, true),
             (PauseGate, false),
+            (ClusterSlotValidation, true),
             (ConnectionCommand, false),
             (ReplicationHandshake, false),
             (WaitIntercept, false),
             (ServerWide, false),
             (ClusterSlotSubcommand, false),
-            (ClusterSlotValidation, true),
             (MigratingTryAgain, true),
             (Execute, false),
         ];

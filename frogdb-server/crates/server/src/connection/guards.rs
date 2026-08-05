@@ -687,7 +687,12 @@ impl PreDispatchView<'_> {
     ///   declares its keys through `numkeys`, surfaced by the registry's
     ///   `dynamic_keys` hook. A script with declared `KEYS` is slot-routed;
     ///   `SCRIPT LOAD` and friends declare none and fall out on the empty-key
-    ///   check instead.
+    ///   check instead. Scripts are *dispatched* at the `ConnectionCommand`
+    ///   stage, so this refusal only bites because `ClusterSlotValidation`
+    ///   runs ahead of that stage — pinned structurally by the `MUST_PRECEDE`
+    ///   pair `(ClusterSlotValidation, ConnectionCommand)` (FM-CLUSTER-030;
+    ///   before that pair existed a bare `EVAL` ran to completion on a
+    ///   non-owner and acked its writes there).
     ///
     /// What remains genuinely node-scoped: server-wide fan-outs (`SCAN`,
     /// `KEYS`, `DBSIZE`, `FLUSHDB`, `FT.*`, `MIGRATE`, …), the non-scripting
