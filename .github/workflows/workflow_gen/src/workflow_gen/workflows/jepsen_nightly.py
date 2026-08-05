@@ -11,11 +11,20 @@ slot-migration + raft-chaos + key-routing checkers now assert data, orphaned
 cluster/failover workloads wired) had landed, so the signal is real rather than
 false-green.
 
-Design, mirroring `concurrency_nightly.py` (the repo's other long-running on-demand
+Design, mirroring `concurrency_nightly.py` (the repo's other long-running nightly
 tier):
 
-* Single GitHub-hosted job, `workflow_dispatch` only — the nightly and weekly crons
-  were removed; a core run is ~1.5-2h of runner time and nothing gates on it.
+* Single GitHub-hosted job, nightly cron plus `workflow_dispatch`, gated by the shared
+  `change_gate_job` (see `helpers.py`) so a night with no new commits since the last
+  successful run skips the ~1.5-2h core suite instead of re-running it for nothing.
+* Only the daily core-suite cadence is scheduled. Pre-campaign this workflow also had a
+  weekly cron (Sunday) that added the extended/fault suites via `github.event.schedule`
+  matching; that second cadence does not compose cleanly with the change-gate (the gate
+  compares against "the last successful run of this workflow" regardless of which suite
+  tier it ran, so a weekly `full` run landing on a commit the nightly `core` run already
+  covered would be skipped even though `full` itself had never run on that commit). The
+  `full` tier stays available on demand via the `suites: full` dispatch input instead of
+  being resurrected as a second cron.
 * Build the debug Docker image **once** via `just docker-build-debug`
   (Dockerfile.builder, in-Docker Rust build — needs no host Rust/zig toolchain).
   We deliberately do NOT go through `just jepsen-suite`, which forces
@@ -36,13 +45,14 @@ from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.helpers import (
+    change_gate_job,
     checkout_step,
     mise_setup_step,
     omap,
     script,
     upload_artifact_step,
 )
-from workflow_gen.schema import Job, Step, Trigger, Workflow
+from workflow_gen.schema import Job, ScheduleTrigger, Step, Trigger, Workflow
 
 # Only the tools the harness needs on the host: `just` (recipes), `uv` (run.py is a
 # uv script), and `java` (Leiningen's runtime). No Rust toolchain — the server is
@@ -53,6 +63,13 @@ MISE_TOOLS = "just uv java"
 # production and the rest of CI). The whole run is one sequential build-then-suite
 # loop, so extra cores buy little.
 RUNS_ON = "ubuntu-latest"
+
+WORKFLOW_FILE = "jepsen-nightly.yml"
+
+# Off-the-hour + overnight-US, and distinct from the other nightly crons (concurrency
+# 14 3, coverage 50 4, fuzz 41 2). See the module docstring for why the pre-campaign
+# weekly (Sunday) full-suite cron is not restored alongside this one.
+NIGHTLY_CRON = "37 5 * * *"
 
 # Core suites: cover every `all`-suite test (single ∪ crash ∪ replication ∪ raft
 # == the `all` suite) including the issue's required `raft` + `replication`.
@@ -208,17 +225,21 @@ def _summary_step() -> Step:
 def jepsen_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Jepsen Nightly",
-        # Manual dispatch only: the nightly and weekly crons are deliberately off.
-        # A core run is ~1.5-2h of runner time; dispatch it when the distributed
-        # layer actually changes.
-        on=Trigger(workflow_dispatch_inputs=CommentedMap(suites=_suites_input())),
+        on=Trigger(
+            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
+            workflow_dispatch_inputs=CommentedMap(suites=_suites_input()),
+        ),
     )
+
+    gate = w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
 
     w.job(
         "jepsen-nightly",
         Job(
             name="Nightly Jepsen Distributed-Correctness Suites",
             runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
             # A core run (single+crash+replication+raft) takes ~1.5-2h wall:
             # the in-Docker debug build (~20-30m on this box) + the sum of suite
             # time-limits (run.py `TESTS`) plus per-topology bring-up and checker

@@ -7,9 +7,47 @@
 
 name: Regression Nightly
 'on':
+  schedule:
+  - cron: '0 3 * * *'
   workflow_dispatch: {}
 jobs:
+  gate:
+    name: Change Gate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+    steps:
+    - id: gate
+      name: Check for new commits since last successful run
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT_NAME: ${{ github.event_name }}
+        CURRENT_SHA: ${{ github.sha }}
+        WORKFLOW_FILE: regression-nightly.yml
+      run: |
+        set -uo pipefail
+        if [ "${EVENT_NAME}" != "schedule" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Not a scheduled run (event: ${EVENT_NAME}); proceeding."
+          exit 0
+        fi
+        last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \
+          --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+        if [ -z "${last_sha}" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "No previous successful run found; proceeding."
+        elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "No new commits since last successful run (${last_sha}); skipping."
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+        fi
   regression-check:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     name: Regression Suite Compile Check
     runs-on: ubuntu-latest
     steps:
@@ -33,6 +71,8 @@ jobs:
     - name: Type-check frozen regression suite
       run: just regression-check
   regression-run:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     name: Run Frozen Redis Compat Suite
     runs-on: ubuntu-latest
     timeout-minutes: 360

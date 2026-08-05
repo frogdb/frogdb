@@ -23,7 +23,7 @@ from workflow_gen.constants import (
     SETUP_QEMU,
     UPLOAD_ARTIFACT,
 )
-from workflow_gen.schema import Step
+from workflow_gen.schema import Job, Permissions, Step
 
 DOCKERHUB_IMAGE = "frogdb/frogdb"
 
@@ -270,6 +270,71 @@ def upload_artifact_step(
 
 def run_step(*, name: str, run: str) -> Step:
     return Step(name=name, run=run)
+
+
+# --- Credit-thrift change gate for scheduled (nightly) workflows ---
+
+
+def change_gate_job(*, workflow_file: str) -> Job:
+    """Build a lightweight leading job that skips a scheduled run with no new commits.
+
+    Nightly workflows burn CI minutes every night regardless of whether anything
+    changed. This job compares the current commit against the head SHA of this same
+    workflow's last successful run (via `gh run list`) and exposes a `skip` output;
+    downstream jobs add `needs: gate` plus `if: needs.gate.outputs.skip != 'true'` to
+    honor it.
+
+    The check only ever applies to `schedule`-triggered runs — `workflow_dispatch`
+    (someone explicitly asked for a run) and any other trigger always proceed, so a
+    manual dispatch is never silently absorbed by the gate. The job itself always
+    runs (rather than being conditioned on `github.event_name == 'schedule'` at the
+    job level) so downstream `needs: gate` never has to reason about a *skipped*
+    dependency — GitHub Actions' default "skip if a needed job was skipped" behavior
+    is exactly the footgun this sidesteps; see `changes` in `workflows/test.py` for
+    the same always-runs-leading-job shape.
+
+    No checkout is needed — `gh run list` talks to the Actions API directly, scoped
+    to just this job via a minimal `actions: read` token (the job has no other
+    permission, including `contents`).
+    """
+    return Job(
+        name="Change Gate",
+        runs_on="ubuntu-latest",
+        permissions=Permissions(actions="read"),
+        outputs=omap(skip="${{ steps.gate.outputs.skip }}"),
+        steps=[
+            Step(
+                id="gate",
+                name="Check for new commits since last successful run",
+                env=omap(
+                    GH_TOKEN="${{ github.token }}",
+                    EVENT_NAME="${{ github.event_name }}",
+                    CURRENT_SHA="${{ github.sha }}",
+                    WORKFLOW_FILE=workflow_file,
+                ),
+                run=script("""\
+                    set -uo pipefail
+                    if [ "${EVENT_NAME}" != "schedule" ]; then
+                      echo "skip=false" >> "$GITHUB_OUTPUT"
+                      echo "Not a scheduled run (event: ${EVENT_NAME}); proceeding."
+                      exit 0
+                    fi
+                    last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \\
+                      --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+                    if [ -z "${last_sha}" ]; then
+                      echo "skip=false" >> "$GITHUB_OUTPUT"
+                      echo "No previous successful run found; proceeding."
+                    elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
+                      echo "skip=true" >> "$GITHUB_OUTPUT"
+                      echo "No new commits since last successful run (${last_sha}); skipping."
+                    else
+                      echo "skip=false" >> "$GITHUB_OUTPUT"
+                      echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+                    fi
+                    """),
+            ),
+        ],
+    )
 
 
 # --- Matrix targets ---

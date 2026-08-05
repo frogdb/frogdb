@@ -15,9 +15,9 @@ work, not fixed here) — `server/src/commands/info.rs` (0.8%),
 `server/src/connection/builder.rs` (0.0%), `server/src/config/loader.rs` (29.8%),
 `core/src/store/mod.rs` (34.7%), among others.
 
-Design, mirroring the repo's other single-job on-demand tiers (`concurrency_nightly.py`
-/ `jepsen_nightly.py` / `fuzz.py`): a dedicated `workflow_dispatch` workflow rather than
-reviving the `test.yml`-embedded job, so a red/slow coverage run
+Design, mirroring the repo's other single-job nightly tiers (`concurrency_nightly.py`
+/ `jepsen_nightly.py` / `fuzz.py`): a dedicated cron-triggered (+ `workflow_dispatch`)
+workflow rather than reviving the `test.yml`-embedded job, so a red/slow coverage run
 can never gate a PR merge (it isn't a dependency of `test.yml`'s `ci-pass`, and it
 lives in an entirely separate workflow file) and never pages anyone. `just
 coverage-lcov` (the same recipe a developer runs locally) generates the lcov report;
@@ -26,11 +26,12 @@ line-coverage percentage, prints it against this doc's 84.0% baseline in the job
 summary (so future drift is visible at a glance without opening the artifact), and
 uploads the lcov file itself as a CI artifact for deeper per-file inspection.
 
-Cadence: dispatch-only. The nightly cron was removed along with the repo's other
-scheduled tiers — an instrumented build plus a full test run is the single most
-expensive job here, and it gates nothing, so it runs when someone wants the number.
+Cadence: nightly cron plus `workflow_dispatch`, gated by the shared `change_gate_job`
+(see `helpers.py`) — a scheduled run with no new commits since the last successful run
+skips rather than paying for an instrumented build plus a full test run (the single
+most expensive job here) for nothing.
 
-Runner: same GitHub-hosted `ubuntu-latest` (x86) class as the other three on-demand
+Runner: same GitHub-hosted `ubuntu-latest` (x86) class as the other three nightly
 workflows. The audit ran coverage on aarch64 only because that happened to be the
 testbox on hand that day; unlike Jepsen/fuzz/concurrency (where architecture affects
 which races and timing bugs reproduce), coverage is a build-instrumentation/line-count
@@ -41,6 +42,7 @@ other nightly jobs rather than requiring its own arm runner class.
 from workflow_gen.constants import INSTALL_ACTION
 from workflow_gen.helpers import (
     cargo_cache_step,
+    change_gate_job,
     checkout_step,
     libclang_step,
     mise_setup_step,
@@ -50,13 +52,19 @@ from workflow_gen.helpers import (
     script,
     upload_artifact_step,
 )
-from workflow_gen.schema import Job, Step, Trigger, Workflow
+from workflow_gen.schema import Job, ScheduleTrigger, Step, Trigger, Workflow
 
 MISE_TOOLS = "just cargo:cargo-nextest"
 
 # GitHub-hosted standard runner: free and unmetered on public repos. See the module
 # docstring for why aarch64 isn't required here.
 RUNS_ON = "ubuntu-latest"
+
+WORKFLOW_FILE = "coverage-nightly.yml"
+
+# Off-the-hour, and distinct from the other nightly crons (jepsen 37 5, concurrency
+# 14 3, fuzz 41 2) so the campaigns don't contend for runner minutes.
+NIGHTLY_CRON = "50 4 * * *"
 
 # This audit's baseline (2026-07-22, aarch64 Blacksmith testbox) — the documented
 # starting reference point so the job summary shows drift, not just an absolute
@@ -112,17 +120,18 @@ def _coverage_summary_step() -> Step:
 def coverage_nightly_workflow() -> Workflow:
     w = Workflow(
         name="Coverage Nightly",
-        # Manual dispatch only: the nightly cron is deliberately off. Instrumented
-        # builds are the most expensive job in the repo and this one never gates a
-        # merge, so it runs on demand rather than every night.
-        on=Trigger(),
+        on=Trigger(schedule=ScheduleTrigger(cron=[NIGHTLY_CRON])),
     )
+
+    gate = w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
 
     w.job(
         "coverage",
         Job(
             name="Nightly Code Coverage",
             runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
             # Instrumented builds + test runs cost noticeably more than a plain
             # `cargo nextest run --all` (per-line counters on every codegen unit);
             # generous margin over the plain unit-tests job for CI variance.
