@@ -5485,6 +5485,14 @@ async fn test_info_replication_shows_all_replicas() {
 
 // FM-REPLICATION-027
 /// Kill/restart replica 3x rapidly — recovers each time.
+///
+/// Each cycle waits for the replica to be *fence-relevant* fresh rather than
+/// merely connected. The self-fence is on by default and arms on the first
+/// cycle, so from cycle 2 onward the `SET` below is gated on the primary
+/// having a replica that is streaming **and** has ACKed inside the freshness
+/// window (FM-REPLICATION-041). Waiting on `connected_slaves` alone left the
+/// write racing the replica's first ACK, and losing that race is what made
+/// this test flake with a fence refusal rather than an `OK` (issue 30).
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -5502,7 +5510,11 @@ async fn test_replica_handles_rapid_reconnect(#[case] persistence: bool) {
 
     for cycle in 0..3 {
         let replica = TestServer::start_replica_with_config(&primary, config.clone()).await;
-        wait_for_connected_slave(&primary).await;
+        assert!(
+            wait_for_fresh_streaming_replicas(&primary, 1, Duration::from_secs(30)).await,
+            "cycle {cycle}: the replica must be streaming and freshly ACKing before the \
+             primary is written to"
+        );
 
         // Write a key during this cycle
         let key = format!("{{rr}}key{}", cycle + 1);
@@ -5518,6 +5530,15 @@ async fn test_replica_handles_rapid_reconnect(#[case] persistence: bool) {
         );
 
         replica.shutdown().await;
+        // Drain the departing session before the next cycle attaches, so the
+        // freshness wait above cannot be satisfied by the line of a replica
+        // that has already gone (its `lag=` stays 0 for up to a second after
+        // its last ACK).
+        assert_eq!(
+            wait_connected_slaves(&primary, 0, Duration::from_secs(15)).await,
+            Some(0),
+            "cycle {cycle}: the primary must drop the departed replica"
+        );
     }
 
     primary.shutdown().await;
@@ -7336,6 +7357,52 @@ async fn wait_connected_slaves(server: &TestServer, want: i64, within: Duration)
         last = connected_slaves(server).await;
     }
     last
+}
+
+/// Poll `INFO replication` until `server` has exactly `want` replicas that are
+/// *fresh* in the sense the write fences use, or the deadline elapses. Returns
+/// whether that state was reached.
+///
+/// `connected_slaves` alone is the wrong wait for anything that then writes:
+/// a replica is counted the moment its session registers, but both write gates
+/// count only replicas that are streaming **and** have ACKed recently
+/// (FM-REPLICATION-041, FM-REPLICATION-042). This reads the same registry
+/// through the projection that renders it: `state=online` is `Phase::Streaming`
+/// and `lag=0` is an ACK inside the last whole second — comfortably inside the
+/// default 3s freshness window, and never true of a replica that has attached
+/// but not yet ACKed.
+async fn wait_for_fresh_streaming_replicas(
+    server: &TestServer,
+    want: usize,
+    within: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + within;
+    loop {
+        if let Some(info) = parse_info_replication(&server.send("INFO", &["replication"]).await) {
+            let count = info
+                .get("connected_slaves")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let fresh = (0..count)
+                .filter_map(|i| info.get(&format!("slave{i}")))
+                .filter(|line| {
+                    let field = |name: &str| {
+                        line.split(',')
+                            .find_map(|p| p.strip_prefix(name))
+                            .unwrap_or("")
+                    };
+                    field("state=") == "online" && field("lag=") == "0"
+                })
+                .count();
+            if count == want && fresh == want {
+                return true;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Poll `WAIT want …` until the primary reports `want` acking replicas, or the
