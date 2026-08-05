@@ -66,8 +66,25 @@ skill.
 
 ### Long-Running Commands
 
-- sometimes compilation/test commands can hang. Perform liveness checks on long-running commands to
-ensure they are still progressing and not stuck.
+Any command expected to exceed ~2 minutes (workspace build/check, full test suites, `just lint`,
+mutation runs) follows this protocol — foreground long runs stall the agent stream and get the
+agent killed by the 600s watchdog:
+
+1. **Checkpoint-commit WIP first.** A watchdog kill or API drop loses everything uncommitted.
+2. **Launch with the Bash tool's `run_in_background: true`.** The harness tracks it, captures
+   output to a file, and re-invokes you when it exits. NEVER detach with `nohup`/`&`/wrapper
+   scripts — detached processes are untracked and nothing will ever resume you.
+3. **Unthrottle the build.** macOS runs background tasks at background QoS and throttles their
+   disk I/O to a crawl (fresh test binaries sit at `_dyld_start`, 0% CPU; rustc runs 10x slow).
+   After launching: `pgrep -f 'rustc|cargo|nextest'`, then `taskpolicy -B -p <pid>` for each
+   (both commands are sandbox-excluded and work as plain top-level Bash calls).
+4. **Poll with short foreground commands** (tail the harness output file). Liveness = log
+   growing or CPU accumulating (`ps -Ao pid,pcpu,etime,command`). Static log + 0% CPU for
+   2+ minutes = stuck: `sample <pid>` to diagnose, kill, re-run.
+5. **Never end your turn while a background command is pending** unless you have nothing left
+   to do — and say so explicitly if you do.
+6. **Never pipe a long run through filters** (`| grep | tail` buffers everything and hides
+   progress); let the harness capture raw output.
 
 ## Agent Guidelines
 
