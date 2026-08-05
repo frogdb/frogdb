@@ -12,9 +12,7 @@
         "kind": "at_least",
         "min": 1
       },
-      "flags": [
-        "ADMIN"
-      ],
+      "flags": [],
       "execution_strategy": "connection_level",
       "full": false,
       "is_stub": false
@@ -614,8 +612,7 @@
       "flags": [
         "NOSCRIPT",
         "LOADING",
-        "STALE",
-        "ADMIN"
+        "STALE"
       ],
       "execution_strategy": "connection_level",
       "full": false,
@@ -628,8 +625,7 @@
         "min": 1
       },
       "flags": [
-        "STALE",
-        "ADMIN"
+        "STALE"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -748,8 +744,7 @@
       "flags": [
         "NOSCRIPT",
         "LOADING",
-        "STALE",
-        "ADMIN"
+        "STALE"
       ],
       "execution_strategy": "connection_level",
       "full": false,
