@@ -8,6 +8,18 @@
 name: Link check
 'on':
   workflow_dispatch: {}
+  push:
+    branches:
+    - main
+    paths:
+    - 'website/**'
+    - 'lychee.toml'
+  pull_request:
+    branches:
+    - main
+    paths:
+    - 'website/**'
+    - 'lychee.toml'
 concurrency:
   group: link-check-${{ github.ref }}
   cancel-in-progress: true

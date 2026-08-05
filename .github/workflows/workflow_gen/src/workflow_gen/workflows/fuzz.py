@@ -11,27 +11,29 @@ corpus and nothing a prior session learned was ever retained. Ten seconds from c
 no seed corpus barely clears the parser's front door; the targets were effectively never
 meaningfully fuzzed.
 
-Design (mirrors the repo's other long-running tiers, `concurrency_nightly.py` /
-`jepsen_nightly.py`, single GitHub-hosted job on `workflow_dispatch`):
+Design (mirrors the repo's other long-running nightly tiers, `concurrency_nightly.py` /
+`jepsen_nightly.py`, single GitHub-hosted job per cadence):
 
-* **Campaign** (`fuzz-campaign`, manual dispatch — the nightly cron was removed):
-  runs every target for a
-  multi-minute budget (`FUZZ_SECONDS`, default 180s, overridable via dispatch input) and
-  accumulates the libFuzzer corpus so each run builds on the last.
+* **Campaign** (`fuzz-campaign`, nightly cron + `workflow_dispatch`; `if:
+  github.event_name != 'pull_request'`): runs every target for a multi-minute budget
+  (`FUZZ_SECONDS`, default 180s, overridable via dispatch input) and accumulates the
+  libFuzzer corpus so each run builds on the last. Sits behind the shared
+  `change_gate_job` (see `helpers.py`) so a scheduled run skips when nothing has
+  changed since the last successful campaign.
 * **Corpus persistence via `actions/cache`** rather than committing the corpus to git
   (`.gitignore` keeps `corpus/`/`artifacts/` out of the tree). The campaign key embeds
   `github.run_id` (always unique → the post-job save always writes a fresh entry) with a
   `fuzz-corpus-` `restore-keys` prefix (restores the newest prior corpus). Caches created
   on the default branch are readable by PR branches, which is what lets the PR job below
   replay the corpus the campaign grew.
-* **Corpus-replay** (`corpus-replay`): a fast regression gate that *restores* the
-  persisted corpus (restore-only — no cache writes) and replays every entry against each
-  target with libFuzzer `-runs=0` (execute the corpus once, no mutation). It catches a
-  parser regression against any previously-found input without paying the campaign's
-  time budget. A cold cache (empty corpus) degrades to a no-op per target rather than
-  failing. Originally gated on `pull_request` so it ran on every PR automatically; CI is
-  manual-dispatch-only during the hardening campaign, so both jobs below now run
-  together on every `workflow_dispatch` instead.
+* **Corpus-replay** (`corpus-replay`, `pull_request`; `if: github.event_name ==
+  'pull_request'`): a fast regression gate that *restores* the persisted corpus
+  (restore-only — no cache writes) and replays every entry against each target with
+  libFuzzer `-runs=0` (execute the corpus once, no mutation). It catches a parser
+  regression against any previously-found input without paying the campaign's time
+  budget. A cold cache (empty corpus) degrades to a no-op per target rather than
+  failing. Runs on every PR automatically and is never gated — the change gate only
+  ever applies to the scheduled campaign.
 * **Crash artifacts**: cargo-fuzz writes crashing/oom/timeout reproducers to
   `testing/fuzz/artifacts/<target>/`; both jobs upload that tree `if: failure()` so a red
   run ships its reproducers. Each job loops over all targets accumulating a nonzero exit
@@ -48,6 +50,7 @@ from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 from workflow_gen.helpers import (
     cache_step,
     cargo_cache_step,
+    change_gate_job,
     checkout_step,
     libclang_step,
     omap,
@@ -57,6 +60,8 @@ from workflow_gen.helpers import (
 )
 from workflow_gen.schema import (
     Job,
+    PullRequestTrigger,
+    ScheduleTrigger,
     Step,
     Trigger,
     Workflow,
@@ -65,6 +70,12 @@ from workflow_gen.schema import (
 # GitHub-hosted standard runner: free and unmetered on public repos. Blacksmith is
 # reserved for the testbox workflow (test-unit-tests-testbox.yml).
 RUNS_ON = "ubuntu-latest"
+
+WORKFLOW_FILE = "fuzz.yml"
+
+# Off-the-hour and overnight-US, distinct from the other nightly crons (jepsen 37 5,
+# concurrency 14 3, coverage 50 4) so the campaigns don't contend for runner minutes.
+NIGHTLY_CRON = "41 2 * * *"
 
 # Default per-target fuzzing budget in seconds for the scheduled campaign. 180s x 34
 # targets ~= 100min of pure fuzzing; with the instrumented build (amortised by the
@@ -181,24 +192,25 @@ def _crash_artifact_step() -> Step:
 def fuzz_workflow() -> Workflow:
     w = Workflow(
         name="Fuzz",
-        # CI is manual-dispatch-only during the hardening campaign: the `corpus-replay`
-        # PR gate lost its `pull_request` trigger along with everything else, so both
-        # jobs below now run unconditionally on every dispatch (the old
-        # `github.event_name` guards that split "PR gate" from "nightly campaign" are
-        # meaningless with a single trigger type — with only workflow_dispatch left,
-        # we want a manual run to exercise everything).
         on=Trigger(
+            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
+            pull_request=PullRequestTrigger(branches=["main"]),
             workflow_dispatch_inputs=CommentedMap(duration=_duration_input()),
         ),
         env=omap(CARGO_TERM_COLOR="always"),
     )
 
-    # Multi-minute campaign that grows the corpus.
+    gate = w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
+
+    # Multi-minute campaign that grows the corpus. Scheduled + manual dispatch only —
+    # never on a `pull_request` event (that's corpus-replay's job below).
     w.job(
         "fuzz-campaign",
         Job(
             name="Fuzz Campaign",
             runs_on=RUNS_ON,
+            needs=gate,
+            if_="github.event_name != 'pull_request' && needs.gate.outputs.skip != 'true'",
             timeout_minutes=360,
             steps=[
                 checkout_step(),
@@ -218,12 +230,14 @@ def fuzz_workflow() -> Workflow:
         ),
     )
 
-    # Fast gate: restore the corpus (read-only) and replay it, no fuzzing.
+    # Fast gate: restore the corpus (read-only) and replay it, no fuzzing. PR-only —
+    # never gated by change_gate_job (a PR always has "new commits" by definition).
     w.job(
         "corpus-replay",
         Job(
             name="Corpus Replay",
             runs_on=RUNS_ON,
+            if_="github.event_name == 'pull_request'",
             timeout_minutes=60,
             steps=[
                 checkout_step(),
