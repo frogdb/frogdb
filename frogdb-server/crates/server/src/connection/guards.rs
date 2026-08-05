@@ -13,7 +13,8 @@
 //! - [`PreDispatchView::run_pre_checks`] — auth / replica-readonly / quorum-fence
 //!   / admin-port / ACL / pub-sub-mode gate
 //! - [`PreDispatchView::validate_cluster_slots`] — MOVED/ASK/CROSSSLOT routing
-//! - [`PreDispatchView::check_migrating_multikey`] — TRYAGAIN during slot rehash
+//! - [`PreDispatchView::check_migrating_source`] — the MIGRATING-source presence
+//!   probe: serve / `ASK` / `TRYAGAIN` while a slot is being handed over
 //! - [`PreDispatchView::validate_queued_batch`] — the EXEC-time twin of the two
 //!   above: whole-queue MOVED/ASK/TRYAGAIN/CROSSSLOT re-validation against one
 //!   cluster snapshot (called from `transaction.rs`, not from the gauntlet)
@@ -51,7 +52,7 @@ use crate::connection::state::ConnectionState;
 use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
 use crate::slot_migration::{
     BatchKeys, BatchRoute, RouteDecision, RouteOutcome, SlotValidator, redirect,
-    route_queued_batch, route_watched_keys, watch_slot_is_locally_served,
+    route_migrating_source, route_queued_batch, route_watched_keys, watch_slot_is_locally_served,
 };
 
 /// The `-MISCONF` reply sent while `snapshot.stop-writes-on-save-error` is on
@@ -73,7 +74,7 @@ pub(crate) const SAVE_ERROR_REFUSAL: &str = "MISCONF Errors writing snapshots. \
 /// TCP pair (contrast the old `make_test_handler`). The `PreChecks`,
 /// `CommandLookup`, `PubSubPing`, `TransactionQueue`, `ClusterSlotValidation`,
 /// and
-/// `MigratingTryAgain` stages are pure functions over this view.
+/// `MigratingSourceProbe` stages are pure functions over this view.
 ///
 /// The view holds `&mut` borrows only for the synchronous guard body (or, for
 /// the one async guard, across a single shard round-trip); it is built and
@@ -95,7 +96,7 @@ pub(crate) struct PreDispatchView<'a> {
     /// Runtime config, read live on the write path for the
     /// `min-replicas-to-write` gate (so `CONFIG SET` takes effect at once).
     pub(crate) config_manager: &'a crate::runtime_config::ConfigManager,
-    /// Shard senders, for the multi-key MIGRATING presence scatter.
+    /// Shard senders, for the MIGRATING-source presence scatter.
     pub(crate) shard_senders: &'a [ShardSender],
     /// Replica flag: writes are rejected on a read-only replica.
     pub(crate) is_replica: &'a AtomicBool,
@@ -158,55 +159,6 @@ impl ConnectionHandler {
                 Some(Response::error("ERR rate limit exceeded: bytes per second"))
             }
         }
-    }
-
-    /// For a MIGRATING slot (we are the source), check if the command's response
-    /// indicates the key doesn't exist locally. If so, return an ASK redirect
-    /// so the client retries on the importing target.
-    ///
-    /// Redis behavior: during MIGRATING, existing keys are served locally;
-    /// missing keys (already migrated away) get `-ASK` redirect.
-    ///
-    /// This runs *after* execution (`Execute` terminal), so it stays on the
-    /// handler rather than the pre-dispatch view.
-    pub(crate) fn migrating_ask_for_nil(
-        &self,
-        cmd: &ParsedCommand,
-        response: &Response,
-    ) -> Option<Response> {
-        // Only relevant in cluster mode
-        let cluster_state = self.cluster.cluster_state.as_ref()?;
-        let node_id = self.cluster.node_id?;
-
-        // Check if response indicates "key not found"
-        if !is_nil_response(response) {
-            return None;
-        }
-
-        // Get the first key's slot
-        let cmd_name_bytes = cmd.name_uppercase();
-        let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
-        let keys = if let Some(cmd_impl) = self.core.registry.get_entry(&cmd_name) {
-            cmd_impl.keys(&cmd.args)
-        } else {
-            return None;
-        };
-        if keys.is_empty() {
-            return None;
-        }
-        let slot = slot_for_key(keys[0]);
-
-        // Check if we own this slot and it's in MIGRATING state
-        let snapshot = cluster_state.snapshot();
-        if let Some(owner) = snapshot.get_slot_owner(slot)
-            && owner == node_id
-            && let Some(migration) = snapshot.migrations.get(&slot)
-            && let Some(target_node) = snapshot.nodes.get(&migration.target_node)
-        {
-            return Some(ask_response(slot, target_node.addr));
-        }
-
-        None
     }
 }
 
@@ -838,60 +790,70 @@ impl PreDispatchView<'_> {
         }))
     }
 
-    /// For multi-key commands targeting a MIGRATING slot, check key presence
-    /// and return TRYAGAIN if keys are split between source and target
-    /// (`MigratingTryAgain` stage).
+    /// FM-CLUSTER-028: on the MIGRATING source, decide by key *presence* before
+    /// the command runs (`MigratingSourceProbe` stage).
     ///
-    /// Redis semantics:
-    /// - All keys present locally → serve locally (None)
-    /// - All keys absent → ASK redirect
-    /// - Mixed presence → TRYAGAIN
+    /// `MIGRATE` deletes each key as it hands it over, so owning the slot and
+    /// holding the key are different questions for the whole migration window.
+    /// Redis answers the second one in `getNodeByQuery` for every arity:
     ///
-    /// The presence probe itself lives in [`Self::probe_key_presence`], shared
-    /// with the EXEC-time batch validation
-    /// ([`Self::validate_queued_batch`]) so the two paths cannot drift. The
-    /// `keys.len() >= 2` gate is this stage's own (a single-key command is
-    /// handled post-execution by
-    /// [`ConnectionHandler::migrating_ask_for_nil`]); the batch path has no
-    /// such gate.
-    pub(crate) async fn check_migrating_multikey(&self, cmd: &ParsedCommand) -> Option<Response> {
+    /// - All keys present locally → serve locally (`None`)
+    /// - All keys absent → `-ASK` at the importing node
+    /// - Mixed presence → `-TRYAGAIN`
+    ///
+    /// Arity is **not** a gate. The former `keys.len() >= 2` gate left every
+    /// single-key command to a post-execution nil-reply conversion, which
+    /// answered `+OK` to a `SET` on an already-migrated key and re-created it
+    /// behind the migration; `CLUSTER SETSLOT <slot> NODE` then destroyed the
+    /// acknowledged write (issue 40).
+    ///
+    /// Cluster-exempt commands are skipped for the same reason
+    /// [`Self::validate_cluster_slots`] skips them: no slot owns a node-scoped
+    /// command, so no migration can redirect it.
+    ///
+    /// The routing half lives in
+    /// [`route_migrating_source`](crate::slot_migration::route_migrating_source)
+    /// and the probe itself in [`Self::probe_key_presence`], both shared with
+    /// the EXEC-time batch validation ([`Self::validate_queued_batch`]) so the
+    /// two paths cannot drift. The slot-state read comes first, so a command on
+    /// a slot with no open migration costs one snapshot read and no keyspace
+    /// lookup.
+    pub(crate) async fn check_migrating_source(&self, cmd: &ParsedCommand) -> Option<Response> {
         // Only relevant in cluster mode
         let cluster_state = self.cluster.cluster_state.as_ref()?;
         let node_id = self.cluster.node_id?;
 
-        // Get keys from command
         let cmd_name_bytes = cmd.name_uppercase();
         let cmd_name = String::from_utf8_lossy(&cmd_name_bytes);
+
+        // Node-scoped commands are not addressed by key; no migration redirects
+        // them (same exemption as the slot-validation stage).
+        if self.is_cluster_exempt(&cmd_name) {
+            return None;
+        }
+
+        // Get keys from command
         let keys = if let Some(cmd_impl) = self.registry.get_entry(&cmd_name) {
             cmd_impl.keys(&cmd.args)
         } else {
             return None;
         };
-
-        // Single-key commands are handled by existing migrating_ask_for_nil
-        if keys.len() < 2 {
+        let Some(first) = keys.first() else {
             return None;
-        }
+        };
+        // Cross-slot key sets were already refused by `ClusterSlotValidation`,
+        // so the first key's slot is the whole command's slot.
+        let slot = slot_for_key(first);
 
-        let slot = slot_for_key(keys[0]);
-
-        // Check if we own the slot and it's in MIGRATING state
+        // Are we the source of an open migration off this slot, with a target we
+        // can name in an ASK? If not, there is nothing to probe.
         let snapshot = cluster_state.snapshot();
-        let owner = snapshot.get_slot_owner(slot)?;
-        if owner != node_id {
-            return None;
-        }
-        let migration = snapshot.migrations.get(&slot)?;
-        let target_addr = snapshot.nodes.get(&migration.target_node)?.addr;
+        let target_addr = route_migrating_source(&snapshot, slot, node_id)?;
 
         let keys_bytes: Vec<Bytes> = keys.iter().map(|k| Bytes::copy_from_slice(k)).collect();
-        match self.probe_key_presence(&keys_bytes).await {
-            KeyPresence::Mixed => Some(redirect::tryagain()),
-            // All keys migrated away — ASK redirect.
-            KeyPresence::AllAbsent => Some(ask_response(slot, target_addr)),
-            KeyPresence::AllPresent => None,
-            KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
-        }
+        self.probe_key_presence(&keys_bytes)
+            .await
+            .migrating_source_reply(slot, target_addr)
     }
 
     /// Probe whether `keys` currently exist on this node, via one
@@ -1058,14 +1020,10 @@ impl PreDispatchView<'_> {
             // We are the migration source: the presence of the batch's keys
             // decides. All present → the batch is still ours; all gone → ASK
             // the target; split → TRYAGAIN.
-            BatchRoute::ProbeMigratingSource { slot, target } => {
-                match self.probe_key_presence(keys.keys()).await {
-                    KeyPresence::AllPresent => None,
-                    KeyPresence::AllAbsent => Some(redirect::ask(slot, target)),
-                    KeyPresence::Mixed => Some(redirect::tryagain()),
-                    KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
-                }
-            }
+            BatchRoute::ProbeMigratingSource { slot, target } => self
+                .probe_key_presence(keys.keys())
+                .await
+                .migrating_source_reply(slot, target),
             // We are the importing target with ASKING set. Redis serves the
             // batch here unless it is multi-key with something still missing,
             // in which case neither side can satisfy it yet → TRYAGAIN. It
@@ -1098,6 +1056,33 @@ pub(crate) enum KeyPresence {
     Unavailable,
 }
 
+impl KeyPresence {
+    /// FM-CLUSTER-028: the MIGRATING source's reply for this verdict — the one
+    /// place the presence→redirect policy is written.
+    ///
+    /// `None` means "serve it here". Both callers route through this: the
+    /// per-command [`PreDispatchView::check_migrating_source`] stage and the
+    /// EXEC-time [`PreDispatchView::validate_queued_batch`], so a single-key
+    /// `SET`, a `MSET`, and the same commands inside a `MULTI` cannot answer
+    /// the same key set differently.
+    ///
+    /// The importing *target* deliberately does not use this: it never `ASK`s
+    /// back at the source (that is a redirect loop), so its arm keeps its own
+    /// mapping.
+    fn migrating_source_reply(self, slot: u16, target: SocketAddr) -> Option<Response> {
+        match self {
+            KeyPresence::AllPresent => None,
+            // Every key has already been handed over — send the client after it.
+            KeyPresence::AllAbsent => Some(redirect::ask(slot, target)),
+            // The request straddles the open slot; neither side can serve it.
+            KeyPresence::Mixed => Some(redirect::tryagain()),
+            // Fail closed: not knowing means not serving. Serving here is the
+            // orphan write this seam exists to prevent.
+            KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
+        }
+    }
+}
+
 /// The keyed footprint of a queued MULTI, plus the batch-level READONLY
 /// eligibility, as folded by [`PreDispatchView::fold_queued_batch`].
 pub(crate) struct QueuedBatch {
@@ -1108,19 +1093,12 @@ pub(crate) struct QueuedBatch {
     pub(crate) readonly_eligible: bool,
 }
 
-fn is_nil_response(response: &Response) -> bool {
-    matches!(response, Response::Null | Response::Bulk(None))
-}
-
-fn ask_response(slot: u16, addr: SocketAddr) -> Response {
-    redirect::ask(slot, addr)
-}
-
 #[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
     use super::*;
     use frogdb_core::command::QuorumChecker;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
 
     struct MockQuorumChecker {
         has_quorum: bool,
@@ -1513,5 +1491,330 @@ mod tests {
         }
         // PING is auth-exempt.
         assert!(fx.view().run_pre_checks("PING", &[]).is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // FM-CLUSTER-028 — the MIGRATING-source presence probe
+    // ------------------------------------------------------------------
+
+    const SOURCE_NODE: u64 = 1;
+    const TARGET_NODE: u64 = 2;
+
+    /// Two keys sharing one hash tag, so both land in the same (migrating) slot
+    /// and `ClusterSlotValidation` would never have refused them as CROSSSLOT.
+    const MIG_KEY_A: &[u8] = b"{mig}a";
+    const MIG_KEY_B: &[u8] = b"{mig}b";
+
+    fn importing_addr() -> SocketAddr {
+        "127.0.0.1:7002".parse().unwrap()
+    }
+
+    fn cmd(name: &'static str, args: &[&[u8]]) -> ParsedCommand {
+        ParsedCommand::new(
+            Bytes::from_static(name.as_bytes()),
+            args.iter().map(|a| Bytes::copy_from_slice(a)).collect(),
+        )
+    }
+
+    /// The wire text of a probe verdict, for exact-shape assertions.
+    fn reply_text(reply: &Option<Response>) -> String {
+        match reply {
+            None => "<serve locally>".to_string(),
+            Some(Response::Error(msg)) => String::from_utf8_lossy(msg).to_string(),
+            Some(other) => format!("{other:?}"),
+        }
+    }
+
+    impl ViewFixture {
+        /// Make this node the owner of `MIG_KEY_A`'s slot. `migrating` also
+        /// opens a migration off that slot towards [`importing_addr`].
+        fn owns_migrating_slot(&mut self, migrating: bool) -> u16 {
+            let slot = slot_for_key(MIG_KEY_A);
+            let mut snap = frogdb_cluster::types::ClusterSnapshot::new();
+            snap.nodes.insert(
+                SOURCE_NODE,
+                frogdb_cluster::types::NodeInfo::new_primary(
+                    SOURCE_NODE,
+                    "127.0.0.1:7001".parse().unwrap(),
+                    "127.0.0.1:17001".parse().unwrap(),
+                ),
+            );
+            snap.nodes.insert(
+                TARGET_NODE,
+                frogdb_cluster::types::NodeInfo::new_primary(
+                    TARGET_NODE,
+                    importing_addr(),
+                    "127.0.0.1:17002".parse().unwrap(),
+                ),
+            );
+            snap.slot_assignment.insert(slot, SOURCE_NODE);
+            if migrating {
+                snap.migrations.insert(
+                    slot,
+                    frogdb_cluster::types::SlotMigration {
+                        slot,
+                        source_node: SOURCE_NODE,
+                        target_node: TARGET_NODE,
+                    },
+                );
+            }
+            self.cluster.cluster_state = Some(Arc::new(frogdb_core::ClusterState::from_snapshot(
+                snap,
+                Arc::new(AtomicU64::new(SOURCE_NODE)),
+            )));
+            self.cluster.node_id = Some(SOURCE_NODE);
+            slot
+        }
+
+        /// Install a fake shard that answers the `EXISTS` presence probe:
+        /// `present` keys report `1`, every other probed key reports `0`.
+        ///
+        /// The returned counter is how many probes actually reached a shard, so
+        /// `0` is a positive proof that no keyspace lookup happened — the
+        /// property that keeps this stage off the non-migrating hot path.
+        fn probe_shard(&mut self, present: &[&'static [u8]]) -> Arc<AtomicUsize> {
+            let probes = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&probes);
+            let present: Vec<Bytes> = present.iter().map(|k| Bytes::from_static(k)).collect();
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<frogdb_core::Envelope>(16);
+            tokio::spawn(async move {
+                while let Some(envelope) = rx.recv().await {
+                    let frogdb_core::ShardMessage::Core(CoreMsg::ScatterRequest {
+                        keys,
+                        operation,
+                        response_tx,
+                        ..
+                    }) = envelope.message
+                    else {
+                        continue;
+                    };
+                    assert!(
+                        matches!(operation, ScatterOp::Exists),
+                        "the migrating-source probe must ask EXISTS, got {operation:?}"
+                    );
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    let results = keys
+                        .into_iter()
+                        .map(|k| {
+                            let here = present.contains(&k);
+                            (k, Response::Integer(i64::from(here)))
+                        })
+                        .collect();
+                    let _ = response_tx.send(frogdb_core::PartialResult::keyed(results));
+                }
+            });
+            self.shard_senders = vec![ShardSender::new(tx)];
+            probes
+        }
+    }
+
+    // FM-CLUSTER-028
+    /// The bug issue 40 was filed for: a **single-key write** whose key the
+    /// migration has already handed over must be `-ASK`ed, not acked here.
+    ///
+    /// Answering `+OK` re-created the key behind the migration and
+    /// `CLUSTER SETSLOT <slot> NODE` then destroyed the acknowledged write. The
+    /// arity gate that caused it is gone, so `SET`/`INCR`/`DEL`/`EXPIRE` — none
+    /// of which ever reply nil, so none of which the old post-execution
+    /// nil-to-ASK conversion could ever have caught — all take the probe.
+    #[tokio::test]
+    async fn migrating_source_asks_a_single_key_write_whose_key_moved() {
+        let mut fx = ViewFixture::new(None);
+        let slot = fx.owns_migrating_slot(true);
+        // Nothing is present: the whole slot has been handed over.
+        let probes = fx.probe_shard(&[]);
+
+        let expected = format!("ASK {slot} {}", importing_addr());
+        for command in [
+            cmd("SET", &[MIG_KEY_A, b"v"]),
+            cmd("INCR", &[MIG_KEY_A]),
+            cmd("DEL", &[MIG_KEY_A]),
+            cmd("EXPIRE", &[MIG_KEY_A, b"10"]),
+            // …and the read the old hack did catch, still redirected.
+            cmd("GET", &[MIG_KEY_A]),
+        ] {
+            let reply = fx.view().check_migrating_source(&command).await;
+            assert_eq!(
+                reply_text(&reply),
+                expected,
+                "{} on an already-migrated key must ASK the importing node",
+                String::from_utf8_lossy(&command.name)
+            );
+        }
+        assert_eq!(probes.load(Ordering::Relaxed), 5);
+    }
+
+    // FM-CLUSTER-028
+    /// The other half of the contract: a key the migration has not reached yet
+    /// is served here, whatever the command would reply.
+    ///
+    /// `HGET` on a missing field, `LPOS` on a value that is not in the list and
+    /// `GET` on a key that exists all pass through. The first two are why the
+    /// retired reply-side hack was unsound in the *other* direction: they reply
+    /// nil while the key is very much still here, so it converted them into
+    /// spurious `ASK`s that sent the client to a node holding nothing.
+    #[tokio::test]
+    async fn migrating_source_serves_a_single_key_command_still_held_here() {
+        let mut fx = ViewFixture::new(None);
+        fx.owns_migrating_slot(true);
+        let probes = fx.probe_shard(&[MIG_KEY_A]);
+
+        for command in [
+            cmd("GET", &[MIG_KEY_A]),
+            cmd("SET", &[MIG_KEY_A, b"v"]),
+            cmd("HGET", &[MIG_KEY_A, b"nosuchfield"]),
+            cmd("LPOS", &[MIG_KEY_A, b"nosuchvalue"]),
+        ] {
+            let reply = fx.view().check_migrating_source(&command).await;
+            assert_eq!(
+                reply_text(&reply),
+                "<serve locally>",
+                "{} must be served where the key still lives",
+                String::from_utf8_lossy(&command.name)
+            );
+        }
+        assert_eq!(probes.load(Ordering::Relaxed), 4);
+    }
+
+    // FM-CLUSTER-028
+    /// A multi-key command straddling the open slot — one key handed over, one
+    /// still here — is `-TRYAGAIN`: neither node can satisfy it yet. Unchanged
+    /// by this fix, pinned so dropping the arity gate did not disturb it.
+    #[tokio::test]
+    async fn migrating_source_tryagain_when_the_keys_straddle_the_slot() {
+        let mut fx = ViewFixture::new(None);
+        fx.owns_migrating_slot(true);
+        let probes = fx.probe_shard(&[MIG_KEY_A]);
+
+        for command in [
+            cmd("MGET", &[MIG_KEY_A, MIG_KEY_B]),
+            cmd("MSET", &[MIG_KEY_A, b"1", MIG_KEY_B, b"2"]),
+        ] {
+            let reply = fx.view().check_migrating_source(&command).await;
+            assert!(
+                reply_text(&reply).starts_with("TRYAGAIN"),
+                "{} across a half-migrated slot must TRYAGAIN, got {}",
+                String::from_utf8_lossy(&command.name),
+                reply_text(&reply)
+            );
+        }
+        assert_eq!(probes.load(Ordering::Relaxed), 2);
+    }
+
+    // FM-CLUSTER-028
+    /// The scripting family is probed too. `EVAL` declares its keys through
+    /// `numkeys` and short-circuits at the `ConnectionCommand` stage, so it
+    /// only reaches the probe because `MigratingSourceProbe` is ordered ahead
+    /// of that stage (the `MUST_PRECEDE` pair) and `is_cluster_exempt` refuses
+    /// to exempt `Scripting` — the same structural fix FM-CLUSTER-030 made for
+    /// slot validation.
+    #[tokio::test]
+    async fn migrating_source_probes_the_scripting_family() {
+        let mut fx = ViewFixture::new(None);
+        let slot = fx.owns_migrating_slot(true);
+        let probes = fx.probe_shard(&[]);
+
+        let command = cmd(
+            "EVAL",
+            &[b"return redis.call('set', KEYS[1], 1)", b"1", MIG_KEY_A],
+        );
+        let reply = fx.view().check_migrating_source(&command).await;
+        assert_eq!(
+            reply_text(&reply),
+            format!("ASK {slot} {}", importing_addr()),
+            "a script writing an already-migrated key must be redirected, not run here"
+        );
+        assert_eq!(probes.load(Ordering::Relaxed), 1);
+    }
+
+    // FM-CLUSTER-028
+    /// A slot with no open migration costs one snapshot read and **no** keyspace
+    /// lookup: the probe reads slot state first and returns before it would
+    /// address a shard. `0` probes is the assertion that keeps this stage off
+    /// the hot path.
+    #[tokio::test]
+    async fn migrating_source_probe_is_skipped_when_the_slot_is_not_migrating() {
+        let mut fx = ViewFixture::new(None);
+        fx.owns_migrating_slot(false);
+        let probes = fx.probe_shard(&[]);
+
+        assert!(
+            fx.view()
+                .check_migrating_source(&cmd("SET", &[MIG_KEY_A, b"v"]))
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            probes.load(Ordering::Relaxed),
+            0,
+            "a slot with no open migration must not cost a keyspace lookup"
+        );
+
+        // Standalone mode (no cluster state at all) is the same no-op.
+        let mut standalone = ViewFixture::new(None);
+        let probes = standalone.probe_shard(&[]);
+        assert!(
+            standalone
+                .view()
+                .check_migrating_source(&cmd("SET", &[MIG_KEY_A, b"v"]))
+                .await
+                .is_none()
+        );
+        assert_eq!(probes.load(Ordering::Relaxed), 0);
+    }
+
+    // FM-CLUSTER-028
+    /// Node-scoped commands are never probed — no slot owns them, so no
+    /// migration can redirect them. `WATCH` is the interesting one: it is a
+    /// keyed command whose keys hash into the migrating slot, and exempting it
+    /// here is deliberate (its own slot check is
+    /// [`PreDispatchView::validate_watch_slots`], run at the
+    /// `TransactionControl` stage).
+    #[tokio::test]
+    async fn migrating_source_probe_is_skipped_for_node_scoped_commands() {
+        let mut fx = ViewFixture::new(None);
+        fx.owns_migrating_slot(true);
+        let probes = fx.probe_shard(&[]);
+
+        for command in [
+            cmd("WATCH", &[MIG_KEY_A]),
+            cmd("CLUSTER", &[b"INFO"]),
+            cmd("SCAN", &[b"0"]),
+            cmd("DBSIZE", &[]),
+            cmd("PING", &[]),
+        ] {
+            let reply = fx.view().check_migrating_source(&command).await;
+            assert!(
+                reply.is_none(),
+                "{} is node-scoped and must not be redirected by a migration",
+                String::from_utf8_lossy(&command.name)
+            );
+        }
+        assert_eq!(
+            probes.load(Ordering::Relaxed),
+            0,
+            "node-scoped commands must not cost a keyspace lookup"
+        );
+    }
+
+    // FM-CLUSTER-028
+    /// The probe fails closed. A shard that cannot answer leaves us unable to
+    /// tell whether the key is still here, and serving it in that state is
+    /// exactly the orphan write this seam exists to prevent — so the command is
+    /// refused instead.
+    #[tokio::test]
+    async fn migrating_source_refuses_when_the_shard_does_not_answer() {
+        let mut fx = ViewFixture::new(None);
+        fx.owns_migrating_slot(true);
+        // A sender whose receiver is already gone: the probe's send fails.
+        let (tx, rx) = tokio::sync::mpsc::channel::<frogdb_core::Envelope>(1);
+        drop(rx);
+        fx.shard_senders = vec![ShardSender::new(tx)];
+
+        let reply = fx
+            .view()
+            .check_migrating_source(&cmd("SET", &[MIG_KEY_A, b"v"]))
+            .await;
+        assert_eq!(reply_text(&reply), "ERR shard unavailable");
     }
 }

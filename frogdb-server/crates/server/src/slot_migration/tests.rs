@@ -11,8 +11,8 @@ use std::net::SocketAddr;
 use frogdb_cluster::types::{ClusterSnapshot, NodeInfo, SlotMigration};
 
 use super::routing::{
-    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, route_queued_batch, route_watched_keys,
-    route_with_snapshot, watch_slot_is_locally_served,
+    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, route_migrating_source, route_queued_batch,
+    route_watched_keys, route_with_snapshot, watch_slot_is_locally_served,
 };
 
 const SELF_NODE: u64 = 1;
@@ -178,6 +178,69 @@ fn route_unassigned_when_self_is_target_but_no_asking_or_restore() {
 
     let decision = route_with_snapshot(&snap, SLOT, "GET", false, SELF_NODE);
     assert_eq!(decision, RouteDecision::Unassigned { slot: SLOT });
+}
+
+// FM-CLUSTER-028
+/// The per-command probe instruction on the migrating source: owning the slot
+/// with a migration open means "decide by key presence", not "serve it".
+///
+/// `ASKING` is not an input — the probe runs after `ClusterSlotValidation` has
+/// consumed the one-shot flag, so the verdict must be the same either way, for
+/// any command name.
+#[test]
+fn migrating_source_probe_names_the_importing_node() {
+    let mut snap = empty_snapshot();
+    snap.slot_assignment.insert(SLOT, SELF_NODE);
+    snap.migrations
+        .insert(SLOT, migration(SELF_NODE, OTHER_NODE));
+
+    assert_eq!(
+        route_migrating_source(&snap, SLOT, SELF_NODE),
+        Some(test_addr(6380)),
+        "the source must probe, with the importing node as the ASK target"
+    );
+}
+
+// FM-CLUSTER-028
+/// Nothing to probe when the slot is not migrating away from this node: a slot
+/// we own outright, a slot another node owns, and a slot with no owner at all
+/// are the ordinary `LocalServe` / `Moved` / `Unassigned` verdicts, already
+/// settled by slot validation. This is the gate that keeps the probe — and its
+/// keyspace round-trip — off every command outside a migration window.
+#[test]
+fn migrating_source_probe_is_none_without_an_open_migration() {
+    let mut owned = empty_snapshot();
+    owned.slot_assignment.insert(SLOT, SELF_NODE);
+    assert_eq!(route_migrating_source(&owned, SLOT, SELF_NODE), None);
+
+    let mut foreign = empty_snapshot();
+    foreign.slot_assignment.insert(SLOT, OTHER_NODE);
+    foreign
+        .migrations
+        .insert(SLOT, migration(OTHER_NODE, SELF_NODE));
+    assert_eq!(
+        route_migrating_source(&foreign, SLOT, SELF_NODE),
+        None,
+        "the importing target never ASKs back at the source"
+    );
+
+    let unassigned = empty_snapshot();
+    assert_eq!(route_migrating_source(&unassigned, SLOT, SELF_NODE), None);
+}
+
+// FM-CLUSTER-028
+/// An importing node missing from the local node table renders no ASK address,
+/// so the source serves locally rather than emitting a redirect it cannot
+/// address — the same fallback `route_queued_batch` takes.
+#[test]
+fn migrating_source_probe_is_none_when_the_ask_address_is_unknown() {
+    let mut snap = empty_snapshot();
+    snap.slot_assignment.insert(SLOT, SELF_NODE);
+    snap.migrations
+        .insert(SLOT, migration(SELF_NODE, OTHER_NODE));
+    snap.nodes.remove(&OTHER_NODE);
+
+    assert_eq!(route_migrating_source(&snap, SLOT, SELF_NODE), None);
 }
 
 // FM-CLUSTER-028

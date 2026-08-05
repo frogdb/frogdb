@@ -4109,3 +4109,191 @@ async fn test_multi_exec_readonly_does_not_rescue_a_scatter_write() {
 
     harness.shutdown_all().await;
 }
+
+// FM-CLUSTER-028
+/// Issue 40, end to end: a **single-key write** on a MIGRATING source whose key
+/// has already been handed over must be `-ASK`ed, and the migration must finish
+/// with nothing orphaned behind it.
+///
+/// Before the fix the source answered `+OK` — key presence was only consulted
+/// for multi-key commands, and single-key commands relied on a post-execution
+/// "nil reply means the key moved" conversion that a `SET` (which never replies
+/// nil) sails straight past. The write landed on the source, behind the open
+/// migration, and `CLUSTER SETSLOT <slot> NODE` then handed the slot away and
+/// destroyed it: 11 acknowledged writes lost in a fault-free cluster in the
+/// jepsen run this was filed from (issue 31 §"Bug X").
+///
+/// The `:orphaned-keys` half of that jepsen workload can be gated against this:
+/// the no-orphan proof here is the source's physical `DBSIZE`, which is the only
+/// view that a `MOVED`-answering node cannot hide an orphan behind.
+#[tokio::test]
+async fn test_single_key_write_on_migrating_source_asks_and_never_orphans() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    let test_slot = 1260u16;
+    let (source_id, target_id) = find_owner_of_slot(&harness, test_slot)
+        .await
+        .expect("could not find an owner for the test slot");
+    let tag = format!("{{{}}}", key_for_slot(test_slot));
+    let (key_a, key_b) = (format!("{tag}_a"), format!("{tag}_b"));
+    let slot_str = test_slot.to_string();
+    let target_addr = harness.node(target_id).unwrap().client_addr();
+
+    // Seed both keys on the current owner. "v0" is what migrates; any later
+    // value observed anywhere is a write that should have been redirected.
+    let source = harness.node(source_id).unwrap();
+    for k in [&key_a, &key_b] {
+        assert_eq!(
+            source.send("SET", &[k, "v0"]).await,
+            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            "seeding {k} on its owner must succeed"
+        );
+    }
+
+    // Open the window without transferring ownership, then hand over ONE key:
+    // the slot straddles the two nodes.
+    open_slot_migration_window(&harness, source_id, target_id, test_slot).await;
+    migrate_keys(&harness, source_id, target_id, &[&key_a]).await;
+
+    // PARTIAL: a multi-key command spanning both sides can be served by
+    // neither, so it is TRYAGAIN — not a half-executed batch.
+    for cmd in [
+        vec!["MGET", key_a.as_str(), key_b.as_str()],
+        vec!["MSET", key_a.as_str(), "v1", key_b.as_str(), "v1"],
+    ] {
+        let resp = harness
+            .node(source_id)
+            .unwrap()
+            .send(cmd[0], &cmd[1..])
+            .await;
+        assert_eq!(
+            error_prefix(&resp).as_deref(),
+            Some("TRYAGAIN"),
+            "{} straddling the open slot must TRYAGAIN, got {resp:?}",
+            cmd[0]
+        );
+    }
+
+    // The key still on the source is served here, unaffected by the migration.
+    assert_eq!(
+        harness
+            .node(source_id)
+            .unwrap()
+            .send("GET", &[&key_b])
+            .await,
+        frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+        "a key the migration has not reached yet is still served by the source"
+    );
+
+    // Hand the second key over as well: the slot is ours, its contents are not.
+    migrate_keys(&harness, source_id, target_id, &[&key_b]).await;
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "MIGRATE deletes as it hands over: the source holds nothing now"
+    );
+
+    // THE CONTRACT (issue 40): the single-key WRITE is redirected, not acked.
+    let resp = harness
+        .node(source_id)
+        .unwrap()
+        .send("SET", &[&key_a, "v1"])
+        .await;
+    assert_eq!(
+        is_ask_redirect(&resp),
+        Some((test_slot, target_addr.clone())),
+        "a single-key write to an already-migrated key must ASK the importing \
+         node, NOT reply +OK and re-create the key here; got {resp:?}"
+    );
+
+    // Reads of an absent key answer the same ASK (the one case the retired
+    // reply-side hack did handle).
+    let resp = harness
+        .node(source_id)
+        .unwrap()
+        .send("GET", &[&key_a])
+        .await;
+    assert_eq!(
+        is_ask_redirect(&resp),
+        Some((test_slot, target_addr.clone())),
+        "a read of an already-migrated key must ASK; got {resp:?}"
+    );
+
+    // A script writing the same key is redirected too: it declares its keys
+    // through `numkeys` and would otherwise run to completion on the source.
+    let resp = harness
+        .node(source_id)
+        .unwrap()
+        .send(
+            "EVAL",
+            &["return redis.call('set', KEYS[1], 'v2')", "1", &key_a],
+        )
+        .await;
+    assert_eq!(
+        is_ask_redirect(&resp),
+        Some((test_slot, target_addr.clone())),
+        "a script writing an already-migrated key must ASK, not execute here; \
+         got {resp:?}"
+    );
+
+    // NO ORPHAN, before the slot is handed over: none of the refused writes
+    // touched the source's keyspace.
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "every refused write must leave the source's keyspace untouched — a \
+         single orphan here is the acked write SETSLOT NODE would destroy"
+    );
+
+    // Finish the migration. This is the step that destroyed the acked write:
+    // the slot leaves the source, taking anything it re-created with it.
+    let target_cluster_id = harness
+        .get_node_id_str(target_id)
+        .expect("target cluster id");
+    let resp = send_cluster_cmd(
+        &harness,
+        target_id,
+        &["SETSLOT", &slot_str, "NODE", &target_cluster_id],
+    )
+    .await;
+    assert!(!is_error(&resp), "SETSLOT NODE failed: {resp:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // NO ORPHAN, after: the source holds nothing and now says MOVED, and the
+    // target's migrated value is the one that survived — never overwritten by a
+    // redirected write, never rolled back to a value the source re-created.
+    assert_eq!(
+        node_dbsize(&harness, source_id).await,
+        0,
+        "the former owner must hold nothing once the slot is handed over"
+    );
+    let resp = harness
+        .node(source_id)
+        .unwrap()
+        .send("GET", &[&key_a])
+        .await;
+    assert_eq!(
+        is_moved_redirect(&resp),
+        Some((test_slot, target_addr)),
+        "with the migration closed the source answers MOVED, not ASK; got {resp:?}"
+    );
+    for k in [&key_a, &key_b] {
+        assert_eq!(
+            harness.node(target_id).unwrap().send("GET", &[k]).await,
+            frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v0"))),
+            "the new owner keeps the migrated value of {k}, untouched by every \
+             refused write"
+        );
+    }
+
+    harness.shutdown_all().await;
+}

@@ -28,8 +28,10 @@ pub enum RouteDecision {
     LocalServe,
 
     /// We own the slot and a migration is active (we are the source / MIGRATING).
-    /// Serve the command locally; clear ASKING. The dispatch layer may convert
-    /// nil responses into ASK redirects via [`migrating_ask_for_nil`].
+    /// Clear ASKING. Owning the slot is *not* the whole answer here: `MIGRATE`
+    /// deletes each key as it hands it over, so the caller must decide by key
+    /// presence before executing — see [`route_migrating_source`] for the
+    /// per-command path and [`BatchRoute::ProbeMigratingSource`] for EXEC.
     LocalServeMigrating,
 
     /// Another node owns the slot, but we are the importing target and the
@@ -279,7 +281,8 @@ pub(crate) fn route_queued_batch(
             Some(target) => BatchRoute::ProbeMigratingSource { slot, target },
             // The importing node is not in our node table, so no ASK address
             // can be rendered. Serving locally is what the per-command path
-            // does in the same situation (`check_migrating_multikey` bails).
+            // does in the same situation (`route_migrating_source` answers
+            // `None`, so its caller skips the probe).
             None => BatchRoute::ServeLocal,
         },
         RouteDecision::AcceptImporting => BatchRoute::ProbeImporting { slot },
@@ -347,6 +350,41 @@ pub(crate) fn watch_slot_is_locally_served(
             | RouteDecision::LocalServeMigrating
             | RouteDecision::AcceptImporting
     )
+}
+
+// ---------------------------------------------------------------------------
+// MIGRATING-source presence probe (per-command)
+// ---------------------------------------------------------------------------
+
+/// The MIGRATING-source probe instruction for one command's slot — the
+/// per-command twin of [`BatchRoute::ProbeMigratingSource`].
+///
+/// `Some(target)` means: this node owns `slot`, a migration off it is open, and
+/// the importing node's address renders — so the caller must decide by *key
+/// presence*, before executing, exactly as Redis' `getNodeByQuery` does
+/// (`cluster.c`): every key still here → serve here, every key gone →
+/// `ASK <slot> target`, split → `TRYAGAIN`.
+///
+/// `None` means there is nothing to probe: either the slot is not migrating away
+/// from us — the ordinary `LocalServe` / `Moved` / `Unassigned` verdicts, which
+/// [`SlotMigrationCoordinator::route`] has already applied — or the ASK address
+/// is unknown, in which case serving locally beats emitting a redirect we cannot
+/// address (the same fallback [`route_queued_batch`] takes).
+///
+/// Neither `asking` nor the command name is a parameter, deliberately: the arm
+/// this reads ([`RouteDecision::LocalServeMigrating`]) is the "we are the owner"
+/// branch of [`route_with_snapshot`], which consults neither. That is what lets
+/// the probe run *after* slot validation has consumed the one-shot `ASKING`
+/// flag without the consumption changing its verdict.
+pub(crate) fn route_migrating_source(
+    snapshot: &ClusterSnapshot,
+    slot: u16,
+    self_node_id: NodeId,
+) -> Option<SocketAddr> {
+    match route_with_snapshot(snapshot, slot, "", false, self_node_id) {
+        RouteDecision::LocalServeMigrating => migration_target_addr(snapshot, slot),
+        _ => None,
+    }
 }
 
 /// The address of the node a slot is migrating *to*, if the snapshot knows it.
