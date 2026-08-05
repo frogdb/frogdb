@@ -173,7 +173,7 @@ core-test area pattern="":
       txn)         crates="-p frogdb-vll -p frogdb-txn" ;;
       persistence) crates="-p frogdb-persistence -p frogdb-recovery" ;;
       replication) crates="-p frogdb-replication -p frogdb-replication-runtime" ;;
-      cluster)     crates="-p frogdb-cluster" ;;
+      cluster)     crates="-p frogdb-cluster -p frogdb-cluster-runtime" ;;
       *) echo "unknown area: {{area}} (txn|persistence|replication|cluster)" >&2; exit 2 ;;
     esac
     {{dyld-env}} {{rocksdb-env}} cargo nextest run $crates {{ if pattern != "" { "-E 'test(/" + pattern + "/)'" } else { "" } }}

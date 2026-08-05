@@ -19,6 +19,21 @@ use tokio::sync::{Notify, mpsc};
 /// Connection ID type.
 pub type ConnId = u64;
 
+/// The broadcast pub/sub coordinator shard.
+///
+/// Broadcast (SUBSCRIBE/PSUBSCRIBE) registrations and PUBLISH delivery all go
+/// through this single shard so each subscriber is registered exactly once and
+/// each message is delivered exactly once, with a subscriber count that is not
+/// multiplied by the number of shards. Forwarded keyspace notifications
+/// (`PubSubMsg::PublishKeyspace`) and the CLIENT TRACKING BCAST redirect
+/// path rely on the same invariant.
+///
+/// Lives here rather than in the server's pub/sub command module because the
+/// cluster bus delivers a peer's `PUBLISH` to the same shard: both sides of the
+/// convention must read one constant or a cross-node broadcast lands on a shard
+/// with no subscribers registered.
+pub const BROADCAST_SHARD: usize = 0;
+
 /// Default hard cap (32 MiB) on the bytes of pending pub/sub messages buffered
 /// for a single slow / non-reading subscriber before further messages are
 /// dropped and the connection is torn down. Mirrors Redis's

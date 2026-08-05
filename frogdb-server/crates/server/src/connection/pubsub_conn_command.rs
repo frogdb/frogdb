@@ -45,16 +45,11 @@ use crate::connection::state::{ConnectionState, SubKind, SubscribeOutcome};
 use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
 use crate::slot_migration::RouteOutcome;
 
-/// The broadcast pub/sub coordinator shard.
-///
-/// Broadcast (SUBSCRIBE/PSUBSCRIBE) registrations and PUBLISH delivery all go
-/// through this single shard so each subscriber is registered exactly once and
-/// each message is delivered exactly once, with a subscriber count that is not
-/// multiplied by the number of shards. Forwarded keyspace notifications
-/// (`PubSubMsg::PublishKeyspace`) and the CLIENT TRACKING BCAST redirect
-/// path rely on the same invariant. Also referenced by the cluster bus and the
-/// connection lifecycle.
-pub(crate) const BROADCAST_SHARD: usize = 0;
+/// The broadcast pub/sub coordinator shard. Defined in `frogdb-core` because
+/// the cluster bus routes a peer's `PUBLISH` to the same shard; re-exported
+/// here so this module's call sites (and the connection lifecycle) keep
+/// reading one name. See [`frogdb_core::pubsub::BROADCAST_SHARD`].
+pub(crate) use frogdb_core::pubsub::BROADCAST_SHARD;
 
 // ============================================================================
 // Subscription-kind table

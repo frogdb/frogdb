@@ -788,7 +788,7 @@ pub struct ConfigManager {
     /// Live `[cluster]` decision flags (auto-failover, self-fence, replica
     /// priority). Shared with the failure detector and the self-fence gate,
     /// which read them at decision time.
-    cluster_flags: Arc<crate::cluster_flags::ClusterRuntimeFlags>,
+    cluster_flags: Arc<crate::cluster::flags::ClusterRuntimeFlags>,
     /// Live `[status]` health thresholds. Shared with the status collector, which
     /// classifies each `/status` report against the current values.
     status_thresholds: Arc<frogdb_telemetry::StatusThresholds>,
@@ -995,7 +995,7 @@ impl ConfigManager {
             typed_params: Self::build_typed_params(),
             shard_notifier,
             client_eviction_registry,
-            cluster_flags: crate::cluster_flags::ClusterRuntimeFlags::from_config(&config.cluster),
+            cluster_flags: crate::cluster::flags::ClusterRuntimeFlags::from_config(&config.cluster),
             status_thresholds: crate::config::StatusConfigExt::to_thresholds(&config.status),
             tracing_sampling_rate: Arc::new(frogdb_telemetry::SamplingRate::new(
                 config.tracing.sampling_rate,
@@ -1133,7 +1133,7 @@ impl ConfigManager {
     }
 
     /// Live `[cluster]` decision flags, for the failure detector and fence gate.
-    pub fn cluster_flags(&self) -> Arc<crate::cluster_flags::ClusterRuntimeFlags> {
+    pub fn cluster_flags(&self) -> Arc<crate::cluster::flags::ClusterRuntimeFlags> {
         self.cluster_flags.clone()
     }
 

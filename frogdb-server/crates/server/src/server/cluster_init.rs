@@ -10,10 +10,10 @@ use frogdb_core::{
 use std::time::Duration;
 use tracing::{info, warn};
 
-use crate::config::Config;
-use crate::failure_detector::{
+use crate::cluster::failure_detector::{
     FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };
+use crate::config::Config;
 use crate::net::{TcpListener, spawn};
 use crate::slot_migration::SlotMigrationCoordinator;
 
@@ -99,7 +99,7 @@ pub(super) async fn init_cluster(
     // Live `[cluster]` decision flags (auto-failover, self-fence, replica
     // priority), owned by the ConfigManager. The failure detector reads them at
     // decision time rather than copying them at construction.
-    cluster_flags: Arc<crate::cluster_flags::ClusterRuntimeFlags>,
+    cluster_flags: Arc<crate::cluster::flags::ClusterRuntimeFlags>,
     // The process-wide live role flag, minted in phase 1 and shared by all shard
     // workers, the acceptor, every connection handler and the replication
     // broadcaster. The `RoleManager` built here is its sole writer, driving Role

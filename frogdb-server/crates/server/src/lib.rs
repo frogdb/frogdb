@@ -6,16 +6,13 @@
 pub mod acceptor;
 pub mod admin;
 pub mod cli;
-pub mod cluster_bus;
-pub mod cluster_flags;
-pub mod cluster_pubsub;
+pub mod cluster;
 pub mod commands;
 pub mod config;
 pub(crate) mod config_persister;
 pub mod connection;
 pub mod cursor_store;
 pub mod debug_providers;
-pub mod failure_detector;
 pub mod function_store;
 pub mod info;
 pub mod latency_test;

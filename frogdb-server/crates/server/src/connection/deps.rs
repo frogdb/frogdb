@@ -20,7 +20,7 @@ use frogdb_telemetry::SharedTracer;
 
 use frogdb_core::ClientRegistry;
 
-use crate::cluster_pubsub::ClusterPubSubForwarder;
+use crate::cluster::pubsub::ClusterPubSubForwarder;
 use crate::config::TracingConfig;
 use crate::cursor_store::AggregateCursorStore;
 use crate::replication::{PrimaryReplicationHandler, SharedReplicationState};

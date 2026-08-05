@@ -1642,6 +1642,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-cluster-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-config",
+ "frogdb-core",
+ "frogdb-net",
+ "openraft",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-commands"
 version = "0.1.0"
 dependencies = [
@@ -1915,6 +1928,7 @@ dependencies = [
  "dashmap",
  "figment",
  "frogdb-cluster",
+ "frogdb-cluster-runtime",
  "frogdb-commands",
  "frogdb-config",
  "frogdb-core",

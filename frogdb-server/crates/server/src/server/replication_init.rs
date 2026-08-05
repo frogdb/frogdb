@@ -93,7 +93,7 @@ fn backlog_config(replication: &crate::config::ReplicationConfigSection) -> Back
 /// and PSYNC stayed refused. Building the seams once, up front, and gating
 /// *behavior* on the live role flag makes a promotion take effect with no
 /// post-construction wiring that can silently no-op — the same "decide at the
-/// point of use" rule [`crate::cluster_flags`] follows.
+/// point of use" rule [`crate::cluster::flags`] follows.
 ///
 /// What stays role-dependent:
 /// - Broadcasting is wrapped in [`RoleGatedBroadcaster`], so a replica (or a

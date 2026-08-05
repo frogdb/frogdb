@@ -5,8 +5,6 @@
 //! in frogdb_core::cluster::network.
 
 use std::sync::Arc;
-#[cfg(not(feature = "turmoil"))]
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -23,12 +21,46 @@ use frogdb_core::cluster::{
 use frogdb_core::cluster::new_framed;
 #[cfg(not(feature = "turmoil"))]
 use frogdb_core::cluster::new_framed_tcp;
+use frogdb_core::pubsub::BROADCAST_SHARD;
 use frogdb_core::shard_for_key;
 use tokio::sync::oneshot;
 
-use crate::net::TcpListener;
+use frogdb_net::TcpListener;
 use tracing::warn;
 use tracing::{debug, error, info};
+
+/// The server-side TLS seam for inbound cluster-bus connections.
+///
+/// TLS is the one thing this crate cannot own: the certificate store, the
+/// reload watcher and the `MaybeTlsStream` alias are all `frogdb-server`
+/// types. So the bus asks for the three things it actually needs — the
+/// handshake, the live dual-accept flag, and the live handshake timeout — and
+/// the server supplies them over its `TlsRuntimeHandle`. All three are read
+/// *per connection*, so a `CONFIG SET` reaches the next peer that dials in
+/// without disturbing established bus connections.
+#[cfg(not(feature = "turmoil"))]
+pub trait BusTlsAcceptor: Send + Sync {
+    /// Complete a TLS handshake on `stream`, yielding the encrypted stream.
+    ///
+    /// The bus applies [`Self::handshake_timeout`] around this future, so an
+    /// implementation need not bound it again.
+    fn accept(&self, stream: frogdb_net::TcpStream) -> BusTlsHandshake;
+
+    /// Whether to accept both plain and TLS connections (rolling migration).
+    fn dual_accept(&self) -> bool;
+
+    /// How long a handshake — or the transport sniff that precedes one — may
+    /// take before the connection is dropped.
+    fn handshake_timeout(&self) -> std::time::Duration;
+}
+
+/// The in-flight handshake [`BusTlsAcceptor::accept`] returns.
+#[cfg(not(feature = "turmoil"))]
+pub type BusTlsHandshake = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = std::io::Result<frogdb_core::cluster::BoxedStream>> + Send,
+    >,
+>;
 
 /// Context for the cluster bus, providing access to Raft and shard infrastructure.
 pub struct ClusterBusContext {
@@ -37,18 +69,10 @@ pub struct ClusterBusContext {
     pub num_shards: usize,
     pub node_id: NodeId,
     pub replication_offset: Arc<AtomicU64>,
-    /// TLS manager for accepting encrypted cluster bus connections.
+    /// TLS seam for accepting encrypted cluster bus connections. `None` when
+    /// the bus serves plaintext only.
     #[cfg(not(feature = "turmoil"))]
-    pub tls_manager: Option<Arc<crate::tls::TlsManager>>,
-    /// Whether to accept both plain and TLS connections during migration.
-    ///
-    /// Read per inbound connection so a rolling migration can be turned on and
-    /// off without a restart.
-    #[cfg(not(feature = "turmoil"))]
-    pub tls_cluster_migration: Arc<AtomicBool>,
-    /// Live TLS handshake timeout, read per inbound connection.
-    #[cfg(not(feature = "turmoil"))]
-    pub tls_handshake_timeout: crate::tls_runtime::HandshakeTimeout,
+    pub tls: Option<Arc<dyn BusTlsAcceptor>>,
 }
 
 /// Run the cluster bus TCP server.
@@ -117,15 +141,15 @@ fn choose_transport(migration: bool, first_byte: Option<u8>) -> BusTransport {
 /// RPCs are handled locally.
 #[cfg(not(feature = "turmoil"))]
 async fn handle_connection(
-    stream: tokio::net::TcpStream,
+    stream: frogdb_net::TcpStream,
     ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
-    let framed = if let Some(ref mgr) = ctx.tls_manager {
+    let framed = if let Some(ref tls) = ctx.tls {
         // Both the dual-accept flag and the handshake timeout are read here,
         // per connection, so a runtime change applies to the next peer that
         // dials in without disturbing established bus connections.
-        let migration = ctx.tls_cluster_migration.load(Ordering::Relaxed);
-        let handshake_timeout = ctx.tls_handshake_timeout.get();
+        let migration = tls.dual_accept();
+        let handshake_timeout = tls.handshake_timeout();
         let first_byte = if migration {
             let mut peek_buf = [0u8; 1];
             // Bounded by the same budget as the handshake itself: a peer
@@ -147,14 +171,12 @@ async fn handle_connection(
         match choose_transport(migration, first_byte) {
             BusTransport::Plaintext => new_framed_tcp(stream),
             BusTransport::Tls => {
-                let acceptor = mgr.acceptor();
-                let tls_stream = tokio::time::timeout(handshake_timeout, acceptor.accept(stream))
+                let tls_stream = tokio::time::timeout(handshake_timeout, tls.accept(stream))
                     .await
                     .map_err(|_| {
                         std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
-                    })?
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))?;
-                frogdb_core::cluster::new_framed(Box::new(tls_stream))
+                    })??;
+                frogdb_core::cluster::new_framed(tls_stream)
             }
         }
     } else {
@@ -211,7 +233,7 @@ async fn handle_connection(
 /// simulated network, giving deterministic multi-node cluster consensus.
 #[cfg(feature = "turmoil")]
 async fn handle_connection(
-    stream: crate::net::ConnectionStream,
+    stream: frogdb_net::TcpStream,
     ctx: &ClusterBusContext,
 ) -> std::io::Result<()> {
     let mut framed = new_framed(Box::new(stream));
@@ -278,7 +300,6 @@ async fn handle_pubsub_broadcast(
     channel: &[u8],
     message: &[u8],
 ) -> ClusterRpcResponse {
-    use crate::connection::pubsub_conn_command::BROADCAST_SHARD;
     let (response_tx, response_rx) = oneshot::channel();
     let _ = shard_senders[BROADCAST_SHARD]
         .send(PubSubMsg::Publish {
@@ -322,9 +343,10 @@ async fn handle_pubsub_forward(
 // (scoped-tls) outside a running sim. Excluded from the turmoil build.
 #[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
-    use super::{AtomicBool, BusTransport, Ordering, choose_transport};
-    use crate::net::tcp_listener_reusable;
+    use super::{BusTransport, Ordering, choose_transport};
+    use frogdb_net::tcp_listener_reusable;
     use std::net::SocketAddr;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn strict_mode_always_requires_tls() {
@@ -376,7 +398,7 @@ mod tests {
 
         // We can't easily test run() without a real Raft instance,
         // but we can verify tcp_listener_reusable behavior
-        let result: std::io::Result<crate::net::TcpListener> = tcp_listener_reusable(addr).await;
+        let result: std::io::Result<frogdb_net::TcpListener> = tcp_listener_reusable(addr).await;
         // Binding to a privileged port should fail for non-root users.
         // On macOS and when running as root (e.g. Docker containers), binding
         // to port 1 may succeed — that's acceptable, we just verify the call

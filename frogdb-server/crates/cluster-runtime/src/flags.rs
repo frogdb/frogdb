@@ -6,7 +6,7 @@
 //! decision, so a `CONFIG SET` takes effect on the next failover / fence /
 //! promotion check without a restart.
 //!
-//! Ownership: [`crate::runtime_config::ConfigManager`] builds the single
+//! Ownership: the server's `runtime_config::ConfigManager` builds the single
 //! instance from the startup [`frogdb_config::ClusterConfigSection`] and hands
 //! clones to the failure detector (auto-failover, replica priority) and the
 //! self-fence gate. That mirrors how `max_clients` / `listpack` /
@@ -104,7 +104,7 @@ impl Default for ClusterRuntimeFlags {
 
 /// Quorum checker that applies `cluster-self-fence-on-quorum-loss` at read time.
 ///
-/// The write pre-check ([`crate::connection::guards`]) fences a write when its
+/// The write pre-check (the server's `connection::guards`) fences a write when its
 /// quorum checker reports no quorum. Gating *installation* of the checker on
 /// the config flag made the knob startup-only; wrapping the real checker in
 /// this gate instead moves the decision to the point of use, so toggling the

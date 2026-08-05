@@ -11,8 +11,8 @@ use frogdb_core::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::cluster::failure_detector::FailureDetector;
 use crate::config::{Config, JsonConfigExt};
-use crate::failure_detector::FailureDetector;
 use crate::net::spawn;
 use crate::runtime_config::ConfigManager;
 

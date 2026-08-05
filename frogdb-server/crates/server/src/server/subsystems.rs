@@ -71,18 +71,6 @@ impl Server {
         }
     }
 
-    /// The live dual-accept flag for the cluster bus; same fallback rationale
-    /// as [`Self::tls_handshake_timeout`].
-    #[cfg(not(feature = "turmoil"))]
-    fn tls_cluster_migration_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
-        match self.tls_runtime {
-            Some(ref tls_rt) => tls_rt.cluster_migration_flag(),
-            None => Arc::new(std::sync::atomic::AtomicBool::new(
-                self.config.tls.tls_cluster_migration,
-            )),
-        }
-    }
-
     /// Start all subsystems and return handles for later shutdown.
     pub(super) fn start_subsystems(&mut self) -> Result<SubsystemHandles> {
         // Capture server start time
@@ -134,7 +122,7 @@ impl Server {
         // reason from *this* object: the write gate's verdict and the reported
         // reason are then the same evaluation, not two that can drift.
         let self_fence_gate = self.failure_detector.as_ref().map(|fd| {
-            Arc::new(crate::cluster_flags::SelfFenceGate::new(
+            Arc::new(crate::cluster::flags::SelfFenceGate::new(
                 fd.clone() as Arc<dyn frogdb_core::command::QuorumChecker>,
                 self.config_manager.cluster_flags(),
             ))
@@ -351,7 +339,7 @@ impl Server {
                 .cluster_bus_listener
                 .take()
                 .expect("cluster_bus_listener must be set when cluster is enabled");
-            let ctx = Arc::new(crate::cluster_bus::ClusterBusContext {
+            let ctx = Arc::new(crate::cluster::bus::ClusterBusContext {
                 raft: raft.clone(),
                 shard_senders: self.shard_senders.clone(),
                 num_shards: self.config.server.num_shards.max(1),
@@ -363,18 +351,17 @@ impl Server {
                     .clone()
                     .unwrap_or_else(|| Arc::new(AtomicU64::new(0))),
                 #[cfg(not(feature = "turmoil"))]
-                tls_manager: if self.config.tls.enabled && self.config.tls.tls_cluster {
-                    self.tls_runtime.as_ref().map(|h| h.manager().clone())
+                tls: if self.config.tls.enabled && self.config.tls.tls_cluster {
+                    self.tls_runtime.as_ref().map(|h| {
+                        Arc::new(crate::cluster::ClusterBusTls::new(h.clone()))
+                            as Arc<dyn crate::cluster::bus::BusTlsAcceptor>
+                    })
                 } else {
                     None
                 },
-                #[cfg(not(feature = "turmoil"))]
-                tls_cluster_migration: self.tls_cluster_migration_flag(),
-                #[cfg(not(feature = "turmoil"))]
-                tls_handshake_timeout: self.tls_handshake_timeout(),
             });
             Some(spawn(async move {
-                if let Err(e) = crate::cluster_bus::run(cluster_bus_listener, ctx).await {
+                if let Err(e) = crate::cluster::bus::run(cluster_bus_listener, ctx).await {
                     error!(error = %e, "Cluster bus server error");
                 }
             }))
@@ -462,12 +449,12 @@ impl Server {
         };
 
         // Create cluster pub/sub forwarder (None in standalone mode)
-        let pubsub_forwarder: Option<Arc<crate::cluster_pubsub::ClusterPubSubForwarder>> =
+        let pubsub_forwarder: Option<Arc<crate::cluster::pubsub::ClusterPubSubForwarder>> =
             if let (Some(cluster_state), Some(node_id), Some(network_factory)) =
                 (&self.cluster_state, self.node_id, &self.network_factory)
             {
                 Some(Arc::new(
-                    crate::cluster_pubsub::ClusterPubSubForwarder::Cluster {
+                    crate::cluster::pubsub::ClusterPubSubForwarder::Cluster {
                         cluster_state: cluster_state.clone(),
                         network_factory: network_factory.clone(),
                         node_id,

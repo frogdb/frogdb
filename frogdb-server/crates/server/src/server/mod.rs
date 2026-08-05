@@ -29,8 +29,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use crate::cluster::failure_detector::FailureDetector;
 use crate::config::{Config, TracingConfigExt};
-use crate::failure_detector::FailureDetector;
 use crate::latency_test::LatencyTestResult;
 use crate::net::TcpListener;
 use crate::replication::{PrimaryReplicationHandler, ReplicaReplicationHandler};

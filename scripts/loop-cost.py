@@ -50,8 +50,8 @@ AREAS: dict[str, tuple[str, str, list[str]]] = {
         [],
     ),
     "cluster": (
-        "frogdb-server",
-        "frogdb-server/crates/server/src/failure_detector.rs",
+        "frogdb-cluster-runtime",
+        "frogdb-server/crates/cluster-runtime/src/failure_detector.rs",
         [],
     ),
 }
