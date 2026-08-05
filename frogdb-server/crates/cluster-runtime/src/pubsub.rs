@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-    // FM-CLUSTER-069
+    // FM-CLUSTER-069, FM-CLUSTER-070
     #[tokio::test]
     async fn test_local_forwarder_forward_returns_none() {
         let forwarder = ClusterPubSubForwarder::Local;
