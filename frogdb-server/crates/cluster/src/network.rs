@@ -1341,6 +1341,22 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
+        // An existing voter: nothing is proposed at all, so the membership entry
+        // that is in force does not move and node 1 stays a voter. This phase
+        // runs first, while no other add-voter saga is in flight — the stranger
+        // phase below spawns a task whose learner→voter promotion can land a
+        // second membership entry at any later point, which would move the log
+        // id out from under this assertion for reasons unrelated to the re-add.
+        let settled = *raft.metrics().borrow().membership_config.log_id();
+        spawn_add_raft_voter(raft.clone(), 1, self_addr);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            raft.metrics().borrow().membership_config.log_id(),
+            &settled,
+            "re-adding an existing voter must propose nothing"
+        );
+        assert!(voters(&raft).contains(&1));
+
         // A stranger: the promotion has to reach Raft. `add_learner` commits the
         // membership entry before it blocks waiting for the (unreachable) peer
         // to catch up, so the node appearing in the membership is the signal.
@@ -1353,18 +1369,6 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-
-        // An existing voter: nothing is proposed at all, so the membership entry
-        // that is in force does not move and node 1 stays a voter.
-        let settled = *raft.metrics().borrow().membership_config.log_id();
-        spawn_add_raft_voter(raft.clone(), 1, self_addr);
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert_eq!(
-            raft.metrics().borrow().membership_config.log_id(),
-            &settled,
-            "re-adding an existing voter must propose nothing"
-        );
-        assert!(voters(&raft).contains(&1));
 
         raft.shutdown().await.unwrap();
     }
