@@ -13,6 +13,8 @@
 
 mod admin;
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use frogdb_cluster::wire;
 use frogdb_core::{
@@ -506,7 +508,7 @@ fn cluster_slots(ctx: &mut CommandContext) -> Result<Response, CommandError> {
     let snapshot = match ctx.cluster_state {
         Some(cluster_state) => cluster_state.snapshot(),
         // Standalone mode - single primary owning all slots.
-        None => wire::standalone_snapshot(ctx.node_id.unwrap_or(1)),
+        None => Arc::new(wire::standalone_snapshot(ctx.node_id.unwrap_or(1))),
     };
 
     Ok(map_slots_response(&wire::shard_views(&snapshot)))
@@ -556,7 +558,7 @@ fn cluster_shards(ctx: &mut CommandContext) -> Result<Response, CommandError> {
         // offset to that node regardless of whether `ctx.node_id` is set.
         None => {
             let node_id = ctx.node_id.unwrap_or(1);
-            (wire::standalone_snapshot(node_id), Some(node_id))
+            (Arc::new(wire::standalone_snapshot(node_id)), Some(node_id))
         }
     };
 

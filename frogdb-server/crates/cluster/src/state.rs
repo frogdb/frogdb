@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use openraft::storage::RaftStateMachine;
 use openraft::{EntryPayload, LogId, Snapshot, SnapshotMeta, StorageError, StoredMembership};
-use parking_lot::RwLock;
+use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
@@ -21,10 +21,78 @@ use crate::types::{
 /// The cluster state, protected by a read-write lock for concurrent access.
 #[derive(Debug, Clone, Default)]
 pub struct ClusterState {
-    pub(crate) inner: Arc<RwLock<ClusterStateInner>>,
+    cell: Arc<RwLock<StateCell>>,
     /// This node's current ID. Shared across all connections so that HARD reset
     /// (which generates a new node ID) is visible immediately. Not Raft-replicated.
     self_node_id: Arc<AtomicU64>,
+}
+
+/// The authoritative replicated state together with the immutable
+/// [`ClusterSnapshot`] published to readers.
+///
+/// Both live under one lock on purpose: the published value is rebuilt inside
+/// the same critical section as the mutation that invalidated it, so a reader
+/// can never observe a snapshot older than a mutation that has already
+/// returned. Rebuilding outside the lock would re-open the torn-verdict window
+/// the EXEC re-validation work closed (FM-CLUSTER-038).
+#[derive(Debug)]
+struct StateCell {
+    inner: ClusterStateInner,
+    /// Rebuilt from `inner` on every snapshot-visible mutation. Readers clone
+    /// the `Arc`, so [`ClusterState::snapshot`] copies a pointer rather than the
+    /// 16384-entry slot table.
+    published: Arc<ClusterSnapshot>,
+}
+
+impl StateCell {
+    fn new(inner: ClusterStateInner) -> Self {
+        let published = Arc::new(inner.to_snapshot());
+        Self { inner, published }
+    }
+
+    /// Re-derive the published snapshot from the authoritative state.
+    fn republish(&mut self) {
+        self.published = Arc::new(self.inner.to_snapshot());
+    }
+}
+
+impl Default for StateCell {
+    fn default() -> Self {
+        Self::new(ClusterStateInner::default())
+    }
+}
+
+/// A write guard over [`ClusterStateInner`] that republishes the reader snapshot
+/// when it is dropped.
+///
+/// This is the only way to obtain a `&mut ClusterStateInner`, which is what
+/// makes "every mutation republishes" structural rather than a convention: an
+/// early `return`, a `?`, or an unwinding panic all run `Drop` before the lock
+/// is released, so no caller can leave a stale snapshot behind. The rebuild is
+/// unconditional — a command that validated and rejected republishes an
+/// identical value rather than relying on nothing having been touched yet.
+pub(crate) struct PublishOnDrop<'a> {
+    cell: RwLockWriteGuard<'a, StateCell>,
+}
+
+impl std::ops::Deref for PublishOnDrop<'_> {
+    type Target = ClusterStateInner;
+
+    fn deref(&self) -> &ClusterStateInner {
+        &self.cell.inner
+    }
+}
+
+impl std::ops::DerefMut for PublishOnDrop<'_> {
+    fn deref_mut(&mut self) -> &mut ClusterStateInner {
+        &mut self.cell.inner
+    }
+}
+
+impl Drop for PublishOnDrop<'_> {
+    fn drop(&mut self) {
+        self.cell.republish();
+    }
 }
 
 /// Inner state of the cluster.
@@ -67,9 +135,44 @@ impl ClusterState {
             active_version: snapshot.active_version,
         };
         Self {
-            inner: Arc::new(RwLock::new(inner)),
+            cell: Arc::new(RwLock::new(StateCell::new(inner))),
             self_node_id,
         }
+    }
+
+    /// Read the authoritative replicated state.
+    ///
+    /// Prefer [`Self::snapshot`] for anything that wants a consistent view of
+    /// the whole topology — this borrows the lock for as long as the guard
+    /// lives, and blocks writers.
+    pub(crate) fn read_inner(&self) -> MappedRwLockReadGuard<'_, ClusterStateInner> {
+        RwLockReadGuard::map(self.cell.read(), |cell| &cell.inner)
+    }
+
+    /// Take the write lock, republishing the reader snapshot when the returned
+    /// guard drops. See [`PublishOnDrop`].
+    pub(crate) fn write_inner(&self) -> PublishOnDrop<'_> {
+        PublishOnDrop {
+            cell: self.cell.write(),
+        }
+    }
+
+    /// Record how far openraft has applied.
+    ///
+    /// `last_applied_log` is not part of [`ClusterSnapshot`], so this
+    /// deliberately does not republish: every entry openraft applies — including
+    /// blank ones — advances it, and rebuilding the slot table per entry would
+    /// move the cost this seam exists to remove onto the apply path.
+    fn set_last_applied_log(&self, log_id: LogId<NodeId>) {
+        self.cell.write().inner.last_applied_log = Some(log_id);
+    }
+
+    /// Record the membership configuration openraft committed.
+    ///
+    /// Like [`Self::set_last_applied_log`], `last_membership` is openraft
+    /// bookkeeping that no snapshot carries, so no republish is needed.
+    fn set_last_membership(&self, membership: StoredMembership<NodeId, openraft::BasicNode>) {
+        self.cell.write().inner.last_membership = membership;
     }
 
     /// Get this node's current ID. Returns `None` if not yet set (value is 0).
@@ -96,7 +199,7 @@ impl ClusterState {
     pub fn encode_snapshot(
         &self,
     ) -> Result<(SnapshotMeta<NodeId, openraft::BasicNode>, Vec<u8>), serde_json::Error> {
-        let inner = self.inner.read();
+        let inner = self.read_inner();
         let data = serde_json::to_vec(&*inner)?;
         let meta = SnapshotMeta {
             last_log_id: inner.last_applied_log,
@@ -122,34 +225,32 @@ impl ClusterState {
     ) {
         restored.last_applied_log = meta.last_log_id;
         restored.last_membership = meta.last_membership.clone();
-        *self.inner.write() = restored;
+        *self.write_inner() = restored;
     }
 
     /// Get a snapshot of the current state.
-    pub fn snapshot(&self) -> ClusterSnapshot {
-        let inner = self.inner.read();
-        ClusterSnapshot {
-            nodes: inner.nodes.clone(),
-            slot_assignment: inner.slot_assignment.clone(),
-            config_epoch: inner.config_epoch,
-            migrations: inner.migrations.clone(),
-            active_version: inner.active_version.clone(),
-        }
+    ///
+    /// Pointer-cheap: the value is rebuilt on mutation, not on read (see
+    /// [`StateCell`]), so the routing seam can take one per keyed command
+    /// without copying the slot table. Two calls with no intervening mutation
+    /// return the same allocation.
+    pub fn snapshot(&self) -> Arc<ClusterSnapshot> {
+        Arc::clone(&self.cell.read().published)
     }
 
     /// Get node info by ID.
     pub fn get_node(&self, node_id: NodeId) -> Option<NodeInfo> {
-        self.inner.read().nodes.get(&node_id).cloned()
+        self.read_inner().nodes.get(&node_id).cloned()
     }
 
     /// Get all nodes.
     pub fn get_all_nodes(&self) -> Vec<NodeInfo> {
-        self.inner.read().nodes.values().cloned().collect()
+        self.read_inner().nodes.values().cloned().collect()
     }
 
     /// Get the node owning a slot.
     pub fn get_slot_owner(&self, slot: u16) -> Option<NodeId> {
-        self.inner.read().slot_assignment.get(&slot).copied()
+        self.read_inner().slot_assignment.get(&slot).copied()
     }
 
     /// Get all slots assigned to a node as ranges.
@@ -159,17 +260,17 @@ impl ClusterState {
 
     /// Get the current configuration epoch.
     pub fn config_epoch(&self) -> ConfigEpoch {
-        self.inner.read().config_epoch
+        self.read_inner().config_epoch
     }
 
     /// Check if a slot is migrating.
     pub fn is_slot_migrating(&self, slot: u16) -> bool {
-        self.inner.read().migrations.contains_key(&slot)
+        self.read_inner().migrations.contains_key(&slot)
     }
 
     /// Get migration info for a slot.
     pub fn get_slot_migration(&self, slot: u16) -> Option<SlotMigration> {
-        self.inner.read().migrations.get(&slot).cloned()
+        self.read_inner().migrations.get(&slot).cloned()
     }
 
     /// Apply a command to the local state during bootstrap, bypassing Raft
@@ -189,19 +290,19 @@ impl ClusterState {
 
     /// Check if all slots are assigned.
     pub fn all_slots_assigned(&self) -> bool {
-        let inner = self.inner.read();
+        let inner = self.read_inner();
         inner.slot_assignment.len() == CLUSTER_SLOTS as usize
     }
 
     /// Get the finalized active version, if any.
     pub fn active_version(&self) -> Option<String> {
-        self.inner.read().active_version.clone()
+        self.read_inner().active_version.clone()
     }
 
     /// Override a node's reported binary version. Test-only.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn set_node_version(&self, node_id: NodeId, version: String) {
-        if let Some(info) = self.inner.write().nodes.get_mut(&node_id) {
+        if let Some(info) = self.write_inner().nodes.get_mut(&node_id) {
             info.version = version;
         }
     }
@@ -209,7 +310,7 @@ impl ClusterState {
     /// Override all nodes' reported binary versions. Test-only.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn set_all_node_versions(&self, version: &str) {
-        let mut inner = self.inner.write();
+        let mut inner = self.write_inner();
         for info in inner.nodes.values_mut() {
             info.version = version.to_string();
         }
@@ -241,6 +342,21 @@ pub(crate) enum EpochReconciliation {
 }
 
 impl ClusterStateInner {
+    /// Build the reader-facing view of this state.
+    ///
+    /// The one place that decides which fields are snapshot-visible: anything
+    /// copied here has to be republished on mutation, anything left out (the
+    /// openraft bookkeeping) does not.
+    fn to_snapshot(&self) -> ClusterSnapshot {
+        ClusterSnapshot {
+            nodes: self.nodes.clone(),
+            slot_assignment: self.slot_assignment.clone(),
+            config_epoch: self.config_epoch,
+            migrations: self.migrations.clone(),
+            active_version: self.active_version.clone(),
+        }
+    }
+
     /// The highest `config_epoch` any known node currently claims.
     fn max_node_epoch(&self) -> ConfigEpoch {
         self.nodes
@@ -648,7 +764,7 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
         ),
         StorageError<NodeId>,
     > {
-        let inner = self.state.inner.read();
+        let inner = self.state.read_inner();
         Ok((inner.last_applied_log, inner.last_membership.clone()))
     }
 
@@ -732,14 +848,14 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                     results.push(response);
                 }
                 EntryPayload::Membership(membership) => {
-                    let mut inner = self.state.inner.write();
-                    inner.last_membership = StoredMembership::new(Some(log_id), membership);
+                    self.state
+                        .set_last_membership(StoredMembership::new(Some(log_id), membership));
                     results.push(ClusterResponse::Ok);
                 }
             }
 
             // Update last applied log
-            self.state.inner.write().last_applied_log = Some(log_id);
+            self.state.set_last_applied_log(log_id);
         }
 
         Ok(results)
@@ -889,6 +1005,129 @@ mod tests {
             RoleChangeEvent::Promoted(e) => e,
             other => panic!("expected a promotion, got {other:?}"),
         }
+    }
+
+    // FM-CLUSTER-078
+    #[test]
+    fn test_snapshot_observes_topology_applied_since_the_last_read() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+
+        let before = state.snapshot();
+        assert_eq!(before.get_slot_owner(42), None);
+
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 100)],
+            })
+            .unwrap();
+
+        let after = state.snapshot();
+        assert_eq!(
+            after.get_slot_owner(42),
+            Some(1),
+            "a mutation applied through apply_command must be visible in the next snapshot"
+        );
+        assert!(
+            !Arc::ptr_eq(&before, &after),
+            "a mutation must publish a new snapshot rather than edit the one readers hold"
+        );
+        // The snapshot a reader already held is an immutable value: the
+        // mutation cannot reach back into a decision made against it.
+        assert_eq!(before.get_slot_owner(42), None);
+    }
+
+    // FM-CLUSTER-078
+    #[test]
+    fn test_repeated_snapshots_without_mutation_share_one_allocation() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, CLUSTER_SLOTS - 1)],
+            })
+            .unwrap();
+
+        let first = state.snapshot();
+        let second = state.snapshot();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "snapshot() must hand out the published value, not a fresh copy of the slot table"
+        );
+
+        // Read-only accessors are readers too: they must not invalidate the
+        // published value.
+        let _ = state.get_slot_owner(7);
+        let _ = state.config_epoch();
+        let _ = state.get_all_nodes();
+        assert!(Arc::ptr_eq(&first, &state.snapshot()));
+    }
+
+    // FM-CLUSTER-078
+    #[test]
+    fn test_rejected_command_leaves_snapshot_agreeing_with_state() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 10)],
+            })
+            .unwrap();
+
+        // Rejected halfway through its validation loop.
+        let err = state.apply_command(ClusterCommand::RemoveSlots {
+            node_id: 1,
+            slots: vec![SlotRange::new(5, 20)],
+        });
+        assert!(err.is_err());
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.get_slot_owner(5), Some(1), "no slot was removed");
+        assert_eq!(snapshot.slot_assignment, state.read_inner().slot_assignment);
+        assert_eq!(snapshot.nodes, state.read_inner().nodes);
+        assert_eq!(snapshot.config_epoch, state.config_epoch());
+    }
+
+    // FM-CLUSTER-078
+    #[test]
+    fn test_snapshot_install_republishes_the_reader_view() {
+        let state = ClusterState::new();
+        let stale = state.snapshot();
+
+        let mut restored = ClusterStateInner::default();
+        restored.nodes.insert(
+            9,
+            NodeInfo::new_primary(9, test_addr(6389), test_addr(16389)),
+        );
+        restored.slot_assignment.insert(3, 9);
+        restored.config_epoch = 12;
+        let meta = SnapshotMeta {
+            last_log_id: None,
+            last_membership: Default::default(),
+            snapshot_id: "snapshot-0".to_string(),
+        };
+        state.restore_from_snapshot(restored, &meta);
+
+        let fresh = state.snapshot();
+        assert!(!Arc::ptr_eq(&stale, &fresh));
+        assert_eq!(fresh.get_slot_owner(3), Some(9));
+        assert_eq!(fresh.config_epoch, 12);
+        assert!(fresh.get_node(9).is_some());
     }
 
     // FM-CLUSTER-001
@@ -1692,7 +1931,7 @@ mod tests {
         let state = ClusterState::new();
 
         let assert_invariant = |label: &str| {
-            let inner = state.inner.read();
+            let inner = state.read_inner();
             let highest = inner
                 .nodes
                 .values()
@@ -1815,7 +2054,7 @@ mod tests {
         // final membership is that node alone. Pinned so a change in any
         // command's semantics shows up here rather than silently reshaping the
         // state the invariant was being checked against.
-        let inner = state.inner.read();
+        let inner = state.read_inner();
         let mut ids: Vec<NodeId> = inner.nodes.keys().copied().collect();
         ids.sort_unstable();
         assert_eq!(ids, vec![99], "final membership after the hard reset");
@@ -2693,10 +2932,10 @@ mod tests {
             })
             .unwrap();
 
-        let data = serde_json::to_vec(&*state.inner.read()).unwrap();
+        let data = serde_json::to_vec(&*state.read_inner()).unwrap();
         let restored: ClusterStateInner = serde_json::from_slice(&data).unwrap();
 
-        let original = state.inner.read();
+        let original = state.read_inner();
         assert_eq!(restored.nodes, original.nodes);
         assert_eq!(restored.slot_assignment, original.slot_assignment);
         assert_eq!(restored.config_epoch, original.config_epoch);
@@ -2873,7 +3112,7 @@ mod tests {
     fn snapshot_payload(
         state: &ClusterState,
     ) -> (SnapshotMeta<NodeId, openraft::BasicNode>, Vec<u8>) {
-        let data = serde_json::to_vec(&*state.inner.read()).unwrap();
+        let data = serde_json::to_vec(&*state.read_inner()).unwrap();
         let meta = SnapshotMeta {
             last_log_id: Some(openraft::LogId {
                 leader_id: openraft::CommittedLeaderId::new(1, 1),

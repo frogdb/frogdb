@@ -1062,6 +1062,18 @@ than disguised as correct ownership.
 | Forced by | `a_fresh_counter_pair_reads_zero`, `the_two_directions_are_counted_independently`, `counters_accumulate_across_threads`, `cluster_stats_messages_sent_grows_with_bus_traffic`, `cluster_stats_messages_received_grows_on_the_receiving_node`, `a_connection_that_never_opens_counts_nothing`, `cluster_info_omits_gossip_counters_that_have_no_source`, `cluster_info_reports_the_live_bus_counters`, `cluster_info_omits_the_bus_totals_when_they_cannot_be_read` |
 | Bug refs | fixed: [37-cluster-stats-messages-hardcoded-zero.md](../issues/done/37-cluster-stats-messages-hardcoded-zero.md) |
 
+## FM-CLUSTER-078 — the published snapshot is never older than an applied mutation
+
+| Field | Value |
+|---|---|
+| Trigger | Any topology mutation the state machine applies — a `ClusterCommand` through `apply_command` (including one it rejects), or a whole-state replacement through `restore_from_snapshot` — followed by a `ClusterState::snapshot()`. |
+| Observable | The next `snapshot()` observes the mutation. Two `snapshot()` calls with no intervening mutation return the *same* allocation (`Arc::ptr_eq`), and read-only accessors do not invalidate it. A snapshot a reader already holds is immutable: a later mutation cannot reach back into a decision made against it. |
+| NOT observable | A reader routing against a topology the state machine has already moved past — a stale slot table is a `MOVED` to the wrong node or a local serve of a slot this node no longer owns. Nor a per-read copy of the 16384-entry slot table: `snapshot()` is on the keyed-command path (`SlotMigrationCoordinator::route`), so a copy there is per-command cost. |
+| Invariant | `StateCell` holds the authoritative `ClusterStateInner` and the published `Arc<ClusterSnapshot>` under one lock, and `PublishOnDrop` — the only way to obtain a `&mut ClusterStateInner` — rebuilds the published value in its `Drop`, inside the same critical section. An early `return`, a `?`, or an unwinding panic all run that `Drop`. The openraft bookkeeping fields (`last_applied_log`, `last_membership`) are deliberately not snapshot-visible and have their own no-republish setters (`state.rs`). |
+| Outcome variant | `Arc<ClusterSnapshot>` |
+| Forced by | `test_snapshot_observes_topology_applied_since_the_last_read`, `test_repeated_snapshots_without_mutation_share_one_allocation`, `test_rejected_command_leaves_snapshot_agreeing_with_state`, `test_snapshot_install_republishes_the_reader_view` |
+| Bug refs | fixed: [10-cluster-snapshot-clone-cost.md](../../replication-cluster-rework/issues/done/10-cluster-snapshot-clone-cost.md) |
+
 ---
 
 ## GAPS — behavior nothing forces

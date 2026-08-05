@@ -15,11 +15,15 @@ impl ClusterState {
     /// no events at all — emit-on-failure is structurally impossible. The
     /// events are node-agnostic; the node-local self-filter and channel routing
     /// live in [`crate::state::ClusterStateMachine`]'s `apply`.
+    ///
+    /// The guard republishes the reader snapshot when it drops, so every arm —
+    /// including the ones that `return Err` before mutating — leaves
+    /// [`ClusterState::snapshot`] agreeing with the state this call produced.
     pub(crate) fn apply_command(
         &self,
         cmd: ClusterCommand,
     ) -> Result<(ClusterResponse, Vec<ClusterEvent>), ClusterError> {
-        let mut inner = self.inner.write();
+        let mut inner = self.write_inner();
 
         match cmd {
             ClusterCommand::AddNode { mut node } => {
