@@ -119,9 +119,10 @@ agent killed by the 600s watchdog:
 ### Hardening campaign (ACTIVE)
 
 Foundation-hardening campaign is in progress: core areas (transactions, persistence, replication,
-cluster) are being extracted, specced, and mutation-tested; the redis-regression suite is frozen
-and operator/frogctl are out of scope. **Read `docs/agents/hardening-campaign.md` before working
-on core-area code.**
+cluster) are being extracted, specced, and mutation-tested; operator/frogctl are out of scope.
+The redis-regression compat suite was frozen during the campaign and is now unfrozen — it builds
+in `just check` and runs in `just test` again. **Read `docs/agents/hardening-campaign.md` before
+working on core-area code.**
 
 ### Issue tracker
 

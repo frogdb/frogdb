@@ -48,9 +48,12 @@ default, and two expressions mutated into themselves (`connected()` is the defau
 - `frogdb-operator/**` — separate workspace, own CI.
 - `frogctl/**` — excluded from the default test run (`just frogctl-test` to run explicitly).
 - `website/**`.
-- The **frozen** redis-regression suite (`frogdb-server/crates/redis-regression`): it does not
-  build in `just check`/`just test`. If a nightly `regression-run` goes red, file an issue in
-  `.scratch/hardening/issues/` — do **not** fix inline.
+
+The redis-regression suite (`frogdb-server/crates/redis-regression`) was frozen for the
+duration of the campaign — gated behind a `regression` required-feature and out of `just
+check`/`just test`. **That freeze ended at campaign exit (2026-08-05)**: the suite builds and
+runs in the default dev loop again, and a red compat test is a normal failure to fix, not an
+issue to file.
 
 ## Command surface
 
@@ -58,8 +61,8 @@ default, and two expressions mutated into themselves (`connected()` is the defau
 |---|---|
 | `just core-test <area> [pattern]` | Run one area's crate tests (`txn` \| `persistence` \| `replication` \| `cluster`) |
 | `just core-test-e2e <area>` | Area's end-to-end tests against the real server, core profile |
-| `just regression [pattern]` | Run the frozen compat suite (on demand / nightly only) |
-| `just regression-check` | Compile-only anti-rot check of the frozen suite |
+| `just regression [pattern]` | Run the Redis compat suite on its own (also part of `just test`) |
+| `just regression-check` | Compile-only check of the compat suite |
 | `just mutants <crate>` | Full mutation run (testbox-class; use `just tb-run` in testbox mode) |
 | `just mutants-diff <crate>` | Mutate only this branch's diff (PR-viable) |
 | `just mutants-gate <crate> <threshold>` | Enforce an area's mutation score from a completed run |
@@ -67,7 +70,7 @@ default, and two expressions mutated into themselves (`connected()` is the defau
 
 Targeted `-p` builds (`just check <crate>`, `just test <crate>`, the `core-*` recipes) already use
 the core command profile — it is the default feature set. Workspace-wide builds unify to the full
-surface (docs-gen and the frozen regression suite pin `cmd-full`), which is expected. Avoid
+surface (docs-gen and the regression suite pin `cmd-full`), which is expected. Avoid
 alternating extra feature flags between commands in an iteration loop — it thrashes the build
 cache.
 

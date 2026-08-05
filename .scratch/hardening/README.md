@@ -41,5 +41,7 @@ Filed under [`issues/`](issues/) per the
 [issue-tracker conventions](../../docs/agents/issue-tracker.md) — `Status:` line and
 `open/`|`done/` subdirectory must agree, enforced by `just scratch-check`.
 
-Note the redis-regression suite is **frozen**: a red nightly `regression-run` gets an issue
-here, not an inline fix.
+The redis-regression suite was **frozen** during the campaign (a red `regression-run` got an
+issue here, not an inline fix). That freeze ended at campaign exit on 2026-08-05 — the suite
+builds in `just check` and runs in `just test` again, and a red compat test is now a normal
+failure to fix.

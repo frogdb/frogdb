@@ -68,12 +68,12 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: regression
-    - name: Type-check frozen regression suite
+    - name: Type-check regression suite
       run: just regression-check
   regression-run:
     needs: gate
     if: needs.gate.outputs.skip != 'true'
-    name: Run Frozen Redis Compat Suite
+    name: Run Redis Compat Suite
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -94,5 +94,5 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: regression
-    - name: Run frozen regression suite
+    - name: Run regression suite
       run: just regression

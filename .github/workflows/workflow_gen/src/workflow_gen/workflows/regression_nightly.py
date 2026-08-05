@@ -1,31 +1,28 @@
-"""Nightly frozen Redis-compat regression workflow definition.
+"""Nightly Redis-compat regression workflow definition.
 
 The 63K-LOC `frogdb-redis-regression` compat suite (`frogdb-server/crates/redis-regression`)
-is frozen for the duration of the foundation-hardening campaign (see
-`docs/agents/hardening-campaign.md`): it no longer builds as part of `just check`/`just
-test` (gated behind the `regression` Cargo feature via `required-features`), so a compat
-regression during the campaign is invisible to the normal PR-gating `test.yml` run. This
-workflow is the nightly signal that fills that gap, mirroring the repo's other on-demand
-tiers (`concurrency_nightly.py` / `jepsen_nightly.py` / `coverage_nightly.py`):
+was frozen for the duration of the foundation-hardening campaign — gated behind a
+`regression` required-feature and out of `just check`/`just test` — which left compat
+breakage invisible to the PR-gating `test.yml` run. This workflow was the nightly signal
+that filled that gap. The freeze ended at campaign exit (see
+`docs/agents/hardening-campaign.md`): the suite is back in the default dev loop, so this
+tier is now a scheduled backstop rather than the only signal, mirroring the repo's other
+on-demand tiers (`concurrency_nightly.py` / `jepsen_nightly.py` / `coverage_nightly.py`):
 
-* `regression-check`: compiles the frozen suite (`just regression-check`, plain `cargo
-  check --features regression --all-targets`) without running it — the cheap anti-rot
-  guard that catches the suite silently bit-rotting against API changes elsewhere in the
-  workspace, without paying the cost of actually running 63K lines of compat tests.
-* `regression-run`: runs the full suite (`just regression`) against the real server. Per
-  `hardening-campaign.md`, a red nightly here gets filed as an issue under
-  `.scratch/hardening/issues/` rather than fixed inline — the suite is explicitly frozen,
-  not actively maintained, during the campaign.
+* `regression-check`: compiles the suite (`just regression-check`) without running it — the
+  cheap anti-rot guard that catches the suite silently bit-rotting against API changes
+  elsewhere in the workspace, without paying the cost of actually running 63K lines of
+  compat tests.
+* `regression-run`: runs the full suite (`just regression`) against the real server. Now
+  that the suite is unfrozen, a red run here is a normal failure to fix, not an issue to
+  file.
 
 Unlike the campaign's other nightly tiers (concurrency/coverage/jepsen), whose crons were
-removed because they are expensive, unwatched, and gate nothing, this suite's whole purpose
-is to keep a working (if frozen) regression signal alive while it's out of the PR path — so
-it keeps a real nightly cron in addition to `workflow_dispatch`, unlike most other workflows
-in the repo. Both jobs sit behind the shared `change_gate_job` (see `helpers.py`): a
-scheduled run with no new commits since the last successful run skips rather than re-running
-63K lines of compat tests for nothing. The suite itself remains frozen for the duration of
-the hardening campaign (`docs/agents/hardening-campaign.md`) — a red `regression-run` gets
-filed as an issue, not fixed inline; that policy is orthogonal to whether the workflow runs.
+removed because they are expensive, unwatched, and gate nothing, this one keeps a real
+nightly cron in addition to `workflow_dispatch` so the full compat run has a scheduled home
+even when the PR tier is scoped down. Both jobs sit behind the shared `change_gate_job` (see
+`helpers.py`): a scheduled run with no new commits since the last successful run skips
+rather than re-running 63K lines of compat tests for nothing.
 """
 
 from workflow_gen.helpers import (
@@ -74,7 +71,7 @@ def regression_nightly_workflow() -> Workflow:
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="regression"),
-                run_step(name="Type-check frozen regression suite", run="just regression-check"),
+                run_step(name="Type-check regression suite", run="just regression-check"),
             ],
         ),
     )
@@ -82,7 +79,7 @@ def regression_nightly_workflow() -> Workflow:
     w.job(
         "regression-run",
         Job(
-            name="Run Frozen Redis Compat Suite",
+            name="Run Redis Compat Suite",
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
@@ -96,7 +93,7 @@ def regression_nightly_workflow() -> Workflow:
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="regression"),
-                run_step(name="Run frozen regression suite", run="just regression"),
+                run_step(name="Run regression suite", run="just regression"),
             ],
         ),
     )
