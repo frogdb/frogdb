@@ -1,6 +1,7 @@
 # Bare EVAL/EVALSHA/FCALL appear to bypass cluster slot validation (stage-ordering hole)
 
-Status: needs-triage — code-derived finding, needs a forcing test to confirm
+Status: confirmed — forcing test written and failing (2026-08-04); ready-for-agent (fix deferred to
+the cluster hardening phase's bug-closing step)
 PRD: [replication-cluster-rework/epoch-fold-redesign.md](../epoch-fold-redesign.md)
 Type: AFK
 Origin: rework-02 design research, 2026-08-04 (see
@@ -26,6 +27,31 @@ at `:673-695` explaining scripts are slot-routed. But there is no `MUST_PRECEDE`
 pins a bare `EVAL` receiving `-MOVED` on a non-owner node — only the MULTI-queued case
 (FM-TXN-030) and cross-slot-in-script (`test_eval_cross_slot_returns_error`, which comes from
 `classify_script_shards`, not `validate_cluster_slots`).
+
+## Confirmation (2026-08-04)
+
+Forcing test: `test_bare_eval_on_non_owner_returns_moved`
+(`frogdb-server/crates/server/tests/cluster_slots.rs`). 3-node cluster, probe slot 4483, owner
+found by probing; control `GET <key>` on the non-owner returns `-MOVED` as expected, then a bare
+`EVAL "redis.call('SET', KEYS[1], ...); return 1" 1 <key>` is sent to the same non-owner.
+
+Result — **the hole is real**:
+
+```
+thread 'test_bare_eval_on_non_owner_returns_moved' panicked at
+frogdb-server/crates/server/tests/cluster_slots.rs:1730:5:
+bare EVAL naming a key owned by another node must be MOVED, got: Integer(1)
+```
+
+`Integer(1)` is the script's own return value: it ran to completion on the non-owner and its
+`SET` landed there — an acked write on a node that does not own the slot, while the identical
+`GET` on the same connection is redirected. Consequence 3/3 confirmed.
+
+The test is left in the tree as `#[ignore]` naming this issue, so the fix has a ready-made
+regression test: delete the `#[ignore]` when the ordering is fixed. Specced as a known bug:
+FM-CLUSTER-030 in `.scratch/hardening/specs/cluster-failure-modes.md`, which cites this issue as
+its gap (an `#[ignore]`d test is absent from `cargo nextest list`, so the failure-mode lint cannot
+resolve it as a `Forced by` witness — re-point the row at the test when the `#[ignore]` goes).
 
 ## What to do
 
