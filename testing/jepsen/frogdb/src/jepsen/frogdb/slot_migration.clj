@@ -646,19 +646,38 @@
      partition), ownership is reported but not asserted, so the partition variant
      does not false-positive; durability/value-correctness still gate the run.
 
-   - No orphaned writes (gates, scoped to transaction keys): after the slot has
-     changed hands, no node other than its current owner may physically hold a
-     key the straddling transaction wrote. This is the property the
-     `:queued-txn` / `:exec-queued-txn` pair exists to stress — a transaction
-     queued before the migration and EXEC'd after it must not commit on the
-     former owner. Every other op in this workload goes through the cluster
-     client, which follows MOVED to the new owner and therefore *cannot* observe
-     such an orphan; `:read-orphans` reads each non-owner node directly with
-     `CLUSTER GETKEYSINSLOT`, which reports what a node physically stores rather
-     than what it would route. Orphans belonging to *other* keys are reported
-     under :orphaned-keys but do not gate: the ordinary `:write` generator also
-     runs through finalization, where the bounded raft-apply window can leave a
-     key on the former owner for an interval this workload does not control.
+   - No orphaned acked writes (gates, all keys this workload acknowledged):
+     after the slot has changed hands, no node other than its current owner may
+     physically hold a key this workload wrote or queued a write to — the
+     ordinary `:write` register key and the `:queued-txn` / `:exec-queued-txn`
+     straddling transaction's key alike. Every other op in this workload goes
+     through the cluster client, which follows MOVED to the new owner and
+     therefore *cannot* observe such an orphan; `:read-orphans` reads each
+     non-owner node directly with `CLUSTER GETKEYSINSLOT`, which reports what a
+     node physically stores rather than what it would route.
+
+     This used to gate only the transaction's key, on the theory that an
+     ordinary single-key `:write` could legitimately straddle finalization and
+     land on the former owner for the bounded raft commit->apply window
+     (FM-CLUSTER-037, microseconds). That reasoning covered a real gap: the
+     migrating-source single-key write path had no pre-execution key-presence
+     probe, so a `:write` landing on the source *after* its key had already
+     migrated away was served locally instead of ASK'd — re-creating the key
+     on the former owner and silently orphaning up to several seconds of acked
+     writes with no fault active (hardening issue 31's Bug X, filed as issue
+     40). That path now probes presence before executing, same as the
+     multi-key/EXEC path — see
+     `test_single_key_write_on_migrating_source_asks_and_never_orphans`
+     (`frogdb-server/crates/server/tests/cluster_migration.rs`) — so an
+     ordinary write can no longer be served-then-orphaned that way either, and
+     gating it the same as the transaction key is now sound. FM-CLUSTER-037's
+     genuine microsecond window is still not a false-positive risk: `:read-
+     orphans` fires only after `finish-migration` + a 2s settle +
+     `exec-queued-txn` + another 1s settle (see the generator), several
+     seconds past any commit->apply gap. Orphans of keys outside this
+     workload's own key set are still reported under :orphaned-keys (nothing
+     else should ever be found in this hash-tagged slot, but reporting is
+     unconditional) — only orphans of an acked-write key gate.
 
    A migration must have started at all (sanity) for the run to be meaningful.
 
@@ -772,22 +791,31 @@
             ;; correct; only an orphan is a fault).
             queued-txn-ops (filter #(= :queued-txn (:f %)) completed)
 
-            ;; Gate only on keys the straddling transaction touched. The
-            ;; ordinary :write generator runs straight through finalization as
-            ;; well, and the documented raft-apply window (see
-            ;; .scratch/replication-cluster-rework/issues/02) can leave one
-            ;; of its keys on the former owner for a bounded interval — a known,
-            ;; accepted race with nothing to do with transactions. Every orphan
-            ;; is still reported; only a transactional one fails the run.
+            ;; Gate on every key this workload acknowledged: the transaction's
+            ;; key and the ordinary register key alike (see the docstring's
+            ;; "No orphaned acked writes" entry — the migrating-source
+            ;; single-key write path that used to legitimize a non-txn orphan
+            ;; is fixed, hardening issue 40 / Bug X). Both key sets live in the
+            ;; same hash-tagged slot, so `acked-keys` is really "every key this
+            ;; workload has ever touched" — kept as an explicit set (rather
+            ;; than gating on all reported keys unconditionally) so a stray
+            ;; key from an unrelated workload sharing the cluster can never
+            ;; false-positive this gate.
             txn-keys (->> queued-txn-ops
                           (keep #(get-in % [:value :key]))
                           set)
+            acked-keys (into txn-keys written-keys)
             orphaned-txn-keys (->> orphaned-keys
                                    (keep (fn [o]
                                            (let [ks (filterv txn-keys (:keys o))]
                                              (when (seq ks) (assoc o :keys ks)))))
                                    vec)
-            no-orphans? (empty? orphaned-txn-keys)
+            orphaned-acked-keys (->> orphaned-keys
+                                     (keep (fn [o]
+                                             (let [ks (filterv acked-keys (:keys o))]
+                                               (when (seq ks) (assoc o :keys ks)))))
+                                     vec)
+            no-orphans? (empty? orphaned-acked-keys)
             exec-txn-ops   (filter #(and (= :exec-queued-txn (:f %))
                                          (#{:ok :fail} (:type %)))
                                    history)
@@ -813,6 +841,7 @@
          :intended-dest intended-dest
          :final-owner final-owner
          :no-orphaned-writes? no-orphans?
+         :orphaned-acked-keys (vec (take 20 orphaned-acked-keys))
          :orphaned-txn-keys (vec (take 20 orphaned-txn-keys))
          :orphaned-keys (vec (take 20 orphaned-keys))
          :orphan-read-count (count orphan-reads)
