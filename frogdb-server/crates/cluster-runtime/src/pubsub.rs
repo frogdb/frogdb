@@ -357,7 +357,12 @@ fn route_shard_channel_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frogdb_core::cluster::{ClusterCommand, NodeInfo, SlotRange};
+    use frogdb_core::cluster::network::ConnectFactory;
+    use frogdb_core::cluster::{
+        BoxedStream, ClusterBusStats, ClusterCommand, ClusterRpcRequest, NodeInfo, SlotRange,
+        new_framed, parse_rpc_message, send_rpc_response,
+    };
+    use std::collections::BTreeMap;
     use std::net::SocketAddr;
 
     fn test_addr(port: u16) -> SocketAddr {
@@ -394,6 +399,71 @@ mod tests {
             factory.register_node(id, test_addr(16379 + id as u16));
         }
         Arc::new(factory)
+    }
+
+    /// The bus address this crate's helpers register for `id`.
+    fn bus_addr(id: u64) -> SocketAddr {
+        test_addr(16379 + id as u16)
+    }
+
+    /// A network factory whose peers answer pub/sub RPCs in-process.
+    ///
+    /// `counts` maps a node id to the subscriber count that node reports; a node
+    /// absent from the map is unreachable (the connect attempt fails), which is
+    /// how a fan-out failure is exercised without a real partition. Every dial
+    /// gets its own `duplex` pair with a responder task on the far end, so the
+    /// production RPC path — framing, postcard, the response shape mapping —
+    /// runs unchanged.
+    fn network_answering(counts: &[(u64, usize)]) -> Arc<ClusterNetworkFactory> {
+        let by_addr: BTreeMap<SocketAddr, usize> =
+            counts.iter().map(|&(id, n)| (bus_addr(id), n)).collect();
+        let mut factory = ClusterNetworkFactory::new();
+        factory.set_connect_factory(responder_factory(by_addr));
+        for &(id, _) in counts {
+            factory.register_node(id, bus_addr(id));
+        }
+        Arc::new(factory)
+    }
+
+    fn responder_factory(by_addr: BTreeMap<SocketAddr, usize>) -> ConnectFactory {
+        Arc::new(move |addr: SocketAddr| {
+            let count = by_addr.get(&addr).copied();
+            Box::pin(async move {
+                let Some(count) = count else {
+                    return Err(std::io::Error::other("peer unreachable"));
+                };
+                let (client, server) = tokio::io::duplex(64 * 1024);
+                tokio::spawn(serve_pubsub_rpcs(server, count));
+                Ok(Box::new(client) as BoxedStream)
+            })
+        })
+    }
+
+    /// The peer half of a bus connection: answer every pub/sub RPC with `count`.
+    async fn serve_pubsub_rpcs(server: tokio::io::DuplexStream, count: usize) {
+        let mut framed = new_framed(Box::new(server));
+        let stats = ClusterBusStats::new();
+        while let Ok(request) = parse_rpc_message(&mut framed, &stats).await {
+            let response = match request {
+                ClusterRpcRequest::Bus(BusRpc::PubSubBroadcast { .. }) => {
+                    ClusterRpcResponse::PubSubBroadcastResult {
+                        subscriber_count: count,
+                    }
+                }
+                ClusterRpcRequest::Bus(BusRpc::PubSubForward { .. }) => {
+                    ClusterRpcResponse::PubSubForwardResult {
+                        subscriber_count: count,
+                    }
+                }
+                other => ClusterRpcResponse::Error(format!("unexpected request: {other:?}")),
+            };
+            if send_rpc_response(&mut framed, response, &stats)
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
     }
 
     // FM-CLUSTER-069
@@ -606,6 +676,76 @@ mod tests {
         )
         .await;
         assert_eq!(result, Err(PubSubRpcError::Timeout));
+    }
+
+    /// The `Cluster` fan-out itself: every *other* reachable peer is dialled
+    /// exactly once and its count is *added* to the running total. Peers latched
+    /// FAIL are skipped, and this node never RPCs itself (which would double-count
+    /// the local subscribers the caller adds separately).
+    // FM-CLUSTER-069
+    #[tokio::test]
+    async fn cluster_broadcast_sums_every_other_reachable_peer_once() {
+        let state = cluster_state(3, None);
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: state.clone(),
+            // Distinct counts per node, so "which peers were dialled" is
+            // readable off the total alone.
+            network_factory: network_answering(&[(1, 3), (2, 7), (3, 5)]),
+            node_id: 1,
+        };
+
+        assert_eq!(
+            forwarder.broadcast_publish(b"chan", b"msg").await,
+            12,
+            "both peers answer and their counts are summed; self is not dialled"
+        );
+
+        // A peer latched FAIL is skipped rather than dialled and timed out.
+        state
+            .apply_local(ClusterCommand::MarkNodeFailed { node_id: 3 })
+            .expect("marking a member failed must succeed");
+        assert_eq!(
+            forwarder.broadcast_publish(b"chan", b"msg").await,
+            7,
+            "a node flagged FAIL contributes nothing and is not dialled"
+        );
+    }
+
+    /// An unreachable peer contributes zero without poisoning the total, and a
+    /// single reachable peer still reports its own count.
+    // FM-CLUSTER-069
+    #[tokio::test]
+    async fn cluster_broadcast_folds_an_unreachable_peer_into_zero() {
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(3, None),
+            // Node 3 is registered but its dial fails.
+            network_factory: {
+                let factory = network_answering(&[(1, 3), (2, 7)]);
+                factory.register_node(3, bus_addr(3));
+                factory
+            },
+            node_id: 1,
+        };
+        assert_eq!(forwarder.broadcast_publish(b"chan", b"msg").await, 7);
+    }
+
+    /// The remote leg of `SPUBLISH`: the owner's count reaches the caller through
+    /// `Forwarded`, and `remote_count` reports it rather than swallowing it.
+    // FM-CLUSTER-070
+    #[tokio::test]
+    async fn cluster_forward_reports_the_owners_subscriber_count() {
+        let forwarder = ClusterPubSubForwarder::Cluster {
+            cluster_state: cluster_state(2, Some(2)),
+            network_factory: network_answering(&[(1, 3), (2, 9)]),
+            node_id: 1,
+        };
+        let outcome = forwarder.forward_spublish(b"chan", b"msg").await;
+        assert_eq!(outcome, SpublishOutcome::Forwarded(9));
+        assert_eq!(
+            outcome.remote_count(),
+            Some(9),
+            "a forwarded publish must report the owner's count, not `None`"
+        );
     }
 
     // FM-CLUSTER-068
