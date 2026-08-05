@@ -11,8 +11,8 @@ use std::sync::atomic::Ordering;
 use frogdb_core::PubSubMsg;
 use frogdb_core::ShardSender;
 use frogdb_core::cluster::{
-    BusRpc, ClusterBusStats, ClusterRaft, ClusterRpcRequest, ClusterRpcResponse, NodeId,
-    handle_rpc_request, parse_rpc_message, send_rpc_response,
+    BusRpc, ClusterBusStats, ClusterRaft, ClusterRpcRequest, ClusterRpcResponse, FramedStream,
+    NodeId, RaftRpc, handle_rpc_request, parse_rpc_message, send_rpc_response,
 };
 // Framing helpers diverge by transport: production wraps a `tokio::net::TcpStream`
 // (optionally TLS) via `new_framed_tcp`; under turmoil the accepted stream is a
@@ -62,9 +62,37 @@ pub type BusTlsHandshake = std::pin::Pin<
     >,
 >;
 
+/// The consensus half of the bus, as a seam.
+///
+/// The bus itself services only [`BusRpc`]; everything else is consensus traffic
+/// it hands straight to openraft. Naming that hand-off as a trait is what makes
+/// the accept loop and the connection loop testable — an `openraft::Raft` cannot
+/// be constructed without storage, a network factory and an election, so a
+/// context that owned one concretely could not be built in a unit test at all.
+pub trait BusRaftHandler: Send + Sync + 'static {
+    /// Service one Raft RPC and produce its wire response.
+    fn handle_raft_rpc(
+        &self,
+        rpc: RaftRpc,
+    ) -> impl std::future::Future<Output = ClusterRpcResponse> + Send;
+}
+
+impl BusRaftHandler for Arc<ClusterRaft> {
+    // Pure delegation to `frogdb_core::cluster::handle_rpc_request` against a
+    // live `openraft::Raft`. cargo-mutants' only replacement for the return type
+    // (`ClusterRpcResponse`) needs `Default`, which the enum does not implement,
+    // so this body carries no viable mutant.
+    async fn handle_raft_rpc(&self, rpc: RaftRpc) -> ClusterRpcResponse {
+        handle_rpc_request(self, rpc).await
+    }
+}
+
 /// Context for the cluster bus, providing access to Raft and shard infrastructure.
-pub struct ClusterBusContext {
-    pub raft: Arc<ClusterRaft>,
+///
+/// Generic over the [`BusRaftHandler`] seam so the bus is testable without a
+/// live consensus instance; production uses the default (`Arc<ClusterRaft>`).
+pub struct ClusterBusContext<R = Arc<ClusterRaft>> {
+    pub raft: R,
     pub shard_senders: Arc<Vec<ShardSender>>,
     pub num_shards: usize,
     pub node_id: NodeId,
@@ -86,7 +114,10 @@ pub struct ClusterBusContext {
 ///
 /// Accepts a pre-bound `TcpListener` so that the port is held open from
 /// `Server::new()` and never subject to TOCTOU port races.
-pub async fn run(listener: TcpListener, ctx: Arc<ClusterBusContext>) -> std::io::Result<()> {
+pub async fn run<R: BusRaftHandler>(
+    listener: TcpListener,
+    ctx: Arc<ClusterBusContext<R>>,
+) -> std::io::Result<()> {
     let addr = listener.local_addr()?;
     info!(%addr, "Cluster bus listening");
 
@@ -138,73 +169,128 @@ fn choose_transport(migration: bool, first_byte: Option<u8>) -> BusTransport {
     }
 }
 
-/// Handle a single cluster bus connection.
+/// The byte a one-byte `peek` actually observed, if any.
 ///
-/// Reads RPC requests in a loop, processes them, and sends responses.
-/// Raft RPCs are delegated to the Raft instance; pub/sub and HealthProbe
-/// RPCs are handled locally.
+/// `peek` reports the number of bytes copied; `0` is EOF, not a byte worth
+/// `0x00`. Separated from the I/O so the EOF-vs-byte distinction — which decides
+/// whether a connection is fed to the TLS acceptor or to the plaintext framer —
+/// is forced without a socket.
 #[cfg(not(feature = "turmoil"))]
-async fn handle_connection(
+fn sniffed_byte(peeked: usize, peek_buf: [u8; 1]) -> Option<u8> {
+    (peeked > 0).then_some(peek_buf[0])
+}
+
+/// Handle a single cluster bus connection: pick the transport, then serve it.
+///
+/// Only the framing step differs between the production and turmoil builds
+/// ([`negotiate_framing`]); the read/dispatch/respond loop
+/// ([`serve_connection`]) is shared, so the two builds cannot drift.
+async fn handle_connection<R: BusRaftHandler>(
     stream: frogdb_net::TcpStream,
-    ctx: &ClusterBusContext,
+    ctx: &ClusterBusContext<R>,
 ) -> std::io::Result<()> {
-    let framed = if let Some(ref tls) = ctx.tls {
-        // Both the dual-accept flag and the handshake timeout are read here,
-        // per connection, so a runtime change applies to the next peer that
-        // dials in without disturbing established bus connections.
-        let migration = tls.dual_accept();
-        let handshake_timeout = tls.handshake_timeout();
-        let first_byte = if migration {
-            let mut peek_buf = [0u8; 1];
-            // Bounded by the same budget as the handshake itself: a peer
-            // that connects and sends nothing must not hold the task (and
-            // the socket) open forever. `peek` has no timeout of its own.
-            let n = tokio::time::timeout(handshake_timeout, stream.peek(&mut peek_buf))
+    let framed = negotiate_framing(stream, ctx).await?;
+    serve_connection(framed, ctx).await
+}
+
+/// Choose the transport for one inbound connection and frame it.
+///
+/// Strict mode hands every connection to the TLS acceptor; dual-accept sniffs
+/// the first byte first (see [`choose_transport`]). Both the flag and the
+/// handshake timeout are read here, per connection, so a runtime change applies
+/// to the next peer that dials in without disturbing established connections.
+#[cfg(not(feature = "turmoil"))]
+async fn negotiate_framing<R: BusRaftHandler>(
+    stream: frogdb_net::TcpStream,
+    ctx: &ClusterBusContext<R>,
+) -> std::io::Result<FramedStream> {
+    let Some(ref tls) = ctx.tls else {
+        return Ok(new_framed_tcp(stream));
+    };
+
+    let migration = tls.dual_accept();
+    let handshake_timeout = tls.handshake_timeout();
+    let first_byte = if migration {
+        let mut peek_buf = [0u8; 1];
+        // Bounded by the same budget as the handshake itself: a peer that
+        // connects and sends nothing must not hold the task (and the socket)
+        // open forever. `peek` has no timeout of its own.
+        let peeked = tokio::time::timeout(handshake_timeout, stream.peek(&mut peek_buf))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "cluster bus transport sniff timeout",
+                )
+            })??;
+        sniffed_byte(peeked, peek_buf)
+    } else {
+        None
+    };
+
+    match choose_transport(migration, first_byte) {
+        BusTransport::Plaintext => Ok(new_framed_tcp(stream)),
+        BusTransport::Tls => {
+            let tls_stream = tokio::time::timeout(handshake_timeout, tls.accept(stream))
                 .await
                 .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "cluster bus transport sniff timeout",
-                    )
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
                 })??;
-            (n > 0).then_some(peek_buf[0])
-        } else {
-            None
-        };
-
-        match choose_transport(migration, first_byte) {
-            BusTransport::Plaintext => new_framed_tcp(stream),
-            BusTransport::Tls => {
-                let tls_stream = tokio::time::timeout(handshake_timeout, tls.accept(stream))
-                    .await
-                    .map_err(|_| {
-                        std::io::Error::new(std::io::ErrorKind::TimedOut, "TLS handshake timeout")
-                    })??;
-                frogdb_core::cluster::new_framed(tls_stream)
-            }
+            Ok(frogdb_core::cluster::new_framed(tls_stream))
         }
-    } else {
-        new_framed_tcp(stream)
-    };
-    let mut framed = framed;
+    }
+}
 
+/// Frame one inbound connection under turmoil.
+///
+/// Turmoil's accepted stream is a `turmoil::net::TcpStream` (no TLS); type-erase
+/// it into a `BoxedStream` and frame it the way the production plaintext path
+/// does. Real Raft RPCs — vote, append-entries, install-snapshot — then flow
+/// through turmoil's simulated network, giving deterministic multi-node
+/// consensus.
+#[cfg(feature = "turmoil")]
+async fn negotiate_framing<R: BusRaftHandler>(
+    stream: frogdb_net::TcpStream,
+    _ctx: &ClusterBusContext<R>,
+) -> std::io::Result<FramedStream> {
+    Ok(new_framed(Box::new(stream)))
+}
+
+/// Whether a parse failure is an ordinary disconnect rather than a protocol
+/// error.
+///
+/// A peer that goes away mid-connection is the steady state on a cluster bus —
+/// nodes restart, links drop — so it ends the connection with `Ok(())` and no
+/// warning. Anything else is a frame this node could not understand and is
+/// surfaced as `InvalidData`. Split out of the loop so each disjunct is forced
+/// individually: an `&&` here would classify every real disconnect as a protocol
+/// error and fill the log with warnings on every rolling restart.
+fn is_clean_disconnect(error_msg: &str) -> bool {
+    error_msg.contains("connection closed")
+        || error_msg.contains("connection reset")
+        || error_msg.contains("broken pipe")
+}
+
+/// Read RPC requests in a loop, process them, and send responses.
+///
+/// Bus RPCs (pub/sub fan-out, health probes) are serviced from the context;
+/// everything else is consensus traffic handed to the [`BusRaftHandler`].
+async fn serve_connection<R: BusRaftHandler>(
+    mut framed: FramedStream,
+    ctx: &ClusterBusContext<R>,
+) -> std::io::Result<()> {
     loop {
-        // Parse the incoming RPC request
         let request = match parse_rpc_message(&mut framed, &ctx.bus_stats).await {
             Ok(req) => req,
             Err(e) => {
                 let error_msg = e.to_string();
-                if error_msg.contains("connection closed")
-                    || error_msg.contains("connection reset")
-                    || error_msg.contains("broken pipe")
-                {
-                    // Clean disconnect or peer went away
+                if is_clean_disconnect(&error_msg) {
                     return Ok(());
                 }
                 warn!(error = %e, "Failed to parse cluster RPC request");
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    e.to_string(),
+                    error_msg,
                 ));
             }
         };
@@ -213,57 +299,7 @@ async fn handle_connection(
         // subset (`BusRpc`) locally; the Raft handler owns the rest (`RaftRpc`).
         let response = match request {
             ClusterRpcRequest::Bus(bus_rpc) => handle_bus_rpc(ctx, bus_rpc).await,
-            ClusterRpcRequest::Raft(raft_rpc) => handle_rpc_request(&ctx.raft, raft_rpc).await,
-        };
-
-        // Send the response
-        if let Err(e) = send_rpc_response(&mut framed, response, &ctx.bus_stats).await {
-            warn!(error = %e, "Failed to send cluster RPC response");
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                e.to_string(),
-            ));
-        }
-    }
-}
-
-/// Handle a single cluster bus connection under turmoil.
-///
-/// Turmoil's accepted stream is a `turmoil::net::TcpStream` (no TLS); type-erase
-/// it into a `BoxedStream` and frame it the same way the production plaintext
-/// path does. The read/dispatch/respond loop is otherwise identical to
-/// [`handle_connection`] (the non-turmoil variant), so real Raft RPCs — vote,
-/// append-entries, install-snapshot — and the bus subset flow through turmoil's
-/// simulated network, giving deterministic multi-node cluster consensus.
-#[cfg(feature = "turmoil")]
-async fn handle_connection(
-    stream: frogdb_net::TcpStream,
-    ctx: &ClusterBusContext,
-) -> std::io::Result<()> {
-    let mut framed = new_framed(Box::new(stream));
-
-    loop {
-        let request = match parse_rpc_message(&mut framed, &ctx.bus_stats).await {
-            Ok(req) => req,
-            Err(e) => {
-                let error_msg = e.to_string();
-                if error_msg.contains("connection closed")
-                    || error_msg.contains("connection reset")
-                    || error_msg.contains("broken pipe")
-                {
-                    return Ok(());
-                }
-                warn!(error = %e, "Failed to parse cluster RPC request");
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                ));
-            }
-        };
-
-        let response = match request {
-            ClusterRpcRequest::Bus(bus_rpc) => handle_bus_rpc(ctx, bus_rpc).await,
-            ClusterRpcRequest::Raft(raft_rpc) => handle_rpc_request(&ctx.raft, raft_rpc).await,
+            ClusterRpcRequest::Raft(raft_rpc) => ctx.raft.handle_raft_rpc(raft_rpc).await,
         };
 
         if let Err(e) = send_rpc_response(&mut framed, response, &ctx.bus_stats).await {
@@ -282,7 +318,10 @@ async fn handle_connection(
 ///
 /// The match is exhaustive by construction — [`BusRpc`] names only the variants
 /// this function can service, so it cannot carry (nor mis-route) a Raft RPC.
-async fn handle_bus_rpc(ctx: &ClusterBusContext, request: BusRpc) -> ClusterRpcResponse {
+async fn handle_bus_rpc<R: BusRaftHandler>(
+    ctx: &ClusterBusContext<R>,
+    request: BusRpc,
+) -> ClusterRpcResponse {
     match request {
         BusRpc::PubSubBroadcast { channel, message } => {
             handle_pubsub_broadcast(&ctx.shard_senders, &channel, &message).await
@@ -347,10 +386,42 @@ async fn handle_pubsub_forward(
 // (scoped-tls) outside a running sim. Excluded from the turmoil build.
 #[cfg(all(test, not(feature = "turmoil")))]
 mod tests {
-    use super::{BusTransport, Ordering, choose_transport};
+    use super::*;
+    use frogdb_core::cluster::{ClusterCommand, ClusterNetworkFactory, new_framed};
     use frogdb_net::tcp_listener_reusable;
     use std::net::SocketAddr;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
+
+    /// A [`BusRaftHandler`] that records what consensus traffic reached it and
+    /// answers every RPC successfully — enough to prove the envelope dispatch
+    /// without an `openraft::Raft`.
+    #[derive(Default)]
+    struct RecordingRaft {
+        seen: Mutex<Vec<String>>,
+    }
+
+    impl BusRaftHandler for RecordingRaft {
+        async fn handle_raft_rpc(&self, rpc: RaftRpc) -> ClusterRpcResponse {
+            self.seen.lock().unwrap().push(format!("{rpc:?}"));
+            ClusterRpcResponse::ForwardedWrite(Ok(()))
+        }
+    }
+
+    /// A plaintext bus context reporting `node_id` / `offset` on a health probe.
+    fn test_context(node_id: NodeId, offset: u64) -> Arc<ClusterBusContext<RecordingRaft>> {
+        Arc::new(ClusterBusContext {
+            raft: RecordingRaft::default(),
+            // A health probe never reaches the shards; the pub/sub arms that do
+            // are covered by `pubsub.rs`.
+            shard_senders: Arc::new(Vec::new()),
+            num_shards: 0,
+            node_id,
+            replication_offset: Arc::new(AtomicU64::new(offset)),
+            bus_stats: Arc::new(ClusterBusStats::new()),
+            tls: None,
+        })
+    }
 
     // FM-CLUSTER-065
     #[test]
@@ -395,6 +466,104 @@ mod tests {
         assert_eq!(
             choose_transport(flag.load(Ordering::Relaxed), plaintext_peer),
             BusTransport::Tls
+        );
+    }
+
+    /// A one-byte `peek` reports a *count*, not a byte: `0` is EOF and must not
+    /// be read as a `0x00` first byte (which `choose_transport` would then treat
+    /// as plaintext for a different reason, and which any non-strict comparison
+    /// here would turn into a spurious `Some`).
+    // FM-CLUSTER-066
+    #[test]
+    fn a_peek_of_zero_bytes_is_not_a_first_byte() {
+        assert_eq!(sniffed_byte(0, [0x16]), None, "EOF yields no first byte");
+        assert_eq!(sniffed_byte(0, [0x00]), None);
+        assert_eq!(sniffed_byte(1, [0x16]), Some(0x16));
+        assert_eq!(
+            sniffed_byte(1, [0x00]),
+            Some(0x00),
+            "a peeked NUL is a byte, not EOF"
+        );
+    }
+
+    /// Each disconnect phrase independently ends the connection quietly; a
+    /// parse error that names none of them is a protocol error.
+    // FM-CLUSTER-065
+    #[test]
+    fn every_disconnect_phrase_ends_the_connection_quietly() {
+        for msg in [
+            "connection closed",
+            "connection reset by peer",
+            "broken pipe",
+            "network error: connection closed",
+        ] {
+            assert!(is_clean_disconnect(msg), "{msg:?} must be a clean close");
+        }
+        for msg in [
+            "invalid frame",
+            "deserialization failed: bad varint",
+            "frame size exceeded",
+            "",
+        ] {
+            assert!(
+                !is_clean_disconnect(msg),
+                "{msg:?} must surface as a protocol error"
+            );
+        }
+    }
+
+    /// The accept loop keeps serving: a peer dials the bound listener, gets its
+    /// health probe answered from the context, and the *same* connection then
+    /// carries a Raft RPC into the consensus seam. A loop that returned after
+    /// binding — or a connection handler that returned before its first
+    /// response — leaves the peer with no answer at all.
+    // FM-CLUSTER-051
+    #[tokio::test]
+    async fn the_bus_serves_probes_and_raft_rpcs_on_one_connection() {
+        let listener = tcp_listener_reusable("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+            .await
+            .expect("binding an ephemeral port must succeed");
+        let addr = listener.local_addr().unwrap();
+        let ctx = test_context(42, 9_001);
+        let server = tokio::spawn(run(listener, ctx.clone()));
+
+        let factory = ClusterNetworkFactory::new();
+        let peer = factory.connect(42, addr);
+
+        assert_eq!(
+            peer.health_probe().await.expect("probe must be answered"),
+            (42, 9_001),
+            "the probe answers from the context, unconditionally"
+        );
+
+        // Pooled: the same connection, so this also proves the handler loops
+        // rather than serving one request and returning.
+        peer.forward_write(ClusterCommand::MarkNodeFailed { node_id: 7 })
+            .await
+            .expect("a forwarded write is consensus traffic and must dispatch");
+        assert_eq!(
+            ctx.raft.seen.lock().unwrap().len(),
+            1,
+            "exactly the Raft RPC reached the consensus seam; the probe did not"
+        );
+
+        server.abort();
+    }
+
+    /// A peer that simply goes away ends the connection with `Ok`, so the accept
+    /// loop logs nothing on an ordinary restart.
+    // FM-CLUSTER-065
+    #[tokio::test]
+    async fn a_vanished_peer_closes_the_connection_cleanly() {
+        let ctx = test_context(1, 0);
+        let (client, server) = tokio::io::duplex(1024);
+        let serving =
+            tokio::spawn(async move { serve_connection(new_framed(Box::new(server)), &ctx).await });
+
+        drop(client);
+        assert!(
+            serving.await.unwrap().is_ok(),
+            "a dropped peer is not a protocol error"
         );
     }
 
