@@ -47,6 +47,8 @@ pub mod network;
 pub mod state;
 pub mod stats;
 pub mod storage;
+#[cfg(test)]
+mod test_tracing;
 pub mod types;
 pub mod version_gate;
 pub mod wire;

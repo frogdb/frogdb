@@ -211,6 +211,35 @@ mod tests {
         assert_eq!(pending[0].name, "feature_b");
     }
 
+    /// A gate that stays shut during a mixed-version window is the operator's
+    /// only explanation for a feature that is present in the binary but not
+    /// behaving — so the suppression is logged, and only the suppression is.
+    // FM-CLUSTER-009
+    #[test]
+    fn gate_suppression_is_reported_once_and_only_when_suppressed() {
+        let gates = test_gates();
+
+        let (active, capture) = crate::test_tracing::capture_events(|| {
+            is_gate_active_in("feature_a", Some("0.1.0"), &gates)
+        });
+        assert!(!active);
+        let event = capture.only("Version gate suppressed");
+        assert_eq!(event.level, tracing::Level::DEBUG);
+        assert_eq!(event.field("gate"), Some("feature_a"));
+        assert_eq!(event.field("active_version"), Some("0.1.0"));
+        assert_eq!(event.field("required_version"), Some("0.2.0"));
+
+        let (active, capture) = crate::test_tracing::capture_events(|| {
+            is_gate_active_in("feature_a", Some("0.2.0"), &gates)
+        });
+        assert!(active);
+        assert!(
+            capture.matching("Version gate suppressed").is_empty(),
+            "an active gate has nothing to explain: {:?}",
+            capture.events()
+        );
+    }
+
     // FM-CLUSTER-009
     #[test]
     fn pending_gates_empty_for_patch_upgrade() {
