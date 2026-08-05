@@ -11,8 +11,9 @@ forces.
 
 Scope. The cluster area is one replicated state machine plus the seams that read it:
 
-* **Topology and membership (FM-CLUSTER-001..009)** — the `ClusterCommand` arms that add, remove,
-  re-role, and reset nodes, the bootstrap slot split, and the rolling-upgrade gate
+* **Topology and membership (FM-CLUSTER-001..009, 078)** — the `ClusterCommand` arms that add,
+  remove, re-role, and reset nodes, the bootstrap slot split, the rolling-upgrade gate, and how the
+  applied topology is published to readers
   (`frogdb-server/crates/cluster/src/{commands,state,types,version_gate}.rs`).
 * **Config epoch (010..017, 076)** — the two epochs (the replicated counter and the per-node value),
   who may raise them, the collision rule, and what survives a restart
@@ -1069,7 +1070,7 @@ than disguised as correct ownership.
 | Trigger | Any topology mutation the state machine applies — a `ClusterCommand` through `apply_command` (including one it rejects), or a whole-state replacement through `restore_from_snapshot` — followed by a `ClusterState::snapshot()`. |
 | Observable | The next `snapshot()` observes the mutation. Two `snapshot()` calls with no intervening mutation return the *same* allocation (`Arc::ptr_eq`), and read-only accessors do not invalidate it. A snapshot a reader already holds is immutable: a later mutation cannot reach back into a decision made against it. |
 | NOT observable | A reader routing against a topology the state machine has already moved past — a stale slot table is a `MOVED` to the wrong node or a local serve of a slot this node no longer owns. Nor a per-read copy of the 16384-entry slot table: `snapshot()` is on the keyed-command path (`SlotMigrationCoordinator::route`), so a copy there is per-command cost. |
-| Invariant | `StateCell` holds the authoritative `ClusterStateInner` and the published `Arc<ClusterSnapshot>` under one lock, and `PublishOnDrop` — the only way to obtain a `&mut ClusterStateInner` — rebuilds the published value in its `Drop`, inside the same critical section. An early `return`, a `?`, or an unwinding panic all run that `Drop`. The openraft bookkeeping fields (`last_applied_log`, `last_membership`) are deliberately not snapshot-visible and have their own no-republish setters (`state.rs`). |
+| Invariant | `StateCell` holds the authoritative `ClusterStateInner` and the published `Arc<ClusterSnapshot>` under one lock, and `PublishOnDrop` — the only handle that hands out a `&mut ClusterStateInner` — rebuilds the published value in its `Drop`, inside the same critical section. An early `return`, a `?`, or an unwinding panic all run that `Drop`. The openraft bookkeeping fields (`last_applied_log`, `last_membership`) are deliberately not snapshot-visible and have their own no-republish setters (`state.rs`). |
 | Outcome variant | `Arc<ClusterSnapshot>` |
 | Forced by | `test_snapshot_observes_topology_applied_since_the_last_read`, `test_repeated_snapshots_without_mutation_share_one_allocation`, `test_rejected_command_leaves_snapshot_agreeing_with_state`, `test_snapshot_install_republishes_the_reader_view` |
 | Bug refs | fixed: [10-cluster-snapshot-clone-cost.md](../../replication-cluster-rework/issues/done/10-cluster-snapshot-clone-cost.md) |

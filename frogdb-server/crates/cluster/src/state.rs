@@ -33,8 +33,8 @@ pub struct ClusterState {
 /// Both live under one lock on purpose: the published value is rebuilt inside
 /// the same critical section as the mutation that invalidated it, so a reader
 /// can never observe a snapshot older than a mutation that has already
-/// returned. Rebuilding outside the lock would re-open the torn-verdict window
-/// the EXEC re-validation work closed (FM-CLUSTER-038).
+/// returned. Rebuilding outside the lock would widen the commit-to-apply window
+/// FM-CLUSTER-037 bounds into one the EXEC re-validation work cannot bound.
 #[derive(Debug)]
 struct StateCell {
     inner: ClusterStateInner,
@@ -65,12 +65,18 @@ impl Default for StateCell {
 /// A write guard over [`ClusterStateInner`] that republishes the reader snapshot
 /// when it is dropped.
 ///
-/// This is the only way to obtain a `&mut ClusterStateInner`, which is what
-/// makes "every mutation republishes" structural rather than a convention: an
-/// early `return`, a `?`, or an unwinding panic all run `Drop` before the lock
-/// is released, so no caller can leave a stale snapshot behind. The rebuild is
-/// unconditional — a command that validated and rejected republishes an
+/// Every mutation of a snapshot-visible field goes through this guard, which is
+/// what makes "every mutation republishes" structural rather than a convention:
+/// an early `return`, a `?`, or an unwinding panic all run `Drop` before the
+/// lock is released, so no caller can leave a stale snapshot behind. The rebuild
+/// is unconditional — a command that validated and rejected republishes an
 /// identical value rather than relying on nothing having been touched yet.
+///
+/// The only mutations that deliberately skip it are the two openraft bookkeeping
+/// setters ([`ClusterState::set_last_applied_log`],
+/// [`ClusterState::set_last_membership`]), whose fields no snapshot carries. The
+/// lock lives behind a private field, so those two and this guard are the whole
+/// mutation surface.
 pub(crate) struct PublishOnDrop<'a> {
     cell: RwLockWriteGuard<'a, StateCell>,
 }
@@ -1071,6 +1077,48 @@ mod tests {
         let _ = state.config_epoch();
         let _ = state.get_all_nodes();
         assert!(Arc::ptr_eq(&first, &state.snapshot()));
+    }
+
+    /// Timing probe for the cost FM-CLUSTER-078's publication scheme removes,
+    /// not an assertion — ignored so it never runs in CI. Reproduce with:
+    ///
+    /// ```text
+    /// cargo test --release -p frogdb-cluster snapshot_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "timing probe, not an assertion"]
+    fn snapshot_cost_on_a_fully_assigned_cluster() {
+        let state = ClusterState::new();
+        state
+            .apply_command(ClusterCommand::AddNode {
+                node: NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            })
+            .unwrap();
+        state
+            .apply_command(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, CLUSTER_SLOTS - 1)],
+            })
+            .unwrap();
+
+        const ITERS: u32 = 10_000;
+
+        // What `snapshot()` used to do: rebuild the whole view per read.
+        let start = std::time::Instant::now();
+        for _ in 0..ITERS {
+            std::hint::black_box(state.read_inner().to_snapshot());
+        }
+        let rebuilt = start.elapsed() / ITERS;
+
+        // What it does now.
+        let start = std::time::Instant::now();
+        for _ in 0..ITERS {
+            std::hint::black_box(state.snapshot());
+        }
+        let published = start.elapsed() / ITERS;
+
+        println!("rebuild per call:   {rebuilt:?}");
+        println!("published per call: {published:?}");
     }
 
     // FM-CLUSTER-078

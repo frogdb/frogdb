@@ -8,7 +8,7 @@ WAIT in cluster mode), all implemented, adversarially reviewed, and merged 2026-
 a bonus (dead auto-failover from an edge-triggered detector; fullsync checkpoint acked-write
 loss from a missing WAL drain).
 
-The PRDs are done. The follow-up issues they filed are not — 4 open, 0 closed.
+The PRDs are done. The follow-up issues they filed are mostly closed — 2 open, 9 closed.
 
 ## Layout
 
@@ -16,15 +16,12 @@ The PRDs are done. The follow-up issues they filed are not — 4 open, 0 closed.
 |---|---|
 | `PRD.md` | umbrella brief |
 | `exec-slot-revalidation.md`, `promotion-replid-psync.md`, `epoch-fold-redesign.md`, `wait-cluster-mode.md` | the four PRDs, implemented |
-| `issues/open/` | 4 open follow-ups |
+| `issues/open/` | 2 open follow-ups |
+| `issues/done/` | 9 closed follow-ups |
 
-## Still open (4)
+## Still open (2)
 
-01 EXEC slot-table version fast path · 02 migration finalization pause barrier ·
-03 Lua internal write validation · 04 WATCH slot validation
-
-Issue **05** (CLUSTER admin-gating) is client-breaking — do not implement it without an
-explicit decision.
+02 migration finalization pause barrier · 03 Lua internal write validation
 
 ## Inbound references
 
