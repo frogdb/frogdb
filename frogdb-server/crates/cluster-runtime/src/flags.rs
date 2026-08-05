@@ -231,6 +231,47 @@ mod tests {
         assert_eq!(healthy.write_fence_reason(), None);
     }
 
+    // FM-CLUSTER-059
+    /// The gate decides *whether* the checker it wraps may fence, never *what*
+    /// the refusal says. Two checkers share the one write-gate rung — the Raft
+    /// detector answers `-CLUSTERDOWN`, the replica-loss fence answers
+    /// `-SELFFENCE` — so a gate that spelled a string of its own would relabel
+    /// whichever verdict came from inside and send the operator to the wrong
+    /// subsystem (issue 30).
+    #[test]
+    fn self_fence_gate_delegates_the_quorum_lost_wording() {
+        struct NamedChecker;
+        impl QuorumChecker for NamedChecker {
+            fn has_quorum(&self) -> bool {
+                false
+            }
+            fn quorum_lost_error(&self) -> &'static str {
+                "SELFFENCE inner wording"
+            }
+        }
+
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let gate = SelfFenceGate::new(Arc::new(NamedChecker), flags.clone());
+        assert_eq!(gate.quorum_lost_error(), "SELFFENCE inner wording");
+
+        // The wording does not depend on the gate's own verdict: disabling the
+        // flag stops the fencing, not the attribution.
+        flags.set_self_fence_on_quorum_loss(false);
+        assert_eq!(gate.quorum_lost_error(), "SELFFENCE inner wording");
+
+        // A checker that says nothing of its own still gets the cluster's
+        // wording through the trait default — the gate adds nothing either way.
+        let plain = SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: false }), flags);
+        assert_eq!(
+            plain.quorum_lost_error(),
+            frogdb_core::command::CLUSTER_DOWN_QUORUM_LOST
+        );
+        assert!(
+            plain.quorum_lost_error().starts_with("CLUSTERDOWN"),
+            "the Raft detector's refusal is the one that names the cluster"
+        );
+    }
+
     /// Each config field lands on its own flag. `auto_failover` and
     /// `self_fence_on_quorum_loss` are both `bool` with *different* defaults,
     /// so a transposition silently inverts both policies.
