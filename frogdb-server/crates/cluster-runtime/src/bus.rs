@@ -248,6 +248,10 @@ async fn negotiate_framing<R: BusRaftHandler>(
 /// does. Real Raft RPCs — vote, append-entries, install-snapshot — then flow
 /// through turmoil's simulated network, giving deterministic multi-node
 /// consensus.
+// Surviving-mutant note: this body compiles only under `--features turmoil`,
+// which the default-feature mutation run never builds, so a mutation here is
+// unobservable to that run by construction. The turmoil simulation suite is
+// the witness for this arm; the real-TCP twin above carries the forcing tests.
 #[cfg(feature = "turmoil")]
 async fn negotiate_framing<R: BusRaftHandler>(
     stream: frogdb_net::TcpStream,
