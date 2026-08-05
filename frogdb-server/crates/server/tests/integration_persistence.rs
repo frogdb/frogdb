@@ -3034,7 +3034,11 @@ async fn script_info_persistence_reports_the_real_bgsave_outcome() {
         "err",
         "a script must be able to see a failing save, not a static 'ok':\n{failed_info}"
     );
-    assert_eq!(info_field_u64(&failed_info, "rdb_bgsave_failures"), 1, "{failed_info}");
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_bgsave_failures"),
+        1,
+        "{failed_info}"
+    );
     assert_eq!(
         info_field_u64(&failed_info, "rdb_saves"),
         0,

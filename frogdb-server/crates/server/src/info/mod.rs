@@ -453,22 +453,27 @@ pub fn persistence_snapshot_fields(
             "rdb_bgsave_in_progress",
             u8::from(bgsave_in_progress).to_string(),
         ),
-        ("rdb_last_save_time", last_save_unix.unwrap_or(0).to_string()),
+        (
+            "rdb_last_save_time",
+            last_save_unix.unwrap_or(0).to_string(),
+        ),
         // Real save outcome, not a literal: `err` while the most recent
         // finished save failed, back to `ok` on the next success (Redis
         // semantics).
         (
             "rdb_last_bgsave_status",
-            if stats.last_error.is_some() { "err" } else { "ok" }.to_string(),
+            if stats.last_error.is_some() {
+                "err"
+            } else {
+                "ok"
+            }
+            .to_string(),
         ),
     ];
     if let Some(err) = &stats.last_error {
         // INFO is a line-oriented format: fold any CR/LF in the cause into
         // spaces so one error cannot forge extra fields.
-        fields.push((
-            "rdb_last_bgsave_error",
-            err.replace(['\r', '\n'], " "),
-        ));
+        fields.push(("rdb_last_bgsave_error", err.replace(['\r', '\n'], " ")));
     }
     fields.push((
         "rdb_last_bgsave_time_sec",
