@@ -144,6 +144,13 @@ pub struct NodeFlags {
 
 impl NodeFlags {
     /// Create flags for a node that's fully connected.
+    ///
+    /// "Connected" *is* the zero value — no handshake pending, no failure
+    /// suspicion, an address on file — so a mutation replacing this body with
+    /// `Default::default()` is the identical program (documented equivalent
+    /// mutant). The constructor exists to name the state at the call site, not
+    /// to compute a different one; the distinguishable sibling is
+    /// [`NodeFlags::handshaking`], which does set a field.
     pub fn connected() -> Self {
         Self::default()
     }
@@ -664,6 +671,164 @@ impl ClusterSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_addr(port: u16) -> SocketAddr {
+        format!("127.0.0.1:{port}").parse().unwrap()
+    }
+
+    /// A node table entry written before replica priorities existed must read
+    /// back at the neutral default, not at "never promote" (0) and not at the
+    /// most-preferred value (1): either would silently rewrite the failover
+    /// order of every pre-upgrade node.
+    // FM-CLUSTER-057
+    #[test]
+    fn test_missing_replica_priority_defaults_to_the_neutral_value() {
+        assert_eq!(default_replica_priority(), 100);
+
+        let legacy = r#"{
+            "id": 1,
+            "addr": "127.0.0.1:6379",
+            "cluster_addr": "127.0.0.1:16379",
+            "role": "Primary",
+            "primary_id": null,
+            "config_epoch": 0,
+            "flags": {"handshake": false, "fail": false, "pfail": false, "noaddr": false}
+        }"#;
+        let node: NodeInfo = serde_json::from_str(legacy).unwrap();
+        assert_eq!(node.replica_priority, 100);
+        assert_eq!(node.version, "");
+    }
+
+    /// The two flag constructors are not interchangeable: a handshaking node is
+    /// exactly a connected one plus the `handshake` bit, and nothing else.
+    // FM-CLUSTER-001
+    #[test]
+    fn test_node_flags_handshaking_sets_only_the_handshake_bit() {
+        let handshaking = NodeFlags::handshaking();
+        assert!(handshaking.handshake);
+        assert!(!handshaking.fail);
+        assert!(!handshaking.pfail);
+        assert!(!handshaking.noaddr);
+
+        let connected = NodeFlags::connected();
+        assert!(!connected.handshake);
+        assert_ne!(
+            handshaking, connected,
+            "handshaking must be distinguishable from connected"
+        );
+        assert_eq!(
+            connected,
+            NodeFlags::default(),
+            "connected is the zero value"
+        );
+    }
+
+    /// Inclusive-range arithmetic: a range of one slot has length 1, and the
+    /// length of `start..=end` is `end - start + 1` — every neighbouring
+    /// formula (`end - start`, `end - start - 1`, `end + start + 1`) gets a
+    /// different answer for at least one of these cases.
+    // FM-CLUSTER-075
+    #[test]
+    fn test_slot_range_len_counts_both_endpoints() {
+        assert_eq!(SlotRange::new(10, 20).len(), 11);
+        assert_eq!(SlotRange::single(5).len(), 1);
+        assert_eq!(SlotRange::new(0, CLUSTER_SLOTS - 1).len(), 16384);
+
+        // A slot range is never empty: it always owns at least its own slot,
+        // which is why `is_empty` is a constant rather than a length test.
+        assert!(!SlotRange::new(0, 0).is_empty());
+        assert!(!SlotRange::new(10, 20).is_empty());
+        assert_eq!(
+            SlotRange::single(7).iter().collect::<Vec<_>>(),
+            vec![7],
+            "len() and iter() must agree on the single-slot case"
+        );
+    }
+
+    /// `start == end` is a legal one-slot range in the `a-b` form, not a
+    /// rejected inversion: `SETSLOT`/`ADDSLOTS` callers write `"5-5"`.
+    // FM-CLUSTER-075
+    #[test]
+    fn test_slot_range_parse_accepts_a_degenerate_range() {
+        assert_eq!("5-5".parse::<SlotRange>().unwrap(), SlotRange::single(5));
+        assert_eq!("5-6".parse::<SlotRange>().unwrap(), SlotRange::new(5, 6));
+        assert!("6-5".parse::<SlotRange>().is_err());
+    }
+
+    /// Role partitioning of the node table: `get_primaries` is exactly the
+    /// primaries, and `get_replicas(p)` is exactly the nodes following `p` —
+    /// neither the complement nor everything.
+    // FM-CLUSTER-071
+    #[test]
+    fn test_cluster_snapshot_partitions_nodes_by_role() {
+        let mut snapshot = ClusterSnapshot::new();
+        for node in [
+            NodeInfo::new_primary(1, test_addr(6379), test_addr(16379)),
+            NodeInfo::new_primary(2, test_addr(6380), test_addr(16380)),
+            NodeInfo::new_replica(3, test_addr(6381), test_addr(16381), 1),
+            NodeInfo::new_replica(4, test_addr(6382), test_addr(16382), 1),
+            NodeInfo::new_replica(5, test_addr(6383), test_addr(16383), 2),
+        ] {
+            snapshot.nodes.insert(node.id, node);
+        }
+
+        let primaries: Vec<NodeId> = snapshot.get_primaries().iter().map(|n| n.id).collect();
+        assert_eq!(primaries, vec![1, 2]);
+
+        let replicas_of_1: Vec<NodeId> = snapshot.get_replicas(1).iter().map(|n| n.id).collect();
+        assert_eq!(replicas_of_1, vec![3, 4]);
+        let replicas_of_2: Vec<NodeId> = snapshot.get_replicas(2).iter().map(|n| n.id).collect();
+        assert_eq!(replicas_of_2, vec![5]);
+        assert!(
+            snapshot.get_replicas(3).is_empty(),
+            "a replica has no replicas of its own"
+        );
+    }
+
+    /// The three slot-coverage readers agree with each other and with the slot
+    /// table: a partially covered cluster is not "all assigned", its unassigned
+    /// list is exactly the complement of what is assigned, and the count is the
+    /// table's size.
+    // FM-CLUSTER-073
+    #[test]
+    fn test_cluster_snapshot_slot_coverage_readers_agree() {
+        let mut snapshot = ClusterSnapshot::new();
+        assert!(
+            !snapshot.all_slots_assigned(),
+            "an empty table covers nothing"
+        );
+        assert_eq!(snapshot.assigned_slot_count(), 0);
+        assert_eq!(
+            snapshot.get_unassigned_slots().len(),
+            CLUSTER_SLOTS as usize
+        );
+
+        for slot in 0..11u16 {
+            snapshot.slot_assignment.insert(slot, 1);
+        }
+        assert!(!snapshot.all_slots_assigned());
+        assert_eq!(snapshot.assigned_slot_count(), 11);
+
+        let unassigned = snapshot.get_unassigned_slots();
+        assert_eq!(unassigned.len(), CLUSTER_SLOTS as usize - 11);
+        assert_eq!(
+            unassigned.first().copied(),
+            Some(11),
+            "the unassigned list is the complement, not the assigned set"
+        );
+        assert_eq!(unassigned.last().copied(), Some(CLUSTER_SLOTS - 1));
+        assert!(
+            (0..11u16).all(|s| !unassigned.contains(&s)),
+            "an assigned slot must never be reported unassigned"
+        );
+
+        for slot in 11..CLUSTER_SLOTS {
+            snapshot.slot_assignment.insert(slot, 2);
+        }
+        assert!(snapshot.all_slots_assigned());
+        assert_eq!(snapshot.assigned_slot_count(), CLUSTER_SLOTS as usize);
+        assert!(snapshot.get_unassigned_slots().is_empty());
+    }
 
     // FM-CLUSTER-075
     #[test]
