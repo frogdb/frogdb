@@ -37,6 +37,13 @@ path = "tests/cluster_failover.rs"
 name = "cluster_misc"
 path = "tests/cluster_misc.rs"
 
+# Measurement harness for rework issue 02 (slot-migration finalization residual
+# window). Every case is `#[ignore]`d — it records latencies rather than
+# asserting, so it never runs as part of `just test`.
+[[test]]
+name = "cluster_finalization_window"
+path = "tests/cluster_finalization_window.rs"
+
 [[bin]]
 name = "frogdb-server"
 path = "src/main.rs"

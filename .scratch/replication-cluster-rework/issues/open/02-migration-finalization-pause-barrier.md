@@ -70,3 +70,45 @@ itself becomes the thing that holds the EXEC — so the coverage should land wit
 Gated behind a decision, not a straight implementation task. The pause barrier costs availability at
 every migration finalization; that trade may not be worth it if the residual window is measured and
 found to be sub-millisecond in practice. Measure first.
+
+## Comment — 2026-08-05: residual window measured
+
+Sequencing step 1 of
+[migration-pause-barrier-brief-2026-08-04.md](../../migration-pause-barrier-brief-2026-08-04.md) §7
+is done. Full methodology, numbers, and recommendation:
+[finalization-window-measurement-2026-08-05.md](../../finalization-window-measurement-2026-08-05.md).
+
+Harness: `frogdb-server/crates/server/tests/cluster_finalization_window.rs` — test-only, every case
+`#[ignore]`d, no production code instrumented. 3-node in-process cluster, 120 finalizations per
+scenario, commit→apply observed by polling each node's `ClusterState` from a dedicated OS thread.
+
+Residual window on the losing node (`t_source − t_leader`), microseconds:
+
+| Scenario | p50 | p99 | max |
+|---|---|---|---|
+| follower-source, idle, shipped Raft timing | 248.8 | 541.0 | 887.3 |
+| follower-source, loaded (32 writers + Raft churn) | 684.2 | 1927.4 | 2030.6 |
+| leader-source (control) | −0.9 | 34.8 | 52.5 |
+
+So the window **is** sub-millisecond typically (p99 0.54 ms) and ~2 ms under load. But it is not
+benign: with a client writing the slot across the handover, the source acknowledged a write *after*
+the cluster committed the handoff in **68/120** idle and **118/120** loaded finalizations. Raft
+heartbeat interval does not affect it (100 ms vs 250 ms are indistinguishable) — openraft pushes the
+commit index eagerly, so the window is follower apply *scheduling*, and it widens with node load.
+
+**Recommendation: build the Option A barrier**, with two amendments the measurement forces:
+
+1. It must also cover commands already past the routing guard — the leader-source control has a
+   ~0 state window yet still shows ~150 µs p99 of post-flip acks, which a routing-admission gate
+   cannot see. Option C (fencing token at the execute seam) is the cheap complement, not an
+   alternative.
+2. The prepare phase needs an explicit deadline so a source that never hears phase two resumes
+   serving instead of blackholing the slot. Tens of milliseconds is 3–4 orders above the measured
+   p99.
+
+Key argument: the barrier's added unavailability is one extra Raft round trip on one slot — the same
+0.2–2 ms it removes. The availability/correctness trade this issue was gated on is roughly 1:1, so
+it is not a close call.
+
+The harness doubles as the acceptance test: assert *"iterations with an acknowledged write after
+commit = 0"* over ≥120 loaded iterations. It reports 118/120 today, so it is a live reproduction.
