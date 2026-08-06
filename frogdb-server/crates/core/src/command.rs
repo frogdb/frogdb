@@ -9,6 +9,7 @@ use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command_spec::{AccessSpec, CommandSpec, KeySpec};
 use crate::error::CommandError;
 use crate::keyspace_event::KeyspaceEventFlags;
+use crate::persistence::SnapshotStats;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardSender;
@@ -1341,6 +1342,20 @@ pub struct CommandContext<'a> {
     /// [`CommandContext::new`] constructor used in unit/test contexts.
     pub json_limits: JsonLimits,
 
+    /// This shard's snapshot-coordinator save history, read once per command
+    /// context — the shard-local `redis.call('INFO')` path's only handle on
+    /// save health. A plain data snapshot rather than a live coordinator
+    /// reference: command execution can observe the state, not mutate it or
+    /// trigger new saves (issue 10 / FM-PERSISTENCE-022). `Default::default()`
+    /// (all-idle, "nothing saved yet") in unit/test contexts with no
+    /// coordinator wired.
+    pub snapshot_stats: SnapshotStats,
+
+    /// Whether a background save is running on this shard right now, read
+    /// alongside `snapshot_stats` for the same reason. `false` in unit/test
+    /// contexts with no coordinator wired.
+    pub bgsave_in_progress: bool,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1379,6 +1394,8 @@ impl<'a> CommandContext<'a> {
             master_link_up: false,
             master_sync_error: None,
             json_limits: JsonLimits::default(),
+            snapshot_stats: SnapshotStats::default(),
+            bgsave_in_progress: false,
             effects: CommandEffects::default(),
         }
     }

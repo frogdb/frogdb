@@ -54,6 +54,7 @@ use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
 };
 use crate::command::{CommandContext, ExecutionStrategy, ScriptWriteRecord};
+use crate::persistence::SnapshotStats;
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::message::ScriptingMsg;
@@ -319,6 +320,15 @@ pub(crate) struct ScriptInvoker<'a> {
     /// `redis.call('JSON.SET', ...)` inside a script enforces the same caps as a
     /// direct command instead of silently falling back to defaults.
     json_limits: crate::JsonLimits,
+    /// The snapshot coordinator's live stats/in-progress flag, propagated for
+    /// the same reason as `replication_tracker`: a fresh sub-command context
+    /// (built per `redis.call` in [`Self::run_local`]) defaults these to
+    /// `SnapshotStats::default()` / `false`, which is exactly the static
+    /// `rdb_last_bgsave_status:ok` placeholder issue 10 fixed for the
+    /// connection-level path — without this propagation `redis.call('INFO',
+    /// 'persistence')` inside a script would still report it (FM-PERSISTENCE-022).
+    snapshot_stats: SnapshotStats,
+    bgsave_in_progress: bool,
     /// Effective local writes performed by this script's sub-commands, recorded
     /// so the shard worker can run the canonical write-effect pipeline
     /// (notifications, WATCH bump, tracking, waiter wake, WAL, replication)
@@ -352,6 +362,8 @@ impl<'a> ScriptInvoker<'a> {
             master_sync_error: ctx.master_sync_error.clone(),
             replication_tracker: ctx.replication_tracker.cloned(),
             json_limits: ctx.json_limits,
+            snapshot_stats: ctx.snapshot_stats.clone(),
+            bgsave_in_progress: ctx.bgsave_in_progress,
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
             // scalar reads. `store` and `effects.script_writes` are distinct
@@ -475,6 +487,11 @@ impl CommandInvoker for ScriptInvoker<'_> {
         // the same caps as direct commands (the fresh sub-command context would
         // otherwise default them).
         ctx.json_limits = self.json_limits;
+        // Propagate the snapshot coordinator's live stats for the same reason:
+        // a fresh sub-command context defaults to `SnapshotStats::default()`,
+        // which is the static "ok" placeholder issue 10 fixed (FM-PERSISTENCE-022).
+        ctx.snapshot_stats = self.snapshot_stats.clone();
+        ctx.bgsave_in_progress = self.bgsave_in_progress;
 
         let result = handler.execute(&mut ctx, args);
 
@@ -802,6 +819,8 @@ mod tests {
             master_sync_error: None,
             replication_tracker: None,
             json_limits: crate::JsonLimits::default(),
+            snapshot_stats: SnapshotStats::default(),
+            bgsave_in_progress: false,
             store: RefCell::<&mut dyn Store>::new(store),
             script_writes: RefCell::new(writes),
         }
@@ -1040,6 +1059,8 @@ mod tests {
             master_sync_error: None,
             replication_tracker: None,
             json_limits: crate::JsonLimits::default(),
+            snapshot_stats: SnapshotStats::default(),
+            bgsave_in_progress: false,
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
         };
@@ -1085,6 +1106,8 @@ mod tests {
             master_sync_error: None,
             replication_tracker: Some(Arc::clone(&tracker)),
             json_limits: crate::JsonLimits::default(),
+            snapshot_stats: SnapshotStats::default(),
+            bgsave_in_progress: false,
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
         };

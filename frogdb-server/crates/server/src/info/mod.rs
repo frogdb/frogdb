@@ -417,6 +417,77 @@ pub fn replica_link_fields(
     fields
 }
 
+/// The `SnapshotCoordinator`-derived block of `INFO persistence` — save
+/// outcome, counters, and durations — in Redis's order.
+///
+/// Shared by both INFO renderers for the same reason [`sync_counter_fields`]
+/// is: the shard-local path (`redis.call('INFO')`, `commands::info::build_persistence_info`)
+/// used to emit these eight fields as literals (`rdb_last_bgsave_status:ok`
+/// always, `rdb_saves:0` always, ...) because a shard's `CommandContext` had
+/// no handle on the coordinator — a script polling INFO to check save health
+/// always read "healthy" even while saves were actively failing
+/// (issue 10 / FM-PERSISTENCE-022). Every shard is constructed with the same
+/// `Arc<dyn SnapshotCoordinator>` the connection-level path reads
+/// (`server/init.rs` builds it once), so both renderers now read the
+/// identical [`SnapshotStats`] and cannot drift into reporting different
+/// save health for the same node.
+pub fn persistence_snapshot_fields(
+    stats: &frogdb_core::SnapshotStats,
+    bgsave_in_progress: bool,
+) -> Vec<(&'static str, String)> {
+    use std::time::UNIX_EPOCH;
+
+    let last_save_unix = stats.last_save_time.map(|saved_at| {
+        saved_at
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    });
+    let last_bgsave_secs = stats.last_duration.map(|d| d.as_secs());
+    // Elapsed at *read* time, from the same stats value: a hung save reports
+    // a growing number rather than a frozen one.
+    let current_bgsave_secs = stats.current_save_elapsed().map(|d| d.as_secs());
+
+    let mut fields = vec![
+        (
+            "rdb_bgsave_in_progress",
+            u8::from(bgsave_in_progress).to_string(),
+        ),
+        (
+            "rdb_last_save_time",
+            last_save_unix.unwrap_or(0).to_string(),
+        ),
+        // Real save outcome, not a literal: `err` while the most recent
+        // finished save failed, back to `ok` on the next success (Redis
+        // semantics).
+        (
+            "rdb_last_bgsave_status",
+            if stats.last_error.is_some() {
+                "err"
+            } else {
+                "ok"
+            }
+            .to_string(),
+        ),
+    ];
+    if let Some(err) = &stats.last_error {
+        // INFO is a line-oriented format: fold any CR/LF in the cause into
+        // spaces so one error cannot forge extra fields.
+        fields.push(("rdb_last_bgsave_error", err.replace(['\r', '\n'], " ")));
+    }
+    fields.push((
+        "rdb_last_bgsave_time_sec",
+        last_bgsave_secs.map_or(-1, |s| s as i64).to_string(),
+    ));
+    fields.push((
+        "rdb_current_bgsave_time_sec",
+        current_bgsave_secs.map_or(-1, |s| s as i64).to_string(),
+    ));
+    fields.push(("rdb_saves", stats.saves.to_string()));
+    fields.push(("rdb_bgsave_failures", stats.failures.to_string()));
+    fields
+}
+
 /// The `slaveN:` feed both INFO renderers use: every registered replica, in
 /// attach order, projected through [`ReplicaLine::from_replica`] — which drops
 /// the ones in a phase Redis has no state for (FM-REPLICATION-060).
@@ -532,22 +603,11 @@ pub struct PersistenceSnapshot {
     pub durability_mode: String,
     /// Whether a background save is currently running.
     pub bgsave_in_progress: bool,
-    /// Unix time (seconds) of the last successful save, if any.
-    pub last_save_unix: Option<u64>,
-    /// Successful background saves in this process (Redis `rdb_saves`).
-    pub saves: u64,
-    /// Failed background saves in this process. Cumulative — a later success
-    /// does not reset it.
-    pub bgsave_failures: u64,
-    /// Cause of the most recent *failed* save, cleared by the next success.
-    /// `Some` is exactly the `rdb_last_bgsave_status:err` condition.
-    pub last_bgsave_error: Option<String>,
-    /// Whole seconds the last successful save took (`rdb_last_bgsave_time_sec`).
-    /// `None` until one completes in this process, rendered as Redis' `-1`.
-    pub last_bgsave_secs: Option<u64>,
-    /// Whole seconds the in-flight save has been running
-    /// (`rdb_current_bgsave_time_sec`); `None` when none is, rendered as `-1`.
-    pub current_bgsave_secs: Option<u64>,
+    /// Raw save history straight from the `SnapshotCoordinator` — the single
+    /// source [`crate::info::persistence_snapshot_fields`] renders into
+    /// `rdb_last_save_time`/`rdb_last_bgsave_status`/`rdb_saves`/etc, shared
+    /// with the shard-local INFO renderer (issue 10 / FM-PERSISTENCE-022).
+    pub snapshot_stats: frogdb_core::SnapshotStats,
     /// Keys restored by this boot's recovery (`rdb_last_load_keys_loaded`).
     ///
     /// This and the two below describe the *load*, so they are constants for the

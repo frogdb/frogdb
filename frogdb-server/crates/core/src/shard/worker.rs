@@ -306,6 +306,13 @@ impl ShardWorker {
             .and_then(|cs| cs.self_node_id())
             .or(self.cluster.node_id());
         let is_replica = self.identity.is_replica();
+        // One read of the coordinator's save history, same as the
+        // connection-level INFO builder's — so a script polling
+        // `redis.call('INFO')` for save health sees the real state instead
+        // of a static `ok` (issue 10 / FM-PERSISTENCE-022).
+        let snapshot_coordinator = self.persistence.snapshot_coordinator();
+        let snapshot_stats = snapshot_coordinator.stats();
+        let bgsave_in_progress = snapshot_coordinator.in_progress();
 
         crate::command::CommandContext {
             store: &mut self.store,
@@ -329,6 +336,8 @@ impl ShardWorker {
             master_link_up: self.identity.master_link_up(),
             master_sync_error: self.identity.master_sync_error(),
             json_limits: self.json_limits,
+            snapshot_stats,
+            bgsave_in_progress,
             effects: Default::default(),
         }
     }

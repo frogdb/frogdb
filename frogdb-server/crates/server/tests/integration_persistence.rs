@@ -2989,6 +2989,107 @@ async fn snapshot_failure_does_not_refuse_writes_under_the_default() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-022
+/// The forcing test for issue 10: a script's `redis.call('INFO')` runs inside
+/// a shard worker, a different path than the connection-level `INFO` above,
+/// and used to report static `rdb_last_bgsave_status:ok`/`rdb_saves:0`/etc no
+/// matter what the coordinator's real state was — a script polling for save
+/// health always read "healthy" even while saves were actively failing. Both
+/// surfaces must now agree on the save-outcome fields.
+#[cfg(unix)]
+#[tokio::test]
+async fn script_info_persistence_reports_the_real_bgsave_outcome() {
+    let data_root = tempfile::tempdir().unwrap();
+    let snapshot_root = tempfile::tempdir().unwrap();
+    let server = TestServer::start_standalone_with_config(snapshot_observability_config(
+        &data_root.path().join("data"),
+        snapshot_root.path(),
+    ))
+    .await;
+    let mut client = server.connect().await;
+
+    let scripted_info = |resp: &Response| String::from_utf8(unwrap_bulk(resp).to_vec()).unwrap();
+
+    // Healthy baseline through the script path too.
+    let info = scripted_info(
+        &client
+            .command(&["EVAL", "return redis.call('INFO', 'persistence')", "0"])
+            .await,
+    );
+    assert_eq!(info_field_str(&info, "rdb_last_bgsave_status"), "ok");
+    assert_eq!(info_field_u64(&info, "rdb_bgsave_failures"), 0, "{info}");
+    assert_eq!(info_field_u64(&info, "rdb_saves"), 0, "{info}");
+
+    fail_one_background_save(&mut client, snapshot_root.path()).await;
+
+    // The forcing assertion: EVAL's own view, not the connection-level one,
+    // must show the failure.
+    let failed_info = scripted_info(
+        &client
+            .command(&["EVAL", "return redis.call('INFO', 'persistence')", "0"])
+            .await,
+    );
+    assert_eq!(
+        info_field_str(&failed_info, "rdb_last_bgsave_status"),
+        "err",
+        "a script must be able to see a failing save, not a static 'ok':\n{failed_info}"
+    );
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_bgsave_failures"),
+        1,
+        "{failed_info}"
+    );
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_saves"),
+        0,
+        "a failed save is not a save:\n{failed_info}"
+    );
+    assert_eq!(
+        info_field_u64(&failed_info, "rdb_last_save_time"),
+        0,
+        "{failed_info}"
+    );
+
+    // Recovery is visible through the script path too.
+    let resp = client.command(&["BGSAVE"]).await;
+    assert!(
+        matches!(&resp, Response::Simple(msg)
+            if String::from_utf8_lossy(msg).contains("Background saving")),
+        "Unexpected BGSAVE response: {resp:?}"
+    );
+    let mut recovered_info = String::new();
+    let mut recovered = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        recovered_info = scripted_info(
+            &client
+                .command(&["EVAL", "return redis.call('INFO', 'persistence')", "0"])
+                .await,
+        );
+        if info_field_u64(&recovered_info, "rdb_saves") >= 1 {
+            recovered = true;
+            break;
+        }
+    }
+    assert!(
+        recovered,
+        "a successful BGSAVE must count in rdb_saves through the script path:\n{recovered_info}"
+    );
+    assert_eq!(
+        info_field_str(&recovered_info, "rdb_last_bgsave_status"),
+        "ok",
+        "{recovered_info}"
+    );
+    assert_eq!(
+        info_field_u64(&recovered_info, "rdb_bgsave_failures"),
+        1,
+        "the failure counter is cumulative, not reset by a success:\n{recovered_info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+}
+
 // FM-PERSISTENCE-042
 /// `LASTSAVE` and `rdb_last_save_time` must report the *snapshot's own*
 /// completion time across a restart. The artifact's recorded completion time is
