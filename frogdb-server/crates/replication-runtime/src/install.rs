@@ -418,7 +418,7 @@ mod tests {
     fn entry(value: &str, ttl: Option<Duration>) -> (Value, KeyMetadata) {
         let value = Value::string(value.to_string());
         let mut metadata = KeyMetadata::new(value.memory_size());
-        metadata.expires_at = ttl.map(|d| Instant::now() + d);
+        metadata.expires_at = ttl.map(|d| clock::now() + d);
         (value, metadata)
     }
 

@@ -193,7 +193,7 @@ mod unit_tests {
         // Write key with future expiry
         let value = Value::string("expires_later");
         let mut metadata = KeyMetadata::new(13);
-        metadata.expires_at = Some(Instant::now() + Duration::from_secs(3600));
+        metadata.expires_at = Some(crate::clock::now() + Duration::from_secs(3600));
         rocks
             .put(0, b"future_key", &serialize(&value, &metadata))
             .unwrap();
@@ -217,7 +217,7 @@ mod unit_tests {
         let value = Value::string("expired");
         let mut metadata = KeyMetadata::new(7);
         // Set expiry in the past
-        metadata.expires_at = Some(Instant::now() - Duration::from_secs(1));
+        metadata.expires_at = Some(crate::clock::now() - Duration::from_secs(1));
         rocks
             .put(0, b"expired_key", &serialize(&value, &metadata))
             .unwrap();

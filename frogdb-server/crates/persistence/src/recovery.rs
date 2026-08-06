@@ -258,6 +258,7 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    use frogdb_types::clock;
     use frogdb_types::hyperloglog::HyperLogLogValue;
     use frogdb_types::types::{
         SortedSetValue, StreamId, StreamIdSpec, StreamRangeBound, StreamValue, Value,
@@ -322,7 +323,7 @@ mod tests {
 
         // A key with a future expiry — survives and stays.
         let mut future_meta = KeyMetadata::new(4);
-        future_meta.expires_at = Some(Instant::now() + Duration::from_secs(3600));
+        future_meta.expires_at = Some(clock::now() + Duration::from_secs(3600));
         rocks
             .put(
                 0,
@@ -333,7 +334,7 @@ mod tests {
 
         // A key whose expiry already passed — filtered during recovery.
         let mut past_meta = KeyMetadata::new(7);
-        past_meta.expires_at = Some(Instant::now() - Duration::from_secs(1));
+        past_meta.expires_at = Some(clock::now() - Duration::from_secs(1));
         rocks
             .put(
                 0,
@@ -456,7 +457,7 @@ mod tests {
 
         // Expired warm key — filtered and pruned.
         let mut warm_past = KeyMetadata::new(3);
-        warm_past.expires_at = Some(Instant::now() - Duration::from_secs(1));
+        warm_past.expires_at = Some(clock::now() - Duration::from_secs(1));
         rocks
             .put_warm(
                 0,
