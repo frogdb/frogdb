@@ -316,8 +316,8 @@ field. Benign; listed so a future sweep does not re-litigate them.
 - `frogdb-core/fake-wal` + `shard/builder.rs:373-385` + `shard/fake_wal_registry.rs` — deterministic
   recording WAL sink, enabled by `frogdb-server/turmoil`.
 - `frogdb-core/shard-driver` (`core/Cargo.toml:25`, `shard/event_loop.rs:356,368-412`) — drives one
-  active-expiry cycle and one waiter-timeout sweep synchronously, bypassing the `select!`. Exists but
-  **is not enabled by the `turmoil` feature**; see remediation R6.
+  active-expiry cycle and one waiter-timeout sweep synchronously, bypassing the `select!`. Enabled by
+  `frogdb-server/turmoil` since R6 — the simulation's shards run driven (§6.2).
 - `vll/src/shard.rs:18` — imports `tokio::time::Instant`; continuation-lock drain deadlines are on
   the virtual clock. Its tests assert exact virtual-time equality (`:695`, `:713`, `:1040`), which is
   the pattern the rest of the codebase should copy.
@@ -512,7 +512,7 @@ instead of a digest eyeballed by hand.
 | **R3** | **Clock-domain unification, phase 1 — the blocking path.** `server/src/connection/blocking.rs:44` and `blocking/coordinator.rs:78,87` → `tokio::time::Instant`; thread a virtual `now` into `core/src/shard/blocking.rs:170,303` and `wait_queue::collect_expired`. | S | **The single highest-value change.** Directly targets `MultiWaiter`, the profile issue 14 shows flapping 0/1/0/0. | **DONE** `b48fd3a7` |
 | **R4** | **Clock-domain unification, phase 2 — expiry.** `event_loop.rs:177` sources `now` from `tokio::time::Instant`; `active_expiry.rs`'s 25 ms real budget becomes either a virtual-clock budget or an op-count under sim; `store/hashmap.rs:558,1392,1543,1555` take an injected `now`. Fix the false comment at `hashmap.rs:543` while there. | S–M | Removes the largest cluster of A-sites (A5–A11) and makes TTL behaviour under sim mean what the code already claims it means. | **DONE** `00dfb0ab` |
 | **R5** | Sweep the remaining `std::time::Instant` imports in product crates to `tokio::time::Instant` (55 files, mechanical `sed`), leaving `SystemTime` alone. Add a `just lint-clock-seam` grep gate, in the style of the existing `lint-turmoil-features` / `lint-metrics-chokepoint` recipes, forbidding `std::time::Instant::now` outside an allowlist. | M | Closes A18–A23 and prevents regression. This is FDB's "no direct time calls" rule, enforced the way this repo already enforces its other seams. | not started |
-| **R6** | Enable `frogdb-core/shard-driver` from the `turmoil` feature and use `run_one_expiry_cycle` / the waiter sweep from the harness where possible, instead of racing the `select!`. | S | Removes A51's expiry and waiter branches from the race entirely for driven tests. The seam already exists and is unused by the sim. | not started |
+| **R6** | Enable `frogdb-core/shard-driver` from the `turmoil` feature and use `run_one_expiry_cycle` / the waiter sweep from the harness where possible, instead of racing the `select!`. | S | Removes A51's expiry and waiter branches from the race entirely for driven tests. The seam already exists and is unused by the sim. | **DONE** — see [6.2](#62-r6-as-implemented-driven-shard-ticks-2026-08-05) for the interpretation |
 | **R7** | Add `biased;` + a priority comment to A51–A55, matching the existing convention. | S | Makes those five loops deterministic *by construction*, not merely by seed — so a future tokio version that changes its RNG cannot silently invalidate pinned seeds. | not started |
 | **R8** | Seeded RNG through `CommandContext` / `ShardWorker` for A26–A36, A39. Per-shard seed = `(workload_seed, shard_id)`. | M | Removes the remaining 13 unseeded-RNG sites. Needed before any `SRANDMEMBER`/`SPOP`/`RANDOMKEY`/`ZRANDMEMBER` profile can be pinned. | not started |
 | **R9** | Deterministic ordering for the 11 hash-order sites: `BTreeMap<ConnId,_>` for pubsub (A40–A43) and the client registry (A49–A50); a tiebreaker on `id` in `eviction_candidates` (A48, one line); seedable `ahash::RandomState` — or `IndexMap` — for `HashEncoding::HashMap`, `SetEncoding::HashSet`, and the `griddle` keyspace (A44–A47). Sort `all_keys()` for `KEYS` (A46). | M | Removes the last class that can change a *reply value* for an identical state. Only fully effective once R3–R8 make the operation sequence stable. | not started |
@@ -563,6 +563,47 @@ extends that to any profile that touches TTLs; R8+R9 are required before profile
 commands or large sets/hashes can be pinned. Criterion 2 ("the sources are identified and named")
 is satisfied by this document — the answer is **all three suspects, plus unseeded chaos injection and
 client-visible hash-order in replies**.
+
+### 6.2 R6 as implemented: driven shard ticks (2026-08-05)
+
+R6's wording ("use `run_one_expiry_cycle` / the waiter sweep **from the harness**") could not be
+followed literally, for two reasons found while implementing it:
+
+1. `run_one_expiry_cycle` does not exist. The seam's real entry points are
+   `ShardWorker::drive_expiry_tick` / `drive_waiter_timeout_tick` (`shard/event_loop.rs`).
+2. The turmoil harness never owns a `ShardWorker`. It speaks RESP over a simulated socket
+   (`tests/common/workload_runner.rs`); the workers are spawned inside the server host task by
+   `server/src/server/shards.rs`. Only the shard-harness crate (`frogdb-shard-harness`) holds
+   workers directly, and it does not run under turmoil.
+
+**Interpretation chosen** — keep R6's *effect* (A51's two sweep branches leave the race), move the
+driving point from the harness to the server's own spawn site:
+
+- `frogdb-server/turmoil` now forwards `frogdb-core/shard-driver`, so the seam is compiled into
+  every simulation build (it stays absent from production builds).
+- `ShardWorker::set_driven_ticks(true)` suppresses the event loop's two 100 ms sweep arms
+  (`expiry_interval.tick()`, `waiter_timeout_interval.tick()`) via a `select!` branch guard. The
+  10 s metrics arm and the 1 s search-commit arm are deliberately left alone: the shard supervisor
+  classifies a returning `run()` as fail-stop, and those remaining timer arms are what keep
+  `else => break` unreachable when the message channel closes.
+- The sweeps are instead delivered as `ShardMessage::DriveTick(TickKind::Expiry |
+  TickKind::WaiterTimeout)` — a new seam-gated message variant — by a per-shard pump task
+  (`spawn_shard_tick_pump`, `#[cfg(feature = "turmoil")]`) at the same 100 ms cadence on the host's
+  paused virtual clock, expiry first then waiters. `dispatch_message` routes the variant through the
+  existing `drive_expiry_tick` / `drive_waiter_timeout_tick` seams, so the sweeps now take a definite
+  position in the shard's single totally-ordered message queue instead of being a `select!` coin
+  flip against queued commands. Cadence and semantics are unchanged; only the ordering is.
+
+**Alternatives rejected.** (a) A wire-level `DEBUG SHARD-TICK` driven by the workload harness: the
+harness would have to drive blocking-waiter timeouts itself, adding round-trips and leaving
+`MultiWaiter` clients hanging whenever the harness is busy. (b) Deterministic deadline checks after
+each `select!` wake-up: the wake-up branch itself still races the queued messages, so A51 survives.
+
+**Evidence.** `frogdb-shard-harness`'s `drive_tick_message_runs_the_expiry_sweep` /
+`…_waiter_timeout_sweep` pin the message → seam route; `simulation::driven_shard_ticks_run_expiry_
+and_waiter_sweeps` proves the pump drives both sweeps end to end over the wire under turmoil (an
+untouched key's `expired_keys` bump can only come from the active sweep, and a `BLPOP` nobody
+satisfies can only be answered by the waiter sweep). The three determinism pins stay green.
 
 ---
 

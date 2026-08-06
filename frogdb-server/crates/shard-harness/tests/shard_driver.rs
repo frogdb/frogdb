@@ -132,3 +132,94 @@ async fn fake_wal_failure_is_injected_at_index() {
         "the injected index-0 WAL failure must suppress the SET's recorded write"
     );
 }
+
+/// Determinism R6: a `DriveTick(Expiry)` *message* runs the active-expiry sweep.
+///
+/// The turmoil simulation suppresses the event loop's 100 ms expiry timer branch
+/// and delivers the sweep through the shard's ordinary message queue instead, so
+/// the sweep is totally ordered against commands rather than racing them for a
+/// `select!` branch. This pins the message → `drive_expiry_tick` route: the
+/// physical key (and its expiry-index row) survives until the tick message is
+/// dispatched, and is gone afterwards.
+#[tokio::test]
+async fn drive_tick_message_runs_the_expiry_sweep() {
+    use frogdb_core::TickKind;
+    use frogdb_core::store::BackdateExpiryResult;
+    use frogdb_shard_harness::harness::ShardDriver;
+
+    let mut d = ShardDriver::new(1);
+    assert!(matches!(
+        d.execute(0, "SET", &["k", "v"]).await,
+        Response::Simple(_)
+    ));
+    assert_eq!(
+        d.execute(0, "EXPIRE", &["k", "100"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        d.backdate_expiry(0, "k", 1_000).await,
+        BackdateExpiryResult::Backdated
+    );
+    assert_eq!(
+        d.expiry_index_check(0).await.total_entries,
+        1,
+        "the backdated key must still be physically present before the sweep"
+    );
+
+    assert!(
+        !d.dispatch(0, ShardMessage::DriveTick(TickKind::Expiry))
+            .await,
+        "a drive tick must never signal shutdown"
+    );
+
+    assert_eq!(
+        d.expiry_index_check(0).await.total_entries,
+        0,
+        "the queued DriveTick(Expiry) message must run the sweep that reaps the key"
+    );
+}
+
+/// Determinism R6: a `DriveTick(WaiterTimeout)` *message* runs the blocking-waiter
+/// timeout sweep — the queued counterpart of the suppressed 100 ms waiter branch.
+#[tokio::test]
+async fn drive_tick_message_runs_the_waiter_timeout_sweep() {
+    use std::time::Duration;
+
+    use frogdb_core::TickKind;
+    use frogdb_core::types::BlockingOp;
+    use frogdb_shard_harness::harness::ShardDriver;
+    use tokio::time::Instant;
+
+    let mut d = ShardDriver::new(1);
+    let rx = d
+        .block_wait(
+            0,
+            10,
+            vec![Bytes::from_static(b"k")],
+            BlockingOp::BLPop,
+            // Already elapsed: the next sweep — and only a sweep — must time it out.
+            Some(Instant::now() - Duration::from_millis(1)),
+        )
+        .await;
+    assert_eq!(
+        d.wait_queue_info(0).await.total_waiters,
+        1,
+        "the waiter must still be queued before the sweep"
+    );
+
+    assert!(
+        !d.dispatch(0, ShardMessage::DriveTick(TickKind::WaiterTimeout))
+            .await,
+        "a drive tick must never signal shutdown"
+    );
+
+    assert_eq!(
+        d.wait_queue_info(0).await.total_waiters,
+        0,
+        "the queued DriveTick(WaiterTimeout) message must run the timeout sweep"
+    );
+    assert!(
+        matches!(rx.await, Ok(Response::NullArray)),
+        "the timed-out BLPOP must be answered with its op-aware null-array reply"
+    );
+}

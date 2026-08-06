@@ -7171,3 +7171,80 @@ fn test_replication_failover_chain_wgl_linearizable() {
         run_replication_failover_chain(seed);
     }
 }
+
+/// Determinism R6: the simulation's shard workers run with driven ticks, so the
+/// two periodic sweeps must arrive as queued `DriveTick` messages from the
+/// per-shard pump instead of the (now suppressed) `select!` timer branches.
+///
+/// Both sweeps are checked through the wire, from effects nothing else can
+/// produce:
+///
+/// * **Active expiry** — a key is written with a short TTL and then *never read
+///   again*, so no lazy-expiry path can touch it. `INFO stats`' `expired_keys`
+///   can therefore only be bumped by the active sweep. If the pump were missing
+///   (or stopped) while `set_driven_ticks(true)` suppressed the timer branch, the
+///   counter would stay at 0 and this fails.
+/// * **Blocking-waiter timeouts** — a `BLPOP` on a key nobody pushes is answered
+///   only by the waiter-timeout sweep; without it the client would block until
+///   the simulation's deadline and the test would fail on the read.
+#[test]
+fn driven_shard_ticks_run_expiry_and_waiter_sweeps() {
+    let mut sim = Builder::new()
+        .simulation_duration(Duration::from_secs(30))
+        .build();
+
+    sim.host(SERVER_HOST, || real_frogdb_server(1));
+
+    sim.client("client1", async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let addr = turmoil::lookup(SERVER_HOST);
+        let mut stream = TcpStream::connect((addr, SERVER_PORT)).await?;
+        let mut buf = vec![0u8; 64 * 1024];
+
+        // A key that dies 50 virtual-ms from now and is never read again.
+        let cmd = encode_command(&[b"SET", b"doomed", b"v", b"PX", b"50"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        assert!(matches!(
+            parse_simple_response(&buf[..n]),
+            OperationResult::Ok
+        ));
+
+        // Well past the deadline and several 100 ms sweep periods.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let cmd = encode_command(&[b"INFO", b"stats"]);
+        stream.write_all(&cmd).await?;
+        let mut info = Vec::new();
+        // INFO is a single bulk string; read until the section it must contain
+        // has arrived rather than assuming one read carries the whole reply.
+        while !String::from_utf8_lossy(&info).contains("expired_keys:") {
+            let n = stream.read(&mut buf).await?;
+            assert!(n > 0, "connection closed before INFO stats completed");
+            info.extend_from_slice(&buf[..n]);
+        }
+        let info = String::from_utf8_lossy(&info).into_owned();
+        assert!(
+            info.contains("expired_keys:1"),
+            "the active-expiry sweep must have reaped the untouched key \
+             (driven-tick pump not running?); INFO stats was:\n{info}"
+        );
+
+        // A blocking pop nobody will satisfy: only the waiter-timeout sweep can
+        // answer it, and it must answer with a null array.
+        let cmd = encode_command(&[b"BLPOP", b"nobody-pushes-here", b"1"]);
+        stream.write_all(&cmd).await?;
+        let n = stream.read(&mut buf).await?;
+        let reply = &buf[..n];
+        assert!(
+            reply == b"*-1\r\n" || reply == b"$-1\r\n" || reply == b"_\r\n",
+            "BLPOP must be timed out by the waiter sweep, got {:?}",
+            String::from_utf8_lossy(reply)
+        );
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}

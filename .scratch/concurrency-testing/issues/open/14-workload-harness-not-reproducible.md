@@ -154,8 +154,9 @@ carries the measured before/after digest table.
 | `00dfb0ab` | R4 | One `frogdb_types::clock::now()` seam for the whole expiry domain; the active-expiry budget stops measuring real CPU time; `expiry.rs` takes a single paired `Instant`/`SystemTime` sample |
 | `faaf7f2d` | (not in the plan) | Seeded skiplist level heights — the audit had filed this class B, but the height is observable through `memory_size()`, and it was the last divergence in the MultiWaiter digest |
 
-Not started: R5–R11 (clock-seam lint + mechanical sweep, `biased;` select loops, seeded command
-RNG, hash-order determinism, `spawn_blocking`/thread inlining, `frogdb-net` bypasses).
+Not started: R5, R7–R11 (clock-seam lint + mechanical sweep, `biased;` select loops, seeded command
+RNG, hash-order determinism, `spawn_blocking`/thread inlining, `frogdb-net` bypasses). R6 landed
+2026-08-05 — see the section below.
 
 **The remaining blocker for criterion 5 is A15**, filed as issue 17: `XADD *` mints stream IDs from
 `SystemTime::now()`, and no virtual wall clock exists in the codebase, so every profile that
@@ -239,10 +240,29 @@ to issue 16 rather than to this issue:
   and the judged fraction *falls* as ops rise (11% → 7%). Worth confirming the generator produces
   enough genuinely-contended waiters to keep the check load-bearing at the nightly default.
 
+## R6 landed (2026-08-05): the simulation's shards run driven ticks
+
+`frogdb-server/turmoil` now enables `frogdb-core/shard-driver`, and every shard spawned under the
+simulation runs with `set_driven_ticks(true)`: the event loop's two 100 ms sweep arms (active
+expiry, blocking-waiter timeout) are suppressed, and both sweeps arrive as queued
+`ShardMessage::DriveTick(TickKind::…)` messages from a per-shard pump task at the same cadence on
+the virtual clock. A51's two sweep branches therefore leave the `select!` race entirely and become
+totally ordered against commands — the effect R6 asked for.
+
+**Interpretation recorded** (R6's literal wording was unimplementable — `run_one_expiry_cycle` does
+not exist, and the turmoil harness never owns a `ShardWorker`, only a socket): see §6.2 of the
+audit for the full reasoning, the rejected alternatives, and why the metrics/search timer arms were
+deliberately left in place (the shard supervisor's fail-stop classification depends on them).
+
+Tests: `frogdb-shard-harness` gains `drive_tick_message_runs_the_expiry_sweep` and
+`drive_tick_message_runs_the_waiter_timeout_sweep` (message → seam route);
+`simulation::driven_shard_ticks_run_expiry_and_waiter_sweeps` proves the pump drives both sweeps
+end to end over the wire. The three determinism pins stay green.
+
 ### What keeps this issue open
 
-Criterion 5 was the last checkbox, but the audit's remediation plan is not finished: **R5–R11 are
-still not started** (clock-seam lint + mechanical sweep, `biased;` select loops, seeded command
+Criterion 5 was the last checkbox, but the audit's remediation plan is not finished: **R5 and R7–R11
+are still open** (R6 landed, above) (clock-seam lint + mechanical sweep, `biased;` select loops, seeded command
 RNG, hash-order determinism, `spawn_blocking`/thread inlining, `frogdb-net` bypasses). The three
 determinism pins passing is evidence for three specific configurations
 (`(seed, profile, clients, ops, shards)` = Mixed/0/4/30/2, MultiWaiter/10/4/30/2,
@@ -256,6 +276,6 @@ TxHeavy/3/4/60/2), in-process, not a general guarantee:
   when issue 17 landed but nothing asserts it on an ongoing basis.
 - Determinism at 30–60 ops does not imply determinism at the nightly default of 150.
 
-Recommend this issue stay open for R5–R11 and the `BlockingHeavy` pin, with the "findings cannot
+Recommend this issue stay open for R5, R7–R11 and the `BlockingHeavy` pin, with the "findings cannot
 be pinned by seed" warning in issue 11 now downgraded: seed pinning is sound for the pinned
 configurations, and should be treated as unproven elsewhere until the above closes.
