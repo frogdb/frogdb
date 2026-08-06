@@ -27,7 +27,7 @@ mod string;
 mod timeseries;
 
 use frogdb_types::clock;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use thiserror::Error;
 
 use frogdb_types::types::{KeyMetadata, Value};

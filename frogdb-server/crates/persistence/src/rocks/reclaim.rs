@@ -27,7 +27,6 @@
 use frogdb_types::clock;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use frogdb_types::metrics::definitions::{FlushCompactCompleted, FlushCompactStarted};
 use rocksdb::{BottommostLevelCompaction, CompactOptions};

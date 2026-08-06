@@ -14,7 +14,7 @@ use super::{
 };
 use frogdb_types::clock;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 pub struct NoopSnapshotCoordinator {
     stats: SaveHistory,

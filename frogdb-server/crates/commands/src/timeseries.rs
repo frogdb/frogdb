@@ -11,7 +11,7 @@ use frogdb_core::{
     LookupSpec, ServerWideOp, StoreTypedFamilyExt, TimeSeriesValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 /// Get current timestamp in milliseconds.
 fn current_timestamp_ms() -> i64 {

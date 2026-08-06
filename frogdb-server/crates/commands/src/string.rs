@@ -19,7 +19,7 @@ use frogdb_core::{
     StoreTypedFamilyExt, StringValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use super::utils::{
     ExpiryErr, ExpiryUnit, checked_expire_value, format_float, parse_f64, parse_i64, parse_u64,

@@ -14,7 +14,7 @@ use frogdb_core::{
     ExecutionStrategy, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 // ============================================================================
 // DBSIZE - Return key count

@@ -29,7 +29,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use frogdb_replication::{BacklogGeometry, NetByteCountersSnapshot, SyncCountersSnapshot};
 

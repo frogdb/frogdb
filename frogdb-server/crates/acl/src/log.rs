@@ -7,7 +7,7 @@ use frogdb_types::clock;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use frogdb_types::sync::MutexExt;
 

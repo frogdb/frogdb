@@ -6,7 +6,7 @@
 //! module to patch, so "the patch silently no-oped" is unrepresentable.
 
 use frogdb_core::clock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use frogdb_cluster::version_gate;
 use frogdb_core::histogram::KeysizeType;

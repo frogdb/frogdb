@@ -10,7 +10,6 @@
 //! can be round-trip tested end-to-end against a mock sink.
 
 use frogdb_types::clock;
-use std::time::Instant;
 
 use bytes::Bytes;
 use frogdb_types::types::{KeyMetadata, KeyType, Value};

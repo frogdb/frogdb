@@ -57,7 +57,6 @@ use frogdb_core::{
 };
 use frogdb_replication::replica::{FullSyncPayload, InstallError, SnapshotInstaller};
 use std::collections::HashSet;
-use std::time::Instant;
 use tokio::sync::oneshot;
 
 /// Reads a received full-resync dataset and installs it into the live shards.

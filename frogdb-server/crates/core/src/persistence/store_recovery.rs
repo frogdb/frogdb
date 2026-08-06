@@ -9,7 +9,6 @@
 //! results the server expects.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use bytes::Bytes;
 use frogdb_persistence::{

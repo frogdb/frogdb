@@ -1,7 +1,6 @@
 //! Script executor — orchestrates Lua script execution with shebang support.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};

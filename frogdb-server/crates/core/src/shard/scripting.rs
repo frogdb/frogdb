@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use bytes::Bytes;
 use frogdb_protocol::{ProtocolVersion, Response};
 

@@ -18,7 +18,7 @@ use frogdb_types::metrics::definitions::{
 use rocksdb::{WriteBatch, WriteOptions};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use tracing::{debug, error, info, trace};
 
 pub(super) enum WalEntry {

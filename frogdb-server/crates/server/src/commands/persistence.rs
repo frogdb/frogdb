@@ -11,7 +11,7 @@ use frogdb_core::{
     WalStrategy, deserialize, serialize,
 };
 use frogdb_protocol::Response;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use frogdb_core::parse_i64;
 
