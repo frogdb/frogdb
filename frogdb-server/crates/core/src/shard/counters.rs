@@ -113,7 +113,7 @@ impl OperationCounters {
             buckets,
             current_index: 0,
             current_second: 0,
-            epoch: Instant::now(),
+            epoch: crate::clock::now(),
             data_start_second: 0,
             enabled: Arc::new(AtomicBool::new(true)),
             missed_ops_while_disabled: false,

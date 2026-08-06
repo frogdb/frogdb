@@ -7,6 +7,7 @@
 //! - WAIT: Wait for replica acknowledgments
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
@@ -531,7 +532,7 @@ pub(crate) fn parse_wait_args(args: &[Bytes]) -> Result<(u32, u64), CommandError
         });
     }
     // Check for overflow when adding current time (same as Redis mstime() + timeout)
-    let now_ms = std::time::SystemTime::now()
+    let now_ms = clock::system_now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);

@@ -19,7 +19,7 @@ use frogdb_core::{
     StoreTypedFamilyExt, StringValue, Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use super::utils::{
     ExpiryErr, ExpiryUnit, checked_expire_value, format_float, parse_f64, parse_i64, parse_u64,
@@ -506,7 +506,7 @@ impl Command for GetexCommand {
                 // EXAT is also a seconds unit upstream: same overflow guard.
                 let ts = checked_expire_value(raw, true, ExpiryErr::Named("getex"))?;
                 let target = UNIX_EPOCH + Duration::from_secs(ts);
-                let now = SystemTime::now();
+                let now = clock::system_now();
                 if let Ok(duration) = target.duration_since(now) {
                     ctx.store.set_expiry(key, clock::now() + duration);
                 }
@@ -514,7 +514,7 @@ impl Command for GetexCommand {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
                 let ts = checked_expire_value(raw, false, ExpiryErr::Named("getex"))?;
                 let target = UNIX_EPOCH + Duration::from_millis(ts);
-                let now = SystemTime::now();
+                let now = clock::system_now();
                 if let Ok(duration) = target.duration_since(now) {
                     ctx.store.set_expiry(key, clock::now() + duration);
                 }

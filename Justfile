@@ -236,7 +236,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-turmoil-features lint-turmoil lint-failure-modes
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1177,6 +1177,22 @@ lint-format-float:
         exit 1
     fi
     echo "OK: one float renderer, in frogdb-protocol"
+
+# Gate: server crates read the clock through the seam (frogdb-types/src/clock.rs),
+# not the OS directly (determinism audit R5).
+#
+# Every deadline the server holds is compared against a `now`, and which clock
+# that `now` came from decides whether a key expired, whether a waiter timed
+# out, whether a node is FAILed, and what a TTL/TIME/XINFO reply says. Under a
+# paused tokio runtime — how every simulated turmoil host runs — the timer's
+# clock and the OS clock disagree, so a direct OS read makes its decision on a
+# different timeline from the rest of the server and the run stops being
+# reproducible. Both seam functions compile to the same reading as the OS clock
+# when no paused runtime is present, so a converted site is free in production.
+#
+# Exemptions live in the script, per file, with a reason and a pinned count.
+lint-clock-seam:
+    ./scripts/clock-seam.py
 
 # =============================================================================
 # Build/test execution mode

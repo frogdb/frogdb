@@ -149,7 +149,7 @@ impl LuaVm {
 
     /// Prepare the VM for a new script execution.
     pub fn prepare_execution(&self, keys: &[Bytes], argv: &[Bytes]) -> Result<(), ScriptError> {
-        let start_time = Instant::now();
+        let start_time = crate::clock::now();
 
         // Reset execution state
         {

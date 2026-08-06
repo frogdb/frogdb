@@ -1,6 +1,7 @@
 //! System metrics collection.
 
 use frogdb_core::MetricsRecorder;
+use frogdb_types::clock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -56,7 +57,7 @@ impl SystemMetricsCollector {
 
         Self {
             recorder,
-            start_time: Instant::now(),
+            start_time: clock::now(),
             system,
             pid,
             maxmemory,

@@ -2,6 +2,7 @@
 
 use frogdb_cluster::version_gate;
 use frogdb_core::ShardMessage;
+use frogdb_core::clock;
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{ClusterState, MetricsRecorder};
 use frogdb_debug::{ConfigEntry, DebugState, ServerInfo};
@@ -74,7 +75,7 @@ impl Server {
     /// Start all subsystems and return handles for later shutdown.
     pub(super) fn start_subsystems(&mut self) -> Result<SubsystemHandles> {
         // Capture server start time
-        let start_time = std::time::Instant::now();
+        let start_time = clock::now();
 
         // Live operating mode shared by the status collector and (when HTTP is
         // enabled) the debug node-state provider. Cluster mode is config-static;

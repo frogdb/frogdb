@@ -9,6 +9,7 @@
 //! Per-replica state lives on [`crate::replica_session::ReplicaSession`].
 
 use frogdb_types::ReplicationTracker;
+use frogdb_types::clock;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -501,7 +502,7 @@ impl ReplicationTrackerImpl {
         if let Some(session) = self.replicas.read().get(&replica_id) {
             self.lag_disconnect_times
                 .write()
-                .insert(session.address(), Instant::now());
+                .insert(session.address(), clock::now());
         }
     }
 

@@ -50,7 +50,7 @@ impl ShardSender {
     ) -> Result<(), mpsc::error::SendError<ShardMessage>> {
         let envelope = Envelope {
             message: message.into(),
-            enqueued_at: Instant::now(),
+            enqueued_at: crate::clock::now(),
         };
         self.inner
             .send(envelope)
@@ -66,7 +66,7 @@ impl ShardSender {
     ) -> Result<(), mpsc::error::TrySendError<ShardMessage>> {
         let envelope = Envelope {
             message: message.into(),
-            enqueued_at: Instant::now(),
+            enqueued_at: crate::clock::now(),
         };
         self.inner.try_send(envelope).map_err(|e| match e {
             mpsc::error::TrySendError::Full(env) => mpsc::error::TrySendError::Full(env.message),

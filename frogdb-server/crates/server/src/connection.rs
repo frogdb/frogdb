@@ -69,6 +69,7 @@ pub use state::{
 // Re-export builder
 pub use builder::{ConnectionHandlerBuilder, connection_builder, standalone_config};
 
+use frogdb_core::clock;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -329,7 +330,7 @@ impl ConnectionHandler {
         );
 
         // Capture a single timestamp for timing, metrics, and idle tracking
-        let now = std::time::Instant::now();
+        let now = clock::now();
 
         // Update last command time for idle tracking
         self.admin

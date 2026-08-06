@@ -3,10 +3,11 @@
 //! Records security events such as failed authentication attempts
 //! and permission denials.
 
+use frogdb_types::clock;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use frogdb_types::sync::MutexExt;
 
@@ -69,7 +70,7 @@ impl AclLogEntry {
         client_info: impl Into<String>,
         object: impl Into<String>,
     ) -> Self {
-        let timestamp_usec = SystemTime::now()
+        let timestamp_usec = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or(0);
@@ -103,7 +104,7 @@ impl AclLogEntry {
     /// Increment the count for this entry.
     pub fn increment(&mut self) {
         self.count += 1;
-        self.timestamp_usec = SystemTime::now()
+        self.timestamp_usec = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or(self.timestamp_usec);
@@ -136,7 +137,7 @@ impl AclLogEntry {
 
     /// Calculate age in seconds.
     fn age_seconds(&self) -> f64 {
-        let now = SystemTime::now()
+        let now = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or(0);

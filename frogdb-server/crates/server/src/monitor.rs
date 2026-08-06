@@ -5,6 +5,7 @@
 //! backpressure). Zero overhead when no subscribers: single `AtomicUsize` load
 //! per command (the broadcast channel's internal receiver count).
 
+use frogdb_core::clock;
 use std::fmt::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -33,7 +34,7 @@ impl MonitorEvent {
         };
 
         Self {
-            timestamp: SystemTime::now(),
+            timestamp: clock::system_now(),
             client_addr: addr,
             cmd_name: cmd_name.to_string(),
             args,

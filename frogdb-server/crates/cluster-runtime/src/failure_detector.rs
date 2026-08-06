@@ -21,6 +21,7 @@
 //! node unflagged forever. A level-triggered reconciliation converges no
 //! matter which node was leader when the threshold was crossed.
 
+use frogdb_core::clock;
 use frogdb_core::sync::{Arc, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -368,7 +369,7 @@ impl<R: DetectorRaft> FailureDetector<R> {
         self.health
             .write()
             .unwrap()
-            .record_success(node_id, Instant::now());
+            .record_success(node_id, clock::now());
     }
 
     /// Record a failed connection attempt to a node (local tracking only).
@@ -394,7 +395,7 @@ impl<R: DetectorRaft> FailureDetector<R> {
     /// [`Self::inflight`] set keeps the next tick from re-issuing a write that
     /// has not finished yet.
     pub fn reconcile_topology(self: &Arc<Self>) {
-        let now = Instant::now();
+        let now = clock::now();
         let verdicts: Vec<(NodeId, LocalVerdict, bool)> = {
             let health = self.health.read().unwrap();
             self.cluster_state
@@ -448,7 +449,7 @@ impl<R: DetectorRaft> FailureDetector<R> {
         self.health
             .read()
             .unwrap()
-            .has_quorum(&all_nodes, self.self_node_id, Instant::now())
+            .has_quorum(&all_nodes, self.self_node_id, clock::now())
     }
 
     /// Mark a node as failed via Raft consensus.

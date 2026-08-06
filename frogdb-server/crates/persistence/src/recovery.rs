@@ -9,7 +9,7 @@
 //! drives it, so the read half of the format lives next to the write half and
 //! can be round-trip tested end-to-end against a mock sink.
 
-use std::time::Instant;
+use frogdb_types::clock;
 
 use bytes::Bytes;
 use frogdb_types::types::{KeyMetadata, KeyType, Value};
@@ -140,8 +140,8 @@ pub fn recover_shard_into<S: RestoreSink>(
     shard_id: usize,
     sink: &mut S,
 ) -> Result<RecoveryStats, RecoveryError> {
-    let start = Instant::now();
-    let now = Instant::now();
+    let start = clock::now();
+    let now = clock::now();
     let mut stats = RecoveryStats::default();
 
     for (key, value) in rocks.iter_cf(shard_id)? {
@@ -205,7 +205,7 @@ pub fn recover_warm_shard_into<S: RestoreSink>(
     sink: &mut S,
     stats: &mut RecoveryStats,
 ) -> Result<(), RecoveryError> {
-    let now = Instant::now();
+    let now = clock::now();
 
     for (key, value) in rocks.iter_warm_cf(shard_id)? {
         match deserialize(&value) {
@@ -258,6 +258,7 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    use frogdb_types::clock;
     use frogdb_types::hyperloglog::HyperLogLogValue;
     use frogdb_types::types::{
         SortedSetValue, StreamId, StreamIdSpec, StreamRangeBound, StreamValue, Value,
@@ -322,7 +323,7 @@ mod tests {
 
         // A key with a future expiry — survives and stays.
         let mut future_meta = KeyMetadata::new(4);
-        future_meta.expires_at = Some(Instant::now() + Duration::from_secs(3600));
+        future_meta.expires_at = Some(clock::now() + Duration::from_secs(3600));
         rocks
             .put(
                 0,
@@ -333,7 +334,7 @@ mod tests {
 
         // A key whose expiry already passed — filtered during recovery.
         let mut past_meta = KeyMetadata::new(7);
-        past_meta.expires_at = Some(Instant::now() - Duration::from_secs(1));
+        past_meta.expires_at = Some(clock::now() - Duration::from_secs(1));
         rocks
             .put(
                 0,
@@ -456,7 +457,7 @@ mod tests {
 
         // Expired warm key — filtered and pruned.
         let mut warm_past = KeyMetadata::new(3);
-        warm_past.expires_at = Some(Instant::now() - Duration::from_secs(1));
+        warm_past.expires_at = Some(clock::now() - Duration::from_secs(1));
         rocks
             .put_warm(
                 0,

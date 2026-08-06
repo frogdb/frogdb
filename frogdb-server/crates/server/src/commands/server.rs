@@ -8,12 +8,13 @@
 //! - SHUTDOWN: Gracefully shut down the server
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 // ============================================================================
 // DBSIZE - Return key count
@@ -174,7 +175,7 @@ impl Command for TimeCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        let now = SystemTime::now()
+        let now = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
 

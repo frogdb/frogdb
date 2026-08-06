@@ -24,12 +24,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// and that gap lands directly in an `EXPIRETIME`/`TTL` reply. One sample per
 /// conversion makes the pairing exact and the reply a function of the inputs.
 ///
-/// The monotonic half comes from [`frogdb_core::clock`] so it agrees with every
-/// deadline comparison in the store. The wall-clock half is still the real OS
-/// clock: nothing in the codebase virtualizes wall time, so absolute
-/// `EXPIRETIME`-style replies remain real-time values.
+/// Both halves come from [`frogdb_core::clock`]: the monotonic one so it agrees
+/// with every deadline comparison in the store, the wall-clock one so absolute
+/// `EXPIRETIME`-style replies advance with the same (possibly paused) clock the
+/// deadlines do. Reading `SystemTime::now()` here instead would reintroduce the
+/// drift under a paused runtime that pairing the two samples exists to remove.
 fn now_pair() -> (Instant, SystemTime) {
-    (clock::now(), SystemTime::now())
+    (clock::now(), clock::system_now())
 }
 
 /// Helper to convert Unix timestamp (seconds) to Instant.
@@ -266,7 +267,7 @@ impl Command for ExpireCommand {
         }
         // Also reject if converting to ms and adding to current time would overflow
         let ms = seconds * 1000;
-        let now_ms = SystemTime::now()
+        let now_ms = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
@@ -355,7 +356,7 @@ impl Command for PexpireCommand {
         let ms = parse_i64(&args[1])?;
 
         // Reject if adding to current time would overflow
-        let now_ms = SystemTime::now()
+        let now_ms = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;

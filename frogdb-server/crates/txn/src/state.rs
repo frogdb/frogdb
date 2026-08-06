@@ -5,6 +5,7 @@
 //! transitions below; EXEC consumes it with [`TransactionState::take`], which
 //! leaves the state clean so no exit path has to clear fields by hand.
 
+use frogdb_core::clock;
 use std::collections::HashMap;
 
 use bytes::Bytes;
@@ -205,7 +206,7 @@ impl TransactionState {
         self.slots = TxnSlotAccumulator::default();
         self.exec_abort = false;
         self.queued_errors.clear();
-        self.start_time = Some(std::time::Instant::now());
+        self.start_time = Some(clock::now());
         Ok(())
     }
 

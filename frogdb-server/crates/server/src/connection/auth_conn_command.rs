@@ -19,6 +19,7 @@
 //! [`ConnectionLevelOp::Auth`] strategy, which `is_auth_exempt` recognizes.
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Arity, BoxFuture, ClientRegistry, CommandFlags, CommandSpec, ConnCtx, ConnStateMut,
     ConnectionCommand, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec,
@@ -60,7 +61,7 @@ impl ConnStateMut for ConnectionState {
 
     fn mark_hello_received(&mut self) {
         self.hello_received = true;
-        self.hello_at = Some(std::time::Instant::now());
+        self.hello_at = Some(clock::now());
     }
 
     fn reset(&mut self) -> frogdb_core::ResetOutcome {

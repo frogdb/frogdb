@@ -4,13 +4,14 @@
 //! [`crate::connection::persistence_conn_command`].
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, KeyMetadata, KeySpec, KeyspaceEventFlags, LookupSpec, WaiterWake,
     WalStrategy, deserialize, serialize,
 };
 use frogdb_protocol::Response;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use frogdb_core::parse_i64;
 
@@ -130,7 +131,7 @@ impl Command for RestoreCommand {
                 unix_ms_to_instant(ttl_ms)
             } else {
                 // TTL is relative in milliseconds
-                Instant::now() + Duration::from_millis(ttl_ms as u64)
+                clock::now() + Duration::from_millis(ttl_ms as u64)
             };
             metadata.expires_at = Some(expires_at);
         } else if ttl_ms == 0 {
@@ -155,8 +156,8 @@ impl Command for RestoreCommand {
 
 /// Convert a Unix timestamp in milliseconds to an Instant.
 fn unix_ms_to_instant(unix_ms: i64) -> Instant {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
+    let now_instant = clock::now();
+    let now_system = clock::system_now();
 
     let target = UNIX_EPOCH + Duration::from_millis(unix_ms as u64);
 

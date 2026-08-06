@@ -466,7 +466,7 @@ impl ClientRegistry {
         addr: SocketAddr,
         local_addr: Option<SocketAddr>,
     ) -> ClientHandle {
-        let now = Instant::now();
+        let now = crate::clock::now();
         let (kill_tx, kill_rx) = watch::channel(false);
         let (unblock_tx, unblock_rx) = watch::channel(None);
 
@@ -666,7 +666,7 @@ impl ClientRegistry {
 
     /// Update a client's last command time.
     pub fn update_last_command(&self, id: u64) {
-        self.with_client_mut(id, |entry| entry.last_command_at = Instant::now());
+        self.with_client_mut(id, |entry| entry.last_command_at = crate::clock::now());
     }
 
     /// Update a client's last command time with a pre-captured instant.
@@ -730,7 +730,7 @@ impl ClientRegistry {
     /// - Time preservation: the maximum of old and new end times is kept.
     pub fn pause(&self, mode: PauseMode, timeout_ms: u64) {
         let mut pause_state = self.pause_state.write().unwrap();
-        let now = Instant::now();
+        let now = crate::clock::now();
         let new_unpause_at = now + std::time::Duration::from_millis(timeout_ms);
 
         // Check whether the existing pause is still active (not expired).
@@ -783,7 +783,7 @@ impl ClientRegistry {
             let pause_state = self.pause_state.read().unwrap();
             let mode = pause_state.mode?;
             if let Some(unpause_at) = pause_state.unpause_at {
-                if Instant::now() < unpause_at {
+                if crate::clock::now() < unpause_at {
                     return Some(mode);
                 }
             } else {
@@ -794,7 +794,7 @@ impl ClientRegistry {
         // Pause expired, clear it
         let mut pause_state = self.pause_state.write().unwrap();
         if let Some(unpause_at) = pause_state.unpause_at
-            && Instant::now() >= unpause_at
+            && crate::clock::now() >= unpause_at
         {
             pause_state.mode = None;
             pause_state.unpause_at = None;

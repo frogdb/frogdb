@@ -88,7 +88,7 @@ pub struct LatencySample {
 impl LatencySample {
     /// Create a new sample with the current timestamp.
     pub fn new(latency_ms: u64) -> Self {
-        let timestamp = std::time::SystemTime::now()
+        let timestamp = crate::clock::system_now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);

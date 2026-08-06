@@ -21,6 +21,7 @@
 //! - latency_baseline: Intrinsic latency test results (if startup test was run)
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     ADVERTISED_REDIS_VERSION, AccessSpec, Arity, Command, CommandContext, CommandError,
     CommandFlags, CommandSpec, ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec,
@@ -28,7 +29,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use frogdb_replication::{BacklogGeometry, NetByteCountersSnapshot, SyncCountersSnapshot};
 
@@ -173,7 +174,7 @@ fn append_section(
 }
 
 fn build_server_info(ctx: &CommandContext) -> String {
-    let now = SystemTime::now()
+    let now = clock::system_now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
 

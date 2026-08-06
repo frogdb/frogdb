@@ -39,6 +39,7 @@ pub mod tracing;
 #[cfg(feature = "testing")]
 pub mod testing;
 
+use frogdb_types::clock;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -85,7 +86,7 @@ impl CommandTimer {
     /// Start timing a command.
     pub fn new(command: String, recorder: Arc<dyn MetricsRecorder>) -> Self {
         Self {
-            start: Instant::now(),
+            start: clock::now(),
             command,
             recorder,
         }
