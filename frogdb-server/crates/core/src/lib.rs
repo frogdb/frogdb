@@ -135,6 +135,8 @@ pub use replication::{
 pub use scripting::{
     CachedScript, LuaVm, ScriptCache, ScriptError, ScriptExecutor, ScriptingConfig,
 };
+#[cfg(any(test, feature = "shard-driver"))]
+pub use shard::TickKind;
 pub use shard::{
     BigKeyInfo, BigKeysScanResponse, BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg,
     Envelope, HotShardStatsResponse, IndexLifecycleManager, InfoShardSnapshot, LifecycleError,

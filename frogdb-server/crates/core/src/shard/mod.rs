@@ -72,6 +72,8 @@ pub use counters::{HotShardStatsResponse, OpClass, OperationBucket, OperationCou
 #[cfg(any(test, feature = "fake-wal"))]
 pub use fake_wal_registry::FakeWalRegistry;
 pub use helpers::REPLICA_INTERNAL_CONN_ID;
+#[cfg(any(test, feature = "shard-driver"))]
+pub use message::TickKind;
 pub use message::{
     BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg, Envelope, ObservabilityMsg, PubSubMsg,
     ReplicationMsg, ScatterOp, ScriptingMsg, SearchMsg, ShardMessage, ShardReceiver, ShardSender,

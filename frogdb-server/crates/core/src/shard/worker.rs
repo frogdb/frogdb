@@ -187,6 +187,13 @@ pub struct ShardWorker {
     /// Whether active expiry is disabled via DEBUG SET-ACTIVE-EXPIRE 0.
     pub(crate) debug_active_expire_disabled: bool,
 
+    /// Shard-driver seam: when true the event loop's two periodic-sweep timer
+    /// branches (active expiry, blocking-waiter timeout) are suppressed and the
+    /// sweeps arrive as [`ShardMessage::DriveTick`](super::message::ShardMessage)
+    /// messages instead. See [`ShardWorker::set_driven_ticks`].
+    #[cfg(any(test, feature = "shard-driver"))]
+    pub(crate) driven_ticks: bool,
+
     /// Search: indexes, aliases, dictionaries, config.
     pub(crate) search: IndexLifecycleManager,
 
@@ -229,6 +236,27 @@ impl ShardWorker {
     /// Set whether this shard belongs to a replica server.
     pub fn set_is_replica(&mut self, is_replica: bool) {
         self.identity.set_is_replica(is_replica);
+    }
+
+    /// Shard-driver seam: switch this worker's two periodic sweeps from timer
+    /// branches to queued [`DriveTick`](super::message::ShardMessage::DriveTick)
+    /// messages.
+    ///
+    /// With `driven == true` the event loop stops polling its 100 ms
+    /// active-expiry and blocking-waiter-timeout intervals; whoever set the flag
+    /// owns delivering both sweeps as `DriveTick` messages at the cadence the
+    /// timers would have used (the server does this under the `turmoil`
+    /// feature). The point is determinism, not cadence: a queued sweep is
+    /// totally ordered against the commands around it, whereas a timer branch
+    /// races them inside `select!` (determinism audit A51 / remediation R6).
+    ///
+    /// The other two interval branches (metrics, search commit) are untouched —
+    /// they keep the loop alive on channel close, which the shard supervisor's
+    /// fail-stop classification depends on.
+    #[cfg(any(test, feature = "shard-driver"))]
+    #[doc(hidden)]
+    pub fn set_driven_ticks(&mut self, driven: bool) {
+        self.driven_ticks = driven;
     }
 
     /// Get a shared handle to the is_replica flag.

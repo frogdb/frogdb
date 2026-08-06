@@ -32,6 +32,11 @@ impl ShardWorker {
         let mut search_commit_interval = tokio::time::interval(Duration::from_secs(1));
 
         loop {
+            // Re-read every iteration so the flag can be flipped at runtime
+            // (the seam's setter takes `&mut self`, i.e. only between
+            // iterations, so this is a plain read of settled state).
+            let timer_sweeps = self.timer_sweeps_enabled();
+
             tokio::select! {
                 // Handle new connections
                 Some(new_conn) = self.new_conn_rx.recv() => {
@@ -60,8 +65,10 @@ impl ShardWorker {
                     }
                 }
 
-                // Active expiry task
-                _ = expiry_interval.tick() => {
+                // Active expiry task. Suppressed in a driven run, where the
+                // sweep arrives as a `DriveTick` message instead (see
+                // `ShardWorker::set_driven_ticks`).
+                _ = expiry_interval.tick(), if timer_sweeps => {
                     if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
                         // Build the span before creating the future so `shard_id()`'s
                         // borrow ends before `run_active_expiry` takes `&mut self`;
@@ -80,8 +87,9 @@ impl ShardWorker {
                     self.collect_shard_metrics();
                 }
 
-                // Blocking waiter timeout check
-                _ = waiter_timeout_interval.tick() => {
+                // Blocking waiter timeout check. Suppressed in a driven run,
+                // like the expiry sweep above.
+                _ = waiter_timeout_interval.tick(), if timer_sweeps => {
                     self.check_waiter_timeouts();
                 }
 
@@ -134,6 +142,26 @@ impl ShardWorker {
         {
             tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL on exit");
         }
+    }
+
+    /// Whether the event loop's two periodic-sweep timer branches (active
+    /// expiry, blocking-waiter timeout) are live this iteration.
+    ///
+    /// Always `true` in a production build — the seam feature is not compiled,
+    /// so this folds to a constant and the `select!` guards vanish. Under the
+    /// `shard-driver` seam a driven run flips it off and delivers both sweeps
+    /// as [`ShardMessage::DriveTick`](super::message::ShardMessage) messages
+    /// instead (determinism audit R6).
+    #[cfg(any(test, feature = "shard-driver"))]
+    fn timer_sweeps_enabled(&self) -> bool {
+        !self.driven_ticks
+    }
+
+    /// See the seam-enabled twin above: without `shard-driver` the sweeps are
+    /// always timer-driven.
+    #[cfg(not(any(test, feature = "shard-driver")))]
+    fn timer_sweeps_enabled(&self) -> bool {
+        true
     }
 
     /// Run active expiry with time budget.
@@ -329,6 +357,17 @@ impl ShardWorker {
                         let _ = response_tx.send(());
                     }
                     other => self.dispatch_search(other),
+                }
+                false
+            }
+            // Driven run (see `ShardWorker::set_driven_ticks`): the periodic
+            // sweep arrives as a queued message, so it is totally ordered
+            // against commands instead of racing them in the `select!`.
+            #[cfg(any(test, feature = "shard-driver"))]
+            ShardMessage::DriveTick(kind) => {
+                match kind {
+                    super::message::TickKind::Expiry => self.drive_expiry_tick().await,
+                    super::message::TickKind::WaiterTimeout => self.drive_waiter_timeout_tick(),
                 }
                 false
             }

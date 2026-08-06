@@ -172,12 +172,37 @@ pub enum ShardMessage {
     /// Replication lifecycle (full-resync snapshot install) — see [`ReplicationMsg`].
     Replication(ReplicationMsg),
 
+    /// Shard-driver seam: run one periodic sweep *as a queued message* instead
+    /// of as a timer branch of the event loop's `select!` — see [`TickKind`].
+    ///
+    /// Only compiled with the `shard-driver` seam feature (which the server's
+    /// `turmoil` feature enables). Never present in a production build.
+    #[cfg(any(test, feature = "shard-driver"))]
+    DriveTick(TickKind),
+
     /// Shutdown signal.
     ///
     /// Handled directly in the event loop body (flushes WAL and breaks the
     /// loop); it is the only message that returns `true` from dispatch, so it
     /// stays a top-level variant rather than folding into a category.
     Shutdown,
+}
+
+/// Which periodic shard sweep a [`ShardMessage::DriveTick`] runs.
+///
+/// The event loop normally reaches both sweeps through their own
+/// `tokio::time::interval` branches of its `select!`, which makes "sweep vs.
+/// queued command" a branch-selection coin flip (determinism audit A51). A
+/// driven run suppresses those two branches and delivers the sweeps through
+/// this message instead, so they take their place in the shard's single
+/// totally-ordered message queue alongside every command.
+#[cfg(any(test, feature = "shard-driver"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickKind {
+    /// One active-expiry cycle (the event loop's 100 ms expiry branch).
+    Expiry,
+    /// One blocking-waiter timeout sweep (the event loop's 100 ms waiter branch).
+    WaiterTimeout,
 }
 
 /// Core command-execution messages.
@@ -974,6 +999,10 @@ impl ShardMessage {
             ShardMessage::Cluster(m) => m.probe_type_str(),
             ShardMessage::Search(m) => m.probe_type_str(),
             ShardMessage::Replication(m) => m.probe_type_str(),
+            #[cfg(any(test, feature = "shard-driver"))]
+            ShardMessage::DriveTick(TickKind::Expiry) => "DriveExpiryTick",
+            #[cfg(any(test, feature = "shard-driver"))]
+            ShardMessage::DriveTick(TickKind::WaiterTimeout) => "DriveWaiterTimeoutTick",
             ShardMessage::Shutdown => "Shutdown",
         }
     }

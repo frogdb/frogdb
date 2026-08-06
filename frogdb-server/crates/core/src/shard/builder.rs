@@ -451,6 +451,8 @@ impl ShardWorkerBuilder {
             expiry_paused: Arc::new(AtomicBool::new(false)),
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             debug_active_expire_disabled: false,
+            #[cfg(any(test, feature = "shard-driver"))]
+            driven_ticks: false,
             search,
             expiry: ActiveExpiryCoordinator::default(),
             json_limits: crate::JsonLimits::default(),

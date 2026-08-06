@@ -285,6 +285,17 @@ pub(super) fn spawn_shard_workers(
             worker.install_search_manager(result.manager);
         }
 
+        // Determinism (audit A51/R6): under the turmoil simulation the shard's
+        // two periodic sweeps stop being `select!` timer branches — which race
+        // queued commands for branch selection — and become ordinary queued
+        // `DriveTick` messages produced by the pump below. The sweeps keep
+        // their 100 ms cadence but now take a definite place in the shard's
+        // single totally-ordered message queue.
+        #[cfg(feature = "turmoil")]
+        worker.set_driven_ticks(true);
+        #[cfg(feature = "turmoil")]
+        spawn_shard_tick_pump(shard_id, ctx.shard_senders.clone());
+
         let monitor = ctx.shard_monitor.clone();
         let handle = spawn(monitor.instrument(async move {
             worker.run().await;
@@ -294,4 +305,56 @@ pub(super) fn spawn_shard_workers(
     }
 
     Ok(shard_handles)
+}
+
+/// Deterministic replacement for a shard's periodic-sweep timer branches
+/// (simulation builds only — determinism audit remediation R6).
+///
+/// A shard worker spawned with `set_driven_ticks(true)` suppresses the active
+/// expiry and blocking-waiter-timeout arms of its `select!`; this task supplies
+/// both sweeps at the same 100 ms cadence as queued
+/// [`ShardMessage::DriveTick`] messages, which reach the same
+/// `drive_expiry_tick` / `drive_waiter_timeout_tick` seams the shard harness
+/// uses. Semantics and cadence are unchanged — what changes is that "sweep vs.
+/// command" is no longer resolved by `select!` branch choice.
+///
+/// Under turmoil the interval runs on the host's paused virtual clock, so the
+/// tick instants are a function of the simulation alone. The task exits when
+/// the shard's receiver is gone (worker shut down), so it never outlives the
+/// shard it drives.
+#[cfg(feature = "turmoil")]
+fn spawn_shard_tick_pump(shard_id: usize, senders: Arc<Vec<ShardSender>>) {
+    use frogdb_core::TickKind;
+    use std::time::Duration;
+
+    spawn(async move {
+        let sender = senders[shard_id].clone();
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        // The sweeps are idempotent catch-up work: a delayed tick must not
+        // produce a burst of back-to-back sweeps (the default `Burst`
+        // behaviour), which would be indistinguishable from real time passing.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            // Fixed order within a tick: expiry first, then the waiter sweep —
+            // matching a real loop's worst-case interleaving, and fixed so the
+            // pair is reproducible rather than scheduler-dependent.
+            if sender
+                .send(frogdb_core::ShardMessage::DriveTick(TickKind::Expiry))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            if sender
+                .send(frogdb_core::ShardMessage::DriveTick(
+                    TickKind::WaiterTimeout,
+                ))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 }
