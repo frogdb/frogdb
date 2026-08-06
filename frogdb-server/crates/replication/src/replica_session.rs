@@ -388,7 +388,14 @@ pub struct ReplicaSession {
 
     // Hot atomic counters — written from the read/write tasks and queried by
     // INFO/ROLE consumers without needing to lock the inner state.
+    /// What the replica has acknowledged **on the wire**, and nothing else.
+    /// Written only by [`Self::record_ack`]. See [`Self::seed_resume_position`]
+    /// for why the primary's own bookkeeping is not allowed in here.
     acked_offset: AtomicU64,
+    /// Where this replica *resumed* — its `PSYNC` offset for a partial resync,
+    /// the checkpoint's `snapshot_offset` for a full one. Primary bookkeeping,
+    /// written only by [`Self::seed_resume_position`].
+    resume_offset: AtomicU64,
     sync_bytes_transferred: AtomicU64,
 
     /// Primary-initiated teardown signal (see [`Self::request_disconnect`]).
@@ -419,6 +426,7 @@ impl ReplicaSession {
             address,
             connected_at: now,
             acked_offset: AtomicU64::new(0),
+            resume_offset: AtomicU64::new(0),
             sync_bytes_transferred: AtomicU64::new(0),
             disconnect: tokio::sync::Notify::new(),
             inner: RwLock::new(SessionInner {
@@ -443,8 +451,33 @@ impl ReplicaSession {
     pub fn connected_at(&self) -> Instant {
         self.connected_at
     }
+    /// What this replica has acknowledged on the wire — Redis's `repl_ack_off`.
+    ///
+    /// This is the durability number: `WAIT`'s count, `min_acked_offset` and
+    /// `INFO`'s `slaveN:offset=` all read it, and it moves only when a
+    /// `REPLCONF ACK` arrives. `0` means "has not acked yet", never "resumed at
+    /// 0" — see [`Self::resume_offset`].
     pub fn acked_offset(&self) -> u64 {
         self.acked_offset.load(Ordering::Acquire)
+    }
+    /// Where this replica resumed the stream, as recorded by the primary.
+    ///
+    /// A sender-side fact: it says which byte the primary started forwarding
+    /// from, not which byte the replica applied. Only the byte-lag measure
+    /// reads it (through [`Self::stream_position`]).
+    pub fn resume_offset(&self) -> u64 {
+        self.resume_offset.load(Ordering::Acquire)
+    }
+    /// How far along the stream this link is, for *lag* purposes only.
+    ///
+    /// `max(acked_offset, resume_offset)`: a replica that just resumed at the
+    /// live head is not behind, even though it has acked nothing yet, and
+    /// measuring its lag from `acked_offset` alone would hand every
+    /// freshly-online replica to [`LagPolicy`] for an immediate disconnect. The
+    /// two positions are folded together *here and nowhere else* — no consumer
+    /// that answers a durability question may use this (FM-REPLICATION-039).
+    pub fn stream_position(&self) -> u64 {
+        self.acked_offset().max(self.resume_offset())
     }
     pub fn last_ack_time(&self) -> Instant {
         self.inner.read().last_ack_time
@@ -518,30 +551,35 @@ impl ReplicaSession {
         }
     }
 
-    /// Seed the initial acked position when the session enters streaming.
+    /// Record where the replica resumed when its session enters streaming.
     ///
-    /// Unlike [`Self::record_ack`], this is a *primary bookkeeping* fact — where
-    /// this replica resumed from (its PSYNC offset for a partial resync, or the
-    /// checkpoint's `snapshot_offset` for a full resync) — not a replica
-    /// acknowledgement read off the wire. It advances the same monotonic
-    /// `acked_offset` atomic (so there is exactly one source of truth for the
-    /// acked position) and shares `record_ack`'s "only advances forward, reports
-    /// whether it did" mechanics; the two entry points remain distinct call sites
-    /// only because the primary itself, not the replica, supplies this value.
+    /// A *primary bookkeeping* fact — the offset this replica restarted the
+    /// stream from (its PSYNC offset for a partial resync, or the checkpoint's
+    /// `snapshot_offset` for a full one) — not a replica acknowledgement read
+    /// off the wire. It therefore writes its **own** monotonic atomic and
+    /// leaves [`Self::acked_offset`] alone.
     ///
-    /// The lag clock (`last_ack_time`) is reset to the resume instant: the
+    /// The two used to share one field, and that was a false-durability bug
+    /// (issue 28): the phase is published at the top of
+    /// [`Self::start_streaming`] and the seed is the backlog tail's last
+    /// offset, so a replica that had not decoded — let alone applied — a single
+    /// byte was counted by `WAIT` at the primary's live offset, and `WAIT 1`
+    /// returned 1 against an empty replica keyspace. What a replica has is what
+    /// it says it has; Redis moves `repl_ack_off` from `replconfCommand`'s ACK
+    /// branch and nowhere else, for exactly this reason.
+    ///
+    /// The lag clock (`last_ack_time`) *is* reset to the resume instant: the
     /// time-based lag threshold must measure from where streaming (re)started,
     /// not from registration — a long FULLRESYNC checkpoint stream would
-    /// otherwise trip it immediately.
+    /// otherwise trip it immediately. Liveness and durability are different
+    /// questions, and only the first one a resume can answer.
     ///
-    /// Returns `true` iff the offset advanced (`offset > prev`), mirroring
-    /// [`Self::record_ack`]'s return contract — callers use this to decide
-    /// whether to notify WAIT waiters via the broadcast channel.
-    pub fn seed_acked_position(&self, offset: u64) -> bool {
+    /// Returns `true` iff the resume position advanced (`offset > prev`).
+    pub fn seed_resume_position(&self, offset: u64) -> bool {
         self.inner.write().last_ack_time = Instant::now();
-        let prev = self.acked_offset.load(Ordering::Acquire);
+        let prev = self.resume_offset.load(Ordering::Acquire);
         if offset > prev {
-            self.acked_offset.store(offset, Ordering::Release);
+            self.resume_offset.store(offset, Ordering::Release);
             true
         } else {
             false
@@ -1129,14 +1167,16 @@ impl ReplicaSession {
             stream.write_all(&encoded).await?;
             resume_offset = offset;
         }
-        // Seed where the replica resumed, so WAIT waiters and the lag monitor
-        // start from the resumed position. This is a primary bookkeeping fact
-        // ("where this replica started"), not a replica ACK, so it uses the
-        // coordinator's `seed_replica_position` verb rather than
-        // `ingest_replica_ack` — but it advances the same monotonic atomic and,
-        // if a reconnecting replica already resumed at/past a WAIT target, it
-        // notifies WAIT waiters exactly like a genuine ACK would (a stale/
-        // duplicate seed that doesn't advance the offset stays silent).
+        // Record where the replica resumed, so the lag monitor measures from
+        // the resumed position instead of treating a freshly-online replica as
+        // maximally behind. This is a primary bookkeeping fact ("where this
+        // replica started"), not a replica ACK: it uses the coordinator's
+        // `seed_replica_position` verb rather than `ingest_replica_ack`, it
+        // lands in its own field, and it credits the replica with nothing that
+        // `WAIT` or `INFO` can read as durability — those wait for the wire
+        // (FM-REPLICATION-039, issue 28). Note the phase above was published
+        // before any of this tail reached the socket, so "streaming" here is a
+        // statement about the sender, not the receiver.
         handler
             .offsets
             .seed_replica_position(self.id, resume_offset);
@@ -2792,34 +2832,95 @@ mod tests {
         assert_eq!(session.acked_offset(), 100);
     }
 
-    /// Seeding shares `record_ack`'s contract: it reports an *advance*, so a
-    /// re-seed of the offset the session is already at is not one. The tracker
-    /// turns that `false` into "do not notify WAIT waiters", which is what keeps
-    /// a reconnect storm from waking every parked WAIT for no progress.
+    // FM-REPLICATION-039
+    /// Seeding shares `record_ack`'s monotonic contract on its *own* field: it
+    /// reports an advance, so a re-seed of the position the session already
+    /// holds is not one, and a stale seed never regresses it.
     #[test]
-    fn seed_acked_position_advances_only_strictly_forward() {
+    fn seed_resume_position_advances_only_strictly_forward() {
         let session = ReplicaSession::new(1, addr());
 
-        assert!(session.seed_acked_position(100), "0 → 100 is an advance");
-        assert_eq!(session.acked_offset(), 100);
+        assert!(session.seed_resume_position(100), "0 → 100 is an advance");
+        assert_eq!(session.resume_offset(), 100);
         assert!(
-            !session.seed_acked_position(100),
-            "re-seeding the offset the session already holds is not an advance"
+            !session.seed_resume_position(100),
+            "re-seeding the position the session already holds is not an advance"
         );
         assert!(
-            !session.seed_acked_position(50),
+            !session.seed_resume_position(50),
             "a stale seed is not an advance"
         );
         assert_eq!(
-            session.acked_offset(),
+            session.resume_offset(),
             100,
-            "and never regresses the offset"
+            "and never regresses the position"
         );
         assert!(
-            session.seed_acked_position(101),
+            session.seed_resume_position(101),
             "one byte forward is enough"
         );
-        assert_eq!(session.acked_offset(), 101);
+        assert_eq!(session.resume_offset(), 101);
+    }
+
+    // FM-REPLICATION-039
+    /// Issue 28, at the field that caused it: the primary's record of where a
+    /// replica resumed must not show up as something the replica acknowledged.
+    /// `WAIT`, `min_acked_offset` and `INFO`'s `slaveN:offset=` all read
+    /// `acked_offset`, so a seed leaking into it is a durability claim nobody
+    /// made — the shape that had `WAIT 1` answer 1 against an empty replica
+    /// keyspace.
+    #[test]
+    fn a_resume_seed_never_moves_the_wire_acked_offset() {
+        let session = ReplicaSession::new(1, addr());
+
+        assert!(session.seed_resume_position(5_000));
+        assert_eq!(
+            session.acked_offset(),
+            0,
+            "the primary streaming to offset 5000 is not the replica acking it"
+        );
+        assert_eq!(session.resume_offset(), 5_000);
+
+        // And the reverse: a wire ACK is not a resume. The two fields are
+        // written by exactly one caller each.
+        assert!(session.record_ack(6_000));
+        assert_eq!(session.acked_offset(), 6_000);
+        assert_eq!(
+            session.resume_offset(),
+            5_000,
+            "an ACK says nothing about where the replica resumed"
+        );
+    }
+
+    // FM-REPLICATION-043
+    /// The one consumer allowed to read both: byte lag. A replica resumed at
+    /// the live head is not behind, and one that has acked past its resume
+    /// point is measured from the ACK — whichever is further along the stream.
+    #[test]
+    fn stream_position_is_the_max_of_the_wire_ack_and_the_resume_seed() {
+        let session = ReplicaSession::new(1, addr());
+        assert_eq!(session.stream_position(), 0);
+
+        session.seed_resume_position(5_000);
+        assert_eq!(
+            session.stream_position(),
+            5_000,
+            "a freshly-resumed replica is at its resume point, not at 0"
+        );
+
+        session.record_ack(4_000);
+        assert_eq!(
+            session.stream_position(),
+            5_000,
+            "an ACK behind the resume point does not drag the stream position back"
+        );
+
+        session.record_ack(9_000);
+        assert_eq!(
+            session.stream_position(),
+            9_000,
+            "and an ACK past it moves the position forward"
+        );
     }
 
     /// The read accessors report what the session was built with — the surface

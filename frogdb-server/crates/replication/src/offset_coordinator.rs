@@ -198,19 +198,17 @@ impl OffsetCoordinator {
         self.tracker.record_ack(replica_id, acked);
     }
 
-    /// Seed a resumed replica's *stream position* after backlog replay. Same
-    /// monotonic session store as an ACK, but a distinct verb: this is
-    /// primary-side bookkeeping ("where this replica resumed"), not a durability
-    /// confirmation — [`Self::ingest_replica_ack`] is the only path driven by a
-    /// value the replica itself sent. Despite that distinction in provenance,
-    /// seeding notifies WAIT waiters exactly like a genuine ACK whenever it
-    /// advances the acked offset (round-7 follow-up to proposal 57): a replica
-    /// that reconnects via partial resync already at/past a blocked WAIT's
-    /// target must wake it immediately rather than park for up to a
-    /// spontaneous-ACK cadence (~1s). A stale/duplicate seed that does not
-    /// advance the offset does not notify.
+    /// Seed a resumed replica's *stream position* after backlog replay. A
+    /// distinct verb **and** a distinct field: this is primary-side bookkeeping
+    /// ("where this replica resumed"), not a durability confirmation —
+    /// [`Self::ingest_replica_ack`] is the only path driven by a value the
+    /// replica itself sent, and the only one that can move a `WAIT` count or an
+    /// `INFO` offset. A resume feeds the lag measures alone; folding it into the
+    /// acked offset had `WAIT 1` answering 1 against a replica whose keyspace
+    /// was still empty (issue 28). It notifies no waiter, because it can change
+    /// no count.
     pub fn seed_replica_position(&self, replica_id: u64, position: u64) {
-        self.tracker.seed_acked_position(replica_id, position);
+        self.tracker.seed_resume_position(replica_id, position);
     }
 
     /// Minimum acked offset across streaming replicas (for WAIT / safety).
@@ -348,8 +346,12 @@ mod tests {
         assert_eq!(acks.try_recv().unwrap(), (session.id(), 100));
     }
 
+    // FM-REPLICATION-039
+    /// The two verbs on this seam write two different fields, and only one of
+    /// them can answer `WAIT` (issue 28). Seeding the resumed position feeds
+    /// the lag measures; it neither moves the acked offset nor wakes a waiter.
     #[test]
-    fn seed_replica_position_notifies_wait_on_advance() {
+    fn seed_replica_position_does_not_satisfy_wait() {
         let tracker = ReplicationTrackerImpl::new_arc();
         let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
         let coord = OffsetCoordinator::new(tracker.clone(), &identity);
@@ -357,26 +359,24 @@ mod tests {
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
 
-        // Seeding the resumed position advances the monotonic session store (so
-        // WAIT counting + the lag monitor start from the resumed position) AND
-        // notifies WAIT waiters exactly like a genuine ACK, since a reconnecting
-        // replica may already be at/past a blocked WAIT's target.
         coord.seed_replica_position(session.id(), 100);
-        assert_eq!(session.acked_offset(), 100);
-        assert_eq!(tracker.count_acked(100), 1);
+        assert_eq!(session.resume_offset(), 100);
+        assert_eq!(session.acked_offset(), 0);
         assert_eq!(
-            acks.try_recv().unwrap(),
-            (session.id(), 100),
-            "an advancing seed must notify WAIT waiters"
+            tracker.count_acked(100),
+            0,
+            "the primary streaming to 100 is not the replica acking 100"
         );
-
-        // A stale/duplicate seed does not advance the offset and does not notify.
-        coord.seed_replica_position(session.id(), 50);
-        assert_eq!(session.acked_offset(), 100);
+        assert_eq!(coord.min_acked(), Some(0));
         assert!(
             acks.try_recv().is_err(),
-            "a stale/duplicate seed must not notify WAIT waiters"
+            "a seed changes no count, so it must wake no waiter"
         );
+
+        // The wire ACK is the only thing that does.
+        coord.ingest_replica_ack(session.id(), 100);
+        assert_eq!(tracker.count_acked(100), 1);
+        assert_eq!(acks.try_recv().unwrap(), (session.id(), 100));
     }
 
     #[test]

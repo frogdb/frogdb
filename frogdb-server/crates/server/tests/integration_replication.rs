@@ -3155,9 +3155,9 @@ async fn test_wal_overflow_triggers_full_resync(#[case] persistence: bool) {
 /// - Once the resync completes, WAIT converges to exactly 1 and the replica
 ///   serves both the mid-resync write and a fresh one.
 ///
-/// The stronger durability claim ("a counted ack means the replica can serve
-/// the write") is documented at the call site below as a known, currently
-/// failing property rather than asserted.
+/// And the durability claim itself, whichever way the race falls: if the count
+/// is 1, that replica serves the write (issue 28).
+// FM-REPLICATION-037
 #[rstest]
 #[case::in_memory(false)]
 #[case::with_persistence(true)]
@@ -3232,16 +3232,21 @@ async fn test_wait_during_replica_resync(#[case] persistence: bool) {
         "WAIT must not report more acks than there are replicas, got {count}"
     );
 
-    // NOT asserted here, deliberately: "count == 1 implies the replica serves
-    // the write". That is the claim WAIT is supposed to make, and it does not
-    // hold today — a replica that is still installing its full-resync
-    // checkpoint is already reported `state=online` with
-    // `offset=<the primary's current offset>`, so WAIT counts it while a `GET`
-    // on that same replica still returns nil (and the replica's own INFO says
-    // `master_link_status:down`, `master_repl_offset:0`). Turning this into an
-    // assertion is the acceptance test for that bug; until it is fixed the
-    // deterministic facts this test pins are the bound above and the
-    // convergence below.
+    // The claim WAIT exists to make: a counted ack is a replica that serves the
+    // write. This used to be false (issue 28) — a replica still installing its
+    // full-resync checkpoint was reported `state=online` at the primary's own
+    // offset, so WAIT counted it while a `GET` on that same replica returned
+    // nil. Asserting it is safe against the resync race in the only direction
+    // that matters: applying a write is monotonic, so a replica that had the
+    // key when WAIT answered still has it now.
+    if count == 1 {
+        let served = string_value(&replica2.send("GET", &["wait_test_key"]).await);
+        assert_eq!(
+            served.as_deref(),
+            Some("wait_test_value"),
+            "WAIT counted a replica that cannot serve the write it acknowledged"
+        );
+    }
 
     // Now let the resync finish and check the steady state.
     let final_acked = wait_for_acks(&primary, 1, Duration::from_secs(60)).await;

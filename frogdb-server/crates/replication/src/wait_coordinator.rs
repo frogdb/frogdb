@@ -318,6 +318,44 @@ mod tests {
         assert_eq!(solicitor.calls(), 0);
     }
 
+    // FM-REPLICATION-037
+    /// Issue 28, at the seam that answers the client. A replica that has just
+    /// been handed the stream carries the primary's resume position and nothing
+    /// the replica itself said; `WAIT` must refuse to count it, block, and time
+    /// out at 0 — the number that is true of a replica whose keyspace is still
+    /// empty. The fast path must not take it either: a wrongly-credited replica
+    /// would return `Reached(1)` with no GETACK on the wire at all.
+    #[tokio::test]
+    async fn a_replica_credited_only_by_a_resume_seed_does_not_satisfy_the_quorum() {
+        let (coord, tracker) = coordinator();
+        let id = streaming_replica(&tracker, 6380);
+        tracker.seed_resume_position(id, 500);
+
+        let solicitor = MockSolicitor::new();
+        let deadline = Instant::now() + Duration::from_millis(30);
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 500, 1, Some(deadline), &solicitor)
+            .await;
+
+        assert_eq!(
+            verdict,
+            WaitVerdict::TimedOut(0),
+            "a seeded resume is the primary's send position, not the replica's durability"
+        );
+        assert_eq!(
+            solicitor.calls(),
+            1,
+            "and the WAIT was a real blocking wait, not a fast-path return"
+        );
+
+        // The replica answers for itself, and now it counts.
+        tracker.record_ack(id, 500);
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 500, 1, None, &solicitor)
+            .await;
+        assert_eq!(verdict, WaitVerdict::Reached(1));
+    }
+
     // FM-REPLICATION-038
     #[tokio::test]
     async fn blocking_wait_solicits_exactly_once_then_reaches_quorum() {
