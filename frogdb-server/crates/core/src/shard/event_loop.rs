@@ -32,13 +32,91 @@ impl ShardWorker {
         let mut search_commit_interval = tokio::time::interval(Duration::from_secs(1));
 
         loop {
+            // `biased;` (determinism audit R7/A51): this is the hottest
+            // continuously-looping `select!` in the system, so branch order is
+            // a real production fairness decision, not just a determinism one
+            // — a naive top-to-bottom bias that put the data-plane arms first
+            // would let a sustained message backlog starve the maintenance
+            // arms below them indefinitely (tokio's random tie-break is what
+            // gives them a chance today). None of the arms below are
+            // "always ready" the way `message_rx`/`new_conn_rx` can be under
+            // load — each is a periodic tick or a rare event that resolves
+            // once and goes back to pending — so putting them ahead of the
+            // data-plane arms costs at most one poll's worth of dispatch
+            // latency per firing, while guaranteeing none of them can be
+            // starved by a continuous queue. `message_rx` is deliberately
+            // last: it is the one arm that can be perpetually ready, so
+            // nothing may be placed after it.
             tokio::select! {
-                // Handle new connections
+                biased;
+                // 1. Continuation lock lifecycle. VLL correctness: a delayed
+                // release notification or drain-timeout report can convoy the
+                // next lock holder, so this must not wait behind a backlog.
+                event = self.vll.next_continuation_event() => {
+                    match event {
+                        ContinuationEvent::Released => {
+                            tracing::debug!(shard_id = self.shard_id(), "Continuation lock released");
+                        }
+                        ContinuationEvent::DrainTimedOut => {
+                            tracing::warn!(
+                                shard_id = self.shard_id(),
+                                "Continuation lock request timed out waiting for the shard queue to drain"
+                            );
+                        }
+                    }
+                }
+
+                // 2. Blocking waiter timeout check (100ms) — coarse GC only;
+                // `BlockingWaitCoordinator` (server/connection/blocking) is
+                // the canonical timeout authority and races its own deadline
+                // independently, so this tick lagging behind `message_rx`
+                // delays cleanup bookkeeping, not the client-visible timeout.
+                _ = waiter_timeout_interval.tick() => {
+                    self.check_waiter_timeouts();
+                }
+
+                // 3. Active expiry task (100ms) — proactive reclaim; reads
+                // still lazily purge, so a delayed cycle costs memory
+                // headroom under load, not correctness.
+                _ = expiry_interval.tick() => {
+                    if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
+                        // Build the span before creating the future so `shard_id()`'s
+                        // borrow ends before `run_active_expiry` takes `&mut self`;
+                        // `Instrument` carries the span across the await correctly
+                        // (never hold an entered guard across `.await`).
+                        use tracing::Instrument;
+                        let span = tracing::info_span!("active_expiry", shard_id = self.shard_id());
+                        self.run_active_expiry().instrument(span).await;
+                    } else {
+                        self.run_active_expiry().await;
+                    }
+                }
+
+                // 4. Periodic search index commit (1s).
+                _ = search_commit_interval.tick() => {
+                    let sid = self.identity.shard_id();
+                    for idx in self.search.indexes.values_mut() {
+                        if idx.is_dirty() && let Err(e) = idx.commit() {
+                            tracing::error!(shard_id = sid, error = %e, "Failed to commit search index");
+                        }
+                    }
+                }
+
+                // 5. Periodic metrics collection (10s) — observability only.
+                _ = metrics_interval.tick() => {
+                    self.collect_shard_metrics();
+                }
+
+                // 6. Handle new connections — rare relative to steady-state
+                // message traffic, so prioritizing it ahead of dispatch costs
+                // nothing and keeps CLIENT accept latency low.
                 Some(new_conn) = self.new_conn_rx.recv() => {
                     self.handle_new_connection(new_conn).await;
                 }
 
-                // Handle shard messages — dispatch to grouped sub-handlers
+                // 7. Handle shard messages — dispatch to grouped sub-handlers.
+                // The data plane: kept last because it is the one arm that
+                // can be continuously ready under load.
                 Some(envelope) = self.message_rx.recv() => {
                     let queue_latency = envelope.enqueued_at.elapsed().as_secs_f64();
                     let msg = envelope.message;
@@ -57,58 +135,6 @@ impl ShardWorker {
 
                     if self.dispatch_message(msg).await {
                         break;
-                    }
-                }
-
-                // Active expiry task
-                _ = expiry_interval.tick() => {
-                    if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
-                        // Build the span before creating the future so `shard_id()`'s
-                        // borrow ends before `run_active_expiry` takes `&mut self`;
-                        // `Instrument` carries the span across the await correctly
-                        // (never hold an entered guard across `.await`).
-                        use tracing::Instrument;
-                        let span = tracing::info_span!("active_expiry", shard_id = self.shard_id());
-                        self.run_active_expiry().instrument(span).await;
-                    } else {
-                        self.run_active_expiry().await;
-                    }
-                }
-
-                // Periodic metrics collection
-                _ = metrics_interval.tick() => {
-                    self.collect_shard_metrics();
-                }
-
-                // Blocking waiter timeout check
-                _ = waiter_timeout_interval.tick() => {
-                    self.check_waiter_timeouts();
-                }
-
-                // Periodic search index commit
-                _ = search_commit_interval.tick() => {
-                    let sid = self.identity.shard_id();
-                    for idx in self.search.indexes.values_mut() {
-                        if idx.is_dirty() && let Err(e) = idx.commit() {
-                            tracing::error!(shard_id = sid, error = %e, "Failed to commit search index");
-                        }
-                    }
-                }
-
-                // Continuation lock lifecycle: the held lock's release signal,
-                // or a parked request's drain deadline. The state machine
-                // applies the transition; this arm only reports it.
-                event = self.vll.next_continuation_event() => {
-                    match event {
-                        ContinuationEvent::Released => {
-                            tracing::debug!(shard_id = self.shard_id(), "Continuation lock released");
-                        }
-                        ContinuationEvent::DrainTimedOut => {
-                            tracing::warn!(
-                                shard_id = self.shard_id(),
-                                "Continuation lock request timed out waiting for the shard queue to drain"
-                            );
-                        }
                     }
                 }
 

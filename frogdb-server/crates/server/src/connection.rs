@@ -567,14 +567,120 @@ impl ConnectionHandler {
         debug!(conn_id = self.state.id, "Connection handler started");
 
         loop {
+            // `biased;` (determinism audit R7/A52): fixes the poll order so a
+            // seeded turmoil run replays identically instead of depending on
+            // tokio's random tie-break. Order chosen for production fairness,
+            // not just determinism:
+            //   1. CLIENT KILL — rare, terminal; must win any tie so a killed
+            //      connection can't be perpetually re-armed by traffic on the
+            //      other arms (the audit explicitly calls out "CLIENT KILL
+            //      beats an already-buffered command").
+            //   2. Next command frame — the data plane for *this* connection.
+            //      Kept ahead of the three push channels so a subscriber /
+            //      tracked / monitored client can still read its own next
+            //      command (e.g. UNSUBSCRIBE, RESET) under a sustained push
+            //      firehose, rather than being starved by messages meant to
+            //      be delivered *to* it.
+            //   3-5. Pub/sub, invalidation, MONITOR — each already has its
+            //      own bounded-backlog escape hatch (`recv_or_overflow`
+            //      disconnects a too-slow subscriber; MONITOR reports
+            //      `Lagged`), so a delay here degrades gracefully into that
+            //      existing, designed backstop rather than an unbounded
+            //      correctness problem. Relative order among these three is
+            //      untouched (pub/sub, invalidation, MONITOR) — no
+            //      asymmetry between them is called out by the audit.
             tokio::select! {
-                // Check for CLIENT KILL
+                biased;
+
+                // 1. Check for CLIENT KILL
                 _ = self.client_handle.killed() => {
                     info!(conn_id = self.state.id, addr = %self.state.addr, "Connection killed");
                     break;
                 }
 
-                // Handle pub/sub messages from shards
+                // 2. Handle client commands
+                frame_result = async {
+                    if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
+                        self.framed.next().instrument(tracing::info_span!("cmd_read")).await
+                    } else {
+                        self.framed.next().await
+                    }
+                } => {
+                    let frame = match frame_result {
+                        Some(Ok(frame)) => frame,
+                        Some(Err(e)) => {
+                            debug!(conn_id = self.state.id, error = %e, "Frame error");
+                            // Use `details()` (not `Display`) so the wire form is
+                            // Redis's `-ERR Protocol error: ...` without the
+                            // upstream `Decode Error: ` kind prefix.
+                            let _ = self.send_response(WireResponse::error(format!("ERR {}", e.details()))).await;
+                            continue;
+                        }
+                        None => {
+                            debug!(
+                                conn_id = self.state.id,
+                                addr = %self.state.addr,
+                                session_duration_ms = self.state.created_at.elapsed().as_millis() as u64,
+                                "Client disconnected"
+                            );
+                            break;
+                        }
+                    };
+
+                    // Process first command (buffers response, no flush yet)
+                    let mut should_break = false;
+                    match self.process_one_command(frame).await {
+                        FrameAction::Break => should_break = true,
+                        // Stash the handoff and break *after* the shared flush
+                        // below, so buffered pipelined replies reach the wire
+                        // before the socket is taken over.
+                        FrameAction::Handoff(handoff) => {
+                            self.pending_psync_handoff = Some(handoff);
+                            should_break = true;
+                        }
+                        FrameAction::Continue | FrameAction::SkipResponse => {}
+                    }
+
+                    // Drain loop: process all complete frames already in the read buffer
+                    if !should_break {
+                        while let Some(frame_result) = self.try_next_frame() {
+                            let frame = match frame_result {
+                                Ok(frame) => frame,
+                                Err(e) => {
+                                    debug!(conn_id = self.state.id, error = %e, "Frame error in drain");
+                                    let _ = self.feed_response(
+                                        WireResponse::error(format!("ERR {}", e.details()))
+                                    ).await;
+                                    continue;
+                                }
+                            };
+                            match self.process_one_command(frame).await {
+                                FrameAction::Break => {
+                                    should_break = true;
+                                    break;
+                                }
+                                FrameAction::Handoff(handoff) => {
+                                    self.pending_psync_handoff = Some(handoff);
+                                    should_break = true;
+                                    break;
+                                }
+                                FrameAction::Continue | FrameAction::SkipResponse => {}
+                            }
+                        }
+                    }
+
+                    // Single flush for all buffered responses
+                    if self.flush_responses().await.is_err() {
+                        debug!(conn_id = self.state.id, "Failed to flush responses");
+                        break;
+                    }
+
+                    if should_break {
+                        break;
+                    }
+                }
+
+                // 3. Handle pub/sub messages from shards
                 Some(drained) = async {
                     match self.pubsub_rx.as_mut() {
                         Some(rx) => rx.recv_or_overflow().await,
@@ -700,88 +806,6 @@ impl ConnectionHandler {
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             self.monitor_rx = None;
                         }
-                    }
-                }
-
-                // Handle client commands
-                frame_result = async {
-                    if self.per_request_spans.load(std::sync::atomic::Ordering::Relaxed) {
-                        self.framed.next().instrument(tracing::info_span!("cmd_read")).await
-                    } else {
-                        self.framed.next().await
-                    }
-                } => {
-                    let frame = match frame_result {
-                        Some(Ok(frame)) => frame,
-                        Some(Err(e)) => {
-                            debug!(conn_id = self.state.id, error = %e, "Frame error");
-                            // Use `details()` (not `Display`) so the wire form is
-                            // Redis's `-ERR Protocol error: ...` without the
-                            // upstream `Decode Error: ` kind prefix.
-                            let _ = self.send_response(WireResponse::error(format!("ERR {}", e.details()))).await;
-                            continue;
-                        }
-                        None => {
-                            debug!(
-                                conn_id = self.state.id,
-                                addr = %self.state.addr,
-                                session_duration_ms = self.state.created_at.elapsed().as_millis() as u64,
-                                "Client disconnected"
-                            );
-                            break;
-                        }
-                    };
-
-                    // Process first command (buffers response, no flush yet)
-                    let mut should_break = false;
-                    match self.process_one_command(frame).await {
-                        FrameAction::Break => should_break = true,
-                        // Stash the handoff and break *after* the shared flush
-                        // below, so buffered pipelined replies reach the wire
-                        // before the socket is taken over.
-                        FrameAction::Handoff(handoff) => {
-                            self.pending_psync_handoff = Some(handoff);
-                            should_break = true;
-                        }
-                        FrameAction::Continue | FrameAction::SkipResponse => {}
-                    }
-
-                    // Drain loop: process all complete frames already in the read buffer
-                    if !should_break {
-                        while let Some(frame_result) = self.try_next_frame() {
-                            let frame = match frame_result {
-                                Ok(frame) => frame,
-                                Err(e) => {
-                                    debug!(conn_id = self.state.id, error = %e, "Frame error in drain");
-                                    let _ = self.feed_response(
-                                        WireResponse::error(format!("ERR {}", e.details()))
-                                    ).await;
-                                    continue;
-                                }
-                            };
-                            match self.process_one_command(frame).await {
-                                FrameAction::Break => {
-                                    should_break = true;
-                                    break;
-                                }
-                                FrameAction::Handoff(handoff) => {
-                                    self.pending_psync_handoff = Some(handoff);
-                                    should_break = true;
-                                    break;
-                                }
-                                FrameAction::Continue | FrameAction::SkipResponse => {}
-                            }
-                        }
-                    }
-
-                    // Single flush for all buffered responses
-                    if self.flush_responses().await.is_err() {
-                        debug!(conn_id = self.state.id, "Failed to flush responses");
-                        break;
-                    }
-
-                    if should_break {
-                        break;
                     }
                 }
             }
