@@ -810,6 +810,7 @@ impl ReplicaSession {
                     self.inner.write().sync_started_at = Some(Instant::now());
                     self.stream_checkpoint(
                         &mut stream,
+                        handler,
                         &checkpoint_path,
                         &replication_id,
                         snapshot_offset,
@@ -847,6 +848,7 @@ impl ReplicaSession {
     async fn stream_checkpoint(
         &self,
         stream: &mut BoxedStream,
+        handler: &Arc<PrimaryReplicationHandler>,
         checkpoint_path: &Path,
         replication_id: &str,
         replication_offset: u64,
@@ -917,6 +919,14 @@ impl ReplicaSession {
             replication_offset,
         };
         CheckpointStreamCodec::write_metadata(stream, &metadata).await?;
+
+        // The full-sync payload lane: counted here, once, as the real
+        // checksum-verified size, so it is never confused with — or dropped
+        // from — the separately-counted frame lane (hardening issue 29).
+        handler
+            .tracker()
+            .net_bytes_handle()
+            .record_output(total_size);
 
         let elapsed = self
             .inner
@@ -1030,6 +1040,14 @@ impl ReplicaSession {
         )
         .await?;
 
+        // The full-sync payload lane: counted here, once, as the real size
+        // that was actually written (hardening issue 29) — see the matching
+        // comment in `stream_checkpoint`.
+        handler
+            .tracker()
+            .net_bytes_handle()
+            .record_output(total_size);
+
         tracing::info!(
             replica_id = self.id,
             blobs = blobs.len(),
@@ -1127,6 +1145,15 @@ impl ReplicaSession {
         for (offset, shard_id, payload) in tail {
             let encoded = ReplicationFrame::new_on_shard(offset, shard_id, payload).encode()?;
             stream.write_all(&encoded).await?;
+            // The backlog-replay lane of the frame lane (hardening issue 29):
+            // a resumed replica's tail is real bytes on the wire, written
+            // directly here rather than through `forward_frame`, so it needs
+            // its own record — omitting it would undercount every partial
+            // resync by the size of the tail it replayed.
+            handler
+                .tracker
+                .net_bytes_handle()
+                .record_output(encoded.len() as u64);
             resume_offset = offset;
         }
         // Seed where the replica resumed, so WAIT waiters and the lag monitor
@@ -1199,11 +1226,25 @@ impl ReplicaSession {
                                 break ReplicaDeparture::Lost;
                             }
                         };
-                        if let Forward::Break =
-                            forward_frame(&mut write_half, &encoded, write_timeout, lag_replica_id)
-                                .await
+                        match forward_frame(
+                            &mut write_half,
+                            &encoded,
+                            write_timeout,
+                            lag_replica_id,
+                        )
+                        .await
                         {
-                            break ReplicaDeparture::Lost;
+                            Forward::Continue => {
+                                // The frame lane (hardening issue 29) — only
+                                // bytes actually written to the wire, never
+                                // bytes merely encoded: a `Break` below means
+                                // the write did not land, or landed partially,
+                                // and must not be counted as sent.
+                                lag_tracker
+                                    .net_bytes_handle()
+                                    .record_output(encoded.len() as u64);
+                            }
+                            Forward::Break => break ReplicaDeparture::Lost,
                         }
                         if let Some(breach) =
                             lag_policy.should_disconnect(&lag_tracker, lag_replica_id)
@@ -1440,6 +1481,7 @@ mod tests {
     //! left the replica registered as `Syncing` until process restart.
     use super::*;
     use crate::frame::serialize_command_to_resp;
+    use crate::net_bytes::NetByteCountersSnapshot;
     use crate::primary::BacklogConfig;
     use crate::primary::{LagThresholdConfig, PrimaryReplicationHandler};
     use crate::state::ReplicationState;
@@ -2127,6 +2169,53 @@ mod tests {
         assert_eq!(tracker.replica_count(), 0);
     }
 
+    // FM-REPLICATION-063
+    /// Hardening issue 29: the frame lane of `total_net_repl_output_bytes` —
+    /// a forwarded write's real encoded length lands in the tracker, on the
+    /// primary side, the moment the write task actually puts it on the wire.
+    #[tokio::test]
+    async fn repl_output_bytes_grow_when_a_write_is_forwarded() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let off1 =
+            handler.broadcast_control_command("SET", &[Bytes::from("k1"), Bytes::from("v1")]);
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let session = tracker.register_replica(addr());
+
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(server, SyncKind::Partial { replay_from: off1 }, handler)
+                    .await
+            }
+        });
+
+        // The replay window (off1, off1] is empty, so the grant carries no
+        // backlog frames — nothing forwarded yet counts as nothing sent.
+        let off2 =
+            handler.broadcast_control_command("SET", &[Bytes::from("k2"), Bytes::from("v2")]);
+        let frames = read_continue_then_frames(&mut client, 1).await;
+        assert_eq!(frames[0].sequence, off2);
+        let expected_output: u64 = frames.iter().map(|f| f.encoded_size() as u64).sum();
+
+        await_net_bytes(
+            &tracker,
+            NetByteCountersSnapshot {
+                output: expected_output,
+                input: 0,
+            },
+        )
+        .await;
+
+        drop(client);
+        let _ = task.await.unwrap();
+    }
+
     /// Read to EOF and assert nothing more was streamed.
     ///
     /// An abandoned resume must leave the wire empty: not a short tail, not a
@@ -2447,6 +2536,67 @@ mod tests {
         assert_eq!(tracker.replica_count(), 0);
         // The dataset path never sets sync_checkpoint_path, so no dir to clean.
         assert!(session.inner.read().sync_checkpoint_path.is_none());
+    }
+
+    // FM-REPLICATION-063
+    /// Hardening issue 29: the full-sync payload lane of
+    /// `total_net_repl_output_bytes` — the whole dataset a persistence-disabled
+    /// primary streams, not just the (empty, here) frame lane. Summing only
+    /// forwarded frames would undercount every resync by exactly this much,
+    /// which is the issue's "undercount trap": a wrong number that looks more
+    /// plausible than `0`.
+    #[tokio::test]
+    async fn repl_output_bytes_include_the_full_sync_payload() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), None, dir.path().to_path_buf());
+        with_live_dataset(
+            &handler,
+            vec![
+                dataset_blob(&[("a", "1"), ("b", "2")]),
+                dataset_blob(&[("c", "3")]),
+            ],
+        );
+        let repl_id = handler.state.read().replication_id.clone();
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let session = tracker.register_replica(addr());
+
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(
+                        server,
+                        SyncKind::Full {
+                            replication_id: repl_id,
+                        },
+                        handler,
+                    )
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        let (blobs, metadata) = drain_live_dataset(&mut client).await;
+        let total_size = blobs.iter().map(Vec::len).sum::<usize>() as u64;
+        assert_eq!(metadata.rdb_size, total_size);
+
+        await_net_bytes(
+            &tracker,
+            NetByteCountersSnapshot {
+                output: total_size,
+                input: 0,
+            },
+        )
+        .await;
+
+        drop(client);
+        let _ = task.await.unwrap();
     }
 
     /// A primary that cannot read its own keyspace fails the sync instead of
@@ -3433,6 +3583,24 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "counters never reached {expected:?}; last read {seen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Poll until the net-byte counters reach `expected` (hardening issue 29),
+    /// mirroring [`await_counters`]: a write recorded on the write task lands
+    /// after a client that only reads the wire can observe its effect.
+    async fn await_net_bytes(tracker: &ReplicationTrackerImpl, expected: NetByteCountersSnapshot) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = tracker.net_bytes();
+            if seen == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "net bytes never reached {expected:?}; last read {seen:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

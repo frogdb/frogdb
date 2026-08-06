@@ -174,6 +174,13 @@ impl ReplicaConnection {
         epoch: u64,
         pending_ack: &mut Option<u64>,
     ) -> io::Result<bool> {
+        // The frame lane (hardening issue 29): `decode` shrinks `buf` by
+        // exactly the bytes it consumed on each successful frame, so a single
+        // before/after diff over the whole drain covers every frame decoded
+        // here — live frames and a full sync's over-read carryover alike —
+        // with no risk of double-counting the full-sync payload itself, which
+        // is recorded separately (and earlier) from `FullSyncMetadata::rdb_size`.
+        let starting_len = buf.len();
         while let Some(frame) = codec.decode(buf)? {
             // Advance the live applied offset (also the cluster-bus handle).
             // The advance unit is the RESP payload only (see
@@ -196,6 +203,8 @@ impl ReplicaConnection {
                 .is_err()
             {
                 tracing::warn!("Frame channel closed");
+                self.net_bytes
+                    .record_input((starting_len - buf.len()) as u64);
                 return Ok(false);
             }
             if solicited {
@@ -205,6 +214,8 @@ impl ReplicaConnection {
                 *pending_ack = Some(pending_ack.unwrap_or(0).max(received));
             }
         }
+        self.net_bytes
+            .record_input((starting_len - buf.len()) as u64);
         Ok(true)
     }
 
@@ -221,6 +232,7 @@ impl ReplicaConnection {
 mod tests {
     use super::*;
     use crate::frame::ReplicationFrame;
+    use crate::net_bytes::{NetByteCounters, NetByteCountersSnapshot};
     use crate::replica::connection::{ConnectionState, ReplicaConnection};
     use crate::replica::offset::{AppliedOffset, Claim, ReplicaApplyStint, ReplicaOffset};
     use crate::state::ReplicationState;
@@ -257,6 +269,11 @@ mod tests {
         frames: mpsc::Receiver<StreamedFrame>,
         acks: BytesMut,
         task: JoinHandle<io::Result<()>>,
+        /// The connection's net-byte input tally (hardening issue 29), kept
+        /// alongside it here the same way `received`/`applied` are: the
+        /// connection itself is moved into `task`, so anything a test needs to
+        /// read back has to be captured before the move.
+        net_bytes: Arc<NetByteCounters>,
     }
 
     impl Link {
@@ -291,6 +308,7 @@ mod tests {
         ) -> Self {
             let (primary, replica) = tokio::io::duplex(64 * 1024);
             let offsets = ReplicaOffset::new(state.clone(), received.clone(), applied.clone());
+            let net_bytes = Arc::new(NetByteCounters::default());
             let mut conn = ReplicaConnection {
                 stream: Box::new(replica),
                 _primary_addr: "127.0.0.1:6379".parse().unwrap(),
@@ -303,6 +321,7 @@ mod tests {
                 snapshot_installer: None,
                 sync_refusal: Arc::new(RwLock::new(None)),
                 pending_stream_bytes: BytesMut::new(),
+                net_bytes: net_bytes.clone(),
             };
             let (frame_tx, frames) = mpsc::channel(16);
             let task = tokio::spawn(async move { conn.stream_replication(&frame_tx).await });
@@ -315,6 +334,7 @@ mod tests {
                 frames,
                 acks: BytesMut::new(),
                 task,
+                net_bytes,
             }
         }
 
@@ -568,6 +588,47 @@ mod tests {
             next.received.load(Ordering::Acquire),
             0,
             "the reconnect was left able to ask for a `+CONTINUE`"
+        );
+    }
+
+    // FM-REPLICATION-063
+    /// Hardening issue 29: the frame lane of `total_net_repl_input_bytes` —
+    /// bytes `drain_frames` actually decoded off the wire, not a value
+    /// derived from the applied offset (which counts RESP payload only, not
+    /// the transport header every frame also carries).
+    #[tokio::test]
+    async fn repl_input_bytes_grow_on_the_replica_as_it_applies() {
+        let mut link = Link::start();
+        assert_eq!(
+            link.net_bytes.snapshot(),
+            NetByteCountersSnapshot::default()
+        );
+
+        let payload = Bytes::from_static(b"*1\r\n$4\r\nPING\r\n");
+        let expected = ReplicationFrame::new(0, payload.clone()).encoded_size() as u64;
+        link.send(0, payload).await;
+        let frame = link.next_frame().await;
+        link.applied.frame_applied(&frame);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = link.net_bytes.snapshot();
+            if seen.input == expected {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "input bytes never reached {expected}; last read {seen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(
+            link.net_bytes.snapshot(),
+            NetByteCountersSnapshot {
+                output: 0,
+                input: expected
+            },
+            "the replica records input, never output, for a received frame"
         );
     }
 }

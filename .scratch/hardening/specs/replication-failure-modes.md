@@ -1342,13 +1342,13 @@ third seam (trait + no-op + layering method) to express a dependency that alread
 carries the handle directly and matches its sibling context type.
 
 **Audit of the other replication-owned `INFO stats` fields** (the issue's third remedy).
-`sync_counter_fields` is the only live replication data in either `stats` renderer. The neighbouring
-`total_net_repl_input_bytes` / `total_net_repl_output_bytes` are the literal `0` in both renderers with
-no source behind them at all — they are not in this row's position (nothing to reset), they are in
-issue 20's: a hardcoded literal shaped like data. Nothing else in `stats` is replication-owned.
-Closing issue 20 did **not** reach them — the backlog geometry had a live source to project from and
-those two have none — so they are refiled as
-`.scratch/hardening/issues/open/29-net-repl-byte-counters-are-hardcoded-zero.md`.
+`sync_counter_fields` and, since issue 29, `net_byte_fields` are the only live replication data in
+either `stats` renderer. `total_net_repl_input_bytes` / `total_net_repl_output_bytes` were the literal
+`0` in both renderers with no source behind them at all — a hardcoded literal shaped like data, filed
+as `.scratch/hardening/issues/open/29-net-repl-byte-counters-are-hardcoded-zero.md` when closing issue
+20 did not reach them (the backlog geometry had a live source to project from and those two had none).
+They are real counters now (FM-REPLICATION-063) and `CONFIG RESETSTAT` zeroes them exactly as it
+zeroes the three counters this row owns, so nothing in `stats` is replication-owned and unresettable.
 
 ---
 
@@ -1464,6 +1464,28 @@ point of view). Making the stronger claim would need an in-band farewell the rep
 it closes, which the replica's teardown path cannot await today (`RealReplicaStream::drop` is
 synchronous and aborts the connection task). That is a real follow-up, not a pretence this row
 makes.
+
+---
+
+## FM-REPLICATION-063 — `total_net_repl_*_bytes` count bytes that actually crossed the wire
+
+| Field | Value |
+|---|---|
+| Trigger | Any replication transfer, in each of the two lanes a node's transfer total is made of: the full-sync payload (a `FullSyncPayload::LiveDataset` or `StagedCheckpoint`, whichever a primary sends per FM-REPLICATION-001) and the steady-state frame stream, on both sides — a primary forwarding a live write or replaying a resumed replica's backlog tail, and a replica decoding what it received. Then `INFO stats` read through either renderer, exactly as FM-REPLICATION-050's `sync_*` counters are. |
+| Observable | `total_net_repl_output_bytes` on a primary grows by the real encoded size of every frame actually written to the wire — a live-forwarded write, a backlog tail replayed to a resuming replica, or a full-sync payload — the instant that write lands, never before. `total_net_repl_input_bytes` on a replica grows by the same measure on the receiving side: the checksum-verified size of an installed full-sync payload, and the exact byte span `drain_frames` consumes from its read buffer per decode pass. A primary only ever moves `output`; a replica only ever moves `input` — nothing here double-counts a byte as both a primary's send and its own receipt within one process. Both renderers report the same pair for the same tracker state, always, and `CONFIG RESETSTAT` zeroes both (FM-REPLICATION-058) without disturbing the replica registry, the offset, or the sync counters next to them. |
+| NOT observable | **Two hardcoded zeros.** Both fields were the literal `0` in *both* `INFO` renderers with nothing in the codebase counting a byte — a primary saturating a slow link and a primary that has replicated nothing were indistinguishable, which is exactly the plausible-looking-but-fake shape the counters exist to rule out. **Bytes counted as sent before the write lands.** `forward_frame` returning `Break` means the write did not land, or landed partially; counting `encoded.len()` unconditionally (rather than only on `Forward::Continue`) would report transfer that never happened. **The backlog-replay tail left uninstrumented.** A resumed replica's tail is written directly via `stream.write_all`, a second output path distinct from the live-forward one — a build that counts only the live path undercounts every partial resync by the size of the tail it replayed. **Bytes derived from the offset coordinator instead of the wire.** The offset advances once per *stamped* write, not once per *sent* byte, and never accounts for a full-sync payload at all; deriving the counters from it would report a number that moves independently of anything a socket did. **A replica counting its own full-sync payload before the checksum is verified**, which would let a corrupted transfer that gets rejected and retried still inflate the tally with bytes that were discarded. |
+| Invariant | `NetByteCounters` (`net_bytes.rs`) is two `AtomicU64`s (`output`, `input`) with `record_output`/`record_input` no-oping on `bytes == 0`, `Relaxed` for the same reason `SyncCounters` is (FM-REPLICATION-050): a monotone diagnostic tally nothing derives a decision from tolerates benign tearing. `ReplicationTrackerImpl` owns one `Arc<NetByteCounters>`, vended cross-crate by `net_bytes_handle()` (`pub`, unlike the crate-local `offset_handle()`, because the counters are recorded from `frogdb-server`'s handler-construction call sites as well as from within `frogdb-replication`) and read back by `net_bytes() -> NetByteCountersSnapshot`; `reset_net_bytes()` is `SyncCounters::reset`'s sibling, zeroing only this pair. Four call sites record output, all on the primary: `stream_checkpoint` and `stream_live_dataset` each record `total_size` — the same checksum-verified size already stamped into `FullSyncMetadata.rdb_size` — once, after `write_metadata` succeeds; the live-forward path in `start_streaming`'s write task records `encoded.len()` only on `Forward::Continue`, never on `Break`; the backlog-replay tail loop in the same function records `encoded.len()` per frame immediately after its `write_all` succeeds, independently of the live-forward path (a replayed frame is never also live-forwarded, so the two sites cannot double-count one frame). Two call sites record input, both on the replica: `receive_snapshot` and `receive_checkpoint` each record `metadata.rdb_size` after their checksum/commit step confirms it real; `replica/streaming.rs`'s `drain_frames` records `starting_len - buf.len()` — the exact span `ReplicationFrameCodec::decode`'s loop consumed from the read buffer — at both of its exits (channel closed early, and loop completion), so a partial drain still counts what it actually decoded. `info::net_byte_fields(snapshot) -> [(&'static str, u64); 2]` is the single name-to-value list both `StatsSection::render` and `build_stats_info` render, in Redis's field position (immediately after `total_net_output_bytes`, before the `instantaneous_*` fields), the same pattern `sync_counter_fields` established. |
+| Outcome variant | n/a (`INFO stats` fields `total_net_repl_input_bytes`, `total_net_repl_output_bytes`) |
+| Forced by | `net_bytes_handle_is_shared_with_the_tracker_snapshot`, `resetting_the_net_bytes_leaves_the_replica_registry_and_offset_alone`, `repl_output_bytes_grow_when_a_write_is_forwarded`, `repl_output_bytes_include_the_full_sync_payload`, `repl_input_bytes_grow_on_the_replica_as_it_applies`, `both_info_renderers_report_the_same_repl_byte_counters`, `both_info_renderers_report_zeros_after_the_repl_byte_counters_are_reset`, `config_resetstat_zeroes_the_repl_byte_counters` |
+| Bug refs | `.scratch/hardening/issues/done/29-net-repl-byte-counters-are-hardcoded-zero.md` |
+
+**Why the offset coordinator was rejected as the source** (considered and dropped, not merely
+unmentioned). The tracker's offset advances once per write *stamped* into the stream, which is a
+count of writes, not of bytes on a socket: it cannot see a full-sync payload at all (no frame, no
+offset movement), and it advances even for a write whose frame later fails to reach a given replica —
+the offset is "how far the primary's history has moved", not "how much this link has transferred".
+Counting bytes at the write sites that already know the real, on-the-wire (or checksum-verified) size
+is the only shape that cannot be fooled by a write that was stamped but never sent.
 
 ---
 

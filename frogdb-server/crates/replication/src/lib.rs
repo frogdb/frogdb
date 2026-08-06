@@ -35,6 +35,7 @@ pub mod apply;
 pub mod frame;
 pub mod fullsync;
 pub mod identity;
+pub mod net_bytes;
 pub mod offset_coordinator;
 pub mod primary;
 pub mod replica;
@@ -55,6 +56,7 @@ pub use frame::{
 };
 pub use fullsync::FullSyncMetadata;
 pub use identity::{ReplicationIdentity, SharedReplicationState};
+pub use net_bytes::{NetByteCounters, NetByteCountersSnapshot};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
     BacklogConfig, BacklogGeometry, BacklogTtl, DivergenceRecord, FunctionSnapshotHook,
