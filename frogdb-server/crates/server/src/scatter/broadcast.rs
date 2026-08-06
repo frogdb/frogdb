@@ -187,7 +187,18 @@ impl<'a> ScatterGather<'a> {
         let deadline = tokio::time::sleep(self.timeout);
         tokio::pin!(deadline);
         for (shard_id, rx) in rxs {
+            // `biased;` (determinism audit R7/A55): fixes the poll order so
+            // a seeded turmoil run replays identically. Also the right
+            // production call on a tie — the audit's own framing — because
+            // a real per-shard reply that lands in the same instant the
+            // shared deadline elapses must not be flipped into a spurious
+            // `ERR timeout` (matching the existing convention in
+            // `connection/blocking/coordinator.rs::wait_for_response`).
+            // No starvation concern: this loop runs once per shard and
+            // returns/breaks on the first timeout, so there is no
+            // repeated polling for a `reply`-first bias to ever starve.
             tokio::select! {
+                biased;
                 reply = rx => match reply {
                     Ok(reply) => {
                         // A shard that rejected the part (Continuation-Lock
@@ -295,7 +306,12 @@ impl<'a> ScatterGather<'a> {
         let deadline = tokio::time::sleep(self.timeout);
         tokio::pin!(deadline);
         for (shard_id, rx) in rxs {
+            // `biased;` (determinism audit R7/A55): see `run`'s comment
+            // above — same tie-break call (a real reply beats a spurious
+            // timeout) and the same non-starvation shape (once per shard,
+            // returns/breaks on the first timeout).
             tokio::select! {
+                biased;
                 reply = rx => match reply {
                     Ok(reply) => results.push(reply),
                     Err(_) => warn!(
@@ -344,7 +360,10 @@ impl<'a> ScatterGather<'a> {
         let deadline = tokio::time::sleep(self.timeout);
         tokio::pin!(deadline);
         for (_shard_id, rx) in rxs {
+            // `biased;` (determinism audit R7/A55): see `run`'s comment
+            // above — same tie-break call and the same non-starvation shape.
             tokio::select! {
+                biased;
                 reply = rx => {
                     if let Ok(reply) = reply
                         && predicate(&reply)

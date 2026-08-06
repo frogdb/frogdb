@@ -202,6 +202,15 @@ impl WaitCoordinator {
     /// `fence` is the caller's [`RoleFence`], taken before it decided this node
     /// was a primary — a demotion that landed anywhere from that decision
     /// onwards releases the wait as [`WaitVerdict::RoleChanged`].
+    ///
+    /// Both `select!`s below are `biased;`, with the fence checked first: an
+    /// exact tie — quorum reached and the fence firing in the same poll, e.g.
+    /// the GETACK round itself both satisfies the target *and* is what raced
+    /// the demotion — must resolve to `RoleChanged`, never `Reached`. A count
+    /// is a durability claim about a stream this node heads; on a tie it no
+    /// longer does, and FM-REPLICATION-040 already forbids answering with a
+    /// count "across a role change" — this makes the boundary land on the tie
+    /// rather than leaving it to `tokio::select!`'s unseeded tie-break (R7).
     pub async fn wait_for_replicas(
         &self,
         mut fence: RoleFence,
@@ -226,15 +235,23 @@ impl WaitCoordinator {
 
         match deadline {
             None => tokio::select! {
-                count = &mut quorum => WaitVerdict::Reached(count),
+                biased;
+                // 1. The fence: a demotion tied with quorum must win (see the
+                // doc comment above).
                 _ = fence.changed() => WaitVerdict::RoleChanged(self.count_acked(target)),
+                // 2. Quorum reached with no competing demotion.
+                count = &mut quorum => WaitVerdict::Reached(count),
             },
             Some(d) => tokio::select! {
+                biased;
+                // 1. The fence, for the same reason as the no-deadline arm.
+                _ = fence.changed() => WaitVerdict::RoleChanged(self.count_acked(target)),
+                // 2. Quorum reached, or the deadline elapsed, with no
+                // competing demotion.
                 res = tokio::time::timeout_at(d, &mut quorum) => match res {
                     Ok(count) => WaitVerdict::Reached(count),
                     Err(_) => WaitVerdict::TimedOut(self.count_acked(target)),
                 },
-                _ = fence.changed() => WaitVerdict::RoleChanged(self.count_acked(target)),
             },
         }
     }
@@ -566,6 +583,91 @@ mod tests {
             .wait_for_replicas(fence, 400, 1, None, &solicitor)
             .await;
         assert_eq!(verdict, WaitVerdict::RoleChanged(0));
+    }
+
+    /// A solicitor whose GETACK round both satisfies quorum and fences the
+    /// role, synchronously, in the same step `wait_for_replicas` awaits just
+    /// before it builds the `quorum` future and enters the `select!`. Neither
+    /// future has been polled yet when that happens, so their *first* poll —
+    /// the one the `select!` performs — finds both already `Ready`: a genuine
+    /// tie, not a timing-dependent race.
+    struct TieSolicitor {
+        tracker: Arc<ReplicationTrackerImpl>,
+        coord: Arc<WaitCoordinator>,
+        replica_id: u64,
+        target: u64,
+    }
+
+    impl AckSolicitor for TieSolicitor {
+        async fn solicit_acks(&self) {
+            self.tracker.record_ack(self.replica_id, self.target);
+            self.coord.fence_role_change();
+        }
+    }
+
+    // FM-REPLICATION-040
+    #[tokio::test]
+    async fn a_tie_between_quorum_and_role_change_favors_role_changed_no_deadline() {
+        // R7/A53: the `biased;` order in the no-deadline arm of
+        // `wait_for_replicas` checks the fence first. Prove it holds on the
+        // exact tie the ordering exists for, not just the already-covered
+        // "fence strictly before" and "fence strictly after" interleavings.
+        let (coord, tracker) = coordinator();
+        let coord = Arc::new(coord);
+        let id = streaming_replica(&tracker, 6390);
+
+        let solicitor = TieSolicitor {
+            tracker: tracker.clone(),
+            coord: coord.clone(),
+            replica_id: id,
+            target: 700,
+        };
+
+        let verdict = coord
+            .wait_for_replicas(coord.role_fence(), 700, 1, None, &solicitor)
+            .await;
+
+        assert_eq!(
+            verdict,
+            WaitVerdict::RoleChanged(1),
+            "a tie must never answer with a count describing a stream this node \
+             no longer heads (FM-REPLICATION-040)"
+        );
+    }
+
+    // FM-REPLICATION-040
+    #[tokio::test]
+    async fn a_tie_between_quorum_and_role_change_favors_role_changed_with_deadline() {
+        // Same tie, forced through the `Some(d)` arm (`timeout_at` wrapping
+        // `quorum`) so both `select!` sites in `wait_for_replicas` are
+        // covered independently — each is its own `biased;` ordering.
+        let (coord, tracker) = coordinator();
+        let coord = Arc::new(coord);
+        let id = streaming_replica(&tracker, 6391);
+
+        let solicitor = TieSolicitor {
+            tracker: tracker.clone(),
+            coord: coord.clone(),
+            replica_id: id,
+            target: 800,
+        };
+
+        let verdict = coord
+            .wait_for_replicas(
+                coord.role_fence(),
+                800,
+                1,
+                Some(Instant::now() + Duration::from_secs(30)),
+                &solicitor,
+            )
+            .await;
+
+        assert_eq!(
+            verdict,
+            WaitVerdict::RoleChanged(1),
+            "a tie must never answer with a count describing a stream this node \
+             no longer heads (FM-REPLICATION-040)"
+        );
     }
 
     // FM-REPLICATION-039

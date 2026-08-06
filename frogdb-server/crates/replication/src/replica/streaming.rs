@@ -98,7 +98,50 @@ impl ReplicaConnection {
         // Redis `repl-ping-replica-period`), threaded in at connection construction.
         let mut ack_interval = tokio::time::interval(self.ack_interval);
         loop {
+            // `biased;` (determinism audit R7/A54, FM-REPLICATION-006/010):
+            // fixes the poll order so a seeded turmoil run replays
+            // identically instead of depending on tokio's random tie-break.
+            // Order is a safety ranking, not just a determinism fix — every
+            // arm here either fires once and goes back to pending (no arm
+            // but the socket read can be perpetually ready), so biasing
+            // costs no arm a fair share of the loop:
+            //   1. Divergence latch — an admitted divergence must end the
+            //      link before another byte off the wire is decoded onto a
+            //      keyspace already known to be wrong (FM-REPLICATION-010).
+            //   2. Solicited ACK — answers the `GETACK` `WAIT` is blocked
+            //      on; letting it lose a tie to the periodic tick or a fresh
+            //      read only adds latency to an answer that is already
+            //      computed and ready to send (FM-REPLICATION-006).
+            //   3. Ack-interval tick — the spontaneous cadence; best-effort,
+            //      already tolerant of a late tick (that is what the
+            //      solicited branch above exists to shortcut).
+            //   4. Socket read — the bulk data plane, and the one arm that
+            //      can be continuously ready under a fast primary; kept
+            //      last so it can never starve the three arms above it.
             tokio::select! {
+                biased;
+
+                // 1. The applier could not apply a replicated write, so this
+                // node's keyspace has provably diverged from the primary's.
+                // A `select!` branch rather than a check between frames: the
+                // applier is a separate task, and the divergence may be
+                // discovered while this loop is idle (issue 08).
+                _ = applied.divergence() => {
+                    return Err(self.abandon_diverged_link());
+                }
+                // 2. Solicited ACK
+                reached = solicited_ack(&applied, pending_ack) => {
+                    pending_ack = None;
+                    self.send_ack(reached).await?;
+                }
+                // 3. Spontaneous ACK cadence
+                _ = ack_interval.tick() => {
+                    // The landed head, never the claimed one: an ACK is a
+                    // durability claim about data a shard has actually applied
+                    let offset = applied.landed();
+                    self.send_ack(offset).await?;
+                }
+                // 4. Read the next chunk off the link
                 result = self.stream.read_buf(&mut buf) => {
                     match result {
                         Ok(0) => { tracing::info!("Primary connection closed"); return Ok(()); }
@@ -109,24 +152,6 @@ impl ReplicaConnection {
                         }
                         Err(e) => return Err(e),
                     }
-                }
-                _ = ack_interval.tick() => {
-                    // The landed head, never the claimed one: an ACK is a
-                    // durability claim about data a shard has actually applied
-                    let offset = applied.landed();
-                    self.send_ack(offset).await?;
-                }
-                reached = solicited_ack(&applied, pending_ack) => {
-                    pending_ack = None;
-                    self.send_ack(reached).await?;
-                }
-                // The applier could not apply a replicated write, so this
-                // node's keyspace has provably diverged from the primary's.
-                // A `select!` branch rather than a check between frames: the
-                // applier is a separate task, and the divergence may be
-                // discovered while this loop is idle (issue 08).
-                _ = applied.divergence() => {
-                    return Err(self.abandon_diverged_link());
                 }
             }
         }
@@ -621,6 +646,67 @@ mod tests {
             next.received.load(Ordering::Acquire),
             0,
             "the reconnect was left able to ask for a `+CONTINUE`"
+        );
+    }
+
+    /// Determinism audit R7/A54: the streaming loop's `select!` is `biased;`
+    /// with the divergence latch listed ahead of the solicited-ACK branch, so
+    /// an exact tie between "a divergence just landed" and "the answer a
+    /// `WAIT` is blocked on just became computable" must resolve to
+    /// divergence — never one more ACK sent over a link about to be
+    /// abandoned. `frame_applied` (which satisfies the solicited target) and
+    /// `admit_divergence` are both synchronous and called back to back with
+    /// no `.await` between them, so both conditions are true before the
+    /// task's next poll: a genuine simultaneous readiness, not a timing-
+    /// dependent race.
+    // FM-REPLICATION-006, FM-REPLICATION-010
+    #[tokio::test(start_paused = true)]
+    async fn a_tie_between_divergence_and_a_solicited_ack_favors_divergence() {
+        let mut link = Link::start();
+        // The cadence's immediate first tick, out of the way.
+        assert_eq!(link.next_ack().await, 0);
+
+        let getack = getack();
+        let target = getack.len() as u64;
+        link.send(0, getack).await;
+        let frame = link.next_frame().await;
+        assert!(ReplconfCodec::is_getack(&frame.payload));
+        // Now parked in the loop's `select!`: `pending_ack = Some(target)`,
+        // nothing yet satisfies it and no divergence is latched.
+
+        // Both become true in the same instant, with no yield between them.
+        link.applied.frame_applied(&frame);
+        assert_eq!(
+            link.applied.landed(),
+            target,
+            "the solicited ACK's condition is genuinely met, not merely raced"
+        );
+        link.stint.admit_divergence(link.applied.epoch());
+
+        let outcome = link.task.await.expect("the streaming task panicked");
+        assert!(
+            outcome.is_err(),
+            "a tie between the solicited ACK and the divergence latch must \
+             be won by divergence, not by sending one more ACK"
+        );
+        assert_eq!(
+            link.received.load(Ordering::Acquire),
+            0,
+            "the abandon path ran: rewound for a full resync"
+        );
+
+        // The decisive assertion: divergence winning the tie means the
+        // solicited ACK's own body — `self.send_ack(reached).await` — never
+        // ran, so nothing at all reached the wire. Losing the connection
+        // (the task returning) closes the duplex's replica side, so a read
+        // on the primary side now must see a clean EOF, not `target`'s
+        // bytes. This is what would fail if the arm order were reversed.
+        let mut probe = BytesMut::new();
+        let n = link.primary.read_buf(&mut probe).await.unwrap();
+        assert_eq!(
+            n, 0,
+            "an ACK reached the wire ({probe:?}) despite the tie: divergence \
+             did not win"
         );
     }
 
