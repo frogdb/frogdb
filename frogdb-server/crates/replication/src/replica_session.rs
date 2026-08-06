@@ -18,6 +18,7 @@
 //! `run()` returns. The exit handler then unregisters the session, cleans up
 //! any checkpoint directory, and logs the disconnect.
 
+use frogdb_types::clock;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -420,7 +421,7 @@ impl ReplicaSession {
     /// so there is no window in which a registered session reports a
     /// placeholder port to `INFO replication` / `ROLE`.
     pub fn announced(id: u64, address: SocketAddr, announcement: ReplicaAnnouncement) -> Arc<Self> {
-        let now = Instant::now();
+        let now = clock::now();
         Arc::new(Self {
             id,
             address,
@@ -539,7 +540,7 @@ impl ReplicaSession {
     /// use this to decide whether to notify WAIT waiters via the broadcast channel.
     pub fn record_ack(&self, sequence: u64) -> bool {
         // Refresh liveness regardless
-        let now = Instant::now();
+        let now = clock::now();
         self.inner.write().last_ack_time = now;
         // Conditional offset update
         let prev = self.acked_offset.load(Ordering::Acquire);
@@ -576,7 +577,7 @@ impl ReplicaSession {
     ///
     /// Returns `true` iff the resume position advanced (`offset > prev`).
     pub fn seed_resume_position(&self, offset: u64) -> bool {
-        self.inner.write().last_ack_time = Instant::now();
+        self.inner.write().last_ack_time = clock::now();
         let prev = self.resume_offset.load(Ordering::Acquire);
         if offset > prev {
             self.resume_offset.store(offset, Ordering::Release);
@@ -627,7 +628,7 @@ impl ReplicaSession {
     #[doc(hidden)]
     pub fn backdate_last_ack_for_test(&self, by: Duration) {
         let mut inner = self.inner.write();
-        inner.last_ack_time = Instant::now() - by;
+        inner.last_ack_time = clock::now() - by;
     }
 
     /// Drive the session to completion.
@@ -845,7 +846,7 @@ impl ReplicaSession {
                     // Mark for cleanup *only after* successful creation.
                     self.inner.write().sync_checkpoint_path = Some(checkpoint_path.clone());
                     self.set_phase(Phase::StreamingCheckpoint);
-                    self.inner.write().sync_started_at = Some(Instant::now());
+                    self.inner.write().sync_started_at = Some(clock::now());
                     self.stream_checkpoint(
                         &mut stream,
                         handler,
@@ -1036,7 +1037,7 @@ impl ReplicaSession {
         self.inner.write().sync_total_bytes = total_size;
         self.sync_bytes_transferred.store(0, Ordering::Release);
         self.set_phase(Phase::StreamingCheckpoint);
-        self.inner.write().sync_started_at = Some(Instant::now());
+        self.inner.write().sync_started_at = Some(clock::now());
 
         tracing::info!(
             replica_id = self.id,

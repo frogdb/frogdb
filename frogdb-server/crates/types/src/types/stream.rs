@@ -364,7 +364,7 @@ impl PendingEntry {
     pub fn new(consumer: Bytes) -> Self {
         Self {
             consumer,
-            delivery_time: Instant::now(),
+            delivery_time: crate::clock::now(),
             delivery_count: 1,
         }
     }
@@ -390,7 +390,7 @@ impl PendingEntry {
 
     /// Get idle time in milliseconds.
     pub fn idle_ms(&self) -> u64 {
-        self.idle_ms_at(Instant::now())
+        self.idle_ms_at(crate::clock::now())
     }
 
     /// Idle time in milliseconds relative to an explicit `now`.
@@ -467,7 +467,7 @@ impl Consumer {
         Self {
             name,
             pending_count: 0,
-            last_seen: Instant::now(),
+            last_seen: crate::clock::now(),
             active_time: None,
         }
     }
@@ -525,12 +525,12 @@ impl Consumer {
 
     /// Touch the consumer (update last_seen).
     pub fn touch(&mut self) {
-        self.last_seen = Instant::now();
+        self.last_seen = crate::clock::now();
     }
 
     /// Mark the consumer as having actively consumed entries.
     pub fn touch_active(&mut self) {
-        self.active_time = Some(Instant::now());
+        self.active_time = Some(crate::clock::now());
     }
 }
 

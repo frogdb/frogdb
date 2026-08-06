@@ -12,6 +12,7 @@
 //! that consumes it, and is re-exported here so the connection layer keeps one
 //! import site for connection state.
 
+use frogdb_core::clock;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 
@@ -488,7 +489,7 @@ pub struct ConnectionState {
 impl ConnectionState {
     /// Create a new connection state.
     pub fn new(id: u64, addr: SocketAddr, requires_auth: bool) -> Self {
-        let now = std::time::Instant::now();
+        let now = clock::now();
         Self {
             id,
             addr,
@@ -1047,7 +1048,7 @@ impl ConnectionState {
             let delta = self.local_stats.to_delta();
             registry.update_stats(self.id, &delta);
             self.local_stats.clear();
-            self.last_stats_sync = std::time::Instant::now();
+            self.last_stats_sync = clock::now();
         }
     }
 

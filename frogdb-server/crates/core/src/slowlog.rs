@@ -99,7 +99,7 @@ impl SlowLog {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         // Get current timestamp
-        let timestamp = std::time::SystemTime::now()
+        let timestamp = crate::clock::system_now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);

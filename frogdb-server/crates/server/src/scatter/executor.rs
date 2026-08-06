@@ -12,6 +12,7 @@
 //! lives inside the coordinator now — adding a new scatter command is just
 //! adding a strategy.
 
+use frogdb_core::clock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,7 +70,7 @@ impl ScatterGatherExecutor {
 
     /// Execute a scatter-gather operation using a strategy.
     pub async fn execute(&self, strategy: &dyn ScatterGatherStrategy, args: &[Bytes]) -> Response {
-        let start = std::time::Instant::now();
+        let start = clock::now();
         let command_name = strategy.name();
 
         let partition = strategy.partition(args, self.num_shards);

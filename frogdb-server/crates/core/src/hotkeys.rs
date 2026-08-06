@@ -121,7 +121,7 @@ impl HotkeySession {
         Self {
             config,
             state: HotkeySessionState::Active,
-            started_at: Instant::now(),
+            started_at: crate::clock::now(),
             stopped_at: None,
             entries: HashMap::new(),
             total_samples: 0,
@@ -186,7 +186,7 @@ impl HotkeySession {
     /// Stop the session.
     pub fn stop(&mut self) {
         self.state = HotkeySessionState::Stopped;
-        self.stopped_at = Some(Instant::now());
+        self.stopped_at = Some(crate::clock::now());
     }
 
     /// Get the top N keys sorted by access count (descending).

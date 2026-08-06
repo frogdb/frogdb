@@ -41,6 +41,7 @@
 //! (issue 23). Every other failure stays [`InstallError::Transient`] and is
 //! retried as before.
 
+use frogdb_core::clock;
 use std::io;
 use std::path::Path;
 
@@ -118,7 +119,7 @@ impl LiveSnapshotInstaller {
     /// The install ordering and its per-shard (not cross-shard) atomicity are
     /// identical to [`Self::install`]; see that method's note.
     async fn install_dataset(&self, blobs: Vec<Vec<u8>>) -> Result<(), InstallError> {
-        let start = Instant::now();
+        let start = clock::now();
         let num_shards = self.shard_senders.len();
         if num_shards == 0 {
             return Err(InstallError::Transient(io::Error::other(
@@ -177,7 +178,7 @@ impl LiveSnapshotInstaller {
     /// swaps. The install completes before the replica adopts the snapshot's
     /// offset, so no *replicated* write can observe the half-installed state.
     async fn install(&self, staged_dir: &Path) -> Result<(), InstallError> {
-        let start = Instant::now();
+        let start = clock::now();
         let num_shards = self.shard_senders.len();
         let dir = staged_dir.to_path_buf();
         let rocks_config = self.rocks_config.clone();
@@ -316,7 +317,7 @@ impl SnapshotSink {
     /// Unlike boot recovery this never prunes stale warm entries from the source
     /// DB: the staged checkpoint is read-only input, not this node's database.
     fn absorb_warm(&mut self, rocks: &RocksStore, shard_id: usize) -> io::Result<()> {
-        let now = Instant::now();
+        let now = clock::now();
         let iter = rocks
             .iter_warm_cf(shard_id)
             .map_err(|e| io::Error::other(format!("failed to read warm shard {shard_id}: {e}")))?;

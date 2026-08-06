@@ -17,6 +17,7 @@
 //! installed via [`register_protected_global`], and (for the execution VM)
 //! the per-execution timeout hook via [`install_timeout_hook`].
 
+use frogdb_types::clock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -155,7 +156,7 @@ pub fn build_frogdb_lua_vm(options: &SandboxOptions) -> Result<Lua, SandboxError
     if options.mode == SandboxMode::Load {
         install_timeout_hook(
             &lua,
-            Instant::now(),
+            clock::now(),
             TimeoutHook {
                 timeout_ms: LOAD_TIMEOUT_MS,
                 grace_ms: 0,
@@ -323,7 +324,7 @@ fn apply_global_protection(lua: &Lua) -> Result<(), SandboxError> {
 
     let clock_fn = lua
         .create_function(|_, ()| -> LuaResult<f64> {
-            Ok(std::time::SystemTime::now()
+            Ok(clock::system_now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs_f64())
                 .unwrap_or(0.0))
@@ -332,7 +333,7 @@ fn apply_global_protection(lua: &Lua) -> Result<(), SandboxError> {
 
     let time_fn = lua
         .create_function(|_, ()| -> LuaResult<i64> {
-            Ok(std::time::SystemTime::now()
+            Ok(clock::system_now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0))

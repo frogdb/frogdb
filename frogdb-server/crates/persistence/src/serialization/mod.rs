@@ -26,6 +26,7 @@ mod stream;
 mod string;
 mod timeseries;
 
+use frogdb_types::clock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -158,7 +159,7 @@ pub fn deserialize(data: &[u8]) -> Result<(Value, KeyMetadata), SerializationErr
 
     let metadata = KeyMetadata {
         expires_at,
-        last_access: Instant::now(),
+        last_access: clock::now(),
         lfu_counter,
         memory_size: value.memory_size(),
     };
@@ -200,8 +201,8 @@ fn deserialize_value(type_byte: u8, payload: &[u8]) -> Result<Value, Serializati
 /// This is tricky because Instant is monotonic and not tied to wall clock.
 /// We calculate the offset from now.
 pub fn instant_to_unix_ms(instant: Instant) -> i64 {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
+    let now_instant = clock::now();
+    let now_system = clock::system_now();
 
     if instant >= now_instant {
         // Future instant
@@ -229,8 +230,8 @@ pub fn instant_to_unix_ms(instant: Instant) -> i64 {
 ///
 /// This is the inverse of instant_to_unix_ms.
 pub fn unix_ms_to_instant(unix_ms: i64) -> Instant {
-    let now_instant = Instant::now();
-    let now_system = SystemTime::now();
+    let now_instant = clock::now();
+    let now_system = clock::system_now();
 
     let target = UNIX_EPOCH + Duration::from_millis(unix_ms as u64);
 

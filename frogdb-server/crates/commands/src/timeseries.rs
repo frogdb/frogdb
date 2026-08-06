@@ -4,6 +4,7 @@
 
 use crate::utils::format_float;
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Aggregation, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags,
     CommandSpec, DownsampleRule, DuplicatePolicy, EventSpec, ExecutionStrategy, KeySpec,
@@ -14,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Get current timestamp in milliseconds.
 fn current_timestamp_ms() -> i64 {
-    SystemTime::now()
+    clock::system_now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)

@@ -4,6 +4,7 @@
 //! multiple command modules to avoid code duplication.
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     ArgParser, CommandError, Expiry, IncrementError, LexBound, ScoreBound, StreamTrimMode,
 };
@@ -545,7 +546,7 @@ pub const HFE_MAX_ABS_TIME_MSEC: i64 = 0x3FFF_FFFF_FFFF;
 /// Current wall-clock time as Unix milliseconds, used as the `basetime` for the
 /// relative hash-field-expiry arms (mirrors upstream `commandTimeSnapshot()`).
 pub fn now_unix_ms() -> i64 {
-    std::time::SystemTime::now()
+    clock::system_now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)

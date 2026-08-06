@@ -308,7 +308,7 @@ impl ScriptExecutor {
         skc: &ScriptKeyContext,
     ) -> Result<Response, ScriptError> {
         let script_sha = sha_to_hex(sha);
-        let start = Instant::now();
+        let start = crate::clock::now();
         debug!(script_sha = %script_sha, keys_count = keys.len(), "Script execution started");
         self.running.store(true, Ordering::Relaxed);
         self.vm.prepare_execution(keys, argv)?;

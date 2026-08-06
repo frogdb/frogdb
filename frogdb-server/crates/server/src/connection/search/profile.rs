@@ -1,6 +1,7 @@
 //! FT.PROFILE handler.
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_protocol::Response;
 
 use crate::connection::ConnectionHandler;
@@ -51,7 +52,7 @@ impl ConnectionHandler {
         let mut delegated_args = vec![index_name.clone()];
         delegated_args.extend_from_slice(&args[i..]);
 
-        let start = std::time::Instant::now();
+        let start = clock::now();
         let query_result = if is_search {
             self.handle_ft_search(&delegated_args).await
         } else {

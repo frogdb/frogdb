@@ -7,6 +7,7 @@
 //! BGSAVE and LASTSAVE are migrated behind the connection-command seam; see
 //! [`crate::connection::persistence_conn_command`].
 
+use frogdb_core::clock;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -277,7 +278,7 @@ impl ConnectionHandler {
                 let expires_ms = i64::from_le_bytes(data[2..10].try_into().unwrap_or([0; 8]));
                 if expires_ms > 0 {
                     // Convert absolute timestamp to relative TTL
-                    let now_ms = std::time::SystemTime::now()
+                    let now_ms = clock::system_now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);

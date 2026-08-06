@@ -2,10 +2,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::time::Instant;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
+// The timer's clock, not the OS clock: under a paused runtime (the turmoil
+// simulation) the two disagree, and every age this file reports is measured
+// against a deadline the timer owns. See `frogdb_types::clock`.
+use tokio::time::Instant;
 
 use super::{PendingOpState, ShardReadyResult, VllError};
 

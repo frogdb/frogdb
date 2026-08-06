@@ -103,7 +103,7 @@ impl ShardWorker {
             return Response::error("ERR scripting not available");
         }
 
-        let start = Instant::now();
+        let start = crate::clock::now();
         // Clone the registry Arc and move the executor out so that `self` is free
         // for the `command_context` builder (which borrows `&mut self`).
         let registry = std::sync::Arc::clone(&self.registry);

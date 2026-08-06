@@ -22,10 +22,12 @@
 //! of that work, so callers never hand-manage its lifetime.
 
 use std::future::Future;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
+// The timer's clock, not the OS clock — see the note in `queue.rs`.
+use tokio::time::Instant;
 
 use crate::traits::{MetricsSink, ShardSink, ShardSinkError};
 use crate::{LockMode, ShardReadyResult, VllError};

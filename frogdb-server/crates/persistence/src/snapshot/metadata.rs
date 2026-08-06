@@ -1,4 +1,5 @@
 //! Snapshot metadata types.
+use frogdb_types::clock;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -34,7 +35,7 @@ pub struct SnapshotMetadataFile {
 
 impl SnapshotMetadataFile {
     pub fn new(epoch: u64, sequence_number: u64, num_shards: usize) -> Self {
-        let now = SystemTime::now()
+        let now = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO);
         Self {
@@ -49,7 +50,7 @@ impl SnapshotMetadataFile {
         }
     }
     pub fn mark_complete(&mut self, size_bytes: u64) {
-        let now = SystemTime::now()
+        let now = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO);
         self.completed_at_ms = Some(now.as_millis() as u64);

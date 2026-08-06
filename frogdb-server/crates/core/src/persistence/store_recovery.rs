@@ -79,7 +79,7 @@ pub fn recover_shard(
 pub fn recover_all_shards(
     rocks: &Arc<RocksStore>,
 ) -> Result<(Vec<(HashMapStore, ExpiryIndex)>, RecoveryStats), RecoveryError> {
-    let start = Instant::now();
+    let start = crate::clock::now();
     let mut total_stats = RecoveryStats::default();
     let mut results = Vec::with_capacity(rocks.num_shards());
 

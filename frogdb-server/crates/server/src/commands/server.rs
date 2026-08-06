@@ -8,6 +8,7 @@
 //! - SHUTDOWN: Gracefully shut down the server
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec, EventSpec,
     ExecutionStrategy, KeySpec, LookupSpec, ServerWideOp, WaiterWake, WalStrategy,
@@ -174,7 +175,7 @@ impl Command for TimeCommand {
         _ctx: &mut CommandContext,
         _args: &[Bytes],
     ) -> Result<Response, CommandError> {
-        let now = SystemTime::now()
+        let now = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
 

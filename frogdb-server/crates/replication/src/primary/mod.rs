@@ -14,6 +14,7 @@ mod tests;
 use bytes::Bytes;
 use frogdb_persistence::RocksStore;
 use frogdb_types::ReplicationTracker;
+use frogdb_types::clock;
 use parking_lot::RwLock;
 use std::io;
 use std::net::SocketAddr;
@@ -507,9 +508,7 @@ impl PrimaryReplicationHandler {
     /// whether this tick freed it, so the caller can log the transition once.
     pub fn expire_idle_backlog(&self) -> bool {
         let replicas = self.tracker.replica_count();
-        let freed = self
-            .replay
-            .expire_backlog_if_idle(replicas, std::time::Instant::now());
+        let freed = self.replay.expire_backlog_if_idle(replicas, clock::now());
         if freed {
             tracing::info!(
                 ttl_secs = self.replay.backlog_ttl().secs(),

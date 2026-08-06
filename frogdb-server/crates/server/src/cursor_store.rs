@@ -1,5 +1,6 @@
 //! Cursor store for FT.AGGREGATE WITHCURSOR / FT.CURSOR READ/DEL.
 
+use frogdb_core::clock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -54,7 +55,7 @@ impl AggregateCursorStore {
             CursorState {
                 rows,
                 count,
-                last_access: Instant::now(),
+                last_access: clock::now(),
                 timeout,
                 index_name,
             },
@@ -80,7 +81,7 @@ impl AggregateCursorStore {
             return None;
         }
 
-        state.last_access = Instant::now();
+        state.last_access = clock::now();
         let batch_size = count.unwrap_or(state.count);
 
         if batch_size == 0 || batch_size >= state.rows.len() {
@@ -104,7 +105,7 @@ impl AggregateCursorStore {
 
     /// Evict expired cursors. Called periodically from a background task.
     pub fn evict_expired(&self) {
-        let now = Instant::now();
+        let now = clock::now();
         self.cursors
             .retain(|_, state| now.duration_since(state.last_access) < state.timeout);
     }

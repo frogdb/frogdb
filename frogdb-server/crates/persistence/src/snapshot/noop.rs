@@ -12,6 +12,7 @@ use super::scheduler::SnapshotScheduler;
 use super::{
     SaveHistory, SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats,
 };
+use frogdb_types::clock;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -39,7 +40,8 @@ impl NoopSnapshotCoordinator {
     /// and releasing it — so `rdb_last_bgsave_time_sec` reports `0`, not a
     /// borrowed number from a real save that never happened.
     fn record_instant_save(&self) {
-        self.stats.record_success(SystemTime::now(), Duration::ZERO);
+        self.stats
+            .record_success(clock::system_now(), Duration::ZERO);
     }
 
     /// A no-op save has no disk work, so it completes instantly. Release the slot

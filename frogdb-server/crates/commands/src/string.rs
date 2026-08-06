@@ -506,7 +506,7 @@ impl Command for GetexCommand {
                 // EXAT is also a seconds unit upstream: same overflow guard.
                 let ts = checked_expire_value(raw, true, ExpiryErr::Named("getex"))?;
                 let target = UNIX_EPOCH + Duration::from_secs(ts);
-                let now = SystemTime::now();
+                let now = clock::system_now();
                 if let Ok(duration) = target.duration_since(now) {
                     ctx.store.set_expiry(key, clock::now() + duration);
                 }
@@ -514,7 +514,7 @@ impl Command for GetexCommand {
                 let raw = parse_i64(parser.next_arg()?).map_err(|_| CommandError::NotInteger)?;
                 let ts = checked_expire_value(raw, false, ExpiryErr::Named("getex"))?;
                 let target = UNIX_EPOCH + Duration::from_millis(ts);
-                let now = SystemTime::now();
+                let now = clock::system_now();
                 if let Ok(duration) = target.duration_since(now) {
                     ctx.store.set_expiry(key, clock::now() + duration);
                 }

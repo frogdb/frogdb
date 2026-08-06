@@ -11,6 +11,7 @@
 use super::config::DurabilityMode;
 use crate::rocks::RocksStore;
 use bytes::Bytes;
+use frogdb_types::clock;
 use frogdb_types::metrics::definitions::{
     WalBytes, WalFlushDuration, WalFlushFailures, WalLostBytes, WalLostOps, WalWrites,
 };
@@ -87,7 +88,7 @@ pub(super) struct WalLagAtomics {
 }
 
 pub(super) fn current_timestamp_ms() -> u64 {
-    SystemTime::now()
+    clock::system_now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
@@ -424,7 +425,7 @@ impl<S: WriteSink> FlushEngine<S> {
             batch_size: 0,
             batch_ops: 0,
             batch_max_seq: 0,
-            last_flush: Instant::now(),
+            last_flush: clock::now(),
             last_error_log: None,
             group_depth: 0,
             lag,
@@ -580,8 +581,8 @@ impl<S: WriteSink> FlushEngine<S> {
         // (3) Commit the clear as its own batch, recording the outcome under
         // `seq`. `commit` of an empty batch (empty CF) is a no-op commit, which
         // still lets the committed sequence advance past the clear.
-        let start = Instant::now();
-        self.last_flush = Instant::now();
+        let start = clock::now();
+        self.last_flush = clock::now();
         match self.sink.commit(self.is_sync) {
             Ok(()) => {
                 self.outcomes.record_success(seq, self.is_sync);
@@ -620,7 +621,7 @@ impl<S: WriteSink> FlushEngine<S> {
         if self.sink.staged_len() == 0 {
             return Ok(());
         }
-        let start = Instant::now();
+        let start = clock::now();
         let flushed_bytes = self.batch_size;
         let flushed_ops = self.batch_ops;
         let max_seq = self.batch_max_seq;
@@ -637,7 +638,7 @@ impl<S: WriteSink> FlushEngine<S> {
             .pending_bytes
             .fetch_sub(flushed_bytes, Ordering::Release);
         let result = self.sink.commit(self.is_sync);
-        self.last_flush = Instant::now();
+        self.last_flush = clock::now();
         match result {
             Ok(()) => {
                 self.outcomes.record_success(max_seq, self.is_sync);
@@ -684,7 +685,7 @@ impl<S: WriteSink> FlushEngine<S> {
     }
 
     fn log_failure(&mut self, e: &std::io::Error, ops: usize, bytes: usize, msg: &'static str) {
-        let now = Instant::now();
+        let now = clock::now();
         if self
             .last_error_log
             .is_none_or(|t| now.duration_since(t) >= FAILURE_LOG_INTERVAL)

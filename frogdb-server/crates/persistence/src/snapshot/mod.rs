@@ -7,6 +7,7 @@ mod scheduler;
 mod stager;
 #[cfg(test)]
 mod tests;
+use frogdb_types::clock;
 pub use handle::SnapshotHandle;
 pub use metadata::{SnapshotConfig, SnapshotMetadata, SnapshotMetadataFile};
 pub use noop::NoopSnapshotCoordinator;
@@ -108,7 +109,7 @@ impl SnapshotStats {
     /// Returns the stamped start instant so the caller measures the same window
     /// it publishes — one clock read, one meaning.
     pub(crate) fn record_start(&mut self) -> Instant {
-        let started = Instant::now();
+        let started = clock::now();
         self.current_started_at = Some(started);
         started
     }

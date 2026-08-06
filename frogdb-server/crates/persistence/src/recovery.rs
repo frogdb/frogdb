@@ -9,6 +9,7 @@
 //! drives it, so the read half of the format lives next to the write half and
 //! can be round-trip tested end-to-end against a mock sink.
 
+use frogdb_types::clock;
 use std::time::Instant;
 
 use bytes::Bytes;
@@ -140,8 +141,8 @@ pub fn recover_shard_into<S: RestoreSink>(
     shard_id: usize,
     sink: &mut S,
 ) -> Result<RecoveryStats, RecoveryError> {
-    let start = Instant::now();
-    let now = Instant::now();
+    let start = clock::now();
+    let now = clock::now();
     let mut stats = RecoveryStats::default();
 
     for (key, value) in rocks.iter_cf(shard_id)? {
@@ -205,7 +206,7 @@ pub fn recover_warm_shard_into<S: RestoreSink>(
     sink: &mut S,
     stats: &mut RecoveryStats,
 ) -> Result<(), RecoveryError> {
-    let now = Instant::now();
+    let now = clock::now();
 
     for (key, value) in rocks.iter_warm_cf(shard_id)? {
         match deserialize(&value) {

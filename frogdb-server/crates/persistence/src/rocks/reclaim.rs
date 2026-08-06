@@ -24,6 +24,7 @@
 //! queued, because a pass started even slightly later already sees the newer
 //! tombstone.
 
+use frogdb_types::clock;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -159,7 +160,7 @@ pub(crate) fn run_reclamation(
 
     let metrics = rocks.metrics_recorder();
     FlushCompactStarted::inc(&*metrics, &shard_label);
-    let start = Instant::now();
+    let start = clock::now();
     info!(shard_id, tier = ?tier, "post-clear reclamation started");
 
     // (1) Cheap first pass: drop SSTs entirely within the cleared keyspace.

@@ -17,6 +17,7 @@
 //! the same messages `INFO` and the `LATENCY`/`SLOWLOG` commands use — so no
 //! surface returns a stubbed empty panel.
 
+use frogdb_core::clock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -63,7 +64,7 @@ impl Default for ServerInfo {
     fn default() -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
-            start_time: Instant::now(),
+            start_time: clock::now(),
             num_shards: 0,
             bind_addr: "0.0.0.0".to_string(),
             port: 6379,

@@ -5,6 +5,7 @@
 //! emitted at the point of writing — there is no `0` placeholder for another
 //! module to patch, so "the patch silently no-oped" is unrepresentable.
 
+use frogdb_core::clock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frogdb_cluster::version_gate;
@@ -48,7 +49,7 @@ impl InfoSection for ServerSection {
     }
 
     fn render(&self, src: &InfoSources) -> String {
-        let now = SystemTime::now()
+        let now = clock::system_now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
 
