@@ -123,9 +123,9 @@ in the filename.
       **`.cargo/config.toml`, `[target.'cfg(all())']` so it joins rather than replaces any
       per-target rustflags.**
 - [x] Repro files are keyed by `(seed, profile, ops)`.
-- [ ] Once deterministic: re-verify issue 11's findings and re-pin the surviving classes by seed.
-      **Blocked on the profiles that matter still being non-reproducible (A15). Issue stays open
-      for this criterion.**
+- [x] Once deterministic: re-verify issue 11's findings and re-pin the surviving classes by seed.
+      **Unblocked by issue 17 (A15) and done 2026-08-05 — see "Criterion 5 discharged" below.
+      Nothing survives to re-pin: every issue-11 class is gone at the configs that produced it.**
 
 ## References
 
@@ -160,3 +160,102 @@ RNG, hash-order determinism, `spawn_blocking`/thread inlining, `frogdb-net` bypa
 **The remaining blocker for criterion 5 is A15**, filed as issue 17: `XADD *` mints stream IDs from
 `SystemTime::now()`, and no virtual wall clock exists in the codebase, so every profile that
 generates streams (Mixed, TxHeavy) still produces a different history per run.
+*(Resolved — issue 17 landed as `8b62120f`; see below.)*
+
+## Criterion 5 discharged (2026-08-05)
+
+A15/issue 17 landed (`8b62120f`, `frogdb_types::clock::system_now()`), which un-ignored the two
+stream-generating determinism pins. Re-verified on the current tree, local mode, no product
+changes.
+
+### The determinism contract holds for all three pinned profiles
+
+`cargo nextest run -p frogdb-server --features turmoil -E 'test(/determinism/)'` — 3/3 pass:
+
+```
+PASS [0.280s] concurrency_workload::determinism::run_is_reproducible_mixed_seed_0
+PASS [0.468s] concurrency_workload::determinism::run_is_reproducible_txheavy_seed_3
+PASS [1.067s] concurrency_workload::determinism::run_is_reproducible_multiwaiter_seed_10
+```
+
+Mixed and TxHeavy are the two that were `#[ignore]`d for A15, so the run-twice digest now covers
+every profile the pins name.
+
+### Re-verification of issue 11's findings: nothing survives to re-pin
+
+`FROGDB_CONCURRENCY_OPS_PER_CLIENT=60 FROGDB_CONCURRENCY_SEEDS=20 just concurrency-nightly`
+— the exact configuration that produced issue 11's Findings B and C — is now **clean**, 80/80
+seed×profile runs:
+
+```
+seed_sweep_nightly: 80 seed(s), 0/964 WGL-eligible key(s) downgraded to conservation-only
+  (downgrade ratio 0.0000)
+seed_sweep_nightly: exact FIFO attributed 86/88 journaled registration(s) (ratio 0.9773),
+  judged 45 of 398 served blocking pop(s), 17 pair(s) compared,
+  0 run(s) with a truncated registration journal
+```
+
+The same command previously reported 5 failures of 80 (three TxHeavy WATCH false-negatives, two
+MultiWaiter ZSet non-linearizability reports). All five are accounted for by fixes that have since
+landed — issue 12 (product), issue 13 (checker), issue 15 (model) — so the clean sweep is the
+expected result, not a sampling fluke.
+
+Note the WGL downgrade ratio is 0.0000: every eligible key got a real linearizability check, so
+the clean pass is not the silent-degradation failure mode issue 41 guards against.
+
+The other configuration issue 11 tabulated after the Finding-A fix — `OPS=150`, `SEEDS=25`, i.e.
+the nightly defaults — is clean too, 100/100 runs:
+
+```
+seed_sweep_nightly: 100 seed(s), 22/1238 WGL-eligible key(s) downgraded to conservation-only
+  (downgrade ratio 0.0178)
+seed_sweep_nightly: exact FIFO attributed 109/111 journaled registration(s) (ratio 0.9820),
+  judged 69 of 954 served blocking pop(s), 31 pair(s) compared,
+  0 run(s) with a truncated registration journal
+```
+
+That configuration previously reported three failures (one `BlockingHeavy` seed 7, two MultiWaiter
+ZSet), so this run also covers `BlockingHeavy` — the profile with no determinism pin. Its
+downgrade ratio reproduces issue 11's recorded 0.0178 exactly; the downgrades are all the
+`>200 ops` WGL cap on the two hot list keys (`{t4}ls0`, `{t5}ls1`), i.e. a budget cap on long
+histories, not a checker failure.
+
+**Across both configurations — 180 seed×profile runs — there is no surviving issue-11 class to
+pin by seed**, which is why this criterion closes without adding a `regression_*_seed_N` test.
+
+### Residual gap this surfaced (not a blocker for criterion 5)
+
+The FIFO coverage line is healthy in aggregate but shows two things worth tracking as a follow-up
+to issue 16 rather than to this issue:
+
+- **Attribution loss, 2/88 at OPS=60 and 2/111 at OPS=150.** Runs logged `FIFO coverage gap: 0/1
+  journaled registration(s) attributed … journal complete=true`. The journal was *not* truncated,
+  so this is the attribution path — a client's pop count on a key disagreeing with its
+  registration count there — not capture loss. Small and stable at ~2%, but it means the exact
+  checker still silently declines to judge a key now and then for a reason nobody has traced.
+- **Very few served pops are judged: 45 of 398 (OPS=60) and 69 of 954 (OPS=150), over 17 and 31
+  compared pairs.** Most served pops never parked (they found data present), so they legitimately
+  carry no wake-order information — but it does mean the FIFO invariant rests on a thin sample,
+  and the judged fraction *falls* as ops rise (11% → 7%). Worth confirming the generator produces
+  enough genuinely-contended waiters to keep the check load-bearing at the nightly default.
+
+### What keeps this issue open
+
+Criterion 5 was the last checkbox, but the audit's remediation plan is not finished: **R5–R11 are
+still not started** (clock-seam lint + mechanical sweep, `biased;` select loops, seeded command
+RNG, hash-order determinism, `spawn_blocking`/thread inlining, `frogdb-net` bypasses). The three
+determinism pins passing is evidence for three specific configurations
+(`(seed, profile, clients, ops, shards)` = Mixed/0/4/30/2, MultiWaiter/10/4/30/2,
+TxHeavy/3/4/60/2), in-process, not a general guarantee:
+
+- **`BlockingHeavy` has no determinism pin at all** — the one profile of the four never checked
+  for reproducibility. It passes its invariants in the OPS=150 sweep above, but that says nothing
+  about whether it runs the *same* history twice; add a fourth
+  `run_is_reproducible_blockingheavy_*`.
+- The pins are **run-twice-in-one-process**. Cross-process reproducibility was verified by hand
+  when issue 17 landed but nothing asserts it on an ongoing basis.
+- Determinism at 30–60 ops does not imply determinism at the nightly default of 150.
+
+Recommend this issue stay open for R5–R11 and the `BlockingHeavy` pin, with the "findings cannot
+be pinned by seed" warning in issue 11 now downgraded: seed pinning is sound for the pinned
+configurations, and should be treated as unproven elsewhere until the above closes.

@@ -380,3 +380,26 @@ out, so this issue is closed; the follow-up work lives in issues 12–16
 harness is deterministic, no
 finding here can be pinned by seed, and this issue's own seed-indexed history should be read as
 "these classes exist", never "this seed reproduces it".
+
+## Re-confirmation of closure (2026-08-05)
+
+Re-opened for investigation on the stale premise that "Findings B and C remain open". **They do
+not** — this issue was closed on 2026-08-02 and nothing here needs further root-causing. Recorded
+so the next reader does not re-litigate it. Each fix was verified present in the tree, not merely
+asserted by a status header:
+
+| Finding | Verdict | Fix, verified in code |
+|---|---|---|
+| A — exactly-once loss ≳90 ops | harness defect | `workload_runner.rs` readback latched to client completion; pinned by `regressions::regression_drain_capture_race_multiwaiter_ops_110_seed_0` |
+| B(i) — TxHeavy WATCH false-negative | **product bug** | `frogdb-server/crates/txn/src/state.rs` `watch_key` is now `entry().or_insert()` (first-watch-wins), matching Redis `watchForKey()` — issue 12 |
+| B(i-b) — seed-14 WATCH report | checker false positive | `written_keys_of` is result-aware and splits EXEC sub-results — issue 13 |
+| B(ii) — MultiWaiter FIFO wake order | checker false positive | `check_fifo_wake_order_exact` reports `FifoCoverage` and has no invoke-order fallback — issue 16 |
+| C — MultiWaiter ZSet non-linearizable | model defect | `ZSetModel::step` BZPOPMAX tie-break is now lexicographically greatest — issue 15 |
+
+So exactly one of the five classes this issue reported was a product bug (B(i)); three were
+harness/checker/model defects and one was a load-dependent readback artifact.
+
+The one live descendant is **issue 14**, whose last open criterion is "once deterministic,
+re-verify issue 11's findings and re-pin the surviving classes by seed". Its blocker (audit item
+A15, `XADD *` reading real wall-clock time) closed as issue 17 (`8b62120f`), so that criterion is
+now actionable — progress recorded in issue 14, not here.
