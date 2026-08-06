@@ -148,6 +148,14 @@ impl ConnectionHandler {
             .replication_tracker
             .as_ref()
             .map_or_else(Default::default, |tracker| tracker.sync_counters());
+        // Reported whatever the current role is, for the same reason `sync`
+        // above is (hardening issue 29): a demoted node's lifetime transfer
+        // tally is still real history worth reporting.
+        let net_bytes = self
+            .cluster
+            .replication_tracker
+            .as_ref()
+            .map_or_else(Default::default, |tracker| tracker.net_bytes());
         // Reported in every role, from the ring the primary handler published at
         // construction: the capacity is a property of this node's config, and
         // the window is what PSYNC would actually grant a `+CONTINUE` over
@@ -163,6 +171,7 @@ impl ConnectionHandler {
             replication_id,
             primary,
             sync,
+            net_bytes,
             backlog,
             repl_offset,
             master_host: shards.master_host.clone(),

@@ -23,6 +23,7 @@ use tokio::time::timeout;
 use crate::BoxedStream;
 use crate::apply::StreamedFrame;
 use crate::identity::ReplicationIdentity;
+use crate::net_bytes::NetByteCounters;
 use crate::state::ReplicationState;
 
 use connection::SyncType;
@@ -203,6 +204,14 @@ pub struct ReplicaReplicationHandler {
     /// reason `link_up` is: the connection is the only thing that learns the
     /// fact, and the readers (the loop, INFO) outlive it.
     sync_refusal: Arc<RwLock<Option<String>>>,
+    /// Lifetime replication-input tally (hardening issue 29). Defaults to a
+    /// private, unpublished counter so a handler with nothing wired still
+    /// works (tests, and any construction path that never calls
+    /// [`Self::set_net_bytes_counters`]); overwritten with the tracker's
+    /// shared handle at boot (`replication_init.rs`) so `INFO` sees the same
+    /// bytes this handler's connections actually received. Cloned into each
+    /// [`ReplicaConnection`] built in [`Self::connect_and_sync`].
+    net_bytes: Arc<NetByteCounters>,
 }
 
 /// Default spontaneous-ACK cadence when config supplies nothing (1s, matching
@@ -254,6 +263,7 @@ impl ReplicaReplicationHandler {
             ack_interval: DEFAULT_ACK_INTERVAL,
             snapshot_installer: None,
             sync_refusal: Arc::new(RwLock::new(None)),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
         (handler, frame_rx)
     }
@@ -334,6 +344,17 @@ impl ReplicaReplicationHandler {
     /// otherwise a full resync only stages for the next boot.
     pub fn set_snapshot_installer(&mut self, installer: SnapshotInstaller) {
         self.snapshot_installer = Some(installer);
+    }
+
+    /// Wire the shared net-byte counters (hardening issue 29), replacing the
+    /// private default with the tracker's handle
+    /// ([`crate::tracker::ReplicationTrackerImpl::net_bytes_handle`]) so this
+    /// handler's connections tally into the same counters `INFO` reads. Must
+    /// be called by every construction site that wants real input bytes
+    /// reported (boot-configured replica and runtime `REPLICAOF` demotion
+    /// alike); otherwise the handler counts into a counter nothing reads.
+    pub fn set_net_bytes_counters(&mut self, counters: Arc<NetByteCounters>) {
+        self.net_bytes = counters;
     }
 
     /// Wire the cluster-bus HealthProbe atomic. The handler adopts `offset` as
@@ -478,6 +499,7 @@ impl ReplicaReplicationHandler {
             snapshot_installer: self.snapshot_installer.clone(),
             sync_refusal: self.sync_refusal.clone(),
             pending_stream_bytes: bytes::BytesMut::new(),
+            net_bytes: self.net_bytes.clone(),
         };
         // Whatever ends this attempt — clean close, a handshake/sync error, or
         // the caller dropping the stream — the link is no longer up. `conn`

@@ -1,8 +1,11 @@
+use crate::frame::ReplicationFrame;
 use crate::identity::ReplicationIdentity;
+use crate::net_bytes::NetByteCounters;
 use crate::replica::connection::ConnectionState;
 use crate::replica::offset::ReplicaOffset;
 use crate::replica::{ConnectFactory, ReplicaReplicationHandler};
 use crate::state::ReplicationState;
+use bytes::Bytes;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -290,6 +293,79 @@ async fn link_up_reports_true_once_the_stream_is_running() {
         assert!(
             std::time::Instant::now() < deadline,
             "the link never came up over a primary that granted +CONTINUE"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    handler.stop();
+    let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+}
+
+// FM-REPLICATION-063
+/// `set_net_bytes_counters` is not a no-op that merely accepts an `Arc` and
+/// forgets it: the exact counters it is handed are the ones the handler's own
+/// connections write into. A mutant that replaces the whole method body with
+/// `()` leaves the setter looking like it does something while every
+/// connection this handler builds keeps counting into its private, unread
+/// default — this pins that the caller's own copy of the `Arc` observes the
+/// increment, which only holds if the setter actually stores it.
+#[tokio::test]
+async fn set_net_bytes_counters_wires_the_handlers_own_connections_to_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let parked: Arc<std::sync::Mutex<Vec<tokio::io::DuplexStream>>> = Arc::default();
+    let keep = parked.clone();
+    let frame = ReplicationFrame::new(0, Bytes::from_static(b"*1\r\n$4\r\nPING\r\n"));
+    let expected = frame.encoded_size() as u64;
+    let encoded = frame.encode().unwrap();
+    let factory: ConnectFactory = Arc::new(move |_addr| {
+        let keep = keep.clone();
+        let encoded = encoded.clone();
+        Box::pin(async move {
+            let (mut client, server) = tokio::io::duplex(64 * 1024);
+            // Three `+OK`s for the REPLCONFs, then `+CONTINUE`, then one frame
+            // — enough to reach Streaming and have `drain_frames` record real
+            // input bytes without a full-resync installer.
+            tokio::io::AsyncWriteExt::write_all(&mut client, b"+OK\r\n+OK\r\n+OK\r\n+CONTINUE\r\n")
+                .await
+                .unwrap();
+            tokio::io::AsyncWriteExt::write_all(&mut client, &encoded)
+                .await
+                .unwrap();
+            // Parked, not dropped: a closed primary half would end the stream
+            // immediately, racing the byte tally this test reads.
+            keep.lock().unwrap().push(client);
+            Ok(Box::new(server) as crate::BoxedStream)
+        })
+    });
+
+    let (mut handler, _rx) = ReplicaReplicationHandler::new(
+        "127.0.0.1:6379".parse().unwrap(),
+        6380,
+        ReplicationIdentity::detached(ReplicationState::new()),
+        tmp.path().join("state.json"),
+        tmp.path().join("db"),
+    );
+    handler.set_connect_factory(factory);
+
+    // The caller's own handle — never touched again except by reading it.
+    let net_bytes = Arc::new(NetByteCounters::default());
+    handler.set_net_bytes_counters(net_bytes.clone());
+
+    let handler = Arc::new(handler);
+    let running = handler.clone();
+    let task = tokio::spawn(async move { running.start().await });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let seen = net_bytes.snapshot().input;
+        if seen == expected {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "input bytes on the caller's own counters never reached {expected}; \
+             set_net_bytes_counters did not wire this handler's connections to it \
+             (last read {seen})"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

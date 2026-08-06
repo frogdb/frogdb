@@ -30,9 +30,9 @@ use frogdb_protocol::Response;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use frogdb_replication::{BacklogGeometry, SyncCountersSnapshot};
+use frogdb_replication::{BacklogGeometry, NetByteCountersSnapshot, SyncCountersSnapshot};
 
-use crate::info::{backlog_geometry_fields, sync_counter_fields};
+use crate::info::{backlog_geometry_fields, net_byte_fields, sync_counter_fields};
 use crate::latency_test;
 use frogdb_cluster::version_gate;
 
@@ -155,7 +155,11 @@ fn append_section(
             let sync = ctx
                 .replication_tracker
                 .map_or_else(Default::default, |tracker| tracker.sync_counters());
-            build_stats_info(sync)
+            // Same tracker, same instant, as `sync` above (hardening issue 29).
+            let net_bytes = ctx
+                .replication_tracker
+                .map_or_else(Default::default, |tracker| tracker.net_bytes());
+            build_stats_info(sync, net_bytes)
         }
         b"replication" => build_replication_info(ctx),
         b"cpu" => build_cpu_info(),
@@ -351,21 +355,30 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
 /// `sync` is passed in rather than read from a `CommandContext` so this
 /// renderer is a pure function of its inputs and can be compared line-for-line
 /// against the connection-level one in a unit test.
-pub(crate) fn build_stats_info(sync: SyncCountersSnapshot) -> String {
+pub(crate) fn build_stats_info(
+    sync: SyncCountersSnapshot,
+    net_bytes: NetByteCountersSnapshot,
+) -> String {
     let mut info = "# Stats\r\n\
      total_connections_received:1\r\n\
      total_commands_processed:0\r\n\
      instantaneous_ops_per_sec:0\r\n\
      total_net_input_bytes:0\r\n\
-     total_net_output_bytes:0\r\n\
-     total_net_repl_input_bytes:0\r\n\
-     total_net_repl_output_bytes:0\r\n\
-     instantaneous_input_kbps:0.00\r\n\
+     total_net_output_bytes:0\r\n"
+        .to_string();
+    // The real replication transfer-byte counters (hardening issue 29), from
+    // the one shared field list the connection-level renderer also reads —
+    // no longer the hardcoded-zero literals both used to emit.
+    for (name, value) in net_byte_fields(net_bytes) {
+        info.push_str(&format!("{name}:{value}\r\n"));
+    }
+    info.push_str(
+        "instantaneous_input_kbps:0.00\r\n\
      instantaneous_output_kbps:0.00\r\n\
      instantaneous_input_repl_kbps:0.00\r\n\
      instantaneous_output_repl_kbps:0.00\r\n\
-     rejected_connections:0\r\n"
-        .to_string();
+     rejected_connections:0\r\n",
+    );
     for (name, value) in sync_counter_fields(sync) {
         info.push_str(&format!("{name}:{value}\r\n"));
     }

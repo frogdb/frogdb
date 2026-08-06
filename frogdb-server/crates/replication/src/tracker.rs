@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
+use crate::net_bytes::{NetByteCounters, NetByteCountersSnapshot};
 use crate::primary::ring_buffer::{BacklogGeometry, ReplicationRingBuffer};
 use crate::replica_session::{
     Phase, ReplicaAnnouncement, ReplicaDeparture, ReplicaInfo, ReplicaSession, ack_age_secs,
@@ -87,6 +88,17 @@ pub struct ReplicationTrackerImpl {
     /// resynced are long gone.
     sync_counters: SyncCounters,
 
+    /// Lifetime tally of replication wire bytes — `INFO`'s
+    /// `total_net_repl_input_bytes` / `total_net_repl_output_bytes`
+    /// (hardening issue 29). Kept here for the same reason
+    /// [`Self::sync_counters`] is: the tracker is the one object both `INFO`
+    /// renderers reach, and it outlives the individual sessions and streams
+    /// whose bytes it tallies. Vended to callers on other structs (the primary
+    /// write task, the replica connection/handler) via
+    /// [`Self::net_bytes_handle`], the same shared-`Arc` shape
+    /// [`Self::publish_backlog`] uses.
+    net_bytes: Arc<NetByteCounters>,
+
     /// The replication backlog, published here by
     /// [`crate::primary::PrimaryReplicationHandler::new`] so `INFO
     /// replication` can read the live window in either role.
@@ -127,6 +139,7 @@ impl ReplicationTrackerImpl {
             ack_notify,
             lag_disconnect_times: RwLock::new(HashMap::new()),
             sync_counters: SyncCounters::default(),
+            net_bytes: Arc::new(NetByteCounters::default()),
             backlog: RwLock::new(None),
             last_streaming_departure: AtomicU8::new(ReplicaDeparture::NONE),
         }
@@ -418,6 +431,26 @@ impl ReplicationTrackerImpl {
         self.sync_counters.snapshot()
     }
 
+    /// Hand out the shared net-byte counters (hardening issue 29) so the
+    /// primary write task and the replica connection/handler can record
+    /// bytes as they actually cross the wire, without going back through the
+    /// tracker for every write.
+    ///
+    /// Fully `pub` (unlike [`Self::offset_handle`]'s `pub(crate)`) because the
+    /// server crate wires this cross-crate at boot
+    /// (`replication_init.rs`) and on runtime role change
+    /// (`role_manager.rs`/`cluster_init.rs`) — the same reason
+    /// [`Self::publish_backlog`] is fully `pub`.
+    pub fn net_bytes_handle(&self) -> Arc<NetByteCounters> {
+        self.net_bytes.clone()
+    }
+
+    /// Read `total_net_repl_input_bytes` / `total_net_repl_output_bytes` as
+    /// one consistent pair, for `INFO`.
+    pub fn net_bytes(&self) -> NetByteCountersSnapshot {
+        self.net_bytes.snapshot()
+    }
+
     /// Publish the replication backlog so `INFO replication` can report its
     /// real geometry.
     ///
@@ -451,6 +484,16 @@ impl ReplicationTrackerImpl {
     /// forget who is attached. Only the three lifetime tallies move.
     pub fn reset_sync_counters(&self) {
         self.sync_counters.reset();
+    }
+
+    /// Zero the two lifetime net-byte counters — `CONFIG RESETSTAT`
+    /// (hardening issue 29, FM-REPLICATION-063). A sibling of
+    /// [`Self::reset_sync_counters`] rather than folded into it: the two
+    /// tallies are independent statistics with independent call sites, and
+    /// keeping them separate means resetting one can never be mistaken for
+    /// resetting the other.
+    pub fn reset_net_bytes(&self) {
+        self.net_bytes.reset();
     }
 
     /// Record that a replica was proactively disconnected due to lag.
@@ -646,6 +689,50 @@ mod tests {
         tracker.reset_sync_counters();
 
         assert_eq!(tracker.sync_counters(), SyncCountersSnapshot::default());
+        assert_eq!(tracker.replica_count(), 1);
+        assert_eq!(tracker.current_offset(), 1000);
+        assert_eq!(tracker.replica_lag(session.id()), Some(200));
+    }
+
+    // FM-REPLICATION-063
+    /// The net-byte handle is a stable, shared `Arc`: whoever records bytes
+    /// through it (the primary write task, a replica connection) and whoever
+    /// reads it back through the tracker (`INFO`) see the same counters.
+    #[test]
+    fn net_bytes_handle_is_shared_with_the_tracker_snapshot() {
+        let tracker = ReplicationTrackerImpl::new();
+        let handle = tracker.net_bytes_handle();
+
+        handle.record_output(100);
+        handle.record_input(40);
+
+        assert_eq!(
+            tracker.net_bytes(),
+            NetByteCountersSnapshot {
+                output: 100,
+                input: 40
+            }
+        );
+    }
+
+    // FM-REPLICATION-063
+    /// `CONFIG RESETSTAT` reaches the net-byte counters through the tracker,
+    /// and stops there, mirroring
+    /// [`resetting_the_sync_counters_leaves_the_replica_registry_and_offset_alone`]:
+    /// the attached replicas and the stream offset survive.
+    #[test]
+    fn resetting_the_net_bytes_leaves_the_replica_registry_and_offset_alone() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.set_offset(1000);
+        tracker.record_ack(session.id(), 800);
+        tracker.net_bytes_handle().record_output(500);
+        assert_eq!(tracker.net_bytes().output, 500);
+
+        tracker.reset_net_bytes();
+
+        assert_eq!(tracker.net_bytes(), NetByteCountersSnapshot::default());
         assert_eq!(tracker.replica_count(), 1);
         assert_eq!(tracker.current_offset(), 1000);
         assert_eq!(tracker.replica_lag(session.id()), Some(200));

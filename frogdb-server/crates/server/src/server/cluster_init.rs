@@ -147,6 +147,14 @@ pub(super) async fn init_cluster(
     if let Some(control) = control_applier {
         real_streamer = real_streamer.with_control_applier(control);
     }
+    // Hardening issue 29: a runtime `REPLICAOF`/failover-driven demotion must
+    // report real input bytes through the same tracker the boot-time replica
+    // path wires (`init_replication`), not the handler's private, unread
+    // default. The primary handler is built unconditionally over that same
+    // tracker (see `init_replication`), so its handle is always the right one.
+    if let Some(handler) = primary_replication_handler {
+        real_streamer = real_streamer.with_net_bytes_counters(handler.tracker().net_bytes_handle());
+    }
     let streamer: Arc<dyn crate::role_manager::ReplicaStreamer> = Arc::new(real_streamer);
     let mut role_manager =
         crate::role_manager::RoleManager::new(is_replica_flag.clone(), streamer, boot_primary_addr);

@@ -29,7 +29,9 @@ use frogdb_core::{
     ClusterState, CommandLatencyHistograms, MetricsRecorder, ServerCommandStats, ShardSender,
 };
 use frogdb_protocol::Response;
-use frogdb_replication::{BacklogGeometry, Phase, ReplicaInfo, SyncCountersSnapshot};
+use frogdb_replication::{
+    BacklogGeometry, NetByteCountersSnapshot, Phase, ReplicaInfo, SyncCountersSnapshot,
+};
 use frogdb_telemetry::definitions::{CommandsTotal, WalBytes, WalWrites};
 use frogdb_telemetry::{NodeStateSnapshot, ShardScatterError};
 use tracing::warn;
@@ -375,6 +377,21 @@ pub fn sync_counter_fields(sync: SyncCountersSnapshot) -> [(&'static str, u64); 
     ]
 }
 
+/// The two `total_net_repl_*_bytes` fields of `INFO stats` (hardening issue
+/// 29), in Redis's order.
+///
+/// Shared by both INFO renderers for the same reason [`sync_counter_fields`]
+/// is: these two were hardcoded-zero literals in *both* of them, with nothing
+/// in the codebase counting a real byte — a fix landed in one renderer and
+/// forgotten in the other would silently reintroduce the fake-zero half of
+/// the bug.
+pub fn net_byte_fields(net_bytes: NetByteCountersSnapshot) -> [(&'static str, u64); 2] {
+    [
+        ("total_net_repl_input_bytes", net_bytes.input),
+        ("total_net_repl_output_bytes", net_bytes.output),
+    ]
+}
+
 /// The four `repl_backlog_*` fields of `INFO replication`, in Redis's order.
 ///
 /// Shared by both INFO renderers for the same reason [`sync_counter_fields`] is:
@@ -533,6 +550,12 @@ pub struct ReplicationSnapshot {
     /// one triple so the three fields cannot describe different instants.
     /// Reported in `INFO stats`, not `INFO replication`, as in Redis.
     pub sync: SyncCountersSnapshot,
+    /// Lifetime replication net-byte counters (hardening issue 29), read as
+    /// one pair off the tracker so `total_net_repl_input_bytes` and
+    /// `total_net_repl_output_bytes` describe the same instant. Reported in
+    /// `INFO stats`, not `INFO replication`, matching where `sync` above is
+    /// reported.
+    pub net_bytes: NetByteCountersSnapshot,
     /// The replication backlog's live shape — capacity, whether a resume window
     /// is open, and where it starts. Read off the tracker (which the backlog is
     /// published to at construction) in *both* roles: the configured capacity is

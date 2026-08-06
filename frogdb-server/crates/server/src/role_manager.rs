@@ -537,6 +537,13 @@ pub struct RealReplicaStreamer {
     /// primary's `FUNCTION LOAD` exactly like a boot-configured replica does,
     /// so this is threaded here rather than only into the boot path.
     control_applier: Option<Arc<dyn frogdb_replication::ControlApplier>>,
+    /// The node's shared net-byte counters (hardening issue 29), stamped onto
+    /// every runtime-demoted replica handler so a `REPLICAOF`/failover-driven
+    /// demotion reports real input bytes through the same tracker the
+    /// boot-time replica path wires (`init_replication`), not a private,
+    /// unread default. `None` only when no primary handler exists yet to vend
+    /// a tracker from (see `with_net_bytes_counters`'s call site).
+    net_bytes: Option<Arc<frogdb_replication::NetByteCounters>>,
     #[cfg(not(feature = "turmoil"))]
     tls: Option<ReplicaTlsConfig>,
 }
@@ -605,6 +612,7 @@ impl RealReplicaStreamer {
                 config.replication.replica_txn_max_bytes,
             )),
             control_applier: None,
+            net_bytes: None,
             #[cfg(not(feature = "turmoil"))]
             tls,
         }
@@ -619,6 +627,22 @@ impl RealReplicaStreamer {
         control_applier: Arc<dyn frogdb_replication::ControlApplier>,
     ) -> Self {
         self.control_applier = Some(control_applier);
+        self
+    }
+
+    /// Wire the node's shared net-byte counters (hardening issue 29) into
+    /// every runtime-demoted replica handler this streamer builds. Separate
+    /// from [`Self::new`] for the same reason as
+    /// [`Self::with_control_applier`]: the caller only has a tracker to vend
+    /// this from once the primary handler exists, and unit builds that never
+    /// construct one still work — `build_handler` leaves the handler on its
+    /// private, unpublished default counter in that case.
+    #[must_use]
+    pub fn with_net_bytes_counters(
+        mut self,
+        net_bytes: Arc<frogdb_replication::NetByteCounters>,
+    ) -> Self {
+        self.net_bytes = Some(net_bytes);
         self
     }
 }
@@ -648,6 +672,9 @@ impl RealReplicaStreamer {
         let mut handler = handler;
         handler.set_ack_interval(self.ack_interval_ms);
         handler.set_snapshot_installer(self.snapshot_installer.clone());
+        if let Some(net_bytes) = &self.net_bytes {
+            handler.set_net_bytes_counters(net_bytes.clone());
+        }
 
         // Publish this stream's applied offset into the cluster-bus HealthProbe
         // atomic, mirroring the boot-time replica path in `init_replication`, so
@@ -1216,6 +1243,7 @@ mod tests {
             .into_installer(),
             txn_bound: Arc::new(frogdb_replication::ReplicaTxnBound::default()),
             control_applier: None,
+            net_bytes: None,
             #[cfg(not(feature = "turmoil"))]
             tls: None,
         }

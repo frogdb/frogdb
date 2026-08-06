@@ -11,8 +11,8 @@ use frogdb_cluster::version_gate;
 use frogdb_core::histogram::KeysizeType;
 
 use super::{
-    InfoSection, InfoSources, SectionWriter, backlog_geometry_fields, replica_link_fields,
-    sync_counter_fields,
+    InfoSection, InfoSources, SectionWriter, backlog_geometry_fields, net_byte_fields,
+    replica_link_fields, sync_counter_fields,
 };
 
 /// The standard section registry, in canonical order.
@@ -314,10 +314,16 @@ impl InfoSection for StatsSection {
             // which is omitted for the same reason).
             .field("instantaneous_ops_per_sec", 0)
             .field("total_net_input_bytes", 0)
-            .field("total_net_output_bytes", 0)
-            .field("total_net_repl_input_bytes", 0)
-            .field("total_net_repl_output_bytes", 0)
-            .field("instantaneous_input_kbps", "0.00")
+            .field("total_net_output_bytes", 0);
+        // The real replication transfer-byte counters (hardening issue 29),
+        // from the one shared field list, so this renderer and the
+        // shard-local one in `crate::commands::info` cannot report a
+        // different set — no longer the hardcoded-zero literals both used to
+        // emit.
+        for (name, value) in net_byte_fields(src.replication().net_bytes) {
+            w.field(name, value);
+        }
+        w.field("instantaneous_input_kbps", "0.00")
             .field("instantaneous_output_kbps", "0.00")
             .field("instantaneous_input_repl_kbps", "0.00")
             .field("instantaneous_output_repl_kbps", "0.00")
@@ -1294,7 +1300,7 @@ mod tests {
         src.replication.sync = sync;
 
         let connection_level = render(&StatsSection, &src);
-        let shard_local = crate::commands::info::build_stats_info(sync);
+        let shard_local = crate::commands::info::build_stats_info(sync, src.replication.net_bytes);
 
         let sync_lines = |section: &str| -> Vec<String> {
             section
@@ -1359,7 +1365,99 @@ mod tests {
             "{connection_level}"
         );
         assert_eq!(
-            sync_lines(&crate::commands::info::build_stats_info(sync)),
+            sync_lines(&crate::commands::info::build_stats_info(
+                sync,
+                src.replication.net_bytes
+            )),
+            expected
+        );
+    }
+
+    // FM-REPLICATION-063
+    /// The two INFO renderers report the same net-byte counters for the same
+    /// state (hardening issue 29): both used to hardcode `0` independently,
+    /// which is exactly the shape that lets one renderer "fix" a field the
+    /// other keeps faking.
+    #[test]
+    fn both_info_renderers_report_the_same_repl_byte_counters() {
+        use frogdb_replication::NetByteCountersSnapshot;
+
+        let net_bytes = NetByteCountersSnapshot {
+            input: 12_345,
+            output: 67_890,
+        };
+        let mut src = sources();
+        src.replication.net_bytes = net_bytes;
+
+        let connection_level = render(&StatsSection, &src);
+        let shard_local = crate::commands::info::build_stats_info(src.replication.sync, net_bytes);
+
+        let net_byte_lines = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| line.starts_with("total_net_repl_"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        assert_eq!(
+            net_byte_lines(&connection_level),
+            vec![
+                "total_net_repl_input_bytes:12345".to_string(),
+                "total_net_repl_output_bytes:67890".to_string(),
+            ],
+            "{connection_level}"
+        );
+        assert_eq!(
+            net_byte_lines(&connection_level),
+            net_byte_lines(&shard_local),
+            "the two INFO renderers must agree for the same state"
+        );
+    }
+
+    // FM-REPLICATION-063
+    /// After `CONFIG RESETSTAT` both renderers report zero net-repl-bytes,
+    /// read through the tracker the way the live server does (hardening
+    /// issue 29), mirroring
+    /// `both_info_renderers_report_zeros_after_the_counters_are_reset` for
+    /// `sync_*` above. The end-to-end RESETSTAT dispatch itself is covered by
+    /// `config_resetstat_zeroes_the_repl_byte_counters` in `conn_command.rs`.
+    #[test]
+    fn both_info_renderers_report_zeros_after_the_repl_byte_counters_are_reset() {
+        use frogdb_core::ReplicationTrackerImpl;
+
+        let tracker = ReplicationTrackerImpl::new();
+        tracker.net_bytes_handle().record_output(500);
+        tracker.net_bytes_handle().record_input(200);
+        tracker.reset_net_bytes();
+
+        let net_bytes = tracker.net_bytes();
+        let mut src = sources();
+        src.replication.net_bytes = net_bytes;
+
+        let expected = vec![
+            "total_net_repl_input_bytes:0".to_string(),
+            "total_net_repl_output_bytes:0".to_string(),
+        ];
+        let net_byte_lines = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| line.starts_with("total_net_repl_"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let connection_level = render(&StatsSection, &src);
+        assert_eq!(
+            net_byte_lines(&connection_level),
+            expected,
+            "{connection_level}"
+        );
+        assert_eq!(
+            net_byte_lines(&crate::commands::info::build_stats_info(
+                src.replication.sync,
+                net_bytes
+            )),
             expected
         );
     }

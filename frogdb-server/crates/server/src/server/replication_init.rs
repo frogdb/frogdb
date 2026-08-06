@@ -220,6 +220,10 @@ pub(super) fn init_replication(
             config.persistence.data_dir.clone(),
         );
         handler.set_ack_interval(config.replication.ack_interval_ms);
+        // Hardening issue 29: wire this handler's connections into the shared
+        // tracker counters so `INFO stats` reports real input bytes instead
+        // of the private, unread default `ReplicaReplicationHandler::new` set up.
+        handler.set_net_bytes_counters(tracker.net_bytes_handle());
         // Issue 61: a received full resync must land in the live keyspace, not
         // just on disk for the next boot.
         handler.set_snapshot_installer(crate::replication::LiveSnapshotInstaller::for_config(

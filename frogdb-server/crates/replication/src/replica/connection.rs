@@ -5,6 +5,7 @@ use crate::fullsync::{
     CHECKPOINT_MARKER, CheckpointChecksum, CheckpointStager, CheckpointStreamCodec,
     SNAPSHOT_MARKER, calculate_bytes_checksum, receive_checkpoint_files,
 };
+use crate::net_bytes::NetByteCounters;
 use crate::state::ReplicationState;
 use bytes::{Bytes, BytesMut};
 use std::io;
@@ -142,6 +143,13 @@ pub struct ReplicaConnection {
     /// [`Self::take_pending_stream_bytes`] seeds the streaming decoder with
     /// them. Empty on every other path.
     pub(crate) pending_stream_bytes: BytesMut,
+    /// Lifetime replication-input tally, shared with the owning
+    /// [`super::ReplicaReplicationHandler`] and (through it) the tracker, so
+    /// `INFO` reports the same bytes this connection actually received
+    /// (hardening issue 29). Recorded by [`Self::receive_snapshot`] /
+    /// [`Self::receive_checkpoint`] for the full-sync payload lane and by
+    /// `stream_replication`/`drain_frames` for the frame lane.
+    pub(crate) net_bytes: Arc<NetByteCounters>,
 }
 
 impl ReplicaConnection {
@@ -390,6 +398,11 @@ impl ReplicaConnection {
             ));
         }
 
+        // The full-sync payload lane (hardening issue 29): `rdb_size` is the
+        // real, checksum-verified size just confirmed above, not a value
+        // derived from anything the payload might have been.
+        self.net_bytes.record_input(metadata.rdb_size);
+
         self.install_payload(FullSyncPayload::LiveDataset(blobs))
             .await?;
 
@@ -455,6 +468,11 @@ impl ReplicaConnection {
         };
 
         let outcome = stager.commit(incoming, computed, &metadata).await?;
+
+        // The full-sync payload lane (hardening issue 29): `commit` verifies
+        // the checksum before returning, so `rdb_size` is confirmed real —
+        // see the matching comment in `receive_snapshot`.
+        self.net_bytes.record_input(metadata.rdb_size);
 
         self.install_payload(FullSyncPayload::StagedCheckpoint(stager.staged_dir()))
             .await?;
@@ -614,6 +632,7 @@ mod tests {
             snapshot_installer: None,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
 
         let mut client = client;
@@ -670,6 +689,7 @@ mod tests {
             snapshot_installer: None,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
         let verdict = conn.psync().await;
         (verdict, offsets)
@@ -791,6 +811,7 @@ mod tests {
             snapshot_installer: None,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
 
         // One `+OK` per REPLCONF the handshake sends; scripted up front so it
@@ -922,6 +943,7 @@ mod tests {
             snapshot_installer: installer,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
 
         // Feed the whole checkpoint body (plus any live tail) in one write, then
@@ -1141,6 +1163,7 @@ mod tests {
             snapshot_installer: installer,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
 
         client.write_all(&body).await.unwrap();
@@ -1300,6 +1323,7 @@ mod tests {
             snapshot_installer: None,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
 
         let task = tokio::spawn(async move {
@@ -1443,6 +1467,7 @@ mod tests {
                 snapshot_installer: None,
                 sync_refusal: Arc::new(RwLock::new(None)),
                 pending_stream_bytes: BytesMut::new(),
+                net_bytes: Arc::new(NetByteCounters::default()),
             };
 
             // Script the whole reply up front, then close the write half so
@@ -1529,6 +1554,7 @@ mod tests {
             snapshot_installer: None,
             sync_refusal: Arc::new(RwLock::new(None)),
             pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
         };
         client.write_all(truncated).await.unwrap();
         client.shutdown().await.unwrap();

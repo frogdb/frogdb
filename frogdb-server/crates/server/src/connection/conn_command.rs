@@ -336,7 +336,10 @@ async fn config_set(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// `INFO`-facing latency histograms, rebases the operator-visible keyspace
 /// hit/miss counters (Prometheus `_total` counters stay monotonic), and zeroes
 /// the three PSYNC-outcome counters `INFO stats` renders as
-/// `sync_full`/`sync_partial_ok`/`sync_partial_err` (FM-REPLICATION-058).
+/// `sync_full`/`sync_partial_ok`/`sync_partial_err` (FM-REPLICATION-058) and
+/// the two net-byte counters it renders as
+/// `total_net_repl_input_bytes`/`total_net_repl_output_bytes` (hardening
+/// issue 29).
 async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
     // Await-and-discard: the replies are only a barrier confirming every shard
     // reset its stats. Bounded by the shared deadline (was unbounded).
@@ -352,6 +355,7 @@ async fn config_resetstat(ctx: &ConnCtx<'_>) -> Response {
     // from (FM-REPLICATION-050).
     if let Some(tracker) = ctx.replication_tracker {
         tracker.reset_sync_counters();
+        tracker.reset_net_bytes();
     }
     Response::ok()
 }
@@ -619,6 +623,31 @@ mod tests {
 
         assert_eq!(resp, Response::ok());
         assert_eq!(tracker.sync_counters(), SyncCountersSnapshot::default());
+    }
+
+    // FM-REPLICATION-063
+    /// The two `INFO stats` net-byte counters are server statistics like the
+    /// PSYNC ones above (hardening issue 29): RESETSTAT has to zero them too,
+    /// or an operator resetting stats after a resync storm keeps reading the
+    /// storm's transfer totals as if they were new.
+    #[tokio::test]
+    async fn config_resetstat_zeroes_the_repl_byte_counters() {
+        use frogdb_replication::NetByteCountersSnapshot;
+
+        let tracker = std::sync::Arc::new(frogdb_core::ReplicationTrackerImpl::new());
+        tracker.net_bytes_handle().record_output(500);
+        tracker.net_bytes_handle().record_input(200);
+        assert_ne!(tracker.net_bytes(), NetByteCountersSnapshot::default());
+
+        let mut fx = Fixture::new();
+        fx.cluster.replication_tracker = Some(tracker.clone());
+
+        let resp = ConfigConnCommand
+            .execute(&mut fx.ctx(), &[arg("RESETSTAT")])
+            .await;
+
+        assert_eq!(resp, Response::ok());
+        assert_eq!(tracker.net_bytes(), NetByteCountersSnapshot::default());
     }
 
     // FM-REPLICATION-058
