@@ -343,7 +343,11 @@ impl ReplicationTrackerImpl {
 
     /// Minimum acknowledged offset across streaming replicas.
     ///
-    /// Derived from the [`Self::get_streaming_replicas`] projection.
+    /// Derived from the [`Self::get_streaming_replicas`] projection, off the
+    /// wire ACK only — a replica that has resumed but not acked pins this at
+    /// `0`, which is the conservative direction for its one consumer (the
+    /// split-brain divergence record's lower bound: writes nobody has confirmed
+    /// holding).
     pub fn min_acked_offset(&self) -> Option<u64> {
         self.get_streaming_replicas()
             .iter()
@@ -354,7 +358,10 @@ impl ReplicationTrackerImpl {
     /// Count streaming replicas that have ACKed at least `offset`.
     ///
     /// Derived from the [`Self::get_streaming_replicas`] projection — the same
-    /// replicas ROLE lists are the ones WAIT counts.
+    /// replicas ROLE lists are the ones WAIT counts. `acked_offset` is the wire
+    /// ACK only, so a replica that has entered streaming but not yet answered
+    /// counts for nothing here regardless of how far the primary has streamed
+    /// to it (FM-REPLICATION-037/039).
     pub fn count_acked(&self, offset: u64) -> u32 {
         self.get_streaming_replicas()
             .iter()
@@ -362,13 +369,20 @@ impl ReplicationTrackerImpl {
             .count() as u32
     }
 
-    /// Lag in bytes for a specific replica (current_offset - acked_offset).
+    /// Lag in bytes for a specific replica: `current_offset - stream_position`.
+    ///
+    /// The one measure that reads the resume seed as well as the wire ACK (see
+    /// [`ReplicaSession::stream_position`]) — a replica handed the stream at the
+    /// live head is not behind, and measuring from its ACKs alone would send
+    /// every full-resync replica straight back into a lag disconnect. The
+    /// `saturating_sub` matters because a seed is taken from an offset read a
+    /// moment earlier and can briefly meet or exceed a re-read `current_offset`.
     pub fn replica_lag(&self, replica_id: u64) -> Option<u64> {
         let current = self.current_offset();
         self.replicas
             .read()
             .get(&replica_id)
-            .map(|s| current.saturating_sub(s.acked_offset()))
+            .map(|s| current.saturating_sub(s.stream_position()))
     }
 
     /// Subscribe to ACK notifications. Yields `(replica_id, offset)` for any
@@ -448,30 +462,32 @@ impl ReplicationTrackerImpl {
         }
     }
 
-    /// Seed a replica's initial acked position when its session enters the
-    /// streaming phase — the offset it resumed from (its PSYNC offset for a
-    /// partial resync, or the checkpoint's `snapshot_offset` for a full resync).
+    /// Record where a replica resumed the stream when its session enters the
+    /// streaming phase — its PSYNC offset for a partial resync, or the
+    /// checkpoint's `snapshot_offset` for a full one.
     ///
     /// This is the primary recording where the replica *started*, not the
-    /// replica acknowledging an offset — the distinction from
-    /// [`ReplicationTracker::record_ack`] is the source of the value (primary
-    /// bookkeeping vs. a wire ACK), not the effect. It shares the session's
-    /// monotonic `acked_offset` atomic (so no second source of truth is
-    /// introduced) and, like `record_ack`, notifies WAIT waiters when the seed
-    /// actually advances that offset: a replica that reconnects via partial
-    /// resync already at/past a blocked WAIT's target must wake it immediately
-    /// rather than park for up to a spontaneous-ACK cadence. A stale/duplicate
-    /// seed (offset <= current) does not advance the offset and does not notify.
-    pub fn seed_acked_position(&self, replica_id: u64, offset: u64) {
+    /// replica acknowledging an offset, and the two are kept in separate fields
+    /// because they answer different questions: [`ReplicationTracker::record_ack`]
+    /// feeds the durability projections ([`Self::count_acked`],
+    /// [`Self::min_acked_offset`], `INFO`'s `slaveN:offset=`), while a resume
+    /// feeds only the lag measures — the byte lag through
+    /// [`ReplicaSession::stream_position`] and the lag clock through the
+    /// `last_ack_time` reset the session does on the way past.
+    ///
+    /// It notifies no WAIT waiter, because it cannot change a count: a waiter
+    /// woken by a resume would re-read the same number and park again. A replica
+    /// that reattaches during a `WAIT` satisfies it on its first real ACK, one
+    /// spontaneous-ACK cadence away at worst (FM-REPLICATION-038).
+    pub fn seed_resume_position(&self, replica_id: u64, offset: u64) {
         let Some(session) = self.replicas.read().get(&replica_id).cloned() else {
             return;
         };
-        if session.seed_acked_position(offset) {
-            let _ = self.ack_notify.send((replica_id, offset));
+        if session.seed_resume_position(offset) {
             tracing::trace!(
                 replica_id = replica_id,
                 offset = offset,
-                "Seeded replica acked position (advance; notified WAIT waiters)"
+                "Recorded replica resume position"
             );
         }
     }
@@ -649,39 +665,92 @@ mod tests {
     }
 
     // FM-REPLICATION-039
-    /// Seeding regression (round-7 follow-up to proposal 57): seeding the
-    /// resume position advances the acked offset (so WAIT quorum counting and
-    /// the lag monitor start from where the replica resumed) AND notifies WAIT
-    /// waiters exactly like a genuine ACK, but only when the seed actually
-    /// advances the offset — a stale/duplicate seed stays silent.
+    /// Issue 28: a replica that has been handed the stream but has not answered
+    /// on the wire is credited with nothing. The seed is where the *primary*
+    /// resumed sending; `WAIT` asks what the replica applied, and the two are
+    /// separate fields precisely so that the first cannot answer the second.
     #[test]
-    fn seed_acked_position_notifies_wait_waiters_on_advance() {
+    fn wait_does_not_count_a_seeded_position_that_was_never_acked() {
         let tracker = ReplicationTrackerImpl::new();
         let session = tracker.register_replica(test_addr());
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
 
-        // Seed: position advances, notification fires.
-        tracker.seed_acked_position(session.id(), 100);
-        assert_eq!(session.acked_offset(), 100);
-        assert_eq!(tracker.count_acked(100), 1);
+        tracker.seed_resume_position(session.id(), 100);
         assert_eq!(
-            acks.try_recv().unwrap(),
-            (session.id(), 100),
-            "an advancing seed must notify WAIT waiters"
+            session.acked_offset(),
+            0,
+            "a resume seed is not an acknowledgement"
         );
-
-        // A stale seed never regresses the monotonic offset, and does not notify.
-        tracker.seed_acked_position(session.id(), 50);
-        assert_eq!(session.acked_offset(), 100);
+        assert_eq!(
+            tracker.count_acked(100),
+            0,
+            "WAIT must not count a replica that has acked nothing"
+        );
         assert!(
             acks.try_recv().is_err(),
-            "a stale/duplicate seed must not notify WAIT waiters"
+            "a seed changes no count, so it must wake no waiter"
         );
 
-        // Genuine ACK at a higher offset still notifies as before.
-        tracker.record_ack(session.id(), 200);
-        assert_eq!(acks.try_recv().unwrap(), (session.id(), 200));
+        // The replica finally answers, and only then does it count.
+        tracker.record_ack(session.id(), 100);
+        assert_eq!(tracker.count_acked(100), 1);
+        assert_eq!(acks.try_recv().unwrap(), (session.id(), 100));
+    }
+
+    // FM-REPLICATION-039
+    /// The split-brain divergence record's lower bound is "what a replica has
+    /// confirmed holding", so a seeded-but-unacked replica pins it at 0 rather
+    /// than vouching for the primary's own send position.
+    #[test]
+    fn min_acked_offset_ignores_a_resume_seed() {
+        let tracker = ReplicationTrackerImpl::new();
+        let s1 = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
+        let s2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
+        s1.force_phase_for_test(Phase::Streaming);
+        s2.force_phase_for_test(Phase::Streaming);
+
+        tracker.record_ack(s1.id(), 300);
+        tracker.seed_resume_position(s2.id(), 900);
+        assert_eq!(
+            tracker.min_acked_offset(),
+            Some(0),
+            "the seeded replica has acked nothing, so the floor is 0"
+        );
+
+        tracker.record_ack(s2.id(), 900);
+        assert_eq!(tracker.min_acked_offset(), Some(300));
+    }
+
+    // FM-REPLICATION-043
+    /// Byte lag is the one measure that reads the resume seed: a replica handed
+    /// the stream at the live head is not behind, and measuring it from its
+    /// (still absent) ACKs would report the whole history as lag and hand it
+    /// straight to `LagPolicy` for a disconnect it would repeat forever.
+    #[test]
+    fn replica_lag_measures_from_the_resume_seed_before_the_first_ack() {
+        let tracker = ReplicationTrackerImpl::new();
+        let session = tracker.register_replica(test_addr());
+        session.force_phase_for_test(Phase::Streaming);
+        tracker.set_offset(1000);
+
+        assert_eq!(
+            tracker.replica_lag(session.id()),
+            Some(1000),
+            "a replica that has neither resumed nor acked is behind by everything"
+        );
+
+        tracker.seed_resume_position(session.id(), 1000);
+        assert_eq!(
+            tracker.replica_lag(session.id()),
+            Some(0),
+            "resuming at the live head is not lag, even with no ACK yet"
+        );
+
+        tracker.set_offset(1500);
+        assert_eq!(tracker.replica_lag(session.id()), Some(500));
+        tracker.record_ack(session.id(), 1500);
+        assert_eq!(tracker.replica_lag(session.id()), Some(0));
     }
 
     // FM-REPLICATION-039
@@ -732,12 +801,14 @@ mod tests {
     }
 
     // FM-REPLICATION-039
-    /// Reconnect-during-WAIT regression (round-7 follow-up to proposal 57): a
-    /// replica that resumes via partial resync at/past a blocked WAIT's target
-    /// must wake the waiter immediately via `seed_acked_position`, not leave it
-    /// parked until the next spontaneous ACK (up to ~1s in production).
+    /// Issue 28 from the blocked side: a replica that resumes at/past a parked
+    /// `WAIT`'s target does **not** release it. The seed proves only that the
+    /// primary started sending there; releasing on it answers the client's
+    /// durability question with the sender's optimism. The wait stays parked
+    /// until the replica acks — at worst one spontaneous-ACK cadence away — and
+    /// times out here because no ACK ever comes.
     #[tokio::test]
-    async fn seed_acked_position_wakes_blocked_wait_for_acks() {
+    async fn a_resume_seed_does_not_wake_a_blocked_wait() {
         let tracker = Arc::new(ReplicationTrackerImpl::new());
         let session = tracker.register_replica(test_addr());
         session.force_phase_for_test(Phase::Streaming);
@@ -752,13 +823,24 @@ mod tests {
         });
         // Give the waiter time to park before seeding.
         tokio::time::sleep(Duration::from_millis(10)).await;
-        tracker.seed_acked_position(id, 100);
-        let result = wait_handle.await.unwrap();
+        tracker.seed_resume_position(id, 100);
         assert!(
-            result.is_ok(),
-            "seeding an advance must wake the blocked WAIT well within the timeout"
+            wait_handle.await.unwrap().is_err(),
+            "a seeded resume must leave the WAIT parked to its deadline"
         );
-        assert_eq!(result.unwrap(), 1);
+
+        // The genuine ACK does release it.
+        let tracker_clone = tracker.clone();
+        let wait_handle = tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_millis(500),
+                tracker_clone.wait_for_acks(100, 1),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        tracker.record_ack(id, 100);
+        assert_eq!(wait_handle.await.unwrap().unwrap(), 1);
     }
 
     // FM-REPLICATION-042

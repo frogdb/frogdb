@@ -1486,12 +1486,15 @@ mod tests {
 
     /// Register a streaming replica and pin its acked offset at `acked`, so it
     /// contributes to `min_acked` (the divergence lower bound).
+    ///
+    /// It has to be a *wire* ACK: `min_acked` reads only what a replica
+    /// acknowledged, never where the primary seeded it (FM-REPLICATION-039).
     fn streaming_replica_acked_at(handler: &PrimaryReplicationHandler, addr: &str, acked: u64) {
         let session = handler.tracker().register_replica(addr.parse().unwrap());
         session.force_phase_for_test(Phase::Streaming);
         assert!(
-            session.seed_acked_position(acked),
-            "seed must advance the replica's acked offset"
+            session.record_ack(acked),
+            "ACK must advance the replica's acked offset"
         );
     }
 
