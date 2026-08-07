@@ -11,7 +11,7 @@ use crate::command::QuorumChecker;
 use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::keyspace_event::KeyspaceEventFlags;
-use crate::persistence::{RocksStore, SnapshotCoordinator, WalConfig};
+use crate::persistence::{RecoveryStats, RocksStore, SnapshotCoordinator, WalConfig};
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
 use crate::replication::SharedBroadcaster;
@@ -311,6 +311,15 @@ impl ShardWorker {
         self.json_limits = limits;
     }
 
+    /// Share this node's boot-time recovery outcome with the worker.
+    ///
+    /// Recovery runs once, node-wide, before any shard worker exists, so this
+    /// is set once at spawn time (mirroring `set_keyspace_stats` above) rather
+    /// than re-read live like the snapshot coordinator's stats below.
+    pub fn set_recovery_stats(&mut self, stats: Arc<RecoveryStats>) {
+        self.persistence.set_recovery_stats(stats);
+    }
+
     /// Build a fully-populated [`CommandContext`](crate::command::CommandContext)
     /// for executing a command against this shard's local store.
     ///
@@ -341,6 +350,7 @@ impl ShardWorker {
         let snapshot_coordinator = self.persistence.snapshot_coordinator();
         let snapshot_stats = snapshot_coordinator.stats();
         let bgsave_in_progress = snapshot_coordinator.in_progress();
+        let recovery_stats = Arc::clone(self.persistence.recovery_stats());
 
         crate::command::CommandContext {
             store: &mut self.store,
@@ -366,6 +376,7 @@ impl ShardWorker {
             json_limits: self.json_limits,
             snapshot_stats,
             bgsave_in_progress,
+            recovery_stats,
             effects: Default::default(),
         }
     }

@@ -3090,6 +3090,104 @@ async fn script_info_persistence_reports_the_real_bgsave_outcome() {
     server.shutdown().await;
 }
 
+// FM-PERSISTENCE-033
+/// The forcing test for issue 42: a script's `redis.call('INFO')` renders
+/// `rdb_last_load_keys_expired`/`_loaded`/`_failed` from `commands/info.rs`, a
+/// different path than the connection-level `INFO` (`crate::info`) — and used
+/// to report static zeros (and was missing `rdb_last_load_keys_failed`
+/// entirely) no matter what this boot's real recovery outcome was. Seeds a
+/// data directory directly with one already-expired key and one undecodable
+/// key, so a real boot's recovery counts one of each, then asserts both INFO
+/// surfaces agree on all three counters.
+#[tokio::test]
+async fn script_info_persistence_reports_the_real_load_stats() {
+    let data_dir = tempfile::tempdir().unwrap();
+
+    // Pre-seed the data directory directly, standing in for a previous boot
+    // that left one expired key and one undecodable key on disk.
+    {
+        let rocks = frogdb_core::persistence::RocksStore::open(
+            data_dir.path(),
+            1,
+            &frogdb_core::persistence::RocksConfig::default(),
+        )
+        .unwrap();
+        let value = frogdb_core::Value::string("gone".to_string());
+        let mut metadata = frogdb_core::KeyMetadata::new(value.memory_size());
+        metadata.expires_at = Some(std::time::Instant::now() + Duration::from_millis(1));
+        rocks
+            .put(0, b"expiring", &frogdb_core::serialize(&value, &metadata))
+            .unwrap();
+        rocks
+            .put(0, b"undecodable", b"not a serialized value")
+            .unwrap();
+        rocks.flush().unwrap();
+
+        // This directory is standing in for a restart, so it carries that
+        // prior boot's identity marker. Without one, startup recovery refuses
+        // a data directory that holds files it did not write.
+        frogdb_core::persistence::DataDirMarker::mint()
+            .stamp(data_dir.path())
+            .unwrap();
+    }
+    // Let the expiry deadline set above actually elapse before boot.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let server =
+        TestServer::start_standalone_with_config(persistence_config(data_dir.path())).await;
+    let mut client = server.connect().await;
+
+    let read_info = |resp: &Response| String::from_utf8(unwrap_bulk(resp).to_vec()).unwrap();
+    let scripted_info = |resp: &Response| String::from_utf8(unwrap_bulk(resp).to_vec()).unwrap();
+
+    let conn_info = read_info(&client.command(&["INFO", "persistence"]).await);
+    let script_info = scripted_info(
+        &client
+            .command(&["EVAL", "return redis.call('INFO', 'persistence')", "0"])
+            .await,
+    );
+
+    for (info, surface) in [(&conn_info, "connection"), (&script_info, "script")] {
+        assert_eq!(
+            info_field_u64(info, "rdb_last_load_keys_expired"),
+            1,
+            "the {surface} surface must report the real expired-key count, not a static 0:\n{info}"
+        );
+        assert_eq!(
+            info_field_u64(info, "rdb_last_load_keys_loaded"),
+            0,
+            "{surface} surface:\n{info}"
+        );
+        assert_eq!(
+            info_field_u64(info, "rdb_last_load_keys_failed"),
+            1,
+            "the {surface} surface must report the real decode-failure count, not a static 0 \
+             (and the script surface must not be missing the field entirely):\n{info}"
+        );
+    }
+
+    // The forcing assertion: both surfaces must agree, not merely each be
+    // internally plausible.
+    assert_eq!(
+        info_field_u64(&conn_info, "rdb_last_load_keys_expired"),
+        info_field_u64(&script_info, "rdb_last_load_keys_expired"),
+        "connection and script surfaces disagree:\nconn:\n{conn_info}\nscript:\n{script_info}"
+    );
+    assert_eq!(
+        info_field_u64(&conn_info, "rdb_last_load_keys_loaded"),
+        info_field_u64(&script_info, "rdb_last_load_keys_loaded"),
+        "connection and script surfaces disagree:\nconn:\n{conn_info}\nscript:\n{script_info}"
+    );
+    assert_eq!(
+        info_field_u64(&conn_info, "rdb_last_load_keys_failed"),
+        info_field_u64(&script_info, "rdb_last_load_keys_failed"),
+        "connection and script surfaces disagree:\nconn:\n{conn_info}\nscript:\n{script_info}"
+    );
+
+    drop(client);
+    server.shutdown().await;
+}
+
 // FM-PERSISTENCE-042
 /// `LASTSAVE` and `rdb_last_save_time` must report the *snapshot's own*
 /// completion time across a restart. The artifact's recorded completion time is

@@ -1,6 +1,6 @@
 //! Shard worker creation and spawning loop.
 
-use frogdb_core::persistence::{RocksStore, SnapshotCoordinator, WalConfig};
+use frogdb_core::persistence::{RecoveryStats, RocksStore, SnapshotCoordinator, WalConfig};
 use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
     ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, CommandRegistry,
@@ -31,6 +31,10 @@ pub(super) struct ShardSpawnContext {
     pub snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
     pub metrics_recorder: Arc<dyn MetricsRecorder>,
     pub keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
+    /// This node's boot-time recovery outcome, shared read-only with every
+    /// shard worker so `redis.call('INFO', 'persistence')` reports real
+    /// `rdb_last_load_keys_*` counts instead of static zeros (issue 42).
+    pub recovery_stats: Arc<RecoveryStats>,
     pub slowlog_next_id: Arc<AtomicU64>,
     pub function_registry: frogdb_core::SharedFunctionRegistry,
     pub replication_broadcaster: SharedBroadcaster,
@@ -155,6 +159,9 @@ pub(super) fn spawn_shard_workers(
 
         // Share the process-wide keyspace hit/miss accumulator
         worker.set_keyspace_stats(ctx.keyspace_stats.clone());
+
+        // Share this node's boot-time recovery outcome (issue 42).
+        worker.set_recovery_stats(ctx.recovery_stats.clone());
 
         // Wire warm store for tiered storage
         if ctx.config.tiered_storage.enabled

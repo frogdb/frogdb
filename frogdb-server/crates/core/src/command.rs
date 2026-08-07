@@ -9,7 +9,7 @@ use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command_spec::{AccessSpec, CommandSpec, KeySpec};
 use crate::error::CommandError;
 use crate::keyspace_event::KeyspaceEventFlags;
-use crate::persistence::SnapshotStats;
+use crate::persistence::{RecoveryStats, SnapshotStats};
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
 use crate::shard::ShardSender;
@@ -1356,6 +1356,20 @@ pub struct CommandContext<'a> {
     /// contexts with no coordinator wired.
     pub bgsave_in_progress: bool,
 
+    /// This node's boot-time recovery outcome — `frogdb-recovery` aggregates
+    /// it node-wide, not per-shard, since recovery runs once before any shard
+    /// worker exists. Unlike `snapshot_stats` above, recovery is a one-time
+    /// event rather than evolving state, so this is an `Arc` snapshot copied
+    /// once at `ShardWorker` construction and cloned (refcount only) into
+    /// every context that worker builds, never re-read live. Without it a
+    /// shard's `redis.call('INFO')` had no per-shard recovery counters to
+    /// report and fell back to static zeros for `rdb_last_load_keys_expired`/
+    /// `loaded`/`failed`, unlike the connection-level renderer
+    /// (issue 42 / FM-PERSISTENCE-022). `Arc::new(RecoveryStats::default())`
+    /// (all-zero, "nothing recovered") in unit/test contexts with no
+    /// recovery outcome wired.
+    pub recovery_stats: Arc<RecoveryStats>,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1396,6 +1410,7 @@ impl<'a> CommandContext<'a> {
             json_limits: JsonLimits::default(),
             snapshot_stats: SnapshotStats::default(),
             bgsave_in_progress: false,
+            recovery_stats: Arc::new(RecoveryStats::default()),
             effects: CommandEffects::default(),
         }
     }

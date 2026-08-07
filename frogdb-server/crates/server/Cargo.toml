@@ -186,3 +186,9 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # already in the tree via rustls, so this adds no new native build.
 rcgen = { workspace = true, features = ["aws_lc_rs"] }
 sha1.workspace = true
+# Enable RocksStore's test-only single-key put accessor (re-exported through
+# frogdb_core::persistence) so integration tests can synthesize a data
+# directory's on-disk state directly, without a prior server boot. Dev-only,
+# kept out of the production build by resolver "2" — mirrors frogdb-core's,
+# frogdb-recovery's, and frogdb-replication's own dev-dependency.
+frogdb-persistence = { workspace = true, features = ["test-support"] }

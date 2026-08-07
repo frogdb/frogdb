@@ -385,6 +385,7 @@ impl Server {
             snapshot_coordinator: infra.snapshot_coordinator.clone(),
             metrics_recorder: infra.metrics_recorder.clone(),
             keyspace_stats: infra.keyspace_stats.clone(),
+            recovery_stats: Arc::new(infra.recovery_stats.clone()),
             slowlog_next_id: infra.slowlog_next_id,
             function_registry: infra.function_registry.clone(),
             replication_broadcaster: repl.replication_broadcaster,

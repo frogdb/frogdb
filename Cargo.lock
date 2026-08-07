@@ -1937,6 +1937,7 @@ dependencies = [
  "frogdb-debug",
  "frogdb-macros",
  "frogdb-net",
+ "frogdb-persistence",
  "frogdb-protocol",
  "frogdb-recovery",
  "frogdb-replication",

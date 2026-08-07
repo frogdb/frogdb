@@ -9,8 +9,8 @@ use crate::command::QuorumChecker;
 use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
-    NoopSnapshotCoordinator, RocksStore, RocksWalWriter, SnapshotCoordinator, WalConfig,
-    WalFailurePolicy, WalSink,
+    NoopSnapshotCoordinator, RecoveryStats, RocksStore, RocksWalWriter, SnapshotCoordinator,
+    WalConfig, WalFailurePolicy, WalSink,
 };
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -108,6 +108,7 @@ pub struct ShardWorkerBuilder {
     rocks_store: Option<Arc<RocksStore>>,
     wal_config: Option<WalConfig>,
     snapshot_coordinator: Option<Arc<dyn SnapshotCoordinator>>,
+    recovery_stats: Option<Arc<RecoveryStats>>,
     function_registry: Option<SharedFunctionRegistry>,
     cluster_state: Option<Arc<ClusterState>>,
     node_id: Option<u64>,
@@ -141,6 +142,7 @@ impl ShardWorkerBuilder {
             rocks_store: None,
             wal_config: None,
             snapshot_coordinator: None,
+            recovery_stats: None,
             function_registry: None,
             cluster_state: None,
             node_id: None,
@@ -234,6 +236,14 @@ impl ShardWorkerBuilder {
         self
     }
 
+    /// Set this node's boot-time recovery outcome, reported (per-shard) via
+    /// `redis.call('INFO', 'persistence')` from the shard's `command_context()`.
+    /// Defaults to `RecoveryStats::default()` (all-zero) when unset.
+    pub fn with_recovery_stats(mut self, stats: Arc<RecoveryStats>) -> Self {
+        self.recovery_stats = Some(stats);
+        self
+    }
+
     /// Set the function registry for FUNCTION/FCALL commands.
     pub fn with_function_registry(mut self, registry: SharedFunctionRegistry) -> Self {
         self.function_registry = Some(registry);
@@ -302,6 +312,7 @@ impl ShardWorkerBuilder {
     pub fn with_persistence_deps(mut self, persistence: ShardPersistenceDeps) -> Self {
         self.rocks_store = persistence.rocks_store;
         self.snapshot_coordinator = persistence.snapshot_coordinator;
+        self.recovery_stats = persistence.recovery_stats;
         self
     }
 
@@ -348,6 +359,9 @@ impl ShardWorkerBuilder {
         let snapshot_coordinator: Arc<dyn SnapshotCoordinator> = self
             .snapshot_coordinator
             .unwrap_or_else(|| Arc::new(NoopSnapshotCoordinator::new()));
+        let recovery_stats: Arc<RecoveryStats> = self
+            .recovery_stats
+            .unwrap_or_else(|| Arc::new(RecoveryStats::default()));
 
         // Persistence: a WAL writer exists only when both a RocksDB store and a
         // WAL config were supplied. The effective failure policy is owned by the
@@ -414,6 +428,10 @@ impl ShardWorkerBuilder {
             .per_request_spans
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
+        let mut persistence =
+            ShardPersistence::new(wal_writer, snapshot_coordinator, failure_policy);
+        persistence.set_recovery_stats(recovery_stats);
+
         Ok(ShardWorker {
             identity: ShardIdentity::new(shard_id, num_shards, self.is_replica),
             store: self.store.unwrap_or_default(),
@@ -422,7 +440,7 @@ impl ShardWorkerBuilder {
             shard_senders,
             registry,
             slot_versions: super::worker::SlotVersions::default(),
-            persistence: ShardPersistence::new(wal_writer, snapshot_coordinator, failure_policy),
+            persistence,
             observability: ShardObservability::new(
                 metrics_recorder,
                 SlowLog::new(

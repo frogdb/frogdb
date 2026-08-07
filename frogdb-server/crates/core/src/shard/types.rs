@@ -8,7 +8,9 @@ use crate::eviction::{
 };
 use crate::functions::SharedFunctionRegistry;
 use crate::latency::LatencyMonitor;
-use crate::persistence::{RocksStore, SnapshotCoordinator, WalFailurePolicy, WalSink};
+use crate::persistence::{
+    RecoveryStats, RocksStore, SnapshotCoordinator, WalFailurePolicy, WalSink,
+};
 use crate::registry::CommandRegistry;
 use crate::replication::{ReplicationTrackerImpl, SharedBroadcaster};
 use crate::scripting::{ScriptExecutor, ScriptingConfig};
@@ -366,6 +368,13 @@ pub(crate) struct ShardPersistence {
     /// WAL failure policy, encoded via [`WalFailurePolicy::as_u8`]. Shared
     /// with ConfigManager for runtime CONFIG SET support.
     failure_policy: Arc<std::sync::atomic::AtomicU8>,
+    /// This node's boot-time recovery outcome, set once after construction
+    /// (recovery finishes before any shard worker exists — there is nothing
+    /// to reconstruct it from at `ShardPersistence::new` time) via
+    /// [`ShardWorker::set_recovery_stats`](super::worker::ShardWorker::set_recovery_stats).
+    /// `Arc::new(RecoveryStats::default())` until then, matching every other
+    /// unit/test default on this struct.
+    recovery_stats: Arc<RecoveryStats>,
 }
 
 impl ShardPersistence {
@@ -378,6 +387,7 @@ impl ShardPersistence {
             wal_writer,
             snapshot_coordinator,
             failure_policy,
+            recovery_stats: Arc::new(RecoveryStats::default()),
         }
     }
 
@@ -394,6 +404,17 @@ impl ShardPersistence {
     /// The snapshot coordinator (BGSAVE) for this shard.
     pub(crate) fn snapshot_coordinator(&self) -> &Arc<dyn SnapshotCoordinator> {
         &self.snapshot_coordinator
+    }
+
+    /// This node's boot-time recovery outcome (issue 42 / FM-PERSISTENCE-022).
+    pub(crate) fn recovery_stats(&self) -> &Arc<RecoveryStats> {
+        &self.recovery_stats
+    }
+
+    /// Replace the recovery outcome, called once at shard-worker spawn time
+    /// with the node-wide `RecoveryStats` every shard shares.
+    pub(crate) fn set_recovery_stats(&mut self, stats: Arc<RecoveryStats>) {
+        self.recovery_stats = stats;
     }
 
     /// Replace the shared WAL failure-policy flag (from ConfigManager).
@@ -672,6 +693,10 @@ pub struct ShardPersistenceDeps {
 
     /// Snapshot coordinator for BGSAVE operations.
     pub snapshot_coordinator: Option<Arc<dyn SnapshotCoordinator>>,
+
+    /// This node's boot-time recovery outcome, for INFO persistence's
+    /// `rdb_last_load_keys_*` fields (issue 42 / FM-PERSISTENCE-022).
+    pub recovery_stats: Option<Arc<RecoveryStats>>,
 }
 
 /// Dependencies for cluster mode (optional).

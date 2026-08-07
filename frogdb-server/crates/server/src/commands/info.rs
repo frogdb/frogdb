@@ -320,16 +320,16 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
     {
         info.push_str(&format!("{name}:{value}\r\n"));
     }
-    // `rdb_last_load_keys_expired`/`loaded` describe this boot's recovery,
-    // which `frogdb-recovery` aggregates node-wide rather than per-shard; a
-    // shard's `CommandContext` has no per-shard recovery counters to report
-    // here, so these stay 0 rather than plumbing a second, unrelated
-    // dependency into the shard-local path. Tracked as a follow-up:
-    // `.scratch/hardening/issues/open/42-script-info-load-keys-still-static.md`.
-    info.push_str(
+    // `rdb_last_load_keys_expired`/`loaded`/`failed` describe this node's
+    // boot-time recovery. `frogdb-recovery` aggregates node-wide rather than
+    // per-shard, so every shard is handed the same `Arc<RecoveryStats>` at
+    // construction (issue 42) — the same real counts the connection-level
+    // renderer reports, no longer static zeros.
+    info.push_str(&format!(
         "rdb_last_cow_size:0\r\n\
-         rdb_last_load_keys_expired:0\r\n\
-         rdb_last_load_keys_loaded:0\r\n\
+         rdb_last_load_keys_expired:{}\r\n\
+         rdb_last_load_keys_loaded:{}\r\n\
+         rdb_last_load_keys_failed:{}\r\n\
          aof_enabled:0\r\n\
          aof_rewrite_in_progress:0\r\n\
          aof_rewrite_scheduled:0\r\n\
@@ -342,7 +342,10 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
          aof_last_cow_size:0\r\n\
          module_fork_in_progress:0\r\n\
          module_fork_last_cow_size:0\r\n\r\n",
-    );
+        ctx.recovery_stats.keys_expired_skipped,
+        ctx.recovery_stats.keys_loaded,
+        ctx.recovery_stats.keys_failed,
+    ));
     info
 }
 
