@@ -576,6 +576,330 @@ mod spec_exhaustiveness {
         }
     }
 
+    /// Ratcheting registry↔ACL-category parity gate (hardening-2 C5).
+    ///
+    /// `CommandSpec` carries no ACL field: the ~390-command registry and the
+    /// hand-written `COMMAND_ALL_CATEGORIES` table in `frogdb-acl` are joined
+    /// only by a lowercase string, and `CommandCategory::all_for_command` ends
+    /// in `.unwrap_or_default()` — a command with no category row yields an
+    /// empty set, so `permissions.rs`'s deny loop never matches and every
+    /// `-@category` rule is a **silent no-op** against it. `+@all -@admin` then
+    /// wrongly permits CLUSTER, MONITOR, MIGRATE, PSYNC, SYNC, REPLCONF,
+    /// FUNCTION, LATENCY, …. This is the live defect tracked by round2 issue 35
+    /// (`.scratch/testing-improvements-round2/issues/open/35-acl-category-enforcement-inert.md`);
+    /// fixing it (populating the rows / moving categories onto `CommandSpec`) is
+    /// wave-4 work, out of scope here.
+    ///
+    /// This test does not fix the gap — it *pins* it so it can only shrink. The
+    /// allowlist below enumerates every command that currently has no category
+    /// row (a pre-existing gap). The test fails if:
+    ///   (a) a command **not** on the allowlist has no category row (a newly
+    ///       added command landed category-less — the omission this gate exists
+    ///       to make un-mergeable), or
+    ///   (b) an allowlist entry is **stale** — the command has since gained a
+    ///       category row, or no longer exists in the registry — so the list
+    ///       cannot carry dead weight. Fixing the last row deletes the whole
+    ///       allowlist.
+    ///
+    /// Feature-gating mirrors the sibling tests in this module: the
+    /// always-compiled core surface (core command profile plus the server-crate
+    /// commands registered unconditionally — FT.*, FROGDB.*, cluster/monitor/
+    /// replication verbs, …) is listed unconditionally; the exotic families
+    /// follow their `cmd-*` feature so the allowlist tracks `register_commands`
+    /// under both profiles the test is built with — `cmd-core` (80 of 256) via
+    /// `just test frogdb-server`, and `cmd-full` (189 of 391) via the
+    /// workspace-unified `cargo nextest run --all` in CI.
+    ///
+    /// All entries are pre-existing gaps tracked by round2 issue 35.
+    fn acl_category_gap_allowlist() -> std::collections::BTreeSet<&'static str> {
+        // Always-compiled surface (80 entries).
+        #[allow(unused_mut)]
+        let mut set: std::collections::BTreeSet<&'static str> = [
+            // Cluster / connection routing verbs.
+            "ASKING",
+            "CLUSTER",
+            "READONLY",
+            "READWRITE",
+            // Replication / admin verbs.
+            "MIGRATE",
+            "MONITOR",
+            "PSYNC",
+            "REPLCONF",
+            "SYNC",
+            "WAIT",
+            "WAITAOF",
+            "LATENCY",
+            "FROGDB.FINALIZE",
+            "FROGDB.HOTSHARDS",
+            "FROGDB.VERSION",
+            "HOTKEYS",
+            "STATUS",
+            "DIGEST",
+            "LOLWUT",
+            // Scripting / functions.
+            "EVAL_RO",
+            "EVALSHA_RO",
+            "FCALL",
+            "FCALL_RO",
+            "FUNCTION",
+            // String / generic.
+            "LCS",
+            "SUBSTR",
+            "MSETEX",
+            "DELEX",
+            "MOVE",
+            "RPOPLPUSH",
+            // Hash field-TTL family.
+            "HEXPIRE",
+            "HEXPIREAT",
+            "HEXPIRETIME",
+            "HPEXPIRE",
+            "HPEXPIREAT",
+            "HPEXPIRETIME",
+            "HPTTL",
+            "HTTL",
+            "HPERSIST",
+            "HGETDEL",
+            "HGETEX",
+            "HSETEX",
+            // Sorted-set aggregates / range-delete family.
+            "BZMPOP",
+            "ZMPOP",
+            "ZDIFF",
+            "ZDIFFSTORE",
+            "ZINTER",
+            "ZINTERCARD",
+            "ZUNION",
+            "ZRANGESTORE",
+            "ZREMRANGEBYLEX",
+            "ZREMRANGEBYRANK",
+            "ZREMRANGEBYSCORE",
+            // Search (FT.*) — registered unconditionally by the server crate.
+            "FT.AGGREGATE",
+            "FT.ALIASADD",
+            "FT.ALIASDEL",
+            "FT.ALIASUPDATE",
+            "FT.ALTER",
+            "FT.CONFIG",
+            "FT.CREATE",
+            "FT.CURSOR",
+            "FT.DICTADD",
+            "FT.DICTDEL",
+            "FT.DICTDUMP",
+            "FT.DROPINDEX",
+            "FT.EXPLAIN",
+            "FT.EXPLAINCLI",
+            "FT.HYBRID",
+            "FT.INFO",
+            "FT.PROFILE",
+            "FT.SEARCH",
+            "FT.SPELLCHECK",
+            "FT.SUGADD",
+            "FT.SUGDEL",
+            "FT.SUGGET",
+            "FT.SUGLEN",
+            "FT.SYNDUMP",
+            "FT.SYNUPDATE",
+            "FT.TAGVALS",
+            "FT._LIST",
+        ]
+        .into_iter()
+        .collect();
+
+        // Exotic command families — gated exactly as `register_commands` gates
+        // them, so the allowlist and the registry appear/disappear together.
+        #[cfg(feature = "cmd-json")]
+        set.extend([
+            "JSON.ARRAPPEND",
+            "JSON.ARRINDEX",
+            "JSON.ARRINSERT",
+            "JSON.ARRLEN",
+            "JSON.ARRPOP",
+            "JSON.ARRTRIM",
+            "JSON.CLEAR",
+            "JSON.DEBUG",
+            "JSON.DEL",
+            "JSON.GET",
+            "JSON.MERGE",
+            "JSON.MGET",
+            "JSON.NUMINCRBY",
+            "JSON.NUMMULTBY",
+            "JSON.OBJKEYS",
+            "JSON.OBJLEN",
+            "JSON.SET",
+            "JSON.STRAPPEND",
+            "JSON.STRLEN",
+            "JSON.TOGGLE",
+            "JSON.TYPE",
+        ]);
+        #[cfg(feature = "cmd-timeseries")]
+        set.extend([
+            "TS.ADD",
+            "TS.ALTER",
+            "TS.CREATE",
+            "TS.CREATERULE",
+            "TS.DECRBY",
+            "TS.DEL",
+            "TS.DELETERULE",
+            "TS.GET",
+            "TS.INCRBY",
+            "TS.INFO",
+            "TS.MADD",
+            "TS.MGET",
+            "TS.MRANGE",
+            "TS.MREVRANGE",
+            "TS.QUERYINDEX",
+            "TS.RANGE",
+            "TS.REVRANGE",
+        ]);
+        #[cfg(feature = "cmd-bloom")]
+        set.extend([
+            "BF.ADD",
+            "BF.CARD",
+            "BF.EXISTS",
+            "BF.INFO",
+            "BF.INSERT",
+            "BF.LOADCHUNK",
+            "BF.MADD",
+            "BF.MEXISTS",
+            "BF.RESERVE",
+            "BF.SCANDUMP",
+        ]);
+        #[cfg(feature = "cmd-cuckoo")]
+        set.extend([
+            "CF.ADD",
+            "CF.ADDNX",
+            "CF.COUNT",
+            "CF.DEL",
+            "CF.EXISTS",
+            "CF.INFO",
+            "CF.INSERT",
+            "CF.INSERTNX",
+            "CF.LOADCHUNK",
+            "CF.MEXISTS",
+            "CF.RESERVE",
+            "CF.SCANDUMP",
+        ]);
+        #[cfg(feature = "cmd-cms")]
+        set.extend([
+            "CMS.INCRBY",
+            "CMS.INFO",
+            "CMS.INITBYDIM",
+            "CMS.INITBYPROB",
+            "CMS.MERGE",
+            "CMS.QUERY",
+        ]);
+        #[cfg(feature = "cmd-topk")]
+        set.extend([
+            "TOPK.ADD",
+            "TOPK.COUNT",
+            "TOPK.INCRBY",
+            "TOPK.INFO",
+            "TOPK.LIST",
+            "TOPK.QUERY",
+            "TOPK.RESERVE",
+        ]);
+        #[cfg(feature = "cmd-tdigest")]
+        set.extend([
+            "TDIGEST.ADD",
+            "TDIGEST.CDF",
+            "TDIGEST.CREATE",
+            "TDIGEST.INFO",
+            "TDIGEST.MAX",
+            "TDIGEST.MERGE",
+            "TDIGEST.MIN",
+            "TDIGEST.QUANTILE",
+            "TDIGEST.RANK",
+            "TDIGEST.RESET",
+            "TDIGEST.REVRANK",
+            "TDIGEST.TRIMMED_MEAN",
+        ]);
+        #[cfg(feature = "cmd-vectorset")]
+        set.extend([
+            "VADD",
+            "VCARD",
+            "VDIM",
+            "VEMB",
+            "VGETATTR",
+            "VINFO",
+            "VLINKS",
+            "VRANDMEMBER",
+            "VRANGE",
+            "VREM",
+            "VSETATTR",
+            "VSIM",
+        ]);
+        #[cfg(feature = "cmd-event-sourcing")]
+        set.extend([
+            "ES.ALL",
+            "ES.APPEND",
+            "ES.INFO",
+            "ES.READ",
+            "ES.REPLAY",
+            "ES.SNAPSHOT",
+        ]);
+        #[cfg(feature = "cmd-geo")]
+        set.extend(["GEORADIUSBYMEMBER_RO", "GEORADIUS_RO"]);
+        #[cfg(feature = "cmd-hyperloglog")]
+        set.extend(["PFDEBUG", "PFSELFTEST"]);
+        #[cfg(feature = "cmd-stream")]
+        set.extend(["XACKDEL", "XDELEX"]);
+
+        set
+    }
+
+    /// Every registered command resolves to at least one ACL category, unless it
+    /// is a known pre-existing gap on `acl_category_gap_allowlist`. This is the
+    /// registry↔category parity gate: an empty category set silently defeats
+    /// every `-@category` rule (round2 issue 35), so a *new* command must never
+    /// land category-less, and the allowlist of existing gaps may only shrink.
+    #[test]
+    fn every_registered_command_has_acl_category_or_is_allowlisted() {
+        use frogdb_core::CommandCategory;
+        let allow = acl_category_gap_allowlist();
+        let r = full_registry();
+
+        // Direction (a): a registered command with no category row that is not
+        // an accounted-for pre-existing gap. This trips when a new command is
+        // added without a `COMMAND_ALL_CATEGORIES` row.
+        let mut uncategorised_not_allowlisted: Vec<&str> = Vec::new();
+        let mut registered: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for (name, _entry) in r.iter() {
+            registered.insert(name);
+            if CommandCategory::all_for_command(name).is_empty() && !allow.contains(name) {
+                uncategorised_not_allowlisted.push(name);
+            }
+        }
+        uncategorised_not_allowlisted.sort_unstable();
+        assert!(
+            uncategorised_not_allowlisted.is_empty(),
+            "command(s) registered with no ACL category row and not on the pre-existing-gap \
+             allowlist — every `-@category` rule is a silent no-op against these (round2 issue \
+             35). Add a `COMMAND_ALL_CATEGORIES` row in frogdb-acl (preferred), or, only for a \
+             genuine pre-existing gap, extend `acl_category_gap_allowlist`: \
+             {uncategorised_not_allowlisted:?}"
+        );
+
+        // Direction (b): a stale allowlist entry — the command gained a category
+        // row, or is no longer registered (in this feature profile). Keeping the
+        // list honest is what forces it to shrink toward empty.
+        let mut stale: Vec<&str> = Vec::new();
+        for &name in &allow {
+            if !registered.contains(name) {
+                stale.push(name);
+            } else if !CommandCategory::all_for_command(name).is_empty() {
+                stale.push(name);
+            }
+        }
+        stale.sort_unstable();
+        assert!(
+            stale.is_empty(),
+            "stale `acl_category_gap_allowlist` entr(y/ies) — these now have a category row or \
+             are no longer registered. Delete them so the ratchet keeps shrinking (fixing the \
+             last entry removes the allowlist entirely): {stale:?}"
+        );
+    }
+
     /// Structural inverse (automatic, enforced by `CommandSpec::validate`): no
     /// non-WRITE command may declare a non-`None` reindex fact — reindexing is a
     /// write side effect. This iterates the whole registry and trips on any
