@@ -55,3 +55,20 @@ through level 4 would be prohibitively slow.
 ## Depends on
 
 Issue 01, `.scratch/testing-improvements-round2/issues/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+No registry-wide argument-fuzz harness exists. The `shard_driver` harness moved out of
+`core/tests/shard_driver/` into its own crate — `frogdb-server/crates/shard-harness/`
+(`src/harness.rs` = `ShardDriver`, `src/generator.rs` = the proptest schedule generator) — and
+neither it nor any of its 13 scenario files enumerates the registry; the only registry
+enumeration in the tree is `RecordingBroadcaster::command_names`
+(`shard-harness/src/recording_broadcaster.rs:61`), which is unrelated. The nearest existing thing
+is the `cmd_dispatch` fuzz target (`testing/fuzz/fuzz_targets/cmd_dispatch.rs`), which now
+actually runs nightly again after `45591265` restored fuzz CI — but it fails every criterion
+here: it drives a **hand-written 37-command list** (`COMMANDS`, lines 11-19) rather than the
+registry, it `continue`s past any arity the handler rejects (line 63-65) instead of driving every
+arity position, and it has no documented skip list and no memory bound. `proptest_commands.rs`
+in `frogdb-server/crates/server/tests/` only re-implements scalar parsers, not dispatch.

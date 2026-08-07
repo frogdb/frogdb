@@ -1,6 +1,6 @@
 # Non-deterministic writes (`VADD REDUCE`, `TOPK.ADD`) are propagated verbatim, so replicas diverge
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/07 F4 · proposals/07 F13 · MASTER.md §3 (consistency violations), §2 T7
@@ -84,3 +84,26 @@ single-node test cannot observe the second draw of the RNG.
 ## Depends on
 
 issue 25 (theme T7 — determinism of propagated writes), `.scratch/testing-improvements-round2/issues/`
+
+## Re-triage 2026-08-06
+
+**Verdict: superseded**
+
+Superseded by **issue 25** (`25-determinism-of-propagated-writes-unverified.md`), which stays open
+and owns the work. Issue 25 is a strict superset: same two findings (07/F4 + 07/F13), same file:line
+evidence, and acceptance criteria that add the table-driven primary/replica determinism harness plus
+the level-1 `uid` pin, while this issue already declared itself as depending on 25. Closing here
+purely to remove the duplicate — **the defect itself is still live**.
+
+Verified on today's tree: `crates/types/src/vectorset.rs:163` still `vs.uid = rand::random();`,
+`:563` still derives the projection matrix from that uid, `:688` still
+`StdRng::seed_from_u64(uid)`; `crates/types/src/topk.rs:118` still `rand::random::<f64>() < prob`
+inside the decay loop (issue cited `:120`). Neither command sets a replication override — the only
+`rewrite_propagation`/`suppress_propagation` caller in `crates/commands/src` is SPOP (`set.rs`), so
+`WriteRecord::repl_override` stays `None` (`crates/core/src/command.rs:557,570`) and both replicate
+verbatim. The clock seam and `just lint-clock-seam` (2fb1051c, 0fe2dd0a) and the XADD wall-clock
+virtualization (8b62120f) discharge **none** of this: they gate OS *clock* reads, not `rand`, and
+there is no equivalent lint for randomness on write paths. `integration_replication.rs` still lists
+`TOPK.ADD` only in the smoke matrix (`:7824`, issue cited `:6995`) and VADD likewise; no
+determinism table exists, and `replication-failure-modes.md` has no FM row for verbatim-propagation
+determinism.

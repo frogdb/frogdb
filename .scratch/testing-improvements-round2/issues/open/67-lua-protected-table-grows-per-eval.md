@@ -60,3 +60,19 @@ per-execution inside `LuaVm`.
 ## Depends on
 
 nothing
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The chain is intact, only the line numbers moved. `execute_in_scope` still calls
+`self.set_redis_functions(call_fn, pcall_fn)` on *every* execution —
+`frogdb-server/crates/core/src/scripting/lua_vm.rs:467` (was `:452`); `set_redis_functions`
+(`:510`) builds a fresh table with `self.lua.create_table()` at `:515-518` (was `:498`) and ends
+at `:674` (was `:655`) with `sandbox::register_protected_global(self.lua(), "redis", redis_table)`.
+`register_protected_global` (`frogdb-server/crates/scripting/src/sandbox.rs:475-504`) still does
+`protected.set(table.clone(), true)` at `:494-496` (was `:451-453`) into `_protected`, declared
+`local _protected = {}` at `sandbox.rs:402` (was `:359`) with **no `__mode`** — strong-keyed, so
+every superseded `redis` table stays reachable. `cleanup_execution` (`lua_vm.rs:212-223`, was
+`:200-210`) still only resets `KEYS`/`ARGV` state. No `used_memory`/`_protected`-count assertion
+exists in `lua_vm.rs`; scripting is outside the four locked areas.

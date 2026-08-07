@@ -1,6 +1,6 @@
 # Decision D1 — where command-semantics tests live
 
-Status: ready-for-human
+Status: done
 Type: decision
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §7 D1 · proposals/06 F0 · proposals/07 cross-area note 1
@@ -81,3 +81,21 @@ delivers the `ProtocolVersion` parameter and the blocking-command entry wrapper 
 needs — measured at 1–2 days, since every builder option it requires already exists on
 `ShardWorkerBuilder` and is simply not forwarded. It does not have to land before the decision, but
 option (b) is not fully usable without it.
+
+## Re-triage 2026-08-06
+
+**Verdict: superseded**
+
+Answered by events in favour of option (b). Commit `7dd3cf65` (2026-07-31) moved the harness out of
+`frogdb-core/tests/shard_driver/` into its own workspace member, `frogdb-shard-harness`
+(`frogdb-server/crates/shard-harness/{src,tests}/`) — which dissolves the `E0308` dev-dep-cycle
+constraint this issue rests on: the harness crate can dev-dep both `frogdb-core` and
+`frogdb-commands` normally and has an ordinary `tests/` dir. Every round-2 command-semantics finding
+closed since then landed its test there as a new file, not inline and not in `redis-regression`:
+`tests/eviction_spill_failure.rs` (issue 41), `tests/rendering_incrbyfloat.rs` (issue 55),
+`tests/script_timeout_effects.rs` (issue 60), all from `0d727d05` / `4e96e4d5`. Stale refs:
+`core/tests/shard_driver/*` → `frogdb-server/crates/shard-harness/tests/*`, harness →
+`shard-harness/src/harness.rs`; `frogdb-commands` still has no `tests/` dir and gained no new
+store-asserting inline tests. Residual, owned by issue 01 not by this decision: the harness still
+hardcodes `ProtocolVersion::Resp3` (`shard-harness/src/harness.rs:122,144,198,222`), so the RESP2
+selection option (b) wants does not exist yet.

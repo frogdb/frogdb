@@ -98,3 +98,36 @@ expiry-scoped slice as ~30–40 of the 313 call sites and names theme T4 as its 
 but the table above can be written without it using short TTLs plus explicit ticks. Issue 06,
 `.scratch/testing-improvements-round2/issues/` (live-link fault primitive) for the controlled lag
 window in the replica arm.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+The command-surface half (06/F1) is fully fixed; the two cross-surface arms are untouched.
+Per-claim:
+
+- **PERSIST / RENAME / RENAMENX / TYPE / EXISTS / EXPIRETIME / PEXPIRETIME — FIXED.** Closed by
+  round-2 issue 57 (now in `issues/done/`) under **FM-PERSISTENCE-044**.
+  `crates/core/src/store/hashmap.rs:1240-1256` — `persist` now opens with
+  `if self.check_and_delete_expired(key) { return false; }` and the exact comment the issue asked
+  for. `crates/commands/src/generic.rs`: TYPE reads `exists_unexpired` (:50-53, with a comment
+  explaining it stays non-destructive), RENAME `get_with_expiry_check` (:108), RENAMENX
+  (:196,:206). `crates/commands/src/expiry.rs:753-760` (EXPIRETIME) and `:803-810` (PEXPIRETIME)
+  now return `-2` when `expires_at <= clock::now()`. Acceptance criterion 2 is discharged by
+  `hashmap.rs:2640 persist_on_expired_key_leaves_no_expiry_index_orphan` (plus
+  `:2611 persist_on_expired_key_deletes_instead_of_immortalizing` and
+  `:2670 nondestructive_probes_do_not_see_a_past_deadline_key`). Line refs old → new:
+  `expiry.rs:697-700` → `:712-716`; `hashmap.rs:1239-1247` → `:1240-1256`; `:1249 touch` → `:1258`.
+- **Replica-side independent expiry vs primary-side TTL extension (14/F10) — still valid.**
+  `crates/core/src/shard/event_loop.rs:199-214` — `run_active_expiry` is still gated only on
+  `expiry_paused` (:207) and `debug_active_expire_disabled` (:212); there is still no `is_replica`
+  check. Old ref `event_loop.rs:133` → `:199`.
+- **`FT.SEARCH` serves expired-unreaped keys (10/F9) — still valid.**
+  `crates/search/src/index.rs:604,649,705` still call `extract_hit_fields(&doc)` straight off the
+  tantivy document; `search()` never consults the store. Old ref `index.rs:709` → `:604/:649/:705`
+  (three collector arms).
+
+Cross-refs: issue 90's F10 and still-open issues 58 (EXPIRE GT/LT after past-deadline delete) and
+54 (bcast trackers not invalidated on lazy expiry) remain separate instances of the same invariant
+— none of them is discharged by the FM-PERSISTENCE-044 work, which only covered the seven commands
+above.

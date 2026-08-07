@@ -87,3 +87,36 @@ Nothing. Issue 28, `.scratch/testing-improvements-round2/issues/`, is the siblin
 defect and should be scheduled with it; issue 31,
 `.scratch/testing-improvements-round2/issues/`, is the decision on when to do both relative to the
 testing work.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Nothing in the hardening campaign fixed this. `git log -- scripts/ .github/workflows/coverage-nightly.yml Justfile`
+shows exactly one coverage-related change since filing: `ab376ed5` (2026-07-31, "coverage sees
+frozen suites"), which only added `--features frogctl/cli-tests --ignore-default-filter` to the
+recipe — the profile-collection root cause is untouched. Current state, criterion by criterion:
+
+- `Justfile:85-86` — `coverage-lcov` is still plain
+  `cargo llvm-cov nextest --all … --lcov --output-path target/llvm-cov/lcov.info`, with no
+  per-test `LLVM_PROFILE_FILE`. Refs old → new: `Justfile:77-79` → `:82-86`.
+- `.github/workflows/coverage-nightly.yml:80-106` — the "Coverage summary" step still `awk`s
+  `LH:`/`LF:` and its **only** failure mode is a missing file (`:84-89`). No plausibility guard
+  (criterion 3 unmet). Refs old → new: `:41` → `:79`; `:44-67` → `:80-106`; `:69-77` → `:107-114`.
+- `coverage-nightly.yml:101` still prints the `**84.0%**` baseline string verbatim (criterion 4
+  unmet). Note the workflow is generated — the source lives under
+  `.github/workflows/workflow_gen/` and must be edited there (`just workflow-gen`); the issue body
+  points only at the generated YAML.
+- The campaign's published numbers are **mutation scores**, not line coverage
+  (`docs/agents/hardening-campaign.md` contains no occurrence of "coverage" or "lcov"), so nothing
+  in the campaign re-validated this pipeline.
+
+**Criteria 1, 2 and 5 are unverified-by-execution** — the re-triage brief forbids running
+`cargo`/`just`, and there is no `target/llvm-cov/lcov.info` on disk in either the worktree or the
+main checkout. Given that the production path is unchanged, the defect is presumed to reproduce;
+the reproduction should be re-measured as the first step of the fix.
+
+One extra root-cause lead for whoever picks this up: `.cargo/config.toml:34-35` sets
+`[target.'cfg(all())'] rustflags = ["--cfg", "tokio_unstable"]`. `cargo-llvm-cov` injects its
+instrumentation through the `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` env var, which *replaces* rather
+than merges with config-file rustflags — worth ruling in or out before hunting elsewhere.

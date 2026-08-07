@@ -71,3 +71,23 @@ seconds and no signal. `integration_debug_http.rs` already has the `reqwest` pat
 
 Nothing. Cross-area: `crates/config/` is owned by another area — coordinate so the
 `HttpConfig::validate()` change lands once.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Both halves reproduce. `bearer_auth_middleware` is now at
+`frogdb-server/crates/server/src/observability_server.rs:256-271` (was 248-270), still with
+`// No token configured — allow all` → `next.run(req).await` at `observability_server.rs:267-270`;
+the protected sub-router (`/debug*`, `/admin/{health,cluster,role,nodes,upgrade-status,shutdown,transfer-leader}`)
+is `observability_server.rs:232-249` and there is still no shared path const. Config half:
+`HttpConfig::validate()` at `frogdb-server/crates/config/src/http.rs:70-92` still warns only on
+`token.is_some() && bind == "0.0.0.0"` (`http.rs:83-89`) and is silent for `token: None`
+(default at `http.rs:58`) on any bind. Coverage is still zero: an `rg` for
+`admin/shutdown|admin/role|admin/nodes|admin/cluster|admin/transfer-leader` across every `.rs` in
+the repo hits only `observability_server.rs`, `admin/handlers.rs`, `acceptor.rs` and
+`frogdb-operator/src/health.rs` — no test file, and `observability_server.rs` has no `mod tests`.
+The rework-05 per-subcommand admin gating flagged as possibly relevant is a *different* gate: it
+covers the RESP admin-port `NOADMIN` split (FM-CLUSTER-061/062, `command_spec.rs`) and does not
+touch the HTTP surface. File history since filing is `9499641a`/`1828d3db` (TLS + config-param
+work), neither touching the middleware.

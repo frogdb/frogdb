@@ -71,3 +71,20 @@ the socket only re-encodes it.
 
 Nothing. Related: issue 35, `.scratch/testing-improvements-round2/issues/` — both are ACL
 enforcement bypasses and should be fixed and re-tested together.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces. `is_command_allowed` (now `frogdb-server/crates/acl/src/permissions.rs:215-266`, was
+cited 215-268) still scans `subcommand_rules` first and does `return rule.allowed` unconditionally
+at `permissions.rs:225`, ahead of `denied_commands` (:231), `denied_categories` (:239-246) and
+`allow_all` (:249). `deny_command` still does
+`self.subcommand_rules.retain(|r| r.allowed || r.command != cmd)` at `permissions.rs:325-326`,
+deliberately keeping the `+config|get` rule alive across a later `-config`. The model is still four
+unordered `HashSet`s plus a `Vec<SubcommandRule>`; the `rule_log: Vec<AclCommandRule>` added
+alongside is display-only (`ACL GETUSER` rendering) and is not consulted by `is_command_allowed`.
+One body claim is now stale: `frogdb-server/crates/server/tests/integration_acl.rs:1499`
+(`test_acl_subcommand_allow_specific`) *does* apply two conflicting rules to one user, but only in
+the `-config` → `+config|get` order where the set model happens to agree with Redis; nothing tests
+the reversed order. Only history on the file since filing is `7ba151f0` (directory restructure).

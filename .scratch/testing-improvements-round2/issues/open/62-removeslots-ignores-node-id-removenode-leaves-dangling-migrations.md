@@ -77,3 +77,36 @@ storage, network or async behaviour participates in either defect.
 
 nothing — `INFRASTRUCTURE.md` records that area 11 needs no new infrastructure; proptest,
 tempfile and `tokio::test` are already dev-dependencies
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+**11/F9 (`RemoveSlots` ignores `node_id`) is FIXED** — commit `723b8114`
+("fix(cluster): owner-checked DELSLOTS…"), specced as **FM-CLUSTER-004** and forced by
+`remove_slots_rejects_a_slot_owned_by_another_node` and
+`remove_slots_rejects_the_whole_batch_when_one_slot_is_foreign`. The arm now validates
+`Some(&owner) if owner != node_id => InvalidOperation("slot N is owned by X, not Y")` before it
+mutates anything (`frogdb-server/crates/cluster/src/commands.rs:150-178`; the issue's `:119-136` is
+stale). Hardening tracker: `.scratch/hardening/issues/done/33-remove-slots-is-owner-blind.md`.
+
+**11/F5 is half-discharged.** The *dangling migration* itself is now a deliberate, specced
+non-guarantee — **FM-CLUSTER-002**, pinned by `remove_node_leaves_migrations_and_replicas_dangling`
+(`commands.rs:621-658`), with the documented operator recovery being `SETSLOT … STABLE`
+(FM-CLUSTER-035). But the **ghost-owner consequence is still live**: `CompleteSlotMigration`
+(`commands.rs:459-490`, moved from `:353-385`) still does an unguarded
+`inner.slot_assignment.insert(slot, target_node)` with **no** `nodes.contains_key(target_node)`
+check, and nothing upstream adds one — `commands/cluster/admin.rs:627-635` only checks that a
+migration record exists and its `target_node` matches, and `slot_migration/mod.rs::complete` →
+`connection/cluster.rs:137` is a thin pass-through. FM-CLUSTER-033 explicitly blesses the unguarded
+insert ("the parameter match … is what makes the unguarded `slot_assignment.insert` safe"), which
+does not hold once FM-CLUSTER-002 lets the target be forgotten first. So
+`BeginSlotMigration{s, A→B}` → `CLUSTER FORGET B` → `CLUSTER SETSLOT s NODE B` still yields
+`slot_assignment[s] = B ∉ nodes`, and FM-CLUSTER-073 confirms the downstream symptom is specced
+as-is ("A slot whose owner is unknown counts as `ok` rather than being dropped").
+
+**Remaining work:** acceptance criteria 1, 3 and 4. There is no `slot_assignment.values() ⊆
+nodes.keys()` post-state assertion and no proptest anywhere in `crates/cluster` (the crate has no
+`proptest` dev-dependency). Either add the node-exists check to `CompleteSlotMigration` or prune
+migrations in `RemoveNode` (matching the `Failover { force: true }` arm), and add an
+FM-CLUSTER row for whichever is chosen. Criterion 2 is done.

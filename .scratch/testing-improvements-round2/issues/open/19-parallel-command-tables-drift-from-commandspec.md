@@ -96,3 +96,31 @@ behavioural tests at level 4/5 and belong with their own defect issues.
 Decision D1 (issue 29, `.scratch/testing-improvements-round2/issues/`) settles where this module
 lives. Criterion 4's enforcement policy depends on the semantics call tracked in issue 30,
 `.scratch/testing-improvements-round2/issues/`. No infrastructure item is required.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+All three findings reproduce verbatim on today's tree, and no registry-consistency test module
+exists (`rg register_all` finds only `commands/src/lib.rs`, `server/src/server/register.rs` and
+`shard-harness`; no test iterates `CommandRegistry::iter()`). Per-claim:
+
+- **ACL categories — still valid.** `crates/acl/src/categories/mod.rs:149-154` is unchanged
+  (`COMMAND_ALL_CATEGORIES.get(...).cloned().unwrap_or_default()`); `categories/data.rs` has not
+  been touched since the repo restructure (`git log -- .../categories/data.rs` → `7ba151f0` only).
+  Spot-checks confirm the drift: `wait` (data.rs:209), `monitor` (:244), `failover` (:254) sit in
+  `COMMAND_CATEGORIES` (ends :293) and are absent from `COMMAND_ALL_CATEGORIES` (starts :296);
+  `json.set` / `ft.search` are in neither. The only tests are still the 6 spot-checks at
+  `categories/mod.rs:218-236`.
+- **Scripting write-flags — still valid.** `crates/core/src/scripting/bindings.rs:44-73`
+  `is_write_command` is still the hand-written `match`; still no `SETBIT`, `BITFIELD`, `BITOP`,
+  `PFADD`, `XSETID`, `HEXPIRE*`, `SORT … STORE`, `GEORADIUS … STORE`, or any `JSON.*`/`TS.*`/
+  `BF.*`/`CF.*`/`CMS.*`/`TOPK.*`/`TDIGEST.*` write. Callers: `scripting/gate.rs`,
+  `server/src/connection/lifecycle.rs`.
+- **WAL declared keys — still valid.** `crates/core/src/registry.rs` still has three
+  `debug_assert!`s (:184, :207, :213) and no test asserts key containment.
+
+Cross-check with **issue 93**: neither subsumes the other. 93 owns "every registered spec passes
+`CommandSpec::validate()`, unconditionally"; this issue owns "the parallel tables agree with the
+spec" plus the `touched_keys ⊆ wal_strategy().actions()` property. They share the
+`CommandRegistry::iter()` seam and should be scheduled together (93 already says so).

@@ -82,3 +82,27 @@ unit test (pure predicate algebra). Level 3 becomes available once the driver ga
 Infrastructure I1 (`shard_driver` harness extension — specifically `drive_register_tracking`,
 mirroring `drive_capture_keyspace`) — issue 01, `.scratch/testing-improvements-round2/issues/`.
 With it, the invalidation assertion moves from level 4 to level 3.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Confirmed live; every claim reproduces, only line numbers moved. Both lazy-expiry drains still call
+the default-mode-only entry point: `crates/core/src/shard/worker.rs:770-771` (whole-key `purged`
+branch, issue cited `:732-733`) and `:796-797` (hash-`emptied` branch, issue cited `:758-759`), each
+guarded by `has_tracking_clients()`. `ShardTracking::invalidate_keys` is now `shard/types.rs:480-483`
+(cited `:471`) and still delegates to `tracking_table` alone; the both-modes seam
+`invalidate_keys_all_modes` is `types.rs:488-499` (cited `:479`) and is reached only from
+`post_execution.rs:686`, which the *active* sweep hits via `run_internal_removal_effects`
+(`post_execution.rs:561-603` → `run_write_effects`) — the lazy drains bypass it entirely. The
+camouflage finding (02/F3) is intact: `types.rs:442-444` `has_tracking_clients() =
+!invalidation_registry.is_empty()`, `:448-450` `has_any_tracking_clients() = has_tracking_clients()
+|| !broadcast_table.is_empty()`, and `register_broadcast` (`:458-466`) still calls
+`invalidation_registry.register` before `broadcast_table.register`, so the second disjunct at `:449`
+is unreachable and the inner guard at `:492` is always true. The only lazy-expiry regression is
+still default-mode (`crates/server/tests/integration_client.rs:1309
+regression_lazy_expiry_invalidates_tracked_key`, cited `:1307`); the BCAST tests at `:1418-1600` all
+exercise ordinary writes, none an expiry. Core is not one of the six locked areas, so no FM row
+covers this. Distinct from issue 22 (expiry not checked *before reads* — a store-level liveness
+question) and from issue 66 (tracking-table LRU ordering, a memory bound); both remain open and
+neither subsumes this call-site choice.

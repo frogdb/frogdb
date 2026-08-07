@@ -59,3 +59,23 @@ resulting divergence to this cache, and the repro is fully deterministic at the 
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Confirmed live; the Phase-4 cluster lock did not close it. The code did not move — it is still
+`frogdb-server/crates/cluster/src/storage.rs`, only the line numbers shifted (the file's only edit
+since is the repo-restructure commit `7ba151f0`). `get_log_reader` is now `storage.rs:472-481`
+(issue cited `:280-288`) and still hands back a detached `ClusterStorage` with
+`log_cache: RwLock::new(self.log_cache.read().clone())` at `:477` while sharing only `db` and
+`snapshot_save_lock` by `Arc`. `try_get_log_entries` still short-circuits on the clone's own cache —
+`storage.rs:415` `if let Some(entry) = self.get_cached(index)` inside the RocksDB iteration (issue
+cited `:227-228`). `invalidate_cache_range` is now `:364-374` (issue cited `:176-186`) and is
+reached only from `truncate` (`:567`) and `purge` (`:600`) on the *owning* handle, so a reader clone
+is never invalidated. Nothing anywhere in `crates/cluster` or `crates/cluster-runtime` calls
+`get_log_reader` outside its own definition — no test constructs a reader, so the clone's staleness
+is unforced. `cluster-failure-modes.md` names `cache_evicts_the_oldest_only_once_over_the_bound`,
+`cache_invalidation_respects_both_range_ends` and `truncate_drops_only_the_tail_after_the_kept_index`
+(spec line 295), all of which operate on a single handle; **no FM row covers reader-clone cache
+coherence**.

@@ -108,3 +108,52 @@ crash-primitive decision determines how much of that API survives. Issue 01, sam
 `PageCacheSink` case. `new_replication_id` is blocked on
 `.scratch/replication-cluster-rework/promotion-replid-psync.md`, outside this round; the six pure
 deletions can start now.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+**2 of 10 items resolved (both "contested" ones that wanted wiring, not deletion); 8 still have zero
+production call sites.**
+
+Resolved:
+
+- **14 `new_replication_id` — RESOLVED as the checkbox wanted.** It now has two production callers:
+  `replication/src/primary/mod.rs:385` (manual promotion, mints the replid under the state write
+  lock) and `replication/src/primary/replay.rs:553`, landed by `f6484219` "manual promotion mints a
+  replid and serves PSYNC". Stale ref: `replication/src/state.rs:248` → `:318`. It is no longer dead
+  code and no longer blocked on the promotion-replid PRD.
+- **13/F14 `PageCacheSink` / `WriteSink` — RESOLVED differently.** Both moved out of
+  `core/src/persistence/rocks/` into the extracted `frogdb-persistence` crate: `WriteSink` is
+  `pub(super)` at `persistence/src/wal/flush.rs:112`, and `PageCacheSink` now lives *inside the same
+  crate's* test tree at `persistence/src/wal/tests.rs:1064`, driven by real fsync/power-loss tests
+  (`:987-1120`). The "unreachable because `WriteSink` is `pub(super)`" complaint is void — the
+  fsync/page-cache model is exercised. Not done: the `test-support` export and the `shard_driver`
+  durable-sequence case in the checkbox; if that case is still wanted it needs the export, otherwise
+  close the checkbox as satisfied in-crate.
+
+Still valid, all confirmed by `rg` on today's tree:
+
+- **03 `ConnectionHandlerBuilder`** — `server/src/connection/builder.rs:42`, still only the
+  definition plus the `connection.rs:70` re-export.
+- **13/F15 `CrashTestHarness`** — `core/src/persistence/test_harness.rs`, all 13 fns still have zero
+  callers outside the file (the only repo-wide hits for `count_keys` are the unrelated
+  `count_keys_in_slot`).
+- **06/F20 `commands/src/scan.rs`** — `ScanCommand`/`KeysCommand`/`parse_key_type` still there,
+  still registered (`commands/src/lib.rs:260-261`) while `dispatch.rs:229-230` → `:237-238` routes
+  to `scatter.rs`. The divergence is unchanged: `scan.rs:160` `"unknown type: {}"` vs
+  `scatter.rs:107` → `:109` `"ERR unknown type: {}"`.
+- **04 `SlotMigrationCoordinator::is_migrating` / `migration_for`** — `slot_migration/mod.rs:92-99`
+  → `:103`/`:108`, definitions only.
+- **07 `geohash_range_for_bbox`** — `types/src/geo.rs:335`, still no *production* caller; the one
+  reference is `testing/fuzz/fuzz_targets/geo_ops.rs:161`, which predates the audit (`75385c3b`,
+  2026-03-31). Deleting it means deleting that fuzz arm too.
+- **08 `Response::Attribute` / `WireResponse::Attribute` / `set_frame_attributes`** —
+  `protocol/src/response.rs:386` → `:387` (`Response::Attribute` at `:641`,
+  `WireResponse::Attribute` at `:159`). Still no producer anywhere; the only outside reference is a
+  *consumer*, `core/src/scripting/bindings.rs:167`.
+- **15/F15 `ConfigParam::default`** — `config/src/param.rs:99`; `(p.default)()` still appears at
+  exactly one site repo-wide, `param.rs:260`, in the module's own test.
+- **09/F15 `set_running_function`** — `scripting/src/registry.rs:174`, still no caller, so
+  `FUNCTION STATS` `running_script` is still permanently null (reader moved
+  `connection/scripting/function.rs:317` → `:225`).

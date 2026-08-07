@@ -76,3 +76,23 @@ level 4. Per proposal 10, (i) is level 2 (crate API over an in-RAM index) and (i
 
 Issue 01, `.scratch/testing-improvements-round2/issues/` — for part (2) only, which shares the
 `shard_driver` harness. Part (1) depends on nothing and can start immediately.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The gap is intact — with one evidence bullet retracted. `frogdb-search` still has **no `tests/`
+dir** (`crates/search/` is `Cargo.toml` + `src/` only), and `rg -l 'FT\.'` over both
+`crates/core/tests/` and the relocated harness tree `crates/shard-harness/tests/` returns nothing,
+so there is still no FT.* coverage at level 1-3. `server/tests/search.rs` has grown to **7,933
+lines with 135 sleeps**. The crate saw no commits at all since 2026-07-21 (`5716945b`,
+`72d07e47`), and the hardening campaign never touched it. **Retract the `open_in_ram` bullet:**
+`ShardSearchIndex::open_in_ram` (`search/src/index.rs:287`) is *not* at 0/41 regions — it has ~20
+in-crate `#[cfg(test)]` callers today (`index.rs:1447-1949`, `spellcheck.rs:161-275`) and already
+had 15 at audit-filing commit `a0e85aac`. That figure is a false negative from the broken lcov
+pipeline (issue 27 / decision D3, issue 31). Acceptance criterion 2 is therefore already met and
+should be struck; criterion 1 (a real `tests/` dir) still stands on its own merits. Correction to
+the re-triage brief's premise: `frogdb-search` is **not** behind a cargo feature — it is a plain
+workspace member (`Cargo.toml:34`) and a non-optional dependency of both `frogdb-core` and
+`frogdb-server`; the feature-gated things are the FT.* command *families*. Stale ref: part (2)'s
+home is now `frogdb-server/crates/shard-harness/tests/`, not `core/tests/shard_driver/`.

@@ -71,3 +71,20 @@ whole defect.
 Nothing. Related: issue 72, `.scratch/testing-improvements-round2/issues/` (no on-disk format
 version or magic) — adding a field to this payload is exactly the change that version needs to
 describe.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Every cited fact reproduces, at essentially the cited addresses.
+`persistence/src/serialization/timeseries.rs` contains **zero** occurrences of `rules`: the payload
+doc comment at `:5-25` and the encoder `serialize_timeseries` at `:26-...` still write only
+retention / duplicate policy / chunk size / labels / chunks / active samples.
+`types/src/timeseries/value.rs:160` is still the literal `rules: Vec::new(),` inside `from_raw`, and
+`:110` / `:130` are the other two constructors doing the same; `add_rule` (`:492-497`) is the only
+writer and `rules()` (`:482`) the only reader. `TS.CREATERULE` still declares
+`WalStrategy::PersistFirstKey` — line drift only, `commands/src/timeseries.rs:1208` → `:1210`
+(`name:` is at `:1205`), with the `ts.add_rule(rule)` call now at `:1271-1274`. The hardening
+campaign locked `frogdb-persistence` but timeseries is a non-core exotic type: no
+`FM-PERSISTENCE-*` row mentions `rules` or timeseries downsampling, and no serialization test for
+this type asserts rules. Confirmed live data-loss defect.

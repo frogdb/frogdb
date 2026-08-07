@@ -84,3 +84,36 @@ type/option matrix, and site 2's `FT.CONFIG` knob.
 
 issue 11 (I11 — registry-wide argument-fuzz harness; names 06/F9, 07/F14, 10/F6 as instances),
 `.scratch/testing-improvements-round2/issues/`. Sibling: issue 95, same directory.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** (all four sites; per-site below)
+
+None of the four sites is inside a locked area, and none was touched. Paths are now
+`frogdb-server/crates/<crate>/src/...`.
+
+- **Site 1 — LCS DP matrix: still-valid.** `commands/src/string.rs:1055` (was `:1054`) is still
+  `let mut dp = vec![vec![0usize; n + 1]; m + 1];` with no ceiling. `.unwrap_or_default()` on both
+  key fetches at `:1023-1032` (was `1022-1031`); the bare `LEN` return at `:1070-1072` (was
+  `:1069`) still short-circuits before the `IDX` branch at `:1075`; `WITHMATCHLEN`-without-`IDX` is
+  still rejected at `:1015-1020`. `APPEND` (`:197-214`, was `196-213`) still has no ceiling, and
+  `SETRANGE`'s is still the hardcoded `const MAX_STRING_LEN` at `:339` (was `:338`).
+- **Site 2 — FT deep offset: still-valid.** `search/src/index.rs:568-572` (was `:571` / `:568-569`)
+  still computes `(offset, offset + limit)`, or `(0, raw_total.max(1))` when a `GEOFILTER` is
+  present, and feeds `fetch_limit` to `TopDocs::with_limit` at `:594`, `:634`, `:699`. No clamp in
+  `search/src/wire.rs:121-122` (still `parse_num(...).unwrap_or(0/10)` into `usize`), and
+  `wire.rs:340` re-amplifies with `limit: self.offset + self.limit`. `rg` finds no
+  `MAXSEARCHRESULTS` / `max_search_results` knob anywhere.
+- **Site 3 — BF/CF.LOADCHUNK: still-valid.** `commands/src/cuckoo.rs:710` is still
+  `let fp_bytes = num_buckets * layer_bucket_size as usize * 2;` — unchecked `usize` multiply
+  guarding the `:711` bounds check and the per-bucket indexing at `:721`; `Vec::with_capacity` at
+  `:690` (`num_layers` from a raw `u32`) and `:717` (`num_buckets` from a raw `u64`).
+  `commands/src/bloom.rs:625` has the same `Vec::with_capacity(num_layers)` from `:622`. No
+  semantic check on `k == 0`, `capacity == 0`, `count > capacity`, or NaN/negative `error_rate`
+  (`bloom.rs:619-660`, `cuckoo.rs:679-735`). Old cites `bloom.rs:495-668` → **`567-668`**,
+  `cuckoo.rs:559-748` → **`641-745`**.
+- **Site 4 — FUNCTION LOAD capture VM: still-valid.** `scripting/src/loader.rs:57` still sets
+  `memory_limit_bytes: 0`, and `scripting/src/sandbox.rs:146-147` still only calls
+  `set_memory_limit` when the value is non-zero. The execution VM still gets the cap at
+  `core/src/scripting/lua_vm.rs:103` (was `:96`). The sandbox test helper still passes `0`
+  (`sandbox.rs:984`, was `:941`).

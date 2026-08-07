@@ -64,3 +64,9 @@ no connection, RESP or routing behaviour is involved.
 
 issue 29 (decision D1 — home for command-semantics tests),
 `.scratch/testing-improvements-round2/issues/`
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Confirmed live on today's tree. File moved `commands/src/expiry.rs` → **`frogdb-server/crates/commands/src/expiry.rs`**, and the clock seam (`clock::now()`) shifted every line: EXPIRE past-deadline delete `:296-299` then GT/LT at `:304-318`; PEXPIRE `:385-388` then `:393-406`; EXPIREAT `:463-466`/`:471-475` then `:477-491`; PEXPIREAT `:547-550`/`:555-559` then `:561-575`. One correction to the body: **NX/XX are already evaluated before the delete** in all four commands (`:289`, `:378`, `:455`, `:539`), so only the **GT/LT half of the claim reproduces** — narrow the acceptance criteria accordingly (the `LT` and no-TTL-`LT` cases happen to agree with Redis by coincidence; `EXPIRE k -10 GT` on a key with a TTL, and on a key with no TTL, are the two divergent cases). No new coverage landed: `redis-regression/tests/expire_tcl.rs` GT cases (`:707`, `:721`, `:735`, `:906`) all use positive TTLs, and the expiry crate is not in the hardening campaign's locked set, so no FM row owns this.

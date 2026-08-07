@@ -60,3 +60,23 @@ which only the turmoil multi-node harness provides.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The primitive does not exist. `frogdb-server/crates/testing/src/fault_injection.rs` is still
+"History-corruption helpers used by checker self-tests" (module doc, `:1`) — seven after-the-fact
+manglers, nothing live. The turmoil hosts `real_frogdb_primary` / `real_frogdb_replica`
+(`server/tests/common/sim_helpers.rs:250` / `:297`) still take no fault handle; the only live network
+control in the suite is turmoil's own `sim.hold`/`sim.release`, used for cluster partitions
+(`server/tests/simulation.rs:5367`, `:5384`), not for replication-link shapes. **But the motivation has
+largely evaporated**: three of the four dependents were discharged during hardening at a much cheaper
+boundary. 14/F2 and 14/F9 (backlog evicted between grant and stream; the full-sync handoff window) are
+now FM-REPLICATION-012, forced by `a_resume_evicted_after_the_grant_is_abandoned_not_truncated` /
+`a_full_sync_whose_handoff_window_is_evicted_abandons_the_link` in
+`replication/src/replica_session.rs`; a checkpoint dying mid-transfer is FM-REPLICATION-001's
+`a_checkpoint_that_dies_mid_transfer_leaves_the_old_history_alone`; 14/F7 (ACK on receipt, not apply) was
+closed as round-2 issue 76 plus hardening 28's wire-only WAIT acks (90fefaf7). Only 14/F10 (replicas
+expiring independently) is left. The decision this issue asks for should therefore probably be
+**decline** — record that rather than schedule 1-2 weeks.

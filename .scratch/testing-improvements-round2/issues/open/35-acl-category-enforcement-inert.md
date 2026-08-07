@@ -80,3 +80,20 @@ shard worker is needed to prove the predicate.
 Theme T1 (hand-maintained parallel tables drift from `CommandSpec`) — issue 19,
 `.scratch/testing-improvements-round2/issues/`; the same registry-consistency module closes this
 and the scripting write-flags and WAL declared-keys instances.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces verbatim. `all_for_command` is still `COMMAND_ALL_CATEGORIES.get(...).cloned().unwrap_or_default()`
+at `frogdb-server/crates/acl/src/categories/mod.rs:149-154`, and `permissions.rs:236` is still its
+sole enforcement consumer (deny-category loop at `permissions.rs:239-246`), so an empty vec makes
+every `-@category` rule a no-op. The gap has *grown*: `COMMAND_ALL_CATEGORIES`
+(`categories/data.rs:296-1801`) holds **202** rows against **377** `static SPEC: CommandSpec`
+constants in the tree (was 356 at filing). `monitor` (`data.rs:244`) and `failover` (`data.rs:254`)
+are still present only in the primary `COMMAND_CATEGORIES` table (lines 9-293) and absent from
+`COMMAND_ALL_CATEGORIES`, so `+@all -@admin` still permits `MONITOR`. No `acl_category_coverage`
+test or `CATEGORY_EXEMPT` allowlist exists anywhere in the tree; the only history on either file
+since filing is `7ba151f0` (the directory-restructure move). Path correction: all `acl/src/...`
+refs in the body are now `frogdb-server/crates/acl/src/...` — line numbers are otherwise unchanged.
+ACL is not a hardening-campaign locked area, so no `FM-*` row covers it.

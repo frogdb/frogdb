@@ -69,3 +69,21 @@ move it down when that support exists.
 - `shard_driver` FT.\* support (proposal 10/F15, "no FT.\* coverage exists at any boundary below
   the socket") is **not** currently one of the I1–I18 infrastructure items, so there is no issue
   number to cite for it. Until it exists, this test lands at level 4.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+All three cited sites are unchanged, and the line numbers still hold.
+`core/src/shard/search/index_mgmt.rs:128-141` — the `self.search.alter(name, new_fields, |idx| …)`
+rescan closure — is still hash-only (`if let Some(value) = store.get(&key) && let Some(hash) =
+value.as_hash() { idx.index_hash(...) }`) with **no `IndexSource::Json` branch**, while the sibling
+`core/src/shard/search/create.rs:38-52` still does `let is_json = def.source == IndexSource::Json;`
+and dispatches to `index_json`/`index_hash`. The destructive reopen is still
+`std::fs::remove_dir_all(path)?` → `Index::open_or_create(dir, …)` at
+`search/src/index.rs:1010-1015` (a second copy at `:897`), and `VectorFieldManager::new` is still
+rebuilt from scratch at `:1034`. `frogdb-search` / `frogdb-core`'s search module were never part of
+the hardening campaign (no locked crate, no FM row mentions `FT.ALTER`), and the test picture is
+unchanged: all six `FT.ALTER` uses in `server/tests/search.rs` (`:147`, `:187`, `:206`, `:251`,
+`:2950`) are HASH indexes, and none of the `ON JSON` tests (`:5801`+, `:7420`+) alters. Confirmed
+live data-loss defect.

@@ -99,3 +99,27 @@ only under option (b), which trades transfer fidelity for speed.
   shutdown despite its name.
 - Theme T2 (failure of a derived structure reported as success) — issue 20,
   `.scratch/testing-improvements-round2/issues/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The exclusion is not just intact, it is now *documented policy*:
+`persistence/src/snapshot/stager.rs:9-12` still says a snapshot deliberately does not include
+`<data_dir>/search`, `:97-110` carries the proposal-23 DELETE note (*"Replication full sync ships
+its own flat RocksDB checkpoint and never touches `search/` either"*), and Phase 2 pinned the
+exclusion with a **test that asserts it** — `test_stager_excludes_search_sidecar`, listed under
+FM-PERSISTENCE-018. Nothing was added on the restore side: `IndexLifecycleManager::recover`
+(`core/src/shard/search/lifecycle.rs:357-395`) still reads the definition out of `search_meta`,
+calls `ShardSearchIndex::open` against the node's own (empty) search dir, and pushes
+`RecoveryOutcome::Recovered { num_docs }` at `:381-383` with no comparison against the shard's key
+count. `frogdb-search` and the core search module were out of campaign scope, and no
+`FM-PERSISTENCE-*` row covers the restored-index case — note FM-PERSISTENCE-019's Observable cell
+("The restored checkpoint contains every write … *including search-index state*") reads as a
+guarantee this issue shows is false for a restore into a fresh data dir, and should be corrected
+with the fix. Crash half also intact, with line drift: `event_loop.rs:31` → `:32`
+(`search_commit_interval = interval(Duration::from_secs(1))`) fired at old `:88-95` → `:104`, still
+independent of `WriteEffectKind::WalPersistence` (`post_execution.rs:385`). The only restart test,
+`server/tests/search.rs:1535 test_ft_survives_restart`, reuses the **same** data dir so the sidecar
+is simply still on disk — it cannot see this; `test_ft_search_bgsave_flushes_search` (`:1616`) never
+restarts. The option decision (a/b/c) is still unrecorded, so this stays `needs-triage`.

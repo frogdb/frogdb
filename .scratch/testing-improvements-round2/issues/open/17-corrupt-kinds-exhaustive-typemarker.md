@@ -52,3 +52,25 @@ the exhaustiveness link itself is a compile-time (level 1) guarantee.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The gap is unchanged and the list got *shorter*, not longer. `CORRUPT_KINDS` is no longer a
+const: `cd78df2f` (exotic command families behind cargo features) turned it into
+`fn corrupt_kinds() -> Vec<&'static str>` — so `server/tests/integration_dump_restore.rs:630-641`
+→ `frogdb-server/crates/server/tests/integration_dump_restore.rs:638-655`. It is still
+hand-written, still omits cms, topk, tdigest and vectorset, and now drops stream/hll/json out of
+the matrix entirely under the default core profile (they are `#[cfg(feature = "cmd-…")]`
+pushes), so the default `just test` run corrupts six kinds out of seventeen markers. One new
+obstacle for the proposed fix: `TypeMarker` is now **crate-private** —
+`frogdb-server/crates/persistence/src/serialization/marker.rs:19` is `pub(crate) enum TypeMarker`
+and `serialization/mod.rs:36` re-exports it `pub(crate)` — so a server integration test cannot
+match on it at all. Either the marker (or a purpose-built enumeration) must be exported from
+`frogdb-persistence`, or the exhaustiveness check must live inside that crate alongside the
+existing `TypeMarker::ALL`-driven `registry_covers_every_marker_once` /
+`every_marker_round_trips` (`persistence/src/serialization/registry.rs:542,562`), which today
+guarantee a decoder per marker but say nothing about corruption coverage. Nothing in
+`.scratch/hardening/specs/persistence-failure-modes.md` covers DUMP/RESTORE payload corruption
+(its corruption rows are recovery-side: FM-PERSISTENCE-033/034/047).

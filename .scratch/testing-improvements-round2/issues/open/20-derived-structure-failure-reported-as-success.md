@@ -106,3 +106,38 @@ Issue 04, `.scratch/testing-improvements-round2/issues/` (conservation checker i
 `with_eviction`, optional warm/persistent store) is required for the spill and warm-read arms. The
 failed-spill contract is gated on the semantics call in issue 30,
 `.scratch/testing-improvements-round2/issues/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+One of five findings is fixed; the core deliverable (a seventh conservation checker) does not
+exist — `crates/testing/src/conservation.rs` still has exactly the five checkers named in the body
+(`check_exactly_once_delivery:121`, `check_fifo_wake_order_exact:417`,
+`check_tx_sum_conservation:539`, `check_watch_no_false_negative:818`, `check_pel_conservation:879`)
+and no `check_index_conservation`. Per-claim:
+
+- **Failed RocksDB spill → real delete + replicated `DEL` — FIXED.** Commit `0d727d05`
+  (2026-08-03, "keep keys on failed spill"), tracked as round-2 issue 41 (now in `issues/done/`).
+  `crates/core/src/shard/eviction.rs:299-309` now splits `Err(e @ SpillError::Rocks(_))` (log +
+  return `false` ⇒ caller replies `-OOM`, key survives) from structural errors, which still fall
+  back to `delete_for_eviction` at :320. Forced by `crates/shard-harness/tests/eviction_spill_failure.rs`.
+  Line refs old → new: `eviction.rs:269-277` → `:262-323`; the doc rationale moved to `:236-261`.
+- **Failed warm-tier read → still valid.** `crates/core/src/store/hashmap.rs:812-831` (old ref
+  `:813-827`) — the `Ok(None)`, `Err(e)` and deserialize-`Err` arms of `unspill_key` all still
+  `return None` with only a `warn!`, taking no repair action, while the expired-warm-key arm at
+  `:799-808` still correctly `uninstall`s.
+- **Mid-iteration RocksDB error → still valid.** `crates/persistence/src/rocks/columns.rs:41-45`
+  is byte-identical (`self.inner.next().and_then(|r| r.ok())`, `Item = (Box<[u8]>, Box<[u8]>)`).
+  Owned separately by still-open issue 42.
+- **Search index absent from snapshot/full-sync → still valid, and now deliberate.**
+  `crates/persistence/src/snapshot/stager.rs:9-11,98-124` documents the exclusion as a decided
+  design ("proposal 23 — search-sidecar layout, DELETE branch"), so the remaining gap is purely
+  the *unasserted* `num_docs` reconciliation. Owned separately by still-open issue 46.
+- **HLL encode failure → still valid.** `crates/persistence/src/serialization/probabilistic.rs:211-214`
+  (old ref `:181-183`) still has the `else` arm writing `(TypeMarker::HyperLogLog, vec![0;5])` with
+  the "Shouldn't happen" comment.
+
+Relationship to **issue 61**: 61 was re-triaged as *superseded by issue 23*, not by this issue —
+61/23 are the scatter-merge family (T5), this issue is the derived-structure family (T2). They do
+not overlap in evidence; keep both.

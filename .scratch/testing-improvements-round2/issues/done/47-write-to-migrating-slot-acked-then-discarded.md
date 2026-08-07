@@ -1,6 +1,6 @@
 # A single-key write to a MIGRATING slot is `+OK`'d, then discarded
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/04 F1 · MASTER.md §3
@@ -68,3 +68,27 @@ The existing `test_e2e_migration_concurrent_writes` already does 90% of the setu
 ## Depends on
 
 Nothing — the cluster harness this needs already exists.
+
+## Re-triage 2026-08-06
+
+**Verdict: fixed**
+
+This is the same defect the hardening campaign tracked as issue 40 / issue 31 §"Bug X", fixed by
+**9128d086** *"fix(cluster): probe key presence on the migrating source at every arity"* (plus
+clippy follow-up **fa699be2**). That commit did exactly what "What to fix" asks: `route_migrating_source`
+(`server/src/slot_migration/routing.rs`) turns an open migration off an owned slot into a probe
+instruction, `KeyPresence::migrating_source_reply` is the single presence→reply policy shared by the
+per-command stage and `validate_queued_batch`, `check_migrating_multikey` became
+`check_migrating_source` with **no arity gate** (so `guards.rs:750` no longer exists in that shape),
+the stage was renamed `MigratingTryAgain` → `MigratingSourceProbe` and hoisted ahead of
+`ConnectionCommand`, and the post-execution `migrating_ask_for_nil` hack was retired outright. The
+contract is now
+[FM-CLUSTER-028](../../../hardening/specs/cluster-failure-modes.md#fm-cluster-028--the-migrating-source-serves-what-it-still-holds-and-asks-what-has-moved)
+(rewritten by the same commit — it previously documented the buggy behaviour), forced by 15 tests
+including the end-to-end `test_single_key_write_on_migrating_source_asks_and_never_orphans`
+(`server/tests/cluster_migration.rs:4130`), which covers criteria 1-2 verbatim (`SET` on a migrated
+key → `-ASK <slot> <target>`, `GET` → `-ASK`, `EVAL` → `-ASK`, source `DBSIZE == 0` before *and*
+after `SETSLOT NODE`, target keeps the migrated value). Criterion 3's `DEL`/`INCR` variants are not
+spelled out by name, but the rule is now arity- and command-agnostic by construction, so `SET`-
+specificity is structurally impossible; criterion 4's read variant is covered by the same test's
+`GET` assertion.

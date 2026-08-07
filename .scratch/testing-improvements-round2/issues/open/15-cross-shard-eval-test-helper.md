@@ -49,3 +49,21 @@ to span.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The helper still does not exist. The knob is where the issue says it is —
+`allow_cross_slot_standalone` at `frogdb-server/crates/test-harness/src/server.rs:195,275,476` —
+but `test-harness/src/` exposes no EVAL helper and no cross-shard key selector: `cluster_helpers.rs`
+offers only `key_for_slot(slot)` (`:94`), which is slot-oriented and single-key. Every test that
+needs shard-spanning keys re-derives them locally from `frogdb_core::shard_for_key` —
+`keys_spanning_shards` in `server/tests/integration_persistence.rs:1943`, plus one-off finders at
+`integration_transactions.rs:7` and `integration_client.rs:1625` — which is exactly the
+duplication the helper would remove. On the scripting side the closest test is
+`test_script_load_caches_on_every_shard` (`server/tests/integration_scripting.rs:556-613`), and it
+proves the gap rather than closing it: it runs **one single-key EVALSHA per shard** to check that
+SCRIPT LOAD broadcast, never an EVAL whose declared `KEYS` span shards, so the multi-shard script
+path the VLL audit wants (`frogdb-server/crates/vll/src/coordinator.rs`, the shard-exclusive lock
+a cross-shard Lua script takes) is still unexercised.

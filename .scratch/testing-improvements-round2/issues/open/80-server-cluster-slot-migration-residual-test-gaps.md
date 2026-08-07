@@ -188,3 +188,41 @@ and rejects PSYNC); the standalone half below is writable today.
 
 - issue 13, `.scratch/testing-improvements-round2/issues/` (I13 — bounded-duration partition primitive; F4 needs a partition of a *specific* node from the leader for a *bounded* number of health-check intervals, which nothing today can express)
 - issue 14, `.scratch/testing-improvements-round2/issues/` (I14 — mockable `ClusterWriter` / propose seam; F7 needs an honest `ProposeError::Redirect`, and the same item's typed `parse_rpc_message` error taxonomy would let F10 replace `cluster_bus.rs:167-181`'s string matching with an error-kind match)
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 4/12 findings discharged, 4 partially, 4 still-valid.
+
+| finding | verdict | evidence |
+|---|---|---|
+| F3 assertion-free cluster replication tests | **fixed** | `crates/server/tests/cluster_failover.rs:1682` `test_cluster_replica_receives_writes_asserted` (6 asserts: `connected_slaves:1`, `READONLY` read-back) and `:2233` `test_promoted_replica_has_all_data` (5 asserts, `CLUSTER FAILOVER TAKEOVER`, `MOVED` explicitly a failure) |
+| F4 probe loop → quorum gate → `MarkNodeFailed` wiring | partially-fixed | `crates/cluster-runtime/src/failure_detector.rs` now has 30 tests / 21 FM tags incl. the rejected-`MarkNodeFailed` arm (`:474`) and composition tests (`:1559,:1583,:1684,:1705,:1820`), but no level-5 false-positive scenario under a bounded partition |
+| F5 importing target returns no TRYAGAIN for a partially-arrived multi-key command | **still-valid** | see note below |
+| F6 `RealReplicaStreamer` never started by a test | partially-fixed | `crates/server/src/role_manager.rs:507` streamer + `:1223` `streamer_with()` + `:1257` `runtime_stream_wires_shared_offset_to_healthprobe_atomic`; still no live-stream test |
+| F7 `SlotMigrationCoordinator::commit` non-leader redirect arm | partially-fixed | unit coverage of `ProposeError::Redirect` → `redirect_to_response`; no level-4/5 non-leader commit |
+| F8 migration completion with unknown target drops the shard wakeup | **fixed** | `crates/cluster-runtime/src/migration_events.rs` — the drop branch is now a wake with `target_addr: None`, pinned by `migration_event_with_an_unknown_target_still_wakes_blocked_clients` (`:221`) and siblings at `:168,:188,:206`, all tagged `// FM-CLUSTER-038` |
+| F9 `tls_cluster_migration` runtime flip vs a real bus connection | still-valid | `crates/cluster-runtime/src/bus.rs:451` `flipping_the_runtime_flag_changes_the_next_connection` still only calls `choose_transport`; no live TLS/plaintext dial |
+| F10 malformed/truncated/duplicate bus frames; errors classified by string match | partially-fixed | FM-CLUSTER-051 `the_bus_serves_probes_and_raft_rpcs_on_one_connection` (`bus.rs:525`) covers multiplexing; `is_clean_disconnect` (`:273`) still does `error_msg.contains("connection closed")` and no malformed/truncated-frame test exists |
+| F11 `MIGRATE` AUTH/SELECT handshake uncovered | still-valid | `crates/server/src/migrate.rs:283` `auth` / `:307` `select_db` still have no test; only 7 parse tests |
+| F12 `ClusterRuntimeFlags` setters + `write_fence_reason` | **fixed** | `crates/cluster-runtime/src/flags.rs` — FM-CLUSTER-059 tests `:167,:181,:200,:213,:242`, FM-CLUSTER-060 tests `:280,:307`, against setters `:60,:70,:88` |
+| F13 cluster pubsub never skips a FAILed node; single-node early return dead | **fixed** | `crates/cluster-runtime/src/pubsub.rs:687` asserts 12 → 7 dials after `apply_local(ClusterCommand::MarkNodeFailed{node_id:3})`; single-node early return `:207`, FAIL skip `:220` |
+| F14 `MigrateArgs::parse` negative paths | still-valid | `migrate.rs:139` `parse` still has only the 7 tests at `:375,:396,:413,:450,:475,:500,:512` |
+
+Location corrections (cluster code moved into the Phase-4 crate): `server/src/cluster_bus.rs` →
+`crates/cluster-runtime/src/bus.rs`; `cluster_flags.rs` → `crates/cluster-runtime/src/flags.rs`;
+`cluster_pubsub.rs` → `crates/cluster-runtime/src/pubsub.rs`; `slot_migration/events.rs` →
+`crates/cluster-runtime/src/migration_events.rs`, with `run_event_dispatcher` renamed
+`run_slot_migration_event_dispatcher` (`:91`); the cluster-replication tests cited in
+`integration_cluster.rs` are now in `crates/server/tests/cluster_failover.rs`. F10's cited
+`cluster_bus.rs:167-181` string matching is now `bus.rs:273`.
+
+**F5 remains a real behavioural gap on today's tree, not just a test gap.** The migrating *source*
+now probes at every arity (9128d086, FM-CLUSTER rows for `ProbeMigratingSource`) —
+`guards.rs:823` `check_migrating_source` — but the *importing target* still never probes on the
+per-command path: `slot_migration/routing.rs:89` maps `RouteDecision::AcceptImporting` straight to
+`RouteOutcome::ServeLocal`, and the only `BatchRoute::ProbeImporting` handler
+(`guards.rs:1029`) returns early for `keys.keys().len() < 2`. The asymmetry is documented as
+deliberate at `guards.rs:863` ("the source of a migration turns `AllAbsent` into `ASK`, the
+importing target never does"), so this needs a product decision before a test: either the
+importing side gains the same presence probe (Redis replies `-TRYAGAIN` when only part of a
+multi-key command's keys have arrived) or the doc is wrong.

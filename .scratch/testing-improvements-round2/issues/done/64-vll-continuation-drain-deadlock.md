@@ -1,6 +1,6 @@
 # VLL continuation-lock drain deadlocks the shard for 2 s and then always fails
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/12 F5 · MASTER.md §3 (availability / resource)
@@ -67,3 +67,28 @@ Not level 4: the socket adds nothing, and the hang is observable at the driver s
 
 nothing — proposal 12 records that `shard_driver` already builds the real `ShardWorker`s and
 coordinator this scenario needs
+
+## Re-triage 2026-08-06
+
+**Verdict: fixed**
+
+Fixed by commit **`3044970b`** ("fix(vll): park continuation-lock requests instead of blocking the
+shard event loop"), tracked as hardening
+`.scratch/hardening/issues/done/02-continuation-drain-wait-blocks-event-loop.md` and specced as
+**FM-VLL-003** (with **FM-VLL-004** for the SCA-refusal side); both rows carry this as their
+`Bug refs`. The polling loop is gone: `request_continuation_lock`
+(`frogdb-server/crates/vll/src/shard.rs:301-325`) is **no longer `async`** — it grants immediately
+when `is_drained()` (`:333-335`: queue empty *and* `executing_ops == 0`), otherwise stores a
+`PendingContinuation { …, deadline: Instant::now() + CONTINUATION_DRAIN_TIMEOUT }` and returns to
+the event loop, which then drains the queue and grants from the drain point. The 2 s constant
+survives only as a real timeout served by the host's `next_continuation_event` arm. The spec's
+liveness note (`vll-failure-modes.md:70-78`) describes exactly this issue's mechanism as the
+*former* behaviour. Both acceptance criteria are discharged by
+`continuation_request_does_not_stall_the_shard_event_loop`
+(`frogdb-server/crates/core/src/shard/vll.rs:127`) plus
+`continuation_lock_parks_then_grants_when_the_queue_drains` (`vll/src/shard.rs:682`),
+`continuation_lock_times_out_when_the_queue_never_drains` (`:722`),
+`continuation_lock_parks_while_a_dequeued_op_is_still_executing`,
+`parked_continuation_deadline_survives_cancellation` and
+`sca_lock_request_refused_while_a_continuation_request_is_parked`. `frogdb-vll` is a Phase-1
+locked crate at a 0.90 mutation gate.

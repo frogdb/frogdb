@@ -79,3 +79,32 @@ nondeterminism introduced elsewhere.
 Nothing. `TestServer::start_primary`/`start_replica` and the existing replication integration
 harness are sufficient; no infrastructure item from issues 01–18,
 `.scratch/testing-improvements-round2/issues/`, is required.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Both sources of nondeterminism are unchanged and no determinism table exists. Per-claim:
+
+- **`VADD` REDUCE matrix — still valid.** `crates/types/src/vectorset.rs:163` is still
+  `vs.uid = rand::random();`, `:563` still derives the projection matrix from that uid, `:688`
+  still `StdRng::seed_from_u64(uid)`. No `repl_override` was added.
+- **`TOPK.ADD` decay — still valid.** `crates/types/src/topk.rs:118` is still
+  `if rand::random::<f64>() < prob`.
+- `rg 'rand::random' crates/types/src/{vectorset,topk}.rs` returns exactly those two lines, so
+  acceptance criterion 5 still fails.
+
+**On the campaign's determinism work — it discharges neither half of this issue.** The clock-seam
+sweep (`2fb1051c`), the OS-clock lint (`0fe2dd0a`, `just lint-clock-seam` →
+`scripts/clock-seam.py`) and the XADD wall-clock virtualization (`8b62120f`) all address a
+*different* nondeterminism source: **wall-clock reads**. `2fb1051c` touches 49 files and neither
+`types/src/vectorset.rs` nor `types/src/topk.rs` is among them, and `clock-seam.py` gates
+`Instant::now`/`SystemTime::now`, not `rand`. There is no lint gating `rand` on a
+verbatim-propagated write path. So: the clock work closes the wall-clock half of "propagated
+writes must be deterministic"; this issue's PRNG half — which is the whole of its evidence — is
+untouched. The generic table-driven primary/replica determinism harness (criterion 1) also does
+not exist.
+
+Relationship to **issue 56**: 56 was closed on 2026-08-06 as **superseded by this issue** and moved
+to `issues/done/` (same two findings, strictly narrower criteria). This issue owns the work and
+must stay open.

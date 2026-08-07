@@ -201,3 +201,32 @@ decisively here. Two apparent dependencies that are not:
   area 04 and is directed *at* this crate; nothing in this issue depends on it. Its companion
   note (typing `parse_rpc_message`'s error taxonomy) is cross-referenced from F13 as a
   do-both-at-once opportunity, not a prerequisite.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 4/11 findings discharged (F1, F4, F12 fixed; F16 superseded);
+F7, F11, F13 partial.
+
+| F | verdict | evidence |
+|---|---|---|
+| F1 | **fixed** | The state-machine snapshot is now persisted (`ClusterSnapshotStore`, `KEY_SNAPSHOT_META`/`KEY_SNAPSHOT_DATA` at `cluster/src/storage.rs:28,33`) — the epoch-fold T7 blocker is gone. FM-CLUSTER-017 forces it with `test_state_machine_snapshot_survives_restart_without_log_replay`, `test_snapshot_save_never_moves_backwards`, `test_snapshot_store_is_opt_in`. |
+| F2 | still-valid | No replay-determinism test comparing two independently-derived state machines; `frogdb-cluster`'s dev-deps are only `tokio`, `tempfile`, `tracing-subscriber` — no `proptest`. |
+| F4 | **fixed** | `get_log_state` (`storage.rs:436-466`, was cited at `:248-274`) now returns `last_log_id: last_log_id.or(last_purged)` with the openraft contract spelled out in-source. |
+| F6 | still-valid | No frozen JSON fixture for any `ClusterCommand` variant or for `ClusterStateInner`; the only golden in the crate is `test_render_cluster_nodes_golden` (`wire.rs:337`), which is CLUSTER NODES text, not the on-disk encoding. |
+| F7 | partially-fixed | The lifecycle is no longer at zero tests: `snapshot_builder_shares_the_live_state` (`state.rs:3906`), `begin_receiving_snapshot_hands_back_an_empty_buffer` (`:3941`) under FM-CLUSTER-017, and `test_install_snapshot_emits_{promotion,demotion}…`/`…_silent_when_self_role_unchanged` (`:3186/:3210/:3237`) under FM-CLUSTER-045. Unmet: a full source→`install_snapshot`→fresh-SM equality round trip, the empty-SM `build_snapshot` vs `get_current_snapshot` asymmetry, and the `network.rs` loopback InstallSnapshot payload check. |
+| F8 | still-valid | `commands.rs` still has no property test; no `proptest` dev-dep in the crate. |
+| F11 | partially-fixed | The retry/exhaustion half is now covered — `the_voter_retry_schedule_backs_off_and_then_stops` (`network.rs:1266`) and `adding_a_voter_runs_for_a_stranger_and_skips_an_existing_member` (`:1286`). The removal half stands: `change_membership` appears exactly once repo-wide (`network.rs:710`, inside `spawn_add_raft_voter`), so `CLUSTER FORGET` still leaves a departed node a Raft voter. |
+| F12 | **fixed** | FM-CLUSTER-017 names `membership_entries_are_recorded_for_applied_state`; the `EntryPayload::Membership` apply arm is forced. |
+| F13 | partially-fixed | Only the disconnect/protocol-error classification is pinned (`every_disconnect_phrase_ends_the_connection_quietly`, `cluster-runtime/src/bus.rs:492`). Still untested: garbage / truncated / over-cap frames through `parse_rpc_message` (`network.rs:806`), and `new_client`'s silent `"127.0.0.1:16379"` fallback on an unparsable address (`network.rs:326-332`). `test_all_rpc_variants_roundtrip` (`:891`) still compares discriminants with `matches!`, not payloads. |
+| F15 | still-valid | `SlotRange::new` (`types.rs:176-182`) is still `debug_assert!`-only and `is_empty()` (`:200`) still hard-codes `false`. |
+| F16 | **superseded** | Decided the other way and documented in-source: `storage.rs:493-501` now states `read_committed` is deliberately left at openraft's `None` because `append` uses non-fsync write options, so reading the key back could hand `get_initial_state` a commit index naming lost entries. The write half is forced by `save_committed_writes_then_deletes_the_persisted_key` (FM-CLUSTER-017). The proposed read-back assertion can never hold; the T7 dependency is discharged. |
+
+Phase 4 locked `frogdb-cluster` (99.6%) and `frogdb-cluster-runtime` (99.0%) against 78
+FM-CLUSTER rows, but the lock is not blanket cover: the encoding-compat (F6) and property-test
+(F2, F8) findings have no row, and `frogdb-cluster` still carries no `proptest` dev-dependency.
+Stale refs corrected: `get_log_state` `storage.rs:248-274` → `:436-466`; the `read_committed`
+discussion `storage.rs:298-308` → `:493-501`; `spawn_add_raft_voter` `network.rs:653-660` →
+`:~700-720`; `integration_cluster.rs` split into `server/tests/cluster_*.rs` (e.g.
+`test_cluster_meet_adds_node_to_raft_voters` → `cluster_topology.rs:2234`). No live production
+bug newly confirmed: F11's missing voter-removal path and F15's release-build range guard are
+both real source gaps, but both were already stated as such when filed.

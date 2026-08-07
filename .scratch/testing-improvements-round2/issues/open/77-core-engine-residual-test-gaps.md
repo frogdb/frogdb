@@ -215,3 +215,38 @@ executed with that sweep rather than beside it.
   in `ActiveExpiryCoordinator` (today `Instant::now()` inline). `MASTER.md` §6 lists area 01 among
   I3's requesters; `INFRASTRUCTURE.md`'s "smallest useful slice" note scopes I3 to the expiry path,
   which is exactly what F13 needs.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 1/13 findings discharged (F1), 1 partially (F13).
+
+| finding | verdict | evidence |
+|---|---|---|
+| F1 single-command WAL-failure rollback 0-covered | **fixed** | FM-PERSISTENCE-006 forced by `wal_failure_in_rollback_mode_replies_ioerr_and_restores_the_key` (`crates/core/src/shard/rollback.rs:573`) + `test_rollback_{existing_key,missing_key,del_restores_key,rename,preserves_expiry,clears_added_expiry}`; continue-mode twin is FM-PERSISTENCE-005 |
+| F5 OOM rejection after eviction gives up | still-valid | branch unchanged, no forcing test |
+| F6 active expiry of a spilled (warm) key | still-valid | |
+| F7 cross-shard COPY destination write | still-valid | |
+| F8 eviction never prefers already-expired keys | still-valid | |
+| F9 `Store` trait ~40 silent no-op defaults | still-valid | |
+| F10 active-expiry field-phase budget exhaustion | still-valid | |
+| F11 real `run()` select loop never under test | still-valid | harness still drives `drive*` seams only |
+| F12 eviction asserted only at level 4 | still-valid | builder still takes no `with_eviction` |
+| F13 active-expiry budget tests wall-clock dependent | **partially-fixed** | production half landed |
+| F14 `EvictionPolicy::TieredLfu` never executed | still-valid | |
+| F16 dead seams (delete, don't test) | still-valid | tracked with issue 34 |
+| F15 shard-level negative paths unreachable | still-valid | |
+
+Stale references corrected: the boundary-3 harness moved `core/tests/shard_driver/harness.rs` →
+`frogdb-server/crates/shard-harness/src/harness.rs`, with the scenario tests now in
+`frogdb-server/crates/shard-harness/tests/` (`scenario_s1..s8`, `shard_driver.rs`); F1's cited
+`scenario_s6.rs:32-59` builder is now `crates/shard-harness/tests/scenario_s6.rs:34`
+(`build_rollback_worker`) and still covers only the `EXEC` twin — the single-command arm is
+discharged by the `rollback.rs` unit tests above, not by s6. F13's production prerequisite is
+**done**: the clock-seam sweep (2fb1051c, 0fe2dd0a) replaced the inline `Instant::now()` in
+`ActiveExpiryCoordinator`'s `Budget` with `crate::clock::now()`
+(`crates/core/src/shard/active_expiry.rs:96,102`), so an injectable clock now exists; the test half
+is unchanged — `avalanche_exhausts_budget_and_next_cycle_resumes` (`:656`) still uses a 2 ms
+per-delete `delete_delay` against a 15 ms wall-clock budget and asserts only
+`deleted_keys.len() < total`. Note the seam's own doc (`:82`) records that a *paused* runtime never
+advances the budget, so the deterministic rewrite must step the clock explicitly rather than merely
+pausing it.

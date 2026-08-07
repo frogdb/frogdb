@@ -70,3 +70,18 @@ which is precisely how the current `sort_tcl` tests fail to catch it.
 
 issue 29 (decision D1 — home for command-semantics tests),
 `.scratch/testing-improvements-round2/issues/`
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces verbatim on today's tree; nothing in the hardening campaign touched `SORT` (commands is
+not a locked crate and no FM row mentions it). Path updated: `commands/src/sort.rs` →
+**`frogdb-server/crates/commands/src/sort.rs`**. `resolve_pattern` still reads only `ctx.store`
+(`sort.rs:143`, and its `ctx.store.get(...)` lookups at `:169`, `:184`, `:198`);
+`compute_sort_key` still silently substitutes `SortKey::Alpha(Bytes::new())` (`:242`) /
+`SortKey::Numeric(0.0)` (`:244`) for an unresolvable key; `dynamic_keys` (`:485`) and `dynamic_keys_with_flags`
+(`:500`) still declare only `args[0]` (R) and `sort_store_dest(args)` (OW) — no BY/GET pattern keys.
+`require_same_shard` moved `utils.rs:964` → **`utils.rs:928`** and is still applied only by
+`sorted_set/set_ops.rs:170,340,560,663` and `sorted_set/pop.rs:198`, never by SORT. The
+options (a)/(b)/(c) decision is still unmade, so `needs-triage` stays correct.

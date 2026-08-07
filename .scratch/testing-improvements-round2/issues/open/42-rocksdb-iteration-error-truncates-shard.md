@@ -66,3 +66,24 @@ only re-expose the same `Ok` return.
 
 Theme T2 (failure of a derived structure reported as success) — issue 20,
 `.scratch/testing-improvements-round2/issues/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The swallow is byte-for-byte intact: `persistence/src/rocks/columns.rs:41-44` is still
+`type Item = (Box<[u8]>, Box<[u8]>); fn next(&mut self) { self.inner.next().and_then(|r| r.ok()) }`
+(last touched by 3a135004, March), and `recover_shard_into` still drives it as
+`for (key, value) in rocks.iter_cf(shard_id)?` at `persistence/src/recovery.rs:147` — the `?` covers
+only CF-handle resolution, so a mid-iteration `Err` ends the loop and returns `Ok(stats)` with a
+short `keys_loaded`. Reachability is unchanged: `full_value_merge`/`partial_value_merge`
+(`persistence/src/rocks/mod.rs:671-692`) still return `Option<Vec<u8>>` and `merge_hll_serialized`
+(`persistence/src/serialization/probabilistic.rs:570-601`) still returns `None` on an undecodable
+operand. Phase 2 locked persistence but added no FM row for iteration errors — worse,
+[FM-PERSISTENCE-033](../../../hardening/specs/persistence-failure-modes.md)'s Invariant cell asserts
+*"Only a `RocksError` from the iteration itself propagates"*, which the code does **not** honour;
+that sentence should be corrected as part of the fix. **Correction to the body**: the `has_data`
+sub-claim (old `rocks/mod.rs:531-539`, now `rocks/mod.rs:591-600`) is wrong and always was — it
+iterates the raw `rocksdb` iterator and tests `iter.next().is_some()`, and an error item is
+`Some(Err(_))`, so an unreadable CF reports *has data*, not empty. Acceptance criterion 2 should be
+restated (or dropped) accordingly; criteria 1 and 3 stand.

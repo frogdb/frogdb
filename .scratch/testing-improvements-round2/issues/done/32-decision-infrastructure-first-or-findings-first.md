@@ -1,6 +1,6 @@
 # Decision D4 — shared test infrastructure first, or findings first
 
-Status: ready-for-human
+Status: done
 Type: decision
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §7 D4 · MASTER.md §6 · INFRASTRUCTURE.md
@@ -84,3 +84,21 @@ Nothing blocks this decision. It sequences issues 01–18,
 `.scratch/testing-improvements-round2/issues/`, against everything else in the round-2 backlog.
 Take it together with issue 30, same directory (bugs-before-tests), which is the orthogonal
 scheduling decision.
+
+## Re-triage 2026-08-06
+
+**Verdict: superseded**
+
+The hardening campaign answered this as option (c), by doing it. `docs/agents/hardening-campaign.md`
+records a **Phase 0 "Enablement"** — freeze, gating, recipes, `frogdb-net`, `frogdb-shard-harness`
+(`7dd3cf65`) — a thin tier-A pass that built only the shared seams the scheduled work needed, then
+four strictly serial area phases each shaped **extract → failure-mode spec → close known bugs →
+mutation-test → fill gaps → lock** (`hardening-campaign.md:17`). The retrospective (`e3e51a52`,
+`.scratch/hardening/retrospective-2026-08-05.md` §"What worked" #1) names that ordering as the
+reason each phase finished in 1-2 days. Tiers B and C stayed demand-driven exactly as (c)
+prescribes: I3's clock seam was built only when the expiry/replication work required it
+(`00dfb0ab`, `2fb1051c`, `0fe2dd0a`, plus a lint gating raw OS-clock reads), while I2's
+subprocess-SIGKILL primitive — the tier-C item whose 1-2-week cost this issue asks about — was
+never built, and its design question (byte-truncation vs. mid-fsync residue) is therefore still
+open under issue 02 rather than here. `INFRASTRUCTURE.md`'s I1 was not built as specified; it was
+superseded by the harness crate extraction (see issue 29's re-triage).

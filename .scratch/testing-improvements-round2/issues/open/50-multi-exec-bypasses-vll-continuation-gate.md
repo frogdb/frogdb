@@ -72,3 +72,23 @@ Infrastructure I15 (cross-shard EVAL test helper) — issue 15,
 exists in `test-harness/src/server.rs`; only the scripting-side helper for "run an `EVAL` whose
 keys span shards" is missing (~0.5 day). Related: infrastructure I5 ("shard busy running a script"
 fixture) — issue 05, same directory — supplies the long-running-script half.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Confirmed live; the Phase-1 txn/vll lock did not close it. `crates/core/src/shard/dispatch_core.rs`
+still gates only two of the three arms: `CoreMsg::Execute` at `:20` and `CoreMsg::ScatterRequest` at
+`:49` call `self.can_execute_during_lock(conn_id)`; the `CoreMsg::ExecTransaction` arm at `:95-115`
+has `conn_id` in scope and goes straight to `execute_transaction` (line refs 20/49/95 unchanged).
+`execute_transaction` (`crates/core/src/shard/execution.rs:533`) does not consult the gate either —
+it starts at `purge_expired_watches`/`check_watches`. The gate itself is now `worker.rs:844`
+(issue cited `worker.rs:806`), and `dispatch_scripting.rs` still applies it at `:17/:42/:104`.
+Grepping both locked specs finds **no FM row** for this call site:
+`vll-failure-modes.md` FM-VLL-001..004 cover SCA and continuation-vs-continuation contention only
+(FM-VLL-002's "cross-shard Lua / MULTI" refers to a *cross-shard MULTI acquiring* a continuation
+lock, not to an `ExecTransaction` running under someone else's), and `txn-failure-modes.md` contains
+no occurrence of `continuation` or `can_execute_during_lock` at all. EXEC still routes as a
+single-shard `CoreMsg::ExecTransaction` (`crates/txn/src/exec.rs:350-378` →
+`crates/server/src/connection/transaction.rs:185-212`), so no continuation lock is taken on the way
+in. The `Options` decision the issue asks for is still unrecorded.

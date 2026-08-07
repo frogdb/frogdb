@@ -68,3 +68,26 @@ the audit judged that effort unjustified relative to simply making the write dur
 nothing to make the fix. A behavioural loss-proof would need a crash/filesystem-fault primitive
 — adjacent to issue 02 (I2 — subprocess-SIGKILL crash primitive),
 `.scratch/testing-improvements-round2/issues/` — which this proposal did **not** request.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid — confirmed live consensus-safety defect**
+
+Phase 4 locked cluster (FM-CLUSTER-001..078) but **documented this gap instead of closing it**.
+`frogdb-server/crates/cluster/src/storage.rs:515-545` — `append` still does a plain
+`self.db.write(batch)` (`:538-540`, default `WriteOptions`, `sync = false`) and then
+`callback.log_io_completed(Ok(()))` at `:542`. The asymmetry the issue names is still there:
+`save_vote` (`:483-489`) does `self.db.flush()`, and `ClusterSnapshotStore::save` goes further with
+an explicit `write_opts.set_sync(true)` (`:139-140`). Old cites `:333-337` → **`:538-542`**;
+`:290-296` → **`:483-489`**.
+
+The campaign's only response was a *workaround for a downstream symptom*: `save_committed`'s doc
+comment at `storage.rs:495-502` now states outright that "`Self::append` uses default write options
+(no per-append fsync), so a crash can lose a log tail this key already counted as committed", and
+therefore leaves `read_committed` at `None` so the commit index is re-derived from the leader on
+restart — closing the restart-replay crash, not the durability hole. It ends "Revisit if `append`
+ever fsyncs." No FM-CLUSTER row forces an fsync on append (the cluster spec's only `set_sync`
+mention is the snapshot-store invariant, `cluster-failure-modes.md:290-293`), and issue 74's
+resolution is entirely about the persistence snapshot stager, not the Raft log. A leader can still
+commit and act on a topology decision that a power failure erases. Status stays `ready-for-human`
+per the original triage — the deliverable is a durability/latency call plus a benchmark.

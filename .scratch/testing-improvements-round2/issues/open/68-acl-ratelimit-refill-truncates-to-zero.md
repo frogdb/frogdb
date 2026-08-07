@@ -66,3 +66,20 @@ nothing below shuttle finds it deterministically; a level-1 test cannot schedule
 
 issue 03 (I3 — injectable clock seam; its "smallest useful slice" is exactly
 `acl/src/ratelimit.rs:23 now_us`), `.scratch/testing-improvements-round2/issues/`
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+`frogdb-server/crates/acl/src/ratelimit.rs` is unchanged. `refill` is now `:188-233` (was
+`188-232`): it CASes `last_refill_us` to `now` at `:198-205` *before* computing credit, and
+`let add = (cps as i64 * SCALE * elapsed_us as i64) / 1_000_000;` at `:212` truncates to 0 for any
+`elapsed_us < 1_000_000 / (cps * SCALE)` — 10 µs at `cps = 100`, with the window consumed. The
+clamps are still split `fetch_add` + `fetch_sub` pairs (`:214-220`, `:227-231`), and `try_acquire`
+(`:107-141`) still spends via `fetch_sub` and refunds via `fetch_add` (`:116-137`). `now_us`
+(`:23`) is still a hard `Instant`-baseline read with no seam — the clock-seam gate landed
+(`scripts/clock-seam.py`, commits 2fb1051c / 0fe2dd0a) but has no allowlist entry for this file and
+does not flag the bare `Instant::now` fn-ref at `:20`, so the campaign did not reach it.
+`parse_ratelimit` (`frogdb-server/crates/acl/src/parser.rs:446`) still has no direct test.
+Enforcement moved: `guards.rs:123` → **`guards.rs:153`**, `transaction.rs:170` →
+**`transaction.rs:163`** (via `try_acquire_batch` at `:149`).

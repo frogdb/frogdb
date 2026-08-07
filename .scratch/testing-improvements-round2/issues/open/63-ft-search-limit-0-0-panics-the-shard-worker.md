@@ -66,3 +66,30 @@ The level-1 matrix is not sufficient alone precisely because it cannot observe s
 ## Depends on
 
 nothing
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid — confirmed live panic**
+
+Nothing changed. `git log -S"with_limit" -- frogdb-server/crates/search/src/index.rs` returns only
+the two original feature commits (`fae0204b`, `f360a69c`); the hardening campaign never touched
+`crates/search` and no FM row mentions it. Today's chain, statically verified end to end:
+`wire.rs:119-122` parses `LIMIT 0 0` to `offset=0, limit=0`; `wire.rs:337-341 index_options()`
+yields `SearchOptions { offset: 0, limit: self.offset + self.limit }` = `limit: 0`;
+`index.rs:568-571` computes `(fetch_offset, fetch_limit) = (offset, offset + limit)` = `(0, 0)`
+with **no** `limit == 0` guard anywhere in `search()` (`index.rs:493` onward); `fetch_limit` then
+reaches `TopDocs::with_limit(fetch_limit)` at **`index.rs:594`, `:634` and `:699`** (the issue's
+single `:699` is now three call sites — numeric-sort, string-sort and default-BM25). The workspace
+pins **tantivy 0.26.0** (`Cargo.lock:4951-4952`), whose
+`src/collector/top_score_collector.rs:94` is `assert_ne!(limit, 0, "Limit must be greater than 0")`
+— an unconditional `assert_ne!`, live in release. The hybrid vector is also intact:
+`core/src/shard/search/query.rs:432-438` accepts any parsed `usize` as `combine_count` including
+`0`, `:700-701` folds it to `count`, and `index.rs:1094-1106 hybrid_search` computes
+`fetch_count = window * count` = 0 and feeds it to `search` as `limit`. Only three `catch_unwind`
+sites exist in the workspace (`server/src/connection/transaction_conn_command.rs`,
+`core/src/scripting/gate.rs`, one test) — none on the shard event loop. `rg` for a zero-limit test
+or clamp across `crates/search/src`, `crates/core/src/shard/search` and
+`server/src/commands/search.rs` returns nothing.
+
+Caveat per the re-triage brief: verified statically only (no `cargo` runs permitted); the crash
+itself is unverified-by-execution, but the assert is unconditional and the argument path is direct.
