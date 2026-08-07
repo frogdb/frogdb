@@ -56,10 +56,12 @@ pub use cluster::{
     BusRpc, CLUSTER_SLOTS, ClusterBusStats, ClusterBusStatsSnapshot, ClusterCommand, ClusterConfig,
     ClusterError, ClusterNetwork, ClusterNetworkFactory, ClusterRaft, ClusterResponse,
     ClusterRpcRequest, ClusterRpcResponse, ClusterSnapshot, ClusterState, ClusterStateMachine,
-    ClusterStorage, ConfigEpoch, DemotionEvent, FramedStream, NodeId, NodeInfo, NodeRole,
+    ClusterStorage, ConfigEpoch, DemotionEvent, FramedStream, HANDOFF_BARRIER_MS,
+    HANDOFF_DRAIN_TIMEOUT_MS, HANDOFF_DRAIN_WAIT_MS, HANDOFF_LEASE_MS, NodeId, NodeInfo, NodeRole,
     PromotionEvent, RaftRpc, RoleChangeEvent, RoleReconcile, SelfRoleReconciler, SharedClusterRaft,
-    SlotMigrationCompleteEvent, SlotRange, TypeConfig, handle_rpc_request, new_framed,
-    new_framed_tcp, parse_rpc_message, send_rpc_response,
+    SlotHandoff, SlotHandoffEvent, SlotMigration, SlotMigrationCompleteEvent, SlotRange,
+    TypeConfig, handle_rpc_request, new_framed, new_framed_tcp, parse_rpc_message,
+    send_rpc_response,
 };
 /// The shard-local executor trait. Alias of [`command::Command`], whose
 /// `execute(&mut CommandContext)` runs on the owning shard. Named `ShardCommand`

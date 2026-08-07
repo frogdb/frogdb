@@ -263,22 +263,8 @@ mod tests {
         for slot in 0..10 {
             snap.slot_assignment.insert(slot, 1);
         }
-        snap.migrations.insert(
-            100,
-            SlotMigration {
-                slot: 100,
-                source_node: 1,
-                target_node: 2,
-            },
-        );
-        snap.migrations.insert(
-            200,
-            SlotMigration {
-                slot: 200,
-                source_node: 2,
-                target_node: 1,
-            },
-        );
+        snap.migrations.insert(100, SlotMigration::new(100, 1, 2));
+        snap.migrations.insert(200, SlotMigration::new(200, 2, 1));
         snap.config_epoch = 5;
         snap
     }

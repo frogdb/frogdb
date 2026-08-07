@@ -363,11 +363,61 @@ pub enum ClusterCommand {
         target_node: NodeId,
     },
 
+    /// Phase one of a two-phase slot handoff: record a *prepared* handoff on
+    /// the migration so the source can quiesce the slot before ownership
+    /// moves (rework issue 02).
+    ///
+    /// Applying this emits [`ClusterEvent::SlotHandoffPrepared`] on every node;
+    /// the source arms a slot-scoped write barrier for `barrier_ms` and drains
+    /// its shard, then proposes [`ClusterCommand::ConfirmSlotHandoffDrained`].
+    /// Only a prepared *and* drained handoff admits a
+    /// [`ClusterCommand::CompleteSlotMigration`].
+    ///
+    /// The two durations are different bounds on different things and both are
+    /// load-bearing — see [`SlotHandoff`].
+    PrepareSlotHandoff {
+        slot: u16,
+        source_node: NodeId,
+        target_node: NodeId,
+        /// How long the source holds its slot-scoped barrier, and therefore
+        /// the window in which a `CompleteSlotMigration` is admissible.
+        barrier_ms: u64,
+        /// How long the *prepared record* itself stays valid. Longer than
+        /// `barrier_ms`: it is the backstop that lets a later attempt supersede
+        /// a prepare whose finalizer died.
+        lease_ms: u64,
+        /// The proposer's wall-clock reading (through the clock seam) at
+        /// propose time. Carried in the entry rather than read during `apply`
+        /// so every node computes the same deadlines from the same number —
+        /// a state machine that read a local clock would diverge.
+        proposed_at_ms: u64,
+    },
+
+    /// The source has drained its shard for a prepared handoff. `seq` names the
+    /// prepare attempt being confirmed, so a drain ack that arrives after its
+    /// own attempt was aborted cannot vouch for a later one.
+    ConfirmSlotHandoffDrained { slot: u16, seq: u64 },
+
+    /// Abandon a prepared handoff without abandoning the migration: the
+    /// prepared record is cleared (releasing the source's barrier) and the
+    /// `SlotMigration` stays exactly as it was, so the operator can retry
+    /// `CLUSTER SETSLOT … NODE` without re-opening the migration.
+    AbortSlotHandoff { slot: u16, seq: u64 },
+
     /// Complete slot migration.
+    ///
+    /// Admissible only against a handoff that is prepared, drained, and still
+    /// inside its barrier window — a `Complete` that arrives after the source
+    /// resumed serving is refused rather than half-applied.
     CompleteSlotMigration {
         slot: u16,
         source_node: NodeId,
         target_node: NodeId,
+        /// The proposer's wall-clock reading at propose time, compared against
+        /// the prepared handoff's barrier deadline. See `proposed_at_ms` on
+        /// [`ClusterCommand::PrepareSlotHandoff`] for why it is carried rather
+        /// than read at apply.
+        proposed_at_ms: u64,
     },
 
     /// Cancel slot migration.
@@ -455,6 +505,34 @@ pub enum ClusterEvent {
         source_node: NodeId,
         /// The node that now owns the slot.
         target_node: NodeId,
+    },
+    /// A slot handoff entered the *prepared* state: the source must now arm a
+    /// slot-scoped write barrier, drain its shard, and confirm. Node-agnostic —
+    /// the runtime decides whether *this* node is `source_node`.
+    SlotHandoffPrepared {
+        /// The slot being handed off.
+        slot: u16,
+        /// The node that must arm the barrier and drain.
+        source_node: NodeId,
+        /// The node that will own the slot once the handoff completes.
+        target_node: NodeId,
+        /// Attempt identifier, echoed back in
+        /// [`ClusterCommand::ConfirmSlotHandoffDrained`].
+        seq: u64,
+        /// How long the source holds the barrier before letting it lapse.
+        barrier_ms: u64,
+    },
+    /// A prepared slot handoff was released. Emitted by **every** arm that
+    /// removes a prepared record — complete, abort, cancel, failover pruning,
+    /// reset — so the invariant "a prepared handoff never disappears without a
+    /// release event" holds and the source can always drop its barrier.
+    SlotHandoffReleased {
+        /// The slot whose handoff was released.
+        slot: u16,
+        /// The node that armed the barrier.
+        source_node: NodeId,
+        /// The attempt identifier being released.
+        seq: u64,
     },
 }
 
@@ -547,21 +625,138 @@ pub enum ClusterError {
     /// Migration in progress.
     #[error("migration in progress for slot {0}")]
     MigrationInProgress(u16),
+
+    /// A two-phase handoff precondition failed: not prepared, not drained, a
+    /// stale attempt `seq`, or the barrier window already lapsed.
+    ///
+    /// Always **retryable** and always non-destructive — the `SlotMigration`
+    /// record is left exactly as it was, so re-issuing `CLUSTER SETSLOT … NODE`
+    /// starts a fresh handoff attempt. The connection layer renders this as
+    /// `TRYAGAIN` rather than `ERR` for that reason.
+    #[error("slot {0} handoff not ready: {1}")]
+    HandoffNotReady(u16, String),
+}
+
+impl ClusterError {
+    /// True if the caller can simply re-issue the same command later.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, ClusterError::HandoffNotReady(..))
+    }
+}
+
+/// Default source-local barrier window for a prepared handoff, in milliseconds.
+///
+/// This is simultaneously the *prepare deadline*: the source arms its
+/// slot-scoped pause with this timeout, so if the finalizer dies the barrier
+/// lapses on its own and the source resumes serving without needing anyone to
+/// tell it to. It is also the window inside which a `CompleteSlotMigration` is
+/// admissible — past it, ownership must not move, because the source is
+/// already serving writes again.
+///
+/// Sized from the measured finalization window (loaded p99 1.93 ms for the
+/// residual, `finalization-window-measurement-2026-08-05.md`) with two orders
+/// of magnitude of headroom for the Raft round trip that follows the drain.
+pub const HANDOFF_BARRIER_MS: u64 = 100;
+
+/// Default budget the finalizer waits for the drain confirmation before it
+/// aborts, in milliseconds. Deliberately smaller than [`HANDOFF_BARRIER_MS`] so
+/// the abort proposal and a successful `Complete` both still land inside the
+/// barrier window.
+pub const HANDOFF_DRAIN_WAIT_MS: u64 = 50;
+
+/// Default bound on the source's own shard round trip, in milliseconds. Shaped
+/// after the VLL continuation lock's `CONTINUATION_DRAIN_TIMEOUT`. On expiry the
+/// source simply never confirms, so finalization aborts with the migration
+/// record intact — it does **not** drop the barrier and proceed the way
+/// Dragonfly does.
+pub const HANDOFF_DRAIN_TIMEOUT_MS: u64 = 2_000;
+
+/// Default lease on the *prepared record itself*, in milliseconds. Longer than
+/// the barrier: it is the consensus-level backstop that lets a later attempt
+/// supersede a prepare whose finalizer died mid-flight, and it is what an
+/// operator sees dangling in `CLUSTER` state until it expires or
+/// `SETSLOT STABLE` clears it.
+pub const HANDOFF_LEASE_MS: u64 = 10_000;
+
+/// The prepared phase of a two-phase slot handoff.
+///
+/// Every field is plain replicated data. Nothing here is computed from a clock
+/// read during `apply` — see [`SlotHandoff::prepared_at_ms`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SlotHandoff {
+    /// Attempt identifier, minted from the replicated `handoff_seq` counter.
+    /// A drain confirmation or abort must carry the matching `seq`, so a late
+    /// ack from an aborted attempt cannot vouch for the attempt that replaced
+    /// it.
+    pub seq: u64,
+    /// Wall-clock milliseconds, as read by the *proposer* through the clock
+    /// seam. The state machine never reads a clock itself: two nodes applying
+    /// the same entry at different instants would compute different deadlines
+    /// and diverge. Readers compare this data against their own `system_now()`.
+    pub prepared_at_ms: u64,
+    /// Barrier window length; see [`HANDOFF_BARRIER_MS`].
+    pub barrier_ms: u64,
+    /// Prepared-record lease length; see [`HANDOFF_LEASE_MS`].
+    pub lease_ms: u64,
+    /// Set by `ConfirmSlotHandoffDrained` once the source's shard round trip
+    /// returned. Only a drained handoff admits `CompleteSlotMigration`.
+    pub drained: bool,
+}
+
+impl SlotHandoff {
+    /// Wall-clock deadline (ms) after which the source has resumed serving.
+    pub fn barrier_expires_at_ms(&self) -> u64 {
+        self.prepared_at_ms.saturating_add(self.barrier_ms)
+    }
+
+    /// Wall-clock deadline (ms) after which the prepared record itself is dead
+    /// and a fresh prepare may supersede it.
+    pub fn lease_expires_at_ms(&self) -> u64 {
+        self.prepared_at_ms.saturating_add(self.lease_ms)
+    }
+
+    /// True if `now_ms` is past the barrier window.
+    pub fn barrier_expired_at(&self, now_ms: u64) -> bool {
+        now_ms >= self.barrier_expires_at_ms()
+    }
+
+    /// True if `now_ms` is past the prepared-record lease.
+    pub fn lease_expired_at(&self, now_ms: u64) -> bool {
+        now_ms >= self.lease_expires_at_ms()
+    }
+
+    /// True if this handoff can still admit a `CompleteSlotMigration` proposed
+    /// at `now_ms`: drained, inside its barrier window, inside its lease.
+    pub fn admits_complete_at(&self, now_ms: u64) -> bool {
+        self.drained && !self.barrier_expired_at(now_ms) && !self.lease_expired_at(now_ms)
+    }
 }
 
 /// An in-progress slot migration.
 ///
-/// Migration is a **two-point ownership swap**: `BeginSlotMigration` inserts
-/// this record (making the slot "migrating"), `CompleteSlotMigration` /
-/// `CancelSlotMigration` remove it. There is no intermediate state machine —
-/// routing derives the importing/migrating role by comparing the local node id
-/// against `source_node`/`target_node`, and `CLUSTER SETSLOT IMPORTING` and
-/// `MIGRATING` both lower to the same begin command. (A `MigrationState` enum
-/// used to live here, but only its initial variant was ever constructed and
-/// nothing transitioned it; it was deleted. If incremental key transfer ever
-/// needs resumable progress, reintroduce real states driven by the migration
-/// executor. Old Raft snapshots carrying the `state` field still deserialize —
-/// serde ignores unknown fields.)
+/// Migration is an ownership swap bracketed by `BeginSlotMigration` (inserts
+/// this record, making the slot "migrating") and `CompleteSlotMigration` /
+/// `CancelSlotMigration` (remove it). Routing derives the importing/migrating
+/// role by comparing the local node id against `source_node`/`target_node`, and
+/// `CLUSTER SETSLOT IMPORTING` and `MIGRATING` both lower to the same begin
+/// command.
+///
+/// The record carries exactly **one** intermediate state, and only over the
+/// finalization instant: [`handoff`](Self::handoff). Ownership cannot flip
+/// atomically with respect to in-flight writes on the source, so finalization
+/// is two-phase (rework issue 02) — `PrepareSlotHandoff` sets `handoff`, the
+/// source arms a slot-scoped write barrier and drains, `ConfirmSlotHandoffDrained`
+/// marks it drained, and only then may `CompleteSlotMigration` move ownership.
+/// `handoff` is `None` for the whole bulk-transfer phase, which is where a
+/// migration spends essentially all of its life.
+///
+/// This is deliberately *not* a general `MigrationState` enum. One used to live
+/// here, but only its initial variant was ever constructed and nothing
+/// transitioned it; it was deleted. If incremental key transfer ever needs
+/// resumable progress, that is a second axis and wants its own field rather
+/// than a state enum that conflates transfer progress with handoff fencing.
+/// Old Raft snapshots predating either field still deserialize — serde ignores
+/// unknown fields, and `handoff` defaults to `None`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlotMigration {
     /// The slot being migrated.
@@ -570,6 +765,30 @@ pub struct SlotMigration {
     pub source_node: NodeId,
     /// Target node ID.
     pub target_node: NodeId,
+    /// The prepared finalization handoff, if finalization is in flight.
+    #[serde(default)]
+    pub handoff: Option<SlotHandoff>,
+}
+
+impl SlotMigration {
+    /// A migration in its ordinary (bulk-transfer, no handoff prepared) state.
+    pub fn new(slot: u16, source_node: NodeId, target_node: NodeId) -> Self {
+        Self {
+            slot,
+            source_node,
+            target_node,
+            handoff: None,
+        }
+    }
+
+    /// The prepared handoff if it is still within its lease at `now_ms`.
+    /// An expired prepared record is treated as absent by every reader, so a
+    /// dead finalizer cannot wedge the slot.
+    pub fn live_handoff_at(&self, now_ms: u64) -> Option<&SlotHandoff> {
+        self.handoff
+            .as_ref()
+            .filter(|h| !h.lease_expired_at(now_ms))
+    }
 }
 
 /// Snapshot of the complete cluster state.

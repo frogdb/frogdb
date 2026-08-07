@@ -1,10 +1,36 @@
 //! Command handlers for cluster state mutations.
 
 use crate::types::{
-    ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, NodeRole, SlotMigration,
+    ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, NodeRole, SlotHandoff,
+    SlotMigration,
 };
 
 use super::state::{ClusterState, EpochReconciliation};
+
+/// The release events a removed [`SlotMigration`] owes.
+///
+/// Every arm that drops a migration record funnels through here so the
+/// invariant holds unconditionally: **a prepared handoff never disappears
+/// without a [`ClusterEvent::SlotHandoffReleased`]**. Without it a source that
+/// armed its barrier would depend on the barrier timeout to recover from a
+/// cancel or a failover prune, parking that slot's writes for the rest of the
+/// window for no reason.
+fn release_events(migration: SlotMigration) -> Vec<ClusterEvent> {
+    let SlotMigration {
+        slot,
+        source_node,
+        handoff,
+        ..
+    } = migration;
+    match handoff {
+        Some(h) => vec![ClusterEvent::SlotHandoffReleased {
+            slot,
+            source_node,
+            seq: h.seq,
+        }],
+        None => Vec::new(),
+    }
+}
 
 impl ClusterState {
     /// Apply a command to the state, returning the response and any
@@ -324,15 +350,29 @@ impl ClusterState {
                 //    the old primary (a NodeDemoted event); a force failover
                 //    *removes* it, which is not a demotion.
                 let graceful_demotion = !force;
+                let mut pruned_migrations = Vec::new();
                 if force {
                     if old_exists {
                         inner.nodes.remove(&old_primary_id);
                     }
                     // Migrations referencing a removed node can never complete
-                    // and would block future migrations of those slots.
-                    inner.migrations.retain(|_, m| {
-                        m.source_node != old_primary_id && m.target_node != old_primary_id
-                    });
+                    // and would block future migrations of those slots. A pruned
+                    // migration still owes its release event: a surviving source
+                    // that had armed a barrier for a handoff to the removed node
+                    // must be told to drop it (see `release_events`).
+                    let doomed: Vec<u16> = inner
+                        .migrations
+                        .iter()
+                        .filter(|(_, m)| {
+                            m.source_node == old_primary_id || m.target_node == old_primary_id
+                        })
+                        .map(|(slot, _)| *slot)
+                        .collect();
+                    for slot in doomed {
+                        if let Some(m) = inner.migrations.remove(&slot) {
+                            pruned_migrations.push(m);
+                        }
+                    }
                 } else {
                     let old_node = inner.nodes.get_mut(&old_primary_id).unwrap();
                     old_node.role = NodeRole::Replica;
@@ -370,7 +410,10 @@ impl ClusterState {
                 // Order matters on a node that is both: the demotion is the old
                 // primary's, the promotion the successor's, and they can never
                 // name the same node (the two ids are validated distinct above).
-                let mut events = Vec::new();
+                let mut events: Vec<ClusterEvent> = pruned_migrations
+                    .into_iter()
+                    .flat_map(release_events)
+                    .collect();
                 if graceful_demotion {
                     events.push(ClusterEvent::NodeDemoted {
                         demoted_node_id: old_primary_id,
@@ -444,22 +487,131 @@ impl ClusterState {
                     )));
                 }
 
-                inner.migrations.insert(
+                inner
+                    .migrations
+                    .insert(slot, SlotMigration::new(slot, source_node, target_node));
+                tracing::info!(slot, source_node, target_node, "Started slot migration");
+                Ok((ClusterResponse::Ok, Vec::new()))
+            }
+
+            ClusterCommand::PrepareSlotHandoff {
+                slot,
+                source_node,
+                target_node,
+                barrier_ms,
+                lease_ms,
+                proposed_at_ms,
+            } => {
+                let migration = inner.migrations.get(&slot).ok_or_else(|| {
+                    ClusterError::HandoffNotReady(slot, "no migration in progress".to_string())
+                })?;
+
+                if migration.source_node != source_node || migration.target_node != target_node {
+                    return Err(ClusterError::InvalidOperation(
+                        "migration parameters don't match".to_string(),
+                    ));
+                }
+
+                // One live prepare at a time per slot. A prepare whose finalizer
+                // died is *not* live — the lease is exactly what lets the next
+                // attempt through without an operator having to clear anything.
+                if let Some(live) = migration.live_handoff_at(proposed_at_ms) {
+                    return Err(ClusterError::HandoffNotReady(
+                        slot,
+                        format!("handoff seq {} already prepared", live.seq),
+                    ));
+                }
+
+                inner.handoff_seq += 1;
+                let seq = inner.handoff_seq;
+                let migration = inner
+                    .migrations
+                    .get_mut(&slot)
+                    .expect("migration presence checked above");
+                migration.handoff = Some(SlotHandoff {
+                    seq,
+                    prepared_at_ms: proposed_at_ms,
+                    barrier_ms,
+                    lease_ms,
+                    drained: false,
+                });
+                tracing::info!(
                     slot,
-                    SlotMigration {
+                    source_node,
+                    target_node,
+                    seq,
+                    barrier_ms,
+                    lease_ms,
+                    "Prepared slot handoff"
+                );
+                Ok((
+                    ClusterResponse::Ok,
+                    vec![ClusterEvent::SlotHandoffPrepared {
                         slot,
                         source_node,
                         target_node,
-                    },
-                );
-                tracing::info!(slot, source_node, target_node, "Started slot migration");
+                        seq,
+                        barrier_ms,
+                    }],
+                ))
+            }
+
+            ClusterCommand::ConfirmSlotHandoffDrained { slot, seq } => {
+                // Deliberately no expiry check: the confirmation carries no
+                // timestamp because it does not need one. `CompleteSlotMigration`
+                // re-checks both the barrier window and the lease against its own
+                // proposer timestamp, so marking a lapsed handoff drained can
+                // never let ownership move.
+                let handoff = inner
+                    .migrations
+                    .get_mut(&slot)
+                    .and_then(|m| m.handoff.as_mut())
+                    .filter(|h| h.seq == seq)
+                    .ok_or_else(|| {
+                        ClusterError::HandoffNotReady(
+                            slot,
+                            format!("no prepared handoff with seq {}", seq),
+                        )
+                    })?;
+
+                handoff.drained = true;
+                tracing::debug!(slot, seq, "Slot handoff drained");
                 Ok((ClusterResponse::Ok, Vec::new()))
+            }
+
+            ClusterCommand::AbortSlotHandoff { slot, seq } => {
+                // Idempotent: aborting a handoff that is already gone succeeds
+                // silently, so a finalizer that crashes after proposing the abort
+                // can safely re-propose it on restart.
+                let released = inner
+                    .migrations
+                    .get_mut(&slot)
+                    .filter(|m| m.handoff.as_ref().is_some_and(|h| h.seq == seq))
+                    .map(|m| {
+                        let source_node = m.source_node;
+                        m.handoff = None;
+                        source_node
+                    });
+
+                let events = match released {
+                    Some(source_node) => {
+                        tracing::info!(slot, seq, "Aborted slot handoff; migration left intact");
+                        vec![ClusterEvent::SlotHandoffReleased {
+                            slot,
+                            source_node,
+                            seq,
+                        }]
+                    }
+                    None => Vec::new(),
+                };
+                Ok((ClusterResponse::Ok, events))
             }
 
             ClusterCommand::CompleteSlotMigration {
                 slot,
                 source_node,
                 target_node,
+                proposed_at_ms,
             } => {
                 let migration =
                     inner
@@ -476,24 +628,66 @@ impl ClusterState {
                     ));
                 }
 
+                // Ownership moves only under a prepared, drained, still-armed
+                // handoff. A `Complete` that raced past the barrier deadline is
+                // refused outright rather than half-applied: by then the source
+                // has resumed serving the slot, so moving ownership would strand
+                // exactly the writes this barrier exists to fence.
+                let seq = match &migration.handoff {
+                    Some(h) if h.admits_complete_at(proposed_at_ms) => h.seq,
+                    Some(h) => {
+                        let why = if !h.drained {
+                            "handoff not drained"
+                        } else if h.lease_expired_at(proposed_at_ms) {
+                            "handoff lease expired"
+                        } else {
+                            "handoff barrier window elapsed"
+                        };
+                        return Err(ClusterError::HandoffNotReady(slot, why.to_string()));
+                    }
+                    None => {
+                        return Err(ClusterError::HandoffNotReady(
+                            slot,
+                            "no prepared handoff".to_string(),
+                        ));
+                    }
+                };
+
                 // Transfer slot ownership
                 inner.slot_assignment.insert(slot, target_node);
                 inner.migrations.remove(&slot);
-                tracing::info!(slot, source_node, target_node, "Completed slot migration");
+                tracing::info!(
+                    slot,
+                    source_node,
+                    target_node,
+                    seq,
+                    "Completed slot migration"
+                );
                 Ok((
                     ClusterResponse::Ok,
-                    vec![ClusterEvent::SlotMigrationCompleted {
-                        slot,
-                        source_node,
-                        target_node,
-                    }],
+                    vec![
+                        ClusterEvent::SlotMigrationCompleted {
+                            slot,
+                            source_node,
+                            target_node,
+                        },
+                        ClusterEvent::SlotHandoffReleased {
+                            slot,
+                            source_node,
+                            seq,
+                        },
+                    ],
                 ))
             }
 
             ClusterCommand::CancelSlotMigration { slot } => {
-                inner.migrations.remove(&slot);
+                let events = inner
+                    .migrations
+                    .remove(&slot)
+                    .map(release_events)
+                    .unwrap_or_default();
                 tracing::info!(slot, "Cancelled slot migration");
-                Ok((ClusterResponse::Ok, Vec::new()))
+                Ok((ClusterResponse::Ok, events))
             }
 
             ClusterCommand::FinalizeUpgrade { version } => {
@@ -545,8 +739,14 @@ impl ClusterState {
                 // Clear all slot assignments
                 inner.slot_assignment.clear();
 
-                // Clear all migrations
-                inner.migrations.clear();
+                // Clear all migrations, still paying the release events any
+                // prepared handoffs owe so a reset cannot leave this node's
+                // slot barriers armed until they time out.
+                let reset_events: Vec<ClusterEvent> = std::mem::take(&mut inner.migrations)
+                    .into_values()
+                    .flat_map(release_events)
+                    .collect();
+                inner.handoff_seq = 0;
 
                 // Remove all nodes except this one, and ensure it's a primary
                 if let Some(mut this_node) = inner.nodes.remove(&node_id) {
@@ -577,7 +777,7 @@ impl ClusterState {
                     tracing::warn!(node_id, "Cluster reset: node not found in state");
                 }
 
-                Ok((ClusterResponse::Ok, Vec::new()))
+                Ok((ClusterResponse::Ok, reset_events))
             }
         }
     }
@@ -900,15 +1100,21 @@ mod tests {
         // Slot 5 is still recorded as owned by node 1. Completion inserts over
         // that owner without consulting the map — the parameter match against
         // the recorded migration is what authorizes it.
+        let proposed_at_ms = state.arm_handoff_for_test(5, 1, 2);
         let (response, events) = state
             .apply_command(ClusterCommand::CompleteSlotMigration {
                 slot: 5,
                 source_node: 1,
                 target_node: 2,
+                proposed_at_ms,
             })
             .expect("a matching completion must not hit SlotAlreadyAssigned");
         assert!(matches!(response, ClusterResponse::Ok));
-        assert_eq!(events.len(), 1, "exactly one completion event");
+        assert_eq!(
+            events.len(),
+            2,
+            "one completion event plus the handoff release"
+        );
 
         assert_eq!(state.get_slot_owner(5), Some(2), "ownership moved");
         assert_eq!(state.get_slot_owner(4), Some(1), "neighbours untouched");
@@ -918,6 +1124,489 @@ mod tests {
             epoch_before,
             "completion is authorized by the migration record, not a new epoch"
         );
+    }
+
+    // ---- Two-phase slot handoff (rework issue 02) --------------------------
+
+    /// Wall-clock instant every handoff test mints its deadlines from. Any
+    /// value works — the state machine only ever compares two data values.
+    const T0: u64 = 1_000_000;
+
+    /// Seed two primaries, give node 1 slots 0..=10, and open a migration of
+    /// `slot` from node 1 to node 2.
+    fn migrating_state(slot: u16) -> ClusterState {
+        let state = state_with_primaries(2);
+        assign(&state, 1, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot,
+                source_node: 1,
+                target_node: 2,
+            })
+            .expect("begin must succeed");
+        state
+    }
+
+    fn prepare(state: &ClusterState, slot: u16, at: u64) -> Vec<ClusterEvent> {
+        state
+            .apply_command(ClusterCommand::PrepareSlotHandoff {
+                slot,
+                source_node: 1,
+                target_node: 2,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+                lease_ms: crate::types::HANDOFF_LEASE_MS,
+                proposed_at_ms: at,
+            })
+            .expect("prepare must succeed")
+            .1
+    }
+
+    fn complete_at(
+        state: &ClusterState,
+        slot: u16,
+        at: u64,
+    ) -> Result<(ClusterResponse, Vec<ClusterEvent>), ClusterError> {
+        state.apply_command(ClusterCommand::CompleteSlotMigration {
+            slot,
+            source_node: 1,
+            target_node: 2,
+            proposed_at_ms: at,
+        })
+    }
+
+    /// The whole point of phase one: ownership does not move until the source
+    /// has been told to quiesce and has said it did.
+    // FM-CLUSTER-BARRIER-001
+    #[test]
+    fn complete_is_refused_without_a_prepared_handoff() {
+        let state = migrating_state(5);
+        let err = complete_at(&state, 5, T0).expect_err("no prepare, no completion");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why) if why == "no prepared handoff"),
+            "{err:?}"
+        );
+        assert_eq!(state.get_slot_owner(5), Some(1), "ownership stayed put");
+        assert!(state.is_slot_migrating(5), "the migration record survived");
+    }
+
+    // FM-CLUSTER-BARRIER-002
+    #[test]
+    fn complete_is_refused_while_the_handoff_is_undrained() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+        let err = complete_at(&state, 5, T0 + 1).expect_err("undrained handoff must not complete");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why) if why == "handoff not drained"),
+            "{err:?}"
+        );
+        assert_eq!(state.get_slot_owner(5), Some(1));
+    }
+
+    // FM-CLUSTER-BARRIER-003
+    #[test]
+    fn prepare_then_drain_then_complete_moves_ownership() {
+        let state = migrating_state(5);
+        let events = prepare(&state, 5, T0);
+        assert_eq!(
+            events,
+            vec![ClusterEvent::SlotHandoffPrepared {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+                seq: 1,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+            }]
+        );
+        state
+            .apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot: 5, seq: 1 })
+            .expect("confirm must succeed");
+
+        let (_, events) = complete_at(&state, 5, T0 + 10).expect("a drained handoff completes");
+        assert_eq!(
+            events,
+            vec![
+                ClusterEvent::SlotMigrationCompleted {
+                    slot: 5,
+                    source_node: 1,
+                    target_node: 2,
+                },
+                ClusterEvent::SlotHandoffReleased {
+                    slot: 5,
+                    source_node: 1,
+                    seq: 1,
+                },
+            ],
+            "completion always pays the release the source is waiting for"
+        );
+        assert_eq!(state.get_slot_owner(5), Some(2));
+    }
+
+    /// The hazard the measurement exposed: a `Complete` that lands after the
+    /// source's barrier lapsed would move ownership out from under writes the
+    /// source has already resumed serving.
+    // FM-CLUSTER-BARRIER-004
+    #[test]
+    fn complete_is_refused_once_the_barrier_window_elapsed() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+        state
+            .apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot: 5, seq: 1 })
+            .unwrap();
+
+        let late = T0 + crate::types::HANDOFF_BARRIER_MS;
+        let err = complete_at(&state, 5, late).expect_err("a late completion must be refused");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why)
+                if why == "handoff barrier window elapsed"),
+            "{err:?}"
+        );
+        assert_eq!(state.get_slot_owner(5), Some(1), "ownership stayed put");
+        assert!(
+            state.is_slot_migrating(5),
+            "and the migration is still retryable"
+        );
+        assert!(err.is_retryable());
+    }
+
+    // FM-CLUSTER-BARRIER-005
+    #[test]
+    fn complete_is_refused_once_the_lease_expired() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+        state
+            .apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot: 5, seq: 1 })
+            .unwrap();
+
+        // Past the lease is also past the barrier; the lease is reported
+        // because it is the stronger statement (the record itself is dead).
+        let err = complete_at(&state, 5, T0 + crate::types::HANDOFF_LEASE_MS)
+            .expect_err("an expired lease must not complete");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why) if why == "handoff lease expired"),
+            "{err:?}"
+        );
+    }
+
+    /// A second finalizer cannot barge in on a live prepare, but once the lease
+    /// has run out — the finalizer died — the next attempt goes through with no
+    /// operator intervention.
+    // FM-CLUSTER-BARRIER-006
+    #[test]
+    fn a_second_prepare_waits_for_the_lease_but_not_forever() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+
+        let err = state
+            .apply_command(ClusterCommand::PrepareSlotHandoff {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+                lease_ms: crate::types::HANDOFF_LEASE_MS,
+                proposed_at_ms: T0 + 1,
+            })
+            .expect_err("a live prepare owns the slot");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why)
+                if why == "handoff seq 1 already prepared"),
+            "{err:?}"
+        );
+
+        let events = prepare(&state, 5, T0 + crate::types::HANDOFF_LEASE_MS);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [ClusterEvent::SlotHandoffPrepared { seq: 2, .. }]
+            ),
+            "the expired record is superseded, not cleared by hand: {events:?}"
+        );
+    }
+
+    /// The stale-ack hazard: attempt #1's drain confirmation must not vouch for
+    /// attempt #2, which was never drained.
+    // FM-CLUSTER-BARRIER-007
+    #[test]
+    fn a_stale_drain_ack_cannot_vouch_for_the_next_attempt() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+        state
+            .apply_command(ClusterCommand::AbortSlotHandoff { slot: 5, seq: 1 })
+            .expect("abort must succeed");
+        prepare(&state, 5, T0 + 1);
+
+        let err = state
+            .apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot: 5, seq: 1 })
+            .expect_err("attempt 1's ack must not confirm attempt 2");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why)
+                if why == "no prepared handoff with seq 1"),
+            "{err:?}"
+        );
+        let err = complete_at(&state, 5, T0 + 2).expect_err("attempt 2 is still undrained");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why) if why == "handoff not drained"),
+            "{err:?}"
+        );
+    }
+
+    /// Abort is the drain-timeout path: it drops the barrier and leaves the
+    /// migration exactly where it was, so the operator retries rather than
+    /// re-opening the migration.
+    // FM-CLUSTER-BARRIER-008
+    #[test]
+    fn abort_releases_the_barrier_and_keeps_the_migration() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+
+        let (_, events) = state
+            .apply_command(ClusterCommand::AbortSlotHandoff { slot: 5, seq: 1 })
+            .expect("abort must succeed");
+        assert_eq!(
+            events,
+            vec![ClusterEvent::SlotHandoffReleased {
+                slot: 5,
+                source_node: 1,
+                seq: 1,
+            }]
+        );
+        let migration = state.get_slot_migration(5).expect("migration intact");
+        assert_eq!((migration.source_node, migration.target_node), (1, 2));
+        assert!(migration.handoff.is_none());
+        assert_eq!(state.get_slot_owner(5), Some(1));
+
+        // Idempotent: a finalizer that crashed after proposing may re-propose.
+        let (_, events) = state
+            .apply_command(ClusterCommand::AbortSlotHandoff { slot: 5, seq: 1 })
+            .expect("a repeated abort must succeed");
+        assert!(events.is_empty(), "and emits no second release");
+    }
+
+    /// `CLUSTER SETSLOT STABLE` mid-handoff. FM-006/FM-010: the prepared record
+    /// goes away with the migration, and the source is told to drop its barrier
+    /// rather than waiting out the timeout.
+    // FM-CLUSTER-BARRIER-009
+    #[test]
+    fn cancel_releases_a_prepared_handoff() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+
+        let (_, events) = state
+            .apply_command(ClusterCommand::CancelSlotMigration { slot: 5 })
+            .expect("cancel must succeed");
+        assert_eq!(
+            events,
+            vec![ClusterEvent::SlotHandoffReleased {
+                slot: 5,
+                source_node: 1,
+                seq: 1,
+            }]
+        );
+        assert!(!state.is_slot_migrating(5));
+        assert_eq!(state.get_slot_owner(5), Some(1), "ownership never moved");
+    }
+
+    // FM-CLUSTER-BARRIER-010
+    #[test]
+    fn cancel_without_a_handoff_emits_nothing() {
+        let state = migrating_state(5);
+        let (_, events) = state
+            .apply_command(ClusterCommand::CancelSlotMigration { slot: 5 })
+            .expect("cancel must succeed");
+        assert!(events.is_empty());
+    }
+
+    /// A force failover that prunes a migration owes the surviving source its
+    /// release: node 2 disappears, but node 1 is the one holding the barrier.
+    // FM-CLUSTER-BARRIER-011
+    #[test]
+    fn force_failover_releases_the_handoffs_it_prunes() {
+        let state = state_with_primaries(3);
+        assign(&state, 1, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+        prepare(&state, 5, T0);
+
+        let (_, events) = state
+            .apply_command(ClusterCommand::Failover {
+                old_primary_id: 2,
+                new_primary_id: 3,
+                force: true,
+            })
+            .expect("force failover must succeed");
+        assert!(
+            events.contains(&ClusterEvent::SlotHandoffReleased {
+                slot: 5,
+                source_node: 1,
+                seq: 1,
+            }),
+            "the pruned migration owed a release: {events:?}"
+        );
+        assert!(!state.is_slot_migrating(5));
+    }
+
+    // FM-CLUSTER-BARRIER-012
+    #[test]
+    fn reset_releases_prepared_handoffs() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+
+        let (_, events) = state
+            .apply_command(ClusterCommand::ResetCluster {
+                node_id: 1,
+                new_node_id: None,
+            })
+            .expect("reset must succeed");
+        assert_eq!(
+            events,
+            vec![ClusterEvent::SlotHandoffReleased {
+                slot: 5,
+                source_node: 1,
+                seq: 1,
+            }]
+        );
+    }
+
+    // FM-CLUSTER-BARRIER-013
+    #[test]
+    fn prepare_requires_a_migration_and_matching_parameters() {
+        let state = state_with_primaries(3);
+        assign(&state, 1, 0, 10);
+
+        let err = state
+            .apply_command(ClusterCommand::PrepareSlotHandoff {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+                lease_ms: crate::types::HANDOFF_LEASE_MS,
+                proposed_at_ms: T0,
+            })
+            .expect_err("no migration to prepare");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why)
+                if why == "no migration in progress"),
+            "{err:?}"
+        );
+
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+        let err = state
+            .apply_command(ClusterCommand::PrepareSlotHandoff {
+                slot: 5,
+                source_node: 1,
+                target_node: 3,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+                lease_ms: crate::types::HANDOFF_LEASE_MS,
+                proposed_at_ms: T0,
+            })
+            .expect_err("a prepare naming a different target must not be honoured");
+        assert!(matches!(err, ClusterError::InvalidOperation(_)), "{err:?}");
+    }
+
+    /// Confirming a handoff whose lease already ran out is allowed (the entry
+    /// carries no timestamp) but buys nothing: `Complete` re-checks.
+    // FM-CLUSTER-BARRIER-014
+    #[test]
+    fn a_late_confirm_cannot_resurrect_an_expired_handoff() {
+        let state = migrating_state(5);
+        prepare(&state, 5, T0);
+        state
+            .apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot: 5, seq: 1 })
+            .expect("confirm is accepted regardless of expiry");
+
+        let err = complete_at(&state, 5, T0 + crate::types::HANDOFF_LEASE_MS + 1)
+            .expect_err("but completion still re-checks");
+        assert!(
+            matches!(&err, ClusterError::HandoffNotReady(5, why) if why == "handoff lease expired"),
+            "{err:?}"
+        );
+        assert_eq!(state.get_slot_owner(5), Some(1));
+    }
+
+    /// The seq counter is global, not per-slot, so two slots finalizing at once
+    /// get distinct attempt identifiers and neither can confirm the other's.
+    // FM-CLUSTER-BARRIER-015
+    #[test]
+    fn concurrent_handoffs_on_two_slots_do_not_interfere() {
+        let state = migrating_state(5);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 6,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+
+        prepare(&state, 5, T0);
+        prepare(&state, 6, T0);
+        assert_eq!(state.get_slot_migration(5).unwrap().handoff.unwrap().seq, 1);
+        assert_eq!(state.get_slot_migration(6).unwrap().handoff.unwrap().seq, 2);
+
+        // Slot 5's ack must not drain slot 6.
+        state
+            .apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot: 5, seq: 1 })
+            .unwrap();
+        assert!(
+            !state
+                .get_slot_migration(6)
+                .unwrap()
+                .handoff
+                .unwrap()
+                .drained
+        );
+
+        complete_at(&state, 5, T0 + 1).expect("slot 5 completes");
+        assert!(
+            state.is_slot_migrating(6),
+            "slot 6's finalization is untouched"
+        );
+    }
+
+    /// Deadline arithmetic, pinned directly: the barrier is the shorter bound
+    /// and the lease the longer one, and both are computed from replicated data
+    /// rather than a clock read inside `apply`.
+    // FM-CLUSTER-BARRIER-016
+    #[test]
+    fn handoff_deadlines_are_pure_functions_of_replicated_data() {
+        let h = SlotHandoff {
+            seq: 7,
+            prepared_at_ms: 1_000,
+            barrier_ms: 100,
+            lease_ms: 10_000,
+            drained: true,
+        };
+        assert_eq!(h.barrier_expires_at_ms(), 1_100);
+        assert_eq!(h.lease_expires_at_ms(), 11_000);
+        assert!(!h.barrier_expired_at(1_099));
+        assert!(h.barrier_expired_at(1_100));
+        assert!(!h.lease_expired_at(10_999));
+        assert!(h.lease_expired_at(11_000));
+        assert!(h.admits_complete_at(1_099));
+        assert!(!h.admits_complete_at(1_100));
+
+        let undrained = SlotHandoff {
+            drained: false,
+            ..h.clone()
+        };
+        assert!(!undrained.admits_complete_at(1_001));
+
+        // Saturating, so an absurd lease cannot wrap into "already expired".
+        let huge = SlotHandoff {
+            prepared_at_ms: u64::MAX - 1,
+            lease_ms: 10,
+            ..h
+        };
+        assert_eq!(huge.lease_expires_at_ms(), u64::MAX);
     }
 
     // ---- AddNode: what a re-registration reports ---------------------------
