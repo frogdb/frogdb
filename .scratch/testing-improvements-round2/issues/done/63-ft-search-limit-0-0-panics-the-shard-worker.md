@@ -1,6 +1,6 @@
 # `FT.SEARCH … LIMIT 0 0` panics the shard worker and takes the shard down for the process lifetime
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/10 F1 · MASTER.md §3 (availability / resource)
@@ -93,3 +93,62 @@ or clamp across `crates/search/src`, `crates/core/src/shard/search` and
 
 Caveat per the re-triage brief: verified statically only (no `cargo` runs permitted); the crash
 itself is unverified-by-execution, but the assert is unconditional and the argument path is direct.
+
+## Resolution
+
+Fixed 2026-08-07 in `563bdcd1` (arithmetic) and backstopped by `b7df2845`
+([campaign-2 issue 07](../../../hardening-2/issues/done/07-no-panic-isolation-at-the-shard-boundary.md)).
+
+**The panic was real and reproduced by execution**, closing the re-triage's
+verified-statically-only caveat. Reverting just the `limit == 0` guard and re-running the
+matrix test gives:
+
+```
+thread 'index::tests::search_paging_window_edges_return_instead_of_panicking' panicked at
+  tantivy-0.26.0/src/collector/top_score_collector.rs:94:9:
+assertion `left != right` failed: Limit must be greater than 0
+  left: 0
+ right: 0
+```
+
+**Fix** — `ShardSearchIndex::search` (`frogdb-server/crates/search/src/index.rs`) now
+answers a zero window straight from the `Count` collector: `total = raw_total`, empty
+`hits`, no `TopDocs` constructed. The geo branch deliberately falls through, because a
+geo-filtered total is only knowable by enumerating and post-filtering, and its fetch
+window (`raw_total.max(1)`) is non-zero by construction — its trailing `.take(limit)`
+already yields the count-only shape. `knn_search` returns early on `k == 0` (never
+entering usearch) and `hybrid_search` on `count == 0` (never running either leg), which
+covers `FT.HYBRID … COMBINE RRF 0`, `VSIM … KNN <n> 0` and `*=>[KNN 0 @f $b]`.
+
+**Second latent bug found by the same matrix**: `LIMIT 0 usize::MAX` overflowed
+tantivy's `TopNComputer`, which allocates `2 * limit` slots up front. The non-geo fetch
+window is now `offset.saturating_add(limit).min(raw_total.max(1))` — clamping to the
+match count cannot change the result set, since the query has exactly `raw_total`
+matches.
+
+**RediSearch parity**: `[N]` — a one-element array holding the total, which is what
+RediSearch replies for `LIMIT 0 0`. No coordinator change was needed:
+`FtSearchMerge::finish` (`server/src/connection/search/merge.rs`) already pushes
+`Response::Integer(total)` first and then `.skip(offset).take(limit)` over the hits, so
+a zero limit emits the count and nothing else.
+
+**Item 3 of "What to fix"** (should the event loop carry a `catch_unwind`) was already
+filed as campaign-2 issue 07 and is now implemented — see `shard/panic_guard.rs`. The
+isolation is a backstop, not a substitute: this arithmetic is fixed on its own.
+
+**Tests** — `frogdb-search` 159/159 pass: the table-driven
+`search_paging_window_edges_return_instead_of_panicking` over `(offset, limit)` ∈
+`{(0,0), (0,1), (5,0), (0,usize::MAX)}` (every row asserting the same `total`, the
+zero-window rows asserting empty hits), `search_zero_limit_counts_without_fetching_documents`
+(count-only total agrees with the windowed query's, and the zero-match case still counts),
+and `hybrid_and_knn_zero_count_return_no_hits`. RESP-level pin in
+`frogdb-server/crates/server/tests/search.rs`:
+`regression_ft_search_limit_zero_zero_is_count_only_and_shard_survives` asserts the `[N]`
+reply and that the same connection is answered afterwards (liveness).
+
+**No failure-mode row.** The search area has no locked spec under
+`.scratch/hardening/specs/` (the campaign covered txn/vll/persistence/replication/cluster
+only), and inventing a new spec area was out of scope for this fix. The shard-survival
+half of the invariant is rowed as
+[FM-VLL-005](../../../hardening/specs/vll-failure-modes.md#fm-vll-005--a-granted-op-panics-while-executing),
+which cites this issue as the motivating panic.
