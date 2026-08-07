@@ -104,6 +104,7 @@ fn seed_db(db_dir: &Path, num_shards: usize, key: &[u8], val: &str) {
 // FM-PERSISTENCE-027
 // FM-PERSISTENCE-029
 // FM-PERSISTENCE-041
+// FM-PERSISTENCE-048
 #[test]
 fn fresh_boot_creates_empty_shards() {
     let tmp = TempDir::new().unwrap();
@@ -1506,6 +1507,7 @@ fn force_fresh_data_dir_overrides_require_existing_data() {
 /// arrives *after* a staged full sync has been installed has not protected
 /// anything — it has replaced the operator's data with the primary's, which is a
 /// different failure with the same lost bytes.
+// FM-PERSISTENCE-027
 // FM-PERSISTENCE-051
 #[test]
 fn the_data_dir_guard_runs_before_a_staged_checkpoint_can_install() {
