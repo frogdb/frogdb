@@ -27,7 +27,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
@@ -253,7 +253,7 @@ fn new_database_id() -> String {
 /// worth stamping even on a machine whose clock is nonsense, and the timestamp
 /// is informational.
 fn now_unix_ms() -> u64 {
-    SystemTime::now()
+    frogdb_types::clock::system_now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
