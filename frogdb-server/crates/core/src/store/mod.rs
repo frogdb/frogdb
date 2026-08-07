@@ -700,6 +700,16 @@ pub trait Store: Send {
     /// the TOUCH command) is NOT affected.
     fn set_suppress_touch(&mut self, _suppress: bool) {}
 
+    /// Whether [`Self::set_suppress_touch`] is currently on.
+    ///
+    /// The flag is command-scoped — set before one command and cleared after —
+    /// so it is also state a panic can strand (see
+    /// [`shard::panic_guard`](crate::shard) and `ShardWorker::recover_from_panic`).
+    /// This reader is what lets a test observe that it did not survive.
+    fn suppress_touch_enabled(&self) -> bool {
+        false
+    }
+
     // ========================================================================
     // Memory management & eviction
     // ========================================================================

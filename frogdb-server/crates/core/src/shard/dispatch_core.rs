@@ -1,6 +1,7 @@
 use tracing::Instrument;
 
 use super::message::{CoreMsg, ScatterOp};
+use super::panic_guard::{self, INTERNAL_ERROR, PanicSite};
 use super::worker::ShardWorker;
 use crate::store::Store;
 
@@ -24,19 +25,46 @@ impl ShardWorker {
                 // Set suppress_touch on the store before execution
                 self.store.set_suppress_touch(no_touch);
                 let shard_id = self.shard_id();
-                let response = if self
-                    .per_request_spans
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    self.execute_command(command.as_ref(), conn_id, protocol_version, track_reads)
+                // Panic isolation (c2-07): a panic anywhere under
+                // `execute_command` — including inside a dependency — used to
+                // unwind the worker task and abort the process. Caught here so
+                // the client gets an error and the shard keeps serving.
+                let outcome = panic_guard::caught(async {
+                    if self
+                        .per_request_spans
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.execute_command(
+                            command.as_ref(),
+                            conn_id,
+                            protocol_version,
+                            track_reads,
+                        )
                         .instrument(tracing::info_span!("shard_execute", shard_id))
                         .await
-                } else {
-                    self.execute_command(command.as_ref(), conn_id, protocol_version, track_reads)
+                    } else {
+                        self.execute_command(
+                            command.as_ref(),
+                            conn_id,
+                            protocol_version,
+                            track_reads,
+                        )
                         .await
+                    }
+                })
+                .await;
+                let response = match outcome {
+                    Ok(response) => {
+                        // Reset suppress_touch after execution
+                        self.store.set_suppress_touch(false);
+                        response
+                    }
+                    Err(panic_message) => self.recover_from_panic(
+                        PanicSite::Command,
+                        &command.name_uppercase_string(),
+                        &panic_message,
+                    ),
                 };
-                // Reset suppress_touch after execution
-                self.store.set_suppress_touch(false);
                 let _ = response_tx.send(response);
             }
             CoreMsg::ScatterRequest {
@@ -47,10 +75,27 @@ impl ShardWorker {
                 response_tx,
             } => {
                 if let Err(err) = self.can_execute_during_lock(conn_id) {
-                    let _ = response_tx.send(Self::scatter_conflict_reply(&operation, &keys, err));
+                    let _ = response_tx.send(Self::scatter_error_reply(&operation, &keys, err));
                     return false;
                 }
-                let result = self.execute_scatter_part(&keys, &operation, conn_id).await;
+                // Panic isolation (c2-07). The reply is shaped through the same
+                // per-op helper the continuation-lock refusal uses, so the
+                // coordinator's merge recognizes the error instead of folding a
+                // truncated result as success.
+                let outcome =
+                    panic_guard::caught(self.execute_scatter_part(&keys, &operation, conn_id))
+                        .await;
+                let result = match outcome {
+                    Ok(result) => result,
+                    Err(panic_message) => {
+                        let err = self.recover_from_panic(
+                            PanicSite::Scatter,
+                            operation.name(),
+                            &panic_message,
+                        );
+                        Self::scatter_error_reply(&operation, &keys, err)
+                    }
+                };
                 let _ = response_tx.send(result);
             }
             CoreMsg::GetVersion { keys, response_tx } => {
@@ -99,17 +144,33 @@ impl ShardWorker {
                 protocol_version,
                 response_tx,
             } => {
-                let result = if self
-                    .per_request_spans
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    let shard_id = self.shard_id();
-                    self.execute_transaction(commands, &watches, conn_id, protocol_version)
-                        .instrument(tracing::info_span!("shard_exec_txn", shard_id))
-                        .await
-                } else {
-                    self.execute_transaction(commands, &watches, conn_id, protocol_version)
-                        .await
+                // Panic isolation (c2-07), outer half. A panic in a *queued*
+                // command is caught one frame down, inside `execute_transaction`,
+                // so it only fails that command; this guard covers the batch
+                // frames around the loop (watch validation, the batched
+                // write-effects/WAL phase), where there is no single command to
+                // blame and the whole EXEC fails.
+                let outcome = panic_guard::caught(async {
+                    if self
+                        .per_request_spans
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        let shard_id = self.shard_id();
+                        self.execute_transaction(commands, &watches, conn_id, protocol_version)
+                            .instrument(tracing::info_span!("shard_exec_txn", shard_id))
+                            .await
+                    } else {
+                        self.execute_transaction(commands, &watches, conn_id, protocol_version)
+                            .await
+                    }
+                })
+                .await;
+                let result = match outcome {
+                    Ok(result) => result,
+                    Err(panic_message) => {
+                        self.recover_from_panic(PanicSite::Transaction, "EXEC", &panic_message);
+                        super::types::TransactionResult::Error(INTERNAL_ERROR.to_string())
+                    }
                 };
                 let _ = response_tx.send(result);
             }
@@ -129,7 +190,7 @@ impl ShardWorker {
     /// incomplete result set as success (issue #15 item 4). Emit the typed FT
     /// error variant those merges read instead. Every other scatter op keeps the
     /// per-key `Keyed` error shape MGET/DEL/EXISTS/… reconstruct from.
-    fn scatter_conflict_reply(
+    pub(super) fn scatter_error_reply(
         operation: &ScatterOp,
         keys: &[bytes::Bytes],
         err: frogdb_protocol::Response,

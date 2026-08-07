@@ -7931,3 +7931,81 @@ async fn regression_active_field_purge_reindexes_hash_survivor() {
 
     server.shutdown().await;
 }
+
+/// `FT.SEARCH idx * LIMIT 0 0` is the documented RediSearch count-only idiom
+/// (redis-py / node-redis / redisearch-go emit it on default config) and it is
+/// reachable before authentication. It used to reach tantivy's
+/// `TopDocs::with_limit(0)`, whose `assert_ne!(limit, 0)` is unconditional and
+/// live in release, panicking the shard worker's event-loop task — every key on
+/// that shard became unreachable for the process lifetime.
+///
+/// The pin asserts both halves: the reply is count-only (`[N]`, matching
+/// RediSearch, which returns the match count with no document entries), and the
+/// server still answers the *next* command on the same shard. Shard death is
+/// only observable over the socket, which is why the crate-level matrix in
+/// `frogdb-search` is not sufficient on its own.
+#[tokio::test]
+async fn regression_ft_search_limit_zero_zero_is_count_only_and_shard_survives() {
+    // One shard, so "the next command" provably lands on the shard that served
+    // the count-only query.
+    let server = start_server_no_persist().await;
+    let mut client = server.connect().await;
+
+    for (key, name) in [
+        ("user:1", "Alice Smith"),
+        ("user:2", "Bob Jones"),
+        ("user:3", "Alice Jones"),
+    ] {
+        client.command(&["HSET", key, "name", name]).await;
+    }
+    assert_ok(
+        &client
+            .command(&[
+                "FT.CREATE",
+                "idx",
+                "ON",
+                "HASH",
+                "PREFIX",
+                "1",
+                "user:",
+                "SCHEMA",
+                "name",
+                "TEXT",
+            ])
+            .await,
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Count only: the match count, and nothing else.
+    let arr = unwrap_array(
+        client
+            .command(&["FT.SEARCH", "idx", "*", "LIMIT", "0", "0"])
+            .await,
+    );
+    assert_eq!(
+        arr.len(),
+        1,
+        "LIMIT 0 0 must reply with the count alone, got {arr:?}"
+    );
+    assert_eq!(unwrap_integer(&arr[0]), 3);
+
+    // The same count, reached the ordinary way, agrees.
+    let arr = unwrap_array(client.command(&["FT.SEARCH", "idx", "Alice"]).await);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+    let arr = unwrap_array(
+        client
+            .command(&["FT.SEARCH", "idx", "Alice", "LIMIT", "0", "0"])
+            .await,
+    );
+    assert_eq!(arr.len(), 1);
+    assert_eq!(unwrap_integer(&arr[0]), 2);
+
+    // Liveness: the shard still serves data-plane commands.
+    let response = client.command(&["HGET", "user:1", "name"]).await;
+    assert_eq!(unwrap_bulk(&response), b"Alice Smith");
+    assert_ok(&client.command(&["SET", "probe", "alive"]).await);
+    let response = client.command(&["GET", "probe"]).await;
+    assert_eq!(unwrap_bulk(&response), b"alive");
+
+    server.shutdown().await;
+}

@@ -51,6 +51,7 @@ mod helpers;
 mod keyspace_coordinator;
 mod keyspace_notify;
 pub mod message;
+mod panic_guard;
 mod partition;
 mod persistence;
 mod post_execution;

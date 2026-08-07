@@ -8,6 +8,7 @@ use super::active_expiry::ExpiryResult;
 #[cfg(any(test, feature = "shard-driver"))]
 use super::message::Envelope;
 use super::message::ShardMessage;
+use super::panic_guard;
 use super::post_execution::{ENGINE_INTERNAL_CONN_ID, RemovalPropagation, RemovalReason};
 use super::worker::ShardWorker;
 use crate::vll::ContinuationEvent;
@@ -129,9 +130,11 @@ impl ShardWorker {
                     let queue_latency = envelope.enqueued_at.elapsed().as_secs_f64();
                     let msg = envelope.message;
 
+                    let msg_kind = msg.probe_type_str();
+
                     crate::probes::fire_shard_message_received(
                         self.shard_id() as u64,
-                        msg.probe_type_str(),
+                        msg_kind,
                         self.message_rx.len() as u64,
                     );
 
@@ -141,7 +144,29 @@ impl ShardWorker {
                         self.identity.shard_label(),
                     );
 
-                    if self.dispatch_message(msg).await {
+                    // Panic isolation (c2-07), outer net. The inner guards
+                    // (`dispatch_core`, `vll::handle_vll_execute`,
+                    // `execute_transaction`) exist because they can still answer
+                    // the waiting client; this one covers every remaining
+                    // message category, where the caller sees only a dropped
+                    // oneshot. Losing one reply is the correct trade against
+                    // unwinding the task and letting the supervisor abort the
+                    // process. Deliberately *not* extended to the maintenance
+                    // arms above: a panic there is not attributable to a client
+                    // message, and fail-stop stays the right answer for it.
+                    let outcome = panic_guard::caught(self.dispatch_message(msg)).await;
+                    let should_stop = match outcome {
+                        Ok(should_stop) => should_stop,
+                        Err(panic_message) => {
+                            self.recover_from_panic(
+                                panic_guard::PanicSite::Message,
+                                msg_kind,
+                                &panic_message,
+                            );
+                            false
+                        }
+                    };
+                    if should_stop {
                         break;
                     }
                 }

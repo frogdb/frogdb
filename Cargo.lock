@@ -1714,6 +1714,7 @@ dependencies = [
  "frogdb-search",
  "frogdb-types",
  "frogdb-vll",
+ "futures",
  "griddle",
  "hex",
  "linked-hash-map",

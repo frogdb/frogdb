@@ -47,7 +47,27 @@ impl ShardWorker {
             return;
         };
 
-        let result = self.execute_scatter_part(&op.keys, &op.operation, 0).await;
+        // Panic isolation (c2-07). The release below is the whole reason this
+        // site needs its own guard rather than relying on the outer net: an
+        // unwind past it leaks the op's key locks *and* leaves `executing_ops`
+        // incremented, which permanently blocks every later request on those
+        // keys and any parked continuation lock. So the panic path releases
+        // exactly as the success path does — the lock never stays owned by a
+        // command that no longer exists.
+        let outcome =
+            super::panic_guard::caught(self.execute_scatter_part(&op.keys, &op.operation, 0)).await;
+
+        let result = match outcome {
+            Ok(result) => result,
+            Err(panic_message) => {
+                let err = self.recover_from_panic(
+                    super::panic_guard::PanicSite::VllExecute,
+                    op.operation.name(),
+                    &panic_message,
+                );
+                Self::scatter_error_reply(&op.operation, &op.keys, err)
+            }
+        };
 
         self.vll.release_after_execution(op.txid, &op.keys);
 

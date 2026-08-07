@@ -789,7 +789,7 @@ pub enum PartialResult {
 
     /// A shard rejected the scatter part outright — it never executed the
     /// operation, so this reply carries *no* data, only the error. Emitted by
-    /// [`scatter_conflict_reply`](crate::shard::ShardWorker) for **keyless**
+    /// [`scatter_error_reply`](crate::shard::ShardWorker) for **keyless**
     /// scatter ops (KEYS/DBSIZE/SCAN/FLUSHDB, and the FT admin/single-shard ops)
     /// whose per-key `Keyed` fallback would otherwise be *empty* and drop the
     /// error silently. A `ShardError` is fatal: the coordinator must surface it

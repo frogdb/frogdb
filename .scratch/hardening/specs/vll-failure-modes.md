@@ -17,6 +17,12 @@ the client's reply is named in `Observable` and lives in
 `frogdb-server/crates/server/src/connection/scripting/eval.rs`
 (`continuation_error_to_response`).
 
+One caller-side obligation is in scope even though it lives outside those two files: the
+shard worker must pair every `dequeue_for_execution` with a `release_after_execution`
+(`frogdb-server/crates/core/src/shard/vll.rs`). The lock table cannot enforce this from
+the inside — a caller that never returns leaves the entry held forever — so the way that
+pairing survives an abnormal exit is rowed here ([FM-VLL-005](#fm-vll-005--a-granted-op-panics-while-executing)).
+
 Not yet rowed: the scatter phases themselves (lock-request dispatch failure, phase-2/3 partial
 failure unwind, gather timeouts). Those paths have tests — `phase1_dispatch_failure_aborts_shards_already_holding_intents`,
 `phase3_failure_aborts_remaining_holders_not_positions`,
@@ -88,3 +94,17 @@ here names the `ShardReadyResult` the shard sends and the coordinator error it b
 | Outcome variant | `ShardReadyResult::Failed(VllError::ShardBusy)` → `ScatterError::LockFailed` |
 | Forced by | `sca_lock_request_refused_while_a_continuation_request_is_parked` |
 | Bug refs | [issue 02](../issues/02-continuation-drain-wait-blocks-event-loop.md) |
+
+---
+
+## FM-VLL-005 — a granted op panics while executing
+
+| Field | Value |
+|---|---|
+| Trigger | An op that already holds its locks panics inside `execute_scatter_part` — an `assert!`, an index, an overflow, anywhere below the shard boundary including inside a dependency. Round-2 issue 63 (`FT.SEARCH … LIMIT 0 0` reaching tantivy's `assert_ne!(limit, 0)`) was one such panic, reachable before authentication. |
+| Observable | The op's coordinator receives an error-shaped `PartialResult` for this shard — the same per-op shape [FM-VLL-001](#fm-vll-001--sca-request-refused-while-a-continuation-lock-is-held) uses, so the merge recognizes it — carrying `ERR internal error` and no data. `frogdb_shard_panics_isolated_total{site="vll_execute"}` increments and one `error!` names the shard, the op and the panic message. The shard answers the next message normally. |
+| NOT observable | The worker task dying (the supervisor turns that into `process::abort()`, so one op would take the node down); the op's key intents surviving in the lock table, or `executing_ops` staying incremented — either leaks the locks to a command that no longer exists and blocks every later request on those keys plus any parked continuation lock forever; the panic message reaching the client; a truncated result folding into the merge as success. |
+| Invariant | `dequeue_for_execution` and `release_after_execution` stay paired across an unwind: the panic is caught inside `handle_vll_execute` (`frogdb-server/crates/core/src/shard/vll.rs`), so the release runs on the panic path exactly as on the success path. Isolation is a structural backstop, never a licence to leave the panicking arithmetic unfixed — a non-zero counter is always a bug. |
+| Outcome variant | n/a — the locks were already granted; the failure is in execution, not acquisition. |
+| Forced by | `a_panicking_vll_op_releases_its_locks_and_the_shard_keeps_serving` |
+| Bug refs | [campaign-2 issue 07](../../hardening-2/issues/done/07-no-panic-isolation-at-the-shard-boundary.md), [round-2 issue 63](../../testing-improvements-round2/issues/done/63-ft-search-limit-0-0-panics-the-shard-worker.md) |

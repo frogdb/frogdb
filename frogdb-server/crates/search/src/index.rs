@@ -565,10 +565,35 @@ impl ShardSearchIndex {
         // When geo-filtering, we must over-fetch (fetch all matches) because
         // geo post-filtering changes the true total and offset/limit math.
         let raw_total = searcher.search(&tantivy_query, &tantivy::collector::Count)?;
+
+        // `LIMIT 0 0` is the documented RediSearch count-only idiom: reply with
+        // the match count and no documents. tantivy's `TopDocs::with_limit`
+        // asserts `limit != 0` unconditionally (live in release), so a zero
+        // window must never reach a collector — answer straight from the
+        // `Count` collector instead.
+        //
+        // The geo case deliberately falls through: a geo-filtered total is only
+        // knowable by enumerating and post-filtering the matches, and its fetch
+        // window (`raw_total.max(1)`) is non-zero by construction, so the
+        // `.take(limit)` at the end of each geo branch already yields the
+        // count-only shape.
+        if limit == 0 && !has_geo {
+            return Ok(SearchResult {
+                total: raw_total,
+                hits: Vec::new(),
+            });
+        }
+
         let (fetch_offset, fetch_limit) = if has_geo {
             (0, raw_total.max(1))
         } else {
-            (offset, offset + limit)
+            // Clamp to the number of documents that can possibly match: the
+            // collector allocates `2 * limit` slots up front, so an unclamped
+            // `LIMIT 0 18446744073709551615` would overflow that arithmetic.
+            // Clamping to `raw_total` cannot change the result set — the query
+            // has exactly `raw_total` matches — and `max(1)` keeps the
+            // zero-match case away from the same `with_limit` assert.
+            (offset, offset.saturating_add(limit).min(raw_total.max(1)))
         };
 
         // Build snippet generators for highlighted fields
@@ -1066,12 +1091,20 @@ impl ShardSearchIndex {
     }
 
     /// Perform a KNN search on a vector field.
+    ///
+    /// `k == 0` (`… =>[KNN 0 @field $blob]`, `VSIM @field $blob KNN count 0`)
+    /// asks for no neighbours and returns none, without entering the usearch
+    /// index — the same count-only contract [`Self::search`] honours for
+    /// `LIMIT 0 0`.
     pub fn knn_search(
         &self,
         field_name: &str,
         query_vector: &[f32],
         k: usize,
     ) -> Result<Vec<KnnHit>, SearchError> {
+        if k == 0 {
+            return Ok(Vec::new());
+        }
         let hits = self.vectors.knn(field_name, query_vector, k)?;
         Ok(hits
             .into_iter()
@@ -1095,7 +1128,16 @@ impl ShardSearchIndex {
         count: usize,
         text_opts: HybridTextOptions,
     ) -> Result<Vec<crate::hybrid::HybridHit>, SearchError> {
-        let fetch_count = window * count;
+        // `COMBINE <strategy> 0` / `VSIM … KNN <count> 0` asks for zero fused
+        // hits. Fusing nothing is the answer; running the two legs first would
+        // hand a zero window to the text collector and a zero `k` to usearch
+        // for a result that is discarded anyway.
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        // Saturating: `window` is already capped by the caller, but the product
+        // must never wrap into a smaller window than either factor.
+        let fetch_count = window.saturating_mul(count);
 
         // Run text search
         let text_result = self.search(
@@ -1975,5 +2017,181 @@ mod tests {
         let knn = index.knn_search("embedding", &[1.0, 0.0, 0.0], 1).unwrap();
         assert_eq!(knn.len(), 1);
         assert_eq!(knn[0].key, "doc:1");
+    }
+
+    /// An index definition with one TEXT field and one 3-dimensional VECTOR
+    /// field, for the hybrid/KNN paging-window cases.
+    fn text_vector_def() -> SearchIndexDef {
+        SearchIndexDef {
+            name: "hv_idx".to_string(),
+            prefix: vec!["doc:".to_string()],
+            fields: vec![
+                FieldDef {
+                    name: "title".to_string(),
+                    field_type: FieldType::Text { weight: 1.0 },
+                    sortable: false,
+                    noindex: false,
+                    nostem: false,
+                    casesensitive: false,
+                    json_path: None,
+                },
+                FieldDef {
+                    name: "embedding".to_string(),
+                    field_type: FieldType::Vector {
+                        dim: 3,
+                        distance_metric: VectorDistanceMetric::L2,
+                    },
+                    sortable: false,
+                    noindex: false,
+                    nostem: false,
+                    casesensitive: false,
+                    json_path: None,
+                },
+            ],
+            version: 1,
+            synonym_groups: HashMap::new(),
+            source: Default::default(),
+            stopwords: None,
+            skip_initial_scan: false,
+            language: None,
+        }
+    }
+
+    /// Every paging window the wire grammar can produce must return, never
+    /// panic.
+    ///
+    /// `FT.SEARCH idx * LIMIT 0 0` is *the* documented RediSearch count-only
+    /// idiom and reaches this function as `limit == 0`; `LIMIT 0
+    /// 18446744073709551615` reaches it as a window no collector can allocate.
+    /// Both used to abort the shard worker inside tantivy
+    /// (`TopDocs::with_limit` asserts `limit != 0`, and `TopNComputer` allocates
+    /// `2 * limit` slots), taking every key on the shard down for the process
+    /// lifetime.
+    #[test]
+    fn search_paging_window_edges_return_instead_of_panicking() {
+        let mut index = ShardSearchIndex::open_in_ram(test_def()).unwrap();
+        for i in 0..5 {
+            index.index_document(
+                &format!("doc:{i}"),
+                &[("title".to_string(), "common term".to_string())],
+            );
+        }
+        index.commit().unwrap();
+
+        // (offset, limit, expected hit count) — `total` is the match count in
+        // every case, independent of the window.
+        let cases: &[(usize, usize, usize)] = &[
+            // Count only: the RediSearch `LIMIT 0 0` idiom.
+            (0, 0, 0),
+            (0, 1, 1),
+            // Count only with a non-zero offset: still no documents.
+            (5, 0, 0),
+            // Unbounded window: every match, no allocation overflow.
+            (0, usize::MAX, 5),
+        ];
+
+        for &(offset, limit, expected_hits) in cases {
+            let result = index
+                .search("common", &SearchOptions::page(offset, limit))
+                .unwrap_or_else(|e| panic!("search(offset={offset}, limit={limit}) failed: {e}"));
+            assert_eq!(
+                result.total, 5,
+                "total for (offset={offset}, limit={limit})"
+            );
+            assert_eq!(
+                result.hits.len(),
+                expected_hits,
+                "hits for (offset={offset}, limit={limit})"
+            );
+        }
+    }
+
+    /// The count-only reply carries the true match count with no documents —
+    /// the contract `FT.SEARCH … LIMIT 0 0` exists to serve.
+    #[test]
+    fn search_zero_limit_counts_without_fetching_documents() {
+        let mut index = ShardSearchIndex::open_in_ram(test_def()).unwrap();
+        for i in 0..3 {
+            index.index_document(
+                &format!("doc:{i}"),
+                &[("title".to_string(), "hello world".to_string())],
+            );
+        }
+        index.index_document("doc:x", &[("title".to_string(), "unrelated".to_string())]);
+        index.commit().unwrap();
+
+        let counted = index.search("hello", &SearchOptions::page(0, 0)).unwrap();
+        assert_eq!(counted.total, 3);
+        assert!(counted.hits.is_empty());
+
+        // The same query with a window agrees about the total.
+        let fetched = index.search("hello", &SearchOptions::page(0, 10)).unwrap();
+        assert_eq!(fetched.total, counted.total);
+        assert_eq!(fetched.hits.len(), 3);
+
+        // Zero matches, zero window: still a well-formed count.
+        let none = index.search("absent", &SearchOptions::page(0, 0)).unwrap();
+        assert_eq!(none.total, 0);
+        assert!(none.hits.is_empty());
+    }
+
+    /// `FT.HYBRID … COMBINE RRF 0` and `VSIM @field $blob KNN <count> 0` both
+    /// fold to a zero fused count, which fed a zero window to the text
+    /// collector and a zero `k` to usearch.
+    #[test]
+    fn hybrid_and_knn_zero_count_return_no_hits() {
+        let mut index = ShardSearchIndex::open_in_ram(text_vector_def()).unwrap();
+        for i in 0..3 {
+            let raw_vec: Vec<u8> = [i as f32, 0.0, 0.0]
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect();
+            index.index_hash(
+                &format!("doc:{i}"),
+                &[
+                    (
+                        Bytes::from_static(b"title"),
+                        Bytes::from_static(b"hello world"),
+                    ),
+                    (Bytes::from_static(b"embedding"), Bytes::from(raw_vec)),
+                ],
+            );
+        }
+        index.commit().unwrap();
+
+        let fused = index
+            .hybrid_search(
+                "hello",
+                "embedding",
+                &[1.0, 0.0, 0.0],
+                &crate::hybrid::FusionStrategy::Rrf { constant: 60.0 },
+                4,
+                0,
+                HybridTextOptions::default(),
+            )
+            .unwrap();
+        assert!(fused.is_empty());
+
+        // A non-zero count still fuses, so the guard is not swallowing results.
+        let fused = index
+            .hybrid_search(
+                "hello",
+                "embedding",
+                &[1.0, 0.0, 0.0],
+                &crate::hybrid::FusionStrategy::Rrf { constant: 60.0 },
+                4,
+                2,
+                HybridTextOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(fused.len(), 2);
+
+        // `*=>[KNN 0 @embedding $blob]` asks for no neighbours.
+        assert!(
+            index
+                .knn_search("embedding", &[1.0, 0.0, 0.0], 0)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

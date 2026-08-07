@@ -144,6 +144,13 @@ define_metrics! {
         labels: [shard: &str],
     }
 
+    /// Total panics caught and isolated at the shard boundary, by isolation site.
+    /// A non-zero value is always a bug: the shard survived, but a client saw
+    /// `-ERR internal error` instead of an answer. Alert on the rate.
+    counter ShardPanicsIsolated("frogdb_shard_panics_isolated_total") {
+        labels: [shard: &str, site: &str],
+    }
+
     // ========================================================================
     // Persistence Metrics (WAL)
     // ========================================================================
