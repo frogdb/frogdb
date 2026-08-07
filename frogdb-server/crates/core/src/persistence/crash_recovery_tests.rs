@@ -18,17 +18,74 @@
 use super::recover_all_shards;
 use super::rocks::{RawBatchOp, RocksConfig, RocksStore};
 use super::serialization::{deserialize, serialize};
-use super::snapshot::SnapshotMetadataFile;
+use super::snapshot::{
+    RocksSnapshotCoordinator, SnapshotConfig, SnapshotCoordinator, SnapshotError,
+    SnapshotMetadataFile,
+};
 use super::test_harness::*;
 use super::wal::{DurabilityMode, WalConfig};
 use crate::noop::NoopMetricsRecorder;
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
 use bytes::Bytes;
+use frogdb_types::traits::MetricsRecorder;
 use rocksdb::WriteOptions;
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+/// Boot a snapshot coordinator over `snapshot_dir`, the way the server does.
+///
+/// Shared by the FM-PERSISTENCE-017 tests so each of them asserts against the
+/// *real* boot path (`load_latest_metadata` plus the epoch seed) rather than
+/// against `serde_json` in isolation.
+fn boot_coordinator(
+    tmp: &TempDir,
+    snapshot_dir: &Path,
+) -> Result<RocksSnapshotCoordinator, SnapshotError> {
+    let db_path = tmp.path().join("db");
+    RocksSnapshotCoordinator::new(
+        Arc::new(RocksStore::open(db_path.as_path(), 2, &RocksConfig::default()).unwrap()),
+        SnapshotConfig {
+            snapshot_dir: snapshot_dir.to_path_buf(),
+            snapshot_interval_secs: 3600,
+            max_snapshots: 5,
+        },
+        Arc::new(NoopMetricsRecorder::new()),
+        db_path,
+    )
+}
+
+/// Metrics recorder that keeps every counter call, including one carrying zero.
+///
+/// The FM-PERSISTENCE-035 tests below need to distinguish "reported nothing"
+/// from "reported a loss of zero records": a dashboard counts events, so a
+/// zero-valued alarm is still an alarm.
+#[derive(Default)]
+struct RecordingRecorder {
+    counters: Mutex<Vec<(String, u64)>>,
+}
+
+impl MetricsRecorder for RecordingRecorder {
+    fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+        self.counters
+            .lock()
+            .unwrap()
+            .push((name.to_string(), value));
+    }
+    fn record_gauge(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+    fn record_histogram(&self, _name: &str, _value: f64, _labels: &[(&str, &str)]) {}
+}
+
+impl RecordingRecorder {
+    fn calls(&self) -> Vec<(String, u64)> {
+        self.counters.lock().unwrap().clone()
+    }
+}
+
+/// The counter FM-PERSISTENCE-035 is about.
+const WAL_DROPPED_RECORDS: &str = "frogdb_wal_recovery_dropped_records_total";
 
 // ============================================================================
 // Category 1: Durability Mode Tests
@@ -40,8 +97,14 @@ mod durability_mode {
     // FM-PERSISTENCE-002
     /// Test 1.1: Sync mode guarantees - every acknowledged write survives crash.
     ///
-    /// With DurabilityMode::Sync, every write is fsync'd before returning.
-    /// This means ALL acknowledged writes MUST survive a crash.
+    /// With DurabilityMode::Sync, every write is fsync'd before returning, so
+    /// ALL acknowledged writes MUST survive a crash. The mode is what has to do
+    /// the work here: the keys go in through `put_direct`, which derives its
+    /// `sync` flag from the harness's `WalConfig`, not through an explicit
+    /// override. The unsynced neighbour written alongside them is the control —
+    /// it is the one write a crash is allowed to take — so this test fails both
+    /// if sync mode stops fsyncing and if `crash()` regresses to a clean drop
+    /// that loses nothing at all.
     #[test]
     fn test_sync_mode_crash_recovery() {
         let mut harness = CrashTestHarness::with_sync_mode();
@@ -51,8 +114,11 @@ mod durability_mode {
         for i in 0..n {
             let key = format!("sync_key_{:05}", i);
             let value = Value::string(format!("sync_value_{:05}", i));
-            harness.put_with_sync(0, key.as_bytes(), &value, true);
+            harness.put_direct(0, key.as_bytes(), &value);
         }
+
+        // Control: a write that bypasses the mode and is never fsynced.
+        harness.put_with_sync(0, b"unsynced_control", &Value::string("lost"), false);
 
         // Crash without explicit close
         harness.crash();
@@ -61,7 +127,7 @@ mod durability_mode {
         let (mut stores, stats) = harness.recover();
         assert_eq!(
             stats.keys_loaded, n,
-            "All {} keys must survive with sync mode",
+            "All {} keys must survive with sync mode, and only those",
             n
         );
 
@@ -75,13 +141,25 @@ mod durability_mode {
                 key
             );
         }
+
+        assert!(
+            stores[0].0.get(b"unsynced_control").is_none(),
+            "The never-fsynced control write must not survive the crash — if it \
+             does, the crash primitive is not discarding anything and the 100 \
+             surviving keys prove nothing about sync mode"
+        );
     }
 
     // FM-PERSISTENCE-003
-    /// Test 1.2: Periodic mode - data survives after interval passes.
+    /// Test 1.2: Periodic mode - data written before a sync survives, data
+    /// written after it does not.
     ///
-    /// With Periodic mode, data is synced at regular intervals.
-    /// After waiting past the interval, writes should survive.
+    /// Periodic mode never fsyncs at the commit seam; durability arrives out of
+    /// band, one sync per interval. So the loss window is bounded *by the last
+    /// sync*: everything before it comes back, and only the writes made since
+    /// are at risk. Both halves are asserted — the surviving prefix and the lost
+    /// suffix — because the surviving half alone passes against a crash that
+    /// loses nothing.
     #[test]
     fn test_periodic_mode_after_interval() {
         let mut harness = CrashTestHarness::with_periodic_mode(100); // 100ms interval
@@ -100,6 +178,13 @@ mod durability_mode {
         // Sleep past the interval to ensure sync has occurred
         std::thread::sleep(Duration::from_millis(150));
 
+        // Writes issued after the last sync sit in the current window.
+        for i in 0..10 {
+            let key = format!("in_window_key_{:05}", i);
+            let value = Value::string(format!("in_window_value_{:05}", i));
+            harness.put_direct(0, key.as_bytes(), &value);
+        }
+
         // Crash
         harness.crash();
 
@@ -107,7 +192,8 @@ mod durability_mode {
         let (mut stores, stats) = harness.recover();
         assert_eq!(
             stats.keys_loaded, n,
-            "All keys should survive after flush and interval"
+            "Every key synced before the crash survives, and nothing from the \
+             open window does"
         );
 
         for i in 0..n {
@@ -119,20 +205,35 @@ mod durability_mode {
                 key
             );
         }
+
+        for i in 0..10 {
+            let key = format!("in_window_key_{:05}", i);
+            assert!(
+                stores[0].0.get(key.as_bytes()).is_none(),
+                "Key {} was written inside the open sync window and must be lost",
+                key
+            );
+        }
     }
 
     // FM-PERSISTENCE-003
-    /// Test 1.3: Periodic mode - recovery plumbing after an immediate crash.
+    /// Test 1.3: Periodic mode - a crash inside the sync window loses exactly
+    /// the window, and never anything older.
     ///
-    /// NOTE: `crash()` here drops the `RocksStore` handle and `recover()`
-    /// reopens the same directory, which preserves the OS page cache — so
-    /// unflushed writes may still be recovered and this test cannot actually
-    /// distinguish the periodic loss window. It only exercises that recovery
-    /// after a mid-write crash succeeds and the flushed baseline is intact. The
-    /// real per-mode fsync-boundary window (bounded by the flush interval) is
+    /// With a 60s interval no periodic sync can land during the test, so every
+    /// write after the baseline flush is inside the open window and must be
+    /// gone after the crash — while the flushed baseline must not be. That is
+    /// the row's whole claim: the loss is a *suffix* bounded by the last sync,
+    /// never a gap and never an older write.
+    ///
+    /// The crash model here is the harness's compensating delete of everything
+    /// written since the last durability boundary (see `CrashTestHarness`), not
+    /// a severed page cache: it reproduces *what a crash costs*, not the
+    /// mechanics of losing it. The mechanics — that the loss window is set by
+    /// the `WriteSink::commit(sync)` flag and by the flush interval — are
     /// verified by `test_periodic_mode_loss_bounded_by_flush_interval` in
-    /// `frogdb-persistence`'s `wal::tests`, which severs the page cache at the
-    /// `WriteSink::commit(sync)` seam.
+    /// `frogdb-persistence`'s `wal::tests`, which crashes a real
+    /// `PageCacheSink`.
     #[test]
     fn test_periodic_mode_within_window() {
         let mut harness = CrashTestHarness::with_periodic_mode(60000); // 60s interval (long)
@@ -160,25 +261,37 @@ mod durability_mode {
             "Flushed baseline key must survive"
         );
 
-        // Unflushed keys MAY or MAY NOT be present - this is acceptable behavior
-        // We just verify the recovery doesn't fail and baseline is intact
-        assert!(
-            stats.keys_loaded >= 1,
-            "At least the baseline key should be recovered"
+        // Every write inside the open window MUST be gone.
+        for i in 0..10 {
+            let key = format!("unflushed_key_{}", i);
+            assert!(
+                stores[0].0.get(key.as_bytes()).is_none(),
+                "Key {} was never synced and must not survive the crash",
+                key
+            );
+        }
+
+        assert_eq!(
+            stats.keys_loaded, 1,
+            "Exactly the synced baseline comes back — the periodic window is \
+             lost whole, and nothing older than it is touched"
         );
     }
 
     // FM-PERSISTENCE-004
-    /// Test 1.4: Async mode - recovery plumbing after a crash.
+    /// Test 1.4: Async mode - only the explicit flush makes a write durable.
     ///
-    /// NOTE: like `test_periodic_mode_within_window`, `crash()`+`recover()`
-    /// preserve the OS page cache (same-process reopen of the same directory),
-    /// so the unflushed `key2` may still be recovered and this test cannot
-    /// distinguish async's (unbounded) loss window. It only exercises that
-    /// recovery succeeds and the flushed `key1` is intact. The real async
-    /// window — everything acked-but-unsynced is lost until an out-of-band
-    /// fsync — is verified by `test_async_mode_unbounded_loss_without_fsync`
-    /// and `test_async_mode_window_bounded_only_by_external_fsync` in
+    /// Async never fsyncs on its own, so the flush is the *only* durability
+    /// event in this test: `key1` precedes it and survives, `key2` follows it
+    /// and does not. Deleting the `flush()` call must lose both keys — that is
+    /// what makes the flush load-bearing rather than decorative.
+    ///
+    /// As in `test_periodic_mode_within_window`, the crash is the harness's
+    /// compensating delete of everything written since the last durability
+    /// boundary. That async's window is *unbounded* until an out-of-band fsync
+    /// — the property that needs real elapsed time and a real page cache — is
+    /// verified by `test_async_mode_unbounded_loss_without_fsync` and
+    /// `test_async_mode_window_bounded_only_by_external_fsync` in
     /// `frogdb-persistence`'s `wal::tests`.
     #[test]
     fn test_async_mode_explicit_flush() {
@@ -203,15 +316,22 @@ mod durability_mode {
             "Flushed key1 must survive"
         );
 
-        // key2 MAY be missing (acceptable) - we just verify recovery succeeded
+        // key2 was never covered by a flush: async mode owes it nothing.
         assert!(
-            stats.keys_loaded >= 1,
-            "At least the flushed key should be recovered"
+            stores[0].0.get(b"key2").is_none(),
+            "key2 was acknowledged but never synced — async mode must lose it"
         );
+        assert_eq!(stats.keys_loaded, 1, "Exactly the flushed key comes back");
     }
 
     // FM-PERSISTENCE-004
-    /// Test 1.5: Explicit sync_wal ensures durability.
+    /// Test 1.5: In async mode an explicit `sync_wal()` is the out-of-band
+    /// event that makes durability happen — and it covers only what preceded
+    /// it.
+    ///
+    /// The 20 keys written before the sync survive; the one written after it is
+    /// back inside the unbounded window and does not. Delete the `sync_wal()`
+    /// call and all 21 are lost, so the sync is the thing under test.
     #[test]
     fn test_explicit_sync_wal() {
         let mut harness = CrashTestHarness::with_async_mode();
@@ -225,17 +345,33 @@ mod durability_mode {
         // Explicitly sync WAL
         harness.sync_wal();
 
+        // Written after the only fsync in this test: not covered by it.
+        harness.put_direct(0, b"after_sync_key", &Value::string("after_sync_value"));
+
         // Crash
         harness.crash();
 
         // Recover - all 20 keys should be present
-        let (_stores, stats) = harness.recover();
+        let (mut stores, stats) = harness.recover();
         assert_eq!(
             stats.keys_loaded, 20,
-            "All keys must survive after sync_wal"
+            "All keys written before sync_wal must survive, and only those"
+        );
+        for i in 0..20 {
+            let key = format!("wal_key_{}", i);
+            assert!(
+                verify_string_value(&mut stores, 0, key.as_bytes(), &format!("value_{}", i)),
+                "Key {} must be recovered with its value",
+                key
+            );
+        }
+        assert!(
+            stores[0].0.get(b"after_sync_key").is_none(),
+            "A write made after the last sync_wal is not covered by it"
         );
     }
 
+    // FM-PERSISTENCE-002, FM-PERSISTENCE-004
     /// Issue 08 forcing test: `wal_config.mode` must actually gate what
     /// `crash()` loses. An async-mode write is never synced, so it must not
     /// survive; a sync-mode write is always synced, so it must survive.
@@ -270,8 +406,11 @@ mod atomicity {
 
     /// Test 2.1: Single key operations are atomic.
     ///
-    /// Large value writes are all-or-nothing - after crash, key either
-    /// has the full value or doesn't exist.
+    /// A 1MB value is all-or-nothing across a crash, on both sides of the
+    /// durability boundary: the synced one is there in full, the unsynced one is
+    /// absent in full. Neither may come back as a truncated payload — a partial
+    /// value is the failure this test exists to exclude, and "either outcome is
+    /// fine" would not exclude it.
     #[test]
     fn test_single_key_atomic() {
         let mut harness = CrashTestHarness::new();
@@ -279,6 +418,8 @@ mod atomicity {
         // Write a large value (1MB)
         let large_value = TestDataGenerator::large_string(1024 * 1024);
         harness.put_with_sync(0, b"large_key", &large_value, true);
+        // And one the crash is expected to take whole.
+        harness.put_with_sync(0, b"large_unsynced_key", &large_value, false);
 
         // Crash
         harness.crash();
@@ -286,16 +427,21 @@ mod atomicity {
         // Recover
         let (mut stores, _stats) = harness.recover();
 
-        // Key either exists with full value or doesn't exist
-        if let Some(value) = stores[0].0.get(b"large_key") {
-            let sv = value.as_string().expect("Should be string");
-            assert_eq!(
-                sv.as_bytes().len(),
-                1024 * 1024,
-                "If key exists, it must have the full value"
-            );
-        }
-        // If key doesn't exist, that's also acceptable (crash during write)
+        let value = stores[0]
+            .0
+            .get(b"large_key")
+            .expect("A synced write is not the crash's to take");
+        let sv = value.as_string().expect("Should be string");
+        assert_eq!(
+            sv.as_bytes().len(),
+            1024 * 1024,
+            "The surviving key must carry the whole value, never a prefix of it"
+        );
+
+        assert!(
+            stores[0].0.get(b"large_unsynced_key").is_none(),
+            "The unsynced key must be gone entirely, not partially present"
+        );
     }
 
     /// Test 2.2: WriteBatch operations are atomic.
@@ -563,6 +709,20 @@ mod recovery_correctness {
         assert!(stores[0].0.get(b"future_key").is_some());
         assert!(stores[0].0.get(b"no_expiry_key").is_some());
         assert!(stores[0].0.get(b"expired_key").is_none());
+
+        // The rebuilt index must agree with the restored store: the live TTL is
+        // tracked, the dead one is not resurrected there either.
+        let expiry_index = &stores[0].1;
+        assert!(
+            expiry_index.get(b"future_key").is_some(),
+            "A surviving TTL must be mirrored into the rebuilt index"
+        );
+        assert!(
+            expiry_index.get(b"expired_key").is_none(),
+            "An expired key must not come back through the index"
+        );
+        assert!(expiry_index.get(b"no_expiry_key").is_none());
+        assert_eq!(expiry_index.len(), 1);
     }
 
     // FM-PERSISTENCE-036
@@ -661,7 +821,13 @@ mod recovery_correctness {
     }
 
     // FM-PERSISTENCE-041
-    /// Test 3.6: Multiple shards recover independently.
+    /// Test 3.6: Multiple shards recover independently, and recovery returns
+    /// exactly one store per configured shard.
+    ///
+    /// The vector length is asserted against `num_shards` directly, and one
+    /// shard is deliberately emptied by the crash (its writes are never synced)
+    /// so a shard with nothing to restore still occupies its own slot — a short
+    /// vector, or one padded/truncated to fit, misroutes a whole keyspace.
     #[test]
     fn test_multi_shard_recovery() {
         let mut harness =
@@ -678,12 +844,26 @@ mod recovery_correctness {
         }
 
         harness.flush();
+
+        // Shard 2's post-flush writes never reach durability: after the crash
+        // that shard restores nothing at all, and must still get a store.
+        for i in 0..5 {
+            let key = format!("shard2_unsynced_{}", i);
+            harness.put_with_sync(2, key.as_bytes(), &Value::string("lost"), false);
+        }
+
         harness.crash();
 
         let (stores, stats) = harness.recover();
 
         // Total should be 10 + 20 + 30 + 40 = 100
         assert_eq!(stats.keys_loaded, 100);
+
+        assert_eq!(
+            stores.len(),
+            harness.num_shards,
+            "Recovery returns exactly one store per configured shard"
+        );
 
         // Verify each shard
         assert_eq!(stores[0].0.len(), 10);
@@ -693,7 +873,12 @@ mod recovery_correctness {
     }
 
     // FM-PERSISTENCE-029
-    /// Test 3.7: Empty shard recovery.
+    /// Test 3.7: Empty shard recovery — including a shard emptied by the crash.
+    ///
+    /// Shard 1 is written to and then loses every one of those writes, so at
+    /// boot its column family is empty for the same reason a never-used shard's
+    /// is. The probe must treat it as "nothing to restore" and boot, not as a
+    /// half-restored keyspace or a failure.
     #[test]
     fn test_empty_shard_recovery() {
         let mut harness = CrashTestHarness::new();
@@ -701,11 +886,17 @@ mod recovery_correctness {
         // Only write to shard 0, leave others empty
         harness.put_direct(0, b"only_key", &Value::string("only_value"));
         harness.flush();
+
+        // Shard 1's writes are never synced: the crash takes all of them.
+        harness.put_with_sync(1, b"doomed_key", &Value::string("doomed_value"), false);
+
         harness.crash();
 
         let (stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 1);
+        assert_eq!(stats.keys_failed, 0);
+        assert_eq!(stores.len(), harness.num_shards);
         assert_eq!(stores[0].0.len(), 1);
         assert_eq!(stores[1].0.len(), 0);
         assert_eq!(stores[2].0.len(), 0);
@@ -721,7 +912,13 @@ mod fault_injection {
     use super::*;
 
     // FM-PERSISTENCE-017
-    /// Test 4.1: Recovery handles corrupted snapshot metadata gracefully.
+    /// Test 4.1: A half-written `metadata.json` is not a snapshot, and not an
+    /// erased epoch either.
+    ///
+    /// The boot must survive it (a damaged pointer is what a crash mid-publish
+    /// leaves behind, not an operator error), must not adopt it as a save, and
+    /// must not rewind the epoch to 0 — epoch 0 makes the next `BGSAVE` reuse
+    /// `snapshot_00001`, whose directory is sitting right there.
     #[test]
     fn test_corrupted_snapshot_metadata() {
         let tmp = TempDir::new().unwrap();
@@ -736,25 +933,30 @@ mod fault_injection {
         // Create the latest symlink
         create_latest_symlink(&snapshot_dir, "snapshot_00001");
 
-        // Try to load metadata - should fail gracefully
-        let db_path = tmp.path().join("db");
-        let result = super::super::snapshot::RocksSnapshotCoordinator::new(
-            Arc::new(RocksStore::open(db_path.as_path(), 2, &RocksConfig::default()).unwrap()),
-            super::super::snapshot::SnapshotConfig {
-                snapshot_dir: snapshot_dir.clone(),
-                snapshot_interval_secs: 3600,
-                max_snapshots: 5,
-            },
-            Arc::new(NoopMetricsRecorder::new()),
-            db_path,
-        );
+        let coord = boot_coordinator(&tmp, &snapshot_dir)
+            .expect("an unreadable metadata pointer must not fail the boot");
 
-        // Should not crash - either succeeds with no metadata or handles error gracefully
-        assert!(result.is_ok() || result.is_err());
+        assert_eq!(
+            coord.current_epoch(),
+            1,
+            "the epoch falls back to the highest snapshot directory on disk, so \
+             the next BGSAVE cannot reuse a live epoch"
+        );
+        assert!(
+            coord.last_save_time().is_none(),
+            "a snapshot whose metadata will not parse is never reported as a save"
+        );
     }
 
     // FM-PERSISTENCE-017
-    /// Test 4.2: Recovery with incomplete snapshot (no completion marker).
+    /// Test 4.2: An unmarked snapshot is never adopted, even when `latest`
+    /// points straight at it.
+    ///
+    /// This is the row's headline NOT-observable: `snapshot_00001` has no
+    /// completion marker, so however it got published it is not a save. The
+    /// complete `snapshot_00000` next to it is deliberately older — the
+    /// coordinator must not silently fall back to it and report a save either,
+    /// because `latest` is the pointer and it points at the incomplete one.
     #[test]
     fn test_incomplete_snapshot_skipped() {
         let tmp = TempDir::new().unwrap();
@@ -772,50 +974,80 @@ mod fault_injection {
         // Point latest to incomplete snapshot
         create_latest_symlink(&snapshot_dir, "snapshot_00001");
 
-        // Load and verify incomplete is not used
+        // The file itself carries no marker...
         let metadata_path = snapshot_path.join("metadata.json");
         let content = std::fs::read_to_string(&metadata_path).unwrap();
         let metadata: SnapshotMetadataFile = serde_json::from_str(&content).unwrap();
         assert!(!metadata.is_complete());
+
+        // ...and the boot path acts on that: epoch resumed, no save reported.
+        let coord =
+            boot_coordinator(&tmp, &snapshot_dir).expect("an incomplete snapshot is not fatal");
+        assert!(
+            coord.last_save_time().is_none(),
+            "an unmarked snapshot must not be adopted as the latest save"
+        );
+        assert_eq!(
+            coord.current_epoch(),
+            1,
+            "the epoch counter still resumes past the crashed epoch"
+        );
     }
 
     // FM-PERSISTENCE-034
-    /// Test 4.3: Database recovery after unclean shutdown.
+    /// Test 4.3: An unclean shutdown truncates, it does not refuse.
     ///
-    /// RocksDB should recover gracefully from an unclean shutdown
-    /// using its WAL.
+    /// The database has to come back up — an unclean shutdown is ordinary, and
+    /// refusing to open would turn it into an outage. What it comes back with is
+    /// every synced write and nothing that was still in flight: the loss is a
+    /// suffix, so no unsynced key may reappear and no synced one may go missing.
+    ///
+    /// The tear here is the harness's durability boundary rather than a
+    /// byte-level torn record; the record-level behaviour of point-in-time
+    /// replay (truncate at the first inconsistency, drop the suffix behind a
+    /// mid-log corruption) is forced by `wal_truncation_recovers_prefix_and_signals`
+    /// and `wal_mid_log_bitflip_drops_suffix_and_signals` in `frogdb-persistence`.
     #[test]
     fn test_unclean_shutdown_recovery() {
-        let tmp = TempDir::new().unwrap();
+        let mut harness = CrashTestHarness::with_sync_mode();
 
-        // Write data without explicit flush
-        {
-            let rocks = RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap();
-
-            for i in 0..50 {
-                let key = format!("key_{}", i);
-                let value = Value::string(format!("value_{}", i));
-                let metadata = KeyMetadata::new(value.memory_size());
-                let serialized = serialize(&value, &metadata);
-
-                // Use sync write to ensure durability
-                let mut opts = WriteOptions::default();
-                opts.set_sync(true);
-                rocks
-                    .put_opt(0, key.as_bytes(), &serialized, &opts)
-                    .unwrap();
-            }
-
-            // Drop WITHOUT flush - simulates unclean shutdown
+        // 50 synced writes: acknowledged and on the device.
+        for i in 0..50 {
+            let key = format!("key_{}", i);
+            let value = Value::string(format!("value_{}", i));
+            harness.put_direct(0, key.as_bytes(), &value);
         }
 
-        // Reopen - RocksDB should replay WAL
-        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        // 10 writes still in flight when the power goes: the tail.
+        for i in 0..10 {
+            let key = format!("in_flight_{}", i);
+            harness.put_with_sync(0, key.as_bytes(), &Value::string("in_flight"), false);
+        }
+
+        harness.crash();
+
+        // Reopening must succeed — a torn tail is not a startup failure.
+        let (mut stores, stats) = harness.recover();
 
         // All sync'd keys should be present
         assert_eq!(stats.keys_loaded, 50);
         assert_eq!(stores[0].0.len(), 50);
+        for i in 0..50 {
+            let key = format!("key_{}", i);
+            assert!(
+                verify_string_value(&mut stores, 0, key.as_bytes(), &format!("value_{}", i)),
+                "Synced key {} must be replayed with its value",
+                key
+            );
+        }
+        for i in 0..10 {
+            let key = format!("in_flight_{}", i);
+            assert!(
+                stores[0].0.get(key.as_bytes()).is_none(),
+                "Key {} was in the torn tail and must not be replayed",
+                key
+            );
+        }
     }
 
     // FM-PERSISTENCE-033
@@ -856,6 +1088,30 @@ mod fault_injection {
         assert_eq!(stats.keys_loaded, 10);
         assert_eq!(stats.keys_failed, 1);
         assert_eq!(stores[0].0.len(), 10);
+
+        // The count alone cannot tell an operator *what* failed, so the first
+        // failure carries one concrete example: which shard, which tier, which
+        // key. A shrunken keyspace with no example is the thing this row exists
+        // to make impossible.
+        let failure = stats
+            .first_failure
+            .as_ref()
+            .expect("a counted decode failure must also be described");
+        assert_eq!(failure.shard_id, 0);
+        assert!(
+            !failure.warm,
+            "the corrupt value was written to the hot tier"
+        );
+        assert_eq!(failure.key.as_ref(), b"corrupt_key");
+        assert!(
+            !failure.error.is_empty(),
+            "the decoder's own message is what makes the report actionable"
+        );
+        assert!(
+            stats.bytes_loaded > 0,
+            "bytes accumulate before the decode attempt: scanning unreadable \
+             data is not the same as scanning nothing"
+        );
     }
 }
 
@@ -947,41 +1203,62 @@ mod stress {
 
     // FM-PERSISTENCE-034
     /// Test 5.3: Repeated crash and recovery cycles.
+    ///
+    /// Five crashes in a row, each with a synced batch and an unsynced tail.
+    /// Every cycle's synced keys accumulate and every cycle's tail is dropped:
+    /// recovery neither loses ground it already made nor drags a previous
+    /// crash's in-flight writes forward, however many times it happens.
     #[test]
     fn test_repeated_crash_cycles() {
-        let tmp = TempDir::new().unwrap();
+        let mut harness = CrashTestHarness::with_sync_mode();
 
         for cycle in 0..5 {
-            // Open
-            let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-
-            // Count existing keys (verify previous cycle's data)
-            let (existing_stores, _existing_stats) = recover_all_shards(&rocks).unwrap();
+            if cycle > 0 {
+                harness.reopen();
+            }
 
             // Write 20 new keys
             for i in 0..20 {
                 let key = format!("cycle{}_key_{}", cycle, i);
                 let value = Value::string(format!("cycle{}_value_{}", cycle, i));
-                let metadata = KeyMetadata::new(value.memory_size());
-                let serialized = serialize(&value, &metadata);
-                let mut opts = WriteOptions::default();
-                opts.set_sync(true);
-                rocks
-                    .put_opt(0, key.as_bytes(), &serialized, &opts)
-                    .unwrap();
+                harness.put_direct(0, key.as_bytes(), &value);
             }
 
-            // Drop (crash)
-            drop(rocks);
-            drop(existing_stores);
+            // ...and a tail that never reaches the device.
+            for i in 0..3 {
+                let key = format!("cycle{}_tail_{}", cycle, i);
+                harness.put_with_sync(0, key.as_bytes(), &Value::string("tail"), false);
+            }
+
+            harness.crash();
         }
 
         // Final verification
-        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (_stores, stats) = recover_all_shards(&rocks).unwrap();
+        let (mut stores, stats) = harness.recover();
 
         // Should have 5 cycles * 20 keys = 100 keys
         assert_eq!(stats.keys_loaded, 100);
+        for cycle in 0..5 {
+            for i in 0..20 {
+                let key = format!("cycle{}_key_{}", cycle, i);
+                let expected = format!("cycle{}_value_{}", cycle, i);
+                assert!(
+                    verify_string_value(&mut stores, 0, key.as_bytes(), &expected),
+                    "Key {} was synced in cycle {} and must still be here",
+                    key,
+                    cycle
+                );
+            }
+            for i in 0..3 {
+                let key = format!("cycle{}_tail_{}", cycle, i);
+                assert!(
+                    stores[0].0.get(key.as_bytes()).is_none(),
+                    "Key {} was in cycle {}'s torn tail and must be gone",
+                    key,
+                    cycle
+                );
+            }
+        }
     }
 
     /// Test 5.4: Large values recovery.
@@ -1021,7 +1298,12 @@ mod disk_failure {
     use super::*;
 
     // FM-PERSISTENCE-017
-    /// Test 6.1: Recovery after truncated metadata.json
+    /// Test 6.1: A metadata file torn in half is not half a snapshot.
+    ///
+    /// A crash mid-write leaves exactly this: valid JSON up to a point and
+    /// nothing after it. The boot must refuse to read a save out of it — and
+    /// must still not lose the epoch, which is on disk as a directory name
+    /// whatever the pointer says.
     #[test]
     fn test_truncated_metadata_recovery() {
         let tmp = TempDir::new().unwrap();
@@ -1036,15 +1318,36 @@ mod disk_failure {
         let metadata_path = snapshot_path.join("metadata.json");
         let original_size = file_size(&metadata_path).unwrap();
         truncate_file(&metadata_path, original_size / 2).unwrap();
+        create_latest_symlink(&snapshot_dir, "snapshot_00001");
 
-        // Try to parse - should fail gracefully
+        // Half a metadata file is not parseable...
         let content = std::fs::read_to_string(&metadata_path).unwrap_or_default();
-        let result: Result<SnapshotMetadataFile, _> = serde_json::from_str(&content);
-        assert!(result.is_err(), "Truncated JSON should fail to parse");
+        let parsed: Result<SnapshotMetadataFile, _> = serde_json::from_str(&content);
+        assert!(parsed.is_err(), "Truncated JSON should fail to parse");
+
+        // ...and the boot path treats it as no snapshot rather than as a save.
+        let coord = boot_coordinator(&tmp, &snapshot_dir)
+            .expect("a truncated metadata file must not fail the boot");
+        assert!(
+            coord.last_save_time().is_none(),
+            "a half-written metadata file is not a completed save"
+        );
+        assert_eq!(
+            coord.current_epoch(),
+            1,
+            "the epoch survives in the directory name even when the pointer does not"
+        );
     }
 
     // FM-PERSISTENCE-017
-    /// Test 6.2: Recovery handles missing completion marker.
+    /// Test 6.2: The completion marker is the whole difference between a
+    /// snapshot and a directory.
+    ///
+    /// `mark_complete` is the only writer of `FROGDB_SNAPSHOT_COMPLETE_v1`, so
+    /// an unmarked file is what every failed or interrupted save leaves. Both
+    /// directions are asserted — unmarked is refused, marked carries the exact
+    /// marker string — because "is_complete() is false" alone would still pass
+    /// if the marker were never written at all.
     #[test]
     fn test_missing_completion_marker() {
         let tmp = TempDir::new().unwrap();
@@ -1061,39 +1364,74 @@ mod disk_failure {
         let metadata: SnapshotMetadataFile = serde_json::from_str(&content).unwrap();
 
         assert!(!metadata.is_complete(), "Should not be marked complete");
+        assert!(
+            metadata.completed_at().is_none(),
+            "an unmarked snapshot has no completion time to report"
+        );
+        assert!(
+            !content.contains("FROGDB_SNAPSHOT_COMPLETE_v1"),
+            "the marker must be absent from the file, not merely unread"
+        );
+
+        // The completed sibling proves the marker is really written when a save
+        // finishes — otherwise the assertions above hold vacuously.
+        let complete_path = create_test_snapshot_dir(&snapshot_dir, 2);
+        write_snapshot_metadata(&complete_path, 2, 2000, 4, true);
+        let complete = std::fs::read_to_string(complete_path.join("metadata.json")).unwrap();
+        assert!(
+            complete.contains("FROGDB_SNAPSHOT_COMPLETE_v1"),
+            "a completed save publishes the marker verbatim"
+        );
     }
 
     // FM-PERSISTENCE-034
     /// Test 6.3: Recovery from valid data despite snapshot directory issues.
     ///
-    /// Even if snapshot directory is corrupted, WAL-based recovery should work.
+    /// The keyspace comes back from the WAL, and the wreckage a crashed save
+    /// leaves in the snapshot directory — a leftover staging dir, an unmarked
+    /// epoch, a `latest` pointing at garbage — changes nothing about that:
+    /// snapshot restore is an explicit operator action, never a boot path.
     #[test]
     fn test_wal_recovery_despite_snapshot_issues() {
-        let tmp = TempDir::new().unwrap();
+        let mut harness = CrashTestHarness::with_sync_mode();
+
+        // A snapshot directory in the state a crash mid-BGSAVE leaves it: a
+        // leftover staging dir, an unmarked epoch, `latest` pointing at it.
+        let snap_tmp = TempDir::new().unwrap();
+        let snapshot_dir = snap_tmp.path().join("snapshots");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let staged = snapshot_dir.join(".snapshot_00002.tmp");
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("metadata.json"), "{ half-writ").unwrap();
+        let orphan = create_test_snapshot_dir(&snapshot_dir, 1);
+        write_snapshot_metadata(&orphan, 1, 1000, 4, false);
+        create_latest_symlink(&snapshot_dir, "snapshot_00001");
+        let coord = boot_coordinator(&snap_tmp, &snapshot_dir)
+            .expect("a wrecked snapshot directory must not stop the server coming up");
+        assert!(
+            coord.last_save_time().is_none(),
+            "none of that wreckage is a save"
+        );
 
         // Write data with sync
-        {
-            let rocks = RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap();
-
-            for i in 0..30 {
-                let key = format!("wal_key_{}", i);
-                let value = Value::string(format!("value_{}", i));
-                let metadata = KeyMetadata::new(value.memory_size());
-                let serialized = serialize(&value, &metadata);
-                let mut opts = WriteOptions::default();
-                opts.set_sync(true);
-                rocks
-                    .put_opt(0, key.as_bytes(), &serialized, &opts)
-                    .unwrap();
-            }
+        for i in 0..30 {
+            let key = format!("wal_key_{}", i);
+            let value = Value::string(format!("value_{}", i));
+            harness.put_direct(0, key.as_bytes(), &value);
         }
+        harness.put_with_sync(0, b"in_flight", &Value::string("in_flight"), false);
 
-        // Reopen and recover from WAL (no snapshots involved)
-        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
-        let (stores, stats) = recover_all_shards(&rocks).unwrap();
+        harness.crash();
+
+        // Reopen and recover from the WAL — the snapshot wreckage is not consulted.
+        let (mut stores, stats) = harness.recover();
 
         assert_eq!(stats.keys_loaded, 30);
         assert_eq!(stores[0].0.len(), 30);
+        assert!(
+            stores[0].0.get(b"in_flight").is_none(),
+            "the unsynced tail is still dropped, snapshots or no snapshots"
+        );
     }
 
     /// Test 6.4: Binary data survives crash.
@@ -1166,12 +1504,23 @@ mod edge_cases {
     use super::*;
 
     // FM-PERSISTENCE-029
-    /// Test 7.1: Empty database recovery.
+    /// Test 7.1: A database the crash emptied boots fresh, not broken.
+    ///
+    /// Writes went in and every one of them died in the crash, so the probe
+    /// finds an empty keyspace — the same observation a genuine first boot
+    /// produces, and it has to be answered the same way: empty stores, zeroed
+    /// stats, no failure. A partially restored keyspace presented as fresh, or a
+    /// refusal, would both be wrong.
     #[test]
     fn test_empty_database_recovery() {
-        let mut harness = CrashTestHarness::new();
+        let mut harness = CrashTestHarness::with_async_mode();
 
-        // Don't write anything, just crash
+        // Everything written here is inside the loss window.
+        for i in 0..25usize {
+            let key = format!("doomed_key_{}", i);
+            harness.put_direct(i % 4, key.as_bytes(), &Value::string("doomed"));
+        }
+
         harness.crash();
 
         let (stores, stats) = harness.recover();
@@ -1180,6 +1529,7 @@ mod edge_cases {
         assert_eq!(stats.keys_expired_skipped, 0);
         assert_eq!(stats.keys_failed, 0);
 
+        assert_eq!(stores.len(), harness.num_shards);
         for (store, expiry_index) in &stores {
             assert_eq!(store.len(), 0);
             assert!(expiry_index.is_empty());
@@ -1321,7 +1671,16 @@ mod async_wal {
     use super::*;
 
     // FM-PERSISTENCE-035
-    /// Test async WAL writer crash recovery.
+    /// A clean reopen after a synced WAL run raises *nothing*.
+    ///
+    /// The dropped-records detector compares what RocksDB recovered to against
+    /// the durable-sync watermark. Here the watermark is real — the writer runs
+    /// in `Sync` mode, so its commits advance it — and recovery reaches it, so
+    /// the counter must not be touched at all. Not "incremented by zero":
+    /// touched at all, because a zero-valued counter call is still an alarm on
+    /// a dashboard that counts events. This is the never-false-alarm half of the
+    /// row, end to end through `RocksStore::open` rather than against
+    /// `detect_and_reset` directly.
     #[tokio::test]
     async fn test_async_wal_writer_recovery() {
         let tmp = TempDir::new().unwrap();
@@ -1349,21 +1708,46 @@ mod async_wal {
 
         // Flush
         wal.flush_async().await.unwrap();
+        let synced_seq = rocks.latest_sequence_number();
 
         // Drop everything
         drop(wal);
         drop(rocks);
 
         // Reopen and recover
-        let rocks = Arc::new(RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+        let recorder = Arc::new(RecordingRecorder::default());
+        let rocks = Arc::new(
+            RocksStore::open_with_metrics(tmp.path(), 2, &RocksConfig::default(), recorder.clone())
+                .unwrap(),
+        );
         let (stores, stats) = recover_all_shards(&rocks).unwrap();
 
         assert_eq!(stats.keys_loaded, 50);
         assert_eq!(stores[0].0.len(), 50);
+        assert!(
+            rocks.latest_sequence_number() >= synced_seq,
+            "recovery reached at least the sequence the syncs covered"
+        );
+        assert!(
+            !recorder
+                .calls()
+                .iter()
+                .any(|(name, _)| name == WAL_DROPPED_RECORDS),
+            "a reopen that lost nothing must raise no dropped-records signal, \
+             not even a zero: got {:?}",
+            recorder.calls()
+        );
     }
 
     // FM-PERSISTENCE-035
-    /// Test WAL writer sequence numbers survive crash.
+    /// The sequence the detector compares against survives the process.
+    ///
+    /// The WAL writer's own sequence is per-writer and starts at 1; RocksDB's is
+    /// the durable one, and it is what a later boot measures the watermark
+    /// against — so it must not rewind across a reopen, or every subsequent boot
+    /// would report a loss that never happened. Asserted together with the
+    /// no-signal check, since a rewound sequence is precisely how this detector
+    /// would false-alarm.
     #[tokio::test]
     async fn test_wal_sequence_persistence() {
         let tmp = TempDir::new().unwrap();
@@ -1387,5 +1771,30 @@ mod async_wal {
         // RocksDB sequence should have advanced
         let rocks_seq = rocks.latest_sequence_number();
         assert!(rocks_seq > 0);
+
+        drop(wal);
+        drop(rocks);
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let rocks = Arc::new(
+            RocksStore::open_with_metrics(tmp.path(), 2, &RocksConfig::default(), recorder.clone())
+                .unwrap(),
+        );
+        assert!(
+            rocks.latest_sequence_number() >= rocks_seq,
+            "the durable sequence must not rewind across a reopen: {} < {}",
+            rocks.latest_sequence_number(),
+            rocks_seq
+        );
+        assert!(
+            !recorder
+                .calls()
+                .iter()
+                .any(|(name, _)| name == WAL_DROPPED_RECORDS),
+            "nothing was dropped, so nothing may be reported: got {:?}",
+            recorder.calls()
+        );
+        let (_stores, stats) = recover_all_shards(&rocks).unwrap();
+        assert_eq!(stats.keys_loaded, 2, "both writes come back");
     }
 }

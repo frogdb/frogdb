@@ -569,13 +569,25 @@ mod tests {
     }
 
     // FM-PERSISTENCE-033
+    /// A crash that leaves an undecodable value behind is still a recoverable
+    /// database: the bad key is skipped and counted, the good one comes back,
+    /// and the write that never reached durability is simply absent — not
+    /// counted as a failure, because nothing was there to decode.
     #[test]
     fn test_harness_crash_and_recover() {
         let mut harness = CrashTestHarness::new();
 
         // Write data
         harness.put_direct(0, b"key", &Value::string("value"));
+        // A value no deserializer can read, durable alongside the good one.
+        harness
+            .rocks()
+            .put(0, b"corrupt_key", b"not a serialized value")
+            .expect("Failed to put");
         harness.flush();
+
+        // ...and one write still in flight when the process dies.
+        harness.put_with_sync(0, b"in_flight_key", &Value::string("in_flight"), false);
 
         // Simulate crash
         harness.crash();
@@ -584,7 +596,19 @@ mod tests {
         // Recover
         let (mut stores, stats) = harness.recover();
         assert_eq!(stats.keys_loaded, 1);
+        assert_eq!(
+            stats.keys_failed, 1,
+            "the undecodable key is counted, not silently dropped"
+        );
         assert!(verify_string_value(&mut stores, 0, b"key", "value"));
+        assert!(
+            stores[0].0.get(b"corrupt_key").is_none(),
+            "an undecodable key is skipped, never half-restored"
+        );
+        assert!(
+            stores[0].0.get(b"in_flight_key").is_none(),
+            "the unsynced write is gone with the crash"
+        );
     }
 
     #[test]

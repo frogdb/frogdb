@@ -73,7 +73,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | NOT observable | An acknowledged write missing after recovery. A commit that reaches the sink with `sync = false` while the mode is `sync` — the batch would be in the OS page cache, not on the device, and a power loss would take it. |
 | Invariant | `DurabilityMode::Sync` makes every `WriteSink::commit` pass `sync = true`, and `persist_records` under `Durability::Confirm` snapshots the WAL sequence before the first entry and `flush_through(start_seq)` before returning — so the reply cannot outrun the fsync. The page-cache crash model in `wal/tests.rs` (`PageCacheSink`) makes the distinction real: entries committed without `sync` live in a cache the simulated crash discards. |
 | Outcome variant | n/a (storage-layer invariant; `INFO persistence` `durability_mode`, `wal_durability_lag_ms`) |
-| Forced by | `test_sync_mode_zero_acked_write_loss`, `test_fsync_seam_sync_flag_matches_mode`, `test_sync_mode_crash_recovery`, `confirm_snapshots_sequence_then_flushes_once` |
+| Forced by | `test_sync_mode_zero_acked_write_loss`, `test_fsync_seam_sync_flag_matches_mode`, `test_sync_mode_crash_recovery`, `test_durability_mode_gates_crash_loss`, `confirm_snapshots_sequence_then_flushes_once` |
 | Bug refs | `.scratch/testing-improvements/issues/12-durability-fsync-boundary.md` (done — these tests are its outcome) |
 
 ## FM-PERSISTENCE-003 — `periodic` durability bounds loss by the flush interval
@@ -86,7 +86,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Invariant | The commit seam never fsyncs in this mode (`is_sync` is false, so every `WriteSink::commit` passes `sync = false`); durability comes entirely from out of band. `spawn_periodic_sync` calls `RocksStore::durable_sync` every `interval_ms` — flush every shard's memtable, then publish the sequence that flush covered to each registered WAL writer's durable watermark and re-record the on-disk WAL watermark. Between ticks `FlushEngine::should_flush` may still *commit* on the size threshold, which shortens the window of buffered (not yet even committed) entries but does not make them durable. |
 | Outcome variant | n/a (`INFO persistence` `durability_mode:periodic`, `wal_durability_lag_ms`) |
 | Forced by | `test_periodic_mode_loss_bounded_by_flush_interval`, `test_periodic_mode_after_interval`, `test_periodic_mode_within_window` |
-| Bug refs | none |
+| Bug refs | `.scratch/hardening-2/issues/open/11-no-seam-to-stop-the-periodic-syncer.md` (open — the "syncer silently stopped" NOT-observable is unwitnessed: `spawn_periodic_sync` returns no handle, so no test can stop the syncer) |
 
 ## FM-PERSISTENCE-004 — `async` durability is unbounded until something forces a sync
 
@@ -97,7 +97,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | NOT observable | A silently *bounded* window that makes `async` behave like `periodic` — an operator who chose `async` must not be able to mistake page-cache residency for durability. Equally: a *reported* durable point that no fsync backs (FM-PERSISTENCE-043) — `flush_through` in this mode confirms that the batch reached RocksDB, not that it reached the device, and the durable sequence must not claim otherwise. |
 | Invariant | `DurabilityMode::Async` commits with `sync = false` on **every** trigger — size threshold, batch timeout, an explicit `WalCommand::Flush` from `flush_through` / `flush_async`, and the shutdown drain alike — and spawns no periodic syncer. `WalCommand::Flush` empties the buffer into RocksDB; it does not fsync, because the mode's whole contract is that fsync is somebody else's event. Durability is therefore an event, not a clock, and the event is external to the WAL writer. |
 | Outcome variant | n/a (`INFO persistence` `durability_mode:async`) |
-| Forced by | `test_async_mode_unbounded_loss_without_fsync`, `test_async_mode_window_bounded_only_by_external_fsync`, `test_async_mode_explicit_flush`, `test_explicit_sync_wal` |
+| Forced by | `test_async_mode_unbounded_loss_without_fsync`, `test_async_mode_window_bounded_only_by_external_fsync`, `test_async_mode_explicit_flush`, `test_explicit_sync_wal`, `test_durability_mode_gates_crash_loss` |
 | Bug refs | none |
 
 ## FM-PERSISTENCE-043 — the reported durable sequence counts only fsynced commits
