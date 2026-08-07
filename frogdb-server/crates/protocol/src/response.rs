@@ -174,6 +174,54 @@ pub enum WireResponse {
     NullArray,
 }
 
+/// Sanitize an error payload for a CRLF-framed error reply.
+///
+/// **This is the single chokepoint every simple-error payload passes through on
+/// its way to the wire.** A simple error is framed as `-<payload>\r\n`, so a
+/// payload containing CR or LF puts *extra frames* on the wire and desynchronizes
+/// the client's reply stream: a pooled client attributes the attacker's forged
+/// `+OK` to some later command on the same connection. The error payload is
+/// client-controlled and reachable pre-`AUTH` (`ERR unknown command '<name>'`),
+/// so this is a protocol-level confused deputy, not a formatting nicety.
+///
+/// # Semantics (matching Redis)
+///
+/// Redis applies `sdsmapchars(s, "\r\n", "  ", 2)` in `addReplyErrorFormatInternal`
+/// (`networking.c`) and again on the command name in `commandCheckExistence`
+/// (`server.c`): every `\r` byte and every `\n` byte becomes a single space,
+/// in place, byte-length preserving, with no truncation and no escaping. This
+/// function does exactly that.
+///
+/// Deliberate divergence: Redis additionally `sdstrim`s leading/trailing CR/LF
+/// before mapping, so a trailing newline vanishes there and becomes a trailing
+/// space here. Mapping alone is sufficient for the framing invariant, and a
+/// length-preserving transform keeps the byte-accounting in
+/// `estimate_resp2_frame_size` exact.
+///
+/// Non-UTF-8 payloads are replaced lossily rather than panicking — the previous
+/// `Str::from_inner(..).expect("error messages must be valid UTF-8")` was a
+/// remote-triggerable panic surface the moment any error path interpolated raw
+/// client bytes.
+///
+/// Callers that need to embed arbitrary bytes verbatim should use
+/// [`WireResponse::BlobError`], which is length-framed on RESP3 (and is
+/// downgraded *through this function* on RESP2).
+pub fn sanitize_error_message(msg: Bytes) -> Str {
+    fn map_crlf(s: &str) -> String {
+        // `\r` and `\n` are ASCII, so they never occur inside a multi-byte UTF-8
+        // sequence: replacing each with a one-byte space is length-preserving
+        // and cannot produce invalid UTF-8.
+        s.replace(['\r', '\n'], " ")
+    }
+
+    match Str::from_inner(msg) {
+        // Valid UTF-8 with nothing to map: hand the buffer through untouched.
+        Ok(s) if !s.as_bytes().iter().any(|b| matches!(b, b'\r' | b'\n')) => s,
+        Ok(s) => Str::from(map_crlf(&s)),
+        Err(e) => Str::from(map_crlf(&String::from_utf8_lossy(&e.into_inner()))),
+    }
+}
+
 impl WireResponse {
     /// Create a simple "OK" response.
     pub fn ok() -> Self {
@@ -226,9 +274,7 @@ impl WireResponse {
     pub fn to_resp2_frame(self) -> Resp2BytesFrame {
         match self {
             WireResponse::Simple(s) => Resp2BytesFrame::SimpleString(s),
-            WireResponse::Error(e) => Resp2BytesFrame::Error(
-                Str::from_inner(e).expect("error messages must be valid UTF-8"),
-            ),
+            WireResponse::Error(e) => Resp2BytesFrame::Error(sanitize_error_message(e)),
             WireResponse::Integer(i) => Resp2BytesFrame::Integer(i),
             WireResponse::Bulk(Some(b)) => Resp2BytesFrame::BulkString(b),
             WireResponse::Bulk(None) => Resp2BytesFrame::Null,
@@ -240,12 +286,10 @@ impl WireResponse {
             WireResponse::Double(d) => Resp2BytesFrame::BulkString(Bytes::from(format_float(d))),
             WireResponse::Boolean(b) => Resp2BytesFrame::Integer(if b { 1 } else { 0 }),
             WireResponse::BlobError(e) => {
-                // Convert blob error to simple error (truncate if needed)
-                let msg = String::from_utf8_lossy(&e);
-                Resp2BytesFrame::Error(
-                    Str::from_inner(Bytes::from(msg.into_owned()))
-                        .expect("error must be valid UTF-8"),
-                )
+                // Downgrade the length-framed RESP3 blob error to a RESP2 simple
+                // error. The RESP2 form is CRLF-framed, so the payload must go
+                // through the sanitizer exactly like `WireResponse::Error`.
+                Resp2BytesFrame::Error(sanitize_error_message(e))
             }
             WireResponse::VerbatimString { data, .. } => {
                 // Strip format prefix, return as bulk string
@@ -301,7 +345,7 @@ impl WireResponse {
                 attributes: None,
             },
             WireResponse::Error(e) => Resp3BytesFrame::SimpleError {
-                data: Str::from_inner(e).expect("error messages must be valid UTF-8"),
+                data: sanitize_error_message(e),
                 attributes: None,
             },
             WireResponse::Integer(i) => Resp3BytesFrame::Number {
@@ -326,6 +370,11 @@ impl WireResponse {
                 data: b,
                 attributes: None,
             },
+            // A RESP3 blob error is length-framed (`!<len>\r\n<bytes>\r\n`), so
+            // the client reads exactly `len` bytes and an embedded CR/LF cannot
+            // start a new frame. It is deliberately *not* sanitized — that is
+            // the whole point of the blob form. The RESP2 downgrade of the same
+            // variant is CRLF-framed and *is* sanitized (see `to_resp2_frame`).
             WireResponse::BlobError(e) => Resp3BytesFrame::BlobError {
                 data: e,
                 attributes: None,
@@ -1574,5 +1623,148 @@ mod tests {
         };
         let frame = resp.try_to_resp3_frame();
         assert!(frame.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // Invariant P8 — error replies are CRLF-framed, so the *only* CR/LF in
+    // an encoded error is its single terminator.
+    //
+    // Round-2 issue 38: the command name in `ERR unknown command '<name>'`
+    // is client-controlled and reachable *before* AUTH, so a name of
+    // `AB\r\n+OK\r\nX` used to put three frames on the wire where the client
+    // expects one — the client's next reply read then consumes an
+    // attacker-authored `+OK`. The fix is `sanitize_error_message`, the
+    // single chokepoint every simple-error payload passes through.
+    // -------------------------------------------------------------------
+
+    /// Error payloads that must all survive encoding as exactly one frame.
+    /// Each is a realistic pre-auth `ERR unknown command '<name>'` body built
+    /// from a hostile command name, plus the degenerate CR/LF-only cases.
+    fn crlf_injection_payloads() -> Vec<(&'static str, Vec<u8>)> {
+        let unknown = |name: &str| {
+            format!("ERR unknown command '{name}', with args beginning with:").into_bytes()
+        };
+        vec![
+            ("bare CR", unknown("AB\rX")),
+            ("bare LF", unknown("AB\nX")),
+            ("CRLF", unknown("AB\r\nX")),
+            // The issue's exact injection: a forged `+OK` frame.
+            ("injected +OK frame", unknown("AB\r\n+OK\r\nX")),
+            // A whole forged error frame plus a bulk reply.
+            (
+                "injected multi-frame",
+                unknown("A\r\n-WRONGPASS forged\r\n$3\r\nfoo\r\n"),
+            ),
+            ("trailing LF", b"ERR something went wrong\n".to_vec()),
+            ("trailing CRLF", b"ERR something went wrong\r\n".to_vec()),
+            ("leading CRLF", b"\r\nERR something went wrong".to_vec()),
+            ("only newlines", b"\r\n\r\n".to_vec()),
+            // Not valid UTF-8: must be replaced lossily, never panic.
+            (
+                "invalid utf-8 with CRLF",
+                b"ERR unknown command '\xff\xfe\r\n+OK\r\n'".to_vec(),
+            ),
+        ]
+    }
+
+    /// Assert `encoded` is exactly one error frame: the `prefix` byte, a body
+    /// free of CR and LF, and one terminating `\r\n`.
+    fn assert_single_error_frame(label: &str, encoded: &[u8], prefix: u8) {
+        assert_eq!(
+            encoded.first().copied(),
+            Some(prefix),
+            "[{label}] expected an error frame prefix {:?}, got {:?}",
+            prefix as char,
+            String::from_utf8_lossy(encoded)
+        );
+        assert!(
+            encoded.ends_with(b"\r\n"),
+            "[{label}] frame must terminate with CRLF, got {:?}",
+            String::from_utf8_lossy(encoded)
+        );
+        let body = &encoded[1..encoded.len() - 2];
+        assert!(
+            !body.contains(&b'\r') && !body.contains(&b'\n'),
+            "[{label}] interior CR/LF survived encoding — the reply spans \
+             multiple frames: {:?}",
+            String::from_utf8_lossy(encoded)
+        );
+    }
+
+    fn encode_resp2(frame: &Resp2BytesFrame) -> bytes::BytesMut {
+        let mut buf = bytes::BytesMut::new();
+        redis_protocol::resp2::encode::extend_encode(&mut buf, frame, false).unwrap();
+        buf
+    }
+
+    fn encode_resp3(frame: &Resp3BytesFrame) -> bytes::BytesMut {
+        let mut buf = bytes::BytesMut::new();
+        redis_protocol::resp3::encode::complete::extend_encode(&mut buf, frame, false).unwrap();
+        buf
+    }
+
+    #[test]
+    fn resp2_error_encodes_as_exactly_one_frame() {
+        for (label, payload) in crlf_injection_payloads() {
+            let frame = WireResponse::Error(Bytes::from(payload)).to_resp2_frame();
+            assert_single_error_frame(label, &encode_resp2(&frame), b'-');
+        }
+    }
+
+    #[test]
+    fn resp3_simple_error_encodes_as_exactly_one_frame() {
+        for (label, payload) in crlf_injection_payloads() {
+            let frame = WireResponse::Error(Bytes::from(payload)).to_resp3_frame();
+            assert_single_error_frame(label, &encode_resp3(&frame), b'-');
+        }
+    }
+
+    #[test]
+    fn resp2_blob_error_downgrade_encodes_as_exactly_one_frame() {
+        // RESP3's length-framed blob error becomes a CRLF-framed RESP2 simple
+        // error, so the downgrade needs the same sanitizer.
+        for (label, payload) in crlf_injection_payloads() {
+            let frame = WireResponse::BlobError(Bytes::from(payload)).to_resp2_frame();
+            assert_single_error_frame(label, &encode_resp2(&frame), b'-');
+        }
+    }
+
+    #[test]
+    fn error_sanitizer_maps_crlf_to_spaces_like_redis() {
+        // Redis: `sdsmapchars(s, "\r\n", "  ", 2)` — each CR and each LF becomes
+        // one space, in place, byte-length preserving, no truncation.
+        let sanitized = sanitize_error_message(Bytes::from_static(b"a\rb\nc\r\nd"));
+        assert_eq!(&*sanitized, "a b c  d");
+        assert_eq!(sanitized.len(), "a\rb\nc\r\nd".len());
+
+        // A payload with nothing to map is passed through byte-for-byte.
+        let clean = b"ERR unknown command 'FOO', with args beginning with:";
+        assert_eq!(
+            &*sanitize_error_message(Bytes::from_static(clean)),
+            std::str::from_utf8(clean).unwrap()
+        );
+    }
+
+    #[test]
+    fn error_sanitizer_is_lossy_not_panicking_on_invalid_utf8() {
+        // Previously `Str::from_inner(..).expect("error messages must be valid
+        // UTF-8")` — a remote-triggerable panic surface.
+        let sanitized = sanitize_error_message(Bytes::from_static(b"ERR \xff\xfe bad\r\n"));
+        assert!(
+            sanitized.starts_with("ERR ") && sanitized.ends_with("  "),
+            "expected a lossy, CRLF-mapped string, got {sanitized:?}"
+        );
+        assert!(!sanitized.contains(['\r', '\n']));
+    }
+
+    #[test]
+    fn resp3_blob_error_keeps_crlf_because_it_is_length_framed() {
+        // The blob form is `!<len>\r\n<bytes>\r\n`: the client reads exactly
+        // `len` bytes, so an embedded CR/LF cannot start a frame. It is the
+        // documented escape hatch for byte-exact error payloads and must NOT be
+        // sanitized — this test pins that asymmetry against a well-meaning
+        // "sanitize everything" change.
+        let frame = WireResponse::BlobError(Bytes::from_static(b"ERR a\r\nb")).to_resp3_frame();
+        assert_eq!(encode_resp3(&frame).as_ref(), b"!8\r\nERR a\r\nb\r\n");
     }
 }
