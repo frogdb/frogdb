@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Instant;
 
 use dashmap::DashMap;
+use frogdb_types::clock;
 
 /// Scaling factor for sub-token precision (×1000).
 const SCALE: i64 = 1000;
@@ -17,7 +18,9 @@ const SCALE: i64 = 1000;
 static BASELINE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 fn baseline() -> &'static Instant {
-    BASELINE.get_or_init(Instant::now)
+    // Read through the clock seam so a paused turmoil runtime measures token
+    // refill against the simulated timeline, not the OS monotonic clock.
+    BASELINE.get_or_init(clock::now)
 }
 
 fn now_us() -> u64 {
