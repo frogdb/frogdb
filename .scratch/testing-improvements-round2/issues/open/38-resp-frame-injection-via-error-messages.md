@@ -68,3 +68,21 @@ below level 4 can observe frame boundaries as the client sees them.
 Nothing. Note the structural point in `MASTER.md` §6: the real RESP decoder (`FrogDbResp2`) lives
 in `server/src/connection/{codec,frame_io,util}.rs`, not the protocol crate — the sanitiser must
 land where the encoder actually is.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces; no sanitiser exists anywhere. All six interpolation sites survive, with two line
+corrections: `frogdb-server/crates/server/src/connection/guards.rs:492` (was 485) and
+`guards.rs:547` (was 540); unchanged are `connection/routing.rs:44`,
+`frogdb-server/crates/core/src/shard/execution.rs:134`,
+`core/src/scripting/gate.rs:451` (was 423) and `core/src/shard/scripting.rs:208` (was 193). The
+conversion boundary is `frogdb-server/crates/protocol/src/response.rs:229-231` (RESP2
+`WireResponse::Error` → `Resp2BytesFrame::Error`) and `response.rs:303-306` (RESP3
+`Resp3BytesFrame::SimpleError`) — both hand the payload to `Str::from_inner` verbatim with no
+CR/LF mapping, and the RESP2 `BlobError` downgrade at `response.rs:242-249` is a third unguarded
+path. A grep for any `sanitize`/CRLF-mapping helper across `crates/protocol/src` and
+`crates/server/src/connection` finds nothing. Note the same two `Str::from_inner(...).expect("error
+messages must be valid UTF-8")` calls are a latent panic surface if any error payload ever reaches
+them without a prior `from_utf8_lossy` — worth folding into the same sanitiser.

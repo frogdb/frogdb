@@ -76,3 +76,26 @@ already expose.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces; only the line numbers moved. The two raw keys are still planted on `_G` at
+`frogdb-server/crates/scripting/src/sandbox.rs:459-462` (was 416-419), under the same incorrect
+comment; the `_G` metatable is at `sandbox.rs:433-452` (was 390-409), the wrapped `setmetatable` at
+`sandbox.rs:406-411` (was 363-368), and the raw-key clear at `sandbox.rs:454-457` (was 411-414).
+`_real_G` (`sandbox.rs:396`) and `_protected` (`sandbox.rs:402`) are plain unprotected tables, and
+`register_protected_global` (`sandbox.rs:475-504`) still reaches them via `globals.raw_get`, so
+`_G.__frogdb_backing.redis = nil` and `_G.__frogdb_backing.<name> = f` still bypass the metatable
+entirely and persist for the life of the per-shard VM. Contrast `__frogdb_forbidden`, which *is*
+cleaned up correctly (`_rawset(_G, "__frogdb_forbidden", nil)`, `sandbox.rs:379`) — the same
+treatment is what the two remaining keys need. No test anywhere in the tree mentions
+`__frogdb_backing`/`__frogdb_protected`; sandbox history since filing is only `2fb1051c` (clock
+seam), `e68168f2` (lua-time-limit), `403309a8`, `17cb35fc` — none touches this. One nuance to
+correct in the body: acceptance-criterion 3 as written probably does *not* reproduce — after
+`_G.__frogdb_protected[_G] = nil`, `setmetatable(_G, {})` still raises "cannot change a protected
+metatable" because the `_G` metatable carries `__metatable = "The metatable is locked"`
+(`sandbox.rs:451`). Escapes (1) and (2) — global injection and `redis.call` removal across scripts
+— are the live ones and are sufficient on their own. The bare-EVAL slot-validation fix from the
+hardening campaign is unrelated to this finding.

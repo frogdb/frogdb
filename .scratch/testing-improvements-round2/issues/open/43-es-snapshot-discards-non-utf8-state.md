@@ -61,3 +61,19 @@ make.
 Decision D1 (home for command-semantics tests — inline units vs a `scenario_commands_*` family
 under `shard_driver`) — issue 29, `.scratch/testing-improvements-round2/issues/`. Both command
 agents recommend the `shard_driver` family, which is the boundary named above.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The cited line is unchanged and still at the same address:
+`frogdb-server/crates/commands/src/event_sourcing/snapshot.rs:46` is still
+`let stored = format!("{}:{}", version, std::str::from_utf8(state).unwrap_or(""));`, followed by
+`ctx.store.set(...)` and `Ok(Response::ok())` at `:48-50`. The read side still round-trips through
+`str` and splits on the first `':'` — `event_sourcing/replay.rs:59-79`, whose
+`"invalid snapshot format"` / `"invalid snapshot version"` arms remain the untested error family.
+Event sourcing was never in scope for the hardening campaign (no `commands` crate in the locked set,
+no FM row mentions `ES.*`), so nothing has touched this. Every existing `ES.SNAPSHOT` test still
+passes UTF-8 JSON only — `server/tests/integration_event_sourcing.rs` (3 uses) and
+`redis-regression/tests/event_sourcing_regression.rs` (5 uses) — so the destructive binary-state
+path is still entirely unexercised.

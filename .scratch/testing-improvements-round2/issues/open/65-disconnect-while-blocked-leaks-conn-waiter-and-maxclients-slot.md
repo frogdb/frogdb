@@ -66,3 +66,20 @@ level can produce; the harness already has `wait_for_blocked_clients`. Not level
 ## Depends on
 
 nothing
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+All three legs reproduce on today's tree. (1) `BlockingWaitCoordinator::wait_for_response`
+(`frogdb-server/crates/server/src/connection/blocking/coordinator.rs:93-110`) still races exactly
+`response_rx` / `unblock.unblocked()` / the deadline under `biased` — there is no socket/EOF arm.
+(2) `WaitQueue::collect_expired`
+(`frogdb-server/crates/core/src/shard/wait_queue.rs:297-308`) skips any entry whose `deadline` is
+`None`, and `connection/blocking.rs:48` (was cited as `:44`) still sets
+`let deadline = (timeout > 0.0).then(...)`, so `BLPOP k 0` registers a permanently uncollectable
+waiter. (3) `acceptor.rs:353` is still a bare `current_connections.fetch_sub(...)` statement
+after `handler.run().await` (`acceptor.rs:348-354`) — no guard, no `Drop`. The Phase-2/4 hardening
+did not touch this: `.scratch/hardening/specs/blocking-failure-modes.md` has no disconnect row
+(FM-BLOCKING-004 is *response channel closed*, a different trigger), and `rg` finds no
+disconnect-while-blocked test anywhere under `frogdb-server/crates/*/tests/`.

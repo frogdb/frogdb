@@ -61,3 +61,17 @@ the connection or RESP3 push framing participates in the growth.
 
 nothing — the accessor named in `## What to fix` step 3 is part of this work, not separate
 infrastructure
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Unchanged code. In `frogdb-server/crates/core/src/tracking.rs`: `record_read` (now `:103-133`)
+pushes to `lru_order` at `:126` on every first-sight key; `invalidate_keys` (now `:141-177`) still
+carries the "*we don't remove from lru_order here — stale entries are cleaned lazily during
+eviction*" comment at `:174-175`; `remove_connection` (`:191-204`) repeats it at `:199`; and the
+only compaction is inside `evict_lru` (`:207-232`), reachable solely from the
+`while self.key_to_clients.len() > self.max_keys` loop at `:129-131`. `lru_order` is only ever
+fully drained by `flush_all` (`:187`). No `lru_len()`/capacity accessor exists and no test asserts
+`lru_order.len()` (the single reference at `:499` asserts `is_empty()` after a flush). Tracking is
+outside the four locked areas, so no FM row covers it.

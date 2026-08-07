@@ -62,3 +62,20 @@ the two branches any more visible.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Confirmed live on today's tree. `frogdb-server/crates/server/src/config/loader.rs:87` still merges an
+explicit path with plain `Toml::file(path)` while `:91` merges the discovered `./frogdb.toml` with
+`Toml::file(default_path).nested()` — figment's `nested()` reinterprets `[server]`/`[persistence]` as
+*profiles*, and `figment.extract()` at `:128` only reads the Default profile, so a discovered file
+contributes nothing. `config_source_path` is still set unconditionally from that unread file at
+`loader.rs:199-204` (issue cited `:193–202`), so `CONFIG REWRITE` still writes into it. File:line
+refs are unchanged apart from the `config_source_path` block; the file did not move during the
+crate extractions (`git log -- .../config/loader.rs` shows no touch since `0169fbae`). No test
+exercises the discovery branch: `Config::load` has exactly one caller in tests,
+`test_load_explicit_config_file_not_found` (`crates/server/src/config/mod.rs:402-435`), which only
+covers the missing-explicit-path bail. No FM row covers config loading (config is not one of the
+six locked areas).

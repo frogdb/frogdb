@@ -1,6 +1,6 @@
 # Scatter/gather merges discard per-shard errors — partial failure replies as success
 
-Status: needs-triage
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/03 F1 · MASTER.md §3 (consistency violations), §2 T5, §7 (decision required)
@@ -70,3 +70,22 @@ full server integration runs that never inject a failing shard.
 ## Depends on
 
 nothing
+
+## Re-triage 2026-08-06
+
+**Verdict: superseded**
+
+Superseded by **issue 23 (`23-partial-scatter-failure-reported-as-success.md`)** — not fixed. Issue
+23 is the MASTER.md §2 T5 theme issue and reproduces this issue's 03/F1 evidence *verbatim*, with
+the same (a)/(b)/(c) options and the same recommendation, then adds 03/F8
+(`scatter_error_to_response`, all six arms untested) and 07/F17 (`TS.MADD` partial failure). Its
+acceptance criteria are a strict superset — the DEL/MSET/MGET/EXISTS/TOUCH/UNLINK failing-shard
+table covers this issue's `UnlinkStrategy::merge` item — and it correctly records the blocking
+dependency on issue 30 (the contract decision) that this issue's "Depends on: nothing" omits.
+**Issue 23 must stay open.** For the record, the defect is still live on today's code, at moved
+paths `server/src/scatter/strategies.rs` (crate-internal move from `connection/scatter/`):
+`MGetStrategy::merge` `.unwrap_or(Response::null())` at `:55-72`, `MSetStrategy::merge` ignoring
+`shard_results` and returning `Response::ok()` at `:132-138`, `merge_sum_integers`'
+`filter_map(Response::Integer)` at `:153-165`, `UnlinkStrategy::merge` at `:291-297`; and
+`scatter/executor.rs:141-191 scatter_error_to_response` still maps only whole-scatter
+`ScatterError` variants, never a per-key `Response::Error` inside a successful shard's result.

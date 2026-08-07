@@ -61,3 +61,17 @@ a unit test cannot see.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces verbatim. `MonitorEvent::new` at `frogdb-server/crates/server/src/monitor.rs:27` still
+gates redaction on `if cmd_name == "AUTH"` (`monitor.rs:28`) and copies every other command's args
+through with `args.to_vec()` (`monitor.rs:33`). The call site moved:
+`connection.rs:396` → `frogdb-server/crates/server/src/connection.rs:406-414`, still passing the
+uppercased `cmd_name` and the raw `cmd.args`. The only redaction test is still
+`test_auth_args_redacted` (`monitor.rs:114-120`), feeding plain `"AUTH"`. `format_event`
+(`monitor.rs:74-90`) writes `event.args` out with `from_utf8_lossy` and no second filter, so there
+is no downstream backstop. History on `monitor.rs` since filing is only `2fb1051c` (clock seam) —
+no redaction change.
