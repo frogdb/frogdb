@@ -1176,7 +1176,7 @@ mod tests {
 
     /// The whole point of phase one: ownership does not move until the source
     /// has been told to quiesce and has said it did.
-    // FM-CLUSTER-BARRIER-001
+    // FM-CLUSTER-084
     #[test]
     fn complete_is_refused_without_a_prepared_handoff() {
         let state = migrating_state(5);
@@ -1189,7 +1189,7 @@ mod tests {
         assert!(state.is_slot_migrating(5), "the migration record survived");
     }
 
-    // FM-CLUSTER-BARRIER-002
+    // FM-CLUSTER-084
     #[test]
     fn complete_is_refused_while_the_handoff_is_undrained() {
         let state = migrating_state(5);
@@ -1202,7 +1202,7 @@ mod tests {
         assert_eq!(state.get_slot_owner(5), Some(1));
     }
 
-    // FM-CLUSTER-BARRIER-003
+    // FM-CLUSTER-084
     #[test]
     fn prepare_then_drain_then_complete_moves_ownership() {
         let state = migrating_state(5);
@@ -1244,7 +1244,7 @@ mod tests {
     /// The hazard the measurement exposed: a `Complete` that lands after the
     /// source's barrier lapsed would move ownership out from under writes the
     /// source has already resumed serving.
-    // FM-CLUSTER-BARRIER-004
+    // FM-CLUSTER-084
     #[test]
     fn complete_is_refused_once_the_barrier_window_elapsed() {
         let state = migrating_state(5);
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(err.is_retryable());
     }
 
-    // FM-CLUSTER-BARRIER-005
+    // FM-CLUSTER-085
     #[test]
     fn complete_is_refused_once_the_lease_expired() {
         let state = migrating_state(5);
@@ -1290,7 +1290,7 @@ mod tests {
     /// A second finalizer cannot barge in on a live prepare, but once the lease
     /// has run out — the finalizer died — the next attempt goes through with no
     /// operator intervention.
-    // FM-CLUSTER-BARRIER-006
+    // FM-CLUSTER-085
     #[test]
     fn a_second_prepare_waits_for_the_lease_but_not_forever() {
         let state = migrating_state(5);
@@ -1324,7 +1324,7 @@ mod tests {
 
     /// The stale-ack hazard: attempt #1's drain confirmation must not vouch for
     /// attempt #2, which was never drained.
-    // FM-CLUSTER-BARRIER-007
+    // FM-CLUSTER-086
     #[test]
     fn a_stale_drain_ack_cannot_vouch_for_the_next_attempt() {
         let state = migrating_state(5);
@@ -1352,7 +1352,7 @@ mod tests {
     /// Abort is the drain-timeout path: it drops the barrier and leaves the
     /// migration exactly where it was, so the operator retries rather than
     /// re-opening the migration.
-    // FM-CLUSTER-BARRIER-008
+    // FM-CLUSTER-087
     #[test]
     fn abort_releases_the_barrier_and_keeps_the_migration() {
         let state = migrating_state(5);
@@ -1384,7 +1384,7 @@ mod tests {
     /// `CLUSTER SETSLOT STABLE` mid-handoff. FM-006/FM-010: the prepared record
     /// goes away with the migration, and the source is told to drop its barrier
     /// rather than waiting out the timeout.
-    // FM-CLUSTER-BARRIER-009
+    // FM-CLUSTER-087
     #[test]
     fn cancel_releases_a_prepared_handoff() {
         let state = migrating_state(5);
@@ -1405,7 +1405,7 @@ mod tests {
         assert_eq!(state.get_slot_owner(5), Some(1), "ownership never moved");
     }
 
-    // FM-CLUSTER-BARRIER-010
+    // FM-CLUSTER-087
     #[test]
     fn cancel_without_a_handoff_emits_nothing() {
         let state = migrating_state(5);
@@ -1417,7 +1417,7 @@ mod tests {
 
     /// A force failover that prunes a migration owes the surviving source its
     /// release: node 2 disappears, but node 1 is the one holding the barrier.
-    // FM-CLUSTER-BARRIER-011
+    // FM-CLUSTER-087
     #[test]
     fn force_failover_releases_the_handoffs_it_prunes() {
         let state = state_with_primaries(3);
@@ -1449,7 +1449,7 @@ mod tests {
         assert!(!state.is_slot_migrating(5));
     }
 
-    // FM-CLUSTER-BARRIER-012
+    // FM-CLUSTER-087
     #[test]
     fn reset_releases_prepared_handoffs() {
         let state = migrating_state(5);
@@ -1471,7 +1471,7 @@ mod tests {
         );
     }
 
-    // FM-CLUSTER-BARRIER-013
+    // FM-CLUSTER-086
     #[test]
     fn prepare_requires_a_migration_and_matching_parameters() {
         let state = state_with_primaries(3);
@@ -1515,7 +1515,7 @@ mod tests {
 
     /// Confirming a handoff whose lease already ran out is allowed (the entry
     /// carries no timestamp) but buys nothing: `Complete` re-checks.
-    // FM-CLUSTER-BARRIER-014
+    // FM-CLUSTER-085
     #[test]
     fn a_late_confirm_cannot_resurrect_an_expired_handoff() {
         let state = migrating_state(5);
@@ -1535,7 +1535,7 @@ mod tests {
 
     /// The seq counter is global, not per-slot, so two slots finalizing at once
     /// get distinct attempt identifiers and neither can confirm the other's.
-    // FM-CLUSTER-BARRIER-015
+    // FM-CLUSTER-088
     #[test]
     fn concurrent_handoffs_on_two_slots_do_not_interfere() {
         let state = migrating_state(5);
@@ -1575,7 +1575,7 @@ mod tests {
     /// Deadline arithmetic, pinned directly: the barrier is the shorter bound
     /// and the lease the longer one, and both are computed from replicated data
     /// rather than a clock read inside `apply`.
-    // FM-CLUSTER-BARRIER-016
+    // FM-CLUSTER-089
     #[test]
     fn handoff_deadlines_are_pure_functions_of_replicated_data() {
         let h = SlotHandoff {

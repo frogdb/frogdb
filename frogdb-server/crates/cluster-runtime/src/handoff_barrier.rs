@@ -302,7 +302,7 @@ mod tests {
         )
     }
 
-    // FM-CLUSTER-BARRIER-017
+    // FM-CLUSTER-090
     #[test]
     fn only_the_source_node_acts_on_a_handoff() {
         // This node is the source: arm, drain shard `slot % num_shards`.
@@ -338,7 +338,7 @@ mod tests {
         );
     }
 
-    // FM-CLUSTER-BARRIER-018
+    // FM-CLUSTER-090
     #[test]
     fn drain_targets_slot_modulo_num_shards_and_survives_zero() {
         for (slot, num_shards, expected) in [(0u16, 4usize, 0usize), (5, 4, 1), (16383, 4, 3)] {
@@ -360,7 +360,7 @@ mod tests {
 
     /// The happy path end to end: the barrier goes up, the shard round trip
     /// completes, and the drain is confirmed with the attempt's own `seq`.
-    // FM-CLUSTER-BARRIER-019
+    // FM-CLUSTER-090
     #[tokio::test]
     async fn a_prepare_arms_the_barrier_drains_the_shard_and_confirms() {
         let (senders, mut receivers) = shard_channels(4);
@@ -391,7 +391,7 @@ mod tests {
 
     /// The ordering hazard: a release that follows its prepare must find the
     /// barrier already armed, so it can actually lift it.
-    // FM-CLUSTER-BARRIER-020
+    // FM-CLUSTER-090
     #[tokio::test]
     async fn a_release_lifts_the_barrier_its_prepare_armed() {
         let (senders, mut receivers) = shard_channels(4);
@@ -416,7 +416,7 @@ mod tests {
 
     /// A shard that never answers must not produce a confirmation — the
     /// finalizer's abort is what recovers, with the migration record intact.
-    // FM-CLUSTER-BARRIER-021
+    // FM-CLUSTER-091
     #[tokio::test(start_paused = true)]
     async fn a_shard_that_never_answers_is_never_confirmed() {
         let (senders, mut receivers) = shard_channels(4);
@@ -439,7 +439,7 @@ mod tests {
 
     /// A shard index that does not exist is a drain failure, not a silent
     /// success that would let ownership move without a drain.
-    // FM-CLUSTER-BARRIER-022
+    // FM-CLUSTER-091
     #[tokio::test]
     async fn a_missing_shard_fails_the_drain() {
         let (senders, _receivers) = shard_channels(4);
@@ -451,7 +451,7 @@ mod tests {
         assert!(!drain_shard(5, 1, &senders).await);
     }
 
-    // FM-CLUSTER-BARRIER-023
+    // FM-CLUSTER-089
     #[test]
     fn handoff_now_ms_reads_the_clock_seam() {
         let before = to_ms(clock::system_now());
