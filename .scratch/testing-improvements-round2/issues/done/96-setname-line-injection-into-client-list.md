@@ -1,6 +1,6 @@
 # `CLIENT SETNAME` / `HELLO … SETNAME` allow line injection into `CLIENT LIST`
 
-Status: ready-for-agent
+Status: done
 Triage: 2026-08-07 — scheduled into hardening-2 **W4 security spec** (same client-controlled-substring
 injection family as round2 #38, which is fixed). #38 covered every client string reaching an *error*
 reply; this is the two remaining client strings reaching a *data* reply (`CLIENT LIST`). Fix is a
@@ -37,6 +37,17 @@ special characters.`). Fold `HELLO SETNAME` through the same validator.
 `CLIENT SETNAME` / `HELLO 2 SETNAME` with a name containing `\n`, `\r`, and a `0x00` byte each
 return an error and do not alter the connection name; a socket-level test asserting `CLIENT LIST`
 remains one row per connection after an attempted injection.
+
+## Resolution
+
+Fixed 2026-08-07. Shared `validate_client_name` (printable ASCII `0x21..=0x7e`, Redis parity, empty
+name still clears) added at `connection/util.rs`, routed through both `client_setname`
+(`client_conn_command.rs`) and the HELLO SETNAME arm (`auth_conn_command.rs`). HELLO validates at its
+application point (after the inline-AUTH clause), matching Redis option order. Forcing tests:
+`test_client_setname_rejects_line_injection` + `test_hello_setname_rejects_line_injection`
+(`integration_client.rs`, socket-level, assert error + name unchanged + `CLIENT LIST` stays one row
+per connection) and `validate_client_name_rejects_non_printable` (`util.rs` unit) — 7/7 pass, no
+regression.
 
 ## Comments
 
