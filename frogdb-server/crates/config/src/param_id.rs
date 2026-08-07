@@ -269,6 +269,10 @@ param_id_enum! {
         // Recovery has finished before the first connection exists, so there is
         // no live seam a SET could act on; GET reports the startup value.
         RecoveryOnDecodeFailure => "recovery-on-decode-failure",
+        // === persistence hardening round: the data-directory guard (immutable) ===
+        // Same reason: the empty-data-dir refusal is decided in recovery phase 0,
+        // before any client exists. GET reports the startup value.
+        RequireExistingData => "require-existing-data",
     }
 }
 
@@ -357,8 +361,8 @@ mod tests {
         // cadence, TLS ciphersuites) + 1 promote-immutable param added by
         // issue-29 (`pubsub-output-buffer-hard-limit`) + 2 added by the
         // config-mutability round (`tls-watch-*`), minus the 23 that same round
-        // promoted to `MutableParamId` + 1 added by the persistence hardening
-        // round (`recovery-on-decode-failure`).
-        assert_eq!(ImmutableParamId::ALL.len(), 46);
+        // promoted to `MutableParamId` + 2 added by the persistence hardening
+        // round (`recovery-on-decode-failure`, `require-existing-data`).
+        assert_eq!(ImmutableParamId::ALL.len(), 47);
     }
 }
