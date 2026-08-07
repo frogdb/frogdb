@@ -117,7 +117,7 @@ concurrency-turmoil PATTERN='seed_sweep':
 
 # Run the nightly (1000+ seed) generated-workload sweep across all profiles (CI nightly
 # tier, not part of `just concurrency`/`just test-all`). SEEDS overrides seeds-per-profile
-# (default 250 x 4 profiles = 1000). OPS overrides ops-per-client and matches the harness's
+# (default 250 x 5 profiles = 1250). OPS overrides ops-per-client and matches the harness's
 # coded default of 150. (It was held at 75 while the workload runner's final-state readback
 # raced long client scripts, reporting phantom "exactly-once delivery" loss above ~90 ops —
 # .scratch/concurrency-testing/issues/11 Finding A, fixed by latching

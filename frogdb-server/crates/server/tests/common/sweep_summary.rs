@@ -66,6 +66,16 @@ pub struct SweepSummary {
     pub fifo_registrations: usize,
     /// Of those, how many the checker tied to a specific operation.
     pub fifo_attributed: usize,
+    /// Registrations left unattributed because the client's blocking pops on
+    /// the key outnumbered its journaled parks there. Benign by construction —
+    /// see `frogdb_testing::conservation::FifoCoverage` — and the only reason
+    /// the attributed ratio can sit below 1.0.
+    pub fifo_unattributed_extra_pops: usize,
+    /// Registrations left unattributed because the shards journaled *more*
+    /// parks than the history has blocking pops. Nothing in the blocking path
+    /// can produce this, so a non-zero count is a defect, not coverage loss,
+    /// and [`Self::check_fifo_coverage`] fails on it outright.
+    pub fifo_unattributed_missing_pops: usize,
     /// Served blocking pops the exact FIFO checker considered, sweep-wide.
     /// Mostly pops that never parked, so this is context, not a target.
     pub fifo_served_pops: usize,
@@ -87,6 +97,8 @@ impl SweepSummary {
         let cov = report.fifo_coverage;
         self.fifo_registrations += cov.registrations;
         self.fifo_attributed += cov.attributed;
+        self.fifo_unattributed_extra_pops += cov.unattributed_extra_pops;
+        self.fifo_unattributed_missing_pops += cov.unattributed_missing_pops;
         self.fifo_served_pops += cov.served_pops;
         self.fifo_judged_pops += cov.judged_pops;
         self.fifo_pairs_compared += cov.pairs_compared;
@@ -103,6 +115,19 @@ impl SweepSummary {
             1.0
         } else {
             self.fifo_attributed as f64 / self.fifo_registrations as f64
+        }
+    }
+
+    /// Sweep-wide share of *served* blocking pops that carried an unambiguous
+    /// registration ordinal and so could be ordered. Unlike
+    /// [`Self::fifo_attributed_ratio`] this is capped by how often the workload
+    /// actually makes pops park, which is what the high-contention profile
+    /// exists to raise. `0.0` when no blocking pop was served.
+    pub fn fifo_judged_pop_ratio(&self) -> f64 {
+        if self.fifo_served_pops == 0 {
+            0.0
+        } else {
+            self.fifo_judged_pops as f64 / self.fifo_served_pops as f64
         }
     }
 
@@ -135,23 +160,29 @@ impl SweepSummary {
     pub fn fifo_report_line(&self, label: &str) -> String {
         format!(
             "{label}: exact FIFO attributed {}/{} journaled registration(s) \
-             (ratio {:.4}), judged {} of {} served blocking pop(s), {} pair(s) \
-             compared, {} run(s) with a truncated registration journal",
+             (ratio {:.4}), judged {} of {} served blocking pop(s) (judged ratio \
+             {:.4}), {} pair(s) compared, {} run(s) with a truncated registration \
+             journal, unattributed {} extra-pop / {} missing-pop",
             self.fifo_attributed,
             self.fifo_registrations,
             self.fifo_attributed_ratio(),
             self.fifo_judged_pops,
             self.fifo_served_pops,
+            self.fifo_judged_pop_ratio(),
             self.fifo_pairs_compared,
             self.fifo_incomplete_runs,
+            self.fifo_unattributed_extra_pops,
+            self.fifo_unattributed_missing_pops,
         )
     }
 
     /// Hard-threshold check on exact-FIFO coverage: `Err` when the journal was
     /// truncated anywhere, when blocking pops were served but nothing parked
-    /// (capture is dead), when too few journaled registrations were attributed,
-    /// or when no serve-order pair was compared at all. Any of the four means
-    /// the FIFO verdict is not evidence of anything.
+    /// (capture is dead), when a registration was lost in the *defect*
+    /// direction (more journaled parks than blocking pops), when too few
+    /// journaled registrations were attributed, or when no serve-order pair was
+    /// compared at all. Any of the five means the FIFO verdict is not evidence
+    /// of anything.
     pub fn check_fifo_coverage(&self, label: &str, min_ratio: f64) -> Result<(), String> {
         if self.fifo_incomplete_runs > 0 {
             return Err(format!(
@@ -164,6 +195,15 @@ impl SweepSummary {
             return Err(format!(
                 "{} — blocking pops were served but the shards journaled no \
                  registration at all: capture is dead (issue 16)",
+                self.fifo_report_line(label)
+            ));
+        }
+        if self.fifo_unattributed_missing_pops > 0 {
+            return Err(format!(
+                "{} — the shards journaled more parks for some (key, client) than \
+                 the history has blocking pops for it. A BLPOP registers at most \
+                 once and only when it parks, so this is a wake-accounting or \
+                 capture-join defect, not coverage loss",
                 self.fifo_report_line(label)
             ));
         }
@@ -280,6 +320,11 @@ mod tests {
                 judged_pops: judged,
                 pairs_compared: pairs,
                 complete,
+                // The direction split is exercised by its own test below; the
+                // benign bucket absorbs whatever these helpers left unattributed
+                // so the defect check never fires incidentally.
+                unattributed_extra_pops: registrations.saturating_sub(attributed),
+                unattributed_missing_pops: 0,
             },
             ..InvariantReport::default()
         }
@@ -350,6 +395,34 @@ mod tests {
             .check_fifo_coverage("low", 0.9)
             .expect_err("10% attribution must fail a 90% floor");
         assert!(err.contains("minimum attributed ratio"), "{err}");
+    }
+
+    #[test]
+    fn fifo_missing_pop_attribution_loss_fails_even_above_the_ratio_floor() {
+        // 99% attributed — comfortably over the floor — but one registration
+        // was lost in the direction the blocking path cannot produce. That is a
+        // defect signal and must fail rather than be absorbed as coverage loss.
+        let mut summary = SweepSummary::default();
+        let mut report = report_with_fifo(100, 99, 100, 99, 20, true);
+        report.fifo_coverage.unattributed_extra_pops = 0;
+        report.fifo_coverage.unattributed_missing_pops = 1;
+        summary.record(&report);
+        let err = summary
+            .check_fifo_coverage("missing pops", 0.9)
+            .expect_err("a park with no matching pop must fail");
+        assert!(err.contains("journaled more parks"), "{err}");
+    }
+
+    #[test]
+    fn fifo_judged_pop_ratio_reports_parking_density() {
+        let mut summary = SweepSummary::default();
+        summary.record(&report_with_fifo(4, 4, 200, 4, 2, true));
+        assert_eq!(summary.fifo_judged_pop_ratio(), 0.02);
+        assert_eq!(
+            SweepSummary::default().fifo_judged_pop_ratio(),
+            0.0,
+            "no served pops must not divide by zero"
+        );
     }
 
     #[test]
