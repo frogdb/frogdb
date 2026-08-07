@@ -33,15 +33,18 @@
 
 pub(crate) mod redirect;
 mod routing;
+mod slot_fence;
 #[cfg(test)]
 mod tests;
 mod validator;
 
+pub(crate) use routing::route_with_snapshot;
 pub(crate) use routing::{
     BatchKeys, BatchRoute, route_migrating_source, route_queued_batch, route_watched_keys,
     watch_slot_is_locally_served,
 };
 pub use routing::{RouteDecision, RouteOutcome};
+pub(crate) use slot_fence::{SlotFence, SlotVerdict, fence_verdict, stamp_fence};
 pub(crate) use validator::SlotValidator;
 
 use std::time::Duration;
@@ -150,6 +153,16 @@ impl SlotMigrationCoordinator {
             )
             .await
         });
+    }
+
+    /// The coordinator's view of the replicated cluster state.
+    ///
+    /// Handed out so a caller that needs both a routing decision *and* the
+    /// [`SlotFence`](crate::slot_migration::SlotFence) that decision was taken
+    /// against can derive them from one snapshot. Taking two would let the two
+    /// disagree, which is precisely the race the fence exists to catch.
+    pub fn snapshot(&self) -> Arc<frogdb_cluster::types::ClusterSnapshot> {
+        self.cluster_state.snapshot()
     }
 
     /// True if `slot` currently has a migration in progress.

@@ -132,7 +132,7 @@ impl SlotMigrationCoordinator {
 /// [`SlotMigrationCoordinator::route`] so it can be exercised in unit tests
 /// without constructing a full coordinator (which requires a live Raft
 /// instance).
-pub(super) fn route_with_snapshot(
+pub(crate) fn route_with_snapshot(
     snapshot: &ClusterSnapshot,
     slot: u16,
     command_name: &str,
@@ -207,7 +207,7 @@ impl BatchKeys {
 
     /// The single slot the batch touches, or `None` when it touches none or
     /// more than one.
-    fn single_slot(&self) -> Option<u16> {
+    pub(crate) fn single_slot(&self) -> Option<u16> {
         match self.slots.len() {
             1 => self.slots.first().copied(),
             _ => None,

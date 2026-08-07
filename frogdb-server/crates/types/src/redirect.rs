@@ -51,6 +51,21 @@ pub fn tryagain() -> Response {
     Response::error(TRYAGAIN_MSG)
 }
 
+/// `TRYAGAIN Slot <slot> finalization in progress` — the slot's ownership is
+/// mid-flight: a two-phase handoff was prepared underneath a command that had
+/// already passed slot validation, so whether this node may acknowledge it is
+/// undecided until the handoff completes or aborts.
+///
+/// `TRYAGAIN` rather than `MOVED` deliberately. A prepared handoff is not a
+/// completed one — it can still abort, leaving ownership exactly where it was —
+/// so naming the migration target in a `MOVED` would send the client to a node
+/// that does not own the slot and would bounce it straight back. `TRYAGAIN` is
+/// the honest answer: ask again, and the retry either parks on the barrier or
+/// gets a real `MOVED`.
+pub fn tryagain_slot_handoff(slot: u16) -> Response {
+    Response::error(format!("TRYAGAIN Slot {} finalization in progress", slot))
+}
+
 /// The single decision about how an owner address is rendered on the wire:
 /// `<host>:<port>`, where IPv6 hosts are bracketed (`[2001:db8::1]:6379`).
 ///
@@ -120,5 +135,25 @@ mod tests {
             error_text(&tryagain()),
             "TRYAGAIN Multiple keys request during rehashing of slot"
         );
+    }
+
+    #[test]
+    fn tryagain_slot_handoff_names_the_slot() {
+        assert_eq!(
+            error_text(&tryagain_slot_handoff(4242)),
+            "TRYAGAIN Slot 4242 finalization in progress"
+        );
+    }
+
+    /// Both `TRYAGAIN` forms must keep the prefix clients key off, and must not
+    /// collide: one is "your keys straddle a migration", the other is "this
+    /// slot's ownership is being handed over right now".
+    #[test]
+    fn the_two_tryagain_forms_share_a_prefix_and_differ_in_body() {
+        let straddle = error_text(&tryagain());
+        let handoff = error_text(&tryagain_slot_handoff(7));
+        assert!(straddle.starts_with("TRYAGAIN "));
+        assert!(handoff.starts_with("TRYAGAIN "));
+        assert_ne!(straddle, handoff);
     }
 }

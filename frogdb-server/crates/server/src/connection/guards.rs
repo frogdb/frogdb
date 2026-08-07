@@ -51,8 +51,9 @@ use crate::connection::permission_guard::{PermissionGuard, build_permission_guar
 use crate::connection::state::ConnectionState;
 use crate::connection::util::{extract_subcommand, key_access_type_for_flags};
 use crate::slot_migration::{
-    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, SlotValidator, redirect,
-    route_migrating_source, route_queued_batch, route_watched_keys, watch_slot_is_locally_served,
+    BatchKeys, BatchRoute, RouteDecision, RouteOutcome, SlotValidator, SlotVerdict, redirect,
+    route_migrating_source, route_queued_batch, route_watched_keys, route_with_snapshot,
+    stamp_fence, watch_slot_is_locally_served,
 };
 
 /// The `-MISCONF` reply sent while `snapshot.stop-writes-on-save-error` is on
@@ -518,7 +519,13 @@ impl PreDispatchView<'_> {
         }
         // Validate cluster slot ownership before queuing — commands that would
         // get MOVED should fail immediately rather than succeeding at EXEC time.
-        if let Some(cluster_error) = self.validate_cluster_slots(cmd) {
+        //
+        // The fence is discarded here on purpose: queuing executes nothing, so
+        // there is no acknowledgement to fence. The batch is fenced as a unit at
+        // `EXEC` (`validate_queued_batch`), against the topology that exists
+        // then — which is the only generation a committed batch can be judged
+        // against anyway.
+        if let SlotVerdict::Reply(cluster_error) = self.validate_cluster_slots(cmd) {
             let error_msg = match &cluster_error {
                 Response::Error(e) => Some(String::from_utf8_lossy(e).to_string()),
                 _ => None,
@@ -667,9 +674,31 @@ impl PreDispatchView<'_> {
     }
 
     /// Validate slot ownership for keys in cluster mode (`ClusterSlotValidation`
-    /// stage). Returns Some(Response) if validation fails (CROSSSLOT/MOVED/ASK),
-    /// None if OK. Consumes `take_asking` exactly once.
-    pub(crate) fn validate_cluster_slots(&mut self, cmd: &ParsedCommand) -> Option<Response> {
+    /// stage). Consumes `take_asking` exactly once.
+    ///
+    /// [`SlotVerdict::Reply`] is the refusal (CROSSSLOT/MOVED/ASK/CLUSTERDOWN).
+    /// [`SlotVerdict::Serve`] carries the [`SlotFence`] the execute seam must
+    /// re-check before acknowledging — `Some` exactly when this node is the
+    /// slot's *owner*, which is the only side of a handoff that can acknowledge
+    /// a write it is about to stop owning. Everything else (standalone, keyless
+    /// commands, cluster-exempt commands, the importing target, a READONLY
+    /// replica read) answers `Serve(None)`.
+    ///
+    /// The routing decision and the fence are derived from **one** snapshot: two
+    /// reads could straddle the very `PrepareSlotHandoff` the fence exists to
+    /// catch, and would stamp a generation the verdict was never taken against.
+    pub(crate) fn validate_cluster_slots(&mut self, cmd: &ParsedCommand) -> SlotVerdict {
+        match self.validate_cluster_slots_inner(cmd) {
+            Some(verdict) => verdict,
+            // Not in cluster mode, or nothing slot-routable about this command.
+            None => SlotVerdict::Serve(None),
+        }
+    }
+
+    /// The cluster-mode body of [`Self::validate_cluster_slots`]; `None` for
+    /// every "no decision to make" exit, which the caller renders as
+    /// `Serve(None)`.
+    fn validate_cluster_slots_inner(&mut self, cmd: &ParsedCommand) -> Option<SlotVerdict> {
         // Only validate if cluster mode is enabled
         let coordinator = self.cluster.slot_migration.as_ref()?;
         let node_id = self.cluster.node_id?;
@@ -699,14 +728,15 @@ impl PreDispatchView<'_> {
         let first_slot = match SlotValidator::same_slot(&keys) {
             Ok(Some(slot)) => slot,
             Ok(None) => return None,
-            Err(crossslot) => return Some(crossslot),
+            Err(crossslot) => return Some(SlotVerdict::Reply(crossslot)),
         };
 
         // ASKING is a one-shot flag consumed by routing. Read-and-clear up front;
         // the LocalServe arm restores it, preserving the historical quirk that a
         // command routed to a slot we fully own does not consume ASKING.
         let asking = self.state.take_asking();
-        let decision = coordinator.route(first_slot, &cmd_name, asking, node_id);
+        let snapshot = coordinator.snapshot();
+        let decision = route_with_snapshot(&snapshot, first_slot, &cmd_name, asking, node_id);
 
         // LocalServe historically preserves ASKING when we fully own the slot.
         if matches!(decision, RouteDecision::LocalServe) && asking {
@@ -722,10 +752,12 @@ impl PreDispatchView<'_> {
                 .get_entry(&cmd_name)
                 .is_some_and(|c| c.flags().contains(CommandFlags::READONLY));
 
-        match decision.to_response(readonly_eligible) {
-            RouteOutcome::ServeLocal => None,
-            RouteOutcome::Reply(resp) => Some(resp),
-        }
+        Some(match decision.to_response(readonly_eligible) {
+            RouteOutcome::ServeLocal => {
+                SlotVerdict::Serve(stamp_fence(&snapshot, first_slot, node_id))
+            }
+            RouteOutcome::Reply(resp) => SlotVerdict::Reply(resp),
+        })
     }
 
     /// Slot-validate the keys a `WATCH` names, in cluster mode.
@@ -979,21 +1011,40 @@ impl PreDispatchView<'_> {
 
     /// EXEC-time whole-batch slot re-validation.
     ///
-    /// Returns `Some(reply)` when the queued batch must not run on this node —
-    /// the reply is the bare `-MOVED` / `-ASK` / `-TRYAGAIN` / `-CROSSSLOT` /
-    /// `-CLUSTERDOWN` that becomes EXEC's answer, with the queue already
-    /// discarded by `take_transaction` (Redis: `discardTransaction` then
-    /// `clusterRedirectClient`). `None` means "run the batch here".
+    /// [`SlotVerdict::Reply`] is the bare `-MOVED` / `-ASK` / `-TRYAGAIN` /
+    /// `-CROSSSLOT` / `-CLUSTERDOWN` that becomes EXEC's answer, with the queue
+    /// already discarded by `take_transaction` (Redis: `discardTransaction`
+    /// then `clusterRedirectClient`). [`SlotVerdict::Serve`] means "run the
+    /// batch here", carrying the [`SlotFence`] the execute seam re-checks
+    /// before the EXEC array reaches the client.
+    ///
+    /// The fence is stamped only for a batch that pins to exactly one slot this
+    /// node owns. A batch straddling slots cannot be reduced to one generation,
+    /// and the importing target is never fenced for the same reason a single
+    /// command is not (see [`Self::validate_cluster_slots`]).
     ///
     /// Exactly one [`ClusterState::snapshot`] backs the whole decision, so a
     /// migration applying mid-validation cannot produce an internally
     /// inconsistent verdict. The residual window is Raft apply latency, which
-    /// the non-transaction path shares.
+    /// the non-transaction path shares — and which is what the fence closes.
     pub(crate) async fn validate_queued_batch(
         &self,
         queue: &[ParsedCommand],
         asking: bool,
-    ) -> Option<Response> {
+    ) -> SlotVerdict {
+        match self.validate_queued_batch_inner(queue, asking).await {
+            Some(verdict) => verdict,
+            None => SlotVerdict::Serve(None),
+        }
+    }
+
+    /// The cluster-mode body of [`Self::validate_queued_batch`]; `None` when
+    /// this server is not in cluster mode.
+    async fn validate_queued_batch_inner(
+        &self,
+        queue: &[ParsedCommand],
+        asking: bool,
+    ) -> Option<SlotVerdict> {
         // Cluster mode only; standalone has no slot ownership to re-validate.
         //
         // Gated on the *same* handles as the per-command seam
@@ -1012,31 +1063,52 @@ impl PreDispatchView<'_> {
         } = self.fold_queued_batch(queue);
 
         let snapshot = cluster_state.snapshot();
-        match route_queued_batch(&snapshot, &keys, asking, node_id, readonly_eligible) {
-            BatchRoute::ServeLocal => None,
-            BatchRoute::Redirect(reply) => Some(reply),
-            // We are the migration source: the presence of the batch's keys
-            // decides. All present → the batch is still ours; all gone → ASK
-            // the target; split → TRYAGAIN.
-            BatchRoute::ProbeMigratingSource { slot, target } => self
-                .probe_key_presence(keys.keys())
-                .await
-                .migrating_source_reply(slot, target),
-            // We are the importing target with ASKING set. Redis serves the
-            // batch here unless it is multi-key with something still missing,
-            // in which case neither side can satisfy it yet → TRYAGAIN. It
-            // never ASKs back at the source (that would be a redirect loop).
-            BatchRoute::ProbeImporting { .. } => {
-                if keys.keys().len() < 2 {
-                    return None;
+        // The batch's fence, for whichever arm ends up serving locally. Derived
+        // from the same snapshot as the routing verdict, exactly as the
+        // per-command seam does.
+        let serve_local = || {
+            SlotVerdict::Serve(
+                keys.single_slot()
+                    .and_then(|slot| stamp_fence(&snapshot, slot, node_id)),
+            )
+        };
+        Some(
+            match route_queued_batch(&snapshot, &keys, asking, node_id, readonly_eligible) {
+                BatchRoute::ServeLocal => serve_local(),
+                BatchRoute::Redirect(reply) => SlotVerdict::Reply(reply),
+                // We are the migration source: the presence of the batch's keys
+                // decides. All present → the batch is still ours; all gone → ASK
+                // the target; split → TRYAGAIN.
+                BatchRoute::ProbeMigratingSource { slot, target } => {
+                    match self
+                        .probe_key_presence(keys.keys())
+                        .await
+                        .migrating_source_reply(slot, target)
+                    {
+                        Some(reply) => SlotVerdict::Reply(reply),
+                        None => serve_local(),
+                    }
                 }
-                match self.probe_key_presence(keys.keys()).await {
-                    KeyPresence::AllPresent => None,
-                    KeyPresence::AllAbsent | KeyPresence::Mixed => Some(redirect::tryagain()),
-                    KeyPresence::Unavailable => Some(Response::error("ERR shard unavailable")),
+                // We are the importing target with ASKING set. Redis serves the
+                // batch here unless it is multi-key with something still missing,
+                // in which case neither side can satisfy it yet → TRYAGAIN. It
+                // never ASKs back at the source (that would be a redirect loop).
+                BatchRoute::ProbeImporting { .. } => {
+                    if keys.keys().len() < 2 {
+                        return Some(serve_local());
+                    }
+                    match self.probe_key_presence(keys.keys()).await {
+                        KeyPresence::AllPresent => serve_local(),
+                        KeyPresence::AllAbsent | KeyPresence::Mixed => {
+                            SlotVerdict::Reply(redirect::tryagain())
+                        }
+                        KeyPresence::Unavailable => {
+                            SlotVerdict::Reply(Response::error("ERR shard unavailable"))
+                        }
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 }
 

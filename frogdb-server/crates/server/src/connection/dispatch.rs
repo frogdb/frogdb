@@ -16,6 +16,7 @@ use frogdb_replication::AnnouncedOption;
 use crate::commands::replication::{PsyncHandoff, announcement_error};
 use crate::connection::ConnectionHandler;
 use crate::connection::conn_command::ConnectionCommand;
+use crate::slot_migration::{SlotVerdict, fence_verdict};
 
 /// The pre-dispatch gauntlet, in execution order. Reordering a guard means
 /// editing [`PRE_DISPATCH_ORDER`] (and the pinning test notices). Mirrors
@@ -354,6 +355,17 @@ impl ConnectionHandler {
             match self.run_stage(stage, cmd, cmd_name).await {
                 StageOutcome::Continue => {}
                 StageOutcome::ShortCircuit(responses) => {
+                    // The slot fence, if one was stamped, is spent here — after
+                    // the command ran, before its reply is accounted for or
+                    // written. Doing it in the driver rather than in each
+                    // executor covers all three stages that can execute a
+                    // slot-bearing command (`Execute`, `ConnectionCommand` for
+                    // scripts, `TransactionControl` for `EXEC`) with one check,
+                    // and guarantees a stage added later cannot forget it.
+                    let responses = match self.spend_slot_fence() {
+                        Some(refusal) => vec![refusal],
+                        None => responses,
+                    };
                     // Error accounting happens *here*, once, for whichever
                     // stage ended dispatch — so every stage is covered by
                     // construction and a new stage cannot silently skip
@@ -367,10 +379,42 @@ impl ConnectionHandler {
                     }
                     return Dispatched::Responses(responses);
                 }
-                StageOutcome::Handoff(handoff) => return Dispatched::Handoff(handoff),
+                StageOutcome::Handoff(handoff) => {
+                    self.pending_slot_fence = None;
+                    return Dispatched::Handoff(handoff);
+                }
             }
         }
         unreachable!("PRE_DISPATCH_ORDER ends in Execute, which never returns Continue")
+    }
+
+    /// Consume the slot fence stamped by this command's slot validation and
+    /// decide whether the reply may still be acknowledged.
+    ///
+    /// The slot check that admitted this command ran at validation time; the
+    /// command's effects land later. In between, the cluster can have *prepared*
+    /// a two-phase handoff of the slot, or completed one. Either way this node
+    /// is no longer entitled to acknowledge the write, and replying `+OK`
+    /// would ack a write the incoming owner never sees — the residual window
+    /// FM-CLUSTER-083 accepted in phase 1 and this fence closes.
+    ///
+    /// `None` means "reply as executed". `Some(response)` is the refusal that
+    /// replaces the whole reply — a `TRYAGAIN` while ownership is merely
+    /// in flight, a `MOVED` once it has landed elsewhere.
+    ///
+    /// Redis reaches the same place from the other direction: `scriptVerifyClusterState`
+    /// re-runs the cluster check on *every* `redis.call` inside a script rather
+    /// than trusting the one taken when the script was admitted.
+    ///
+    /// The fence is spent unconditionally (`take`), so a command that stamped
+    /// one can never leave it behind for the next command on the connection.
+    fn spend_slot_fence(&mut self) -> Option<Response> {
+        let fence = self.pending_slot_fence.take()?;
+        // Same handle the stamp was taken through — the coordinator and the
+        // connection share one `ClusterState` `Arc` — so a fence is never
+        // checked against a different view of the topology than it was cut from.
+        let coordinator = self.cluster.slot_migration.as_ref()?;
+        fence_verdict(&coordinator.snapshot(), fence)
     }
 
     /// Run a single pre-dispatch stage. A single `match` over the `Copy`
@@ -536,10 +580,21 @@ impl ConnectionHandler {
             // cluster-exempt by strategy (`ServerWide`, the non-scripting
             // connection families) or keyless (`REPLCONF`/`PSYNC`/`WAIT`), so
             // the hoist changes nothing but the script path.
+            //
+            // Serving locally also *stamps* the slot's ownership generation on
+            // the connection (FM-CLUSTER-095): validation and execution are not
+            // the same instant, and a handoff prepared in between must not be
+            // acknowledged. The driver re-checks the stamp before the reply
+            // leaves.
             DispatchStage::ClusterSlotValidation => {
                 match self.pre_dispatch_view().validate_cluster_slots(cmd) {
-                    Some(cluster_error) => StageOutcome::ShortCircuit(vec![cluster_error]),
-                    None => StageOutcome::Continue,
+                    SlotVerdict::Reply(cluster_error) => {
+                        StageOutcome::ShortCircuit(vec![cluster_error])
+                    }
+                    SlotVerdict::Serve(fence) => {
+                        self.pending_slot_fence = fence;
+                        StageOutcome::Continue
+                    }
                 }
             }
 
