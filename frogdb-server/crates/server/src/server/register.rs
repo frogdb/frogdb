@@ -885,9 +885,9 @@ mod spec_exhaustiveness {
         // list honest is what forces it to shrink toward empty.
         let mut stale: Vec<&str> = Vec::new();
         for &name in &allow {
-            if !registered.contains(name) {
-                stale.push(name);
-            } else if !CommandCategory::all_for_command(name).is_empty() {
+            // Stale for either reason: no longer registered in this profile, or it
+            // gained a category row. Both retire the entry.
+            if !registered.contains(name) || !CommandCategory::all_for_command(name).is_empty() {
                 stale.push(name);
             }
         }
