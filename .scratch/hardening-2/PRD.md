@@ -218,10 +218,16 @@ in `core/src/shard/` or `server/src/` outside one test, so any panic in any depe
 shard worker. Campaign 2 carries panic isolation at the shard message boundary as a W4 item
 instead.
 
-**C10 — error-reply sanitization.** `Response::error` and `WireResponse::error` are both
-`Self::Error(msg.into())` with no sanitization, which is live defect 38 (pre-auth RESP frame
-injection). The fix belongs in the constructor; the lint is what makes the constructor
-unbypassable. Closest analogue is the already-shipped `lint-redirect-seam`.
+**C10 — error-reply sanitization.** ~~`Response::error` and `WireResponse::error` are both
+`Self::Error(msg.into())` with no sanitization~~ — **RE-SCOPED 2026-08-07 after the #38 fix
+landed** (`43b41fe7`). The sanitiser (`frogdb_protocol::sanitize_error_message`) landed at the
+*encoding* boundary in `protocol/src/response.rs`, covering RESP2 `Error`, the RESP2 `BlobError`
+downgrade, and RESP3 `SimpleError` — so the 9 direct `Response::error` enum constructions are now
+harmless (they all flow through the boundary). C10 therefore becomes a **3-site, one-file rule**:
+`Resp2BytesFrame::Error` / `Resp3BytesFrame::SimpleError` / the RESP2 blob downgrade are
+constructed nowhere but through `sanitize_error_message` in `protocol/src/response.rs`. The lint is
+what makes that boundary unbypassable. Closest analogue is the already-shipped `lint-redirect-seam`.
+No longer blocked (the fix it waited on has shipped); ready to land in W1.
 
 #### 3.2 Mechanics
 
