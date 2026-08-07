@@ -92,3 +92,13 @@ no occurrence of `continuation` or `can_execute_during_lock` at all. EXEC still 
 single-shard `CoreMsg::ExecTransaction` (`crates/txn/src/exec.rs:350-378` →
 `crates/server/src/connection/transaction.rs:185-212`), so no continuation lock is taken on the way
 in. The `Options` decision the issue asks for is still unrecorded.
+
+## Now lint-tracked (2026-08-07)
+
+The hardening-2 C3 seam lint landed (`scripts/continuation-lock-gate.py`, `just
+lint-continuation-lock`, 14th member of `just lint-gates`) with `CoreMsg::ExecTransaction` pinned
+as a **named-gap bypass** alongside its `ScriptingMsg::FunctionCall` twin (hardening-2 issue 05).
+Every gate run now warns and links here, and the entry hard-fails the moment the arm gains a
+`can_execute_during_lock` call — so the fix must also promote the arm from `GATE_GAP` to `GATE` in
+the script. The guard must go in the arm body itself, not inside `execute_transaction`: the lint
+requires the continuation-lock disposition to be visible at the dispatch site.

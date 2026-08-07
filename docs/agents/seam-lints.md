@@ -1,17 +1,19 @@
 # Seam lints: chokepoint gates
 
 A seam lint states an invariant of the form **"every X must go through Y"**, where `Y` is the one
-implementation that gets it right, and fails the build on any `X` that does not. Fourteen of these
+implementation that gets it right, and fails the build on any `X` that does not. Fifteen of these
 ship today, plus `lint-failover-atomicity`'s sibling checks; each is a `just lint-<rule>` recipe
 and all but one run in well under a second because they are `grep`/`awk` over source text, not
 compiled Rust.
 
-`just lint-gates` runs the compile-free thirteen of them in one shot. It is wired into
+`just lint-gates` runs the compile-free fourteen of them in one shot. It is wired into
 lefthook `pre-commit` **unconditionally** — no `CLAUDECODE=1` skip, unlike `rust-clippy`, because
 these are greps, not a workspace compile — and into CI as the `seam-gates` job
 (`.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`, rendered to
-`.github/workflows/test.yml`), listed in `ci-pass`'s required-jobs array. `just lint` still runs
-the full fourteen (plus the turmoil lints) as part of `just check`/CI's `lint` job.
+`.github/workflows/test.yml`), listed in `ci-pass`'s required-jobs array. `just lint` runs the
+full fifteen (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
+`lint-gates` rather than re-listing its members, because the two hand-maintained lists had
+already drifted (three gates ran on every commit but not under `just lint`).
 
 ## The family
 
@@ -31,13 +33,41 @@ the full fourteen (plus the turmoil lints) as part of `just check`/CI's `lint` j
 | `lint-durable-ack` | a single-file pin on `cluster/src/storage.rs`: each openraft storage method that acks durability (`save`, `save_vote`, `append`) issues its RocksDB write with sync options (`write_opt(..)` + `set_sync(true)`), never a plain `db.write`/`db.flush` that returns before the WAL is fsynced (durability is acked by a callback, not a value a grep can see, so this is a hand-crafted pin, not an `rg` rule) | yes |
 | `lint-nested-config` | no figment `.nested()` on a config source anywhere under `frogdb-server` — it files a TOML file's top-level tables under non-default profiles that an `extract()` under `Profile::Default` never reads (round-2 issue 49); the one known site rides the named-gap warn idiom until the fix lands | yes |
 | `lint-error-sanitize` | a single-file pin on `protocol/src/response.rs`: every CRLF-framed error frame (`Resp2BytesFrame::Error`, `Resp3BytesFrame::SimpleError`) takes its payload from `sanitize_error_message(..)` so a client's error text cannot inject a second wire frame (#38); the length-framed `Resp3BytesFrame::BlobError` is deliberately exempt | yes |
+| `lint-continuation-lock` | every mutating shard-dispatch arm states a disposition against `ShardWorker::can_execute_during_lock` — GATE (calls it, in the arm body), EXEMPT (reason + a forcing test that must still exist), or a tracked named-gap bypass; the 64 arms of the 11 shard `*Msg` enums are count-pinned per enum, so a new or renamed arm cannot land without a classification | yes |
 
 Two recipes sit next to this family but are out of scope for both `lint-gates` and this doc's
-"the 14": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
+"the 15": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
 `lint-turmoil-features` (checks the turmoil cargo-feature is forwarded through every dependent
 manifest — does not compile, but polices the turmoil feature rather than a seam, and the
 originating issue named "the turmoil lints" as excluded alongside the one that compiles). Both
 still run under `just lint`.
+
+### `lint-continuation-lock`: a count pin instead of a full classification
+
+The shard-dispatch surface is 64 match arms across 11 `*Msg` enums, and most of them (pub/sub
+registration, observability counters, DEBUG probes, tracking tables) never touch the keyspace a
+VLL continuation lock protects. Classifying all 64 by hand — the first attempt — produced a table
+that was mostly noise. `scripts/continuation-lock-gate.py` names only the arms that reach store
+execution and pins **the per-enum arm count** for everything else:
+
+- **GATE** (5 arms: `CoreMsg::Execute`, `CoreMsg::ScatterRequest`, `ScriptingMsg::EvalScript`,
+  `EvalScriptSha`, `ScriptSubCommand`) — the arm body must contain a `can_execute_during_lock(`
+  call. The converse holds too: an arm that calls the gate but is not pinned GATE fails, and the
+  gate may not be called anywhere *but* a pinned arm, so the disposition is always visible at the
+  dispatch site rather than buried in a handler.
+- **EXEMPT** (2 arms: `VllMsg::VllExecute`, `CoreMsg::GetVersion`) — mutating but deliberately
+  ungated, each with a one-line reason and a **named forcing test the gate checks still exists**.
+  The reasoning and evidence are in `.scratch/hardening-2/c3-arm-dispositions.md`; an exemption
+  without its forcing test is an unproven claim, so it fails.
+- **A tracked named-gap bypass** (2 arms: `CoreMsg::ExecTransaction`,
+  `ScriptingMsg::FunctionCall`) — known isolation defects (round-2 issue 50, hardening-2 issue
+  05) whose fix has not landed. They warn while their issue link resolves; the moment either arm
+  gains a gate call the stale entry hard-fails and forces its promotion to GATE.
+- **Everything else** — no third `NONMUTATING` set. A new or renamed arm moves its enum's count,
+  and the failure message prints that enum's arms annotated `[GATE]` / `[EXEMPT]` / `[GATE-GAP]` /
+  `[-]`, so the unclassified newcomer is the one without a tag. Arms are also cross-checked
+  against the enum's variants in `message.rs` in both directions, so a variant handled outside its
+  dispatch file cannot slip past the count.
 
 ## Suppression idioms
 
@@ -76,6 +106,11 @@ Anatomy (PRD `.scratch/hardening-2/PRD.md` §3, "W1 — Chokepoint lints"):
    in `just lint-gates` so it actually runs on every commit and in CI. A rule that only joins
    `just lint` inherits this family's original hole: convention, not enforcement.
 
-Location convention for the Python form: shared helpers (`cfg_test_spans()`, `is_test_path()`)
-belong in a common module rather than a third copy — they exist today as private helpers in
-`scripts/clock-seam.py:153-179`.
+Location convention for the Python form: shared helpers (`cfg_test_spans()`, `is_test_path()`,
+`in_any_span()`) live in `scripts/_rustscan.py` and are imported by every Python gate that needs
+`#[cfg(test)]`-span awareness — never re-copied into a third script.
+
+A gate whose scanning is more than a regex (`continuation-lock-gate.py` brace-matches match arms
+and enum bodies) carries its own dependency-free assert script under `scripts/tests/`, wired as a
+`just test-<rule>` recipe — the parser is what the whole rule rests on, so a silently broken
+scanner would report `OK` forever.
