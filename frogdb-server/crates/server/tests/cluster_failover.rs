@@ -103,8 +103,26 @@ async fn test_node_restart_rejoins_cluster() {
         .await
         .unwrap();
 
-    let info = harness.get_cluster_info(victim).await.unwrap();
-    assert_eq!(info.cluster_state, "ok");
+    // `wait_for_cluster_convergence` above already requires every running
+    // node (including `victim`) to report `cluster_state:ok` in the same
+    // poll iteration, but that check and the read below are two independent
+    // round trips. Under whole-suite CPU contention a transient quorum-ack
+    // gap (`cluster_info`'s `millis_since_quorum_ack` check, see
+    // `commands/cluster/mod.rs`) can flip the state back to `fail` in the
+    // window between them, so poll the exact observable this assertion
+    // reads instead of trusting the earlier snapshot (hardening issue 43).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let info = loop {
+        let info = harness.get_cluster_info(victim).await.unwrap();
+        if info.cluster_state == "ok" || tokio::time::Instant::now() >= deadline {
+            break info;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(
+        info.cluster_state, "ok",
+        "victim's own view of cluster_state should converge to ok after rejoin, got {info:?}"
+    );
 
     harness.shutdown_all().await;
 }
