@@ -99,3 +99,30 @@ Issue 12, `.scratch/testing-improvements-round2/issues/` (config observability s
 `.scratch/testing-improvements-round2/issues/`. Note `INFRASTRUCTURE.md` I12 records that area 15
 asks area 05 to own the registry round-trip and the `noop:false ⇒ observable` tests, written
 **once** in `server/tests/`, with 15's findings as the spec.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The config/mutability round (`c700d671`, 2026-07-28 — "propagation-truth coverage for promoted
+mutable params") is what the audit was already looking at; nothing since has added an
+inert-param lint. Per-claim:
+
+- **Golden snapshot still metadata-only — still valid.** Refs old → new:
+  `config/src/params.rs:500` → `:542` (`GOLDEN_SNAPSHOT`); assertions `:1339,1357,1372` →
+  `:1413,1418,1448`. The row count grew 118 → **122** (`params.rs:1448`
+  `assert_eq!(GOLDEN_SNAPSHOT.len(), 122)`), and the rows are still
+  `ConfigParamInfo { name, section, field, mutable, noop }`. There is no `NOOP_FALSE_OBSERVED`
+  list anywhere in the tree.
+- **Listpack thresholds still inert — still valid.** `ListpackConfig::hash_thresholds()` /
+  `set_thresholds()` (`crates/core/src/command.rs:49,57`) still have **zero callers**:
+  `rg 'hash_thresholds\(\)|set_thresholds\(\)'` across `frogdb-server/` + `frogctl/` returns
+  nothing but the definitions. Every production and test call site still passes
+  `ListpackThresholds::DEFAULT_HASH`.
+- **`o` / `c` keyspace classes still never emitted — still valid.**
+  `rg 'OVERWRITTEN|TYPE_CHANGED' frogdb-server --glob '*.rs'` returns only
+  `crates/core/src/keyspace_event.rs` (definition :43,:45; parse :75-76; masks :87-88,:157-158;
+  its own unit test :275-276). Zero emission sites.
+- **Publication seams still unprovable — still valid.** `crates/server/src/runtime_config.rs` has
+  no `is_published` accessor of any kind (`set_snapshot_coordinator` at :1059); issue 12, which
+  owns that seam, is still open.

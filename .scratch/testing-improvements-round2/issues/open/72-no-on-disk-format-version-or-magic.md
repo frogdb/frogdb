@@ -60,3 +60,19 @@ accepted.
 ## Depends on
 
 nothing
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Phase 2 locked persistence/recovery but never added a format stamp.
+`frogdb-server/crates/persistence/src/serialization/mod.rs:93-94` (was `90-91`) still writes
+`// Flags (1 byte) - reserved for future use` / `result.push(0)`, and `:133` (was `:125`) still
+discards it as `let _flags = data[1];`. `rocks/manifest.rs` still stamps no version:
+`ColumnFamilyManifest::reconcile` (`:46`) enforces only `ShardCountMismatch` (`:83`) and
+`WarmTierMismatch` (`:100`), and `rg -n "version|magic|FORMAT"` over that file returns nothing.
+No golden-bytes test pins the 24-byte header (`HEADER_SIZE` is referenced only by `lib.rs` and the
+two serialization modules). What Phase 2 *did* add is adjacent but different: FM-PERSISTENCE-033
+and FM-PERSISTENCE-045 govern how an *undecodable value / unknown type byte* is counted and when a
+wholly-undecodable database refuses to boot — neither rejects a frame whose `flags` byte the
+running binary does not understand, which is the downgrade hazard this issue is about.

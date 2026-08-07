@@ -53,3 +53,19 @@ handshake at all.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Nothing on the test side moved. `TlsFixture` (`frogdb-server/crates/test-harness/src/tls.rs:35`) is still
+a single `generate()` producing one CA + one server cert + one client cert with rcgen's default key
+algorithm — no algorithm variant and no in-place regeneration helper (the struct exposes only paths and
+DER bytes, `:14-33`). `TestServerConfig` still carries only the original eleven TLS knobs
+(`test-harness/src/server.rs:166-186`: cert/key/ca/client_auth/handshake_timeout/replication/cluster/
+cluster_migration/no_tls_on_http/client_cert/client_key) — no `tls_watch_certs`, no
+`tls_additional_certs`, and the `to_server_config` mapping at `:263-273` has nothing to plumb. The
+*production* surface is real and reachable, which is what makes this a pure harness gap:
+`frogdb_config::TlsConfig::watch_certs` (`config/src/tls.rs:199`, defaults `true`) and
+`additional_certs` (`:108`) exist and are consumed by `server/src/tls.rs:428-439`, currently tested only
+by in-crate unit tests (`server/src/tls.rs:748`, `:861`), never through a live handshake or a rotation.

@@ -65,3 +65,25 @@ anti-pattern `BRIEF.md` calls out.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+The harness moved: `core/tests/shard_driver/harness.rs` → `frogdb-server/crates/shard-harness/src/harness.rs`
+(the old path is gone; `ShardWorkerBuilder` line refs `builder.rs:201/207/213/219/225/286` are still
+accurate). Item 1 and item 3 are *not* done at the driver — `ShardDriver::new` still hardcodes the same
+five-call chain (`shard-harness/src/harness.rs:82-87`) and `execute`/`execute_conn`/`exec_transaction`/
+`block_wait` still hardcode `ProtocolVersion::Resp3` (`:122`, `:144`, `:198`, `:222`). What *did* land is
+the capability, reached by shard-harness tests that bypass `ShardDriver` and build a worker directly:
+`with_eviction` + `with_replication` (`shard-harness/tests/eviction_spill_failure.rs:93-101`, commit
+0d727d05), `with_wal_mode` + `with_fake_wal_failure` (`tests/scenario_s6.rs:47-53`,
+`tests/shard_driver.rs:107-115`), `with_scripting` (`tests/script_timeout_effects.rs:82-90`, commit
+e68168f2); `with_persistence` is still unexercised from any harness test. Criterion 3 is met in substance
+by `tests/rendering_incrbyfloat.rs:194 the_resp3_double_and_the_resp2_bulk_describe_the_same_number`,
+which drives one command under both protocols. Still missing: `drive_register_tracking` (item 2 — the
+seam list in `core/src/shard/event_loop.rs` is still `drive:417`, `drive_expiry_tick:427`,
+`drive_waiter_timeout_tick:437`, `drive_continuation_release:454`, `drive_capture_keyspace:487`), the
+blocking-command wrapper entering above argument parsing (item 4 — `block_wait`, `harness.rs:207`, still
+enters at the waiter layer), and the eviction-plus-invalidation-stream criterion. Commits e7827926 /
+f475839c added driven periodic sweeps and tick determinism, not the builder forwarding.

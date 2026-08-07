@@ -68,3 +68,17 @@ level-1/2 truncation slice, which is precisely why the residue is small.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+No decision has been recorded and nothing was built. `frogdb-test-harness` is still entirely in-process:
+zero `Command::new` anywhere under `frogdb-server/crates/test-harness/src`, re-verified by grep. The
+misnamed graceful shutdown is still there and its line ref is stale — `ClusterNode::kill()` is now
+`test-harness/src/cluster_harness.rs:415` (was `cluster_harness.rs:912`), still just
+`server.shutdown_mut().await` under the comment "Immediately stop the node (simulate crash)"; the
+`ClusterHarness::kill_node` wrapper is at `:1099`. `CrashTestHarness` also moved:
+`core/src/persistence/test_harness.rs` is still its home (unchanged), used by
+`core/src/persistence/crash_recovery_tests.rs`. Acceptance criterion 1 (the rename) is unblocked and
+still undone; it is the cheap half of this issue.

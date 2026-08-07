@@ -53,3 +53,21 @@ which requires the connection layer; `shard_driver` has no notion of a second cl
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The fixture does not exist: nothing under `frogdb-server/crates/server/tests/` or
+`crates/test-harness/src/` starts a long-running EVAL and then talks to the same shard on a second
+connection (`functions.rs:625 test_function_kill_not_busy` is the NOTBUSY-when-idle case; the
+redis-regression scripting suite lists the whole `SCRIPT KILL` family as skipped —
+`redis-regression/tests/scripting_tcl.rs:36-43`). One of the three findings it was asked for is now
+discharged at a lower boundary: 09/F4 (a write-dirty script aborted mid-way, partial effects committed)
+was fixed as round-2 issue 60 (commit e68168f2) and is forced by
+`shard-harness/tests/script_timeout_effects.rs:129/:160`
+(`a_read_only_script_that_overruns_the_time_limit_is_aborted_with_busy`,
+`a_write_dirty_script_is_never_aborted_by_the_time_limit`) — a level-3 fixture that never needs a second
+connection. 09/F8 (`SCRIPT KILL`/`FUNCTION KILL` cannot reach a busy shard) and 09/F15 (`FUNCTION STATS`
+never reports a running function) still need this fixture, so the ask stands with two dependents instead
+of three.

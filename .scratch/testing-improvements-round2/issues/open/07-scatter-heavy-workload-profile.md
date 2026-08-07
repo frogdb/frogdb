@@ -52,3 +52,15 @@ level-3 driver can express. It does not need multiple nodes, so not level 5.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Reproduces verbatim on today's tree. `Profile` (`frogdb-server/crates/testing/src/workload.rs:20`) still
+has exactly four variants — `TxHeavy`, `BlockingHeavy`, `MultiWaiter`, `Mixed` — with no `ScatterHeavy`;
+grep for `MGET`/`MSET`/`DEL` across `workload.rs` still returns zero hits, and grep for
+`scatter`/`cross_shard` across all of `crates/testing/src` returns nothing. The machinery the issue says
+is already in place is confirmed present and unchanged: `testing/src/quiescence.rs:81
+check_locktable_empty` plus the `LockTableSnapshot` probe, so the "no changes to the checker, the probe
+or the runner" claim still holds. Cheapest open item in this batch.

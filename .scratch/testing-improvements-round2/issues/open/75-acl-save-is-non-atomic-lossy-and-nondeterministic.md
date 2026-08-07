@@ -69,3 +69,24 @@ level 2 cannot: nothing below the server exercises the `ACL SAVE`/restart path e
 nothing for the level-2 work. The level-4 companion wants the `TestServer` restart-in-place
 helper listed as item 4 of issue 12 (I12 — config observability seams),
 `.scratch/testing-improvements-round2/issues/`, if one does not already exist.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** (one acceptance criterion turns out to be already satisfied)
+
+ACL is outside the four locked areas and nothing changed. `AclManager::save`
+(`frogdb-server/crates/acl/src/manager.rs:256-277`, cite `:256` still exact) is `File::create` +
+`write_all` — no temp file, no rename, no fsync, no directory fsync. `to_acl_string` moved:
+`acl/src/user.rs:167-173` → **`user.rs:122-138`**, and `:136-138` still emits password hashes by
+iterating `password_hashes: HashSet<[u8; 32]>` (`user.rs:17`), so two saves of identical state
+differ; `save` compounds it by iterating `users.values()` of a `HashMap` at `manager.rs:262`, so
+*user order* is nondeterministic too. `parse_acl_line` (`acl/src/parser.rs:585`) still splits on
+`line.split_whitespace()` at `:597`, so any pattern or password containing a space round-trips to a
+different rule set. `load` (`:280-321`) still aborts the whole file on the first parse error
+(`:300-303`).
+
+Correction to the body: acceptance criterion 3 ("a truncated file makes `load()` leave the
+in-memory ACL untouched") **already holds today** — `load` builds a local `new_users` map and only
+swaps it in at `manager.rs:317-318`, after every line has parsed. The remaining gap there is the
+*policy* half of `What to fix` item 4 (whole-file abort vs. partial application), not the
+untouched-on-error property.

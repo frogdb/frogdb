@@ -59,3 +59,18 @@ checker function itself is level-1 testable in isolation.
 ## Depends on
 
 Nothing. **Needs coordination with** whoever owns `crates/testing/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+No index↔store checker exists. `frogdb-server/crates/testing/src/conservation.rs` still holds exactly the
+five cited checkers and nothing search-related — line refs have drifted and are corrected here:
+`check_exactly_once_delivery:121` (unchanged), `check_fifo_wake_order_exact:417` (was
+`check_fifo_wake_order:246`), `check_tx_sum_conservation:539` (was `:431`),
+`check_watch_no_false_negative:818` (was `:621`), `check_pel_conservation:879` (was `:682`). Grep for
+`index_docs` across `frogdb-server/crates` returns nothing. The closest existing thing is the quiescence
+side of the generalisation the issue anticipates —
+`testing/src/quiescence.rs:124 check_expiry_index_consistent` — which is precedent for the parameterised
+(prefix, type, expiry) predicate but does not cover the search index. The four search findings it would
+collapse (10/F3, F4, F5, F9 → issues 43-46) are all still open.

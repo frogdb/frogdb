@@ -67,3 +67,25 @@ level 1; the expiry slice lands at level 2–3 via `shard_driver`.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+The seam exists and the scope question was answered in practice as *full*, not expiry-only:
+`frogdb_types::clock` (`frogdb-server/crates/types/src/clock.rs`, re-exported as `frogdb_core::clock`)
+offers `now()` (monotonic, tokio-virtualizable) and `system_now()` (wall clock, built off the monotonic
+one plus `reset_system_epoch`), landed by 2fb1051c / 8b62120f / 6fe4b6c5 and gated by 0fe2dd0a's
+`just lint-clock-seam` → `scripts/clock-seam.py`, which fails on any `Instant::now()`/`SystemTime::now()`
+under `frogdb-server/crates/*/src` outside a count-pinned, reasoned allowlist. That allowlist *is* the
+"sites deliberately outside the scope" list criterion 4 asks for (13 reads across 12 files). The named
+consumers are on it: `core/src/shard/active_expiry.rs`, `core/src/persistence/store_recovery.rs`,
+`replication-runtime/src/install.rs`, `persistence/src/snapshot/*` all read `clock::now()`/`system_now()`.
+**Not** discharged: (a) criterion 3 — `acl/src/ratelimit.rs` still reads the OS clock at `:17-24`
+(`BASELINE.get_or_init(Instant::now)`) and its refill test still sleeps
+(`ratelimit.rs:596 std::thread::sleep(110ms)`); (b) criterion 2's documentation clause — `clock.rs`'s
+module docs never state the "nobody adds a second" rule and name no owner; (c) no `## Resolution` section
+records the decision. Also a real gate hole worth fixing with (a): `clock-seam.py`'s regexes require
+`::now()` *with parens*, so the function-pointer form escapes it — exactly the two surviving OS-clock
+reads, `acl/src/ratelimit.rs:20` and `persistence/src/snapshot/rocks_coordinator.rs:289`
+(`md.completed_at().unwrap_or_else(SystemTime::now)`, non-test code in a mutation-gated crate).
