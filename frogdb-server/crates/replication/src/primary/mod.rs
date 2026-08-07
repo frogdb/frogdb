@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 
 use crate::BoxedStream;
@@ -33,6 +34,7 @@ use crate::replica_session::{ReplicaAnnouncement, SyncKind};
 use crate::state::ReplicationState;
 use crate::sync_counters::SyncOutcome;
 use crate::tracker::ReplicationTrackerImpl;
+use crate::version_compat::{PRIMARY_VERSION, VersionVerdict};
 use crate::wait_coordinator::WaitCoordinator;
 
 pub use replay::{BacklogTtl, FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
@@ -565,10 +567,12 @@ impl PrimaryReplicationHandler {
     /// than read back off the connection because `PSYNC` is the moment the
     /// session comes into existence — there is nowhere earlier to store it, and
     /// nowhere later that could store it without `INFO` first observing a
-    /// placeholder identity (FM-REPLICATION-049).
+    /// placeholder identity (FM-REPLICATION-049). Its `version` is also the
+    /// input to the compatibility gate below, which is the one consumer that
+    /// can refuse this handshake outright (FM-REPLICATION-064).
     pub async fn handle_psync(
         self: &Arc<Self>,
-        stream: BoxedStream,
+        mut stream: BoxedStream,
         addr: SocketAddr,
         replication_id: &str,
         offset: i64,
@@ -581,6 +585,55 @@ impl PrimaryReplicationHandler {
                 io::ErrorKind::ConnectionAborted,
                 "primary is shutting down",
             ));
+        }
+
+        // The version gate (FM-REPLICATION-064), read off what this replica
+        // announced over `REPLCONF frogdb-version` one command ago. It sits
+        // here, at `PSYNC`, rather than at the announcing `REPLCONF`, for two
+        // reasons: `REPLCONF` is the option's *record* step and a peer is free
+        // to carry on to `PSYNC` after an error on it (Redis replicas do
+        // exactly that for options a primary rejects), and `PSYNC` is the
+        // moment this primary would commit — a session in the registry, a
+        // resync counted, a checkpoint cut. Refusing before any of that means a
+        // refused replica leaves no trace but the log line and the error it was
+        // sent. The rule itself lives in `version_compat`.
+        let verdict = VersionVerdict::evaluate(PRIMARY_VERSION, announcement.version.as_deref());
+        match &verdict {
+            VersionVerdict::Compatible => {}
+            VersionVerdict::MinorSkew { primary, replica } => {
+                tracing::warn!(
+                    replica_addr = %addr,
+                    replica_version = %replica,
+                    primary_version = %primary,
+                    "Replica announced a different minor version; serving the stream, but a \
+                     rolling upgrade should not be left split across the pair"
+                );
+            }
+            VersionVerdict::Unproven { primary, replica } => {
+                tracing::warn!(
+                    replica_addr = %addr,
+                    replica_version = replica.as_deref().unwrap_or("<unannounced>"),
+                    primary_version = %primary,
+                    "Replica announced no readable FrogDB version; serving the stream, but the \
+                     version gate cannot vouch for this pair"
+                );
+            }
+            VersionVerdict::IncompatibleMajor(mismatch) => {
+                tracing::error!(
+                    replica_addr = %addr,
+                    replica_version = %mismatch.replica,
+                    primary_version = %mismatch.primary,
+                    "Refusing PSYNC: replica is on an incompatible major version"
+                );
+                let message = mismatch.wire_error();
+                // Best effort: the refusal is already decided, and a peer that
+                // will not read it is exactly the peer this gate exists for.
+                // Sending it anyway is what puts the reason in the *replica's*
+                // log, which is the only log its operator is watching.
+                let _ = stream.write_all(format!("-{message}\r\n").as_bytes()).await;
+                let _ = stream.flush().await;
+                return Err(io::Error::new(io::ErrorKind::InvalidData, message));
+            }
         }
         // One call resolves the whole PSYNC decision. [`PartialSyncReplay`] owns
         // both bounds of the continuable window — the upper bound + replid match

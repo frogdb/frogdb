@@ -44,6 +44,7 @@ pub mod split_brain_log;
 pub mod state;
 pub mod sync_counters;
 pub mod tracker;
+pub mod version_compat;
 pub mod wait_coordinator;
 
 pub use apply::{

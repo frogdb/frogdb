@@ -1528,6 +1528,7 @@ mod tests {
     use crate::state::ReplicationState;
     use crate::sync_counters::SyncCountersSnapshot;
     use crate::tracker::ReplicationTrackerImpl;
+    use crate::version_compat::PRIMARY_VERSION;
     use bytes::Bytes;
     use frogdb_persistence::{RocksConfig, RocksStore};
     use frogdb_types::ReplicationTracker;
@@ -3455,6 +3456,163 @@ mod tests {
             tracker.get_all_replicas().is_empty(),
             "a refused PSYNC must not register a session"
         );
+    }
+
+    /// An announcement carrying just a version, folded the way the connection
+    /// folds it — `absorb`, not a struct literal, so these tests exercise the
+    /// same path `DispatchStage::ReplicationHandshake` uses.
+    fn announced_version(version: &str) -> ReplicaAnnouncement {
+        let mut announcement = ReplicaAnnouncement::default();
+        announcement.absorb(AnnouncedOption::Version(version.to_string()));
+        announcement
+    }
+
+    /// A version on this build's major line but a minor no build will ever
+    /// carry, so the pair is a skew whatever the workspace version becomes.
+    fn skewed_minor_version() -> String {
+        let major = PRIMARY_VERSION
+            .split('.')
+            .next()
+            .expect("split always yields one segment");
+        format!("{major}.9999.0")
+    }
+
+    // FM-REPLICATION-064
+    /// The gate: a replica on a different major is refused, and refused
+    /// *before* the primary commits anything to it. No session in the registry
+    /// (INFO would otherwise report a replica that will never stream), no
+    /// resync counted (the refusal is not a full resync this primary served),
+    /// and the error the peer is sent names both versions so either operator
+    /// can act on it from their own node's log.
+    #[tokio::test]
+    async fn psync_from_an_incompatible_major_is_refused_before_anything_is_registered() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        // Far enough ahead that no future workspace version can collide.
+        let their_version = "999.0.0";
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let err = handler
+            .handle_psync(
+                server,
+                addr(),
+                &repl_id,
+                resume_point as i64,
+                announced_version(their_version),
+            )
+            .await
+            .expect_err("a replica on another major must not be served");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let line = read_response_line(&mut client).await;
+        assert!(
+            line.starts_with("-ERR PSYNC refused"),
+            "the replica must be told why, got: {line:?}"
+        );
+        assert!(
+            line.contains(their_version) && line.contains(PRIMARY_VERSION),
+            "the refusal must name both versions, got: {line:?}"
+        );
+        assert!(
+            tracker.get_all_replicas().is_empty(),
+            "a refused PSYNC must not register a session"
+        );
+        assert_eq!(
+            tracker.sync_counters(),
+            SyncCountersSnapshot::default(),
+            "a refusal is not a resync this primary served"
+        );
+    }
+
+    // FM-REPLICATION-064
+    /// The other half of the rule: a minor skew is a rolling upgrade in
+    /// flight, so it is *served* — and the version it announced is on the
+    /// session, which is what the warning reports.
+    #[tokio::test]
+    async fn psync_from_a_minor_skewed_replica_is_served() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+        let their_version = skewed_minor_version();
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            let announcement = announced_version(&their_version);
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, resume_point as i64, announcement)
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(
+            line.starts_with("+CONTINUE"),
+            "a same-major replica must be served, got: {line:?}"
+        );
+        let replicas = tracker.get_all_replicas();
+        assert_eq!(replicas.len(), 1, "the session is registered");
+        assert_eq!(
+            replicas[0].replica_version.as_deref(),
+            Some(their_version.as_str()),
+            "and carries what the admitted replica announced"
+        );
+
+        drop(client);
+        let _ = task.await.unwrap();
+    }
+
+    // FM-REPLICATION-064
+    /// Unknown is not incompatible. A peer whose version this primary cannot
+    /// read — a pre-option replica, a non-FrogDB client, anything — is served,
+    /// because refusing what cannot be proved incompatible takes a data path
+    /// down on a suspicion.
+    #[tokio::test]
+    async fn psync_from_a_replica_with_an_unreadable_version_is_served() {
+        let dir = TempDir::new().unwrap();
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(tracker.clone(), None, dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let resume_point =
+            handler.broadcast_control_command("SET", &[Bytes::from("a"), Bytes::from("1")]);
+
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let server: BoxedStream = Box::new(server);
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            let announcement = announced_version("not-a-version");
+            async move {
+                handler
+                    .handle_psync(server, addr(), &repl_id, resume_point as i64, announcement)
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(
+            line.starts_with("+CONTINUE"),
+            "an unreadable version must not stop the handshake, got: {line:?}"
+        );
+        assert_eq!(
+            tracker.get_all_replicas().len(),
+            1,
+            "the session is registered like any other"
+        );
+
+        drop(client);
+        let _ = task.await.unwrap();
     }
 
     // FM-REPLICATION-013
