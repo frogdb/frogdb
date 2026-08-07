@@ -235,6 +235,30 @@ mod durability_mode {
             "All keys must survive after sync_wal"
         );
     }
+
+    /// Issue 08 forcing test: `wal_config.mode` must actually gate what
+    /// `crash()` loses. An async-mode write is never synced, so it must not
+    /// survive; a sync-mode write is always synced, so it must survive.
+    #[test]
+    fn test_durability_mode_gates_crash_loss() {
+        let mut async_harness = CrashTestHarness::with_async_mode();
+        async_harness.put_direct(0, b"async_key", &Value::string("async_value"));
+        async_harness.crash();
+        let (mut stores, _stats) = async_harness.recover();
+        assert!(
+            !verify_string_value(&mut stores, 0, b"async_key", "async_value"),
+            "An unsynced async-mode write must not survive a crash"
+        );
+
+        let mut sync_harness = CrashTestHarness::with_sync_mode();
+        sync_harness.put_direct(0, b"sync_key", &Value::string("sync_value"));
+        sync_harness.crash();
+        let (mut stores, _stats) = sync_harness.recover();
+        assert!(
+            verify_string_value(&mut stores, 0, b"sync_key", "sync_value"),
+            "A synced sync-mode write must survive a crash"
+        );
+    }
 }
 
 // ============================================================================
