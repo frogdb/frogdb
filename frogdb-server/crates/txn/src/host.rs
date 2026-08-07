@@ -100,10 +100,23 @@ pub trait TxnHost {
     /// [`Self::validate_queued_batch`] takes.
     fn watched_slots_still_local(&mut self, watches: &[WatchEntry], asking: bool) -> bool;
 
-    /// Block while the server is paused (`CLIENT PAUSE`). Returns `true` only
+    /// Block while a pause covering this batch is in force. Returns `true` only
     /// if the call actually blocked — EXEC uses that to decide whether its
     /// pre-pause cluster-slot verdict is still fresh.
-    async fn wait_if_paused(&mut self) -> bool;
+    ///
+    /// `queue` is the batch about to run, and it is the whole reason this takes
+    /// an argument. A pause has two dimensions: the node-global `CLIENT PAUSE`,
+    /// which covers everything, and the slot-scoped barrier the slot-migration
+    /// handover arms, which covers exactly one hash slot. Without the queue a
+    /// host can only answer the coarse question — "is *anything* paused?" — and
+    /// must park every write EXEC on every barrier, including barriers on slots
+    /// the batch never touches. With it, the host can resolve the batch to a
+    /// slot and park only when the pause actually covers it.
+    ///
+    /// Hosts must stay fail-closed: a batch that cannot be pinned to a single
+    /// slot (keyless commands, keys spanning slots) may reach the barriered slot
+    /// and has to park. Standalone hosts ignore `queue` entirely.
+    async fn wait_if_paused(&mut self, queue: &[ParsedCommand]) -> bool;
 
     /// One EXEC shard round-trip: hand `commands` + `watches` to `target_shard`
     /// and await its answer.

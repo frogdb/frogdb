@@ -418,19 +418,32 @@ impl ConnectionHandler {
         }
     }
 
-    /// Whether *any* pause is in force, node-global or slot-scoped.
+    /// Whether a pause covering a batch pinned to `slot` is in force.
     ///
-    /// EXEC's gate, and deliberately coarser than
-    /// [`should_pause_command`](Self::should_pause_command). The `TxnHost` seam
-    /// hands `wait_if_paused` no queue, so the transaction's slot cannot be
-    /// resolved here, and a write batch that runs while a barrier is up is
-    /// precisely the acknowledged-then-orphaned write the barrier exists to
-    /// prevent. So a write EXEC parks on any armed pause — over-parking by at
-    /// most the barrier's own lifetime, and never under-parking. Narrowing it
-    /// means widening the `TxnHost` seam, which belongs with the barrier itself
-    /// rather than with this phase.
-    fn any_pause_active(&self) -> bool {
-        self.admin.client_registry.any_pause_active()
+    /// EXEC's gate. Like [`should_pause_command`](Self::should_pause_command) it
+    /// composes the two pause dimensions, and like it, it resolves the slot one
+    /// only when a slot-scoped pause actually exists — the common answer costs
+    /// one lock.
+    ///
+    /// `slot` is `None` when the batch cannot be pinned to a single hash slot,
+    /// and [`ClientRegistry::slot_pause`](frogdb_core::ClientRegistry::slot_pause)
+    /// answers that fail-closed with the strongest pause armed on *any* slot: an
+    /// unpinnable write batch may reach the barriered slot, and a write that runs
+    /// while a barrier is up is precisely the acknowledged-then-orphaned write
+    /// the barrier exists to prevent.
+    ///
+    /// Coarser than `should_pause_command` in one respect that is deliberate:
+    /// mode is not consulted. EXEC only asks once it knows the batch contains
+    /// writes, and both `PauseMode::All` and `PauseMode::Write` park a write.
+    fn pause_active_for_batch(&self, slot: Option<u16>) -> bool {
+        let overview = self.admin.client_registry.pause_overview();
+        if overview.node.is_some() {
+            return true;
+        }
+        if !overview.slot_scoped {
+            return false;
+        }
+        self.admin.client_registry.slot_pause(slot).is_some()
     }
 
     /// Check whether a script command has a `no-writes` flag via shebang
@@ -519,15 +532,24 @@ impl ConnectionHandler {
             .update_paused_state(self.state.id, false);
     }
 
-    /// Wait if the server is paused, for a write-containing transaction (EXEC).
-    /// Both PAUSE ALL and PAUSE WRITE block write transactions.
+    /// Wait if a pause covering this batch is in force, for a write-containing
+    /// transaction (EXEC). Both PAUSE ALL and PAUSE WRITE block write
+    /// transactions.
+    ///
+    /// `slot` is the hash slot the whole batch pins to
+    /// ([`queue_pause_slot`](crate::connection::pause_gate::queue_pause_slot)),
+    /// or `None` when it cannot be pinned — see
+    /// [`pause_active_for_batch`](Self::pause_active_for_batch) for what that
+    /// means. A slot-scoped migration barrier therefore parks only the write
+    /// transactions that can reach its slot, instead of every write transaction
+    /// on the node.
     ///
     /// Returns `true` if the call actually blocked. EXEC uses that to decide
     /// whether its pre-pause cluster-slot verdict is still fresh: nothing else
     /// in the EXEC path can take unbounded wall-clock time, so an unblocked
     /// call means the snapshot cannot have gone stale in between.
-    pub(crate) async fn wait_if_paused_for_transaction(&self) -> bool {
-        if !self.any_pause_active() {
+    pub(crate) async fn wait_if_paused_for_transaction(&self, slot: Option<u16>) -> bool {
+        if !self.pause_active_for_batch(slot) {
             return false;
         }
 
@@ -536,9 +558,11 @@ impl ConnectionHandler {
             .client_registry
             .update_paused_state(self.state.id, true);
 
-        // Wait until pause ends
+        // Wait until the pause covering this batch ends. Re-asked against the
+        // same slot each poll, so a barrier released on our slot frees us even
+        // while barriers on other slots stay armed.
         loop {
-            if !self.any_pause_active() {
+            if !self.pause_active_for_batch(slot) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

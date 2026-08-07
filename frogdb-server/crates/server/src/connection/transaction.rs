@@ -192,8 +192,11 @@ impl TxnHost for ConnectionHandler {
             .watched_slots_still_local(watches, asking)
     }
 
-    async fn wait_if_paused(&mut self) -> bool {
-        self.wait_if_paused_for_transaction().await
+    async fn wait_if_paused(&mut self, queue: &[ParsedCommand]) -> bool {
+        // Resolve the batch to a slot here, on the host, where the registry
+        // lives — the EXEC algorithm never learns what a hash slot is.
+        let slot = crate::connection::pause_gate::queue_pause_slot(&self.core.registry, queue);
+        self.wait_if_paused_for_transaction(slot).await
     }
 
     async fn send_shard_transaction(

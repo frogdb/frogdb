@@ -189,11 +189,18 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         return (TransactionOutcome::Redirected, vec![redirect]);
     }
 
-    // Wait if server is paused and this transaction contains write commands.
-    // CLIENT PAUSE takes effect at the end of the current transaction, so
-    // EXEC blocks until the pause ends if the queued commands include writes.
+    // Wait if a pause covering this batch is in force and the transaction
+    // contains write commands. CLIENT PAUSE takes effect at the end of the
+    // current transaction, so EXEC blocks until the pause ends if the queued
+    // commands include writes.
+    //
+    // The queue is handed to the host so a slot-scoped barrier parks only the
+    // batches that can reach its slot — see [`TxnHost::wait_if_paused`]. The
+    // decision itself stays on the host: which keys a command names and which
+    // pauses are armed are both server facts, and pulling either in here would
+    // put cluster and registry knowledge in the EXEC algorithm.
     let paused = if host.queue_has_writes(&queue) {
-        host.wait_if_paused().await
+        host.wait_if_paused(&queue).await
     } else {
         false
     };
