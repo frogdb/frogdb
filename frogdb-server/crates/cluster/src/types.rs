@@ -901,6 +901,38 @@ mod tests {
         format!("127.0.0.1:{port}").parse().unwrap()
     }
 
+    /// `is_retryable` is what decides between a `TRYAGAIN` and an `ERR` prefix
+    /// on the wire, so it has to discriminate. A handoff that is not ready is
+    /// the one condition a client fixes by re-issuing the same command; every
+    /// other cluster error means the request itself was wrong or the cluster
+    /// cannot serve it, and telling the client to retry those would turn a
+    /// permanent failure into a spin loop.
+    // FM-CLUSTER-091
+    #[test]
+    fn only_a_not_ready_handoff_is_retryable() {
+        assert!(ClusterError::HandoffNotReady(5, "not drained".to_string()).is_retryable());
+
+        for permanent in [
+            ClusterError::NodeNotFound(7),
+            ClusterError::NodeAlreadyExists(7),
+            ClusterError::SlotNotAssigned(5),
+            ClusterError::SlotAlreadyAssigned(5, 7),
+            ClusterError::InvalidSlot("x".to_string()),
+            ClusterError::NotLeader,
+            ClusterError::RaftError("boom".to_string()),
+            ClusterError::StorageError("boom".to_string()),
+            ClusterError::NetworkError("boom".to_string()),
+            ClusterError::NotInitialized,
+            ClusterError::InvalidOperation("bad".to_string()),
+            ClusterError::MigrationInProgress(5),
+        ] {
+            assert!(
+                !permanent.is_retryable(),
+                "{permanent:?} must not tell the client to retry"
+            );
+        }
+    }
+
     /// A node table entry written before replica priorities existed must read
     /// back at the neutral default, not at "never promote" (0) and not at the
     /// most-preferred value (1): either would silently rewrite the failover

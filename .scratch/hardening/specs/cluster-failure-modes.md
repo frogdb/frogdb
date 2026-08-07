@@ -1249,7 +1249,7 @@ deliberately left unpinned so phase 2 can narrow it without editing a row.
 | NOT observable | The barrier being dropped so the finalization can proceed anyway — DragonflyDB's choice, and the reason its pause is explicitly not a correctness mechanism. Proceeding would move ownership with an unbounded set of writes still in flight on the former owner, which is the exposure being fenced. Nor a dangling prepared record: the finalizer aborts its own attempt, and the lease (FM-CLUSTER-085) covers the case where it cannot. |
 | Invariant | `drain_shard` bounds the round trip with `tokio::time::timeout` and returns `false` on expiry or a missing shard, and the runner calls `confirm` only on `true` (`cluster-runtime/src/handoff_barrier.rs`). `SlotMigrationCoordinator::complete` polls its own replicated state for the acknowledgement, so a finalizer that is neither source nor leader still sees it; on timeout it aborts and renders `ClusterError::is_retryable` as `TRYAGAIN` rather than `ERR` (`server/src/slot_migration/mod.rs`). |
 | Outcome variant | `-TRYAGAIN` |
-| Forced by | `a_shard_that_never_answers_is_never_confirmed`, `a_missing_shard_fails_the_drain`, `a_source_that_cannot_drain_aborts_the_finalization` |
+| Forced by | `a_shard_that_never_answers_is_never_confirmed`, `a_missing_shard_fails_the_drain`, `a_source_that_cannot_drain_aborts_the_finalization`, `only_a_not_ready_handoff_is_retryable` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
 
 ## FM-CLUSTER-092 — a write caught by the barrier wakes up redirected, never acknowledged on the former owner
