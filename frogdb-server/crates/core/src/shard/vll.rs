@@ -113,7 +113,8 @@ mod tests {
     use crate::replication::NoopBroadcaster;
     use crate::shard::ShardWorker;
     use crate::shard::message::{ScatterOp, ShardReceiver, ShardSender};
-    use crate::vll::{LockMode, ShardReadyResult};
+    use crate::store::Store;
+    use crate::vll::{ContinuationEvent, LockMode, ShardReadyResult, VllError};
 
     fn test_worker() -> ShardWorker {
         let (msg_tx, msg_rx) = mpsc::channel(16);
@@ -186,5 +187,104 @@ mod tests {
         // Draining the queue grants the parked request.
         assert!(matches!(cont_ready_rx.await, Ok(ShardReadyResult::Ready)));
         assert_eq!(worker.vll.continuation_lock_owner(), Some(99));
+    }
+
+    /// C3 forcing test — Arm 1 (`VllMsg::VllExecute` → `handle_vll_execute`).
+    ///
+    /// `handle_vll_execute` runs its dequeued op through
+    /// `execute_scatter_part(&op.keys, &op.operation, 0)` with `conn_id`
+    /// hardcoded to `0` and **no** `can_execute_during_lock` gate. The C3
+    /// investigation asked whether that lets a *different* connection's VLL op
+    /// mutate a key while a cross-shard script holds the continuation lock
+    /// (issue-50's bug class). It cannot: the VLL two-phase protocol is the
+    /// isolation seam. A continuation lock is only granted on a fully drained
+    /// shard, and while it is held (or a request is parked) the drain barrier in
+    /// `enqueue_lock_request` refuses every foreign SCA op with `ShardBusy`, so
+    /// nothing a foreign connection submits ever reaches the queue — and
+    /// `handle_vll_execute` has nothing to dequeue, executes nothing, and
+    /// mutates nothing. `conn_id = 0` is a drain-path sentinel that never races
+    /// the owner. This test is the machine-checked evidence for the EXEMPT
+    /// disposition: if a later change let SCA work enqueue under a held
+    /// continuation lock, the foreign write would land mid-lock and the
+    /// `contains` assertion below would fail.
+    #[tokio::test]
+    async fn vll_execute_cannot_mutate_a_held_key_under_a_foreign_continuation_lock() {
+        let mut worker = test_worker();
+        let key = Bytes::from_static(b"guarded");
+        let write_op = || ScatterOp::MSet {
+            pairs: vec![(key.clone(), Bytes::from_static(b"foreign-write"))],
+        };
+
+        // Connection A (conn_id 100) holds the continuation lock on the drained
+        // shard — granted synchronously because there is nothing to drain.
+        let (cont_ready_tx, cont_ready_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        worker.handle_vll_continuation_lock(1, 100, cont_ready_tx, release_rx);
+        assert!(matches!(cont_ready_rx.await, Ok(ShardReadyResult::Ready)));
+        assert_eq!(worker.vll.continuation_lock_owner(), Some(100));
+
+        // Connection B (txid 2) tries to queue a VLL *write* on the held key.
+        // The drain barrier refuses it with `ShardBusy`: it declares no intent
+        // and never enters the queue.
+        let (sca_ready_tx, sca_ready_rx) = oneshot::channel();
+        worker
+            .handle_vll_lock_request(
+                2,
+                vec![key.clone()],
+                LockMode::Write,
+                write_op(),
+                sca_ready_tx,
+            )
+            .await;
+        assert!(
+            matches!(
+                sca_ready_rx.await,
+                Ok(ShardReadyResult::Failed(VllError::ShardBusy))
+            ),
+            "a foreign SCA write must be refused while the continuation lock is held"
+        );
+
+        // Draining B's (never-queued) op is a no-op: nothing is dequeued, so the
+        // arm executes nothing and the store never saw the foreign write.
+        let (exec_tx, exec_rx) = oneshot::channel();
+        worker.handle_vll_execute(2, exec_tx).await;
+        assert!(exec_rx.await.is_ok());
+        assert!(
+            !worker.store.contains(key.as_ref()),
+            "the held key must not be mutated by a foreign VLL op while the lock is held"
+        );
+        assert_eq!(
+            worker.vll.continuation_lock_owner(),
+            Some(100),
+            "the continuation lock is still owned by A throughout"
+        );
+
+        // Positive control: once the lock releases, the very same op *does*
+        // execute and mutate — proving the refusal was the lock, not a broken op.
+        release_tx.send(()).ok();
+        assert_eq!(
+            worker.vll.next_continuation_event().await,
+            ContinuationEvent::Released
+        );
+        assert_eq!(worker.vll.continuation_lock_owner(), None);
+
+        let (sca_ready_tx2, sca_ready_rx2) = oneshot::channel();
+        worker
+            .handle_vll_lock_request(
+                3,
+                vec![key.clone()],
+                LockMode::Write,
+                write_op(),
+                sca_ready_tx2,
+            )
+            .await;
+        assert!(matches!(sca_ready_rx2.await, Ok(ShardReadyResult::Ready)));
+        let (exec_tx2, exec_rx2) = oneshot::channel();
+        worker.handle_vll_execute(3, exec_tx2).await;
+        assert!(exec_rx2.await.is_ok());
+        assert!(
+            worker.store.contains(key.as_ref()),
+            "after the lock releases the op executes and mutates the key"
+        );
     }
 }
