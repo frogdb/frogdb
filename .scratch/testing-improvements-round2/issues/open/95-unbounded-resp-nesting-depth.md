@@ -88,3 +88,23 @@ difficulty this finding describes.
 Nothing hard. Issue 10, `.scratch/testing-improvements-round2/issues/` (fuzz CI) is the ongoing
 net under option (3); issue 02, same directory (subprocess-SIGKILL primitive) would supply the
 harness option (2) needs. Sibling: issue 70, same directory.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+**No depth bound exists anywhere.** `rg -i 'max_depth|MAX_NESTING|depth'` over
+`crates/protocol/src/`, `crates/net/src/` and `connection/codec.rs` returns nothing. The decode
+path is unchanged in shape: the `*` branch moved `codec.rs:141-163` → **`:143-166`** and still
+validates only the element *count* (`count < -1`, `count > PROTO_MAX_MULTIBULK_LEN`) before falling
+through to `self.inner.decode(src)` at `:207` → **`:209`**; `scan_for_oversized_bulk` (now
+`:254`) still bails on a non-`$` element (`:262` → `:270`-ish), so nested `*` elements are never
+walked. The encode path is likewise unchanged: `response.rs:234` → **`:235`** (`WireResponse::Array`),
+`:255-262` → **`:254`/`:263`** (`Map`/`Set`), with the mirrored RESP3 recursion at `:316`/`:345`/`:352`
+and the `Response → WireResponse` recursion at `:728`/`:740`/`:747`. What the campaign *did* add is
+`crates/protocol/src/limits.rs` — `PROTO_MAX_BULK_LEN`, `PROTO_MAX_MULTIBULK_LEN`,
+`MAX_INTERNAL_FRAME_LEN` (round-2 issue 69, now `done/`). That file is the obvious home for the
+named depth constant this issue asks for, and its existence removes the "where does the constant
+live" friction. Not verified by execution (triage is static-only), so the stack-overflow claim
+itself still carries the auditing agent's evidence. `Status` left at `needs-triage` — the
+`OPTIONS:` block is still unresolved.

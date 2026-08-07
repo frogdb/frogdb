@@ -438,3 +438,32 @@ sweep, and the negative-matrix test against the *live* scatter path stays here.
 
 - issue 01, `.scratch/testing-improvements-round2/issues/` (I1 — `shard_driver` harness extension; F13 needs the wrapper that drives a blocking command through `blocking.rs::execute()` because `block_wait` enters at the waiter layer and skips argument parsing, and F0's recommended home needs the `ProtocolVersion` parameter since `ShardDriver::execute` hardcodes RESP3)
 - issue 11, `.scratch/testing-improvements-round2/issues/` (I11 — registry-wide argument-fuzz property harness, described by this area's author as "the biggest ask"; it is the second half of F5's proposed test and itself depends on issue 01)
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** — 0/15 findings discharged.
+
+| finding | verdict | evidence on today's tree |
+|---|---|---|
+| F0 where command-semantics tests should live (structural) | still-valid | gated on issue 01 (harness), owned elsewhere |
+| F3 seven commands skip the hash-field purge | still-valid | `purge_expired_hash_fields` now has 13 call sites but still none in `HsetnxCommand::execute` (`commands/src/hash.rs:125`), `HdelCommand::execute` (`:216`), `HincrbyCommand::execute` (`:610`), `HincrbyfloatCommand::execute` (`:652`) |
+| F5 unguarded integer/time arithmetic | still-valid | `commands/src/expiry.rs:37-47` `unix_secs_to_instant` still `Some(now_instant + duration)`, no `checked_add`; `commands/src/blocking.rs:869-885` `parse_timeout` still rejects only nan/inf/negative, so `1e300` passes |
+| F8 no-op writes dirty the WATCH version | still-valid | zero `write_was_noop` uses in `commands/src/string.rs` |
+| F10 `hash_cursor_scan` cost / COUNT semantics / livelock | still-valid | `commands/src/utils.rs:98` `scan_hash`, `:114` `hash_cursor_scan` unchanged |
+| F11 HSCAN/SSCAN/ZSCAN MATCH uses a weaker glob engine | still-valid | `commands/src/utils.rs:60` `simple_glob_match` still handles only `*` and `?` |
+| F12 "empty collection deletes the key" unasserted | still-valid | |
+| F13 blocking commands' negative-argument surface | still-valid | |
+| F14 `intentional-incompatibility:encoding` dropped 86 upstream bodies | still-valid | the unfreeze restored the suite to `just test` but did not shrink the exclusion bucket |
+| F15 `OBJECT ENCODING` synthesised + doubled error prefix | still-valid | `commands/src/generic.rs:431` still `message: "ERR no such key"` → renders `ERR ERR no such key` |
+| F16 error text unpinned across the area | still-valid | |
+| F17 missing expiry-option conflict guards in SET/GETEX | still-valid | |
+| F18 `SETRANGE` empty-value no-op gated on the wrong condition | still-valid | `commands/src/string.rs:356` still `if offset == 0 && value.is_empty()` |
+| F19 cheap uncovered parity divergences | still-valid | `types/src/types/list.rs:180` still `let maxlen = maxlen.unwrap_or(self.len());` |
+| F20 dead second SCAN/KEYS implementation | still-valid | `commands/src/scan.rs:45` `ScanCommand`, `:112` `KeysCommand`, `:151` `parse_key_type` all still present |
+
+The core command profile is default-on and the redis-regression compat suite was unfrozen at
+campaign exit (8e90999b, 3967de82), so these commands *are* exercised again in `just test` — but
+the unfreeze restores tests that already existed; it adds nothing that asserts the specific
+behaviours above, and every cited defect reproduces verbatim on today's tree. No FM row in
+`.scratch/hardening/specs/` covers command semantics for these types (core was not one of the four
+locked areas). F0's structural recommendation stays blocked on issue 01.

@@ -180,3 +180,31 @@ issue before writing the test; the finding itself stays actionable and `ready-fo
   can register a `TrackedConnection` / `InvalidationRegistry` entry. The proposal recommends the
   coordinator treat this as a shared prerequisite; it would move F5 from effort 3 to effort 2 and
   make the whole eviction/expiry/flush invalidation matrix cheap to cover exhaustively.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** — 0/11 findings discharged.
+
+| finding | verdict |
+|---|---|
+| F4 tracking-table capacity hardcoded 1M/shard | still-valid |
+| F5 FLUSHALL/FLUSHDB × BCAST tracking untested | still-valid |
+| F6 replica-side notifications + tracking invalidation untested | still-valid |
+| F7 `HotkeySession::entries` unbounded | still-valid |
+| F8 `HOTKEYS METRIC <m>` accepted but ignored | still-valid |
+| F9 INFO hardcodes `pubsub_*` / `tracking_*` to 0 | still-valid |
+| F10 `slowlog-max-len` enforced per shard | still-valid |
+| F11 `PubsubSubscribers` gauge fed subscription counts | still-valid |
+| F13 slow-subscriber teardown only for channel subscribers | still-valid |
+| F14 `to_flag_string` never emits `A` | still-valid |
+| F15 `OutputBudget` overflow latch + wakeup no interleaving test | still-valid |
+
+Nothing in the hardening campaign touched this surface: core was not one of the four locked areas
+and no FM row in `.scratch/hardening/specs/` covers tracking, hotkeys, slowlog or the observability
+gauges. Spot-verified on today's tree: F9's fabricated constants are still literal — `INFO` emits
+`tracking_clients` 0 at `crates/server/src/info/sections.rs:132` and `pubsub_channels` 0 at `:351`
+(line drift only from the body's cited numbers); F14's `to_flag_string`
+(`crates/core/src/keyspace_event.rs:97-121`) still pushes only `K E g $ l s h z …` and has no `A`
+fold-up branch. The clock-seam sweep (2fb1051c, 0fe2dd0a) and the driven shard ticks (e7827926,
+f475839c) changed how time and sweeps are *driven* in this crate but discharge none of these
+findings, all of which are about state accounting and reported values.

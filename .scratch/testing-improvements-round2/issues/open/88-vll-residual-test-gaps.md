@@ -243,3 +243,36 @@ contradicting VLL's contract. Proposal 12 raises it only as a `## Deprioritised`
 - **Issue 07**, `.scratch/testing-improvements-round2/issues/` (I7 — `ScatterHeavy` workload profile in `testing/src/workload.rs`). F1 cannot run the existing leak detector against any VLL operation until a profile emits cross-shard MGET/MSET/DEL; the quiescence checker and probe themselves need no changes.
 - **Issue 08**, `.scratch/testing-improvements-round2/issues/` (I8 — virtual-time / injectable-timeout primitive for shuttle). F7's model must schedule timer firing rather than observe wall-clock; without it, invariant 2 (bounded acquisition / no deadlock) cannot be established. shuttle itself already exists in `crates/testing` from round-1 issue 07 — only the timeout primitive is new.
 - **Issue 15**, `.scratch/testing-improvements-round2/issues/` (I15 — cross-shard EVAL test helper). F3 needs a "run an `EVAL` whose keys span shards with `allow_cross_slot_standalone=true`" helper; the config knob already exists in `test-harness/src/server.rs`, only the scripting-side helper is missing.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 1/15 findings discharged (F10).
+
+| F | verdict | evidence |
+|---|---|---|
+| F1 | still-valid | `shard-harness/tests/scenario_s3.rs` now asserts clean lock tables + no partial writes after every fault outcome, but the finding's leak-detector-over-a-`ScatterHeavy`-workload criterion (issue 07) is unmet. |
+| F3 | still-valid | no cross-shard EVAL helper; `vll/` still has no `tests/` dir. |
+| F6 | still-valid | no `ShardSink`/`MetricsSink` fake-sink contract suite. |
+| F7 | still-valid | no shuttle model over the scatter protocol; needs issue 08. |
+| F8 | still-valid | `ScatterError` arms still not exhaustively pinned to responses. |
+| F9 | still-valid | `core/src/shard/vll.rs:40-55` still answers a missing txid with `PartialResult::default()` on the success channel; untested. |
+| F10 | **fixed** | `continuation_release_survives_cancellation_then_fires` (`vll/src/shard.rs:985`) and `parked_continuation_deadline_survives_cancellation` (`:1014`, `// FM-VLL-003`); API renamed `await_continuation_release` → `next_continuation_event`. |
+| F11 | still-valid | no crate-level `tests/` dir in `frogdb-vll`. |
+| F12 | still-valid | `vll/src/coordinator.rs` phase-4 gather arms still `return Err(...)` without `abort_shards`. |
+| F13 | still-valid | timeouts are still per-shard inside the phase-2 and phase-4 `for` loops (no whole-scatter budget). |
+| F14 | still-valid | `scatter/executor.rs:116` still `self.timeout.max(DEFAULT_LOCK_ACQUISITION_TIMEOUT)`, untested. |
+| F15 | still-valid | `vll/src/queue.rs:102-108` `enqueue` still overwrites a duplicate txid via `HashMap::insert`. |
+| F16 | still-valid | `connection/scripting/eval.rs:130` builds a plain `ShardSenderSink::new` (no chaos seam). |
+| F17 | still-valid | `MetricsSink` counter assertions still absent. |
+| F18 | still-valid | `server/src/scatter/executor.rs` has no `mod tests`; `scatter_error_to_response` (`:141`) unpinned. |
+
+Phase 1 locked `frogdb-txn` + `frogdb-vll` at 100% mutation score, but the lock did not close
+these gaps: `vll-failure-modes.md` carries only **FM-VLL-001..004**, all about the continuation
+lock, and states in its own words that the scatter phases (dispatch failure, phase-2/3 partial
+unwind, gather timeouts) are "not yet rowed" — so F12/F13/F18 have no FM row to discharge them.
+Only F10 has both a row (FM-VLL-003) and named forcing tests. Stale refs corrected: the
+coordinator/queue/shard code cited under `server/src/` now lives in `frogdb-server/crates/vll/src/`
+(`coordinator.rs`, `queue.rs`, `shard.rs`) and the executor at
+`frogdb-server/crates/server/src/scatter/executor.rs`. No live production bug: every residual
+item is a test gap or a documented design choice (`scenario_s3.rs:50-55` now records the
+deliberate "already-executed participants are not aborted" contract).

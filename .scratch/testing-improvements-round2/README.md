@@ -19,7 +19,18 @@ evidence is always one hop away. Read `MASTER.md` first.
 | `MASTER.md` | consolidated findings: cross-cutting themes, ~40 suspected live defects, tests that cannot fail, dead code, open decisions. **Start here** |
 | `INFRASTRUCTURE.md` | all 18 requested infrastructure items, tiered A/B/C with LOE provenance. Supersedes `MASTER.md` §6 |
 | `proposals/` | the 15 per-area agent proposals — the source of record for every finding |
-| `issues/open/` | the 95 filed issues |
+| `re-triage-2026-08-06.md` | **re-baseline of every open issue against the post-hardening tree** — verdict per issue, the 18 confirmed live defects, and what the campaign did and did not close |
+| `issues/open/` \| `issues/done/` | the 95 filed issues, 75 open / 20 closed |
+
+## Re-triage, 2026-08-06
+
+The issues were filed on 2026-07-28, before the foundation-hardening campaign ran. Every one of
+the 82 then-open issues was re-checked against the current tree on 2026-08-06 and carries a
+`## Re-triage 2026-08-06` section with its verdict and refreshed `file:line` evidence: **2 fixed,
+5 superseded, 20 partially-fixed, 55 still-valid**. Read
+[`re-triage-2026-08-06.md`](re-triage-2026-08-06.md) before picking anything up from this
+directory — a good deal of the original evidence has moved with the crate extractions, and 18
+issues are confirmed *live production defects* rather than test gaps.
 
 ## Issue number ranges
 
@@ -56,7 +67,9 @@ directory exists to prevent.
 ## Suggested order
 
 1. **27–28** — until the coverage pipeline is fixed, no number from this repo means anything.
-2. **29–32** — four decisions that change what gets written everywhere else.
+2. **29–32** — four decisions that change what gets written everywhere else. As of the
+   2026-08-06 re-triage only **31** (D3, coverage-tooling ordering) is still open; 29, 30 and 32
+   were superseded by the hardening campaign's own practice.
 3. **Tier-A infrastructure** (01, 07, 16, 17) — ~2.5 days, drops a large fraction of the
    remaining work by one or two effort levels.
 4. **35–76**, security and silent-data-loss first — these are suspected *live defects*, not

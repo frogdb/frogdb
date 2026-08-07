@@ -229,3 +229,32 @@ from the types side.
 - issue 02, `.scratch/testing-improvements-round2/issues/` (I2 — subprocess-SIGKILL crash primitive; F10's recommended step 1, and the only way to reach real page-cache semantics. Note the tension recorded on F15: `INFRASTRUCTURE.md` names `CrashTestHarness` as I2's *cheaper substitute*, and this proposal asks that if built it live in `frogdb-test-harness` next to `TestServer`, not in `core/src/persistence/test_harness.rs`).
 - issue 03, `.scratch/testing-improvements-round2/issues/` (I3 — injectable clock seam; F16 is unwritable without one. The proposal's explicit request: whoever builds one first owns it, and F16 adopts it rather than adding a second).
 - issue 10, `.scratch/testing-improvements-round2/issues/` (I10 — fuzz CI; F2's option (c) and the proposal's cross-area note that `testing/fuzz/` runs in no PR or nightly job. Highest-value targets named by this area: `deserialize`, each per-type decoder, `RESTORE` payloads).
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 2/12 findings discharged (F4, F12); F1, F10, F16, F17 partial.
+
+| F | verdict | evidence |
+|---|---|---|
+| F1 | partially-fixed | `every_marker_round_trips` (`persistence/src/serialization/registry.rs:562+`) now asserts a byte-exact decode→encode fixed point per marker over an exhaustive-`match` `samples_for` (`:415`, documented `HashWithFieldExpiry` length-only exception). Samples are 1–3 hand-built values with mostly default params, so the "adversarial/randomised per-variant corpus" half is unmet. |
+| F2 | still-valid | no fuzz job runs `deserialize`/per-type decoders (issue 10). |
+| F4 | **fixed** | FM-PERSISTENCE-033/045/047: an undecodable key is counted, exported as `frogdb_recovery_keys_failed_total` and surfaced as `rdb_last_load_keys_failed` in INFO. |
+| F6 | still-valid | `server/tests/integration_persistence.rs` gained `persistence_config_shards` + NUM_SHARDS=4 checkpoint cases (~:2008/:2135/:2279/:2351) but still has no JSON/TS/BF/VADD/TOPK/CMS restart case. |
+| F10 | partially-fixed | FM-PERSISTENCE-034/035 cover part of the torn-write surface; the real-page-cache (subprocess SIGKILL, issue 02) half is unbuilt. |
+| F12 | **fixed** | FM-PERSISTENCE-017 — boot seeds the epoch from `max(metadata epoch, highest snapshot_NNNNN dir)`; forced by `coordinator_boot_keeps_the_epoch_when_latest_metadata_is_unreadable` (`persistence/src/snapshot/tests.rs:1013`). |
+| F13 | still-valid | no test drives the codec-registry version/unknown-marker skew path. |
+| F14 | still-valid | `wal/flush.rs:112` `WriteSink` is still `pub(super)`, so `PageCacheSink` (`wal/tests.rs:1064`) stays module-private and no external fault sink can be substituted. |
+| F15 | still-valid | `core/src/persistence/test_harness.rs` corruption helpers (`corrupt_file` :258, `append_garbage` :267, `find_wal_files` :296, `find_sst_files` :301) still have zero call sites. |
+| F16 | partially-fixed | the clock seam landed — `instant_to_unix_ms` (`serialization/mod.rs:203`) / `unix_ms_to_instant` (`:232`) now read `clock::now()` + `clock::system_now()` — but `test_instant_unix_ms_roundtrip` (`:566`) is unchanged and nothing drives an epoch shift across the pair. |
+| F17 | partially-fixed | FM-PERSISTENCE-019/020 pin part of the flush-error surface; `RocksStore::flush` (`rocks/mod.rs:580-590`) still `?`-returns on the first failing shard, so the "every shard is attempted, errors aggregated" half stands. |
+| F19 | still-valid | `copy_codec_round_trips_all_value_variants` (`serialization/mod.rs:266`) still asserts only `key_type()` behind an `assert_eq!(values.len(), 15, …)` count guard; `unreachable!` still at `:182`. |
+
+Phase 2 locked `frogdb-persistence` (99.1%) and `frogdb-recovery` (100%) and
+`persistence-failure-modes.md` now carries 47 rows, but most rows target recovery/snapshot
+lifecycle rather than these residuals. Round-2 issues 71 and 74 (both in `issues/done/`) are what
+carry F4 and F12 across the line. Stale refs corrected: the WAL/snapshot code cited under
+`server/src/persistence*` and `server/src/recovery/` now lives in
+`frogdb-server/crates/persistence/src/` and `frogdb-server/crates/recovery/src/`; the corruption
+helpers stayed at `frogdb-server/crates/core/src/persistence/test_harness.rs`. No live production
+bug confirmed — F17's first-error-wins flush is the closest, and it is the same documented
+behaviour the finding described.

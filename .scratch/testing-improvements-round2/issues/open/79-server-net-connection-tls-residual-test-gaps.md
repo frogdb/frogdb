@@ -207,3 +207,34 @@ claimed by the dead-code sweep, issue 34, `.scratch/testing-improvements-round2/
   is not in the 01–18 infrastructure set. Either that fixture is scoped as new work, or the cheap
   substitute in the finding — extracting `classify_accept_error` + a backoff helper and unit-testing
   it — is taken instead.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** — 0/13 findings discharged (F6's *evidence* is stale; its acceptance
+criterion is not).
+
+| finding | verdict |
+|---|---|
+| F4 maxclients per-listener, check-then-act, not RAII | still-valid |
+| F5 CLIENT KILL no-op vs blocked/write-stalled conn | still-valid |
+| F6 connection-level MIGRATE handler untested | still-valid (stale evidence) |
+| F7 CLIENT TRACKING invalidation channel unbounded | still-valid |
+| F9 TLS certificate reload never driven through a live listener | still-valid |
+| F11 FT.AGGREGATE cursors have no owner / disconnect cleanup | still-valid |
+| F12 accept loop busy-spins on persistent accept error | still-valid |
+| F16 `CLIENT INFO`/`LIST` always report zero pending output | still-valid |
+| F13 multi-certificate selection never driven by a real ClientHello | still-valid |
+| F14 RESP3 write path bypasses the `Framed` buffer | still-valid |
+| F15 shard-local commands reachable only from Lua ~0% covered | still-valid |
+| F17 rate-limit boundary/refill/MULTI interaction untested | still-valid |
+| F18 PSYNC handoff skips `notify_connection_closed` | still-valid |
+
+Location corrections: the listener/socket code cited under `server/src/net.rs` moved to the
+Phase-0 crate — `frogdb-server/crates/net/src/lib.rs` (the `set_reuse_address`/`set_reuse_port`
+block is now `:60-77`). F6's "174 untested regions / no MIGRATE tests" evidence is a coverage
+artifact: `frogdb-server/crates/server/tests/cluster_migration.rs` does drive real MIGRATE
+(`:1724`, `:1992`, `:2335`, `:3177`, `:4202`), but none of them asserts the *delete-after-transfer*
+failure paths the acceptance criterion names, so the finding stands with corrected evidence. The
+replication net byte-counter fixes (17b9b552, 12793b23 — hardening issue 29) touch this area's
+crate but discharge no finding here; no FM row in `.scratch/hardening/specs/` covers
+connection/TLS/maxclients behaviour.

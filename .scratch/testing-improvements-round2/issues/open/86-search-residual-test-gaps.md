@@ -294,3 +294,26 @@ Two clarifications, since this area did request shared infrastructure:
   F13 both drop from level 4 to level 3 once it lands, and F8 becomes sub-second rather than
   minutes. Issue 01 (I1 — `shard_driver` harness extension) is a *different* item and its scope
   does not include FT.\* drive seams, though issue 94 asks to be sequenced with it.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** — 0/8 findings discharged; every cited site reproduces verbatim.
+
+| F | verdict | evidence (verified today) |
+|---|---|---|
+| F2 | still-valid | `search/src/vector.rs:354-358` — `VectorField::knn` still forwards `query` to `self.index.search(query, k)` with no `query.len() == self.dim` check, while the write path still validates. |
+| F7 | still-valid | `rg -c 'sleep' server/tests/search.rs` = **135**, unchanged. `SearchMsg::FlushSearchIndexes` is still reachable only from the checkpoint/quiesce hook (`server/src/server/checkpoint_quiesce.rs:93,162`) and `dispatch_search.rs:8`; no `DEBUG FLUSH-SEARCH-INDEX` verb exists. The semantics decision is still unmade. |
+| F8 | still-valid | `core/src/shard/search/query.rs:179` still `SearchOptions::page(0, 100_000)` under the "no limit" comment. |
+| F10 | still-valid | `search/src/aggregate.rs:1012-1013` `CountDistinct` merge is still a full `HashSet<String>` union; `:1081-1082` `Quantile` merge still `extend`s a `Vec<f64>`, finalized by clone+sort at `:1161`. |
+| F11 | still-valid | `query.rs:748` still `let _ = range_radius; // RANGE mode: for future use`; `_ef_runtime` (`:279`) still parsed at `:365`/`:396` and never read; the silent defaults survive at `:450` (60.0), `:460`/`:470` (0.5). |
+| F12 | still-valid | `aggregate.rs:1157` still `(*sum_sq / n) - (*sum / n).powi(2)` clamped by `.max(0.0)` — the naive catastrophic-cancellation formula. |
+| F13 | still-valid | KNN/hybrid content still resolves through `store.get(...)` in `query.rs`, so a tiered-spilled key yields `fields: None` while `FT.SEARCH` reads from tantivy. |
+| F14 | still-valid | `search/src/wire.rs:508-510` `parse_num` still returns `Option` and every call site still `unwrap_or`s a default. |
+
+Expected: `crates/search` sits behind a non-default cargo feature and was explicitly out of
+hardening-campaign scope, so no FM spec covers it and none of the eight sites was touched. Issue
+94 (the missing sub-socket FT.\* seams) still gates F11 and F13 at level 4 and still makes F8's
+100 001-document criterion impractical. Nothing in the body needs a file:line correction — the
+area did not move during the extractions. F2 remains the one that is a **latent memory-safety
+bug rather than a test gap** (a short `&[f32]` reaches usearch's C++ side, which reads `dim`
+floats regardless of slice length); it is unchanged since filing, not newly introduced.

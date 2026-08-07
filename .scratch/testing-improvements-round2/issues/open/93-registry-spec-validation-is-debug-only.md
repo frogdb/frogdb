@@ -85,3 +85,21 @@ and a higher level would only make the failure harder to read.
 Nothing. Related to the registry-consistency theme (issue 19,
 `.scratch/testing-improvements-round2/issues/`), which uses the same `CommandRegistry::iter()`
 seam for a larger invariant — do them together if that one is scheduled first.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Unchanged. The `debug_assert!` is still the only whole-registry validation, now at
+`frogdb-server/crates/core/src/registry.rs:184-189` (body cited `:182-187`; the audit's `:184` is
+still inside the block). One addition the body does not mention: `register_conn_command` carries a
+**second** `debug_assert!` over `spec().validate()` at `registry.rs:207-212`, so the sweep has two
+call sites to decide about, not one. Repo-wide, every other `spec().validate()` hit is in
+`core/src/command_spec.rs`'s own unit tests over hand-built specs (`:1174-1299`) — still no test
+that iterates `CommandRegistry::iter()` and validates the *registered* set, and `Justfile`/
+`.github/workflows/` still pass no `--release` to `cargo test`, so the exposure remains exactly as
+filed. Relationship to issue 19 (still open): 19 owns the broader "parallel command tables drift
+from `CommandSpec`" invariant over the same `CommandRegistry::iter()` seam and names issue 29 as its
+home-blocker; this issue is the narrow, unblocked subset — assert `validate().is_ok()` for every
+registered command — and does not depend on 19 landing. Issue 29 is now resolved (harness crate
+`frogdb-shard-harness`), so a registry-wide test has a home.

@@ -72,3 +72,19 @@ be tested end-to-end cannot be property-tested or fuzzed cheaply.
 
 Nothing. Blocks the scheduling of findings 08/F2 and 08/F5, carried in issue 84,
 `.scratch/testing-improvements-round2/issues/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Nothing moved and no decision was recorded. `FrogDbResp2` is still defined in
+`frogdb-server/crates/server/src/connection/codec.rs` (1024 lines), still used only from
+`server/src/connection.rs:79,103,260`, with `frame_io.rs` and `util.rs` alongside it — the paths in
+the body are current. The campaign's `frogdb-net` crate is **not** a relocation of this code: it is
+a 20-line conditional-networking shim that swaps tokio for turmoil types
+(`crates/net/src/lib.rs`), so the "the campaign may have moved it incidentally" hypothesis is false.
+What the campaign did add nearby is `frogdb-protocol`'s new `limits.rs` — `PROTO_MAX_BULK_LEN`,
+`PROTO_MAX_MULTIBULK_LEN`, `MAX_INTERNAL_FRAME_LEN` — which centralises the wire-size ceilings the
+codec enforces (round-2 issue 69, now in `done/`) and is a small precedent for option (c): the pure
+limits moved to `protocol` while the tokio codec wiring stayed in `server`. Still needs a call from
+whoever owns the crate boundary; `Status` left at `needs-triage`.

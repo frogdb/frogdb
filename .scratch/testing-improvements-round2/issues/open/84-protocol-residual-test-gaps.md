@@ -314,3 +314,28 @@ Carried verbatim so nothing in `proposals/08-protocol.md` is lost. The proposal 
 ## Depends on
 
 - issue 10, `.scratch/testing-improvements-round2/issues/` (I10 — fuzz CI; F5's second half is exactly this: the nightly cron was deliberately removed and the PR `corpus-replay` gate is `-runs=0` restore-only, so it silently no-ops on a cold cache across all 34 targets. The decision the proposal frames — weekly campaign, per-PR time-boxed security subset, or accept manual dispatch **and remove the "continuous" framing from the docs** — must be settled there, not here)
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid** — 0/8 findings discharged.
+
+| finding | verdict | evidence on today's tree |
+|---|---|---|
+| F2 no partial-read / streaming-resumption property | still-valid | table is now `decode_edge_cases_table` at `server/src/connection/codec.rs:564` (body cites `:562`) and *does* include partial-frame cases at `:628-641` (`Expect::Pending`, buffer untouched) — but no test ever feeds `bytes[..i]` then `bytes[i..]` and compares against the whole-buffer decode; the 12 `decode_*` tests (`:564`–`:990`) are all whole-frame or pipeline cases, and there is no proptest |
+| F5 `FrogDbResp2` has no fuzz target | still-valid | `testing/fuzz/fuzz_targets/` holds 34 targets; `resp_parse.rs:5,10` and `resp_pipeline.rs:7,15,66` still call `redis_protocol::resp2::decode::decode_bytes` directly, and no target references `FrogDbResp2` |
+| F6 no inbound query-buffer limit | still-valid | no `client-query-buffer-limit` anywhere in the tree |
+| F7 no encode→decode round-trip property for `WireResponse` | still-valid | `crates/protocol/tests/` still contains only `proptest_protocol.rs` |
+| F8 `estimate_resp2_frame_size` never compared against the encoder | still-valid | still at `server/src/connection/util.rs:130` |
+| F9 `ParsedCommand::try_from` silently drops non-bulk elements | still-valid | `protocol/src/command.rs:64` still `.filter_map(|f| f.as_bytes().map(Bytes::copy_from_slice))`; `proptest_protocol.rs:127` `null_elements_filtered` and `:144` `only_null_args` still *pin* the drop |
+| F11 documented "cannot panic" contract is false | still-valid | `protocol/src/response.rs:218` "This method is total — and cannot panic —" and `:296` "This method CANNOT panic", with `.expect("error messages must be valid UTF-8")` at `:230` and `:304` |
+| F12 RESP2 `Double` downgrade renders 17 significant digits | still-valid | `protocol/src/response.rs:240` still `WireResponse::Double(d) => Resp2BytesFrame::BulkString(Bytes::from(format_float(d)))` |
+
+Relationship to the two issues owned by the structural agent (named, not duplicated here): **issue
+92** (relocate `FrogDbResp2` into the protocol crate) is the prerequisite that re-scores F2 and F5
+from effort 2 to 1 — if 92 lands first, both findings should be re-homed as protocol-crate work
+(inline proptest → `crates/protocol/tests/`, and a fuzz target that no longer needs a server
+dependency); nothing in 92 discharges them on its own. **Issue 95** (unbounded RESP nesting depth)
+owns the depth-limit defect that this issue's F4 was already promoted into issue 70 — 95 and 70
+overlap and should be reconciled by their owner, not here. The hardening campaign did not touch
+the protocol crate or `connection/codec.rs`; no FM row in `.scratch/hardening/specs/` covers RESP
+decode.

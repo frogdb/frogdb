@@ -351,3 +351,49 @@ respectively, because the proposal itself folded them there.
 
 - issue 01, `.scratch/testing-improvements-round2/issues/` (I1 — `shard_driver` harness extension; the proposal's cross-area note 1 names `core/tests/shard_driver/harness.rs` as the boundary-3 home that F5, F7, F8, F10, F11 and F18 all need — real `ShardWorker` + `register_all` with `execute`, `capture_keyspace`, `memory_check` and `expiry_index_check`, and **zero** tests in this area use it today)
 - issue 17, `.scratch/testing-improvements-round2/issues/` (I17 — `CORRUPT_KINDS` exhaustive over `TypeMarker`; F12(a) is exactly this, and the compile-time exhaustiveness link to `persistence/src/serialization/marker.rs:36` is what stops the next type being silently omitted)
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 1/12 findings discharged (F11), 1 partially (F5).
+
+| finding | verdict | evidence on today's tree |
+|---|---|---|
+| F5 `XAUTOCLAIM JUSTID` / `XCLAIM TIME|LASTID` zero-exec | **partially-fixed** | see note below |
+| F6 `ES.APPEND`'s `__frogdb:es:all` write outside the WAL record | still-valid | `commands/src/event_sourcing/append.rs:10,88,112-120` unchanged; no restart test (`server/tests/integration_event_sourcing.rs:344-374` exercises `ES.ALL` in-process only) |
+| F7 `XSETID ENTRIESADDED`/`MAXDELETEDID` restore surface | still-valid | only *negative* coverage exists, in the now-unfrozen `redis-regression/tests/stream_tcl.rs:1854` / `:1874` / `:1894` (missing-pair and negative-offset syntax errors); no positive `XINFO STREAM` reflection, no `max_deleted_id > new_last_id` rejection, no lag assertion |
+| F8 `XCLAIM FORCE` phantom PEL entry, no eviction | still-valid | filter still `group.pending_idle(id).map_or(force, …)` at `commands/src/stream/pending.rs:211-212`; the only `XCLAIM … FORCE` tests are keyspace-notification tests (`server/tests/integration_pubsub.rs:5707,:5735,:5927`) |
+| F9 duplicate timestamp landing in a compressed chunk | still-valid | `types/src/timeseries/value.rs:169` still checks `active_samples` only; the chunk lookup at `:191` is still commented "for BLOCK policy"; FIRST/MIN/MAX/SUM/LAST still fall through to the `:203` insert |
+| F10 `XDELEX`/`XACKDEL` implemented but excluded as "not implemented" | still-valid | exclusion bullets still in the headers: `stream_tcl.rs:3,85-92` and `stream_cgroups_tcl.rs:40-45` |
+| F11 consumer-group lag / `entries-read` accounting has no coverage | **fixed** | `redis-regression/tests/stream_cgroups_tcl.rs` tests 45–48 (`:2976` read-counter/lag sanity, `:3068` lag with XDELs incl. `lag = nil`, `:3185` tombstone-after-last-id nil case, `:3247` lag with XTRIM) assert hand-computed lag across add/read/XDEL/XTRIM — exactly the acceptance criterion |
+| F12 CMS/TopK/TDigest have no DUMP/RESTORE, RDB or WAL round-trip | still-valid | `CORRUPT_KINDS` is now the fn `corrupt_kinds()` at `server/tests/integration_dump_restore.rs:645`; it lists string/int-string/list/hash/set/zset plus feature-gated stream/hll/json — cms, topk, tdigest, vectorset still absent |
+| F16 JSONPath subset + `proptest_json` has no oracle | still-valid | `types/src/json.rs:888` still returns `InvalidPath("recursive descent not supported")`, `:931`/`:938` still reject slices/unions; `core/tests/proptest_json.rs` is still `prop_assert!(result.is_ok())`-shaped |
+| F18 `TS.RANGE` vs `TS.MRANGE` disagree on unimplemented options | still-valid | evidence corrected below |
+| F19 `VADD` accepts NaN/inf components | still-valid | `commands/src/vectorset/vadd.rs` `parse_f32` is still a bare `str::parse::<f32>()` |
+| F20 geo edge cases tested only through a full RESP client | still-valid | inline test counts unchanged (`types/src/geo.rs` 7, `commands/src/geo.rs` 6); no boundary-1 pole/antimeridian table |
+
+**F5 detail.** The `XCLAIM … TIME` half is discharged:
+`server/tests/integration_streams.rs:1102` `test_xclaim_time_option_sets_observable_idle` injects a
+past absolute ms and asserts `XPENDING` reports the matching idle (landed f03582ba, 2026-07-12 —
+so the "zero executions" evidence was a coverage artifact, not a real gap), and
+`stream_cgroups_tcl.rs:1925-1988` (test 32, now unfrozen) asserts `XCLAIM` *without* `JUSTID`
+increments the delivery count while `XCLAIM … JUSTID` does not. `XCLAIM … LASTID` is a documented
+deprecated skip-argument (`pending.rs:180-181`), not a semantic branch. What remains: no test
+asserts that **`XAUTOCLAIM … JUSTID` leaves the claimed entries' retry-count unchanged** — the
+strict `StreamGroupModel` (`crates/testing/src/models/stream_group.rs:392-417`, exercised by
+`crates/testing/src/workload.rs:920-938` and the unit test at `:562`) drives
+`XAUTOCLAIM … JUSTID` but documents `delivery_count` as deliberately inert/unobservable (`:9`,
+`:27`), so it pins the reply shape and the cursor, not the counter.
+
+**F18 evidence correction.** `TS.RANGE` no longer errors on `ALIGN` specifically: the option loop
+now ends in a generic catch-all, `ts_unknown_option` (`commands/src/timeseries.rs:31`, used at
+`:184,:280,:376,:616,:878`), so any unknown token — including `ALIGN`/`BUCKETTIMESTAMP`/`LATEST` —
+yields `Unknown option: <tok>`. The divergence stands because the `TS.MRANGE` side is unchanged:
+`core/src/shard/timeseries_execution.rs:173` and `:294` still swallow unknown options with
+`_ => {}`, and `:134` still `filter_map`s unparseable post-`FILTER` expressions away. The folded
+`parse_labels` bullet also stands — `commands/src/timeseries.rs:84` still loops
+`while i + 1 < args.len()`, silently dropping a trailing odd label.
+
+**F20 evidence correction.** `geohash_range_for_bbox` (`types/src/geo.rs:335`) is no longer
+callerless: it is exported at `types/src/lib.rs:42` and driven by the fuzz target
+`testing/fuzz/fuzz_targets/geo_ops.rs:161`. The "delete it" half of the finding (and issue 34's
+claim on it) is therefore moot; the boundary-1 geo table it asks for is not.

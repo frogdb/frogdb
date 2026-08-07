@@ -211,3 +211,31 @@ Two coordination dependencies that are not infra items: F9 is owned by area 05 /
 in `server/tests/`, with this finding as the spec), and F15 shares that placement question.
 F5's conservation half belongs to `core/src/store/hashmap.rs` and the core-engine agent, issue
 77, `.scratch/testing-improvements-round2/issues/`.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 0/11 findings fully discharged; F3 and F9 partially.
+
+| F | verdict | evidence (verified today) |
+|---|---|---|
+| F3 | partially-fixed | The *encoding* half largely landed on the persistence side: `every_marker_round_trips` (`persistence/src/serialization/registry.rs:562+`) round-trips at least one sample per `TypeMarker` over `samples_for` (`:415`), whose `match` is **exhaustive with no wildcard** and is documented as such — so a new marker cannot land without a sample. Unmet: the guard keys off `TypeMarker`, not `Value`, and there is still no proptest generating an arbitrary `Value`; `core/tests/proptest_serialization.rs` still constructs only String / integer-string / SortedSet / Hash / List / Set / Stream. |
+| F5 | still-valid | `Value::memory_size` (`types/src/types/mod.rs:205-222`) fans out to all 15 variants; the only inline tests remain the two listpack cases plus `test_stream_value_memory_size` (`:1167`). No monotonicity/lower-bound suite, no store-side conservation test. |
+| F6 | still-valid | `types/src/types/{hash,set}.rs` still have **no `mod tests` at all** and every length is still an unchecked `as u16`; the registry rows still use `validate: ConfigParam::no_validate`. |
+| F8 | still-valid | `types/src/args.rs:308-311` `parse_i64` is still bare `s.parse()`; `parse_f64` (`:328-337`) still special-cases inf and then falls through to `s.parse()`, which accepts `nan`. |
+| F9 | partially-fixed | The specific `"00"`-for-`"0"` corruption was fixed and is now guarded by example — `to_toml_value_string_never_coerces_to_bool_or_integer` (`server/src/runtime_config.rs:4434`), `to_toml_value_*` siblings, `test_rewrite_config_output_is_valid_toml_value` (`:4662`), `min_replicas_max_lag_round_trips_without_losing_a_sub_second_window` (`:4474`). The finding's ask — a registry-wide `set(render(get(ctx)))` law over all 118 rows — is still absent: `test_param_registry_consistency` (`:4135`) was narrowed to guard only `noop ⟺ NoopParam`, everything else having become compile-time-enforced. |
+| F10 | still-valid | `hash.rs`, `list.rs`, `set.rs`, `sorted_set.rs`, `string_value.rs` still contain zero `mod tests`. |
+| F12 | still-valid | `acl/src/permissions.rs:437` `reset_keys` / `:443` `reset_channels` still have no direct test; the only callers are the parser arms (`acl/src/parser.rs:508,518`). |
+| F14 | still-valid | 47 `no_validate` rows in `server/src/runtime_config.rs`; no `VALIDATION_EXEMPT` list exists anywhere. |
+| F15 | still-valid | `(p.default)()` is still referenced at exactly one site repo-wide — `config/src/param.rs:260`, inside the module's own test. |
+| F16 | still-valid | `types/src/glob.rs:18` `MAX_STAR_COUNT = 100` and `:65` still `return false` on overflow, unpinned. |
+| F17 | still-valid | `redis-regression/tests/acl_tcl.rs:1-20` still excludes "ACL LOAD/SAVE tests (file-based ACL persistence)" and still asserts FrogDB does not implement it, while `acl/src/manager.rs` ships `save`/`load`. |
+
+None of these three crates is a locked campaign area, so no FM spec discharges anything here. The
+two landed rounds that touched the area moved less than expected: the config-mutability round
+(26 params live-mutable, golden at 118 rows) fixed the `"00"` bug and added per-param round-trip
+examples but no registry-wide law (F9), and the `frogdb-types` clock/epoch work (d92a7c20,
+8b62120f) is orthogonal to F5/F6/F8/F16. Overlaps rather than duplicates: F3's proptest body is
+89/F1+F19's, and 89/F1 records the same partial state from the persistence side; F9 and F15 are
+still owned by issue 81 per INFRASTRUCTURE.md I12. No live production bug newly confirmed — F6's
+`as u16` truncation remains reachable only by an operator raising a listpack threshold above
+65535, exactly as filed.

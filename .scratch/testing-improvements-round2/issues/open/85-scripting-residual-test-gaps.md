@@ -377,3 +377,27 @@ which is promoted to issue 19, `.scratch/testing-improvements-round2/issues/`.
 ## Depends on
 
 - issue 05, `.scratch/testing-improvements-round2/issues/` (I5 — the "shard busy running a script" fixture; F8 and F15 both need it and nothing in the suite today starts a long-running EVAL and then talks to the same shard on a second connection. The fixture must guarantee teardown **even if the script cannot be killed**, which is precisely F8's undeliverable-kill path. The proposal's third requester, F4, is promoted to issue 60, `.scratch/testing-improvements-round2/issues/`)
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 0/10 findings fully discharged; F8 and F13 partially.
+
+| F | verdict | evidence |
+|---|---|---|
+| F6 | still-valid | `gate.rs:524` still routes a non-local key to `run_remote_inner` (`:383`); the target shard still calls `run_script_write_effects(vec![record], …)` mid-script (`core/src/shard/scripting.rs:240`), so one record ⇒ `EffectScope::Command`. The doc comment claiming replicas never observe intermediate script state is unchanged (`core/src/shard/post_execution.rs:629-634`, was cited `:630-634`). No cross-shard-script-with-replica test. |
+| F7 | still-valid | The code moved but not the defect: `handle_function_restore` is now a one-liner delegating to `FunctionStore::restore` (`server/src/function_store.rs:185-245`), which still `registry.flush()`es on the FLUSH policy and then `return`s an error from inside the per-library loop, leaving a partial registry and a stale `functions.fdb` (`self.persist()` at `:244` is only reached on success). `server/tests/functions.rs:356` still covers only the happy path. |
+| F8 | partially-fixed | The hang half is fixed and tested: SCRIPT KILL now walks the shared `ScatterGather::find_first` seam bounded by `scatter_gather_timeout` (`connection/scripting/script.rs:97-120`) and FUNCTION KILL matches, forced by `function_kill_returns_when_a_shard_stalls` (`script.rs:324`). The finding's own criteria stand: the kill is still structurally undeliverable while the shard task is inside `run_script` (`core/src/shard/scripting.rs`, `handle_script_kill` at `:250`), and the timeout error is still an ordinary `mlua::Error::RuntimeError` a user `pcall` can swallow. |
+| F9 | still-valid | `lua_to_response` (`core/src/scripting/executor.rs:367`, `:394-399`) still returns `Response::Error(Bytes::from(e))` / `Response::Simple(Bytes::from(o))` straight from the Lua table with no CRLF filtering. |
+| F10 | still-valid | Same function: `Value::Number(n)` is still `Response::Double(n)` under RESP3 and `Response::Integer(n as i64)` under RESP2 (`:385-391`); no `{map=}`/`{double=}`/`{set=}`/`{big_number=}` handling, no `redis.setresp`. |
+| F11 | still-valid | `core/src/scripting/bindings.rs:234-237` — `Value::Nil => continue` with the original comment, still untested. |
+| F13 | partially-fixed | The *declared*-key half is now enforced and rowed: FM-CLUSTER-030 covers `FCALL`/`FCALL_RO` alongside EVAL (`ClusterSlotValidation` precedes `ConnectionCommand`; forced by `test_bare_script_family_on_non_owner_returns_moved`, `test_keyless_script_is_never_redirected`, `load_bearing_ordering_invariants`). The finding's own case — undeclared keys touched via `redis.call` inside the function — remains: `execute_function` still passes `false, CrossSlotTracker::new(None)` into `execute_in_scope` (`executor.rs:525-529`), and FM-CLUSTER-030's closing note explicitly parks that residue on rework issue 03. |
+| F14 | still-valid | `execute_function` still runs the whole library body (`vm.execute(lcc)`) inside `execute_in_scope` with `redis.call` live, then locks the runtime env, then invokes (`executor.rs:525-537`). Untested. |
+| F15 | still-valid | `FunctionRegistry::set_running_function` (`scripting/src/registry.rs:174`) still has no caller anywhere; the only reader moved `server/src/connection/scripting/function.rs:317` → `:225`. |
+| F16 | still-valid | `redis-regression/tests/scripting_tcl.rs` still tags all seven SCRIPT KILL exclusions `redis-specific — Redis-internal feature` and still excludes cmsgpack as "FrogDB may not ship cmsgpack". |
+
+Scripting is not a locked campaign area, so there is no scripting FM spec to discharge against;
+the only campaign work that reaches it is the cluster-side bare-script slot validation
+(FM-CLUSTER-030) and the KILL-timeout retrofit. Stale refs corrected beyond the table:
+`server/src/connection/scripting/function.rs::handle_function_restore` →
+`server/src/function_store.rs:185`. No live production bug newly confirmed — F7's non-atomic
+restore and F8's undeliverable kill are real defects, but both were filed as such.

@@ -329,3 +329,35 @@ second harness.
 ## Depends on
 
 - issue 12, `.scratch/testing-improvements-round2/issues/` (I12 — config observability seams: item 2, the `ConfigPersister` IO seam, is what F15 asserts against and it also unlocks that file's untested error arms; item 4, a `TestServer` restart-in-place helper, is what F9's restart needs)
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed** — 0/13 findings fully discharged; F7's *production* defect is fixed
+but its test half and its second defect remain.
+
+| finding | verdict | evidence |
+|---|---|---|
+| F3 `Config::load` precedence / env mangling / refusal-to-start | still-valid | |
+| F4 `SO_REUSEPORT` release-only | still-valid | code moved, see below |
+| F5 CONFIG REWRITE fidelity pinned for a hand-written subset | still-valid | `ROUNDTRIP_SETS` `runtime_config.rs:5259` → `:5672`, now 13 entries (added `replica-freshness-timeout-ms`); `rewrite_and_reparse` `:5229` → `:5642` |
+| F7 shutdown aborts acceptors last, never drains in-flight | **partially-fixed** | acceptors now abort **first** — `crates/server/src/server/subsystems.rs:698-712` (`acceptor` `:705`, `admin_acceptor` `:707`, `tls_acceptor` `:711`, was `:767`); no test pins the ordering, and the in-flight-drain half is unimplemented |
+| F8 admin-port authn/authz differences untested | still-valid | `integration_admin_port.rs` grew 9 → 17 tests (rework-05 per-subcommand splits at `:124,:158,:222,:249,:277`) but still never sets `requirepass` or an ACL user, and the documented admin rate-limit bypass (`connection/guards.rs:123`) has no test |
+| F9 CONFIG REWRITE never followed by a real restart | still-valid | |
+| F13 `default_toml()` never boot-validated | still-valid | |
+| F14 CLI surface untested | still-valid | |
+| F11 INFO Server/Stats/Memory fabricated constants | still-valid | all constants unchanged, line drift only: `info/sections.rs:62` `redis_mode standalone`, `:79` `run_id frogdb000…`, `:80` `tcp_port 6379`, `:82` `uptime_in_seconds 0`, `:87` `executable`, `:88` `config_file ""`, `:89` `io_threads_active 0`, `:163` `used_memory_rss`, `:306` `total_connections_received 1` |
+| F12 no `cluster_enabled` / INFO `Cluster` section | still-valid | `rg cluster_enabled` over `info/` still returns nothing; `all_sections()` gained only a version-gated `cluster_version` field (`sections.rs:92-104`) |
+| F15 `atomic_write` does not fsync the parent dir | still-valid | |
+| F16 `POST /admin/shutdown` permanently inert | still-valid | `shutdown_tx: None, // TODO: wire up shutdown channel from Server` at `subsystems.rs:251` |
+| F17 debug UI config panel shows a frozen snapshot | still-valid | fixed `config_entries` vector at `subsystems.rs:173` |
+
+Location correction: F4's cited `net.rs:50-81` moved to the Phase-0 crate —
+`frogdb-server/crates/net/src/lib.rs:60-77`, where `set_reuse_address(true)` is unconditional and
+`set_reuse_port(true)` is still `#[cfg(not(debug_assertions))]`, so the finding is unchanged.
+The large config-mutability round (26 params made live-mutable, golden count → 118) and rework 05
+(per-subcommand admin gating) both landed but discharge no finding here: F5 asks for a *generic*
+round-trip guard over the whole registry rather than a longer hand-written list, and F8 asks for
+the authn/authz axis, which rework 05 did not touch. Note F7's residual: `shutdown_subsystems`
+aborts the acceptors first with an explicit comment about not admitting a post-drain `PSYNC`, so
+the acked-write hazard in the body is closed in code while the assertion the finding asks for
+still does not exist.
