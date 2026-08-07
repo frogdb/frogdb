@@ -16,6 +16,9 @@
 //!   and — on the leader — reconciles that view into the replicated topology.
 //! - [`migration_events`] wakes the clients blocked on a slot that just moved
 //!   away, translating each completion event into a per-shard notification.
+//! - [`handoff_barrier`] is the source-side half of the two-phase slot handoff:
+//!   it arms the slot-scoped write barrier, drains the owning shard, and
+//!   confirms the drain back through Raft.
 //!
 //! Nothing here reaches back into `frogdb-server`: the network primitives come
 //! from [`frogdb_net`] (so the turmoil swap reaches this crate — see the
@@ -25,6 +28,7 @@
 pub mod bus;
 pub mod failure_detector;
 pub mod flags;
+pub mod handoff_barrier;
 pub mod migration_events;
 pub mod pubsub;
 
@@ -33,6 +37,9 @@ pub use failure_detector::{
     DetectorRaft, FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };
 pub use flags::{ClusterRuntimeFlags, SelfFenceGate};
+pub use handoff_barrier::{
+    HandoffAction, handoff_now_ms, plan_handoff_action, run_slot_handoff_barrier,
+};
 pub use migration_events::{
     MigrationNotice, plan_migration_notice, run_slot_migration_event_dispatcher,
 };

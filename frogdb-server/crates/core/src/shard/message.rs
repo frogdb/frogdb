@@ -788,6 +788,23 @@ pub enum ClusterMsg {
         /// Response channel for the result.
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+
+    /// Drain barrier for a two-phase slot handoff: reply once this shard's
+    /// event loop has reached this message.
+    ///
+    /// The round trip *is* the drain. The shard runs one message at a time and
+    /// scripts and transactions execute inline in that loop, so by the time this
+    /// variant is handled every command enqueued before it has finished. The
+    /// handler therefore does no work beyond acknowledging — it acquires no
+    /// keys, takes no continuation lock, and awaits nothing.
+    DrainSlot {
+        /// The slot being handed off. Carried for tracing and for the ack's
+        /// correlation; the drain itself is shard-wide, not slot-scoped,
+        /// because a shard's in-flight work is not partitioned by slot.
+        slot: u16,
+        /// Fires when the shard has drained.
+        ack: oneshot::Sender<()>,
+    },
 }
 
 /// Always-available DEBUG introspection messages (LOCKTABLE / WAITQUEUE /
@@ -1135,6 +1152,7 @@ impl ClusterMsg {
         match self {
             ClusterMsg::SlotMigrated { .. } => "SlotMigrated",
             ClusterMsg::RaftCommand { .. } => "RaftCommand",
+            ClusterMsg::DrainSlot { .. } => "DrainSlot",
         }
     }
 }
