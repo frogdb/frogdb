@@ -40,17 +40,24 @@ Existing test surfaces (know these before proposing a boundary):
 
 Build recipes are in `Justfile` (do not run them).
 
-## Coverage data (fresh, 2026-07-28 — use it, don't regenerate it)
+## Coverage data (regenerated 2026-08-07 — use it, don't regenerate it)
 
-- Summary report: `.scratch/testing-improvements/audit/coverage-depth-2026-07-28.md`
+> The original 2026-07-28 figures below were superseded by the issue 27+28 fixes: the class
+> counts were inflated ~7x by counting monomorphizations, and the lcov was stale/near-empty.
+> The numbers here are re-measured from the fixed pipeline.
+
+- Summary report: `.scratch/testing-improvements/audit/coverage-depth-2026-08-07.md`
+  (the 2026-07-28 file is a superseded pointer stub).
 - Methodology: `docs/agents/coverage-depth.md` — read the "Reading the classes" table.
-- Machine-readable: `target/llvm-cov/depth/depth.json` (34 MB), `tests.json` (38 MB),
-  `target/llvm-cov/lcov.info` (9 MB). **Never `Read` these whole** — query with
+- Machine-readable: `target/llvm-cov/depth/depth.json` (21 MB), `tests.json` (27 MB),
+  `target/llvm-cov/lcov.info` (11 MB). **Never `Read` these whole** — query with
   `python3 -c` / `jq --stream` and filter to your crate first.
-- Line coverage is already high workspace-wide (85.0%), so *percentage is not the signal*.
-  The signal is the depth classes: `untested` (14849 fns), `single-test` (6475),
-  `monoculture` (4325), `hot-but-shallow` (13). A `single-test`/`monoculture` function on a
-  durability or consistency path is a bigger finding than an uncovered getter.
+- Line coverage is already high workspace-wide (86.6% lcov; 86.0% de-duplicated depth view),
+  so *percentage is not the signal*. The signal is the depth classes, counted over **source
+  functions** (deduped; raw monomorphization records in parens): `untested` 2414 (15791),
+  `single-test` 5959 (7949), `monoculture` 1679 (5535), `hot-but-shallow` 2 (13). A
+  `single-test`/`monoculture` function on a durability or consistency path is a bigger
+  finding than an uncovered getter.
 - Neither tier proves a test **asserts** anything. Explicitly look for assertion-free or
   assertion-weak tests (executes the path, checks nothing / checks only "no error"), and
   for tests that assert on internal state where they should assert on observable behaviour.

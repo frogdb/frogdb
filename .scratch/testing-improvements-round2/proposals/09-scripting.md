@@ -10,7 +10,9 @@ Paths audited:
 | `frogdb-server/crates/core/src/scripting/` | 4079 | `executor.rs` 1216, `gate.rs` 1078, `lua_vm.rs` 822, `bindings.rs` 420, `cache.rs` 291, `error.rs` 137, `config.rs` 93, `mod.rs` 22 |
 | adjacent seams read (not owned) | — | `core/src/shard/scripting.rs` 246, `core/src/shard/functions.rs` 118, `core/src/shard/dispatch_scripting.rs`, `core/src/shard/post_execution.rs::run_script_write_effects`, `server/src/connection/scripting/{eval,script,function}.rs`, `server/src/recovery/functions.rs` |
 
-Coverage (`.scratch/testing-improvements/audit/coverage-depth-2026-07-28.md`):
+Coverage (re-measured 2026-08-07, `.scratch/testing-improvements/audit/coverage-depth-2026-08-07.md`;
+the figures below are from the superseded 2026-07-28 run and are within ~1pp of current — `scripting`
+is 1705/2038 lines / 83.7% in the fixed lcov):
 
 - crate `scripting`: **1634/1970 lines (82.9%)**, 2739/3387 regions (80.9%) — lowest line
   coverage of any in-scope core crate; region coverage is 4pp below line coverage, i.e. the
