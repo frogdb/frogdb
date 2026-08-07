@@ -58,3 +58,25 @@ tests down to level 2, which is the point of adding them.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+All four seams are still absent on today's tree. (1) `ConfigManager`
+(`frogdb-server/crates/server/src/runtime_config.rs:742`) has no `is_published`/bitmask accessor
+— its public surface is per-parameter getters and `all_param_names`/`mutable_param_names`
+(`:3429-3446`); the mutability round added live params but no publication oracle. (2)
+`ConfigPersister` (`frogdb-server/crates/server/src/config_persister.rs:51`) is still a unit
+struct of associated fns whose `atomic_write(path, contents)` (`:98`) does real filesystem IO with
+no injectable seam, so its error arms remain untested. (3) `create_router`
+(`frogdb-server/crates/server/src/observability_server.rs:221-251`) still builds the
+public/protected split inline as two `Router::new()` chains with no exported const route list —
+adding a route outside the guarded group breaks nothing, and no test enumerates the routes
+(`grep '/admin/'` in `server/tests/` hits only `cluster_misc.rs`, which exercises
+`/admin/upgrade-status` alone). (4) `TestServer` still has no restart-in-place helper —
+`frogdb-server/crates/test-harness/src/server.rs:1110` gives `shutdown_mut()` (documented as
+"before any restart on the same data directory") but callers must re-start by hand; the only
+`restart` helpers are `ClusterHarness::restart`/`restart_node`
+(`test-harness/src/cluster_harness.rs:422,1106`). No `server/tests/` config integration file
+exists, so the registry round-trip and `noop:false ⇒ observable` tests are also unwritten.

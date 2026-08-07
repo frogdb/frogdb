@@ -54,3 +54,25 @@ network and no leader election.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+The propose seam exists and in fact predates this issue — `1dfd57c0` "feat(cluster): add
+ClusterWriter propose seam" (2026-07-22) and `87932d18` routed metadata writes through it. Today
+`frogdb-server/crates/cluster/src/writer.rs:157` is `ClusterWriter<R = Arc<ClusterRaft>, F =
+Arc<ClusterNetworkFactory>>` generic over the `RaftProposer` (`:105`) and `LeaderForwarder`
+(`:129`) traits, with `FakeProposer`/`FakeForwarder` (`:327-356`) driving
+`Err(ProposeError::Redirect(..))` in three tests (`:425,446,485`) with no cluster harness. The
+server-side handling of that error is the pure `redirect_to_response`
+(`frogdb-server/crates/server/src/connection/cluster.rs:21-26`), unit-tested at
+`connection/cluster.rs:186` (`redirect_to_response_renders_wire_strings`), and the seam has three
+non-test callers (`slot_migration/mod.rs:146`, `server/cluster_init.rs:537,584`) — so criteria 1-2
+are effectively met. **Criteria 3-4 are not.** `parse_rpc_message`
+(`frogdb-server/crates/cluster/src/network.rs:806-820`) still returns
+`ClusterError::NetworkError(String)` with no typed taxonomy for `MAX_FRAME_SIZE` or decode
+failures, and the string-matching moved rather than died: `server/src/cluster_bus.rs:167-181` →
+`frogdb-server/crates/cluster-runtime/src/bus.rs:272-276`, where `is_clean_disconnect` matches
+`error_msg.contains("connection closed" | "connection reset" | "broken pipe")` to decide between
+`Ok(())` and `InvalidData` at `bus.rs:287-299`. Remaining work is the typed-error half only.

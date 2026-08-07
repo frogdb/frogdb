@@ -51,3 +51,21 @@ assertion indirect.
 ## Depends on
 
 Issue 01, `.scratch/testing-improvements-round2/issues/` — naturally lands with it.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+Criterion 3 is discharged: `FakeFailure::Predicate` has a caller since the Phase-2 persistence
+lock (`1d0df774`, 2026-08-02) — `predicate_failure_selects_by_key` at
+`frogdb-server/crates/persistence/src/wal/fake.rs:358-376` fails the WAL for the key `poison` and
+asserts only the surrounding writes land. It exercises `FakeWalSink` directly, though, not the
+shard-driver path, so the *fixture* half is untouched. Path corrections: the harness moved from
+`core/tests/shard_driver/` into its own crate, so `scenario_s6.rs:32-59` →
+`frogdb-server/crates/shard-harness/tests/scenario_s6.rs:31-58` (`build_rollback_worker`, still
+private to s6, still calling `set_wal_failure_policy_flag` at its own call site, `:57`), and
+`core/tests/shard_driver/harness.rs` → `frogdb-server/crates/shard-harness/src/harness.rs`, which
+has no WAL-failure constructor at all (`ShardDriver`, `:48-360`). The predicted copy-paste has
+already happened once: `shard-harness/tests/shard_driver.rs:99-133`
+(`fake_wal_failure_is_injected_at_index`) hand-rolls a second `WalMode::Fake` +
+`FakeFailure::AtWriteIndex(0)` builder chain. Criteria 1, 2 and 4 remain.

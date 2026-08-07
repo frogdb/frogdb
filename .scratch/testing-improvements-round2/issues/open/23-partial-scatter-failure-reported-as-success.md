@@ -103,3 +103,31 @@ store state to prove which samples landed.
 
 Issue 30, `.scratch/testing-improvements-round2/issues/` — the scatter partial-failure contract.
 Nothing else; no infrastructure item is required.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Nothing in the hardening campaign touched the scatter path (scatter was not one of the four locked
+areas). All three findings reproduce byte-for-byte, only the crate-internal path changed:
+`connection/scatter/` → `crates/server/src/scatter/`. Per-claim:
+
+- **Scatter merges discard per-shard errors — still valid.** `scatter/strategies.rs:153-165`
+  `merge_sum_integers` still `filter_map`s away every non-`Integer` reply and sums; MGET's merge at
+  `:55-67` still `.cloned().unwrap_or(Response::null())`; `MSetStrategy::merge` at `:132-139` still
+  ignores `_shard_results` entirely and returns `Response::ok()`. `DelStrategy::merge` (:189-195)
+  and `ExistsStrategy::merge` (:223-229) both delegate to `merge_sum_integers`.
+  `scatter/executor.rs:138` still calls `strategy.merge(...)` with per-key errors already folded
+  into `shard_results` (:125-129); only whole-scatter errors are mapped, at :122.
+- **`scatter_error_to_response` untested — still valid.** `scatter/executor.rs:141-…`; all six arms
+  present and unchanged, including the retryability-critical
+  `BUSY shard busy with continuation lock; retry` vs `ERR VLL lock acquisition failed` split at
+  :153-159. There are no `Response::error`-carrying fixtures anywhere in `strategies.rs`.
+- **`TS.MADD` partial failure — still valid.** `crates/commands/src/timeseries.rs:456` (old ref
+  `:455-459`, a one-line shift); the per-element error arms and the auto-create branch are
+  unchanged and still exercised only by all-valid, pre-created-key tests.
+
+Relationship to **issue 61**: 61 (`scatter-merges-discard-per-shard-errors`) was closed on
+2026-08-06 as **superseded by this issue** and moved to `issues/done/`. This issue is the strict
+superset (same 03/F1 evidence + 03/F8 + 07/F17) and **must stay open**. Still blocked on the
+contract decision in issue 30, which is why `Status: needs-triage` is retained.

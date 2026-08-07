@@ -58,3 +58,25 @@ partitioned from.
 ## Depends on
 
 Nothing.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+No reusable primitive landed. Two corrections to the body. First, `crates/testing/partition` is
+not a network-partition module at all — `frogdb-server/crates/testing/src/partition.rs` is Lua
+key-partitioning (`default_keys_of`, `partition_by_key`); the network-fault work lives inline in
+`frogdb-server/crates/server/tests/simulation.rs`. Second, the port-leak caveat is already
+answered in-tree, not on this issue: `simulation.rs:5341-5352` documents that turmoil 0.7.1 leaks
+an ephemeral port per cancelled dial, so the scenarios use `sim.hold()`/`sim.release()` (which
+*queues* traffic and lets the dials complete on heal) instead of `sim.partition()`, with a
+bounded ~3 s window. But both hold-based scenarios predate this issue
+(`run_cluster_leader_partition_migration`, and `run_cluster_asymmetric_partition_false_failover`
+at `simulation.rs:5456` from `98495716`, 2026-07-23), so none of criteria 2-5 is discharged: the
+window is hardcoded rather than N health-check intervals, there is no quorum-loss scenario, and
+`SelfFenceGate` is still asserted only at level 2. What the cluster lock *did* add is level-2
+coverage of the behaviours this primitive was wanted to unlock —
+`frogdb-server/crates/cluster-runtime/src/flags.rs:112` `SelfFenceGate` is forced by
+FM-CLUSTER-059 (`self_fence_gate_follows_live_flag` and three siblings), detector hysteresis by
+FM-CLUSTER-052 (`test_health_table_latch_survives_flapping_recovery`, …) and quorum arithmetic by
+FM-CLUSTER-055 — which lowers this issue's value without discharging it.

@@ -108,3 +108,61 @@ Nothing for ten of the eleven. **04/F3's full version is blocked** on the unrevi
 `.scratch/replication-cluster-rework/` — per `wait-cluster-mode.md` §1–2.2 a cluster primary refuses
 the PSYNC its replica is told to open, so no test can assert a cluster replica holds primary data
 today; its checkbox is scoped to what is observable now plus a tripwire.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+**1 of 11 instances fixed, 2 partially, 8 reproduce verbatim.** `integration_cluster.rs` was split
+into per-concern binaries (`e163ff9a`), so all cluster refs move to
+`server/tests/cluster_failover.rs` / `cluster_migration.rs`.
+
+- **04/F3 — FIXED.** `test_replica_receives_writes` (`:2589`) → renamed
+  `test_cluster_replica_receives_writes_asserted` (`cluster_failover.rs:1682`) and now asserts
+  `connected_slaves:1`, the replicated value under `READONLY`, and `role:slave`.
+  `test_promoted_replica_has_all_data` (`:2706` → `cluster_failover.rs:2233`) asserts all 10 keys
+  with a `WAIT 1 10000` barrier and an explicit "`MOVED` here is a failure" comment. The blocker in
+  "Depends on" is lifted — `c6625ae9` wired cluster replication end to end, so the full version was
+  writable, not just the tripwire.
+- **04/F2 — PARTIAL.** `test_auto_failover_selects_most_caught_up_replica`
+  (`cluster_failover.rs:3591`) no longer asserts `cluster_state == "ok"`; it polls to
+  `cluster_state == "fail"` + `cluster_slots_fail > 0` (`:3643-3650`), and `trigger_auto_failover`
+  now has real coverage — three unit tests at
+  `cluster-runtime/src/failure_detector.rs:1719,1750,1772` (moved from `server/src/failure_detector.rs`).
+  Not done: the test is still misnamed for what it asserts (it never enables `auto_failover` and
+  never compares replica offsets).
+- **13/F18 — PARTIAL.** The two `eprintln!` residues are gone (no `eprintln!` remains anywhere under
+  `crates/persistence/src` or `crates/core/src/persistence`). The WAL-mode pin (`rocks/tests.rs:1243`
+  → `persistence/src/rocks/tests.rs:1312-1318`) is still the literal tautology
+  `matches!(DBRecoveryMode::PointInTime, DBRecoveryMode::PointInTime)` — deleting the production pin
+  at `rocks/mod.rs:167` → `:188` still passes it — though it is now documented as a deliberate anchor
+  with behavioural proof in the adjacent corruption tests. The LASTSAVE bound is still `±1s`
+  (`server/src/connection/persistence_conn_command.rs:526-529`).
+- **12/F4 — still valid.** `simulation.rs:1560-1595` → `:1561-1594`, byte-for-byte the same
+  `has_value && has_nil` shape and bare `assert!(!saw_partial)`. Two more instances of the same
+  pattern now exist: `:1947-1971` and `:1305-1309`.
+- **13/F11 — still valid.** `assert!(result.is_ok() || result.is_err())` moved `:719` →
+  `core/src/persistence/crash_recovery_tests.rs:729`; `test_incomplete_snapshot_skipped` `:724` →
+  `:735`, still reads back the `metadata.json` it wrote and asserts `serde`. Both now carry
+  `// FM-PERSISTENCE-017` tags, so the failure-mode spec credits them as forcing tests.
+- **11/F14 — still valid, all four.** `test_remove_node_during_active_migration`
+  (`cluster_migration.rs:2563`) still `return`s on setup error (`:2617-2624`);
+  `test_raft_snapshot_during_migration` (`:1053`) still `eprintln!`s
+  `migration_state_found`/`slot_ownership_clear` and its only assert is the disjunction at `:1240`;
+  `cluster/src/storage.rs:656 test_storage_committed` still never reads `committed` back;
+  `cluster/src/network.rs:891 test_all_rpc_variants_roundtrip` still asserts only the discriminant.
+  The last two now carry `// FM-CLUSTER-017` / `// FM-CLUSTER-051` tags.
+- **07/F15 — still valid.** `hyperloglog_regression.rs:12,17,35` still `>= 3`/`>= 5`/`>= 9`;
+  `cms_topk_regression.rs:100,123,168,212,579` still lower-bound-only.
+- **08/F10 — still valid, all four.** `protocol/src/response.rs:1039` → `:1031` (still `1e-10`).
+  Correction to the body: `resp3.rs` and `property_tests.rs` are **not** in the protocol crate —
+  they are `frogdb-server/crates/server/tests/resp3.rs:385,412` and
+  `server/tests/property_tests.rs:275-281` (was cited as `:210`). The exact-byte model is now
+  `response.rs:1470-1521`.
+- **03/F2 — still valid.** `integration_copy.rs` still uses `"src"`/`"dst"` throughout;
+  `connection/routing.rs:197 execute_cross_shard_copy` unchanged.
+- **15/F13 — still valid.** `redis-regression/tests/auth_tcl.rs:135
+  tcl_protected_mode_works_as_expected` still has zero assertions; `:104` still re-sets
+  `requirepass` to the same value.
+- **12 — still valid.** `core/tests/concurrency.rs:641 test_mset_cross_shard_partial_visibility`
+  unchanged, still documenting partial cross-shard visibility as acceptable against `TestCluster`.

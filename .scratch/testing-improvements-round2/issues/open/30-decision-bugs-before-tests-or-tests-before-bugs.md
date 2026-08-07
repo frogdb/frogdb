@@ -1,6 +1,6 @@
 # Decision D2 — bugs before tests, or tests before bugs (and the ten semantics calls that gate specific tests)
 
-Status: ready-for-human
+Status: done
 Type: decision
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §7 D2
@@ -79,3 +79,21 @@ Nothing blocks this decision. It gates issues 19, 20, 21, 23 and 24,
 scheduling of the defect issues in the 35–76 range, same directory. Issue 32, same directory
 (infrastructure-first or findings-first), is the orthogonal scheduling decision and should be taken
 together with this one.
+
+## Re-triage 2026-08-06
+
+**Verdict: superseded**
+
+The foundation-hardening campaign (2026-07-31 → 2026-08-05, all four areas LOCKED) settled the
+ordering as option (c) and wrote it down as a standing rule: *"Bug fixes follow spec-first order:
+failure-mode row → failing test → fix"* (`docs/agents/hardening-campaign.md:90`), enforced two-way
+by `just lint-failure-modes`. The retrospective (`e3e51a52`,
+`.scratch/hardening/retrospective-2026-08-05.md` §"What worked" #3) records the same practice as
+one of the five things that worked. No throwaway pins were written; each of the ~30 defects the
+campaign closed landed as row → red test → fix in one change. Of the ten decision-gated semantics
+calls, three are now answered — #1 failed spill (keep the key, `0d727d05`, issue 41 → `done/`),
+#6 script-timeout write policy (issue 60 → `done/`, pinned by
+`shard-harness/tests/script_timeout_effects.rs`), #10 fabricated INFO constants (retrospective
+standing rule: *"no plausible-looking constants in INFO/logs/stats"*). The remaining seven stay
+with their own issues (19, 21, 23, 59 and the un-filed 02/F10, 05/F4, 10/F7) rather than with this
+decision.

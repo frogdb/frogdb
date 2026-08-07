@@ -67,3 +67,21 @@ Nothing blocks this decision. It sequences issues 27 and 28,
 `.scratch/testing-improvements-round2/issues/`, against the rest of the round-2 backlog. Related:
 issue 32, same directory, is the equivalent sequencing decision for the shared test infrastructure
 (issues 01–18, same directory).
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+Nothing was decided and nothing was fixed. Issues 27 and 28 are both still in `issues/open/`; `git
+log --since=2026-07-27 -- scripts/coverage-depth.py .github/workflows/coverage-nightly.yml` shows
+no fix commit, and `just coverage-lcov` (`Justfile:85`) is unchanged.
+`.github/workflows/coverage-nightly.yml` still runs `just coverage-lcov` (`:79`) and still writes a
+"Coverage summary" against the **84.0%** baseline (`:80-101`) — and its `schedule:` cron was
+*re-armed* at campaign exit (`45591265`, after `dd2f6704` had made every workflow manual-only), so
+the fabricated number is being published again nightly. Events narrowed the question rather than
+answering it: the hardening campaign ran to completion on mutation scores, never on line coverage,
+so option (a) ("fix the tooling before starting the testing work") is now moot — the live choice is
+(b)/(c)/(d). One new datum for whoever takes the call: issue 94's headline evidence
+(`ShardSearchIndex::open_in_ram` "untested at 0/41 regions") is a **false negative produced by this
+very defect** — the function had 15 in-crate callers at audit-filing commit `a0e85aac` and has ~20
+today (`search/src/index.rs:1447+`, `spellcheck.rs:161+`). Stays `ready-for-human`.

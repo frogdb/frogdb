@@ -113,3 +113,42 @@ blocking-command entry wrapper is exactly what 06/F7 needs). Issue 05,
 `.scratch/testing-improvements-round2/issues/` ("shard busy running a script" fixture) for the
 script-timeout arm. Issue 30, `.scratch/testing-improvements-round2/issues/` for the script-timeout
 write policy.
+
+## Re-triage 2026-08-06
+
+**Verdict: partially-fixed**
+
+One of the five findings is closed; the seam itself and the three command-level "mutate, then
+error" instances are all live. No table-driven rollback invariant exists anywhere. Per-claim:
+
+- **The seam (`execution.rs`) — still valid.** `crates/core/src/shard/execution.rs:241-244` still
+  turns a handler `Err` into a response and falls through; `:304-317` still builds the
+  `WriteCommandMeta` for any `is_write` command whose effects were not `write_was_noop`. The `Err`
+  outcome is never consulted. Refs old → new: `:240-243` → `:241-244`; the meta construction the
+  body describes is now at `:299-317`; `CommandEffects::into_write_meta` is at `:57-77`.
+- **JSON multi-path mutation — still valid.** `crates/types/src/json.rs:356-390` — `num_incr_by`
+  still writes `*value = new_val` per path inside the loop and still has
+  `_ => return Err(JsonError::NotANumber)` at `:383`, skipping `update_cached_size()` at `:388`.
+  `num_mult_by` at `:393` is the same shape. `crates/commands/src/json/basic.rs:109-112` still
+  takes `let snapshot = json.clone();` and then `json.set(...).map_err(...)?` without restoring it.
+- **`*STORE` destroys the destination before validating — still valid.**
+  `crates/commands/src/sorted_set/store_remove.rs:84-85` still does `ctx.store.delete(&dest)` in
+  the missing-source `else` branch, ahead of the bound parsing at `:91-119`. Same ordering in
+  `sorted_set/set_ops.rs` (ZINTERSTORE / ZDIFFSTORE).
+- **`BLMOVE` / `BRPOPLPUSH` — still valid, and this is a live data-loss bug.**
+  `crates/commands/src/blocking.rs:243-265`: the element is popped at `:243-252`, the source is
+  deleted when empty at `:256` (`delete_if_empty_list`), and only then, at `:261-265`, does the
+  destination type check `return Err(CommandError::WrongType)` — with no undo. The popped element
+  is gone from the source and never reached the destination. `BRPOPLPUSH` routes through the same
+  code (`:851`, "BRPOPLPUSH is equivalent to BLMOVE source dest RIGHT LEFT"). Ref old → new:
+  `:243-265` unchanged; `:814-833` → `:851`.
+- **Script timeout commits and replicates partial effects — FIXED.** Closed as round-2 issue 60
+  (now in `issues/done/`), resolved 2026-08-04 with **option A**: `lua-time-limit` bounds a script
+  only until it writes, so a server-imposed abort is reachable only for a read-only script.
+  `crates/scripting/src/sandbox.rs` gained `TimeoutHook.write_dirty` + the
+  `sandbox::deadline_aborts(elapsed_ms, budget_ms, write_dirty)` predicate; the `BUSY script
+  running for {} ms` raise moved to `:265`. `crates/core/src/shard/scripting.rs:142-145` now
+  documents that only a *script-raised* error can leave writes behind. Acceptance criterion 5 is
+  discharged; item 6 of "What to fix" is closed.
+
+Remaining work is items 1-5 of "What to fix" and acceptance criteria 1-4.

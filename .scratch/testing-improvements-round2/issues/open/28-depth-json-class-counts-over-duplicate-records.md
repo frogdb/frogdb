@@ -98,3 +98,35 @@ Issue 27, `.scratch/testing-improvements-round2/issues/` — the equality claim 
 re-established until `lcov.info` carries real data. Issue 31,
 `.scratch/testing-improvements-round2/issues/`, is the decision on when to do both relative to the
 testing work.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+`scripts/coverage-depth.py` has had exactly two commits ever — `36d3f794` (the original pipeline)
+and `e163ff9a` (2026-08-04, a cluster test-binary split that only touched suite naming). Nothing
+addressed the dedupe. Criterion by criterion:
+
+- `index_functions` (`scripts/coverage-depth.py:499-534`, old ref `:499-507`) still folds only by
+  **mangled name** (`out: dict[str, FuncInfo]` keyed by `fn["name"]`) and still filters by filename
+  only. Two monomorphisations of the same generic have different mangled names, so they are not
+  folded, and the zeroed `::<_>` placeholder record survives as its own entry — which is exactly
+  the span-dedupe gap the issue describes (criterion 1 unmet).
+- `class_counts` is still computed over the un-span-deduped `fn_out` at
+  `scripts/coverage-depth.py:764-766`, and `:800` emits only the single `class_counts` dict — no
+  raw/deduped pair (criteria 1 and 2 unmet).
+- The equality claim survives verbatim at `scripts/coverage-depth.py:838-839`: *"The de-duplicated
+  figure is … and matches `llvm-cov export --format=lcov` exactly."* It is a bare string, backed by
+  no assertion (criterion 3 unmet).
+- `docs/agents/coverage-depth.md:61-72` "Reading the classes" is unchanged — still "Each function
+  gets exactly one class", still no mention of monomorphisation duplicates (criterion 4 unmet).
+- There is no test of any kind on the pipeline: `rg coverage-depth testing/ scripts/` matches only
+  the script itself, and no `Justfile` recipe exercises it as a fixture (criterion 5 unmet).
+
+Depends-on note: issue **27** is also still-valid, so criterion 3's equality can still not be
+re-established.
+
+The raw-count reproduction (`untested` 14 849 → 2 163 span-deduped) is
+**unverified-by-execution** — the brief forbids running `just coverage-depth`, and there is no
+`target/llvm-cov/depth/depth.json` on disk. The code path is unchanged, so the defect is presumed
+to reproduce.

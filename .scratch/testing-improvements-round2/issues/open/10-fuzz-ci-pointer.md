@@ -58,3 +58,21 @@ scheduling and corpus persistence, not test level.
 ## Depends on
 
 Issue 40, `.scratch/testing-improvements/issues/` — the tracking issue for this work.
+
+## Re-triage 2026-08-06
+
+**Verdict: still-valid**
+
+The pointer stays open because its target stays open: issue 40 is still the only file in
+`.scratch/testing-improvements/issues/open/`. Campaign-exit CI restoration (`0a0881a1`,
+`45591265`) discharged the **first** of issue 40's three reopen criteria — the nightly cron is
+back in the DSL (`workflow_gen/src/workflow_gen/workflows/fuzz.py:76` `NIGHTLY_CRON = "41 2 * *
+*"`, plus a `pull_request` trigger on `corpus-replay`) and regenerated into
+`.github/workflows/fuzz.yml:12-22`, so `fuzz-campaign` writes the `fuzz-corpus-` cache again and
+the PR replay gate has something to restore. The other two are **not** done: `corpus-replay`
+still degrades silently on a cold corpus (`echo "$target: no persisted corpus, skipping"`,
+`fuzz.py:_replay_run_step`, no warning annotation and no all-empty failure), and there is no
+workflow-gen test suite at all (`.github/workflows/workflow_gen/` contains only `src/` — nothing
+asserts the expected trigger set per workflow, so the next hosted-runner sweep can drop a cron
+again). This file's own criterion 1 is also unmet: neither 08's decision framing nor 13's
+highest-value target ranking has been recorded on issue 40.
