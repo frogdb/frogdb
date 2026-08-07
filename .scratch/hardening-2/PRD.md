@@ -8,7 +8,7 @@ Predecessor: [foundation-hardening campaign](../hardening/README.md), retrospect
 ## 1. Why a second campaign
 
 Campaign 1 locked four areas — transactions/VLL, persistence/recovery, replication, cluster —
-by extracting each into its own crate, writing 246 failure-mode rows with lint-enforced forcing
+by extracting each into its own crate, writing 258 failure-mode rows with lint-enforced forcing
 tests, and holding mutation gates of 0.80–0.90. It found and fixed real acked-write-loss bugs
 that 5000+ passing tests had certified as fine.
 
@@ -70,8 +70,12 @@ locked-spec witnesses that do not:
 - `cluster/src/network.rs:891` (`// FM-CLUSTER-051`) — asserts only an enum discriminant
 
 Two spec cells are also factually wrong on today's code (`FM-PERSISTENCE-033`'s Invariant,
-`FM-PERSISTENCE-019`'s Observable). **Detection mechanism: witness-quality lints and a spec
-re-validation pass (W3).**
+`FM-PERSISTENCE-019`'s Observable).
+
+The campaign-2 audit measured the class rather than sampling anecdotes: over 54 rows and ~267
+tests, **19% of rows and ~34% of tags** are weaker than the table implies (§3.3). Three was not
+the count; three was what fell out of a re-triage that was looking for something else.
+**Detection mechanism: a hand re-witness pass plus witness-quality lints (W3).**
 
 ### B4 — The worst failure modes are not forceable in-process
 
@@ -264,15 +268,138 @@ make.
 
 ### W3 — Witness quality and spec truth
 
-- Lints for the assert-nothing class (§3.3, filled from the witness audit).
-- A re-validation pass over all 246 rows: every row must be falsifiable (a row no test could fail
-  is a row that means nothing), and every Invariant/Observable cell must match today's code — two
-  are already known wrong.
-- The three known assert-nothing witnesses get real assertions or the rows get re-witnessed.
+The audit is done (§3.3): **19% of rows and ~34% of tags are weaker than the table implies.** This
+workstream is the largest in the campaign, and it is mostly hand work — §3.4 shows the cheap lints
+reach ~40% recall at best.
 
-#### 3.3 Witness lints
+- **W3a — re-witness by hand, ordered by blast radius.** Every crash, fsync, partition, timing and
+  concurrency row, area by area. The forcing tooling already exists (§3.3); this is discipline,
+  not construction. Persistence first (its weakest evidence is in the unmutated `frogdb-core`),
+  then cluster, then txn/vll/blocking, then replication.
+- **W3b — the witness lints of §3.4.** H1 + H10 as errors with count-pinned allowlists, H2/H7/H8/H9
+  as warnings, H4 rewritten against a curated injector allowlist, H5 as a `just` audit recipe over
+  retained mutation logs. Ratchet value, not detection value — build them so the *next* weak tag
+  costs something, then keep hand-auditing.
+- **W3c — make the escape hatch the expected move.** `MISSING ([gap: <issue>](<link>))` was used
+  zero times in 258 rows. Every re-witness that cannot be forced files a tooling-gap issue and uses
+  the hatch. Report the hatch count as a campaign metric: a rising count is health, not debt.
+- **W3d — row truth.** All 258 rows re-read for falsifiability (3 known unfalsifiable) and for
+  Invariant/Observable cells matching today's code. Fix the two mis-tagged rows (issue 09) and
+  re-run the gates over the 15 rows that postdate their area's lock.
 
-*(filled from the witness audit — see `surveys/witness-audit.md`)*
+#### 3.3 The witness audit: how thin the evidence actually is
+
+54 rows sampled across all six areas (weighted to crash, fsync, partition, timing and concurrency
+rows), ~267 of their named tests read.
+
+| area | rows sampled | weak rows | tests inspected | weak tests |
+|---|--:|--:|--:|--:|
+| persistence | 13 | 15% | 87 | **31%** |
+| cluster | 14 | 14% | 79 | **39%** |
+| txn / vll / blocking | 14 | 21% | 46 | **28%** |
+| replication | 13 | 23% | ~55 of 149 named | **~35%** (biased up — targeted subsample) |
+| **overall** | **54** | **19%** | **~267** | **~34%** |
+
+Read the two columns against each other. **The row rate is the campaign's honest number; the test
+rate is tag inflation.** One in three FM tags does not witness the row it names. Rows survive
+anyway because ~4 of 5 have at least one genuinely purpose-built witness, with a crowd of
+neighbours tagged alongside — so `Forced by` lists of 12–22 tests read as depth and are not.
+FM-CLUSTER-017 names 18 tests and is carried by 2. FM-PERSISTENCE-017 names 16 and is carried by
+3, none of which touches its headline NOT-observable.
+
+Zero rows were unverifiable by reading. The weakness is never ambiguity — it is absence.
+
+Representative findings:
+
+- `crash_recovery_tests.rs:702` — terminal assertion is `assert!(result.is_ok() || result.is_err())`.
+- `wal_recovery_mode_is_pinned_to_point_in_time` (`persistence/src/rocks/tests.rs:1312`) —
+  `assert!(matches!(DBRecoveryMode::PointInTime, DBRecoveryMode::PointInTime))`, constructing the
+  enum locally and never reading the production open path.
+- `test_explicit_sync_wal` passes with the `sync_wal()` line deleted.
+- `test_bgsave_snapshot_survives_restart` restarts on the *same* data dir, so both keys return via
+  RocksDB WAL replay — it passes if the checkpoint were empty.
+- FM-CLUSTER-066's entire subject is dead code under test: **no test anywhere constructs a
+  `ClusterBusContext` with `tls: Some(...)`**; `test_context` hardcodes `tls: None`.
+- `CrashTestHarness::crash()` (`core/src/persistence/test_harness.rs:183`) is
+  `self.rocks = None` — a clean in-process `Drop`, so nothing unsynced is ever lost. Its
+  `with_sync_mode()`/`with_periodic_mode()`/`with_async_mode()` constructors set a `WalConfig`
+  **nothing reads**. Ten weak tags trace to this one file. Filed as issue 08.
+
+**Seven of the eight worst offenders are discipline gaps, not tooling gaps.** The tooling needed
+— page-cache crash injection, partition simulation, deterministic scheduling, fault filesystem —
+*already exists in this repo* (`PageCacheSink`, turmoil `sim.hold`/`sim.release`,
+`LagProxy::stall_acks`, `RecordingFs`, `start_paused`, Shuttle, `shard-harness`), and three of the
+eight have their forcing pattern implemented in a sibling test in the same file. Residual real
+gaps are narrow: a counting global allocator, a seam to kill the periodic syncer, and a test-only
+`ConnectionHandler` constructor. **The campaign is not tooling-limited. It is discipline-limited.**
+
+#### 3.4 Witness lints
+
+Counts over 1233 tagged tests / 258 rows.
+
+| # | heuristic | today | disposition |
+|---|---|--:|---|
+| H1 | tagged test body contains no assert-family macro at all | **9 tests** | **error** (needs a `prop_assert*`/helper allowlist, else ~40% FP) |
+| H2 | every assertion is `is_ok()`/`is_some()`/`is_none()`-shaped or `assert!(true)` | **22 tests** | warning |
+| H8 | row `Trigger` names concurrency but no named test spawns a second task/thread/client | **21 rows** | warning — highest recall against the real class |
+| H9 | every assertion sits inside a conditional branch | **17 tests** | warning |
+| H7 | row names a RESP error code that appears in no named test | **10 rows** | warning |
+| H10 | `eprintln!` inside a tagged test | **1** | error (ratchet) |
+| H4 | fault row whose tests import no fault-injection facility | unusable as written | **rewrite with a curated injector allowlist** — then it is the direct detector for the three worst offenders |
+| H5 | row's tests never killed a mutant in the crate they describe | **43 rows** with no in-crate killer; **79 rows** with no named test in any mutated crate | build as a `just` audit recipe, not a gate |
+| S1/S3 | single-test rows (**31**), ≤6-substantive-line tests (**81**) | — | informational report |
+| H3, H11 | identifier-overlap, NOT-observable-type-absence | 318 pairs / 5 rows | **reject** — noise |
+
+**H5 is buildable from artifacts already on disk.** `target/mutants/*/outcomes.json` records only a
+per-mutant `summary` and does *not* say which test killed each mutant — but the retained
+`log/*.log` files contain `test <name> ... FAILED` lines, so killing-test sets can be extracted
+with no re-run. Caveat that must ship with the number: replication/cluster/cluster-runtime were
+`--iterate` runs, so their zero-kill counts are inflated; persistence/recovery/txn/vll logs are
+complete.
+
+**The uncomfortable part: combined recall of every cheap heuristic is ~40%.** Against the 10 weak
+rows the hand audit found, H1 catches one, H2 catches one, H8 catches two, H7 catches none. The
+two worst shapes — *the fault is never induced* and *the test passes if the fix is reverted* — are
+semantic properties no regex reaches. `test_failover_force_replay_is_safe` is well-named,
+well-asserted, and wrong. Only H5 and a rewritten H4 target that class. So the lints are worth
+building for the ratchet effect (they make the next assert-nothing tag cost something to write),
+**not** as the primary defense; the primary defense is W3's hand re-validation of the crash,
+restart and race rows.
+
+#### 3.5 Why this class exists
+
+Four structural causes, each fixable:
+
+1. **The lint counts names.** A row is "forced" the moment someone types a test name into a table
+   cell. That is the entire enforcement surface.
+2. **The escape hatch exists and was never used.** `failure-modes.py` supports
+   `MISSING ([gap: <issue>](<link>))`, which warns instead of failing — exactly the pressure valve
+   for "not forceable with today's tooling." **Zero uses across 258 rows**, and no fault-injection
+   tooling-gap issue was ever filed. When admitting a gap is free but invisible, the path of least
+   resistance is to tag the nearest existing test. That is the mechanism that produced all 90 weak
+   witnesses. Campaign 2 must make using the hatch the expected move, and report its count.
+3. **The campaign found this class once and declined to detect it.** Hardening issue 19 fixed 11
+   conditional-assertion tests in one file and explicitly recorded that the suggested lint was
+   *not* added. H10 has 1 hit today because that fix held in that file; the class regenerated in
+   five others.
+4. **The weak tests live where the mutants don't.** `frogdb-core` was never mutated, and
+   `core/src/persistence/crash_recovery_tests.rs` holds 10 of persistence's 27 weak tags including
+   the tautology. Persistence scored 99.1% on `frogdb-persistence` while its weakest evidence sat
+   in an unmutated crate. This is the same finding as B2, arrived at independently.
+
+Two further bookkeeping defects the lint cannot see, because both rows name tests that exist:
+FM-CLUSTER-059's five tests manipulate `ClusterRuntimeFlags` directly while its `Trigger` is a
+`CONFIG SET`, and the test that would close it exists and is not cited; FM-TXN-040's Observable
+*is* witnessed, by a test tagged FM-CLUSTER-083. Filed as issue 09.
+
+And **15 rows postdate their area's lock** (CLUSTER-079..083, PERSISTENCE-048..052,
+REPLICATION-041/062/063/064, TXN-050) — they carry a mutation-tested area's badge without ever
+having been in a mutation run. Campaign 2 re-runs the gates over them.
+
+Good news: the rows themselves are tight. Only **3 of 258** are unfalsifiable as written
+(FM-PERSISTENCE-013 "eventually", FM-PERSISTENCE-019 "may or may not be present",
+FM-REPLICATION-027 "eventually converges"). The vagueness the campaign guarded against did not
+materialize; the tag inflation it did not guard against did.
 
 ### W4 — Security area: spec + gate
 
@@ -383,31 +510,52 @@ Filed as campaign-2 issues:
 
 ## 5. Defect waves
 
-The 18 confirmed live defects, ordered by blast radius. Waves run *after* the mechanism that
-would have caught each class exists, so that each fix lands with a detector behind it.
+The 18 confirmed live defects from the round-2 re-triage plus the 10 the campaign-2 surveys found,
+ordered by blast radius. Waves run *after* the mechanism that would have caught each class exists,
+so that each fix lands with a detector behind it. Round-2 issues are bare numbers
+(`../testing-improvements-round2/issues/open/`); campaign-2 issues are `c2-NN` (`issues/open/`).
 
 | wave | defects | gated on |
 |---|---|---|
-| 1 — reachable pre-auth | 38 (CRLF frame injection), 63 (shard panic) | nothing; ship first |
-| 2 — consensus + isolation | 73 (raft fsync), 53 (stale log reader), 50 (EXEC gate) | W2 harness for 73; W1 gate lint for 50 |
+| 0 — the gates don't run | **c2-06** (11 seam gates fire in neither CI nor agent commits) | nothing; blocks every W1 item, ships first |
+| 1 — reachable pre-auth | 38 (CRLF frame injection), 63 (shard panic), **c2-07** (no panic isolation at the shard boundary) | nothing |
+| 2 — consensus + isolation | 73 (raft log fsync), **c2-01** (`save_vote` flushes the wrong CF), 53 (stale log reader), 50 (EXEC gate), **c2-05** (`FunctionCall` gate) | W2 harness for 73/c2-01; W1 C3 lint for 50/c2-05 |
 | 3 — silent data loss | 45 (`FT.ALTER` wipes JSON index), 44 (`TS.CREATERULE` not persisted), 42 (RocksDB iteration error → `None`), 24 (`BLMOVE` WRONGTYPE), 43 (`ES.SNAPSHOT` non-UTF-8) | W1 error-swallow rule |
-| 4 — auth and boundaries | 37 (Lua sandbox escape), 35 (`-@admin` inert), 39 (MONITOR leak), 40 (default-open admin gate), 68 (ACL ratelimit lockout) | W4 spec |
-| 5 — silent misconfiguration | 49 (`frogdb.toml` ignored), 72 (no format version), 54 (BCAST invalidation) | W6 |
+| 4 — auth and boundaries | 37 (Lua sandbox escape), 35 (`-@admin` inert), 39 (MONITOR leak), 40 (default-open admin gate), 68 (ACL ratelimit lockout), **c2-02** (aclfile never read at boot) | W4 spec |
+| 5 — silent misconfiguration | 49 (`frogdb.toml` ignored), 72 (no format version), 54 (BCAST invalidation), **c2-04** (`durability_mode` parsed twice) | W6 |
+
+Three campaign-2 issues are structural rather than defect fixes and belong to their workstream, not
+a wave: **c2-03** (six hand-rolled durable writers) is W1's C1 burn-down list plus the `frogdb-fs`
+seam of §4.3; **c2-08** (`CrashTestHarness::crash()` is a clean `Drop`, `WalConfig` unread) is a
+W2 prerequisite — ten weak persistence tags cannot be re-witnessed until the harness crashes for
+real; **c2-09** (two mis-tagged FM rows) and **c2-10** (the scatter error replies — every
+client-visible VLL degradation string — have no tests at all) are W3d.
 
 ## 6. Gates, metrics, and exit criteria
 
 The campaign exits when all of the following hold:
 
-1. Every W1 rule that reached KEEP is wired into `just lint` with its baseline at zero, or with a
-   burn-down plan recorded in this directory.
-2. The crash harness exists and at least the raft log, the WAL/checkpoint install, and the
-   replication offset advance are witnessed by it.
-3. Zero assert-nothing witnesses under the W3 lints; zero rows that no test could fail; the two
-   wrong spec cells corrected.
+0. **The gates run.** `just lint-gates` is wired to lefthook unconditionally and to a required CI
+   job, and a deliberate violation of each of the (then) rules is shown to fail both. Without this
+   every other criterion is a convention, not a gate.
+1. Every W1 rule that reached KEEP is wired into `just lint-gates` with its baseline at zero, or
+   with a burn-down plan recorded in this directory.
+2. The crash harness exists — out-of-process, `SIGKILL`, recover-and-compare — and at least the
+   raft log, the WAL/checkpoint install, and the replication offset advance are witnessed by it.
+   `CrashTestHarness` either crashes for real or is deleted (c2-08).
+3. **Witness truth**, the campaign's headline number: every crash / fsync / partition / timing /
+   concurrency row in all six areas hand-re-witnessed; the W3 lints wired with baselines at zero;
+   zero rows that no test could fail; the mis-tagged rows corrected. The measured metric is the
+   weak-tag rate on a fresh independent sample — target **≤5%**, from ~34% today — not a lint
+   exit code, because the lints only reach ~40% of the class.
 4. The security spec is LOCKED with a mutation gate on record, on the same terms as the other
    four areas.
-5. All 18 live defects fixed, each with a failure-mode row and a forcing test.
-6. `frogdb-core` dispatch is inside a gate, or a written decision says why not.
+5. All 18 round-2 live defects and the 6 campaign-2 defects fixed, each with a failure-mode row and
+   a forcing test that fails when the fix is reverted.
+6. `frogdb-core` dispatch is inside a mutation gate, or a written decision says why not. The 15
+   rows that postdate their area's lock have been through a mutation run.
+7. The `MISSING ([gap: …](…))` count is **greater than zero** and every use links a filed tooling
+   issue. A campaign that re-witnesses 258 rows and admits no gaps has not been honest.
 
 ## 7. Out of scope
 
@@ -419,4 +567,30 @@ The campaign exits when all of the following hold:
 
 ## 8. Open decisions
 
-*(filled once the surveys land)*
+These need a ruling before the workstreams they belong to can start. Recommendation given for each.
+
+1. **Scale and sequencing.** Campaign 1 ran four areas serially over weeks. Campaign 2 is wider
+   (7 workstreams, 27 defects, a 258-row re-witness). *Recommendation:* run W0/W1's item zero
+   (c2-06) and waves 0–1 immediately since they are small and unblock everything, then W3a — the
+   re-witness — as the long pole, with W2 built alongside it because W3a's persistence tranche
+   needs the crash primitive.
+2. **H1 as an error, today.** 9 tagged tests have no assertion at all. Adopting H1 as an error
+   means fixing or allowlisting all 9 in the same change, and it needs a `prop_assert*`/custom-
+   helper allowlist or it false-positives at ~40%. *Recommendation:* adopt as error with a
+   count-pinned allowlist, mirroring `clock-seam.py`.
+3. **`frogdb-core` mutation perimeter (B2).** It is the largest crate and was never mutated; the
+   weakest persistence evidence lives in it. A full run is expensive. *Recommendation:* mutate the
+   `shard/` dispatch and `persistence/` subtrees only, at a lower threshold (0.70) to start.
+4. **C3 arm dispositions.** `CoreMsg::GetVersion` mutates via `purge_if_expired` — is that store
+   execution under a foreign continuation lock? `VllMsg::VllExecute` hardcodes `conn_id = 0` — is
+   the drain path exempt by design? Both need a recorded ruling before the lint can be exhaustive
+   (c2-05).
+5. **ACL missing-file-at-boot policy.** Redis refuses to start when `aclfile` is unreadable.
+   FrogDB currently ignores the file entirely. *Recommendation:* match Redis and refuse — but this
+   turns a silently-degraded boot into a hard failure for anyone with a stale path (c2-02).
+6. **Does the campaign own its own weak witnesses?** W3a's re-witnessing will surface rows whose
+   *fix* is out of scope (search, timeseries, JSON). *Recommendation:* re-witness anyway, file the
+   defect, and let the wave table decide whether it ships — a weak witness is in scope even when
+   the subject is not.
+7. **Coverage pipeline.** Left broken at campaign-1 exit. *Recommendation:* fix it in W0 or turn it
+   off; a coverage number nobody trusts is worse than none.
