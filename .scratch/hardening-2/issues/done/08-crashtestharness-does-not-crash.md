@@ -1,6 +1,6 @@
 # `CrashTestHarness` does not crash, and its durability modes are decorative
 
-Status: ready-for-agent
+Status: done
 Type: bug (test infrastructure) — invalidates evidence, not production behavior
 Severity: likelihood 3/3 (every crash-recovery test in `frogdb-core` uses it), consequence 3/3
 (ten FM-PERSISTENCE tags claim crash durability is witnessed and none of them is) — score 9
@@ -69,3 +69,30 @@ and none of it does.
 Found by the campaign-2 witness audit, 2026-08-07. Same root cause as round-2 infra issue 02
 (`ClusterNode::kill()` is a graceful shutdown): both harnesses named a crash primitive after the
 thing it was supposed to simulate, and neither simulates it.
+
+## Resolution — 2026-08-07
+
+All three fix steps landed:
+
+1. **Crash primitive** (W2, merged 64f4c36b): in-process compensating delete, the cheaper option,
+   choice recorded in `test_harness.rs`. RocksDB hands every write to the OS `write()` immediately
+   regardless of the sync flag, so an in-process drop cannot lose unsynced data by itself; the
+   harness instead tracks unsynced `(shard_id, key)` pairs and `crash()` deletes exactly that set
+   before dropping — observably identical to the write never landing durably. `flush()` /
+   `sync_wal()` clear the tracking.
+2. **`WalConfig` load-bearing** (W2, same merge): `put_direct`/`put_with_expiry`/`put_with_lfu`
+   derive `WriteOptions::set_sync` from the configured `DurabilityMode`; `put_with_sync` keeps the
+   explicit override. Deviation from the letter of the step, recorded: helpers were NOT routed
+   through the async `create_wal_writer()` (would have forced a tokio runtime into ~30 sync
+   `#[test]` fns); they set the same sync flag `RocksSink::commit(sync)` uses internally.
+3. **Re-witness** (W3a, merged fd7ad4ed): all ten weak FM-PERSISTENCE tags (002/003/004/017/029/
+   033/034/035/036/041) now force their modes through the real primitive with negative controls
+   (unsynced write → `crash()` → reopen → asserted **absent**). No `MISSING` hatch used — every row
+   kept genuine forcing tests; the one unforceable sub-claim (stopping the periodic syncer) is
+   issue 11. Two stale clean-drop NOTE comments rewritten; the `:702` tautology now asserts
+   epoch fallback + `last_save_time().is_none()`.
+
+The definitive verification test exists and is the shape this issue demanded:
+`test_durability_mode_gates_crash_loss` — async write → crash → absent; sync write → crash →
+present. Follow-ups filed from the work: issue 11 (no seam to stop the periodic syncer), issue 12
+(recovery-mode pin test is a tautology, found in the locked persistence crate).
