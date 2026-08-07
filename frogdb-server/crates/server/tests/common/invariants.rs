@@ -206,12 +206,15 @@ pub fn check_all_with(
             if coverage.registrations > coverage.attributed {
                 eprintln!(
                     "FIFO coverage gap: {}/{} journaled registration(s) attributed \
-                     ({} of {} served blocking pops judged; journal complete={})",
+                     ({} of {} served blocking pops judged; journal complete={}; \
+                     loss: {} extra-pop, {} missing-pop)",
                     coverage.attributed,
                     coverage.registrations,
                     coverage.judged_pops,
                     coverage.served_pops,
-                    coverage.complete
+                    coverage.complete,
+                    coverage.unattributed_extra_pops,
+                    coverage.unattributed_missing_pops
                 );
             }
             report.fifo_coverage = coverage;

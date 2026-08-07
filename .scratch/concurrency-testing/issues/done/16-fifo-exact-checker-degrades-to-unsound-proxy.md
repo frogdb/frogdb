@@ -124,3 +124,80 @@ short-lived waiters is no longer the source of truth. The checker never silently
 ordinals mean "coverage collapsed: this run proves nothing about wake order", never an
 arrival-order verdict in either direction. Self-test pins that incomplete ordinals produce no
 FIFO verdict.
+
+## Follow-ups discharged (2026-08-06)
+
+Issue 14's "residual gap" section recorded two open questions about the repaired checker. Both are
+now answered. Local mode, no product changes; the checker, the aggregate reporting and the workload
+generator changed.
+
+### 1. The ~2% attribution loss is benign-direction only — checker behaviour, not a defect
+
+**Verdict: no product bug, no checker bug. The loss is the checker correctly declining to judge.**
+
+Attribution joins two counts per `(watched_key, client_id)`: journaled park count vs. that client's
+completed `BLPOP`/`BRPOP` count on the key. A mismatch means the pair is not judged at all. Reading
+the join shows the mismatch has two directions, and only one of them can occur by design:
+
+- **`pops > parks` (extra-pop, benign).** A blocking pop that finds an element already present
+  returns immediately and never registers, so the pop is counted on the history side with no park to
+  match it. Note timed-out pops are *not* a source of loss: they park (counted on the journal side)
+  and complete (counted on the history side), and never appear in the served-order comparison.
+- **`parks > pops` (missing-pop, defect).** A `BLPOP` registers at most once and only when it parks,
+  so more journaled parks than blocking pops means the journal and the history disagree about
+  reality — a wake-accounting bug or a capture/join bug. Nothing in the design produces it.
+
+`FifoCoverage` now carries the two directions as separate counters
+(`unattributed_extra_pops`, `unattributed_missing_pops`), including the previously invisible residual
+where a `(key, client)` pair journaled parks but recorded no blocking pops at all. The nightly
+aggregate reports both, and `SweepSummary::check_fifo_coverage` **hard-fails on any missing-pop
+loss** — before the existing attributed-ratio threshold, so the defect direction can never be
+absorbed as ordinary coverage loss.
+
+Measured, 10 seeds × 5 profiles at OPS=150 / 4 clients / 2 shards: every unattributed registration
+is extra-pop (`unattributed 2 extra-pop / 0 missing-pop`; the 2 are both `BlockingHeavy`). The
+per-run `FIFO coverage gap` diagnostic now prints the same split, so a future gap says which
+direction it is on sight.
+
+Unit tests in `frogdb-server/crates/testing/src/conservation.rs` pin all three cases
+(`fifo_attribution_loss_is_classified_by_direction`,
+`fifo_attribution_loss_flags_parks_without_pops`,
+`fifo_truncated_journal_reports_no_attribution_split`), plus two in `sweep_summary.rs` for the
+hard-fail.
+
+### 2. Judged fraction: 8.1% → 80.9% via a `HighContention` profile
+
+The exact check only judges pops that actually parked, and none of the four existing profiles is
+built to force parking, so the judged fraction was falling as ops rose. Added
+`Profile::HighContention`: role-split on a **single** hot list key, one producer and
+`num_clients - 1` consumers, pushes deliberately under-supplied (~3 pops per push) with spread
+producer delays (150–350 ms) and a 1 s consumer timeout. Design follows directly from the join
+above — surplus *pops* are harmless (they park, time out, and stay attributable), surplus *pushes*
+are what poisons a pair by leaving data sitting for the next pop to find without parking.
+
+Its single key exceeds the per-key WGL op cap and downgrades to conservation-only, which is
+accepted: the profile exists for wake-order coverage, and the other four profiles carry
+linearizability.
+
+Measured over the same 10-seed sweep (`FROGDB_CONCURRENCY_SEEDS=10`,
+`FROGDB_CONCURRENCY_OPS_PER_CLIENT=150`):
+
+| Profile | attributed / registrations | judged / served | ratio | pairs |
+|---|---|---|---|---|
+| Mixed | 0/0 | 0/0 | — | 0 |
+| BlockingHeavy | 0/2 | 0/306 | 0.0000 | 0 |
+| TxHeavy | 0/0 | 0/0 | — | 0 |
+| MultiWaiter | 44/44 | 32/88 | 0.3636 | 17 |
+| **HighContention (new)** | **4500/4500** | **1500/1500** | **1.0000** | **1490** |
+| **Pooled (after)** | 4544/4546 | **1532/1894** | **0.8089** | 1507 |
+| Pooled (before, 4 profiles) | 44/46 | **32/394** | **0.0812** | 17 |
+
+Every served blocking pop in `HighContention` parks and is judged, and compared pairs go from 17 to
+1507 — the FIFO invariant is no longer resting on a thin sample. The profile is pinned into
+`seed_sweep_nightly` (250 × 5 = 1250 runs), and the sweep now prints a **per-profile** FIFO line in
+addition to the pooled one, because pooled coverage hides which profile stopped contributing.
+
+A per-PR smoke test, `concurrency_workload::high_contention_exact_fifo_judges_most_served_pops`
+(seed 0, 4 clients, 20 ops, 2 shards), asserts the journal is complete, attribution is total,
+missing-pop loss is zero, and at least half of served pops are judged — so a generator change that
+quietly stops producing contention fails in CI rather than in the nightly.

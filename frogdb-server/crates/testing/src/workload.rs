@@ -35,6 +35,35 @@ pub enum Profile {
     MultiWaiter,
     /// Even spread across all six type families.
     Mixed,
+    /// Role-split, single-hot-key blocking contention: every client but one
+    /// does nothing but issue long-timeout blocking pops on *one* list key,
+    /// while the remaining client is a slow producer pushing to it.
+    ///
+    /// Exists to raise the *judged* share of served blocking pops. Only a pop
+    /// that actually parked carries a registration ordinal, and the checker
+    /// drops a whole `(key, client)` pair whose pop count disagrees with its
+    /// park count — so a workload where pops routinely find data already
+    /// present judges very little (`BlockingHeavy` judges ~7% of served pops).
+    /// Two properties make parking near-certain here:
+    ///
+    /// 1. **Pushes are deliberately under-supplied** — `num_clients - 1`
+    ///    consumers each emit one pop per generated op against one producer
+    ///    emitting one push, so pops outnumber pushes ~3:1. Surplus pops park
+    ///    and time out, which costs nothing (a timed-out pop still registered,
+    ///    and the checker counts it on both sides of the join). The opposite
+    ///    imbalance is what poisons attribution: a surplus push leaves an
+    ///    element sitting, and the next pop finds it without parking.
+    /// 2. **Consumers outnumber producers and park far longer than they are
+    ///    in flight**, so at least one waiter is parked essentially always,
+    ///    and a push is consumed the instant it lands rather than accumulating.
+    ///
+    /// Everything targets one key on purpose: it maximises the number of
+    /// waiters queued together (so serve-order pairs are actually comparable)
+    /// and removes the per-key push/pop imbalance that multiple hot keys would
+    /// reintroduce. The cost is that its single key is far over the per-key WGL
+    /// op cap and downgrades to conservation-only checking — acceptable, since
+    /// this profile exists for wake-order coverage, not linearizability.
+    HighContention,
 }
 
 /// One RESP command with sim-time think hints. `command`/`args` are exactly
@@ -323,6 +352,8 @@ fn pick_family(profile: Profile, rng: &mut StdRng) -> Family {
                 Family::Script
             }
         }
+        // Lists only: the hot key is a list, and nothing else is generated.
+        Profile::HighContention => Family::List,
         // Even spread.
         Profile::Mixed => FAMILIES[rng.random_range(0..FAMILIES.len())],
     }
@@ -584,6 +615,10 @@ fn gen_list(
         gen_multi_waiter(keys, MultiWaiterFamily::List, rng, multi_waited, ops);
         return;
     }
+    if matches!(profile, Profile::HighContention) {
+        gen_high_contention(keys, rng, client_id, num_clients, ops);
+        return;
+    }
     let blocking_bias = matches!(profile, Profile::BlockingHeavy);
     let r = rng.random_range(0..100);
     let t = think(rng);
@@ -667,6 +702,65 @@ fn gen_list(
             );
         }
     }
+}
+
+/// Blocking timeout (seconds) for [`Profile::HighContention`] consumers. Long
+/// enough that a waiter normally outlives several producer pushes (so waiters
+/// stack up on the key), short enough that the surplus pops — which by design
+/// never get served — still drain well inside the sim window.
+const HIGH_CONTENTION_TIMEOUT: &str = "1";
+
+/// The client that produces (instead of consuming) under
+/// [`Profile::HighContention`]: the last one, so consumers are `0..n-1`.
+/// With a single client there is no one else, so that client both pushes and
+/// pops — degenerate, but not a panic.
+fn high_contention_producer(num_clients: usize) -> u64 {
+    num_clients.saturating_sub(1) as u64
+}
+
+/// Delay (ms) before a [`Profile::HighContention`] producer push. Spread wide
+/// enough that consumers spend most of their time parked rather than being
+/// served the moment they register, and that the producer's script outlives a
+/// meaningful share of the consumers' — a producer that finishes first simply
+/// leaves the remaining pops to time out, which is harmless.
+fn high_contention_push_delay(rng: &mut StdRng) -> u64 {
+    rng.random_range(150..350)
+}
+
+/// Emit one [`Profile::HighContention`] op: a blocking pop on the single hot
+/// key for consumer clients, a delayed push for the one producer client.
+///
+/// Every consumer op targets `keys[0]` — see [`Profile::HighContention`] for
+/// why the key space is deliberately collapsed to one key and why pushes are
+/// under-supplied.
+fn gen_high_contention(
+    keys: &[Bytes],
+    rng: &mut StdRng,
+    client_id: u64,
+    num_clients: usize,
+    ops: &mut Vec<ScriptedOp>,
+) {
+    let k = keys[0].clone();
+    if client_id == high_contention_producer(num_clients) {
+        let v = alnum_value(rng);
+        let delay = high_contention_push_delay(rng);
+        push_op(ops, "rpush", vec![k, v], delay);
+        return;
+    }
+    // Consumers re-park immediately after each pop returns; the small think
+    // only keeps their first registrations from landing in one tick.
+    let think = rng.random_range(0..4);
+    let cmd = if rng.random_range(0..2) == 0 {
+        "blpop"
+    } else {
+        "brpop"
+    };
+    push_op(
+        ops,
+        cmd,
+        vec![k, Bytes::from(HIGH_CONTENTION_TIMEOUT)],
+        think,
+    );
 }
 
 /// Which blocking family a multi-waiter op targets — selects the producer push
@@ -1233,6 +1327,65 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn high_contention_is_role_split_on_one_key_with_undersupplied_pushes() {
+        for seed in 0..40 {
+            let w = Workload::generate(seed, Profile::HighContention, 4, 40);
+            let producer = high_contention_producer(4);
+            let mut hot_key: Option<Vec<u8>> = None;
+            let mut pops = 0usize;
+            let mut pushes = 0usize;
+            let mut consumer_clients: std::collections::HashSet<u64> = Default::default();
+            for c in &w.clients {
+                for op in &c.ops {
+                    let key = op.args[0].to_vec();
+                    match hot_key {
+                        Some(ref k) => assert_eq!(
+                            k,
+                            &key,
+                            "seed {seed}: high contention must stay on one key, saw {:?}",
+                            String::from_utf8_lossy(&key)
+                        ),
+                        None => hot_key = Some(key),
+                    }
+                    match op.command.as_str() {
+                        "blpop" | "brpop" => {
+                            assert_ne!(
+                                c.client_id, producer,
+                                "seed {seed}: the producer client must not block"
+                            );
+                            assert_eq!(
+                                op.args[1],
+                                Bytes::from(HIGH_CONTENTION_TIMEOUT),
+                                "seed {seed}: consumers must use the long timeout"
+                            );
+                            consumer_clients.insert(c.client_id);
+                            pops += 1;
+                        }
+                        "rpush" => {
+                            assert_eq!(
+                                c.client_id, producer,
+                                "seed {seed}: only the producer client may push"
+                            );
+                            pushes += 1;
+                        }
+                        other => panic!("seed {seed}: unexpected high-contention op {other}"),
+                    }
+                }
+            }
+            assert_eq!(
+                consumer_clients.len(),
+                3,
+                "seed {seed}: every non-producer client must be a consumer"
+            );
+            assert!(
+                pops > pushes * 2,
+                "seed {seed}: pushes must stay under-supplied (pops={pops} pushes={pushes}) — \
+                 a surplus push leaves an element for the next pop to find without parking"
+            );
         }
     }
 

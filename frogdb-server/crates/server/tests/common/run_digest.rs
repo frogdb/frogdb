@@ -78,6 +78,29 @@ pub fn run_digest(run: &CapturedRun) -> Vec<String> {
     lines
 }
 
+/// A stable 64-bit fingerprint of a digest, rendered as hex.
+///
+/// FNV-1a over the digest lines (with an explicit `\n` separator so line
+/// boundaries cannot be smuggled), chosen because it is defined entirely by
+/// this function: unlike `DefaultHasher`, it carries no per-process seed and no
+/// standard-library version dependence, so the same digest fingerprints
+/// identically in a different process — which is the whole point of comparing
+/// it across one.
+pub fn digest_fingerprint(digest: &[String]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    let mut mix = |bytes: &[u8]| {
+        for &byte in bytes {
+            h ^= byte as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    };
+    for line in digest {
+        mix(line.as_bytes());
+        mix(b"\n");
+    }
+    format!("{h:016x}")
+}
+
 /// Assert two digests are identical, reporting the *first* divergence with context
 /// rather than dumping two multi-thousand-line vectors.
 pub fn assert_digests_equal(label: &str, a: &[String], b: &[String]) {

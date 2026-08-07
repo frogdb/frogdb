@@ -213,6 +213,69 @@ fn multi_waiter_exact_fifo_is_clean() {
     );
 }
 
+// High-contention exact-FIFO smoke test: the same guarantees as
+// `multi_waiter_exact_fifo_is_clean`, plus the one it deliberately does not
+// make — that most *served* blocking pops are actually judged.
+//
+// `MultiWaiter` and `BlockingHeavy` judge only the pops that parked, and most
+// of their pops find data already present (BlockingHeavy: ~7% of served pops
+// judged at nightly length). `Profile::HighContention` is built so that
+// essentially every pop parks — one hot key, consumers outnumbering producers,
+// pushes under-supplied — so a judged fraction far below 1.0 here means pops
+// stopped parking (or the (key, client) join drifted), not that the workload
+// happens to be easy.
+#[test]
+fn high_contention_exact_fifo_judges_most_served_pops() {
+    let workload = Workload::generate(0, Profile::HighContention, 4, 20);
+    let run = run_workload_capturing(&workload, 2, true);
+    assert!(
+        run.registration_order.is_complete(),
+        "wait-queue registration journal was truncated — the exact FIFO checker \
+         refuses to judge a truncated journal"
+    );
+    let report = check_all_with(
+        &run.history,
+        &run.final_elements,
+        Some(&run.quiescence),
+        Some(&run.registration_order),
+        2,
+        MAX_OPS_PER_KEY,
+        MAX_WGL_STATES,
+    );
+    assert!(
+        report.passed(),
+        "high-contention workload violated invariants: {:?}",
+        report.violations
+    );
+    let cov = report.fifo_coverage;
+    assert_eq!(
+        cov.attributed, cov.registrations,
+        "exact FIFO checker left journaled registrations unattributed \
+         (coverage {cov:?}) — the (key, client) join has drifted"
+    );
+    assert_eq!(
+        cov.unattributed_missing_pops, 0,
+        "the shards journaled parks with no matching blocking pop (coverage \
+         {cov:?}) — a wake-accounting or capture-join defect, not coverage loss"
+    );
+    assert!(
+        cov.pairs_compared >= 2,
+        "exact FIFO checker compared fewer than two waiter pairs (coverage \
+         {cov:?}) — the profile stopped stacking waiters on the hot key"
+    );
+    // The point of the profile. Kept well below the measured value so ordinary
+    // scheduling jitter cannot flake it, but far above the ~7% the pre-existing
+    // blocking profiles reach.
+    assert!(
+        cov.judged_pops * 2 >= cov.served_pops,
+        "only {}/{} served blocking pops were judged (coverage {cov:?}) — pops \
+         stopped parking, so this profile no longer buys the FIFO coverage it \
+         exists for",
+        cov.judged_pops,
+        cov.served_pops
+    );
+}
+
 // TxHeavy seed sweep (CI per-PR tier). Transactions are biased toward
 // single-slot key groups (which commit); a deliberate minority draw keys
 // independently and so span slots — some of those land on separate shards,
@@ -290,11 +353,20 @@ fn seed_sweep_nightly() {
         Profile::BlockingHeavy,
         Profile::TxHeavy,
         Profile::MultiWaiter,
+        // Added for the FIFO *judged* fraction: the other blocking profiles
+        // judge only the minority of pops that park (~7% of served pops at this
+        // length), so wake order was being checked on a thin slice of what the
+        // sweep actually ran. See `Profile::HighContention`.
+        Profile::HighContention,
     ];
 
     let mut failures = Vec::new();
     let mut summary = SweepSummary::default();
     for profile in profiles {
+        // Per-profile aggregate as well as the pooled one: pooled coverage hides
+        // *which* profile stopped contributing, and the profiles differ by an order
+        // of magnitude in how often their pops park.
+        let mut profile_summary = SweepSummary::default();
         for seed in 0..seeds_per_profile {
             let report = run_and_check(
                 seed,
@@ -304,6 +376,7 @@ fn seed_sweep_nightly() {
                 num_shards,
                 max_states,
             );
+            profile_summary.record(&report);
             summary.record(&report);
             if !report.passed() {
                 let path = write_repro_for(seed, profile, num_clients, ops_per_client, num_shards);
@@ -315,6 +388,10 @@ fn seed_sweep_nightly() {
                 failures.push((seed, profile, path));
             }
         }
+        eprintln!(
+            "{}",
+            profile_summary.fifo_report_line(&format!("seed_sweep_nightly {profile:?}"))
+        );
     }
 
     // Surface + threshold the WGL downgrade ratio at the sweep-summary level
@@ -403,9 +480,11 @@ fn replay_repro() {
 /// hash-map iteration order, real-clock readings taken under a paused virtual clock).
 mod determinism {
     use super::*;
-    use crate::common::run_digest::{assert_digests_equal, run_digest};
+    use crate::common::run_digest::{assert_digests_equal, digest_fingerprint, run_digest};
+    use crate::common::workload_runner::CapturedRun;
 
     /// Generate and run the same configuration twice, then require byte-identical digests.
+    /// Returns the first run so a caller can additionally assert on what it exercised.
     ///
     /// The workload is regenerated (not cloned) for the second run so workload *generation*
     /// is covered too, not only execution.
@@ -415,11 +494,12 @@ mod determinism {
         num_clients: usize,
         ops_per_client: usize,
         num_shards: usize,
-    ) {
+    ) -> CapturedRun {
         let label = format!("seed {seed} ({profile:?}, {ops_per_client} ops/client)");
 
         let first = Workload::generate(seed, profile, num_clients, ops_per_client);
-        let digest_a = run_digest(&run_workload_capturing(&first, num_shards, true));
+        let run_a = run_workload_capturing(&first, num_shards, true);
+        let digest_a = run_digest(&run_a);
 
         let second = Workload::generate(seed, profile, num_clients, ops_per_client);
         let digest_b = run_digest(&run_workload_capturing(&second, num_shards, true));
@@ -434,6 +514,7 @@ mod determinism {
         );
 
         assert_digests_equal(&label, &digest_a, &digest_b);
+        run_a
     }
 
     // These were `#[ignore]`d on arrival, per the audit's R0 note: the assertion has to exist
@@ -469,6 +550,105 @@ mod determinism {
     #[test]
     fn run_is_reproducible_txheavy_seed_3() {
         assert_run_is_reproducible(3, Profile::TxHeavy, 4, 60, 2);
+    }
+
+    /// BlockingHeavy: the profile the other three pins left uncovered. Its blocking pops
+    /// carry *short* finite timeouts, so which waiters get served and which expire is
+    /// decided by the deadline arithmetic rather than by a producer that always arrives —
+    /// the same clock-dependence as MultiWaiter, sampled at the opposite end of the
+    /// timeout range, plus the BLMOVE path no other profile generates.
+    ///
+    /// The registration assertion is the anti-vacuity guard that matters here: a run in
+    /// which nothing ever parked would still be trivially reproducible while covering none
+    /// of the blocking machinery this pin exists for.
+    #[test]
+    fn run_is_reproducible_blockingheavy_seed_1() {
+        let run = assert_run_is_reproducible(1, Profile::BlockingHeavy, 4, 60, 2);
+        assert!(
+            run.registration_order.list_pop_registrations() > 0,
+            "seed 1 (BlockingHeavy) parked no waiter at all, so this pin covers none of \
+             the blocking-path nondeterminism it exists for"
+        );
+    }
+
+    /// The configuration the cross-process pin runs on both sides of the process boundary.
+    fn cross_process_config() -> (u64, Profile, usize, usize, usize) {
+        (0, Profile::Mixed, 4, 30, 2)
+    }
+
+    /// Prefix the child prints its fingerprint under.
+    const FINGERPRINT_PREFIX: &str = "RUN_DIGEST_FINGERPRINT ";
+
+    /// Libtest filter selecting [`cross_process_digest_child`] in the child binary. A
+    /// substring, not `--exact`: the exact name carries the integration binary's own module
+    /// prefix (`concurrency_workload::…`), which is easy to get wrong and fails as silently
+    /// as "no such test".
+    const CHILD_TEST: &str = "determinism::cross_process_digest_child";
+
+    /// Runs [`cross_process_config`] and prints its digest fingerprint. Ignored so it only
+    /// executes when [`run_digest_is_stable_across_processes`] spawns it by exact name.
+    #[test]
+    #[ignore = "child half of run_is_reproducible_across_processes; spawned by that test"]
+    fn cross_process_digest_child() {
+        let (seed, profile, clients, ops, shards) = cross_process_config();
+        let workload = Workload::generate(seed, profile, clients, ops);
+        let digest = run_digest(&run_workload_capturing(&workload, shards, true));
+        println!("{FINGERPRINT_PREFIX}{}", digest_fingerprint(&digest));
+    }
+
+    /// Same seed ⇒ same digest in a *different process*.
+    ///
+    /// The three pins above run a configuration twice inside one process, which cannot see
+    /// the drift that is per-process by construction: `RandomState`'s per-process hash seed
+    /// leaking into an iteration order, ASLR-dependent pointer ordering, an environment- or
+    /// PID-derived value reaching a reply. This spawns the test binary again and compares
+    /// fingerprints across the boundary.
+    ///
+    /// A committed golden constant would be the cheaper assertion and was rejected: CI runs
+    /// `ubuntu-latest` (x86_64 Linux) while this is developed on aarch64 macOS, so a
+    /// constant recorded here cannot be validated for the platform that would enforce it,
+    /// and the first CI run would either fail for a reason unrelated to determinism or
+    /// force the constant to be re-recorded from CI output — pinning whatever CI happened
+    /// to produce rather than anything anyone verified. Self-spawning asserts the same
+    /// property (identical inputs, different process ⇒ identical run) on whatever platform
+    /// it runs, at the cost of one extra run of a 30-op configuration.
+    #[test]
+    fn run_is_reproducible_across_processes() {
+        let (seed, profile, clients, ops, shards) = cross_process_config();
+        let workload = Workload::generate(seed, profile, clients, ops);
+        let local = digest_fingerprint(&run_digest(&run_workload_capturing(
+            &workload, shards, true,
+        )));
+
+        let exe = std::env::current_exe().expect("path to this test binary");
+        let output = std::process::Command::new(&exe)
+            .args(["--ignored", "--nocapture", CHILD_TEST])
+            .output()
+            .unwrap_or_else(|e| panic!("failed to spawn {} as a child: {e}", exe.display()));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "child run of {CHILD_TEST} failed ({}):\n--- stdout ---\n{stdout}\n--- stderr ---\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let child = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(FINGERPRINT_PREFIX))
+            .map(str::trim)
+            .unwrap_or_else(|| {
+                panic!(
+                    "child printed no {FINGERPRINT_PREFIX}line — it was filtered out rather \
+                     than run:\n{stdout}"
+                )
+            });
+
+        assert_eq!(
+            child, local,
+            "seed {seed} ({profile:?}) produced a different run in a second process \
+             (this process {local}, child {child}): something in the run depends on \
+             per-process state, not on the seed"
+        );
     }
 }
 

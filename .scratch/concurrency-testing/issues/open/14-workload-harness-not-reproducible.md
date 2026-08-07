@@ -268,14 +268,61 @@ determinism pins passing is evidence for three specific configurations
 (`(seed, profile, clients, ops, shards)` = Mixed/0/4/30/2, MultiWaiter/10/4/30/2,
 TxHeavy/3/4/60/2), in-process, not a general guarantee:
 
-- **`BlockingHeavy` has no determinism pin at all** — the one profile of the four never checked
-  for reproducibility. It passes its invariants in the OPS=150 sweep above, but that says nothing
-  about whether it runs the *same* history twice; add a fourth
-  `run_is_reproducible_blockingheavy_*`.
-- The pins are **run-twice-in-one-process**. Cross-process reproducibility was verified by hand
-  when issue 17 landed but nothing asserts it on an ongoing basis.
+- ~~**`BlockingHeavy` has no determinism pin at all**~~ — closed 2026-08-06, see below.
+- ~~The pins are **run-twice-in-one-process**~~ — closed 2026-08-06, see below.
 - Determinism at 30–60 ops does not imply determinism at the nightly default of 150.
 
-Recommend this issue stay open for R5, R7–R11 and the `BlockingHeavy` pin, with the "findings cannot
+Recommend this issue stay open for R5 and R7–R11, with the "findings cannot
 be pinned by seed" warning in issue 11 now downgraded: seed pinning is sound for the pinned
 configurations, and should be treated as unproven elsewhere until the above closes.
+
+## Pin gaps closed (2026-08-06)
+
+Both of the pin-coverage gaps above are now asserted on every run. Local mode, no product changes.
+
+### `BlockingHeavy` determinism pin
+
+`determinism::run_is_reproducible_blockingheavy_seed_1` — seed 1, 4 clients, 60 ops, 2 shards, run
+twice in-process, digests compared line by line like the other three. Seed 1 was chosen because it
+actually parks: the test additionally asserts
+`run.registration_order.list_pop_registrations() > 0`, so the pin cannot silently degrade into a
+"reproducible because nothing blocked" tautology if the generator changes.
+
+### Cross-process determinism pin
+
+`determinism::run_is_reproducible_across_processes` re-executes the test binary
+(`std::env::current_exe()`) with `--ignored --nocapture <child test>`, which runs the `#[ignore]`d
+`determinism::cross_process_digest_child` (Mixed / seed 0 / 4 clients / 30 ops / 2 shards, the same
+config as the in-process Mixed pin), prints an FNV-1a fingerprint of its run digest, and compares
+that fingerprint against the parent's own run of the same config. Same seed → same digest across
+two OS processes, asserted continuously rather than by hand.
+
+**A committed golden digest constant was rejected**, per the fallback the task allowed: the
+fingerprint covers server-observable results, and CI runs `ubuntu-latest` (x86_64 Linux) while
+development is macOS/aarch64. A constant pinned from a dev machine cannot be validated for CI from a
+dev machine, so the first CI run would either fail for a platform reason indistinguishable from a
+real determinism regression, or get "fixed" by copying whatever CI printed — which asserts nothing.
+Self-spawning compares two processes on the *same* machine, which is exactly the property the
+criterion asks for, and stays platform-agnostic. `digest_fingerprint`
+(`frogdb-server/crates/server/tests/common/run_digest.rs`) uses FNV-1a rather than
+`DefaultHasher` precisely so the value is process-seed-free and stdlib-version-free; if a golden
+constant is ever wanted, that function is the hook.
+
+Note the child filter is a **substring** match, not `--exact`: the child test's path inside the
+integration binary is `concurrency_workload::determinism::cross_process_digest_child`, so an
+`--exact determinism::cross_process_digest_child` filters everything out and the child silently runs
+zero tests. The parent asserts the child actually printed a fingerprint line, so that failure mode
+is loud rather than vacuous.
+
+### Verification
+
+`cargo nextest run -p frogdb-server --features turmoil -E 'test(/determinism::/) + test(/exact_fifo/)'`
+— 7/7 pass, run twice back to back (both passes green, including the two new pins).
+
+### Residual-gap follow-ups (from the section above) are discharged
+
+Both bullets under "Residual gap this surfaced" were traced and addressed under issue 16; see
+[`../done/16-fifo-exact-checker-degrades-to-unsound-proxy.md`](../done/16-fifo-exact-checker-degrades-to-unsound-proxy.md).
+Summary: the ~2% attribution loss is benign-direction only (pops that never parked), now counted
+separately and hard-failed if it ever appears in the defect direction; the judged fraction rose from
+8.1% to 80.9% via a new `HighContention` profile pinned into the nightly sweep.

@@ -365,6 +365,24 @@ pub struct FifoCoverage {
     /// gap to [`Self::registrations`] is attribution loss (a client's pop count
     /// on a key disagreed with its registration count there), not capture loss.
     pub attributed: usize,
+    /// Registrations dropped because the client issued *more* blocking pops on
+    /// the key than the shard journaled parks for it. This is the benign
+    /// direction and the only one the design predicts: a pop that found data
+    /// already present never entered the wait queue, and which of the client's
+    /// pops that was is not recoverable from the history, so none of them are
+    /// judged (see the attribution section of
+    /// [`check_fifo_wake_order_exact`]).
+    pub unattributed_extra_pops: usize,
+    /// Registrations dropped because the shard journaled *more* parks on the
+    /// key for the client than the history has blocking pops for it. Nothing in
+    /// the design produces this: one `BLPOP` registers at most once (the
+    /// command only parks after the shard reports the key empty, and the
+    /// connection never re-registers), and every client runs its script
+    /// serially to completion. A non-zero count therefore means a defect —
+    /// journal/`CLIENT ID` join drift, a lost operation record, or a real
+    /// double-registration in the wait queue — and must be traced, not
+    /// absorbed as coverage loss.
+    pub unattributed_missing_pops: usize,
     /// Served blocking pops the checker considered. Includes pops that never
     /// parked, so `judged_pops / served_pops` is *not* a capture metric.
     pub served_pops: usize,
@@ -440,9 +458,19 @@ pub fn check_fifo_wake_order_exact(
     // pins down positionally (see the doc comment).
     let mut op_ordinal: HashMap<(Bytes, u64), u64> = HashMap::new();
     let mut attributed = 0usize;
+    let mut unattributed_extra_pops = 0usize;
+    let mut unattributed_missing_pops = 0usize;
     for ((key, client_id), pops) in &mut pops_by_key_client {
         let seqs = order.list_pop_ordinals(key, *client_id);
         if seqs.len() != pops.len() {
+            // Record *which way* the counts disagreed: more pops than parks is
+            // the expected "found data present" case, while more parks than
+            // pops cannot happen by design and points at a defect.
+            if pops.len() > seqs.len() {
+                unattributed_extra_pops += seqs.len();
+            } else {
+                unattributed_missing_pops += seqs.len();
+            }
             continue;
         }
         attributed += seqs.len();
@@ -474,9 +502,21 @@ pub fn check_fifo_wake_order_exact(
             .push((op.return_time, op.client_id, op.id));
     }
 
+    let registrations = order.list_pop_registrations();
+    // Registrations on a `(key, client)` pair the history has no blocking pop
+    // for at all never reach the loop above (it iterates the pops). They are
+    // the same defect shape as "journaled more parks than pops", so fold the
+    // residual into that bucket rather than letting it vanish from both.
+    unattributed_missing_pops += registrations
+        .saturating_sub(attributed)
+        .saturating_sub(unattributed_extra_pops)
+        .saturating_sub(unattributed_missing_pops);
+
     let mut coverage = FifoCoverage {
-        registrations: order.list_pop_registrations(),
+        registrations,
         attributed,
+        unattributed_extra_pops,
+        unattributed_missing_pops,
         served_pops: by_key.values().map(Vec::len).sum(),
         complete: order.is_complete(),
         ..FifoCoverage::default()
@@ -485,6 +525,8 @@ pub fn check_fifo_wake_order_exact(
         // Coverage collapsed: with a truncated journal a missing ordinal no
         // longer proves the waiter never parked, so no comparison is sound.
         coverage.attributed = 0;
+        coverage.unattributed_extra_pops = 0;
+        coverage.unattributed_missing_pops = 0;
         return Ok(coverage);
     }
 
@@ -1295,6 +1337,70 @@ mod tests {
         assert_eq!(cov.served_pops, 3);
         assert_eq!(cov.judged_pops, 1); // client 2 only
         assert_eq!(cov.pairs_compared, 0);
+    }
+
+    #[test]
+    fn fifo_attribution_loss_is_classified_by_direction() {
+        // Client 1: two pops on `k`, one journaled park -> the benign
+        // "found data present" direction. Client 2: one pop, one park -> judged.
+        let mut h = History::new();
+        let a = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        h.respond(a, Some(b("k|a")));
+        let c = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        h.respond(c, Some(b("k|c")));
+        let w2 = h.invoke(2, "blpop", vec![b("k"), b("0")]);
+        h.respond(w2, Some(b("k|b")));
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 5, "BLPOP");
+        order.insert(b("k"), 2, 1, "BLPOP");
+
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("no verdict from the lost pair");
+        assert_eq!(cov.registrations, 2);
+        assert_eq!(cov.attributed, 1);
+        assert_eq!(
+            cov.unattributed_extra_pops, 1,
+            "client 1's ordinal was dropped because it popped more often than it parked"
+        );
+        assert_eq!(
+            cov.unattributed_missing_pops, 0,
+            "nothing journaled a park the history has no pop for"
+        );
+    }
+
+    #[test]
+    fn fifo_attribution_loss_flags_parks_without_pops() {
+        // Two journaled parks for client 1 on `k` but only one pop, and a park
+        // for client 3 which issued no pop at all: both are the defect
+        // direction (more parks than pops), including the pair the pop-driven
+        // loop never visits.
+        let mut h = History::new();
+        let a = h.invoke(1, "blpop", vec![b("k"), b("0")]);
+        h.respond(a, Some(b("k|a")));
+        let mut order = WaiterRegistrationOrder::default();
+        order.insert(b("k"), 1, 1, "BLPOP");
+        order.insert(b("k"), 1, 2, "BLPOP");
+        order.insert(b("k"), 3, 3, "BLPOP");
+
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("no verdict");
+        assert_eq!(cov.registrations, 3);
+        assert_eq!(cov.attributed, 0);
+        assert_eq!(cov.unattributed_extra_pops, 0);
+        assert_eq!(
+            cov.unattributed_missing_pops, 3,
+            "2 parks against 1 pop, plus 1 park by a client with no pop at all"
+        );
+    }
+
+    #[test]
+    fn fifo_truncated_journal_reports_no_attribution_split() {
+        // A truncated journal judges nothing, so neither loss bucket may claim
+        // registrations it cannot reason about.
+        let (h, mut order) = two_waiter_history(2);
+        order.mark_truncated();
+        let cov = check_fifo_wake_order_exact(&h, &order).expect("truncated: no verdict");
+        assert_eq!(cov.attributed, 0);
+        assert_eq!(cov.unattributed_extra_pops, 0);
+        assert_eq!(cov.unattributed_missing_pops, 0);
     }
 
     /// Two pops by one client on one key, with two journaled registrations:
