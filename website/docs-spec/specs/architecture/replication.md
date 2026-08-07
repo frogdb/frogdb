@@ -117,7 +117,11 @@ secondary ID is captured on promotion (`new_replication_id()` sets
 full sync uses a RocksDB checkpoint (with an RDB fallback when no RocksStore);
 handshake sends `REPLCONF listening-port`, `REPLCONF capa …`, `REPLCONF
 frogdb-version`, then `PSYNC`; primary answers `+FULLRESYNC <id> <offset>` or
-`+CONTINUE <id>`. Note the handshake has **no AUTH step** in the code path — do
+`+CONTINUE <id>` — or refuses with `-ERR PSYNC refused …` when the announced
+`frogdb-version` is on a different major version (the gate is at the `PSYNC`,
+not at the `REPLCONF`; same-major minor skew and unreadable/absent versions are
+served with a warning — `version_compat.rs`, FM-REPLICATION-064). Note the
+handshake has **no AUTH step** in the code path — do
 not document one unless verified. Note the capabilities line is sent as
 `capa eof capa psync2` (two `capa` tokens) — document the actual bytes.
 

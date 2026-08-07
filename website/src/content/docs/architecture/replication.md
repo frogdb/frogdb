@@ -59,12 +59,24 @@ Replica                              Primary
    |                                    |
    |-- PSYNC <repl_id> <offset> ------>| (fresh replica sends PSYNC ? -1)
    |<- +FULLRESYNC <id> <off>  --------|  or  +CONTINUE <id>
+                                        |  or  -ERR PSYNC refused (version gate)
 ```
 
 Notes verified against source:
 - The capability line sends **two** `capa` tokens: `capa eof capa psync2`.
 - There is **no AUTH step** in this handshake code path.
 - `+FULLRESYNC <id> <offset>` triggers a checkpoint transfer; `+CONTINUE <id>` resumes streaming from the replica's offset.
+
+### Version compatibility gate
+
+The announced `frogdb-version` is checked at the `PSYNC`, not at the `REPLCONF` that carries it — a replica is free to ignore an error on an option and send `PSYNC` anyway, and `PSYNC` is the point where the primary would otherwise commit a session, a resync counter and possibly a checkpoint directory. The rule lives in `frogdb-server/crates/replication/src/version_compat.rs`:
+
+- **Different major version: refused.** The primary answers `-ERR PSYNC refused - …`, naming both versions and both majors, and closes the handshake. A FrogDB replica logs the same text, so the reason is readable from either node. FrogDB's checkpoint carries a RocksDB column-family layout rather than a self-describing RDB, so a pair that cannot agree on a major version cannot be made to work by transferring the data and finding out.
+- **Same major, different minor: served, with one warning per replica session** on the primary naming both versions. This is the normal state part-way through a rolling upgrade, so it does not block replication, but it is the signal that the rollout is not finished.
+- **Patch-level differences: served silently.**
+- **No announced version, or one that does not parse: served, with a warning.** A pre-option replica and a non-FrogDB peer both look like this, and refusing them would drop connections on a suspicion rather than on a proven incompatibility. The gate refuses only what it can prove.
+
+Versions compare on their numeric core, so a pre-release or build suffix (`2.0.0-rc1`) is compared as `2.0`.
 
 ---
 
