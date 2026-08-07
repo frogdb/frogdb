@@ -114,6 +114,40 @@ async fn test_psync_initial_request(#[case] persistence: bool) {
     server.shutdown().await;
 }
 
+// FM-REPLICATION-064
+/// The gate, end to end through the real dispatch stage: a version announced
+/// over `REPLCONF frogdb-version` is accumulated on *this* connection and read
+/// by the `PSYNC` that follows it, and a different major is refused there with
+/// an error naming both versions. The unit tests own the rule; this test owns
+/// the wiring — it is the one that fails if the announcement stops reaching
+/// `handle_psync`, which is exactly how this gap was created (issue 22).
+#[tokio::test]
+async fn test_psync_is_refused_for_an_incompatible_replica_version() {
+    let server = TestServer::start_primary().await;
+    let mut client = server.connect().await;
+
+    // A major no FrogDB build will ever carry, so the case is a refusal
+    // regardless of what the workspace version becomes.
+    assert_ok(
+        &client
+            .command(&["REPLCONF", "frogdb-version", "999.0.0"])
+            .await,
+    );
+
+    let response = client.command(&["PSYNC", "?", "-1"]).await;
+    assert!(
+        is_error(&response),
+        "a replica on another major must be refused, got {response:?}"
+    );
+    let message = get_error_message(&response).expect("an error carries its message");
+    assert!(
+        message.contains("999.0.0") && message.contains(env!("CARGO_PKG_VERSION")),
+        "the refusal must name both versions, got: {message:?}"
+    );
+
+    server.shutdown().await;
+}
+
 /// Test that ROLE returns correct info for a standalone/primary server.
 #[rstest]
 #[case::in_memory(false)]
