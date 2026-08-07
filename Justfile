@@ -236,7 +236,7 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-turmoil-features lint-turmoil lint-failure-modes
+lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
@@ -246,7 +246,7 @@ lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam l
 # second (see docs/agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1203,6 +1203,25 @@ lint-format-float:
 # Exemptions live in the script, per file, with a reason and a pinned count.
 lint-clock-seam:
     ./scripts/clock-seam.py
+
+# Gate: a raft write acked as durable used sync write options. Single-file pin on
+# the openraft storage impl (cluster/src/storage.rs) — the durability ack is a
+# callback, not a grep-able return value. See scripts/durable-ack.py.
+lint-durable-ack:
+    ./scripts/durable-ack.py
+
+# Gate: no figment `.nested()` on a config source (it files a TOML file's tables
+# under non-default profiles an extract() never reads). The one live site rides
+# the named-gap warn idiom until round-2 issue 49 lands. See scripts/nested-config.py.
+lint-nested-config:
+    ./scripts/nested-config.py
+
+# Gate: every CRLF-framed error frame (RESP2 Error / RESP3 SimpleError) in the
+# encoder is built through frogdb_protocol::sanitize_error_message, so client
+# error text cannot inject a second wire frame. RESP3 BlobError is length-framed
+# and deliberately exempt. See scripts/error-sanitize.py.
+lint-error-sanitize:
+    ./scripts/error-sanitize.py
 
 # =============================================================================
 # Build/test execution mode

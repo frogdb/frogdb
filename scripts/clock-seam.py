@@ -53,6 +53,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _rustscan import cfg_test_spans, is_test_path  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "frogdb-server" / "crates"
 
@@ -108,6 +111,16 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
         "names the pre-restore backup directory. Operators correlate that name "
         "with real time, and two runs must not collide on it",
     ),
+    "frogdb-server/crates/persistence/src/snapshot/rocks_coordinator.rs": (
+        1,
+        "fallback for a snapshot artifact's wall-clock completion time when its "
+        "metadata.json carries none. The value is recorded back to disk and "
+        "exported as the `SnapshotLastTimestamp` gauge, a forensic wall-clock "
+        "reading Prometheus correlates against its own scrape clock — the same "
+        "observability argument as the telemetry timestamps below. Newly visible "
+        "once the lint learned the paren-less `unwrap_or_else(SystemTime::now)` "
+        "form (hardening-2 C7)",
+    ),
     "frogdb-server/crates/replication/src/split_brain_log.rs": (
         1,
         "names and stamps the split-brain forensic log — same argument as the backup directory",
@@ -133,10 +146,15 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
     ),
 }
 
-STD_INSTANT_QUALIFIED = re.compile(r"\bstd::time::Instant::now\s*\(\)")
-STD_SYSTEM_QUALIFIED = re.compile(r"\bstd::time::SystemTime::now\s*\(\)")
-BARE_INSTANT = re.compile(r"(?<![:\w])Instant::now\s*\(\)")
-BARE_SYSTEM = re.compile(r"(?<![:\w])SystemTime::now\s*\(\)")
+# Match both the called form `...::now()` and the paren-less value form
+# `...::now` (passed to a combinator, e.g. `get_or_init(Instant::now)` /
+# `unwrap_or_else(SystemTime::now)`) — both read the OS clock, the second just
+# defers it. A trailing `\b` (not `\s*\(\)`) is what catches the paren-less
+# case; `now\b` still rejects `now_us`, `nowhere`, etc.
+STD_INSTANT_QUALIFIED = re.compile(r"\bstd::time::Instant::now\b")
+STD_SYSTEM_QUALIFIED = re.compile(r"\bstd::time::SystemTime::now\b")
+BARE_INSTANT = re.compile(r"(?<![:\w])Instant::now\b")
+BARE_SYSTEM = re.compile(r"(?<![:\w])SystemTime::now\b")
 
 IMPORTS_STD_INSTANT = re.compile(r"^\s*use std::time::(?:\{[^}]*\bInstant\b|Instant\b)", re.M)
 IMPORTS_TOKIO_INSTANT = re.compile(r"^\s*use tokio::time::(?:\{[^}]*\bInstant\b|Instant\b)", re.M)
@@ -150,39 +168,12 @@ class Finding:
     source: str
 
 
-def cfg_test_spans(lines: list[str]) -> list[tuple[int, int]]:
-    """Line spans (0-based, inclusive) covered by `#[cfg(test)]` items."""
-    spans: list[tuple[int, int]] = []
-    i, n = 0, len(lines)
-    while i < n:
-        if "#[cfg(test)]" not in lines[i]:
-            i += 1
-            continue
-        j, depth, opened = i, 0, False
-        while j < n:
-            depth += lines[j].count("{") - lines[j].count("}")
-            opened = opened or "{" in lines[j]
-            if opened and depth <= 0:
-                break
-            j += 1
-        spans.append((i, j))
-        i = j + 1
-    return spans
-
-
-def is_test_path(rel: Path) -> bool:
-    """A test module carried in `src/`: `tests.rs`, `*_tests.rs`, `tests/`."""
-    return (
-        rel.name == "tests.rs"
-        or rel.name.endswith("_tests.rs")
-        or "tests" in rel.parts[4:]  # a `tests/` module dir inside src/
-    )
-
-
 def scan(path: Path) -> list[Finding]:
     rel = path.relative_to(ROOT)
     text = path.read_text()
-    if "::now()" not in text.replace(" ", ""):
+    # Fast path: `::now` (not `::now()`) so a file that only reads the clock via
+    # the paren-less value form is not skipped before the real predicates run.
+    if "::now" not in text.replace(" ", ""):
         return []
     lines = text.splitlines()
     spans = cfg_test_spans(lines)

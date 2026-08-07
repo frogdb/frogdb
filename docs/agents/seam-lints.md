@@ -1,17 +1,17 @@
 # Seam lints: chokepoint gates
 
 A seam lint states an invariant of the form **"every X must go through Y"**, where `Y` is the one
-implementation that gets it right, and fails the build on any `X` that does not. Eleven of these
+implementation that gets it right, and fails the build on any `X` that does not. Fourteen of these
 ship today, plus `lint-failover-atomicity`'s sibling checks; each is a `just lint-<rule>` recipe
 and all but one run in well under a second because they are `grep`/`awk` over source text, not
 compiled Rust.
 
-`just lint-gates` runs the compile-free ten of them in one shot (~0.9s measured). It is wired into
+`just lint-gates` runs the compile-free thirteen of them in one shot. It is wired into
 lefthook `pre-commit` **unconditionally** — no `CLAUDECODE=1` skip, unlike `rust-clippy`, because
 these are greps, not a workspace compile — and into CI as the `seam-gates` job
 (`.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`, rendered to
 `.github/workflows/test.yml`), listed in `ci-pass`'s required-jobs array. `just lint` still runs
-the full eleven (plus the turmoil lints) as part of `just check`/CI's `lint` job.
+the full fourteen (plus the turmoil lints) as part of `just check`/CI's `lint` job.
 
 ## The family
 
@@ -28,9 +28,12 @@ the full eleven (plus the turmoil lints) as part of `just check`/CI's `lint` job
 | `lint-no-typed-unwrap` | command code (`crates/commands/src`) never hand-rolls the `WrongType` invariant — no check-then-unwrap (`as_*_mut().unwrap()` / `get_mut(...).unwrap()`) and no `.ok_or(_else)(...WrongType...)` chain; go through the typed store accessors (`StoreTypedExt`/`StoreTypedFamilyExt`) instead | yes |
 | `lint-keyspace-notify-routing` | keyspace/keyevent notifications publish through `KeyspaceNotificationCoordinator`, never `self.subscriptions.publish(...)` directly, except `dispatch_pubsub.rs` (the coordinator shard's own delivery arm) | yes |
 | `lint-script-gate` | cross-shard Lua sub-command routing stays behind `ScriptCommandGate`: no `block_in_place` outside `scripting/gate.rs`, and no second key extraction (`extract_keys_from_command`) in `lua_vm.rs` | yes |
+| `lint-durable-ack` | a single-file pin on `cluster/src/storage.rs`: each openraft storage method that acks durability (`save`, `save_vote`, `append`) issues its RocksDB write with sync options (`write_opt(..)` + `set_sync(true)`), never a plain `db.write`/`db.flush` that returns before the WAL is fsynced (durability is acked by a callback, not a value a grep can see, so this is a hand-crafted pin, not an `rg` rule) | yes |
+| `lint-nested-config` | no figment `.nested()` on a config source anywhere under `frogdb-server` — it files a TOML file's top-level tables under non-default profiles that an `extract()` under `Profile::Default` never reads (round-2 issue 49); the one known site rides the named-gap warn idiom until the fix lands | yes |
+| `lint-error-sanitize` | a single-file pin on `protocol/src/response.rs`: every CRLF-framed error frame (`Resp2BytesFrame::Error`, `Resp3BytesFrame::SimpleError`) takes its payload from `sanitize_error_message(..)` so a client's error text cannot inject a second wire frame (#38); the length-framed `Resp3BytesFrame::BlobError` is deliberately exempt | yes |
 
 Two recipes sit next to this family but are out of scope for both `lint-gates` and this doc's
-"the 11": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
+"the 14": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
 `lint-turmoil-features` (checks the turmoil cargo-feature is forwarded through every dependent
 manifest — does not compile, but polices the turmoil feature rather than a seam, and the
 originating issue named "the turmoil lints" as excluded alongside the one that compiles). Both
