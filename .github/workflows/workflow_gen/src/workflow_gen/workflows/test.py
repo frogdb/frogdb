@@ -166,6 +166,31 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    # The compile-free seam-lint family (docs/agents/seam-lints.md):
+    # `just lint-gates` runs every `lint-*` gate except `lint-failure-modes`
+    # (builds test binaries) and the turmoil lints — grep/regex checks with no
+    # compile step, so this job needs no Rust toolchain, just `just` (for the
+    # recipe) and `uv` (the clock-seam gate is a PEP-723 script). Kept as its
+    # own job, separate from `lint`, so a seam violation is visible without
+    # waiting on clippy to compile the whole workspace.
+    seam_gates = w.job(
+        "seam-gates",
+        Job(
+            name="Seam Lint Gates",
+            runs_on=RUNS_ON,
+            needs="changes",
+            if_="needs.changes.outputs.rust == 'true'",
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
+                run_step(
+                    name="Run compile-free seam-lint gates",
+                    run="just lint-gates",
+                ),
+            ],
+        ),
+    )
+
     unit_tests = w.job(
         "unit-tests",
         Job(
@@ -573,6 +598,7 @@ def test_workflow() -> Workflow:
             needs=[
                 actionlint,
                 lint,
+                seam_gates,
                 unit_tests,
                 cmd_full_build,
                 shuttle_tests,

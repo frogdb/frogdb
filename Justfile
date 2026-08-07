@@ -239,6 +239,16 @@ fmt-check crate="":
 lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
+# Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
+# except `lint-failure-modes` (builds test binaries) and the turmoil lints
+# (compile via clippy, or exist only to police the turmoil feature). These are
+# grep/regex checks over source text, so the whole set runs in well under a
+# second (see docs/agents/seam-lints.md) and is cheap enough to run
+# unconditionally on every commit, unlike `lint` (clippy compiles the
+# workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate
+    @echo "OK: seam-lint gates passed"
+
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
 # are behind #[cfg(feature = "turmoil")], a non-default feature the plain clippy
 # pass above never enables — those bodies escape clippy entirely and only surface

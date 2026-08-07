@@ -144,6 +144,13 @@ Multi-context: `CONTEXT-MAP.md` at root points to a per-context `CONTEXT.md`
 plain line coverage (which function is reached by how many *distinct* tests). See
 `docs/agents/coverage-depth.md`.
 
+### Seam lints
+
+Eleven chokepoint gates encode "every X must go through Y" invariants (clock reads, metrics
+emission, redirect replies, ...). `just lint-gates` runs the compile-free subset on every commit
+(lefthook, unconditional) and in CI (`seam-gates` job); the full family runs in `just lint`. See
+`docs/agents/seam-lints.md`.
+
 ### Remote compilation/testing: Blacksmith testboxes
 
 Gated behind the session's execution mode — see

@@ -51,18 +51,14 @@ pre-commit:
         - "rust-toolchain.toml"
         - ".mise.toml"
       run: just sync-toolchain-check
-    - name: no-typed-unwrap
-      glob:
-        - "frogdb-server/crates/commands/src/**/*.rs"
-      run: just lint-no-typed-unwrap
-    - name: keyspace-notify-routing
-      glob:
-        - "frogdb-server/crates/core/src/shard/**/*.rs"
-      run: just lint-keyspace-notify-routing
-    - name: script-gate
-      glob:
-        - "frogdb-server/crates/core/src/scripting/**/*.rs"
-      run: just lint-script-gate
+    # The compile-free seam-lint family (docs/agents/seam-lints.md). Unlike
+    # rust-clippy above, these are grep/regex checks with no compile step
+    # (sub-second total), so there is no CLAUDECODE skip: the rationale for
+    # skipping clippy under agents does not apply to a set of greps. Runs
+    # unconditionally (no glob) since a violation can be introduced by
+    # editing either the checked file or the seam it must route through.
+    - name: seam-gates
+      run: just lint-gates
     - name: scratch-tracker
       glob:
         - ".scratch/**/*.md"

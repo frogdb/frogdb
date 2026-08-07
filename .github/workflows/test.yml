@@ -117,6 +117,23 @@ jobs:
       run: cargo clippy --all-targets -- -D warnings
     - name: Check licenses and advisories
       run: cargo deny check --config frogdb-server/deny.toml
+  seam-gates:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    name: Seam Lint Gates
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: python uv just
+        cache: 'true'
+        experimental: 'true'
+    - name: Run compile-free seam-lint gates
+      run: just lint-gates
   unit-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -473,6 +490,7 @@ jobs:
     needs:
     - actionlint
     - lint
+    - seam-gates
     - unit-tests
     - cmd-full-build
     - shuttle-tests
