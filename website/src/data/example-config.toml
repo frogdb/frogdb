@@ -33,6 +33,7 @@ per-request-spans = false
 enabled = true
 mode = "rocksdb"
 data-dir = "./frogdb-data"
+require-existing-data = false
 durability-mode = "periodic"
 sync-interval-ms = 1000
 write-buffer-size-mb = 64

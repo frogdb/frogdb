@@ -577,7 +577,7 @@ mod tests {
     /// subsequent boot, which is the failure mode the guard exists to prevent.
     /// `deny_unknown_fields` turns the attempt into a loud error rather than a
     /// silently ignored key.
-    // FM-PERSISTENCE-052
+    // FM-PERSISTENCE-051
     #[test]
     fn force_fresh_data_dir_is_not_settable_from_the_config_file() {
         let err = serde_json::from_str::<PersistenceConfig>(r#"{"force-fresh-data-dir": true}"#)

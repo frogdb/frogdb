@@ -101,6 +101,15 @@ Do **not** `rm -rf` the existing `data-dir` first — the install step already m
 timestamped backup (one generation is kept automatically), which is your rollback path if the
 restore turns out to be wrong.
 
+The staged path above needs no extra flags: FrogDB stamps the installed directory with its
+identity marker as part of recovery. Assembling a `data-dir` by hand is what needs attention — a
+snapshot's `checkpoint/` contents copied straight into `data-dir`, or a directory carried over
+from a version that predates the marker, holds files FrogDB did not stamp, and that fails the
+boot rather than being written over. Start once with `--force-fresh-data-dir` to adopt such a
+directory; a whole-directory copy of a live `data-dir` (the offline-replica backup above) brings
+the marker with it and starts normally. See
+[Data directory identity](/operations/persistence/#data-directory-identity).
+
 ## Durability mode and backup consistency
 
 How closely a snapshot matches the true last-acknowledged state depends on `persistence.durability-mode`:

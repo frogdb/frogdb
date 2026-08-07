@@ -1792,6 +1792,7 @@ dependencies = [
  "frogdb-config",
  "frogdb-types",
  "parking_lot",
+ "rand 0.10.0",
  "rocksdb",
  "serde",
  "serde_json",

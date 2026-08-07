@@ -1455,7 +1455,11 @@ fn force_fresh_data_dir_adopts_an_unmarked_directory() {
         .expect("adopting must recover the data normally, not start empty");
     assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"hello");
 
-    // One boot with the flag is enough: the directory is marked now.
+    // One boot with the flag is enough: the directory is marked now. The first
+    // boot's RocksDB has to go first — it holds the directory's LOCK, and the
+    // second boot is standing in for the next process, not a second one.
+    drop(recovered);
+
     let adopted = marker_of(&db_dir).database_id;
     cfg.force_fresh_data_dir = false;
     boot_standalone(&cfg).expect("an adopted directory boots on its own afterwards");
@@ -1561,6 +1565,9 @@ fn an_installed_checkpoint_leaves_the_data_dir_marked() {
     let cfg = persistence_config(&db_dir, true);
     let recovered = boot_standalone(&cfg).expect("the staged checkpoint installs");
     assert!(recovered.installed_staged_checkpoint);
+    // Release the installed database's LOCK: the boot below stands in for the
+    // next process, not for a second one racing this test.
+    drop(recovered);
 
     assert_eq!(
         marker_of(&db_dir).database_id,

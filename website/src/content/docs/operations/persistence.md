@@ -92,10 +92,13 @@ interval.
 On startup, FrogDB (`frogdb-server/crates/server/src/server/startup.rs` and
 `frogdb-server/crates/persistence/src/recovery.rs`):
 
-1. Installs a staged replica checkpoint if a `checkpoint_ready` sibling directory is
+1. Verifies that `data-dir` is a directory FrogDB may use — see
+   [Data directory identity](#data-directory-identity) below. This runs before anything
+   writes to the directory, so a wrong path fails the boot instead of being overwritten.
+2. Installs a staged replica checkpoint if a `checkpoint_ready` sibling directory is
    present next to the data directory; otherwise this step is a no-op.
-2. Opens RocksDB at `data-dir`. RocksDB replays its own internal WAL as part of opening.
-3. If data exists, iterates every key in every column family (hot tier, then warm tier)
+3. Opens RocksDB at `data-dir`. RocksDB replays its own internal WAL as part of opening.
+4. If data exists, iterates every key in every column family (hot tier, then warm tier)
    and restores it into the in-memory store, skipping keys whose TTL already expired and
    counting (and logging) any values that fail to deserialize. Recovery continues past
    deserialize failures rather than aborting — this is the only corruption-handling
@@ -107,6 +110,63 @@ instance, not a directory that gets reconstructed from a snapshot on every boot.
 Snapshots in `snapshot-dir` are a separate, standalone copy of the data used for backup
 and replica bootstrap (see [Backup & restore](/operations/backup-restore/) and
 [Replication](/operations/replication/)) — primary recovery never reads them.
+
+## Data directory identity
+
+The first time FrogDB initializes a data directory it writes a marker file,
+`frogdb_data_dir`, containing a generated database id, the creation time, and the
+directory-layout version. On every later boot FrogDB reads it back and decides:
+
+| What is in `data-dir` | What happens |
+|---|---|
+| The marker | Normal startup. |
+| Nothing (missing, empty, or only empty subdirectories) | First boot: FrogDB initializes the database and writes the marker. |
+| Files, but no marker | **Startup fails.** |
+| A marker that cannot be read or parsed | **Startup fails.** |
+
+The refusal exists because a directory with no FrogDB data in it and a directory FrogDB
+is not supposed to be looking at are the same observation from the inside. A mistyped
+`persistence.data-dir`, a container that lost its bind mount, and a volume mounted at the
+wrong path all used to come up as a healthy, empty database — which then began writing
+its WAL and snapshots over whatever was really there. Failing the boot turns a silent
+data-loss window into a startup error naming the resolved absolute path.
+
+Replicas refuse for the same reasons, and the check runs before the replication link is
+dialed. A replica that noticed the problem only after a full resync would have replaced
+the directory's contents with the primary's before anyone could look at it.
+
+### Adopting a directory FrogDB did not stamp
+
+Start once with `--force-fresh-data-dir` to accept the directory as it is and write the
+marker:
+
+```bash
+frogdb-server --config /etc/frogdb/frogdb.toml --force-fresh-data-dir
+```
+
+The flag deletes nothing — existing data is recovered normally — and one boot is enough,
+because the directory is marked afterwards. Use it for a database written before markers
+existed, for one restored by hand, or to repair an unreadable marker. It is a command-line
+flag with no configuration-file equivalent on purpose: a setting left in a config file
+would disable the check permanently, which is exactly the situation the check exists for.
+
+### Empty directories and failed mounts
+
+An unmounted volume presents as an empty directory, and no marker can be read from a
+filesystem that is not there — so FrogDB cannot tell a failed mount from a genuine first
+boot by looking at the directory. By default an empty directory is treated as a first
+boot, because container orchestration routinely pre-creates the mount point.
+
+A deployment that knows it is past its first boot can say so:
+
+```toml
+[persistence]
+require-existing-data = true
+```
+
+With this set, an empty `data-dir` fails the boot instead of initializing a new database.
+Provision a genuinely new node with `--force-fresh-data-dir` for its first start. Set it
+after the node is provisioned, not before — otherwise every new node needs the flag.
 
 ## Tiered storage
 
