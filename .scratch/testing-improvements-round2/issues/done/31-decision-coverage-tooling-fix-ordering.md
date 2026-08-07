@@ -1,6 +1,6 @@
 # Decision D3 — when to fix the coverage tooling, relative to the testing work
 
-Status: ready-for-human
+Status: done
 Type: decision
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §7 D3 · MASTER.md §1 "Data-quality caveat"
@@ -85,3 +85,12 @@ so option (a) ("fix the tooling before starting the testing work") is now moot �
 (`ShardSearchIndex::open_in_ram` "untested at 0/41 regions") is a **false negative produced by this
 very defect** — the function had 15 in-crate callers at audit-filing commit `a0e85aac` and has ~20
 today (`search/src/index.rs:1447+`, `spellcheck.rs:161+`). Stays `ready-for-human`.
+
+## Ruling 2026-08-07
+
+Decided as part of campaign-2 kickoff (`.scratch/hardening-2/PRD.md` §8 ruling 7): **fix the
+coverage pipeline in wave 0** of campaign 2, alongside c2-06. Effectively option (c)-shaped —
+an independent track that does not block the defect waves — but sequenced at the front of the
+campaign so every later "did this help?" measurement runs on real data. Issues 27 and 28 are the
+implementing work items and join wave 0. Until they land, no coverage number from this repo is
+quotable (MASTER.md constraint holds).

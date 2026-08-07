@@ -1,6 +1,6 @@
 # Campaign 2 — detection-first hardening
 
-Status: draft (awaiting approval)
+Status: **approved 2026-08-07** — all §8 decisions ruled (see per-decision rulings)
 Author: 2026-08-07
 Predecessor: [foundation-hardening campaign](../hardening/README.md), retrospective
 [`retrospective-2026-08-05.md`](../hardening/retrospective-2026-08-05.md)
@@ -517,7 +517,7 @@ so that each fix lands with a detector behind it. Round-2 issues are bare number
 
 | wave | defects | gated on |
 |---|---|---|
-| 0 — the gates don't run | **c2-06** (11 seam gates fire in neither CI nor agent commits) | nothing; blocks every W1 item, ships first |
+| 0 — the gates don't run | **c2-06** (11 seam gates fire in neither CI nor agent commits), 27/28/31 (coverage pipeline — fix per §8 ruling 7) | nothing; blocks every W1 item, ships first |
 | 1 — reachable pre-auth | 38 (CRLF frame injection), 63 (shard panic), **c2-07** (no panic isolation at the shard boundary) | nothing |
 | 2 — consensus + isolation | 73 (raft log fsync), **c2-01** (`save_vote` flushes the wrong CF), 53 (stale log reader), 50 (EXEC gate), **c2-05** (`FunctionCall` gate) | W2 harness for 73/c2-01; W1 C3 lint for 50/c2-05 |
 | 3 — silent data loss | 45 (`FT.ALTER` wipes JSON index), 44 (`TS.CREATERULE` not persisted), 42 (RocksDB iteration error → `None`), 24 (`BLMOVE` WRONGTYPE), 43 (`ES.SNAPSHOT` non-UTF-8) | W1 error-swallow rule |
@@ -565,32 +565,44 @@ The campaign exits when all of the following hold:
 - Performance work, new features, and the exotic command families beyond the defects listed here.
 - The redis-regression suite stays unfrozen and is treated as a normal test suite; no refreeze.
 
-## 8. Open decisions
+## 8. Open decisions — ALL RULED 2026-08-07
 
-These need a ruling before the workstreams they belong to can start. Recommendation given for each.
+Original questions kept for the record; ruling appended to each.
 
 1. **Scale and sequencing.** Campaign 1 ran four areas serially over weeks. Campaign 2 is wider
    (7 workstreams, 27 defects, a 258-row re-witness). *Recommendation:* run W0/W1's item zero
    (c2-06) and waves 0–1 immediately since they are small and unblock everything, then W3a — the
    re-witness — as the long pole, with W2 built alongside it because W3a's persistence tranche
    needs the crash primitive.
+   **Ruling: approved as recommended.** W0 + waves 0–1 first, then W3a as the long pole with W2
+   built alongside.
 2. **H1 as an error, today.** 9 tagged tests have no assertion at all. Adopting H1 as an error
    means fixing or allowlisting all 9 in the same change, and it needs a `prop_assert*`/custom-
    helper allowlist or it false-positives at ~40%. *Recommendation:* adopt as error with a
    count-pinned allowlist, mirroring `clock-seam.py`.
+   **Ruling: approved as recommended** — error with count-pinned allowlist.
 3. **`frogdb-core` mutation perimeter (B2).** It is the largest crate and was never mutated; the
    weakest persistence evidence lives in it. A full run is expensive. *Recommendation:* mutate the
    `shard/` dispatch and `persistence/` subtrees only, at a lower threshold (0.70) to start.
+   **Ruling: approved as recommended** — `shard/` + `persistence/` subtrees, 0.70 threshold to
+   start.
 4. **C3 arm dispositions.** `CoreMsg::GetVersion` mutates via `purge_if_expired` — is that store
    execution under a foreign continuation lock? `VllMsg::VllExecute` hardcodes `conn_id = 0` — is
    the drain path exempt by design? Both need a recorded ruling before the lint can be exhaustive
    (c2-05).
+   **Ruling: investigate-and-propose.** During C3/c2-05 work, write forcing tests for both arms,
+   record proposed dispositions with evidence, and present for approval before the C3 lint lands.
+   C2/C5/C6/C7 are not blocked on this.
 5. **ACL missing-file-at-boot policy.** Redis refuses to start when `aclfile` is unreadable.
    FrogDB currently ignores the file entirely. *Recommendation:* match Redis and refuse — but this
    turns a silently-degraded boot into a hard failure for anyone with a stale path (c2-02).
+   **Ruling: match Redis** — refuse to start when the configured `aclfile` is unreadable.
 6. **Does the campaign own its own weak witnesses?** W3a's re-witnessing will surface rows whose
    *fix* is out of scope (search, timeseries, JSON). *Recommendation:* re-witness anyway, file the
    defect, and let the wave table decide whether it ships — a weak witness is in scope even when
    the subject is not.
+   **Ruling: re-witness** everything regardless of subject scope; file defects; wave table decides
+   what ships.
 7. **Coverage pipeline.** Left broken at campaign-1 exit. *Recommendation:* fix it in W0 or turn it
    off; a coverage number nobody trusts is worse than none.
+   **Ruling: fix it in W0.** Issues 27/28/31 join wave 0 alongside c2-06.
