@@ -19,7 +19,7 @@ pub use limits::{MAX_INTERNAL_FRAME_LEN, PROTO_MAX_BULK_LEN, PROTO_MAX_MULTIBULK
 pub use reply::MapReply;
 pub use response::{
     BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, SlotMigrationKind,
-    WireResponse, WireResult,
+    WireResponse, WireResult, sanitize_error_message,
 };
 pub use version::ProtocolVersion;
 

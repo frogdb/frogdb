@@ -681,3 +681,101 @@ async fn tcl_test_verbatim_str_parsing() {
         other => panic!("expected VerbatimString frame, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Reply-stream framing (not a TCL port)
+//
+// Redis's protocol.tcl desync simulators are excluded above (see the header),
+// but the property they protect — one request, one frame — is asserted here for
+// the one desync FrogDB could actually be driven into by a client: an error
+// payload carrying CR/LF. Round-2 issue 38.
+// ---------------------------------------------------------------------------
+
+/// Read from `stream` until the accumulated bytes end with `terminator`, or the
+/// deadline expires. Returns everything read so far either way, so a failing
+/// assertion can show the real stream rather than a timeout panic.
+async fn read_until_suffix(stream: &mut TcpStream, terminator: &[u8]) -> Vec<u8> {
+    let mut acc = Vec::new();
+    let deadline = tokio::time::Duration::from_secs(5);
+    let _ = tokio::time::timeout(deadline, async {
+        loop {
+            let mut buf = [0u8; 4096];
+            match stream.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    acc.extend_from_slice(&buf[..n]);
+                    if acc.ends_with(terminator) {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+    .await;
+    acc
+}
+
+/// A command name containing `\r\n+OK\r\n` must not inject frames into the
+/// reply stream (round-2 issue 38, invariant P8).
+///
+/// The unknown-command error interpolates the client-controlled command name,
+/// and it is reachable on a connection that has issued no `AUTH` — the exposed-
+/// port threat model. Unsanitized, `-ERR unknown command 'AB\r\n+OK\r\nX', …`
+/// puts three frames on the wire for one request; the client's *next* reply read
+/// then consumes the attacker's forged `+OK` and every subsequent reply on that
+/// pooled connection is attributed to the wrong command.
+///
+/// The assertion is a stream property across two pipelined commands, which is
+/// why it needs a real socket: the reply stream must be exactly one error frame
+/// followed by exactly one `+PONG`.
+#[tokio::test]
+async fn error_reply_with_embedded_crlf_does_not_inject_frames() {
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", server.port()))
+        .await
+        .unwrap();
+
+    // Pipelined in one write, with no AUTH first: an unknown command whose name
+    // is `AB\r\n+OK\r\nX` (10 bytes), then a plain PING.
+    stream
+        .write_all(b"*1\r\n$10\r\nAB\r\n+OK\r\nX\r\n*1\r\n$4\r\nPING\r\n")
+        .await
+        .unwrap();
+
+    let reply = read_until_suffix(&mut stream, b"+PONG\r\n").await;
+    let text = String::from_utf8_lossy(&reply);
+
+    // Split into frames on the CRLF terminator. Every reply here is a
+    // single-line frame, so the stream must be exactly two lines.
+    let frames: Vec<&str> = text
+        .strip_suffix("\r\n")
+        .unwrap_or(&text)
+        .split("\r\n")
+        .collect();
+    assert_eq!(
+        frames.len(),
+        2,
+        "expected exactly 2 frames (one error, one +PONG); the injected CR/LF \
+         desynchronized the stream: {text:?}"
+    );
+    assert!(
+        frames[0].starts_with("-ERR unknown command "),
+        "first frame must be the unknown-command error, got {:?} (stream: {text:?})",
+        frames[0]
+    );
+    assert_eq!(
+        frames[1], "+PONG",
+        "second frame must be the PING reply, got {:?} (stream: {text:?})",
+        frames[1]
+    );
+    // The forged bytes are neutralized the way Redis neutralizes them: each CR
+    // and each LF becomes one space, so the payload stays readable (and the same
+    // length) but can no longer start a frame.
+    assert!(
+        frames[0].contains("'AB  +OK  X'"),
+        "expected the command name with CR/LF mapped to spaces, got {:?}",
+        frames[0]
+    );
+}
