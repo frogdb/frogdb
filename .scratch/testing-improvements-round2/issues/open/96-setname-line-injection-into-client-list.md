@@ -1,6 +1,12 @@
 # `CLIENT SETNAME` / `HELLO … SETNAME` allow line injection into `CLIENT LIST`
 
-Status: needs-triage
+Status: ready-for-agent
+Triage: 2026-08-07 — scheduled into hardening-2 **W4 security spec** (same client-controlled-substring
+injection family as round2 #38, which is fixed). #38 covered every client string reaching an *error*
+reply; this is the two remaining client strings reaching a *data* reply (`CLIENT LIST`). Fix is a
+single shared `0x21..=0x7e` validator at both call sites (`client_conn_command.rs:210`,
+`auth_conn_command.rs:414`) with the Redis error text; low risk, server crate only. Forcing test
+below is the acceptance gate.
 Type: bug (protocol / injection)
 Origin: surfaced by the round2 #38 CRLF-sanitizer fix, 2026-08-07 — the wider error-site sweep
 Area: frogdb-server / connection command handling

@@ -29,6 +29,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use crate::connection::util::validate_client_name;
+
 /// The `CommandSpec` for CLIENT. Strategy is `ConnectionLevel(Admin)`, validated
 /// by the registry against the `Connection` executor variant.
 static CLIENT_SPEC: CommandSpec = CommandSpec {
@@ -206,9 +208,10 @@ fn client_setname(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
 
     let name = &args[0];
 
-    // Validate name: no spaces allowed
-    if name.contains(&b' ') {
-        return Response::error("ERR Client names cannot contain spaces");
+    // Validate name: printable ASCII only (Redis parity) so CLIENT LIST rows
+    // stay one-per-connection and splittable — see validate_client_name.
+    if let Err(msg) = validate_client_name(name) {
+        return Response::error(msg);
     }
 
     // Empty name clears the name

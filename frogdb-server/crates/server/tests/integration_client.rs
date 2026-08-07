@@ -266,6 +266,86 @@ async fn test_client_setname_invalid_name() {
     server.shutdown().await;
 }
 
+/// Forcing test for issue 96: `CLIENT SETNAME` must reject any name byte
+/// outside printable ASCII (`0x21..=0x7e`) — space, newline, CR, NUL — so a
+/// client name can never forge or split a `CLIENT LIST` row (Redis parity,
+/// `networking.c` `clientSetNameOrReply`).
+#[tokio::test]
+async fn test_client_setname_rejects_line_injection() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // A benign starting name proves a rejected attempt does not clobber it.
+    assert_eq!(
+        client.command(&["CLIENT", "SETNAME", "good"]).await,
+        Response::ok()
+    );
+
+    for bad in ["evil\nname", "evil\rname", "evil\0name", "has space"] {
+        let response = client.command(&["CLIENT", "SETNAME", bad]).await;
+        assert!(
+            matches!(response, Response::Error(_)),
+            "SETNAME {bad:?} must be rejected"
+        );
+        assert_eq!(
+            client.command(&["CLIENT", "GETNAME"]).await,
+            Response::Bulk(Some(Bytes::from("good"))),
+            "a rejected SETNAME must not alter the connection name"
+        );
+    }
+
+    // The injection target: CLIENT LIST stays exactly one row per connection.
+    let mut other = server.connect().await;
+    other.command(&["CLIENT", "SETNAME", "other"]).await;
+    // A forged extra "row" smuggled through the name must be refused.
+    let injected = "x\nid=999 addr=1.2.3.4:0 name=phantom";
+    assert!(matches!(
+        other.command(&["CLIENT", "SETNAME", injected]).await,
+        Response::Error(_)
+    ));
+
+    match client.command(&["CLIENT", "LIST"]).await {
+        Response::Bulk(Some(data)) => {
+            let text = String::from_utf8_lossy(&data);
+            let rows = text.lines().filter(|l| !l.is_empty()).count();
+            assert_eq!(
+                rows, 2,
+                "CLIENT LIST must be one row per connection, got:\n{text}"
+            );
+            assert!(
+                !text.contains("phantom"),
+                "no forged row must appear in CLIENT LIST:\n{text}"
+            );
+        }
+        other => panic!("expected bulk string, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// Forcing test for issue 96, `HELLO … SETNAME` arm: the pre-auth HELLO path
+/// must validate the client name identically to `CLIENT SETNAME` — before the
+/// fix it applied no validation at all.
+#[tokio::test]
+async fn test_hello_setname_rejects_line_injection() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["HELLO", "2", "SETNAME", "evil\nname"])
+        .await;
+    assert!(
+        matches!(response, Response::Error(_)),
+        "HELLO SETNAME with a newline must be rejected, got {response:?}"
+    );
+
+    // The rejected HELLO must not have set the connection name.
+    let response = client.command(&["CLIENT", "GETNAME"]).await;
+    assert!(matches!(response, Response::Null | Response::Bulk(None)));
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_client_list() {
     let server = TestServer::start_standalone().await;

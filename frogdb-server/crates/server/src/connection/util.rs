@@ -266,6 +266,21 @@ pub(crate) fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String
     }
 }
 
+/// Validate a client name for `CLIENT SETNAME` / `HELLO … SETNAME`.
+///
+/// Redis (`networking.c` `clientSetNameOrReply`) rejects any byte outside the
+/// printable ASCII range `0x21..=0x7e`, so a name can never contain a space,
+/// newline, or NUL. `CLIENT LIST` renders one space-and-newline-delimited row
+/// per connection with the name echoed verbatim; an unsanitised name would
+/// forge an extra row or split a field. An empty name is valid — it clears the
+/// connection name.
+pub(crate) fn validate_client_name(name: &[u8]) -> Result<(), &'static str> {
+    if name.iter().any(|&b| !(0x21..=0x7e).contains(&b)) {
+        return Err("ERR Client names cannot contain spaces, newlines or special characters.");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +292,30 @@ mod tests {
             required_access_for_key_flags(&[R], KeyAccessType::ReadWrite),
             KeyAccessType::Read
         );
+    }
+
+    #[test]
+    fn validate_client_name_rejects_non_printable() {
+        // Empty clears the name — allowed.
+        assert!(validate_client_name(b"").is_ok());
+        assert!(validate_client_name(b"good-name_123").is_ok());
+        // Every byte outside 0x21..=0x7e is rejected: space, newline, CR, NUL,
+        // tab, DEL, high bit.
+        for bad in [
+            b"has space".as_slice(),
+            b"line\ninject",
+            b"cr\rinject",
+            b"nul\0byte",
+            b"tab\there",
+            b"del\x7f",
+            b"high\x80bit",
+        ] {
+            assert!(
+                validate_client_name(bad).is_err(),
+                "{:?} must be rejected",
+                String::from_utf8_lossy(bad)
+            );
+        }
     }
 
     #[test]

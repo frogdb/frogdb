@@ -29,6 +29,7 @@ use frogdb_protocol::{MapReply, ProtocolVersion, Response};
 use tracing::{info, warn};
 
 use crate::connection::state::{ConnectionState, TrackingEnableRequest, TrackingMode};
+use crate::connection::util::validate_client_name;
 
 /// Bridge the server's [`ConnectionState`] to the core [`ConnStateMut`] seam so
 /// AUTH/HELLO can mutate auth/protocol state without the seam naming any server
@@ -410,8 +411,14 @@ fn handle_hello(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
     }
 
     // Handle SETNAME. The name is mirrored into the client registry (as on the
-    // legacy path), keyed by the connection id.
+    // legacy path), keyed by the connection id. Validate first — this path is
+    // reachable pre-auth, and an unsanitised name would inject a row into
+    // CLIENT LIST (see validate_client_name). Redis validates SETNAME after the
+    // inline AUTH clause, matching the option order here.
     if let Some(name) = setname {
+        if let Err(msg) = validate_client_name(name) {
+            return Response::error(msg);
+        }
         let client_registry = ctx.client_registry;
         let state = ctx
             .conn_state
