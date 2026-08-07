@@ -28,6 +28,8 @@ tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 parking_lot.workspace = true
+# Only for the data-directory marker's database id.
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio-metrics = { workspace = true }

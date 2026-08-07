@@ -140,8 +140,9 @@ Spec: FM-PERSISTENCE-047 (new), plus an FM-047 Redis-deviations row. Forcing tes
 
 ## Not in scope here
 
-**Case 2: "no existing data" vs "wrong data dir"** (candidate 3, the marker file) is untouched — a
-mistyped `--data-dir` still boots as a fresh database. Tracked as its own issue,
-`.scratch/hardening/issues/open/11-wrong-data-dir-boots-as-a-fresh-database.md`. Note that neither
-refusal added here helps it: a wrong-but-writable directory has no data to fail decoding, so it
-takes the `has_data() == false` path (FM-PERSISTENCE-029) exactly as before.
+**Case 2: "no existing data" vs "wrong data dir"** (candidate 3, the marker file) is untouched
+here — a mistyped `--data-dir` still boots as a fresh database after this issue. Neither refusal
+added here helps it: a wrong-but-writable directory has no data to fail decoding, so it takes the
+`has_data() == false` path (FM-PERSISTENCE-029) exactly as before. It shipped separately as
+`.scratch/hardening/issues/done/11-wrong-data-dir-boots-as-a-fresh-database.md`
+(FM-PERSISTENCE-048..052).

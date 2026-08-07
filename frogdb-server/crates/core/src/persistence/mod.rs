@@ -12,7 +12,7 @@ mod store_recovery;
 // format-level `recovery` protocol module).
 pub use frogdb_persistence::*;
 // Re-export submodules so that `crate::persistence::rocks::*` etc. still work.
-pub use frogdb_persistence::{rocks, serialization, snapshot, wal};
+pub use frogdb_persistence::{data_dir, rocks, serialization, snapshot, wal};
 
 pub use store_recovery::{recover_all_shards, recover_shard};
 

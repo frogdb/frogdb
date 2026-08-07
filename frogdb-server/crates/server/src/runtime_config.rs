@@ -469,6 +469,10 @@ pub struct StaticConfig {
     /// is no moment at which a `CONFIG SET` could change what it did. Recorded
     /// here so CONFIG GET / REWRITE report the policy the boot actually used.
     pub recovery_on_decode_failure: String,
+    /// Whether an empty data directory refuses the boot instead of initializing
+    /// a database. Immutable for the same reason: the decision is made in
+    /// recovery's data-directory phase, before there is a client to ask.
+    pub require_existing_data: bool,
 }
 
 impl StaticConfig {
@@ -572,6 +576,7 @@ impl StaticConfig {
             tls_watch_certs: config.tls.watch_certs,
             tls_watch_debounce_ms: config.tls.watch_debounce_ms,
             recovery_on_decode_failure: config.recovery.on_decode_failure.clone(),
+            require_existing_data: config.persistence.require_existing_data,
         }
     }
 }
@@ -1677,6 +1682,13 @@ impl ConfigManager {
                 name: id.name(),
                 getter: |mgr| mgr.static_config.recovery_on_decode_failure.clone(),
                 toml_getter: |mgr| mgr.static_config.recovery_on_decode_failure.to_toml_value(),
+            },
+            // Read by recovery's data-directory phase, which has already decided
+            // by the time this manager exists.
+            RequireExistingData => ParamMeta {
+                name: id.name(),
+                getter: |mgr| yes_no(mgr.static_config.require_existing_data),
+                toml_getter: |mgr| mgr.static_config.require_existing_data.to_toml_value(),
             },
         }
     }

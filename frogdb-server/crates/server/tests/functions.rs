@@ -673,6 +673,13 @@ async fn test_function_persistence_across_restart() {
 
         let functions_file = temp_dir.path().join("functions.fdb");
         frogdb_core::save_to_file(&registry, &functions_file).unwrap();
+
+        // This directory is standing in for a previous boot's data dir, so it
+        // carries that boot's identity marker. Without one, startup recovery
+        // refuses a data dir that holds files it did not write.
+        frogdb_core::persistence::DataDirMarker::mint()
+            .stamp(temp_dir.path())
+            .unwrap();
     }
 
     // Start server with persistence enabled using shared TestServer

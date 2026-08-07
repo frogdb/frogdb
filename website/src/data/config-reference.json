@@ -638,6 +638,14 @@
           "description": "WAL implementation to use: `\"rocksdb\"` (default, production) or `\"fake\"`\n(deterministic in-process sink for simulation tests). `\"fake\"` requires\n`enabled = true`."
         },
         {
+          "name": "require-existing-data",
+          "type": "boolean",
+          "default": false,
+          "description": "Refuse to start when the data directory is *empty*, instead of\ninitializing a new database in it.\n\nFrogDB always refuses a data directory that holds files it did not\nstamp (see `frogdb_data_dir`), which catches a mistyped `data-dir` and a\ncontainer that lost its bind mount. It cannot catch a volume that failed\nto mount: the mount point is then an empty directory, and an empty\ndirectory is exactly what a genuine first boot looks like. Nothing on\ndisk distinguishes the two — only the operator knows whether this\ndeployment has been provisioned yet.\n\nSet this once the node has been provisioned and a first boot is no\nlonger expected. A production deployment that flips it turns \"the volume\ndid not mount\" from a silently empty keyspace into a refused boot.\n`--force-fresh-data-dir` overrides it for the one boot that really is\nthe first.",
+          "config_param": "require-existing-data",
+          "mutable": false
+        },
+        {
           "name": "sync-interval-ms",
           "type": "integer",
           "default": 1000,

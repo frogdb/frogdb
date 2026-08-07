@@ -71,6 +71,13 @@ fn main() -> Result<()> {
         config.latency.startup_test = true;
     }
 
+    // Apply --force-fresh-data-dir CLI override. Deliberately applied here
+    // rather than merged through figment: the flag has no config-file or
+    // environment spelling, so it cannot outlive the boot it was passed for.
+    if cli.force_fresh_data_dir {
+        config.persistence.force_fresh_data_dir = true;
+    }
+
     // --- Causal profiling setup (compile-time + runtime gated) ---
     #[cfg(all(tokio_unstable, feature = "causal-profile"))]
     let profiler = {

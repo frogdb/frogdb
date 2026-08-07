@@ -29,6 +29,40 @@ pub struct PersistenceConfig {
     #[param(name = "dir")]
     pub data_dir: PathBuf,
 
+    /// Refuse to start when the data directory is *empty*, instead of
+    /// initializing a new database in it.
+    ///
+    /// FrogDB always refuses a data directory that holds files it did not
+    /// stamp (see `frogdb_data_dir`), which catches a mistyped `data-dir` and a
+    /// container that lost its bind mount. It cannot catch a volume that failed
+    /// to mount: the mount point is then an empty directory, and an empty
+    /// directory is exactly what a genuine first boot looks like. Nothing on
+    /// disk distinguishes the two — only the operator knows whether this
+    /// deployment has been provisioned yet.
+    ///
+    /// Set this once the node has been provisioned and a first boot is no
+    /// longer expected. A production deployment that flips it turns "the volume
+    /// did not mount" from a silently empty keyspace into a refused boot.
+    /// `--force-fresh-data-dir` overrides it for the one boot that really is
+    /// the first.
+    #[serde(default = "default_require_existing_data")]
+    #[param(name = "require-existing-data")]
+    pub require_existing_data: bool,
+
+    /// Adopt the data directory this boot even though it has no valid marker:
+    /// stamp one and continue. Set only by `--force-fresh-data-dir`.
+    ///
+    /// Never wipes anything — it suppresses the refusal and stamps the marker,
+    /// so a directory that already holds a FrogDB database (one written before
+    /// markers existed, or restored by hand) is recovered normally.
+    #[serde(skip)]
+    #[param(skip)]
+    // skip: one-shot CLI override (--force-fresh-data-dir), deliberately not
+    // reachable from the config file, the environment, or CONFIG SET — a
+    // persisted "ignore the wrong-directory guard" would disable it forever,
+    // which is the failure this guard exists to prevent
+    pub force_fresh_data_dir: bool,
+
     /// Durability mode: "async", "periodic", or "sync".
     #[serde(default = "default_durability_mode")]
     #[param(mutable)]
@@ -108,6 +142,10 @@ fn default_persistence_mode() -> String {
 
 fn default_data_dir() -> PathBuf {
     PathBuf::from("./frogdb-data")
+}
+
+fn default_require_existing_data() -> bool {
+    false
 }
 
 fn default_durability_mode() -> String {
@@ -206,6 +244,8 @@ impl Default for PersistenceConfig {
             enabled: default_persistence_enabled(),
             mode: default_persistence_mode(),
             data_dir: default_data_dir(),
+            require_existing_data: default_require_existing_data(),
+            force_fresh_data_dir: false,
             durability_mode: default_durability_mode(),
             sync_interval_ms: default_sync_interval_ms(),
             write_buffer_size_mb: default_write_buffer_size_mb(),
@@ -529,5 +569,36 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.validate().is_err());
+    }
+
+    /// The wrong-data-dir guard's override is a one-shot CLI flag on purpose.
+    /// A config file (or an env var, which figment merges into the same
+    /// deserialization) that could set it would disable the guard for every
+    /// subsequent boot, which is the failure mode the guard exists to prevent.
+    /// `deny_unknown_fields` turns the attempt into a loud error rather than a
+    /// silently ignored key.
+    // FM-PERSISTENCE-051
+    #[test]
+    fn force_fresh_data_dir_is_not_settable_from_the_config_file() {
+        let err = serde_json::from_str::<PersistenceConfig>(r#"{"force-fresh-data-dir": true}"#)
+            .expect_err("the override must not be deserializable");
+        assert!(
+            err.to_string().contains("force-fresh-data-dir"),
+            "the error should name the rejected key, got: {err}"
+        );
+        assert!(
+            !PersistenceConfig::default().force_fresh_data_dir,
+            "and the flag is off unless the CLI turns it on"
+        );
+
+        // `require-existing-data`, by contrast, *is* a config-file knob: it is a
+        // deployment property, not a one-boot escape hatch.
+        let cfg: PersistenceConfig =
+            serde_json::from_str(r#"{"require-existing-data": true}"#).expect("a real config key");
+        assert!(cfg.require_existing_data);
+        assert!(
+            !PersistenceConfig::default().require_existing_data,
+            "and it is off by default, because a first boot must stay silent-success"
+        );
     }
 }

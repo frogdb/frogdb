@@ -10,6 +10,9 @@ use std::path::Path;
 use frogdb_config::{
     ClusterConfigSection, PersistenceConfig, RecoveryConfig, ReplicationConfigSection,
 };
+use frogdb_core::persistence::data_dir::{
+    DATA_DIR_LAYOUT_VERSION, DataDirMarker, MARKER_FILE_NAME,
+};
 use frogdb_core::persistence::{RocksConfig, RocksStore};
 use frogdb_core::sync::Arc;
 use frogdb_core::{KeyMetadata, NoopMetricsRecorder, Store, Value, serialize};
@@ -63,8 +66,31 @@ fn cluster_config(enabled: bool) -> ClusterConfigSection {
     cfg
 }
 
+/// Stamp the data-directory marker a previous FrogDB boot would have left
+/// behind.
+///
+/// Every fixture below that hands recovery a directory which already holds
+/// files is standing in for a *restart*, and a restarting node's data directory
+/// carries a marker. Without one, phase 0 refuses the boot — correctly, and for
+/// a reason that has nothing to do with what the test is about.
+fn mark(dir: &Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    DataDirMarker::mint().stamp(dir).unwrap();
+}
+
+/// The marker a data directory currently carries, for tests that assert the
+/// directory's identity survives (or is created by) a boot.
+fn marker_of(dir: &Path) -> DataDirMarker {
+    DataDirMarker::read(dir)
+        .expect("marker readable")
+        .expect("marker present")
+}
+
 /// Write a single string key into a freshly created RocksDB at `db_dir`, then
 /// close it so the directory is a complete, reopenable database.
+///
+/// Marks the directory too: a database FrogDB wrote is a database FrogDB
+/// stamped.
 fn seed_db(db_dir: &Path, num_shards: usize, key: &[u8], val: &str) {
     let rocks = RocksStore::open(db_dir, num_shards, &RocksConfig::default()).unwrap();
     let value = Value::string(val.to_string());
@@ -72,11 +98,13 @@ fn seed_db(db_dir: &Path, num_shards: usize, key: &[u8], val: &str) {
     rocks.put(0, key, &serialize(&value, &metadata)).unwrap();
     rocks.flush().unwrap();
     drop(rocks);
+    mark(db_dir);
 }
 
 // FM-PERSISTENCE-027
 // FM-PERSISTENCE-029
 // FM-PERSISTENCE-041
+// FM-PERSISTENCE-048
 #[test]
 fn fresh_boot_creates_empty_shards() {
     let tmp = TempDir::new().unwrap();
@@ -185,7 +213,7 @@ fn corrupt_functions_file_is_tolerated() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
     // A corrupt functions.fdb must not block startup.
-    std::fs::create_dir_all(&db_dir).unwrap();
+    mark(&db_dir);
     std::fs::write(db_dir.join("functions.fdb"), b"not a valid function dump").unwrap();
 
     let cfg = persistence_config(&db_dir, true);
@@ -274,7 +302,7 @@ fn primary_loads_and_persists_replication_state() {
 fn staged_replication_metadata_is_adopted_and_consumed() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
-    std::fs::create_dir_all(&db_dir).unwrap();
+    mark(&db_dir);
 
     // Stage replication metadata (as a replica full sync would, carried into the
     // data dir when the staged checkpoint is installed).
@@ -413,7 +441,7 @@ fn corrupt_replication_state_is_regenerated() {
         let tmp = TempDir::new().unwrap();
         let db_dir = tmp.path().join("db");
         let repl_cfg = replication_config("primary");
-        std::fs::create_dir_all(&db_dir).unwrap();
+        mark(&db_dir);
         let state_path = db_dir.join(&repl_cfg.state_file);
         std::fs::write(&state_path, &contents).unwrap();
 
@@ -467,7 +495,7 @@ fn corrupt_replication_state_is_regenerated() {
 fn cluster_storage_open_failure_is_a_recovery_error() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
-    std::fs::create_dir_all(&db_dir).unwrap();
+    mark(&db_dir);
     // A plain file where the Raft store's directory must be: the open fails, and
     // a cluster node must refuse to start rather than fall back to standalone.
     std::fs::write(db_dir.join("raft"), b"not a directory").unwrap();
@@ -685,6 +713,7 @@ fn seed_raw(db_dir: &Path, num_shards: usize, entries: &[(&[u8], &[u8])]) {
     }
     rocks.flush().unwrap();
     drop(rocks);
+    mark(db_dir);
 }
 
 /// Build recovery inputs for a data dir that already exists on disk.
@@ -804,6 +833,7 @@ fn expired_keys_count_as_decoded_so_one_bad_key_does_not_refuse() {
         rocks.put(0, b"bad", b"not a serialized value").unwrap();
         rocks.flush().unwrap();
     }
+    mark(&db_dir);
     std::thread::sleep(Duration::from_millis(10));
 
     let cfg = persistence_config(&db_dir, true);
@@ -867,6 +897,7 @@ fn warm_tier_only_decode_does_not_refuse_start() {
             .unwrap();
         rocks.flush().unwrap();
     }
+    mark(&db_dir);
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
@@ -902,6 +933,7 @@ fn stale_warm_entry_counts_as_decoded() {
         rocks.put(0, b"bad", b"not a serialized value").unwrap();
         rocks.flush().unwrap();
     }
+    mark(&db_dir);
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
@@ -1026,6 +1058,7 @@ fn refuse_policy_covers_warm_tier_decode_failures() {
             .unwrap();
         rocks.flush().unwrap();
     }
+    mark(&db_dir);
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
@@ -1112,6 +1145,7 @@ fn warm_decode_failure_context_records_the_warm_tier() {
             .unwrap();
         rocks.flush().unwrap();
     }
+    mark(&db_dir);
 
     let cfg = persistence_config(&db_dir, true);
     let repl_cfg = replication_config("standalone");
@@ -1196,7 +1230,7 @@ fn a_failing_key_is_previewed_whole_up_to_the_limit_and_marked_when_cut() {
 fn persisted_functions_are_restored() {
     let tmp = TempDir::new().unwrap();
     let db_dir = tmp.path().join("db");
-    std::fs::create_dir_all(&db_dir).unwrap();
+    mark(&db_dir);
 
     let code = "#!lua name=greetlib\nredis.register_function('hi', function() return 'hi' end)";
     let mut registry = frogdb_core::FunctionRegistry::new();
@@ -1227,4 +1261,320 @@ fn persisted_functions_are_restored() {
         vec![("greetlib".to_string(), code.to_string())],
         "the stored library must survive recovery, not be silently dropped"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0 — is this directory FrogDB's? (FM-PERSISTENCE-048..052)
+// ---------------------------------------------------------------------------
+
+/// Boot a standalone, non-cluster node against `cfg`. Every data-directory test
+/// below varies only the persistence config, so the rest of the inputs are noise.
+fn boot_standalone(cfg: &PersistenceConfig) -> Result<crate::RecoveredState, crate::RecoveryError> {
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let inputs = inputs_for(
+        cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        continue_policy(),
+        2,
+        Arc::new(NoopMetricsRecorder::new()),
+    );
+    recover(&inputs)
+}
+
+/// A directory holding somebody else's bytes and no marker is what a mistyped
+/// `data-dir`, a lost bind mount, and a volume mounted elsewhere all look like
+/// from the inside. The boot refuses instead of initializing a database on top,
+/// and the refusal has to be actionable: the *resolved* path (the configured
+/// spelling is the thing the operator already got wrong) and the way out.
+// FM-PERSISTENCE-051
+#[test]
+fn an_unrelated_file_in_the_data_dir_refuses_the_boot() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+    std::fs::write(db_dir.join("important.txt"), b"somebody elses bytes").unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("a populated directory with no marker must not boot");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+
+    let msg = err.to_string();
+    let absolute = std::path::absolute(&db_dir).unwrap();
+    assert!(
+        msg.contains(&absolute.display().to_string()),
+        "the refusal must name the resolved absolute path: {msg}"
+    );
+    assert!(
+        msg.contains(MARKER_FILE_NAME),
+        "the refusal must name the marker it looked for: {msg}"
+    );
+    assert!(
+        msg.contains("--force-fresh-data-dir"),
+        "the refusal must name the override: {msg}"
+    );
+
+    // Refusing means refusing to *write*: the guard runs before anything can
+    // initialize a database over the file it is protecting.
+    assert_eq!(
+        std::fs::read(db_dir.join("important.txt")).unwrap(),
+        b"somebody elses bytes",
+        "the file the refusal is about must be untouched"
+    );
+    assert!(
+        !db_dir.join("CURRENT").exists(),
+        "a refused boot must not leave a RocksDB behind"
+    );
+    assert!(
+        !DataDirMarker::path(&db_dir).exists(),
+        "a refused boot must not stamp the directory it refused"
+    );
+}
+
+/// The other half of the guard: a directory FrogDB may have comes up silently
+/// and is stamped, and the stamp is what makes the *next* boot silent too. If
+/// this half were wrong, every restart would need the override.
+// FM-PERSISTENCE-048
+#[test]
+fn a_fresh_data_dir_boots_and_stamps_the_marker() {
+    let tmp = TempDir::new().unwrap();
+    // Not created: a first boot's data dir does not necessarily exist yet.
+    let db_dir = tmp.path().join("db");
+    let cfg = persistence_config(&db_dir, true);
+
+    boot_standalone(&cfg).expect("a genuinely fresh directory is a first boot, not a refusal");
+
+    let first = marker_of(&db_dir);
+    assert_eq!(first.layout_version, DATA_DIR_LAYOUT_VERSION);
+    assert_eq!(first.database_id.len(), 32);
+
+    boot_standalone(&cfg).expect("the marker this boot stamped must let the next one in");
+    assert_eq!(
+        marker_of(&db_dir).database_id,
+        first.database_id,
+        "a restart must not re-mint the directory's identity"
+    );
+}
+
+/// Emptiness is about files. Container orchestration pre-creates mount points
+/// and subdirectories (the cluster storage path among them), and a freshly
+/// formatted ext4 volume arrives with `lost+found` — refusing those would refuse
+/// the single most common production first boot.
+// FM-PERSISTENCE-048
+#[test]
+fn pre_created_empty_subdirectories_are_still_a_first_boot() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    std::fs::create_dir_all(db_dir.join("cluster")).unwrap();
+    std::fs::create_dir(db_dir.join("lost+found")).unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    boot_standalone(&cfg).expect("empty subdirectories are not evidence of a wrong directory");
+    assert!(
+        DataDirMarker::path(&db_dir).exists(),
+        "the first boot stamps the directory it initialized"
+    );
+}
+
+/// An unreadable marker must not collapse into an absent one: that collapse is
+/// the fail-*open* bug in miniature — a corrupt byte in the marker would license
+/// initializing a fresh database over a real one.
+// FM-PERSISTENCE-050
+#[test]
+fn a_corrupt_marker_refuses_the_boot() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"greeting", "hello");
+    std::fs::write(DataDirMarker::path(&db_dir), b"{ truncated mid-writ").unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("an unreadable marker must not boot");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("could not be read") && msg.contains("--force-fresh-data-dir"),
+        "the refusal must say the marker is unreadable and name the way out: {msg}"
+    );
+}
+
+/// The unmounted-volume caveat, opted into. An empty directory is what a failed
+/// mount and a genuine first boot both look like, and nothing on disk can tell
+/// them apart — so a deployment that knows it is past its first boot says so,
+/// and an empty directory becomes a refusal instead of a fresh database.
+// FM-PERSISTENCE-052
+#[test]
+fn require_existing_data_refuses_an_empty_data_dir() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let mut cfg = persistence_config(&db_dir, true);
+    cfg.require_existing_data = true;
+
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("an empty dir under require-existing-data must not boot");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("require-existing-data") && msg.contains("--force-fresh-data-dir"),
+        "the refusal must name the setting that caused it and the way out: {msg}"
+    );
+    assert!(
+        !DataDirMarker::path(&db_dir).exists(),
+        "a refused boot must not stamp"
+    );
+
+    // The setting is about mount failures, not about refusing every boot: the
+    // same node with its data present comes up.
+    mark(&db_dir);
+    boot_standalone(&cfg).expect("a marked directory satisfies require-existing-data");
+}
+
+/// The override adopts, it does not wipe. A database written before markers
+/// existed (or restored by hand) has to have a way in that keeps its data.
+// FM-PERSISTENCE-051
+#[test]
+fn force_fresh_data_dir_adopts_an_unmarked_directory() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"greeting", "hello");
+    std::fs::remove_file(DataDirMarker::path(&db_dir)).unwrap();
+
+    let mut cfg = persistence_config(&db_dir, true);
+    cfg.force_fresh_data_dir = true;
+    let mut recovered = boot_standalone(&cfg).expect("the override adopts an unmarked directory");
+
+    let value = recovered
+        .shards
+        .iter_mut()
+        .filter_map(|(store, _)| store.get(b"greeting"))
+        .next()
+        .expect("adopting must recover the data normally, not start empty");
+    assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"hello");
+
+    // One boot with the flag is enough: the directory is marked now. The first
+    // boot's RocksDB has to go first — it holds the directory's LOCK, and the
+    // second boot is standing in for the next process, not a second one.
+    drop(recovered);
+
+    let adopted = marker_of(&db_dir).database_id;
+    cfg.force_fresh_data_dir = false;
+    boot_standalone(&cfg).expect("an adopted directory boots on its own afterwards");
+    assert_eq!(marker_of(&db_dir).database_id, adopted);
+}
+
+/// The override covers the unreadable-marker refusal too, by replacing the
+/// marker rather than leaving the directory permanently unbootable.
+// FM-PERSISTENCE-050
+#[test]
+fn force_fresh_data_dir_re_stamps_a_corrupt_marker() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    seed_db(&db_dir, 2, b"greeting", "hello");
+    std::fs::write(DataDirMarker::path(&db_dir), b"{ truncated mid-writ").unwrap();
+
+    let mut cfg = persistence_config(&db_dir, true);
+    cfg.force_fresh_data_dir = true;
+    boot_standalone(&cfg).expect("the override re-stamps an unreadable marker");
+
+    // Readable again — which is the whole point: the operator is not left with a
+    // directory that needs the flag on every boot forever.
+    cfg.force_fresh_data_dir = false;
+    boot_standalone(&cfg).expect("the re-stamped directory boots on its own");
+    assert_eq!(marker_of(&db_dir).layout_version, DATA_DIR_LAYOUT_VERSION);
+}
+
+/// `require-existing-data` has to have the same escape hatch, or provisioning a
+/// new node into a deployment that sets it would be impossible.
+// FM-PERSISTENCE-052
+#[test]
+fn force_fresh_data_dir_overrides_require_existing_data() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let mut cfg = persistence_config(&db_dir, true);
+    cfg.require_existing_data = true;
+    cfg.force_fresh_data_dir = true;
+
+    boot_standalone(&cfg).expect("the override is how a require-existing-data node is provisioned");
+    assert!(DataDirMarker::path(&db_dir).exists());
+}
+
+/// The ordering that makes the guard worth having on a replica: a refusal that
+/// arrives *after* a staged full sync has been installed has not protected
+/// anything — it has replaced the operator's data with the primary's, which is a
+/// different failure with the same lost bytes.
+// FM-PERSISTENCE-027
+// FM-PERSISTENCE-051
+#[test]
+fn the_data_dir_guard_runs_before_a_staged_checkpoint_can_install() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let checkpoint_dir = tmp.path().join("checkpoint_ready");
+
+    // The wrong directory: somebody else's file, no marker.
+    std::fs::create_dir_all(&db_dir).unwrap();
+    std::fs::write(db_dir.join("important.txt"), b"somebody elses bytes").unwrap();
+    // A full-sync checkpoint from the primary, staged and ready to install.
+    seed_db(&checkpoint_dir, 2, b"from-primary", "new");
+
+    let cfg = persistence_config(&db_dir, true);
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("a replica must refuse the wrong directory too");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+
+    assert!(
+        checkpoint_dir.join("CURRENT").exists(),
+        "the checkpoint must still be staged: the install never ran"
+    );
+    assert!(
+        db_dir.join("important.txt").exists(),
+        "the directory the refusal is about must not have been renamed aside"
+    );
+    let backed_up = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_name().to_string_lossy().starts_with("db_backup_"));
+    assert!(
+        !backed_up,
+        "nothing was moved aside for an install that never ran"
+    );
+}
+
+/// Installing a checkpoint renames the whole data directory away, marker and
+/// all, and the staged directory is a RocksDB checkpoint that carries none. The
+/// marker is therefore rewritten after the install — with the *same* id, because
+/// it names the directory rather than its contents — so a full resync does not
+/// leave the next boot refusing the database this one just installed.
+// FM-PERSISTENCE-049
+#[test]
+fn an_installed_checkpoint_leaves_the_data_dir_marked() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    let checkpoint_dir = tmp.path().join("checkpoint_ready");
+
+    seed_db(&db_dir, 2, b"shared", "old");
+    seed_db(&checkpoint_dir, 2, b"shared", "new");
+    // A real staged checkpoint is a RocksDB checkpoint of the primary's db and
+    // has no marker of its own.
+    std::fs::remove_file(DataDirMarker::path(&checkpoint_dir)).unwrap();
+    let before = marker_of(&db_dir).database_id;
+
+    let cfg = persistence_config(&db_dir, true);
+    let recovered = boot_standalone(&cfg).expect("the staged checkpoint installs");
+    assert!(recovered.installed_staged_checkpoint);
+    // Release the installed database's LOCK: the boot below stands in for the
+    // next process, not for a second one racing this test.
+    drop(recovered);
+
+    assert_eq!(
+        marker_of(&db_dir).database_id,
+        before,
+        "the directory's identity survives having its contents replaced"
+    );
+    boot_standalone(&cfg).expect("the boot after a full resync must not refuse");
 }
