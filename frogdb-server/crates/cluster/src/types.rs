@@ -664,6 +664,12 @@ pub const HANDOFF_BARRIER_MS: u64 = 100;
 /// barrier window.
 pub const HANDOFF_DRAIN_WAIT_MS: u64 = 50;
 
+/// How often the finalizer re-reads its local replicated state while waiting for
+/// the drain, in milliseconds. Small relative to [`HANDOFF_DRAIN_WAIT_MS`]: the
+/// drain is a shard round trip, so the common case resolves in the first poll or
+/// two and the interval only bounds the tail.
+pub const HANDOFF_POLL_INTERVAL_MS: u64 = 2;
+
 /// Default bound on the source's own shard round trip, in milliseconds. Shaped
 /// after the VLL continuation lock's `CONTINUATION_DRAIN_TIMEOUT`. On expiry the
 /// source simply never confirms, so finalization aborts with the migration

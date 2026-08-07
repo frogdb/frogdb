@@ -68,8 +68,8 @@ pub use storage::{ClusterSnapshotStore, ClusterStorage, StoredClusterSnapshot};
 pub use types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterConfig, ClusterError, ClusterResponse, ClusterSnapshot,
     ConfigEpoch, HANDOFF_BARRIER_MS, HANDOFF_DRAIN_TIMEOUT_MS, HANDOFF_DRAIN_WAIT_MS,
-    HANDOFF_LEASE_MS, NodeId, NodeInfo, NodeRole, SlotHandoff, SlotMigration, SlotRange,
-    TypeConfig, even_slot_ranges,
+    HANDOFF_LEASE_MS, HANDOFF_POLL_INTERVAL_MS, NodeId, NodeInfo, NodeRole, SlotHandoff,
+    SlotMigration, SlotRange, TypeConfig, even_slot_ranges,
 };
 pub use writer::{
     ClusterWriter, LeaderForwarder, LeaderRedirect, ProposeError, Proposed, RaftClientWriteError,

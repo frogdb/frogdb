@@ -44,11 +44,15 @@ pub(crate) use routing::{
 pub use routing::{RouteDecision, RouteOutcome};
 pub(crate) use validator::SlotValidator;
 
+use std::time::Duration;
+
+use frogdb_cluster_runtime::handoff_now_ms;
 use frogdb_core::cluster::{ClusterCommand, ClusterWriter, ProposeError, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
-    ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterState, NodeId, ShardSender,
-    SlotMigrationCompleteEvent,
+    ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterState,
+    HANDOFF_BARRIER_MS, HANDOFF_DRAIN_WAIT_MS, HANDOFF_LEASE_MS, HANDOFF_POLL_INTERVAL_MS, NodeId,
+    ShardSender, SlotHandoffEvent, SlotMigrationCompleteEvent,
 };
 use frogdb_protocol::Response;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -99,6 +103,55 @@ impl SlotMigrationCoordinator {
         });
     }
 
+    /// Spawn the background task that turns replicated slot-handoff decisions
+    /// into a local write barrier plus a shard drain, on whichever node is the
+    /// migration source.
+    ///
+    /// The drain confirmation goes back through Raft (`ConfirmSlotHandoffDrained`)
+    /// rather than to the finalizer directly: `CLUSTER SETSLOT … NODE` may be
+    /// issued to any node, so the finalizer is frequently neither the source nor
+    /// the leader, and a replicated entry is the only ack every one of them can
+    /// see.
+    pub fn spawn_handoff_barrier(
+        self: &Arc<Self>,
+        handoff_rx: UnboundedReceiver<SlotHandoffEvent>,
+        client_registry: Arc<ClientRegistry>,
+        shard_senders: Arc<Vec<ShardSender>>,
+        num_shards: usize,
+    ) {
+        let cluster_state = self.cluster_state.clone();
+        let coordinator = self.clone();
+        spawn(async move {
+            frogdb_cluster_runtime::run_slot_handoff_barrier(
+                cluster_state,
+                client_registry,
+                handoff_rx,
+                shard_senders,
+                num_shards,
+                move |slot, seq| {
+                    let coordinator = coordinator.clone();
+                    async move {
+                        let resp = coordinator
+                            .commit(ClusterCommand::ConfirmSlotHandoffDrained { slot, seq })
+                            .await;
+                        if let Response::Error(msg) = resp {
+                            // Losing the ack is not a correctness problem: the
+                            // finalizer's budget lapses and it aborts, which
+                            // lifts the barrier and keeps the migration intact.
+                            tracing::warn!(
+                                slot,
+                                seq,
+                                error = %String::from_utf8_lossy(&msg),
+                                "Slot handoff drain confirmation was rejected"
+                            );
+                        }
+                    }
+                },
+            )
+            .await
+        });
+    }
+
     /// True if `slot` currently has a migration in progress.
     pub fn is_migrating(&self, slot: u16) -> bool {
         self.cluster_state.is_slot_migrating(slot)
@@ -120,13 +173,114 @@ impl SlotMigrationCoordinator {
     }
 
     /// Complete a slot migration (CLUSTER SETSLOT NODE for the migrating slot).
+    ///
+    /// Two-phase (rework issue 02). A single `CompleteSlotMigration` moves
+    /// ownership with no bound on the source's in-flight writes; under load that
+    /// stranded acknowledged writes in 118 of 120 measured finalizations. So:
+    ///
+    /// 1. Propose `PrepareSlotHandoff`. Applying it tells the source to fence
+    ///    the slot's writes and drain its shard.
+    /// 2. Wait — by polling this node's own replicated state, which sees the
+    ///    source's `ConfirmSlotHandoffDrained` entry whether or not this node is
+    ///    the leader or the source — for the drain, up to
+    ///    [`HANDOFF_DRAIN_WAIT_MS`].
+    /// 3. Propose `CompleteSlotMigration`, which the state machine admits only
+    ///    while the barrier is still up.
+    ///
+    /// On a drain that never arrives, propose `AbortSlotHandoff` and answer
+    /// `TRYAGAIN`: the barrier comes down, the migration record survives
+    /// untouched, and the operator re-issues `CLUSTER SETSLOT … NODE`. Dropping
+    /// the barrier and completing anyway would reintroduce the exposure this
+    /// whole path exists to close.
     pub async fn complete(&self, slot: u16, source_node: NodeId, target_node: NodeId) -> Response {
+        let prepared_at_ms = handoff_now_ms();
+        let prepare = self
+            .commit(ClusterCommand::PrepareSlotHandoff {
+                slot,
+                source_node,
+                target_node,
+                barrier_ms: HANDOFF_BARRIER_MS,
+                lease_ms: HANDOFF_LEASE_MS,
+                proposed_at_ms: prepared_at_ms,
+            })
+            .await;
+        if matches!(prepare, Response::Error(_)) {
+            return prepare;
+        }
+
+        // Identify *our* attempt by the timestamp we minted: the seq is assigned
+        // during apply, and a forwarded proposal never sees the response, so the
+        // proposer timestamp is the only handle we hold on our own prepare.
+        let Some(seq) = self.await_prepared_seq(slot, prepared_at_ms).await else {
+            return Response::error(format!(
+                "TRYAGAIN slot {} handoff not ready: prepare did not become visible",
+                slot
+            ));
+        };
+
+        if !self.await_drained(slot, seq).await {
+            // Best-effort: if the abort itself fails the lease expires the
+            // prepared record anyway, so the slot cannot wedge.
+            let _ = self
+                .commit(ClusterCommand::AbortSlotHandoff { slot, seq })
+                .await;
+            return Response::error(format!(
+                "TRYAGAIN slot {} handoff not ready: source did not drain in {}ms",
+                slot, HANDOFF_DRAIN_WAIT_MS
+            ));
+        }
+
         self.commit(ClusterCommand::CompleteSlotMigration {
             slot,
             source_node,
             target_node,
+            proposed_at_ms: handoff_now_ms(),
         })
         .await
+    }
+
+    /// Poll local replicated state until our own prepare is visible, returning
+    /// its attempt `seq`.
+    async fn await_prepared_seq(&self, slot: u16, prepared_at_ms: u64) -> Option<u64> {
+        self.poll_handoff(slot, |h| {
+            (h.prepared_at_ms == prepared_at_ms).then_some(h.seq)
+        })
+        .await
+    }
+
+    /// Poll local replicated state until attempt `seq` reports drained.
+    async fn await_drained(&self, slot: u16, seq: u64) -> bool {
+        self.poll_handoff(slot, |h| (h.seq == seq && h.drained).then_some(()))
+            .await
+            .is_some()
+    }
+
+    /// Poll `slot`'s prepared handoff every [`HANDOFF_POLL_INTERVAL_MS`] until
+    /// `want` yields a value or the drain budget runs out.
+    ///
+    /// Polling replicated state rather than awaiting a reply is what keeps the
+    /// drain visible when the finalizer is neither the source nor the leader:
+    /// `CLUSTER SETSLOT` may be issued to any node, and a Raft entry applies on
+    /// all of them.
+    async fn poll_handoff<T>(
+        &self,
+        slot: u16,
+        want: impl Fn(&frogdb_cluster::types::SlotHandoff) -> Option<T>,
+    ) -> Option<T> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(HANDOFF_DRAIN_WAIT_MS);
+        loop {
+            if let Some(found) = self
+                .cluster_state
+                .get_slot_migration(slot)
+                .and_then(|m| m.handoff.as_ref().and_then(&want))
+            {
+                return Some(found);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(HANDOFF_POLL_INTERVAL_MS)).await;
+        }
     }
 
     /// Cancel an in-flight slot migration (CLUSTER SETSLOT STABLE).
@@ -151,7 +305,15 @@ impl SlotMigrationCoordinator {
         match writer.propose(cmd).await {
             Ok(Proposed::Committed(resp)) => {
                 if let ClusterResponse::Error(msg) = &resp {
-                    return Response::error(format!("ERR {}", msg));
+                    // A losing handoff attempt left the cluster exactly as it
+                    // found it, so the caller may simply re-issue the command;
+                    // `TRYAGAIN` is the Redis-cluster signal for that.
+                    let prefix = if msg.is_retryable() {
+                        "TRYAGAIN"
+                    } else {
+                        "ERR"
+                    };
+                    return Response::error(format!("{} {}", prefix, msg));
                 }
                 Response::ok()
             }
