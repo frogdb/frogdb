@@ -439,4 +439,97 @@ mod tests {
             other => panic!("expected Keyed error reply, got {other:?}"),
         }
     }
+
+    /// C3 forcing test — Arm 2 (`CoreMsg::GetVersion`).
+    ///
+    /// The WATCH-time version probe runs with no `can_execute_during_lock` gate,
+    /// yet it physically calls `purge_if_expired` and fires
+    /// `apply_lazy_purge_effects_no_version_bump`. The C3 investigation asked
+    /// whether that violates a continuation-lock owner's isolation. It does not,
+    /// on two counts this test pins down while a *foreign* connection holds the
+    /// continuation lock:
+    ///
+    /// 1. **Only already-dead keys are purged.** A key still live (unexpired) at
+    ///    watch time is left in place — the lock owner never sees a key it holds
+    ///    vanish out from under a live view. Only a key already past its TTL —
+    ///    which the owner would itself observe as absent — is removed.
+    /// 2. **No version bump.** The lazy purge withholds the shard-version bump
+    ///    (F3: an already-stale watch is a nonexistent watch), so a purge on one
+    ///    key does not perturb the WATCH version of a *live* key sharing the same
+    ///    slot. The live and expired keys here are hash-tag colocated (`{s}`)
+    ///    precisely so a spurious bump would corrupt the live key's version and
+    ///    trip the assertion.
+    ///
+    /// This is the machine-checked evidence for the EXEMPT disposition. If a
+    /// future change purged a live key here, or bumped the version on the lazy
+    /// purge, the lock owner's isolation would break and this test would fail —
+    /// flipping the disposition to GATE.
+    #[tokio::test]
+    async fn get_version_purges_only_expired_keys_without_bumping_under_continuation_lock() {
+        use crate::store::Store;
+        use crate::types::Value;
+        use std::time::{Duration, Instant};
+
+        let mut worker = test_worker();
+        let _release = hold_continuation_lock(&mut worker, 100).await;
+
+        // Two keys colocated on one slot via the `{s}` hash tag, so a bump on the
+        // expired-key purge would visibly change the live key's WATCH version.
+        let live = Bytes::from_static(b"{s}live");
+        let dead = Bytes::from_static(b"{s}dead");
+        worker.store.set(live.clone(), Value::string("v"));
+        worker.store.set(dead.clone(), Value::string("v"));
+        // `dead` is already past its TTL; `live` carries none.
+        assert!(
+            worker
+                .store
+                .set_expiry(dead.as_ref(), Instant::now() - Duration::from_secs(60))
+        );
+
+        let slot_version_before = worker.get_key_version(live.as_ref());
+        assert_eq!(
+            slot_version_before,
+            worker.get_key_version(dead.as_ref()),
+            "the two hash-tagged keys must share a slot for this test to be meaningful"
+        );
+
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::GetVersion {
+                keys: vec![live.clone(), dead.clone()],
+                response_tx: tx,
+            })
+            .await;
+        let (versions, live_at_watch) = rx.await.expect("GetVersion reply");
+
+        // (1) The live key survives untouched; the expired key is purged.
+        assert!(
+            worker.store.exists_unexpired(live.as_ref()),
+            "a key live at watch time must NOT be purged by the WATCH-time probe"
+        );
+        assert!(
+            !worker.store.contains(dead.as_ref()),
+            "an already-expired watched key is physically purged"
+        );
+        assert_eq!(
+            live_at_watch,
+            vec![true, false],
+            "live_at_watch records watch-time liveness per key"
+        );
+
+        // (2) The lazy purge withheld the version bump: neither the live key's
+        // slot nor the (shared) expired key's slot advanced, so a WATCH the lock
+        // owner holds on the live key is not spuriously aborted.
+        assert_eq!(
+            versions[0], slot_version_before,
+            "the live key's slot version must not change"
+        );
+        assert_eq!(
+            versions[1], slot_version_before,
+            "purging the already-expired key must NOT bump the shared slot version"
+        );
+
+        // The continuation lock is still held by conn A throughout.
+        assert_eq!(worker.vll.continuation_lock_owner(), Some(100));
+    }
 }
