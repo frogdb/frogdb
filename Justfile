@@ -109,6 +109,10 @@ coverage-calibrate crate:
 test-coverage-depth:
     ./scripts/tests/test_coverage_depth.py
 
+# Unit tests for the continuation-lock gate's Rust scanners (arm/variant parsing)
+test-continuation-lock-gate:
+    ./scripts/tests/test_continuation_lock_gate.py
+
 # Run concurrency tests (Shuttle + Turmoil + generated workload sweep)
 #
 # The generated-workload step filters on the whole `concurrency_workload` module, not just its
@@ -249,7 +253,13 @@ fmt-check crate="":
     cargo fmt {{ if crate != "" { "-p " + crate } else { "--all" } }} -- --check
 
 # Run clippy lints (optionally for a specific crate)
-lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-turmoil-features lint-turmoil lint-failure-modes
+#
+# Depends on `lint-gates` rather than re-listing the compile-free gates: the two
+# hand-maintained lists had already drifted (`lint-no-typed-unwrap`,
+# `lint-keyspace-notify-routing` and `lint-script-gate` ran in `lint-gates` but
+# not in `lint`, contradicting docs/agents/seam-lints.md). One list, so `lint` is
+# always a superset of `lint-gates`.
+lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
@@ -259,7 +269,7 @@ lint crate="": lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam l
 # second (see docs/agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1235,6 +1245,15 @@ lint-nested-config:
 # and deliberately exempt. See scripts/error-sanitize.py.
 lint-error-sanitize:
     ./scripts/error-sanitize.py
+
+# Gate: every mutating shard-dispatch arm states a continuation-lock disposition.
+# The 64 arms of the 11 shard `*Msg` enums are count-pinned per enum; the arms
+# that reach store execution are named as GATE (must call
+# `can_execute_during_lock`), EXEMPT (reason + a forcing test that must still
+# exist), or a tracked named-gap bypass. A new or renamed arm moves the count and
+# forces a classification. See scripts/continuation-lock-gate.py.
+lint-continuation-lock:
+    ./scripts/continuation-lock-gate.py
 
 # =============================================================================
 # Build/test execution mode

@@ -52,3 +52,11 @@ test asserting every `ScriptingMsg`/`CoreMsg` arm is classified.
 
 Found by the campaign-2 chokepoint-lint survey, 2026-08-07, while counting C3 bypasses (12 of 17
 arms bypass the gate; 2 are real defects).
+
+2026-08-07: the C3 lint landed (`scripts/continuation-lock-gate.py`, `just
+lint-continuation-lock`) with this arm — and its `CoreMsg::ExecTransaction` twin, round-2 issue 50
+— pinned as a **named-gap bypass**: every run warns and links here, and the moment the arm gains a
+`can_execute_during_lock` call the stale gap entry hard-fails, so the fix must promote it to
+`GATE` in the script. Fixing it therefore means: add the guard to the arm body (not to
+`handle_function_call` — the lint requires the disposition be stated at the dispatch arm), move
+`ScriptingMsg::FunctionCall` from `GATE_GAP` to `GATE`, and add the forcing test described above.

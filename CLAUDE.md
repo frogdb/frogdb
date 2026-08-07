@@ -146,7 +146,7 @@ plain line coverage (which function is reached by how many *distinct* tests). Se
 
 ### Seam lints
 
-Fourteen chokepoint gates encode "every X must go through Y" invariants (clock reads, metrics
+Fifteen chokepoint gates encode "every X must go through Y" invariants (clock reads, metrics
 emission, redirect replies, durable-ack writes, ...). `just lint-gates` runs the compile-free subset on every commit
 (lefthook, unconditional) and in CI (`seam-gates` job); the full family runs in `just lint`. See
 `docs/agents/seam-lints.md`.

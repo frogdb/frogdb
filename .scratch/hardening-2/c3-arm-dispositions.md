@@ -1,8 +1,17 @@
 # C3 arm dispositions — FINAL (decision 4: investigate-and-propose)
 
-Status: investigation complete, both forcing tests written and passing. Dispositions below are the
-**final proposed** classifications for the C3 chokepoint lint. **The C3 lint itself has NOT been
-added** — it lands only after user approval of these dispositions (PRD §8.4 ruling).
+Status: **LANDED.** Investigation complete, both forcing tests written and passing, dispositions
+approved, and the C3 lint built on top of them: `scripts/continuation-lock-gate.py`, recipe
+`just lint-continuation-lock`, 14th member of `just lint-gates`. The lint is a **count pin**, not
+a full 64-arm classification — see [`docs/agents/seam-lints.md`](../../docs/agents/seam-lints.md)
+(§ "`lint-continuation-lock`: a count pin instead of a full classification") for the shape and the
+script's module docstring for why. Both arms below are pinned `EXEMPT` with their reason and their
+forcing-test name, and the lint fails if either test disappears.
+
+The two known bypasses found alongside them — `CoreMsg::ExecTransaction` (round-2 issue 50) and
+`ScriptingMsg::FunctionCall` (hardening-2 issue 05) — are pinned as tracked named-gap entries:
+they warn on every run and hard-fail the moment either arm gains a gate call, forcing promotion to
+`GATE` when the fix lands.
 
 Supersedes the reading-only findings in [`c3-arm-dispositions-wip.md`](c3-arm-dispositions-wip.md).
 The gate and the two arms are unchanged from that write-up; this document records the settled
@@ -115,11 +124,18 @@ flips the disposition to GATE.
 Neither forcing test uncovered an isolation bug. Both arms are correctly **EXEMPT**, and the two
 tests are now permanent, compile-gated evidence that would fail if either invariant regresses.
 
-Proposed C3 classification (for approval — **do not land the lint yet**):
+C3 classification as landed in `scripts/continuation-lock-gate.py`:
 
-- `GATE`: every state-mutating arm that calls `can_execute_during_lock` (e.g. `Execute`,
-  `ScatterRequest`, `ExecTransaction`), plus issue-50 / issue-05 fixes already landed.
+- `GATE` (5): `CoreMsg::Execute`, `CoreMsg::ScatterRequest`, `ScriptingMsg::EvalScript`,
+  `ScriptingMsg::EvalScriptSha`, `ScriptingMsg::ScriptSubCommand` — each must contain a
+  `can_execute_during_lock(` call *in the arm body*.
 - `EXEMPT { VllExecute: "two-phase VLL protocol serializes drain vs. continuation lock; see
   vll_execute_cannot_mutate_a_held_key_under_a_foreign_continuation_lock" }`
 - `EXEMPT { GetVersion: "lazy expiry of already-dead keys, no version bump; see
   get_version_purges_only_expired_keys_without_bumping_under_continuation_lock" }`
+- `GATE_GAP` (2, warn + tracked): `CoreMsg::ExecTransaction` (round-2 issue 50),
+  `ScriptingMsg::FunctionCall` (hardening-2 issue 05). Note the proposal above listed
+  `ExecTransaction` under `GATE` on the assumption its fix had landed — it has not; the arm still
+  has no gate call, so it rides the named-gap idiom instead.
+- Everything else (55 arms across the 11 shard `*Msg` enums) is covered by the per-enum count pin,
+  cross-checked against the enum variants in `message.rs` in both directions.
