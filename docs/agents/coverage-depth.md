@@ -74,6 +74,23 @@ Each function gets exactly one class, assigned in this priority order:
 A "suite" is `<test-binary>::<top-level test module>`, so `cluster_topology::…`
 tests and `frogdb_core` unit tests count as different suites.
 
+### One entry per source function (dedupe)
+
+`llvm-cov export` emits one `functions[]` record per *monomorphization*: a generic
+`foo::<T>` appears once for every concrete `T` the build instantiated, plus a zeroed
+`foo::<_>` "unused function" placeholder. Classifying those raw records once each
+counts a single source function many times and inflates `untested` heavily (the
+placeholder is always zero-coverage). `class_counts` is therefore computed over a
+**deduped** set: records are folded by `(demangled-name-with-generics-stripped, file,
+line span)`, `::<_>` placeholders are dropped, and each fold keeps the best-covered
+instantiation's evidence (union of tests/suites, representative region counts). The
+report publishes both totals side by side — `class_counts` (deduped, one per source
+function) and `class_counts_raw` (one per monomorphization record) — plus a `dedup`
+block with the raw-record and deduped-function counts so the fold ratio is visible.
+
+Per-file `line_counts` are unaffected: they are summed from `files[].segments`, never
+from `functions[]`, so the dedupe changes only the function-classification view.
+
 **Cold lines** (`count == 1`) are reported separately: executed exactly once across the
 entire suite, which is almost always an incidental touch on the way to something else
 rather than a tested path.

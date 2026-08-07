@@ -571,6 +571,136 @@ def demangle(names: list[str]) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------
+# monomorphization de-duplication
+# --------------------------------------------------------------------------
+#
+# `llvm-cov export` emits one `functions[]` record per *monomorphization* of a
+# generic, plus a single zeroed "unused function" copy whose generic parameters
+# render as `_` (`foo::bar::<_>`). Folding only by mangled name — as the join
+# does, and must, because per-test profiles carry mangled names — therefore
+# counts one source function many times, and the zeroed copy lands in `untested`.
+# The 2026-07-28 suite: `untested` 14849 raw -> 2163 once folded by source span.
+#
+# These helpers fold the *classification* view back down to one entry per source
+# function without disturbing the mangled-name join above.
+
+# A generic-parameter list rendered entirely as placeholders: `<_>`, `<_, _>`,
+# `< _ >`. Real monomorphizations are always concrete (`<u64>`, `<Vec<u8>>`), so
+# a bare-underscore argument list is unique to the zeroed "unused function" copy.
+_PLACEHOLDER_GENERICS_RE = re.compile(r"<[\s_,]+>")
+
+# A trailing disambiguating hash (`::h1a2b3c4d5e6f7a8b`), if present.
+_TRAILING_HASH_RE = re.compile(r"::h[0-9a-f]{16}$")
+
+# One innermost balanced generic-argument group, for iterative stripping.
+_INNERMOST_GENERICS_RE = re.compile(r"<[^<>]*>")
+
+
+def is_generic_placeholder(demangled: str) -> bool:
+    """True for llvm-cov's zeroed generic "unused function" record.
+
+    rustc emits one coverage record per monomorphization plus a single copy whose
+    generic parameters render as `_`. That copy is always zero-count and shares a
+    source span with the real monomorphizations, so it must be dropped rather than
+    classified as its own untested function.
+    """
+    return bool(_PLACEHOLDER_GENERICS_RE.search(demangled))
+
+
+def strip_generics(demangled: str) -> str:
+    """Demangled name with all generic-argument groups and the trailing hash removed.
+
+    `foo::bar::<u64>` and `foo::bar::<i32>` both collapse to `foo::bar`, so every
+    monomorphization of one source function shares a dedupe key.
+    """
+    prev = None
+    name = demangled
+    while prev != name:
+        prev = name
+        name = _INNERMOST_GENERICS_RE.sub("", name)
+    name = _TRAILING_HASH_RE.sub("", name)
+    # Removing a `::<...>` turbofish leaves a dangling `::`; drop it so the key is
+    # the bare path.
+    return name.rstrip(":")
+
+
+def dedupe_key(info: FuncInfo, demangled: str) -> tuple[str, str, int, int]:
+    """Fold key: generic-free demangled name plus source span.
+
+    Span alone already separates distinct source functions; the name is carried so
+    two functions that happen to share a first/last line still classify apart.
+    """
+    return (strip_generics(demangled), info.filename, info.line_start, info.line_end)
+
+
+def dedupe_depths(depths: list[FuncDepth], demangled: dict[str, str]) -> list[FuncDepth]:
+    """Fold monomorphizations to one `FuncDepth` per source function.
+
+    Drops zeroed `::<_>` placeholder records; unions each group's tests/suites and
+    takes the representative (not summed) region counts, since every
+    monomorphization shares the same source regions. The mangled name kept on the
+    merged record is the group's best-covered instantiation, so the tests.json
+    membership join still resolves.
+    """
+    groups: dict[tuple[str, str, int, int], FuncDepth] = {}
+    for d in depths:
+        dem = demangled.get(d.info.name, d.info.name)
+        if is_generic_placeholder(dem):
+            continue
+        key = dedupe_key(d.info, dem)
+        g = groups.get(key)
+        if g is None:
+            groups[key] = FuncDepth(
+                info=FuncInfo(
+                    name=d.info.name,
+                    filename=d.info.filename,
+                    line_start=d.info.line_start,
+                    line_end=d.info.line_end,
+                    regions=d.info.regions,
+                    regions_covered=d.info.regions_covered,
+                    export_count=d.info.export_count,
+                ),
+                tests=list(d.tests),
+                suites=set(d.suites),
+                profile_exec_total=d.profile_exec_total,
+            )
+            continue
+        # Monomorphizations share source regions: take the representative
+        # (best-covered) instantiation rather than summing, which would inflate
+        # region totals N-fold. Union the test/suite evidence across all copies.
+        gi = g.info
+        gi.line_start = min(gi.line_start, d.info.line_start)
+        gi.line_end = max(gi.line_end, d.info.line_end)
+        gi.regions = max(gi.regions, d.info.regions)
+        if d.info.regions_covered > gi.regions_covered:
+            gi.regions_covered = d.info.regions_covered
+            gi.name = d.info.name  # keep the best-covered instantiation's symbol
+        gi.export_count = max(gi.export_count, d.info.export_count)
+        g.tests.extend(d.tests)
+        g.suites.update(d.suites)
+        g.profile_exec_total += d.profile_exec_total
+    return list(groups.values())
+
+
+def classify(depths: list[FuncDepth], hot_floor: int, args) -> None:
+    """Assign each `FuncDepth.klass` in place from its test/suite breadth."""
+    for d in depths:
+        n = len(set(d.tests))
+        if n == 0:
+            d.klass = "untested"
+        elif n == 1:
+            d.klass = "single-test"
+        elif len(d.suites) == 1:
+            d.klass = "monoculture"
+        elif d.info.export_count >= hot_floor and n <= args.hot_tests:
+            d.klass = "hot-but-shallow"
+        elif n >= args.well_covered_tests and len(d.suites) >= 2:
+            d.klass = "well-covered"
+        else:
+            d.klass = "covered"
+
+
+# --------------------------------------------------------------------------
 # report
 # --------------------------------------------------------------------------
 
@@ -633,28 +763,32 @@ def build_depth(args) -> dict:
         flush=True,
     )
 
-    # -- classification -----------------------------------------------------
-    tested = [d for d in depth.values() if d.tests]
+    # -- de-duplicate monomorphizations, then classify ----------------------
+    # The join above is keyed by mangled name (per-test profiles carry mangled
+    # names), so `depth` holds one entry per monomorphization plus the zeroed
+    # `::<_>` placeholder copies. Fold those to one entry per source function
+    # *before* classifying — otherwise `untested` is inflated ~7x (issue 28).
+    raw_names = list(depth.keys())
+    dem_map = demangle(raw_names)
+    dedup_demangled = any(dem_map.get(n, n) != n for n in raw_names)
+    deduped = dedupe_depths(list(depth.values()), dem_map)
+
+    tested = [d for d in deduped if d.tests]
     exec_totals = sorted((d.info.export_count for d in tested), reverse=True)
     hot_floor = DEFAULT_HOT_EXEC_FLOOR
     if exec_totals:
         p90 = exec_totals[max(0, int(len(exec_totals) * 0.10) - 1)]
         hot_floor = max(args.hot_exec_floor, p90)
 
-    for d in depth.values():
-        n = len(set(d.tests))
-        if n == 0:
-            d.klass = "untested"
-        elif n == 1:
-            d.klass = "single-test"
-        elif len(d.suites) == 1:
-            d.klass = "monoculture"
-        elif d.info.export_count >= hot_floor and n <= args.hot_tests:
-            d.klass = "hot-but-shallow"
-        elif n >= args.well_covered_tests and len(d.suites) >= 2:
-            d.klass = "well-covered"
-        else:
-            d.klass = "covered"
+    classify(deduped, hot_floor, args)
+
+    # Raw (pre-dedup) classification is retained only so the report can show the
+    # inflation side by side; the same hot_floor keeps the two comparable.
+    raw_interesting = [d for d in depth.values() if d.info.regions > 0]
+    classify(raw_interesting, hot_floor, args)
+    class_counts_raw: dict[str, int] = defaultdict(int)
+    for d in raw_interesting:
+        class_counts_raw[d.klass] += 1
 
     # -- per-file / per-crate rollups + cold lines --------------------------
     files_out = {}
@@ -663,13 +797,15 @@ def build_depth(args) -> dict:
     )
     totals = {"lines": 0, "lines_covered": 0, "regions": 0, "regions_covered": 0}
     cold_lines: list[dict] = []
-    # Cross-check: line_counts() reimplements llvm's LineCoverageStats, and its
-    # output is verified to match `llvm-cov export --format=lcov` DA records
-    # exactly (all 713 files, 2026-07-28). It does *not* match the export's own
-    # per-file `summary`, and should not: that summary is the sum of per-function
-    # line stats, so a line belonging to several function records (macro
-    # expansions, generic instantiations) is counted once per function. The
-    # recomputed figure is the de-duplicated per-file view; both are reported.
+    # Cross-check: line_counts() reimplements llvm's LineCoverageStats — the same
+    # per-line, de-duplicated counting `llvm-cov export --format=lcov` uses for its
+    # `DA` records (one entry per source line). It deliberately does *not* match the
+    # export's own per-file `summary`, which sums per *function*, so a line belonging
+    # to several function records (macro expansions, generic instantiations) is
+    # counted once per function. The recomputed figure is the de-duplicated per-file
+    # view; both are reported. (`assert_lcov_agreement` in cmd_report checks this
+    # recomputed total against an on-disk lcov.info when one is present, rather than
+    # asserting an equality the pipeline never verifies at runtime — issues 27/28.)
     recomputed = {"lines": 0, "lines_covered": 0, "files_diverged": 0}
     diverged: list[dict] = []
 
@@ -723,7 +859,10 @@ def build_depth(args) -> dict:
             }
 
     # -- serialize ----------------------------------------------------------
-    interesting = [d for d in depth.values() if d.info.regions > 0]
+    # Classification and every derived count operate on the de-duplicated set
+    # (one entry per source function); `class_counts_raw` above records the
+    # pre-fold inflation for the side-by-side view.
+    interesting = [d for d in deduped if d.info.regions > 0]
     names = [d.info.name for d in interesting]
     dem = demangle(names)
 
@@ -798,6 +937,24 @@ def build_depth(args) -> dict:
         },
         "crates": {k: v for k, v in sorted(crate_totals.items(), key=lambda kv: kv[0])},
         "class_counts": dict(class_counts),
+        "class_counts_raw": dict(class_counts_raw),
+        "dedup": {
+            "raw_records": len(raw_interesting),
+            "deduped_functions": len(fn_out),
+            "demangled": dedup_demangled,
+            "note": (
+                "class_counts are computed over source functions, folding "
+                "monomorphizations by demangled name + source span and dropping "
+                "zeroed ::<_> placeholder records. class_counts_raw is the pre-fold "
+                "count (one entry per monomorphization) for comparison."
+            )
+            + (
+                ""
+                if dedup_demangled
+                else " WARNING: rustfilt unavailable — names are mangled, so the "
+                "fold degraded to per-symbol and class_counts ~ class_counts_raw."
+            ),
+        },
         "files": files_out,
         "functions": fn_out,
         "cold_lines": sorted(cold_lines, key=lambda r: -len(r["lines"])),
@@ -835,14 +992,29 @@ def render_markdown(data: dict, top: int) -> str:
         f"({pct(lr['lines_covered'], lr['lines']):.1f}%). The totals above are llvm-cov's "
         f"own per-file summaries, which sum *per function*, so a line in several function "
         f"records is counted once per function; the two differ in "
-        f"{lr['files_diverged']}/{lr['files_total']} files. The de-duplicated figure is "
-        f"what the HTML gutter shows and matches `llvm-cov export --format=lcov` exactly."
+        f"{lr['files_diverged']}/{lr['files_total']} files. The de-duplicated figure uses the "
+        f"same per-line counting as `llvm-cov export --format=lcov`'s `DA` records (what the "
+        f"HTML gutter shows); `just coverage-lcov` writes that lcov, and `coverage-depth.py "
+        f"report` cross-checks the two totals when the file is present."
     )
     w("")
     cc = data["class_counts"]
+    ccr = data.get("class_counts_raw", {})
+    dd = data.get("dedup", {})
     order = ["untested", "single-test", "monoculture", "hot-but-shallow", "covered", "well-covered"]
-    w("| class | functions | meaning |")
-    w("|---|---:|---|")
+    if ccr:
+        w(
+            f"Function classes are counted over **source functions**: "
+            f"{dd.get('raw_records', sum(ccr.values()))} raw records "
+            f"(one per monomorphization + zeroed `::<_>` placeholders) fold to "
+            f"{dd.get('deduped_functions', sum(cc.values()))} functions. Both counts below."
+        )
+        w("")
+        w("| class | functions (deduped) | raw records | meaning |")
+        w("|---|---:|---:|---|")
+    else:
+        w("| class | functions | meaning |")
+        w("|---|---:|---|")
     meanings = {
         "untested": "no test reaches it at all",
         "single-test": "one test is the entire safety net",
@@ -852,8 +1024,11 @@ def render_markdown(data: dict, top: int) -> str:
         "well-covered": f">= {data['thresholds']['well_covered_tests']} tests across >= 2 suites",
     }
     for k in order:
-        if k in cc:
-            w(f"| `{k}` | {cc[k]} | {meanings[k]} |")
+        if k in cc or k in ccr:
+            if ccr:
+                w(f"| `{k}` | {cc.get(k, 0)} | {ccr.get(k, 0)} | {meanings[k]} |")
+            else:
+                w(f"| `{k}` | {cc.get(k, 0)} | {meanings[k]} |")
     w("")
     w("## Per-crate")
     w("")
@@ -1285,6 +1460,57 @@ def cmd_run(args) -> int:
     return 0
 
 
+def _sum_lcov_lines(lcov_path: Path) -> tuple[int, int]:
+    """Sum de-duplicated per-line totals (LF found / LH hit) from an lcov file."""
+    found = hit = 0
+    for line in lcov_path.read_text().splitlines():
+        if line.startswith("LF:"):
+            found += int(line[3:])
+        elif line.startswith("LH:"):
+            hit += int(line[3:])
+    return found, hit
+
+
+def assert_lcov_agreement(data: dict) -> None:
+    """Cross-check the de-duplicated per-file line view against an on-disk lcov.
+
+    This replaces the former bare assertion in the report that the de-dup figure
+    "matches `llvm-cov export --format=lcov` exactly" (issue 28). It runs only when
+    `just coverage-lcov` has left a report on disk. `LF` (lines found) is
+    suite-independent and must match closely; `LH` (lines hit) may differ because
+    the two pipelines can run different test sets, so a divergence there is
+    reported, not fatal.
+    """
+    lcov_path = REPO / "target" / "llvm-cov" / "lcov.info"
+    if not lcov_path.exists():
+        print(
+            "  lcov cross-check: skipped (no target/llvm-cov/lcov.info; "
+            "run `just coverage-lcov` to enable)",
+            flush=True,
+        )
+        return
+    lf, lh = _sum_lcov_lines(lcov_path)
+    lr = data["line_recompute"]
+    df, dh = lr["lines"], lr["lines_covered"]
+    # Lines-found must line up (same instrumented source); allow 2% for the two
+    # runs building marginally different feature sets.
+    if lf and abs(lf - df) / lf > 0.02:
+        print(
+            f"  lcov cross-check: WARNING lines-found differ by "
+            f"{abs(lf - df)} ({lf} lcov vs {df} depth)",
+            flush=True,
+        )
+    else:
+        print(
+            f"  lcov cross-check: lines-found agree ({df} depth vs {lf} lcov)",
+            flush=True,
+        )
+    print(
+        f"  lcov cross-check: lines-hit {dh} depth vs {lh} lcov (suite-dependent; informational)",
+        flush=True,
+    )
+
+
 def cmd_report(args) -> int:
     data = build_depth(args)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1301,6 +1527,14 @@ def cmd_report(args) -> int:
         # The de-duplicated view can never exceed the per-function sum; if it
         # does, line_counts() is mapping lines llvm-cov does not.
         print("  WARNING: de-duplicated line total exceeds the export summary", flush=True)
+
+    dd = data.get("dedup", {})
+    print(
+        f"  functions: {dd.get('deduped_functions', 0)} source functions "
+        f"(folded from {dd.get('raw_records', 0)} monomorphization records)",
+        flush=True,
+    )
+    assert_lcov_agreement(data)
 
     membership = data.pop("membership")
     tests_path = OUT_DIR / "tests.json"

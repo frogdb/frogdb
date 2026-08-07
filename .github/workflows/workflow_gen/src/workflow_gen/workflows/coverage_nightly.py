@@ -5,15 +5,17 @@ Before this workflow there was *no* CI coverage signal at all: `test.py` defined
 `COVERAGE_ENABLED = False` module flag, so it never ran — a coverage regression or a
 newly introduced coverage-blind file was only ever visible via an ad hoc audit run
 (issue 59, `.scratch/testing-improvements/issues/`, CONFIRMED L1/C1 in
-`audit/verdicts-G.md`). That audit itself produced the first real baseline
-(`cargo llvm-cov nextest --all` on the aarch64 Blacksmith testbox, 2026-07-22): 6824
-tests (6823 pass, 1 known-flaky — tracked separately as issue 60), **84.0% total line
-coverage (105531/125629)**. Per-crate range from `frogdb-macros` at 0.0% up to `acl` at
-94.5%; see `.scratch/testing-improvements/audit/coverage-summary.md` for the full
-per-crate table and the worst-file list (follow-up candidates for future coverage
-work, not fixed here) — `server/src/commands/info.rs` (0.8%),
-`server/src/connection/builder.rs` (0.0%), `server/src/config/loader.rs` (29.8%),
-`core/src/store/mod.rs` (34.7%), among others.
+`audit/verdicts-G.md`).
+
+The baseline was re-measured 2026-08-07 from the fixed `just coverage-lcov` pipeline
+(issue 27): **86.6% total line coverage (132894/153502)** over the full `--all` suite
+with frogctl pulled back in, spread across every workspace crate. The prior 84.0%
+figure (2026-07-22) was read from a stale, near-empty lcov.info — the recipe aborted
+before writing a fresh report and the old artifact was consumed as if real. See
+`.scratch/testing-improvements/audit/coverage-summary.md` for the per-crate table and
+worst-file follow-up candidates: `server/src/connection/builder.rs` (0.0%),
+`server/src/config/loader.rs` (29.6%), `core/src/store/mod.rs` (34.4%),
+`server/src/admin/handlers.rs` (36.4%), among others.
 
 Design, mirroring the repo's other single-job nightly tiers (`concurrency_nightly.py`
 / `jepsen_nightly.py` / `fuzz.py`): a dedicated cron-triggered (+ `workflow_dispatch`)
@@ -22,7 +24,7 @@ can never gate a PR merge (it isn't a dependency of `test.yml`'s `ci-pass`, and 
 lives in an entirely separate workflow file) and never pages anyone. `just
 coverage-lcov` (the same recipe a developer runs locally) generates the lcov report;
 the job then sums the `LF`/`LH` totals straight out of the lcov file for a total
-line-coverage percentage, prints it against this doc's 84.0% baseline in the job
+line-coverage percentage, prints it against this doc's 86.6% baseline in the job
 summary (so future drift is visible at a glance without opening the artifact), and
 uploads the lcov file itself as a CI artifact for deeper per-file inspection.
 
@@ -66,24 +68,38 @@ WORKFLOW_FILE = "coverage-nightly.yml"
 # 14 3, fuzz 41 2) so the campaigns don't contend for runner minutes.
 NIGHTLY_CRON = "50 4 * * *"
 
-# This audit's baseline (2026-07-22, aarch64 Blacksmith testbox) — the documented
-# starting reference point so the job summary shows drift, not just an absolute
-# number. Keep in sync with `.scratch/testing-improvements/audit/coverage-summary.md`
-# if that baseline is ever formally superseded (e.g. a future audit re-measures it).
-BASELINE_TOTAL_PCT = "84.0"
-BASELINE_DATE = "2026-07-22"
+# Baseline — the documented starting reference point so the job summary shows
+# drift, not just an absolute number. Re-measured 2026-08-07 from the fixed
+# `just coverage-lcov` pipeline (issue 27: the prior 84.0% figure was read from a
+# stale, near-empty lcov.info and was meaningless). Keep in sync with
+# `.scratch/testing-improvements/audit/coverage-summary.md` if re-measured again.
+BASELINE_TOTAL_PCT = "86.6"
+BASELINE_DATE = "2026-08-07"
 
 LCOV_PATH = "target/llvm-cov/lcov.info"
 
+# Structural-plausibility floor: fraction of `DA:` (line) records that must carry
+# a nonzero hit count. A healthy full-suite run sits near 0.87; the defective
+# 2026-07-28 artifact that motivated the guard was 0.003 (test-execution profiles
+# never merged). 0.30 fails that failure mode loudly while leaving generous room
+# below the real figure for future coverage regressions.
+MIN_NONZERO_DA_RATIO = "0.30"
+
 
 def _coverage_summary_step() -> Step:
-    """Sum LF/LH across every lcov `end_of_record` section and write the job summary.
+    """Sum LF/LH across the lcov file, write the job summary, and fail on implausible data.
 
     `cargo llvm-cov` already produces the authoritative per-file/per-crate breakdown
     in its own stdout table (captured in the raw job log for anyone who needs it);
-    this step only extracts the single total-line-coverage number the acceptance
-    criteria asks be surfaced in the summary, alongside this workflow's documented
-    baseline so drift is visible without downloading the artifact.
+    this step extracts the single total-line-coverage number the acceptance criteria
+    asks be surfaced in the summary, alongside this workflow's documented baseline so
+    drift is visible without downloading the artifact.
+
+    It also guards against a *structurally implausible* report — the failure mode of
+    issue 27, where the lcov carried lines-found but essentially no line hits because
+    the test-execution profiles never merged. A missing file, `LH == 0`, or a
+    nonzero-`DA` ratio below MIN_NONZERO_DA_RATIO fails the job (exit 1) rather than
+    silently publishing a meaningless percentage.
     """
     return Step(
         name="Coverage summary",
@@ -94,25 +110,43 @@ def _coverage_summary_step() -> Step:
               echo "### Coverage summary" >> "$GITHUB_STEP_SUMMARY"
               echo "lcov report not found at {LCOV_PATH} - coverage generation failed." \\
                 >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+              exit 1
             fi
-            read -r lh lf <<< "$(awk -F: '
+            # Sum line totals and count nonzero DA (line-hit) records in one pass.
+            read -r lh lf da_total da_nonzero <<< "$(awk -F: '
               /^LH:/ {{ lh += $2 }}
               /^LF:/ {{ lf += $2 }}
-              END {{ print lh, lf }}
+              /^DA:/ {{ da_total++; split($2, a, ","); if (a[2] != 0) da_nonzero++ }}
+              END {{ print lh, lf, da_total, da_nonzero }}
             ' {LCOV_PATH})"
             pct=$(awk -v lh="$lh" -v lf="$lf" 'BEGIN {{ printf "%.1f", (lf > 0) ? (lh / lf * 100) : 0 }}')
+            ratio=$(awk -v n="$da_nonzero" -v t="$da_total" 'BEGIN {{ printf "%.4f", (t > 0) ? (n / t) : 0 }}')
             cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
             ### Coverage summary
 
             Total line coverage: **${{pct}}%** (${{lh}}/${{lf}} lines)
 
-            Baseline ({BASELINE_DATE} audit, .scratch/testing-improvements/audit/coverage-summary.md): **{BASELINE_TOTAL_PCT}%**
+            Nonzero-DA ratio: ${{ratio}} (${{da_nonzero}}/${{da_total}} line records executed)
 
-            Per-crate baseline table and worst-file follow-up candidates (server/src/commands/info.rs,
-            connection/builder.rs, config/loader.rs, core/src/store/mod.rs, etc.) are tracked in that
+            Baseline ({BASELINE_DATE}, .scratch/testing-improvements/audit/coverage-summary.md): **{BASELINE_TOTAL_PCT}%**
+
+            Per-crate baseline table and worst-file follow-up candidates (connection/builder.rs,
+            config/loader.rs, core/src/store/mod.rs, admin/handlers.rs, etc.) are tracked in that
             same file - not required to be fixed as part of this job.
             SUMMARY
+            # Structural-plausibility gate (issue 27): a report with lines but no hits
+            # is worse than no report, because the number looks real. Fail loudly.
+            implausible=$(awk -v lh="$lh" -v r="$ratio" -v floor="{MIN_NONZERO_DA_RATIO}" \\
+              'BEGIN {{ print (lh == 0 || r < floor) ? 1 : 0 }}')
+            if [ "$implausible" = "1" ]; then
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "**FAILED plausibility check**: LH=${{lh}}, nonzero-DA ratio=${{ratio}} (floor {MIN_NONZERO_DA_RATIO})." \\
+                "The lcov carries essentially no test-execution data - treating this as a coverage" \\
+                "generation failure rather than publishing a meaningless number (issue 27)." \\
+                >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::coverage report implausible: LH=${{lh}}, nonzero-DA ratio=${{ratio}} < {MIN_NONZERO_DA_RATIO}" >&2
+              exit 1
+            fi
             """),
     )
 

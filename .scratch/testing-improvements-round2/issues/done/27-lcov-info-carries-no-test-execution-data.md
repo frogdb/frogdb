@@ -1,6 +1,6 @@
 # `lcov.info` contains essentially no test-execution data, and nightly CI publishes a coverage number from it
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §1 "Data-quality caveat" · MASTER.md §7 D3
@@ -120,3 +120,47 @@ One extra root-cause lead for whoever picks this up: `.cargo/config.toml:34-35` 
 `[target.'cfg(all())'] rustflags = ["--cfg", "tokio_unstable"]`. `cargo-llvm-cov` injects its
 instrumentation through the `RUSTFLAGS`/`CARGO_ENCODED_RUSTFLAGS` env var, which *replaces* rather
 than merges with config-file rustflags — worth ruling in or out before hunting elsewhere.
+
+## Closing note 2026-08-07 (DONE)
+
+**Confirmed root cause (not the presumed profile-collection fault, and not the tokio_unstable
+lead).** The coverage *data mechanics are sound*: a full `cargo llvm-cov nextest --all
+--features frogctl/cli-tests --ignore-default-filter --lcov` run measures **86.6% line
+coverage (132 894/153 502)** with **128 637/147 408 nonzero `DA` records (87.3%)**, spread
+across every workspace crate (server, core, commands, types, persistence, replication, cluster,
+…), not concentrated in `config-derive`. A single-crate repro (`-p frogdb-types`) likewise
+yields ~72% nonzero DA. So the zero-count bug does **not** reproduce with the current toolchain,
+and the `--cfg tokio_unstable` theory is **ruled out** (the flag is present throughout that
+87%-nonzero run; the coverage recipe doesn't enable the turmoil/shuttle features that need it).
+
+The reproducible defect: `cargo llvm-cov … --output-path target/llvm-cov/lcov.info` **does not
+create the parent directory**. On a clean checkout (CI, fresh `target/`) the recipe aborts with
+`failed to create file target/llvm-cov/lcov.info: No such file or directory (os error 2)` and
+writes **no** lcov. The reporter's 9 MB / 323-nonzero-DA artifact was therefore necessarily a
+**stale** file (only build-time proc-macro `config-derive` profiles present, no test-run
+profiles) consumed as if fresh — which is exactly how the meaningless 84.0% arose.
+
+Criterion by criterion:
+
+- [x] **Nonzero-`FNDA`/`DA` are large fractions, not 29/323.** Measured DA 128 637/147 408
+  nonzero (87.3%). FNDA is likewise broadly nonzero across crates.
+- [x] **Spread across crates, not just `config-derive`.** Per-crate table in
+  `.scratch/testing-improvements/audit/coverage-summary.md` (server 85.3%, core 87.6%,
+  commands 85.0%, persistence 93.0%, replication 94.7%, cluster 93.7%, types 91.9%, …).
+- [x] **CI fails on structurally implausible reports.** `coverage-nightly.yml` "Coverage
+  summary" step (generated from `workflow_gen/…/coverage_nightly.py`) now `exit 1`s when the
+  file is missing, `LH == 0`, or the nonzero-`DA` ratio < `MIN_NONZERO_DA_RATIO` (0.30) — the
+  exact signature of the stale/empty artifact — emitting a `::error::`. Previously the only
+  failure mode was a missing file.
+- [x] **Recipe fixed + re-baselined.** `just coverage-lcov` now `mkdir -p target/llvm-cov` and
+  `rm -f` the stale artifact up front, so a failed run leaves no file rather than a misleading
+  one. The `84.0%` string is replaced by **86.6%** in `coverage_nightly.py`
+  (`BASELINE_TOTAL_PCT`, `BASELINE_DATE=2026-08-07`) and in `coverage-summary.md`, in the same
+  change.
+- [x] **Fixed lcov total agrees with the de-duplicated per-file depth view.** `coverage-depth.py
+  report` cross-check: lines-found 154 631 (depth) vs 153 502 (lcov) — 0.73% apart, agree
+  within tolerance; lines-hit 132 959 vs 132 894 — near-identical (informational).
+
+Files: `Justfile` (`coverage-lcov`), `.github/workflows/workflow_gen/…/coverage_nightly.py` +
+regenerated `.github/workflows/coverage-nightly.yml`,
+`.scratch/testing-improvements/audit/coverage-summary.md`.

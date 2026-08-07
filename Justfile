@@ -82,7 +82,16 @@ coverage crate="" pattern="":
 # Generate lcov coverage data (for CI upload). Pulls frogctl back in — it is excluded
 # from the default `just test`/`just check` dev loop, and that exclusion is about
 # keeping the dev loop fast, not about hiding code from coverage measurement.
+#
+# `--output-path` does not create its parent directory, so on a fresh checkout (CI,
+# or a clean `target/`) the run aborts with "No such file or directory". Worse, a
+# stale lcov.info left in place from an earlier run would then be consumed as if it
+# were fresh (that is how the 2026-07-28 near-empty artifact produced a meaningless
+# coverage number). Create the directory and delete any stale artifact up front so a
+# failed run leaves *no* file rather than a misleading one.
 coverage-lcov:
+    mkdir -p target/llvm-cov
+    rm -f target/llvm-cov/lcov.info
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --features frogctl/cli-tests --ignore-default-filter --lcov --output-path target/llvm-cov/lcov.info
 
 # Coverage *depth*: per-line exec counts + per-function test diversity
@@ -95,6 +104,10 @@ coverage-depth crate="" pattern="":
 # Measure the coverage-depth pipeline on one crate before a full-suite run
 coverage-calibrate crate:
     ./scripts/coverage-depth.py calibrate {{crate}}
+
+# Unit tests for the coverage-depth pipeline (monomorphization dedupe, etc.)
+test-coverage-depth:
+    ./scripts/tests/test_coverage_depth.py
 
 # Run concurrency tests (Shuttle + Turmoil + generated workload sweep)
 #

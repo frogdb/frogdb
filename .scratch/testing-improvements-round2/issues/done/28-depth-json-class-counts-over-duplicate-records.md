@@ -1,6 +1,6 @@
 # `depth.json` `class_counts` are computed over duplicate function records — `untested` is inflated ~7×
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: MASTER.md §1 "Data-quality caveat" · MASTER.md §7 D3
@@ -130,3 +130,43 @@ The raw-count reproduction (`untested` 14 849 → 2 163 span-deduped) is
 **unverified-by-execution** — the brief forbids running `just coverage-depth`, and there is no
 `target/llvm-cov/depth/depth.json` on disk. The code path is unchanged, so the defect is presumed
 to reproduce.
+
+## Closing note 2026-08-07 (DONE)
+
+Fixed and verified by executing the full `just coverage-depth` pipeline (8031 per-test profiles,
+join hit-rate 100.00%). Measured, this suite:
+
+- **`untested` 15 791 raw records → 2 414 source functions** (span-deduped). Total: **39 811
+  monomorphization records → 17 115 source functions.** The deduped figure lands near the
+  2 163 the audit predicted; the exact number differs because it is a fresh suite/toolchain, so
+  the report publishes both `class_counts` (deduped) and `class_counts_raw` and prints the fold
+  ratio, per the "explains in one line why the number differs" allowance.
+- Full class table (deduped / raw): untested 2414/15791, single-test 5959/7949,
+  monoculture 1679/5535, hot-but-shallow 2/13, covered 772/1351, well-covered 6289/9172.
+
+Criterion by criterion:
+
+- [x] **Dedupe before classification.** `dedupe_depths()` folds by
+  `(strip_generics(demangled), file, line_start, line_end)`, drops `is_generic_placeholder`
+  (`::<_>`) records, unions tests/suites, takes representative (max) region counts. Called from
+  `build_depth` before `classify()`.
+- [x] **Raw + deduped side by side.** `depth.json` carries `class_counts` (deduped),
+  `class_counts_raw`, and a `dedup` block (raw_records / deduped_functions / note). The
+  generated markdown renders a two-column "functions (deduped) | raw records" table.
+- [x] **False equality claim removed.** The bare "matches `llvm-cov export --format=lcov`
+  exactly" string is gone. The report now states the dedup uses the same per-line `DA` counting
+  as the lcov, and `assert_lcov_agreement()` cross-checks the two totals when `lcov.info` is
+  present (measured: lines-found 154 631 depth vs 153 502 lcov, agree within tolerance;
+  lines-hit 132 959 vs 132 894, informational).
+- [x] **Docs corrected.** `docs/agents/coverage-depth.md` gains a "One entry per source function
+  (dedupe)" subsection under "Reading the classes"; no uncorrected equality claim remains.
+- [x] **Fixture regression test.** `scripts/tests/test_coverage_depth.py` (recipe
+  `just test-coverage-depth`): two monomorphizations + one zeroed `::<_>` for the same function
+  → exactly one classified entry (`{"untested": 1}`), plus 5 more assertions. 6/6 pass.
+- [x] **Per-file `line_counts` unchanged.** They are summed from `files[].segments`, never from
+  `functions[]`; `test_line_counts_untouched_by_dedupe` locks this.
+
+Files: `scripts/coverage-depth.py`, `scripts/tests/test_coverage_depth.py`, `Justfile`,
+`docs/agents/coverage-depth.md`, regenerated
+`.scratch/testing-improvements/audit/coverage-depth-2026-08-07.md` (2026-07-28 replaced with a
+superseded stub), BRIEF.md / MASTER.md / proposals/09-scripting.md figures annotated.

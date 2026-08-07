@@ -32,8 +32,8 @@ inputs, both since confirmed by direct measurement:
 
 | artifact | defect | measured |
 |---|---|---|
-| `target/llvm-cov/lcov.info` | contains essentially no test-execution data; only `config-derive` (a build-time proc macro) has nonzero counts | FNDA 29 nonzero / 34 644 (0.1%); DA 323 / 128 130 (0.3%) |
-| `target/llvm-cov/depth/depth.json` | `class_counts` computed over duplicate function records (monomorphisations + `::<_>` generic placeholders, one copy zeroed) | `untested` 14 849 raw → 7 008 name-deduped → **2 163 span-deduped** |
+| `target/llvm-cov/lcov.info` | contains essentially no test-execution data; only `config-derive` (a build-time proc macro) has nonzero counts | FNDA 29 nonzero / 34 644 (0.1%); DA 323 / 128 130 (0.3%). **FIXED (issue 27):** root cause was the recipe aborting before writing (missing `target/llvm-cov/` dir → stale artifact consumed); fixed recipe measures 86.6%, DA 128 637 / 147 408 nonzero |
+| `target/llvm-cov/depth/depth.json` | `class_counts` computed over duplicate function records (monomorphisations + `::<_>` generic placeholders, one copy zeroed) | `untested` predicted 14 849 raw → ~2 163 span-deduped. **FIXED (issue 28):** measured 15 791 raw → **2 414 span-deduped**; total 39 811 records → 17 115 source functions |
 
 Consequences: `coverage-nightly.yml` consumes `just coverage-lcov`, so **the CI coverage
 number is meaningless**; and the claim that the deduplicated figure "matches `llvm-cov export

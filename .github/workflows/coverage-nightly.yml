@@ -85,25 +85,43 @@ jobs:
           echo "### Coverage summary" >> "$GITHUB_STEP_SUMMARY"
           echo "lcov report not found at target/llvm-cov/lcov.info - coverage generation failed." \
             >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          exit 1
         fi
-        read -r lh lf <<< "$(awk -F: '
+        # Sum line totals and count nonzero DA (line-hit) records in one pass.
+        read -r lh lf da_total da_nonzero <<< "$(awk -F: '
           /^LH:/ { lh += $2 }
           /^LF:/ { lf += $2 }
-          END { print lh, lf }
+          /^DA:/ { da_total++; split($2, a, ","); if (a[2] != 0) da_nonzero++ }
+          END { print lh, lf, da_total, da_nonzero }
         ' target/llvm-cov/lcov.info)"
         pct=$(awk -v lh="$lh" -v lf="$lf" 'BEGIN { printf "%.1f", (lf > 0) ? (lh / lf * 100) : 0 }')
+        ratio=$(awk -v n="$da_nonzero" -v t="$da_total" 'BEGIN { printf "%.4f", (t > 0) ? (n / t) : 0 }')
         cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
         ### Coverage summary
 
         Total line coverage: **${pct}%** (${lh}/${lf} lines)
 
-        Baseline (2026-07-22 audit, .scratch/testing-improvements/audit/coverage-summary.md): **84.0%**
+        Nonzero-DA ratio: ${ratio} (${da_nonzero}/${da_total} line records executed)
 
-        Per-crate baseline table and worst-file follow-up candidates (server/src/commands/info.rs,
-        connection/builder.rs, config/loader.rs, core/src/store/mod.rs, etc.) are tracked in that
+        Baseline (2026-08-07, .scratch/testing-improvements/audit/coverage-summary.md): **86.6%**
+
+        Per-crate baseline table and worst-file follow-up candidates (connection/builder.rs,
+        config/loader.rs, core/src/store/mod.rs, admin/handlers.rs, etc.) are tracked in that
         same file - not required to be fixed as part of this job.
         SUMMARY
+        # Structural-plausibility gate (issue 27): a report with lines but no hits
+        # is worse than no report, because the number looks real. Fail loudly.
+        implausible=$(awk -v lh="$lh" -v r="$ratio" -v floor="0.30" \
+          'BEGIN { print (lh == 0 || r < floor) ? 1 : 0 }')
+        if [ "$implausible" = "1" ]; then
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**FAILED plausibility check**: LH=${lh}, nonzero-DA ratio=${ratio} (floor 0.30)." \
+            "The lcov carries essentially no test-execution data - treating this as a coverage" \
+            "generation failure rather than publishing a meaningless number (issue 27)." \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::coverage report implausible: LH=${lh}, nonzero-DA ratio=${ratio} < 0.30" >&2
+          exit 1
+        fi
     - name: Upload coverage-lcov
       if: always()
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
