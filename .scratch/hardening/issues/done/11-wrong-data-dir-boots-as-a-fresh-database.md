@@ -118,6 +118,14 @@ The id is stamped now so that check has something stable to compare against late
 050 (unreadable or future-layout markers refuse), 051 (populated-but-unmarked refuses), 052
 (`require-existing-data`); 027 (phase order), 029 (the fresh-boot log line), and 032 amended.
 
+**Evidence:** `just core-test persistence` 325/325, `just test frogdb-config` 124/124, `just test
+frogdb-server` 1958/1958, `just lint-failure-modes` OK (252 modes, 1265 tags), clippy
+`--all-targets` clean on the four touched crates. `just mutants-diff` on the locked crates:
+`frogdb-recovery` 10 caught / 0 missed, `frogdb-persistence` 19 caught / 0 missed — the first
+persistence run missed both `NotFound` guards (`DataDirMarker::read` and `contains_files`), i.e.
+"I could not look" was still collapsing into "there is nothing here" for every IO failure that is
+not absence, so two tests were added and the 048/050 rows updated.
+
 **Docs:** `website/src/content/docs/operations/persistence.md` gained a "Data directory identity"
 section (decision table, the adoption flag, the failed-mount caveat); `backup-restore.md` notes
 which restore shapes need the flag. `website/src/data/*` regenerated with `just docs-gen`.
