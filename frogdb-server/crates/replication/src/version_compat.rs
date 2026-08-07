@@ -260,7 +260,8 @@ mod tests {
     #[test]
     fn the_refusal_error_names_both_versions() {
         let verdict = VersionVerdict::evaluate("1.4.2", Some("2.0.0"));
-        let message = verdict.refusal().expect("refused").wire_error();
+        let mismatch = verdict.refusal().expect("refused");
+        let message = mismatch.wire_error();
         assert!(message.starts_with("ERR "), "got: {message}");
         assert!(message.contains("1.4.2"), "primary version: {message}");
         assert!(message.contains("2.0.0"), "replica version: {message}");
@@ -271,6 +272,14 @@ mod tests {
         assert!(
             !message.contains('\r') && !message.contains('\n'),
             "a RESP simple error is one line: {message}"
+        );
+        // One spelling: a caller that formats the mismatch (a log line, an
+        // error chain) must get the same text the wire does, or the two
+        // accounts of one refusal drift apart.
+        assert_eq!(
+            mismatch.to_string(),
+            message,
+            "Display must render the wire error verbatim"
         );
     }
 
