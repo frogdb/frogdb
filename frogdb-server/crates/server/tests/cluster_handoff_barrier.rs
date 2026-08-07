@@ -41,15 +41,29 @@ const MANUAL_BARRIER_MS: &str = "30000";
 const APPLY_WAIT: Duration = Duration::from_secs(5);
 
 /// The first slot `owner` owns, according to its own applied topology.
-fn slot_owned_by(harness: &ClusterTestHarness, owner: u64) -> u16 {
+///
+/// The bootstrap node assigns the slot split through Raft *after* the cluster
+/// elects a leader, so this polls rather than reading once.
+async fn slot_owned_by(harness: &ClusterTestHarness, owner: u64) -> u16 {
     let state = harness
         .node(owner)
         .expect("node")
         .cluster_state()
-        .expect("cluster mode");
-    (0..frogdb_core::CLUSTER_SLOTS)
-        .find(|slot| state.get_slot_owner(*slot) == Some(owner))
-        .expect("every node owns a slot after the bootstrap split")
+        .expect("cluster mode")
+        .clone();
+    let deadline = tokio::time::Instant::now() + APPLY_WAIT;
+    loop {
+        if let Some(slot) =
+            (0..frogdb_core::CLUSTER_SLOTS).find(|slot| state.get_slot_owner(*slot) == Some(owner))
+        {
+            return slot;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "node {owner} never received a slot from the bootstrap split"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Poll `node`'s applied state until `want` holds, or fail.
@@ -95,7 +109,7 @@ async fn a_write_parked_by_the_barrier_wakes_up_redirected() {
     let node_ids = harness.node_ids();
     let source_id = node_ids[0];
     let target_id = node_ids[1];
-    let slot = slot_owned_by(&harness, source_id);
+    let slot = slot_owned_by(&harness, source_id).await;
     let slot_arg = slot.to_string();
     let target_hex = harness.get_node_id_str(target_id).unwrap();
     let source_hex = harness.get_node_id_str(source_id).unwrap();
@@ -166,9 +180,12 @@ async fn a_write_parked_by_the_barrier_wakes_up_redirected() {
         other => panic!("the parked write was acknowledged on the former owner: {other:?}"),
     }
 
-    wait_until(&harness, source_id, "ownership to move to the target", |s| {
-        s.get_slot_owner(slot) == Some(target_id)
-    })
+    wait_until(
+        &harness,
+        source_id,
+        "ownership to move to the target",
+        |s| s.get_slot_owner(slot) == Some(target_id),
+    )
     .await;
     wait_until(&harness, source_id, "the migration record to clear", |s| {
         s.get_slot_migration(slot).is_none()
@@ -197,7 +214,7 @@ async fn a_source_that_cannot_drain_aborts_the_finalization() {
     let node_ids = harness.node_ids();
     let others: Vec<u64> = node_ids.iter().copied().filter(|n| *n != leader).collect();
     let (source_id, finalizer_id) = (others[0], others[1]);
-    let slot = slot_owned_by(&harness, source_id);
+    let slot = slot_owned_by(&harness, source_id).await;
     let slot_arg = slot.to_string();
     let target_hex = harness.get_node_id_str(leader).unwrap();
 
@@ -250,10 +267,15 @@ async fn a_source_that_cannot_drain_aborts_the_finalization() {
     let migration = state
         .get_slot_migration(slot)
         .expect("the migration record must survive a failed finalization");
-    wait_until(&harness, finalizer_id, "the prepared handoff to clear", |s| {
-        s.get_slot_migration(slot)
-            .is_some_and(|m| m.handoff.is_none())
-    })
+    wait_until(
+        &harness,
+        finalizer_id,
+        "the prepared handoff to clear",
+        |s| {
+            s.get_slot_migration(slot)
+                .is_some_and(|m| m.handoff.is_none())
+        },
+    )
     .await;
     assert_eq!(migration.target_node, leader);
 

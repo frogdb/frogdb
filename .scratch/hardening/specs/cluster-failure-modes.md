@@ -1156,6 +1156,121 @@ any slot barrier is up. Narrowing it means widening the `TxnHost` seam so the ho
 queued batch's keys, which belongs with the phase-2 barrier work that owns that seam. It is
 deliberately left unpinned so phase 2 can narrow it without editing a row.
 
+## FM-CLUSTER-084 — ownership moves only under a prepared, drained, still-armed handoff
+
+| Field | Value |
+|---|---|
+| Trigger | `CLUSTER SETSLOT <slot> NODE <target>` against an open migration. The finalizer proposes `PrepareSlotHandoff`, waits for the source's drain acknowledgement, and proposes `CompleteSlotMigration`. |
+| Observable | `Complete` moves the slot's owner and clears the migration only when the slot's record carries a handoff that is drained and whose barrier window has not elapsed. Otherwise it is refused with a retryable `HandoffNotReady` naming which of the three conditions failed, and nothing changes: the owner, the migration, and the prepared record are exactly as they were. |
+| NOT observable | Ownership moving on a `Complete` that arrived after the barrier window lapsed. By then the source has resumed serving the slot, so the writes it accepted in the interval would be stranded on a node that no longer owns them — the acknowledged-then-orphaned write of FM-CLUSTER-037, which this whole mechanism exists to close. Nor a partially applied `Complete`: the check precedes every mutation. |
+| Invariant | `SlotHandoff::admits_complete_at` is the single predicate — `drained && !barrier_expired && !lease_expired` — and `apply_command`'s `CompleteSlotMigration` arm consults it after the parameter match and before touching `slot_assignment` (`cluster/src/{types,commands}.rs`). The finalizer's own wait budget (`HANDOFF_DRAIN_WAIT_MS`) is deliberately shorter than the barrier window so both a successful `Complete` and an abort still land inside it. |
+| Outcome variant | `ClusterResponse::Ok` + `[SlotMigrationCompleted, SlotHandoffReleased]` / `ClusterError::HandoffNotReady` |
+| Forced by | `complete_is_refused_without_a_prepared_handoff`, `complete_is_refused_while_the_handoff_is_undrained`, `prepare_then_drain_then_complete_moves_ownership`, `complete_is_refused_once_the_barrier_window_elapsed` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-085 — the prepared record is leased, so a dead finalizer cannot wedge a slot
+
+| Field | Value |
+|---|---|
+| Trigger | A finalizer proposes `PrepareSlotHandoff` and then dies, is partitioned, or simply stalls past `HANDOFF_LEASE_MS` without proposing either `CompleteSlotMigration` or `AbortSlotHandoff`. |
+| Observable | The prepared record stays visible in the replicated migration (`snapshot().migrations`) until its lease expires. A `Complete` proposed after expiry is refused. A *later* `PrepareSlotHandoff` is refused while the lease is live and accepted once it is not, minting a fresh attempt. A `ConfirmSlotHandoffDrained` that arrives after expiry marks the record drained but still cannot let ownership move. |
+| NOT observable | A slot permanently unfinalizable because the node that prepared it never came back. Nor an expired prepare silently becoming a live one: the lease is checked at `Complete`, not only at `Prepare`, so marking a lapsed record drained buys nothing. |
+| Invariant | Two bounds, at two levels, both derived from `prepared_at_ms`: `barrier_ms` bounds the *source's local pause* and the window in which `Complete` is admissible; the longer `lease_ms` bounds the *replicated record*, and is what a later attempt tests with `SlotMigration::live_handoff_at`. Neither is a clock read at apply (FM-CLUSTER-089). The operator's escape hatch is unchanged — `SETSLOT … STABLE` cancels the migration and the prepared record with it (FM-CLUSTER-087). |
+| Outcome variant | `ClusterError::HandoffNotReady` |
+| Forced by | `complete_is_refused_once_the_lease_expired`, `a_second_prepare_waits_for_the_lease_but_not_forever`, `a_late_confirm_cannot_resurrect_an_expired_handoff` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-086 — every handoff message names the attempt it belongs to
+
+| Field | Value |
+|---|---|
+| Trigger | A slot's handoff is attempted more than once — the first attempt aborted or lapsed — and a message from the earlier attempt (a drain acknowledgement, an abort) arrives after the later one is prepared. Or a `PrepareSlotHandoff` names a source/target pair that does not match the open migration. |
+| Observable | `ConfirmSlotHandoffDrained` and `AbortSlotHandoff` take effect only when their `seq` matches the record's current attempt; otherwise they are refused (`HandoffNotReady`) or, for an abort of an attempt that is already gone, succeed with no event. `PrepareSlotHandoff` against a slot with no migration, or with mismatched endpoints, is refused without creating a record. |
+| NOT observable | A stale drain acknowledgement vouching for a fresh attempt. The stale ack was earned against a shard state that predates the current barrier, so honouring it would complete a handoff whose drain never happened — the same exposure as no barrier at all. |
+| Invariant | `ClusterStateInner::handoff_seq` is a replicated counter incremented on every accepted `PrepareSlotHandoff`; the minted value is carried in `SlotHandoffPrepared` and echoed by both follow-up commands, which filter on `h.seq == seq` before mutating (`cluster/src/{state,commands}.rs`). Because the counter is replicated it advances identically on every node; `ResetCluster` is the only thing that rewinds it, and it clears every migration in the same entry. |
+| Outcome variant | `ClusterError::HandoffNotReady` / `ClusterError::InvalidOperation` |
+| Forced by | `a_stale_drain_ack_cannot_vouch_for_the_next_attempt`, `prepare_requires_a_migration_and_matching_parameters` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-087 — a prepared handoff never disappears without a release event
+
+| Field | Value |
+|---|---|
+| Trigger | Any command that removes or replaces a migration record carrying a prepared handoff: `AbortSlotHandoff`, `CancelSlotMigration` (`SETSLOT … STABLE`), a forced `Failover` that prunes the migrations of the node it demotes, `ResetCluster`, and `CompleteSlotMigration` itself. |
+| Observable | Each one emits `SlotHandoffReleased` for every prepared handoff it removed, so the source lifts its barrier. `Abort` keeps the migration record and drops only the handoff; `Cancel` drops both; `Failover` and `Reset` drop whole sets and emit one release each. Removing a migration that had no prepared handoff emits nothing. |
+| NOT observable | A slot left fenced because the record that would have released it was deleted by an unrelated command. The source's pause has its own deadline, so the worst case is bounded — but a slot silently frozen for the whole barrier window after an operator cancelled the migration is the kind of surprise that gets a barrier ripped out. |
+| Invariant | One helper, `release_events(migration)`, renders a removed record into its release events, and every removing arm routes through it (`cluster/src/commands.rs`). The events are emitted from `apply`, so they reach every node's dispatcher and the source recognises its own by node id (FM-CLUSTER-090). |
+| Outcome variant | `ClusterEvent::SlotHandoffReleased` |
+| Forced by | `abort_releases_the_barrier_and_keeps_the_migration`, `cancel_releases_a_prepared_handoff`, `cancel_without_a_handoff_emits_nothing`, `force_failover_releases_the_handoffs_it_prunes`, `reset_releases_prepared_handoffs`, `a_source_that_cannot_drain_aborts_the_finalization` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-088 — two slots finalize concurrently without serialising on the shard they share
+
+| Field | Value |
+|---|---|
+| Trigger | Two migrations on different slots — possibly slots that map to the same shard — are finalized at overlapping times. |
+| Observable | Both prepare, both drain, both complete. Each barrier fences only its own slot's writes; each attempt carries its own `seq`; aborting or completing one leaves the other untouched. |
+| NOT observable | A second finalization blocked behind the first, or one abort tearing down both barriers. Serialising them would make a busy shard's rebalance take a barrier window per slot, and the fencing has no cross-slot invariant to protect. |
+| Invariant | Handoffs are stored per migration record, keyed by slot, and the barrier is stored in `PauseState`'s slot-keyed map (FM-CLUSTER-079/082), so there is no shared cell for two slots to contend on. The drain is a shard *round trip*, not a lock: two `ClusterMsg::DrainSlot` messages for two slots on one shard are answered in order and neither holds the shard between messages. |
+| Outcome variant | n/a |
+| Forced by | `concurrent_handoffs_on_two_slots_do_not_interfere` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-089 — every handoff deadline is proposer-minted data, never a clock read during apply
+
+| Field | Value |
+|---|---|
+| Trigger | Any node applies a handoff entry — at commit time, replaying the log after a restart, or catching up from a snapshot, all at different wall-clock instants. |
+| Observable | The prepared record's barrier and lease expiry are functions of `prepared_at_ms`, `barrier_ms`, and `lease_ms` alone, all of which travelled in the log entry. Two nodes applying the same entries reach byte-identical state whatever the hour. |
+| NOT observable | A state machine that reads a clock during `apply`. A node replaying yesterday's log would compute today's deadlines, decide a `Complete` was inadmissible where the original leader decided it was, and diverge — a split-brain over slot ownership produced by nothing but a restart. |
+| Invariant | The proposer mints every timestamp through `handoff_now_ms`, which reads `frogdb_core::clock::system_now` (the clock seam, `just lint-clock-seam`); `apply_command` only ever compares two values that arrived as data (`cluster-runtime/src/handoff_barrier.rs`, `cluster/src/types.rs`). The comparison helpers are on `SlotHandoff` rather than inline so there is one place for the arithmetic to be wrong. |
+| Outcome variant | n/a |
+| Forced by | `handoff_deadlines_are_pure_functions_of_replicated_data`, `handoff_now_ms_reads_the_clock_seam` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-090 — only the migration source acts on a handoff, and it fences before it drains
+
+| Field | Value |
+|---|---|
+| Trigger | `SlotHandoffPrepared` and `SlotHandoffReleased` apply on every node in the cluster, because Raft entries apply everywhere. |
+| Observable | The node whose id equals the handoff's `source_node` arms a `WRITE`-mode pause on the slot and sends `ClusterMsg::DrainSlot` to shard `slot % num_shards`, confirming the drain only after the shard answers. Every other node ignores both events. A release lifts the barrier that node's own prepare armed. |
+| NOT observable | A node fencing a slot it does not own, which would park writes nobody asked to park. Nor the arm being deferred: `Prepared` and `Released` are not commutative, so arming from the spawned drain task could let a release be handled first and leave the slot fenced with nothing left to lift it. Only the drain round trip — the part that can block on a busy shard — is spawned. |
+| Invariant | `plan_handoff_action` is a pure function of the event, the node's own id, and the shard count, returning `Arm`/`Release`/`Ignore`; the runner arms and releases inline in its recv loop and spawns only `drain_shard` (`cluster-runtime/src/handoff_barrier.rs`). `num_shards == 0` is folded to shard 0 rather than dividing by zero. The pause is `WRITE`, not `ALL`: the source still holds the data and still owns the slot until `Complete`, so reads stay served — Redis/Valkey atomic slot migration pauses writes too. |
+| Outcome variant | `HandoffAction::{Arm, Release, Ignore}` |
+| Forced by | `only_the_source_node_acts_on_a_handoff`, `drain_targets_slot_modulo_num_shards_and_survives_zero`, `a_prepare_arms_the_barrier_drains_the_shard_and_confirms`, `a_release_lifts_the_barrier_its_prepare_armed` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-091 — a drain that never arrives aborts the finalization instead of proceeding
+
+| Field | Value |
+|---|---|
+| Trigger | The source cannot answer the drain: its shard is wedged past `HANDOFF_DRAIN_TIMEOUT_MS`, the shard channel is gone, or the node itself is dead before the prepare applies. |
+| Observable | The source never proposes `ConfirmSlotHandoffDrained`. The finalizer's `HANDOFF_DRAIN_WAIT_MS` budget lapses, it proposes `AbortSlotHandoff`, and it answers `TRYAGAIN`. Ownership does not move, the migration record survives with no prepared handoff, and `CLUSTER SETSLOT <slot> STABLE` still cancels it. |
+| NOT observable | The barrier being dropped so the finalization can proceed anyway — DragonflyDB's choice, and the reason its pause is explicitly not a correctness mechanism. Proceeding would move ownership with an unbounded set of writes still in flight on the former owner, which is the exposure being fenced. Nor a dangling prepared record: the finalizer aborts its own attempt, and the lease (FM-CLUSTER-085) covers the case where it cannot. |
+| Invariant | `drain_shard` bounds the round trip with `tokio::time::timeout` and returns `false` on expiry or a missing shard, and the runner calls `confirm` only on `true` (`cluster-runtime/src/handoff_barrier.rs`). `SlotMigrationCoordinator::complete` polls its own replicated state for the acknowledgement, so a finalizer that is neither source nor leader still sees it; on timeout it aborts and renders `ClusterError::is_retryable` as `TRYAGAIN` rather than `ERR` (`server/src/slot_migration/mod.rs`). |
+| Outcome variant | `-TRYAGAIN` |
+| Forced by | `a_shard_that_never_answers_is_never_confirmed`, `a_missing_shard_fails_the_drain`, `a_source_that_cannot_drain_aborts_the_finalization` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-092 — a write caught by the barrier wakes up redirected, never acknowledged on the former owner
+
+| Field | Value |
+|---|---|
+| Trigger | A client writes a key in the migrating slot while the finalization barrier is armed on the source. |
+| Observable | The write parks. The finalization runs to completion underneath it — prepare, drain, confirm, complete — and the release that follows wakes the write, which is then re-validated against the topology that exists *now* and answered `MOVED <slot> <target>`. |
+| NOT observable | The write being acknowledged by the source. That acknowledgement is the bug: the client is told the write succeeded, the slot then belongs to a node that never saw it, and nothing in the protocol tells anyone. Nor the write waking before ownership moves: ownership and the release event come from the same `apply`, in that order. |
+| Invariant | The pause gate sits ahead of `ClusterSlotValidation` in the dispatch pipeline, so a parked command re-enters slot validation on release rather than resuming past it (`connection/dispatch.rs`). The release is emitted by `CompleteSlotMigration` *after* the assignment is mutated, so there is no ordering in which a woken write sees the old owner. |
+| Outcome variant | `-MOVED` |
+| Forced by | `a_write_parked_by_the_barrier_wakes_up_redirected` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+Still unpinned after phase 2a, deliberately, because the code is not there yet: the fencing token at
+the execute seam, the `TxnHost` widening that would narrow FM-CLUSTER-083's over-park, and the Lua
+acceptance criterion (a single-shard script in flight when the barrier arms, and a cross-shard
+script holding a VLL continuation). Those are phase 2b of rework issue 02. Whether the barrier
+should also stall a replication primary's replica feed — Redis and Valkey both include
+`PAUSE_ACTION_REPLICA` — is undecided, and so has no row rather than an unforced one.
+
 ---
 
 ## GAPS — behavior nothing forces

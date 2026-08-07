@@ -42,6 +42,12 @@ path = "tests/cluster_misc.rs"
 name = "cluster_pause_barrier"
 path = "tests/cluster_pause_barrier.rs"
 
+# Two-phase slot-handoff finalization (rework issue 02, phase 2a):
+# FM-CLUSTER-084..092.
+[[test]]
+name = "cluster_handoff_barrier"
+path = "tests/cluster_handoff_barrier.rs"
+
 # Measurement harness for rework issue 02 (slot-migration finalization residual
 # window). Every case is `#[ignore]`d — it records latencies rather than
 # asserting, so it never runs as part of `just test`.
