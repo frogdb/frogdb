@@ -523,6 +523,16 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // Redis reads as "disable the lag check"). ---
         rows.extend_from_slice(&VIRTUAL_PARAMS[25..26]); // min-replicas-max-lag
 
+        // --- persistence hardening round (issue 11): the opt-in refusal to
+        // boot on an *empty* data directory, appended last so the golden
+        // snapshot's first 122 rows stay byte-identical. Immutable: recovery
+        // has already decided by the time a connection exists, so there is
+        // nothing a SET could act on — it is readable so an operator can
+        // confirm the guard is armed. The companion override
+        // (`--force-fresh-data-dir`) has no row at all: it is a one-shot CLI
+        // flag, deliberately unreachable from CONFIG and the config file. ---
+        rows.push(pick(PersistenceConfig::PARAMS, "require-existing-data"));
+
         rows
     });
 
@@ -1403,6 +1413,13 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "require-existing-data",
+            section: Some("persistence"),
+            field: Some("require-existing-data"),
+            mutable: false,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1445,7 +1462,9 @@ mod tests {
         // appended the virtual, mutable `min-replicas-max-lag` (Redis's seconds
         // spelling; the derived row at position 14 was renamed in place to
         // `min-replicas-max-lag-ms`, adding no row of its own), giving 122.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 122);
+        // Issue 11 (the wrong-data-dir guard) appended the immutable
+        // `require-existing-data`, giving 123.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 123);
     }
 
     #[test]

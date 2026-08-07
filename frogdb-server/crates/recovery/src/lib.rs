@@ -20,8 +20,9 @@
 //! any async-network crate, they build without the server's 130K-LOC test binary.
 //!
 //! The recovery-order invariant, readable top to bottom in [`recover`]:
-//! **install staged checkpoint → open RocksDB → restore shard stores → restore
-//! functions → restore replication state → open cluster storage**.
+//! **verify the data directory → install staged checkpoint → open RocksDB →
+//! restore shard stores → restore functions → restore replication state → open
+//! cluster storage**.
 //!
 //! One recovery step deliberately stays out of the seam: per-shard search-index
 //! recovery, owned by `frogdb_core::IndexLifecycleManager::recover` and invoked
@@ -43,6 +44,7 @@ use tracing::info;
 
 mod checkpoint;
 mod cluster;
+mod data_dir;
 mod functions;
 mod replication;
 mod shards;
@@ -133,6 +135,9 @@ pub struct RecoveredState {
 /// chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryPhase {
+    /// Decide whether the data directory is one FrogDB may initialize, before
+    /// anything writes to it: marker present, genuinely empty, or refuse.
+    VerifyDataDir,
     /// Install a staged full-sync checkpoint (filesystem rename surgery on the
     /// data dir, before the DB can be opened).
     InstallStagedCheckpoint,
@@ -189,8 +194,20 @@ pub fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryEr
             "Initializing persistence"
         );
 
+        // Phase 0 is a *gate*, not a step: it decides whether this directory is
+        // FrogDB's before the install below renames anything into it, before
+        // RocksDB creates a database in it, and — because recovery as a whole
+        // finishes before `init_replication` dials anyone — before a full
+        // resync could repopulate it and hide the mistake behind data that
+        // looks plausible.
+        let marker = data_dir::verify(inputs)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
         let installed = checkpoint::install_staged(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::InstallStagedCheckpoint, e))?;
+        // The install may have renamed the marker away with the directory it
+        // replaced; this is the same phase's second half, so it reports as one.
+        data_dir::stamp(inputs.data_dir, &marker)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
         let rocks = shards::open_rocks(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::OpenRocks, e))?;
         let (shards, stats) = shards::restore(inputs, &rocks)
