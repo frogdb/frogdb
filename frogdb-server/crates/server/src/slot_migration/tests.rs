@@ -39,11 +39,7 @@ fn empty_snapshot() -> ClusterSnapshot {
 }
 
 fn migration(source: u64, target: u64) -> SlotMigration {
-    SlotMigration {
-        slot: SLOT,
-        source_node: source,
-        target_node: target,
-    }
+    SlotMigration::new(SLOT, source, target)
 }
 
 // FM-CLUSTER-021
@@ -457,14 +453,8 @@ fn batch_on_foreign_slot_is_moved_to_the_owner() {
 fn batch_on_import_target_with_asking_probes_importing() {
     let (batch, slot) = tagged_batch();
     let mut snap = owned_by(slot, OTHER_NODE);
-    snap.migrations.insert(
-        slot,
-        SlotMigration {
-            slot,
-            source_node: OTHER_NODE,
-            target_node: SELF_NODE,
-        },
-    );
+    snap.migrations
+        .insert(slot, SlotMigration::new(slot, OTHER_NODE, SELF_NODE));
     assert_eq!(
         route_queued_batch(&snap, &batch, true, SELF_NODE, false),
         BatchRoute::ProbeImporting { slot }
@@ -478,14 +468,8 @@ fn batch_on_import_target_without_asking_is_moved() {
     // the batch must still be redirected to the slot's current owner.
     let (batch, slot) = tagged_batch();
     let mut snap = owned_by(slot, OTHER_NODE);
-    snap.migrations.insert(
-        slot,
-        SlotMigration {
-            slot,
-            source_node: OTHER_NODE,
-            target_node: SELF_NODE,
-        },
-    );
+    snap.migrations
+        .insert(slot, SlotMigration::new(slot, OTHER_NODE, SELF_NODE));
     assert_eq!(
         batch_reply_text(route_queued_batch(&snap, &batch, false, SELF_NODE, false)),
         format!("MOVED {slot} 127.0.0.1:6380")
@@ -497,14 +481,8 @@ fn batch_on_import_target_without_asking_is_moved() {
 fn batch_on_migrating_source_probes_with_the_ask_target() {
     let (batch, slot) = tagged_batch();
     let mut snap = owned_by(slot, SELF_NODE);
-    snap.migrations.insert(
-        slot,
-        SlotMigration {
-            slot,
-            source_node: SELF_NODE,
-            target_node: OTHER_NODE,
-        },
-    );
+    snap.migrations
+        .insert(slot, SlotMigration::new(slot, SELF_NODE, OTHER_NODE));
     assert_eq!(
         route_queued_batch(&snap, &batch, false, SELF_NODE, false),
         BatchRoute::ProbeMigratingSource {
@@ -522,14 +500,8 @@ fn batch_on_migrating_source_with_unknown_target_serves_locally() {
     let (batch, slot) = tagged_batch();
     let mut snap = owned_by(slot, SELF_NODE);
     snap.nodes.remove(&OTHER_NODE);
-    snap.migrations.insert(
-        slot,
-        SlotMigration {
-            slot,
-            source_node: SELF_NODE,
-            target_node: OTHER_NODE,
-        },
-    );
+    snap.migrations
+        .insert(slot, SlotMigration::new(slot, SELF_NODE, OTHER_NODE));
     assert_eq!(
         route_queued_batch(&snap, &batch, false, SELF_NODE, false),
         BatchRoute::ServeLocal
@@ -648,14 +620,8 @@ fn watch_on_an_open_migration_is_accepted() {
     // any migration touching the slot.
     let (keys, slot) = tagged_batch();
     let mut snap = owned_by(slot, SELF_NODE);
-    snap.migrations.insert(
-        slot,
-        SlotMigration {
-            slot,
-            source_node: SELF_NODE,
-            target_node: OTHER_NODE,
-        },
-    );
+    snap.migrations
+        .insert(slot, SlotMigration::new(slot, SELF_NODE, OTHER_NODE));
     assert_eq!(route_watched_keys(&snap, &keys, false, SELF_NODE), None);
 }
 

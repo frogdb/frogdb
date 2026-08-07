@@ -1549,11 +1549,7 @@ mod tests {
             if migrating {
                 snap.migrations.insert(
                     slot,
-                    frogdb_cluster::types::SlotMigration {
-                        slot,
-                        source_node: SOURCE_NODE,
-                        target_node: TARGET_NODE,
-                    },
+                    frogdb_cluster::types::SlotMigration::new(slot, SOURCE_NODE, TARGET_NODE),
                 );
             }
             self.cluster.cluster_state = Some(Arc::new(frogdb_core::ClusterState::from_snapshot(

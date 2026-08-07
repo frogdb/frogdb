@@ -112,6 +112,14 @@ pub struct ClusterStateInner {
     pub config_epoch: ConfigEpoch,
     /// Active slot migrations.
     pub migrations: BTreeMap<u16, SlotMigration>,
+    /// Monotonic counter minting the `seq` of each prepared slot handoff.
+    ///
+    /// Replicated (not node-local) so every node agrees on which finalization
+    /// attempt a drain confirmation refers to: an ack from an aborted attempt
+    /// carries a stale `seq` and is refused rather than vouching for the
+    /// attempt that replaced it. Never reset by anything but `ResetCluster`.
+    #[serde(default)]
+    pub handoff_seq: u64,
     /// Last applied log index.
     pub last_applied_log: Option<LogId<NodeId>>,
     /// Last membership configuration.
@@ -136,6 +144,11 @@ impl ClusterState {
             slot_assignment: snapshot.slot_assignment,
             config_epoch: snapshot.config_epoch,
             migrations: snapshot.migrations,
+            // Snapshots do not carry the counter (it is finalization-window
+            // state, not cluster topology). Restarting at 0 is safe: any
+            // handoff that survived into a snapshot is already past its lease
+            // by the time a restored node serves finalizations.
+            handoff_seq: 0,
             last_applied_log: None,
             last_membership: StoredMembership::default(),
             active_version: snapshot.active_version,
@@ -292,6 +305,41 @@ impl ClusterState {
         // Bootstrap runs before any event consumer is wired, so the derived
         // events are dropped here (this is correct, not a lost event).
         self.apply_command(cmd).map(|(response, _events)| response)
+    }
+
+    /// Drive a slot handoff to the prepared-and-drained state, returning a
+    /// `proposed_at_ms` that sits inside the resulting barrier window.
+    ///
+    /// Test-only shorthand for the two entries a real finalizer proposes before
+    /// `CompleteSlotMigration`. It exists so the pre-existing migration tests
+    /// keep asserting what they were written to assert (ownership transfer,
+    /// parameter validation, event fanout) instead of each one re-deriving the
+    /// two-phase preamble.
+    #[cfg(test)]
+    pub(crate) fn arm_handoff_for_test(
+        &self,
+        slot: u16,
+        source_node: NodeId,
+        target_node: NodeId,
+    ) -> u64 {
+        let prepared_at_ms = 1_000_000;
+        let (_, events) = self
+            .apply_command(ClusterCommand::PrepareSlotHandoff {
+                slot,
+                source_node,
+                target_node,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+                lease_ms: crate::types::HANDOFF_LEASE_MS,
+                proposed_at_ms: prepared_at_ms,
+            })
+            .expect("prepare must succeed");
+        let seq = match events.as_slice() {
+            [ClusterEvent::SlotHandoffPrepared { seq, .. }] => *seq,
+            other => panic!("expected exactly one prepared event, got {other:?}"),
+        };
+        self.apply_command(ClusterCommand::ConfirmSlotHandoffDrained { slot, seq })
+            .expect("confirm must succeed");
+        prepared_at_ms
     }
 
     /// Check if all slots are assigned.
@@ -476,6 +524,41 @@ pub struct SlotMigrationCompleteEvent {
     pub target_node: NodeId,
 }
 
+/// A transition of a two-phase slot handoff, in Raft apply order (fires on ALL
+/// nodes — the node-local "am I the source?" filter lives in the runtime
+/// consumer, which reads `self_node_id` from [`ClusterState`]).
+///
+/// Both variants share one channel for the same reason role changes do: a
+/// prepare and its release are not commutative. Delivering a `Released` before
+/// the `Prepared` that armed the barrier would leave the slot fenced until the
+/// barrier timed out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotHandoffEvent {
+    /// A handoff was prepared; the source must arm its barrier and drain.
+    Prepared {
+        /// The slot being handed off.
+        slot: u16,
+        /// The node that must arm the barrier.
+        source_node: NodeId,
+        /// The node that will own the slot after completion.
+        target_node: NodeId,
+        /// Attempt identifier to echo back when confirming the drain.
+        seq: u64,
+        /// How long the barrier should be armed for.
+        barrier_ms: u64,
+    },
+    /// A prepared handoff was released (completed, aborted, cancelled, pruned,
+    /// or reset); the source may drop its barrier.
+    Released {
+        /// The slot whose handoff was released.
+        slot: u16,
+        /// The node that armed the barrier.
+        source_node: NodeId,
+        /// The attempt identifier being released.
+        seq: u64,
+    },
+}
+
 /// Raft state machine for cluster coordination.
 pub struct ClusterStateMachine {
     state: ClusterState,
@@ -485,6 +568,8 @@ pub struct ClusterStateMachine {
     role_change_tx: Option<mpsc::UnboundedSender<RoleChangeEvent>>,
     /// Channel to notify when a slot migration completes.
     migration_complete_tx: Option<mpsc::UnboundedSender<SlotMigrationCompleteEvent>>,
+    /// Channel carrying two-phase slot-handoff transitions in apply order.
+    slot_handoff_tx: Option<mpsc::UnboundedSender<SlotHandoffEvent>>,
     /// Durable home for snapshots. When absent the state machine is purely
     /// in-memory and a restart re-derives everything from the log or the leader.
     snapshot_store: Option<ClusterSnapshotStore>,
@@ -498,6 +583,7 @@ impl ClusterStateMachine {
             self_node_id: None,
             role_change_tx: None,
             migration_complete_tx: None,
+            slot_handoff_tx: None,
             snapshot_store: None,
         }
     }
@@ -509,6 +595,7 @@ impl ClusterStateMachine {
             self_node_id: None,
             role_change_tx: None,
             migration_complete_tx: None,
+            slot_handoff_tx: None,
             snapshot_store: None,
         }
     }
@@ -594,6 +681,21 @@ impl ClusterStateMachine {
     ) -> mpsc::UnboundedReceiver<SlotMigrationCompleteEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.migration_complete_tx = Some(tx);
+        rx
+    }
+
+    /// Configure two-phase slot-handoff notifications.
+    ///
+    /// Every applied `PrepareSlotHandoff` and every arm that releases a prepared
+    /// handoff sends a [`SlotHandoffEvent`] through the returned receiver, in
+    /// apply order. The consumer
+    /// ([`frogdb_cluster_runtime::run_slot_handoff_barrier`]) is what turns a
+    /// prepare into an armed slot barrier plus a shard drain.
+    pub fn enable_slot_handoff_notification(
+        &mut self,
+    ) -> mpsc::UnboundedReceiver<SlotHandoffEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.slot_handoff_tx = Some(tx);
         rx
     }
 
@@ -845,6 +947,41 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
                                     });
                                 }
                             }
+                            // Handoff transitions fire on ALL nodes; the
+                            // "am I the source?" filter is the consumer's, so a
+                            // node that is not the source simply finds nothing
+                            // to do rather than the state machine having to know
+                            // its own id here.
+                            ClusterEvent::SlotHandoffPrepared {
+                                slot,
+                                source_node,
+                                target_node,
+                                seq,
+                                barrier_ms,
+                            } => {
+                                if let Some(ref tx) = self.slot_handoff_tx {
+                                    let _ = tx.send(SlotHandoffEvent::Prepared {
+                                        slot,
+                                        source_node,
+                                        target_node,
+                                        seq,
+                                        barrier_ms,
+                                    });
+                                }
+                            }
+                            ClusterEvent::SlotHandoffReleased {
+                                slot,
+                                source_node,
+                                seq,
+                            } => {
+                                if let Some(ref tx) = self.slot_handoff_tx {
+                                    let _ = tx.send(SlotHandoffEvent::Released {
+                                        slot,
+                                        source_node,
+                                        seq,
+                                    });
+                                }
+                            }
                             // A role change of another node: nothing to route here.
                             ClusterEvent::NodeDemoted { .. }
                             | ClusterEvent::NodePromoted { .. } => {}
@@ -873,6 +1010,7 @@ impl RaftStateMachine<TypeConfig> for ClusterStateMachine {
             self_node_id: None,
             role_change_tx: None,
             migration_complete_tx: None,
+            slot_handoff_tx: None,
             // The builder must keep the store: it is the component that actually
             // produces snapshots, and an unpersisted snapshot is exactly what
             // makes log purge lossy.
@@ -1415,11 +1553,13 @@ mod tests {
         assert_eq!(migration.target_node, 2);
 
         // Complete migration
+        let proposed_at_ms = state.arm_handoff_for_test(42, 1, 2);
         state
             .apply_command(ClusterCommand::CompleteSlotMigration {
                 slot: 42,
                 source_node: 1,
                 target_node: 2,
+                proposed_at_ms,
             })
             .unwrap();
 
@@ -1579,6 +1719,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         // Complete migration
+        let proposed_at_ms = sm.state().arm_handoff_for_test(42, 1, 2);
         let complete = openraft::Entry::<TypeConfig> {
             log_id: openraft::LogId {
                 leader_id: openraft::CommittedLeaderId::new(1, 1),
@@ -1588,6 +1729,7 @@ mod tests {
                 slot: 42,
                 source_node: 1,
                 target_node: 2,
+                proposed_at_ms,
             }),
         };
         sm.apply(vec![complete]).await.unwrap();
@@ -2646,6 +2788,7 @@ mod tests {
             slot: 42,
             source_node: 1,
             target_node: 2,
+            proposed_at_ms: 1_000_000,
         });
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
@@ -3472,6 +3615,7 @@ mod tests {
             slot: 42,
             source_node: 1,
             target_node: 3,
+            proposed_at_ms: 1_000_000,
         });
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }
@@ -3653,21 +3797,30 @@ mod tests {
             })
             .unwrap();
 
+        let proposed_at_ms = state.arm_handoff_for_test(42, 1, 2);
         let (resp, events) = state
             .apply_command(ClusterCommand::CompleteSlotMigration {
                 slot: 42,
                 source_node: 1,
                 target_node: 2,
+                proposed_at_ms,
             })
             .unwrap();
         assert!(matches!(resp, ClusterResponse::Ok));
         assert_eq!(
             events,
-            vec![ClusterEvent::SlotMigrationCompleted {
-                slot: 42,
-                source_node: 1,
-                target_node: 2,
-            }]
+            vec![
+                ClusterEvent::SlotMigrationCompleted {
+                    slot: 42,
+                    source_node: 1,
+                    target_node: 2,
+                },
+                ClusterEvent::SlotHandoffReleased {
+                    slot: 42,
+                    source_node: 1,
+                    seq: 1,
+                },
+            ]
         );
     }
 
@@ -3680,6 +3833,7 @@ mod tests {
             slot: 42,
             source_node: 1,
             target_node: 2,
+            proposed_at_ms: 1_000_000,
         });
         assert!(matches!(result, Err(ClusterError::InvalidOperation(_))));
     }

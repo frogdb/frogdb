@@ -352,6 +352,7 @@ impl Server {
             &infra.cluster_bus_listener,
             &infra.shard_senders,
             infra.num_shards,
+            infra.client_registry.clone(),
             repl.primary_replication_handler.as_ref(),
             &infra.metrics_recorder,
             repl.primary_addr,

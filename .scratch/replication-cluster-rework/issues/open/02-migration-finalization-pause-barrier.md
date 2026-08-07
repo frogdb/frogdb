@@ -163,3 +163,102 @@ Still to build (phase 2, brief §6 Option A): `PrepareSlotHandoff` as a Raft op,
 fencing token at the execute seam that covers commands already past the routing guard. The Lua-script
 acceptance criterion above is a phase-2 deliverable — a slot-scoped pause alone does not stop a
 script that validated its key set before the barrier armed.
+
+## Comment (2026-08-07): phase 2a landed — two-phase finalize, drain, deadlines
+
+`CLUSTER SETSLOT <slot> NODE <target>` no longer moves ownership in one Raft entry. Brief §6
+Option A is built: the finalization is a prepare/drain/complete saga carried entirely through the
+replicated log, with three independent deadlines and a fencing sequence number.
+
+**The saga.** `SlotMigrationHandler::complete` proposes `PrepareSlotHandoff { slot, source_node,
+target_node, barrier_ms, lease_ms, proposed_at_ms }`. Applying it attaches a `SlotHandoff` to the
+existing `SlotMigration` record and emits `ClusterEvent::SlotHandoffPrepared`. On the *source* node
+only, that event arms a slot-scoped `PauseMode::Write` barrier through the phase-1
+`ClientRegistry::pause_slot` and sends `ClusterMsg::DrainSlot { slot, ack }` to shard
+`slot % num_shards`. The shard is single-threaded, so the mailbox round trip *is* the drain: when
+the ack returns, every command that was already inside that shard has finished. The source then
+proposes `ConfirmSlotHandoffDrained { slot, seq }`, which sets `handoff.drained`. The finalizer,
+polling its own applied state, sees `drained`, proposes `CompleteSlotMigration` as before, and the
+existing `SlotMigrationCompleted` event releases the barrier on the source.
+
+**Ack transport: a follow-up Raft entry, not a point-to-point RPC** (brief hazard 1). The finalizer,
+the source, and the Raft leader can all be three different nodes. A `BusRpc` ack would be visible
+only to whoever received it; a replicated entry applies everywhere, so the finalizer reads the drain
+out of its own local `ClusterState` regardless of topology. It costs one extra Raft round trip per
+finalization — bounded, off the data path, and paid only at handoff. The integration witness
+`a_source_that_cannot_drain_aborts_the_finalization` deliberately finalizes from the node that is
+neither source nor leader, so this property is pinned rather than assumed.
+
+**Determinism.** `apply_command` never reads a clock. Every deadline is proposer-minted data:
+`handoff_now_ms()` (the `frogdb_core::clock` seam) stamps `prepared_at_ms` into the log entry, and
+each node compares that stored instant against its own `system_now()`. Two nodes applying the same
+entry at different instants therefore compute the same admissibility answer.
+
+**Four bounds, deliberately staggered.** *Barrier* 100 ms (`HANDOFF_BARRIER_MS`) — how long the
+source stops writes, and the window in which a `CompleteSlotMigration` is admissible at all. The
+finalization-window measurement put loaded p99 apply at 1.9 ms, so 100 ms is ~50x headroom.
+*Finalizer drain budget* 50 ms (`HANDOFF_DRAIN_WAIT_MS`, polled every 2 ms) — deliberately shorter
+than the barrier, so whichever way the attempt resolves, the deciding entry lands inside the window
+the source is still holding. *Drain timeout* 2 s (`HANDOFF_DRAIN_TIMEOUT_MS`, the
+`CONTINUATION_DRAIN_TIMEOUT` shape) — the source's own bound on its shard round trip; on expiry it
+simply never confirms. *Lease* 10 s (`HANDOFF_LEASE_MS`) — the consensus-level backstop. A prepared
+record past its lease is invisible to every reader (`SlotMigration::live_handoff_at`), so a
+finalizer that dies between prepare and complete cannot wedge a slot; a later attempt supersedes it.
+The lease is visible in `snapshot().migrations` and is cleared by `SETSLOT … STABLE` along with the
+migration.
+
+**Dragonfly's drop-the-pause-and-proceed is explicitly not what happens.** A drain that never
+arrives *aborts*: the finalizer proposes `AbortSlotHandoff { slot, seq }`, the migration record
+survives untouched, and the caller gets `TRYAGAIN slot N handoff not ready: …`. Ownership does not
+move. `SETSLOT … STABLE` remains the operator's way out. `ClusterError::HandoffNotReady` is the only
+new error and it reports `is_retryable() == true`, which is what renders the `TRYAGAIN` prefix.
+
+**Late `Complete` is refused, never half-applied.** The `CompleteSlotMigration` arm now requires the
+migration to exist, its parameters to match, and `handoff.admits_complete_at(proposed_at_ms)` —
+drained, inside the barrier window, inside the lease. A `Complete` that arrives after an abort or
+after the barrier lapsed is rejected with `HandoffNotReady` and changes nothing, so both release
+paths (complete and abort) are idempotent against a straggler.
+
+**Stale attempts are fenced by `seq`.** `ClusterStateInner` carries a replicated `handoff_seq`
+counter; each prepare mints the next value. `Confirm` and `Abort` must name the seq they belong to,
+so an ack from an attempt that was already aborted cannot vouch for its replacement.
+
+**FM-011 (concurrent second-slot finalization): compose, do not serialize.** Handoffs are keyed by
+slot in `migrations`, and phase 1's `PauseState.slots` is already a per-slot map, so two
+finalizations that happen to share a shard proceed independently — neither waits on the other's
+barrier, and each drain ack is matched by slot and seq. Pinned by FM-CLUSTER-088.
+
+The remaining hazard pins are inherited from phase 1 and re-verified rather than rebuilt: `MIGRATE`
+stays exempt from slot pauses (FM-009), `CLUSTER` stays exempt so `SETSLOT NODE` is never parked by
+the barrier it is about to end (FM-010), blocked readers still wake with `MOVED` because
+`DispatchStage::PauseGate` precedes `DispatchStage::ClusterSlotValidation` (FM-012), operator
+`CLIENT PAUSE` composes because it occupies the node dimension of `PauseState` and `CLIENT UNPAUSE`
+cannot disarm a slot barrier (FM-013), and a leadership change during any of the three proposals
+surfaces as `ProposeError::Redirect` through the ordinary `ClusterWriter` saga, which the caller
+retries (FM-008).
+
+**Shard-dispatch classification.** The new `ClusterMsg::DrainSlot` arm in
+`core/src/shard/dispatch_cluster.rs` is **EXEMPT** from the C3 continuation-lock discipline: it
+acquires no keys, holds no state across messages, and contains no await point. It sends the ack and
+returns; the round trip *is* the drain, and taking a continuation lock would defeat its purpose.
+
+**Spec.** `FM-CLUSTER-084..092` in `.scratch/hardening/specs/cluster-failure-modes.md`. Note the
+namespace deviation from the brief: `FM-CLUSTER-BARRIER-NNN` is unparseable by
+`scripts/failure-modes.py` (it derives the area from the filename and matches `FM-([A-Z]+)-(\d+)`,
+so a hyphenated area matches neither the heading nor the tag regex) and the rows would have been
+invisible in both directions. The rows continue phase 1's `FM-CLUSTER-NNN` series.
+
+Tests: 16 unit tests in `cluster/src/commands.rs` (admissibility, seq fencing, lease expiry, release
+unification), 7 in `cluster-runtime/src/handoff_barrier.rs` (arm/release planning, shard targeting,
+source-only action, unanswered shard), and 2 integration witnesses in
+`frogdb-server/crates/server/tests/cluster_handoff_barrier.rs`
+(`a_write_parked_by_the_barrier_wakes_up_redirected`,
+`a_source_that_cannot_drain_aborts_the_finalization`). The `exec.rs` post-wait re-validation
+contract is untouched; `frogdb-txn` was not modified.
+
+**Still to build (phase 2b).** The fencing token at the execute seam, for commands already past the
+routing guard when the barrier arms — the types are ready for it: `SlotHandoff::seq` is the token,
+and `live_handoff_at` is the lookup. Widening the `TxnHost` seam so a write `EXEC` parks only on the
+slots it touches (the phase-1 over-park, still recorded in prose by FM-CLUSTER-083). The Lua
+acceptance criterion, which needs the execute-seam token rather than the routing guard. And flipping
+`cluster_finalization_window.rs` from a measurement harness to an assertion of 0/120.

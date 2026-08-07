@@ -4,8 +4,8 @@ use anyhow::Result;
 use frogdb_core::cluster::{ClusterWriter, Proposed};
 use frogdb_core::sync::Arc;
 use frogdb_core::{
-    ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine, ClusterStorage,
-    MetricsRecorder, RoleReconcile, ShardSender,
+    ClientRegistry, ClusterNetworkFactory, ClusterRaft, ClusterState, ClusterStateMachine,
+    ClusterStorage, MetricsRecorder, RoleReconcile, ShardSender,
 };
 use std::time::Duration;
 use tracing::{info, warn};
@@ -81,6 +81,10 @@ pub(super) async fn init_cluster(
     cluster_bus_listener: &Option<TcpListener>,
     shard_senders: &Arc<Vec<ShardSender>>,
     num_shards: usize,
+    // The process-wide client registry. The slot-handoff barrier fences a
+    // migrating slot's writes through it (`pause_slot`), which is the same seam
+    // `CLIENT PAUSE` uses — the two compose, strictest wins.
+    client_registry: Arc<ClientRegistry>,
     // The primary handler now owns the whole split-brain divergence window
     // (offsets + backlog), so the logger no longer needs the broadcaster or
     // the tracker.
@@ -231,6 +235,9 @@ pub(super) async fn init_cluster(
 
         // Enable slot migration completion notifications for blocked client handling
         let migration_rx = state_machine.enable_migration_complete_notification();
+        // ... and the two-phase handoff decisions that precede them, which the
+        // migration source turns into a slot-scoped write barrier.
+        let handoff_rx = state_machine.enable_slot_handoff_notification();
 
         // Initialize Raft network factory
         #[allow(unused_mut)] // mut needed for set_connect_factory in non-turmoil builds
@@ -713,6 +720,12 @@ pub(super) async fn init_cluster(
             network_factory_arc.clone(),
         ));
         slot_migration.spawn_event_dispatcher(migration_rx, shard_senders.clone(), num_shards);
+        slot_migration.spawn_handoff_barrier(
+            handoff_rx,
+            client_registry.clone(),
+            shard_senders.clone(),
+            num_shards,
+        );
 
         (
             Some(cluster_state_arc),

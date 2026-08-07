@@ -2,7 +2,7 @@ use super::message::ClusterMsg;
 use super::worker::ShardWorker;
 
 impl ShardWorker {
-    /// Dispatch cluster/raft messages (SlotMigrated, RaftCommand).
+    /// Dispatch cluster/raft messages (SlotMigrated, RaftCommand, DrainSlot).
     pub(super) async fn dispatch_cluster(&mut self, msg: ClusterMsg) -> bool {
         match msg {
             ClusterMsg::SlotMigrated { slot, target_addr } => {
@@ -19,6 +19,16 @@ impl ShardWorker {
                     Err("Raft not initialized".to_string())
                 };
                 let _ = response_tx.send(result);
+            }
+            ClusterMsg::DrainSlot { slot, ack } => {
+                // C3 continuation-lock classification: **no lock required**.
+                // Reaching this arm is the entire semantics — every command
+                // enqueued ahead of it has already run to completion in this
+                // same single-threaded loop. The arm acquires no keys, holds no
+                // cross-message state, and contains no await point, so there is
+                // no continuation for a lock to protect.
+                tracing::trace!(slot, "Shard drained for slot handoff");
+                let _ = ack.send(());
             }
         }
         false
