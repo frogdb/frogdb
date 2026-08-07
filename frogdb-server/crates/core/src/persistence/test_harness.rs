@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use rocksdb::WriteOptions;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tempfile::TempDir;
 
@@ -39,6 +39,19 @@ pub struct CrashTestHarness {
     pub num_shards: usize,
     /// Metrics recorder for WAL writers
     pub metrics: Arc<NoopMetricsRecorder>,
+    /// (shard_id, key) pairs written since the last durability boundary
+    /// (a sync-mode write, an explicit `sync=true`, or `flush()`/`sync_wal()`).
+    ///
+    /// Dropping `rocks` in-process cannot simulate a crash losing unsynced
+    /// data: RocksDB hands every write to the OS the instant it's issued
+    /// regardless of the `sync` flag, so it survives an in-process drop (and
+    /// would survive a real `SIGKILL` too — only an fsync makes the
+    /// durability difference). `crash()` compensates by deleting exactly
+    /// this set before dropping, which is observably identical to those
+    /// writes never having reached durable storage. Modeled on the
+    /// `PageCacheSink`/`PageCacheState` split in `frogdb-persistence`'s
+    /// `wal::tests` (crates/persistence/src/wal/tests.rs).
+    unsynced: Mutex<Vec<(usize, Vec<u8>)>>,
 }
 
 impl CrashTestHarness {
@@ -66,6 +79,7 @@ impl CrashTestHarness {
             rocks_config,
             num_shards,
             metrics: Arc::new(NoopMetricsRecorder::new()),
+            unsynced: Mutex::new(Vec::new()),
         }
     }
 
@@ -126,66 +140,83 @@ impl CrashTestHarness {
         )
     }
 
-    /// Write a key-value pair directly to RocksDB (bypassing WAL batching).
-    pub fn put_direct(&self, shard_id: usize, key: &[u8], value: &Value) {
-        let metadata = KeyMetadata::new(value.memory_size());
-        let serialized = serialize(value, &metadata);
-        self.rocks()
-            .put(shard_id, key, &serialized)
-            .expect("Failed to put");
-    }
-
-    /// Write a key-value pair with explicit sync option.
-    pub fn put_with_sync(&self, shard_id: usize, key: &[u8], value: &Value, sync: bool) {
-        let metadata = KeyMetadata::new(value.memory_size());
-        let serialized = serialize(value, &metadata);
+    /// Write `key` with `sync`, tracking it in `unsynced` unless it lands durably.
+    fn write_tracked(&self, shard_id: usize, key: &[u8], serialized: &[u8], sync: bool) {
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(sync);
         self.rocks()
-            .put_opt(shard_id, key, &serialized, &write_opts)
+            .put_opt(shard_id, key, serialized, &write_opts)
             .expect("Failed to put");
+        let mut unsynced = self.unsynced.lock().unwrap();
+        unsynced.retain(|(s, k)| !(*s == shard_id && k.as_slice() == key));
+        if !sync {
+            unsynced.push((shard_id, key.to_vec()));
+        }
     }
 
-    /// Write a key-value pair with expiry.
+    /// Write a key-value pair, synced or not per the harness's `wal_config.mode`.
+    pub fn put_direct(&self, shard_id: usize, key: &[u8], value: &Value) {
+        let metadata = KeyMetadata::new(value.memory_size());
+        let serialized = serialize(value, &metadata);
+        let sync = matches!(self.wal_config.mode, DurabilityMode::Sync);
+        self.write_tracked(shard_id, key, &serialized, sync);
+    }
+
+    /// Write a key-value pair with explicit sync option, overriding the harness's mode.
+    pub fn put_with_sync(&self, shard_id: usize, key: &[u8], value: &Value, sync: bool) {
+        let metadata = KeyMetadata::new(value.memory_size());
+        let serialized = serialize(value, &metadata);
+        self.write_tracked(shard_id, key, &serialized, sync);
+    }
+
+    /// Write a key-value pair with expiry, synced or not per `wal_config.mode`.
     pub fn put_with_expiry(&self, shard_id: usize, key: &[u8], value: &Value, expires_at: Instant) {
         let mut metadata = KeyMetadata::new(value.memory_size());
         metadata.expires_at = Some(expires_at);
         let serialized = serialize(value, &metadata);
-        self.rocks()
-            .put(shard_id, key, &serialized)
-            .expect("Failed to put");
+        let sync = matches!(self.wal_config.mode, DurabilityMode::Sync);
+        self.write_tracked(shard_id, key, &serialized, sync);
     }
 
-    /// Write a key-value pair with LFU counter.
+    /// Write a key-value pair with LFU counter, synced or not per `wal_config.mode`.
     pub fn put_with_lfu(&self, shard_id: usize, key: &[u8], value: &Value, lfu_counter: u8) {
         let mut metadata = KeyMetadata::new(value.memory_size());
         metadata.lfu_counter = lfu_counter;
         let serialized = serialize(value, &metadata);
-        self.rocks()
-            .put(shard_id, key, &serialized)
-            .expect("Failed to put");
+        let sync = matches!(self.wal_config.mode, DurabilityMode::Sync);
+        self.write_tracked(shard_id, key, &serialized, sync);
     }
 
-    /// Flush all pending writes to disk.
+    /// Flush all pending writes to disk, promoting every tracked write to durable.
     pub fn flush(&self) {
         self.rocks().flush().expect("Failed to flush");
+        self.unsynced.lock().unwrap().clear();
     }
 
-    /// Sync WAL to disk.
+    /// Sync WAL to disk, promoting every tracked write to durable.
     pub fn sync_wal(&self) {
         self.rocks().sync_wal().expect("Failed to sync WAL");
+        self.unsynced.lock().unwrap().clear();
     }
 
-    /// Simulate a crash by dropping the RocksStore without explicit close.
+    /// Simulate a crash: discard every write made since the last durability
+    /// boundary, then drop the RocksStore without explicit close.
     ///
-    /// This mimics what happens during an unexpected process termination.
-    /// Pending unflushed data may be lost depending on durability mode.
+    /// The discard is a compensating delete (see the `unsynced` field doc for
+    /// why an in-process drop alone can't lose unsynced data) — issued with
+    /// `sync=false` deliberately, since it only needs to survive this fake,
+    /// same-process "crash", not a real one.
     pub fn crash(&mut self) {
-        // Drop RocksStore without sync - simulates crash
+        let pending = std::mem::take(&mut *self.unsynced.lock().unwrap());
+        if let Some(rocks) = self.rocks.as_ref() {
+            for (shard_id, key) in pending {
+                let _ = rocks.delete(shard_id, &key);
+            }
+        }
         self.rocks = None;
     }
 
-    /// Simulate a crash by dropping the RocksStore without flushing.
+    /// Simulate a crash by discarding unsynced writes and dropping the RocksStore.
     /// This is an alias for `crash()`.
     pub fn simulate_crash(&mut self) {
         self.crash();
