@@ -582,9 +582,31 @@ impl ShardWorker {
                 }
             }
 
-            let (response, meta) = self
-                .execute_command_inner(command, conn_id, protocol_version, false)
-                .await;
+            // Panic isolation (c2-07), per queued command. Redis reports a
+            // runtime error inside EXEC in that command's own slot and keeps
+            // executing the rest; an isolated panic follows the same rule, so
+            // the transaction contract does not fork from the single-command
+            // one. Catching here (rather than only around the whole EXEC) also
+            // keeps this frame — and therefore `snapshots` — alive, so the undo
+            // list still covers writes captured before the panicking command.
+            let outcome = super::panic_guard::caught(self.execute_command_inner(
+                command,
+                conn_id,
+                protocol_version,
+                false,
+            ))
+            .await;
+            let (response, meta) = match outcome {
+                Ok(pair) => pair,
+                Err(panic_message) => {
+                    let err = self.recover_from_panic(
+                        super::panic_guard::PanicSite::TransactionCommand,
+                        &command.name_uppercase_string(),
+                        &panic_message,
+                    );
+                    (err, None)
+                }
+            };
 
             // Keyspace hit/miss metrics are recorded inside execute_command_inner
             // (lookup level), so MULTI/EXEC commands are counted the same way as

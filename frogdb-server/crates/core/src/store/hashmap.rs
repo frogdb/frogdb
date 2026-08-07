@@ -1494,6 +1494,10 @@ impl Store for HashMapStore {
         self.suppress_touch = suppress;
     }
 
+    fn suppress_touch_enabled(&self) -> bool {
+        self.suppress_touch
+    }
+
     // ========================================================================
     // Eviction support methods
     // ========================================================================

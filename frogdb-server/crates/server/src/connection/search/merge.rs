@@ -29,7 +29,7 @@ use crate::scatter::MergeStrategy;
 /// receive is the Continuation-Lock conflict fallback: a shard whose keys are
 /// held by an in-flight MULTI/EXEC or Lua script rejects the scatter part with
 /// the conflict error carried inside a [`PartialResult::Keyed`] reply (see
-/// `dispatch_core::scatter_conflict_reply`). Surface that embedded error so the
+/// `dispatch_core::scatter_error_reply`). Surface that embedded error so the
 /// merge aborts and the client sees the failure — never a truncated result set
 /// returned as success. Any other shape is a dispatch bug and is surfaced
 /// loudly instead of swallowed.

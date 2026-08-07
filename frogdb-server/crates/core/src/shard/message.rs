@@ -1357,6 +1357,61 @@ impl ScatterOp {
         }
     }
 
+    /// The client-facing command name this scatter op came from.
+    ///
+    /// Diagnostics only — it names the op in the shard-boundary panic log
+    /// (`shard/panic_guard.rs`) without spilling the arguments a `Debug` render
+    /// would. Exhaustive so a new op has to name itself instead of inheriting a
+    /// misleading label.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ScatterOp::MGet => "MGET",
+            ScatterOp::MSet { .. } => "MSET",
+            ScatterOp::Del => "DEL",
+            ScatterOp::Exists => "EXISTS",
+            ScatterOp::Touch => "TOUCH",
+            ScatterOp::Unlink => "UNLINK",
+            ScatterOp::Keys { .. } => "KEYS",
+            ScatterOp::DbSize => "DBSIZE",
+            ScatterOp::FlushDb => "FLUSHDB",
+            ScatterOp::Scan { .. } => "SCAN",
+            // Both halves of the cross-shard COPY fan-out.
+            ScatterOp::Copy { .. } | ScatterOp::CopySet { .. } => "COPY",
+            ScatterOp::RandomKey => "RANDOMKEY",
+            ScatterOp::Dump => "DUMP",
+            ScatterOp::TsQueryIndex { .. } => "TS.QUERYINDEX",
+            ScatterOp::TsMget { .. } => "TS.MGET",
+            ScatterOp::TsMrange { reverse, .. } => {
+                if *reverse {
+                    "TS.MREVRANGE"
+                } else {
+                    "TS.MRANGE"
+                }
+            }
+            ScatterOp::FtCreate { .. } => "FT.CREATE",
+            ScatterOp::FtSearch { .. } => "FT.SEARCH",
+            ScatterOp::FtDropIndex { .. } => "FT.DROPINDEX",
+            ScatterOp::FtInfo { .. } => "FT.INFO",
+            ScatterOp::FtList => "FT._LIST",
+            ScatterOp::FtAlter { .. } => "FT.ALTER",
+            ScatterOp::FtSynupdate { .. } => "FT.SYNUPDATE",
+            ScatterOp::FtSyndump { .. } => "FT.SYNDUMP",
+            ScatterOp::FtAggregate { .. } => "FT.AGGREGATE",
+            ScatterOp::FtHybrid { .. } => "FT.HYBRID",
+            ScatterOp::FtAliasadd { .. } => "FT.ALIASADD",
+            ScatterOp::FtAliasdel { .. } => "FT.ALIASDEL",
+            ScatterOp::FtAliasupdate { .. } => "FT.ALIASUPDATE",
+            ScatterOp::FtTagvals { .. } => "FT.TAGVALS",
+            ScatterOp::FtDictadd { .. } => "FT.DICTADD",
+            ScatterOp::FtDictdel { .. } => "FT.DICTDEL",
+            ScatterOp::FtDictdump { .. } => "FT.DICTDUMP",
+            ScatterOp::FtConfig { .. } => "FT.CONFIG",
+            ScatterOp::FtSpellcheck { .. } => "FT.SPELLCHECK",
+            ScatterOp::FtExplain { .. } => "FT.EXPLAIN",
+            ScatterOp::EsAll { .. } => "ES.ALL",
+        }
+    }
+
     /// The command-flag view of this scatter op.
     ///
     /// Exists so hot-shard op accounting classifies scatter parts through the

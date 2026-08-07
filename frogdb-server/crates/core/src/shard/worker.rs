@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
-use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired};
+use frogdb_types::metrics::definitions::{FieldsExpired, KeysExpired, ShardPanicsIsolated};
 use tokio::sync::mpsc;
 
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
@@ -859,6 +859,49 @@ impl ShardWorker {
             return Err(Response::error("ERR shard busy with continuation lock"));
         }
         Ok(())
+    }
+
+    /// Restore command-scoped shard state after a panic was caught at one of the
+    /// [`panic_guard`](super::panic_guard) boundaries, and record it.
+    ///
+    /// The unwind skipped whatever cleanup the panicking frame owed, so the two
+    /// pieces of state that are set for the duration of one command and cleared
+    /// after it are reset here (see the `panic_guard` module docs for why these
+    /// and not others). Lock-table state is *not* touched here: the VLL entry of
+    /// a dequeued op is released by its own guard, which knows which op it was.
+    ///
+    /// Returns the reply the caller should send in place of the answer the
+    /// client never got.
+    pub(crate) fn recover_from_panic(
+        &mut self,
+        site: super::panic_guard::PanicSite,
+        command: &str,
+        panic_message: &str,
+    ) -> Response {
+        let shard_id = self.shard_id();
+        ShardPanicsIsolated::inc(
+            self.observability.metrics(),
+            &shard_id.to_string(),
+            site.as_str(),
+        );
+        tracing::error!(
+            shard_id,
+            site = site.as_str(),
+            command,
+            panic = panic_message,
+            "caught a panic at the shard boundary; the shard survived and the \
+             client was answered with an error — this is always a bug"
+        );
+
+        // A panic between `set_suppress_touch(true)` and its reset would leave
+        // OBJECT FREQ/IDLETIME frozen for every later command on this shard.
+        self.store.set_suppress_touch(false);
+        // Synthesized blocking-pop propagations belong to the write effects that
+        // died; letting them ride along with the *next* write's broadcast would
+        // ship a pop the primary never served.
+        self.pending_serve_propagations.clear();
+
+        Response::error(super::panic_guard::INTERNAL_ERROR)
     }
 }
 
