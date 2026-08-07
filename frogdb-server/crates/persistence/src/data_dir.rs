@@ -334,6 +334,27 @@ mod tests {
         );
     }
 
+    /// `NotFound` is the *only* IO error that means "no marker". A permissions
+    /// failure, a directory sitting where the marker belongs, an IO error off a
+    /// failing disk — each of those reports a directory whose identity is
+    /// unknown, and treating unknown as absent is what initializes a database
+    /// over one that is already there.
+    // FM-PERSISTENCE-050
+    #[test]
+    fn an_io_error_other_than_not_found_is_an_error_not_an_absent_marker() {
+        let tmp = TempDir::new().unwrap();
+        // A directory at the marker's path: the read fails with something that
+        // is emphatically not `NotFound`, on every platform.
+        std::fs::create_dir(DataDirMarker::path(tmp.path())).unwrap();
+
+        let err = DataDirMarker::read(tmp.path())
+            .expect_err("a marker path that cannot be read must not read as absent");
+        assert!(
+            matches!(err, DataDirMarkerError::Unreadable { .. }),
+            "expected Unreadable, got {err:?}"
+        );
+    }
+
     /// A file that will not parse must not be indistinguishable from no file at
     /// all — that collapse is what would let a corrupt marker initialize a
     /// fresh database over a real one.
@@ -430,6 +451,24 @@ mod tests {
         assert!(
             contains_files(&root).unwrap(),
             "a file at any depth is content"
+        );
+    }
+
+    /// "Not there" is the only listing failure that means "no files". A path
+    /// that is a file rather than a directory, a permissions failure, an IO
+    /// error — each of those is a directory whose contents are *unknown*, and
+    /// reporting unknown as empty is what licenses initializing a database on
+    /// top of it.
+    // FM-PERSISTENCE-048
+    #[test]
+    fn contains_files_propagates_a_listing_failure_that_is_not_absence() {
+        let tmp = TempDir::new().unwrap();
+        let not_a_dir = tmp.path().join("data");
+        std::fs::write(&not_a_dir, b"somebody else's file").unwrap();
+
+        assert!(
+            contains_files(&not_a_dir).is_err(),
+            "a data-dir that is a file must be an error, not an empty directory"
         );
     }
 
