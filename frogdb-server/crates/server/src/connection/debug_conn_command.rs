@@ -30,11 +30,11 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_core::shard::{extract_hash_tag, shard_for_key, slot_for_key};
 use frogdb_core::{
-    AccessSpec, Arity, BloomFilterValue, BoxFuture, CommandFlags, CommandSpec, ConnCtx,
-    ConnectionCommand, ConnectionLevelOp, DebugProvider, EventSpec, ExecutionStrategy, HashValue,
-    HyperLogLogValue, JsonValue, KeyMetadata, KeySpec, KeysizeType, ListValue, LookupSpec,
-    SetValue, SortedSetValue, StreamValue, StringValue, TimeSeriesValue, Value, WaiterWake,
-    WalStrategy,
+    AccessSpec, Arity, BloomFilterValue, BoxFuture, CLUSTER_SLOTS, CommandFlags, CommandSpec,
+    ConnCtx, ConnectionCommand, ConnectionLevelOp, DebugProvider, EventSpec, ExecutionStrategy,
+    HashValue, HyperLogLogValue, JsonValue, KeyMetadata, KeySpec, KeysizeType, ListValue,
+    LookupSpec, PauseMode, SetValue, SortedSetValue, StreamValue, StringValue, TimeSeriesValue,
+    Value, WaiterWake, WalStrategy,
 };
 use frogdb_protocol::Response;
 
@@ -109,6 +109,7 @@ impl ConnectionCommand for DebugConnCommand {
                 .expect("DEBUG dispatches through conn_ctx, which sets ConnCtx::debug");
             let num_shards = ctx.num_shards;
             let shard_count = ctx.shard_senders.len();
+            let client_registry = ctx.client_registry;
 
             let subcommand = args[0].to_ascii_uppercase();
             match subcommand.as_slice() {
@@ -219,6 +220,7 @@ impl ConnectionCommand for DebugConnCommand {
                     let shard_id = shard_for_key(&key, num_shards);
                     debug.expire_backdate(shard_id, key, ms).await
                 }
+                b"PAUSE-SLOT" => debug_pause_slot(client_registry, args),
                 b"KEYSIZES-HIST-ASSERT" => keysizes_hist_assert(debug, args).await,
                 b"ALLOCSIZE-SLOTS-ASSERT" => allocsize_slots_assert(debug, args).await,
                 // Dangerous commands — intentionally not supported
@@ -289,6 +291,8 @@ fn debug_help() -> Response {
         "    Cross-check the expiry index against entry deadlines.",
         "DEBUG EXPIRE-BACKDATE <key> <ms>",
         "    Backdate a key's TTL <ms> into the past so it is already expired (test support).",
+        "DEBUG PAUSE-SLOT <slot> <timeout-ms> [WRITE|ALL]",
+        "    Arm a slot-scoped pause (0 ms disarms it) as the migration barrier does (test support).",
         "DEBUG PUBSUB LIMITS",
         "    Show pub/sub subscription usage vs limits.",
         "DEBUG BUNDLE GENERATE [DURATION <seconds>]",
@@ -371,6 +375,63 @@ fn debug_hashing(num_shards: usize, args: &[Bytes]) -> Response {
                 .collect(),
         )
     }
+}
+
+/// `DEBUG PAUSE-SLOT <slot> <timeout-ms> [WRITE|ALL]` — arm or disarm a
+/// *slot-scoped* pause from the wire.
+///
+/// A slot-scoped pause is the slot-migration finalization barrier's mechanism:
+/// it parks only the commands whose keys hash to `<slot>` (plus the commands
+/// that cannot be pinned to any slot), leaving the rest of the keyspace serving.
+/// Production arms it from the migration path, not from a client; this
+/// subcommand exists so tests can drive the barrier end-to-end over a real
+/// connection without inventing a slot argument for `CLIENT PAUSE`, which Redis
+/// does not have and which would be a visible parity break.
+///
+/// `timeout-ms` of `0` disarms the slot, mirroring `CLIENT UNPAUSE` for the
+/// node-global pause. The mode defaults to `WRITE` — what the barrier itself
+/// uses, since reads of a slot that is still owned locally stay correct.
+/// Node-global pauses are untouched either way: the two dimensions arm, expire,
+/// and release independently.
+fn debug_pause_slot(client_registry: &frogdb_core::ClientRegistry, args: &[Bytes]) -> Response {
+    // args[0] = "PAUSE-SLOT", args[1] = slot, args[2] = timeout-ms, args[3] = mode
+    if args.len() < 3 || args.len() > 4 {
+        return Response::error("ERR wrong number of arguments for 'DEBUG PAUSE-SLOT' command");
+    }
+    let slot = match std::str::from_utf8(&args[1])
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .filter(|slot| *slot < CLUSTER_SLOTS)
+    {
+        Some(slot) => slot,
+        None => {
+            return Response::error(format!(
+                "ERR DEBUG PAUSE-SLOT slot must be an integer in 0..{CLUSTER_SLOTS}"
+            ));
+        }
+    };
+    let timeout_ms = match std::str::from_utf8(&args[2])
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(timeout_ms) => timeout_ms,
+        None => {
+            return Response::error("ERR DEBUG PAUSE-SLOT timeout must be a non-negative integer");
+        }
+    };
+    let mode = match args.get(3) {
+        None => PauseMode::Write,
+        Some(mode) if mode.eq_ignore_ascii_case(b"WRITE") => PauseMode::Write,
+        Some(mode) if mode.eq_ignore_ascii_case(b"ALL") => PauseMode::All,
+        Some(_) => return Response::error("ERR DEBUG PAUSE-SLOT mode must be WRITE or ALL"),
+    };
+
+    if timeout_ms == 0 {
+        client_registry.unpause_slot(slot);
+    } else {
+        client_registry.pause_slot(slot, mode, timeout_ms);
+    }
+    Response::ok()
 }
 
 /// DEBUG RESP3 BIGNUMBER|BOOLEAN|VERBATIM — RESP3-type test responses.

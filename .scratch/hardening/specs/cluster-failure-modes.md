@@ -40,8 +40,16 @@ Scope. The cluster area is one replicated state machine plus the seams that read
   (`cluster-runtime/src/{bus,pubsub}.rs`, `cluster/src/wire.rs`,
   `server/src/commands/cluster/mod.rs`).
 
-Out of scope, deliberately: the pause-barrier design (no `FM-CLUSTER-BARRIER` rows — the design is
-pending a decision), the operator and `frogctl`, and the frozen redis-regression suite. `WAIT` has
+* **Slot-scoped pause (079..083)** — the pause dimension the migration finalization barrier arms:
+  which commands one slot's pause parks, the two exemptions that keep it from deadlocking the
+  handover, and how it composes with the operator's node-global `CLIENT PAUSE`
+  (`core/src/client_registry/mod.rs`, `server/src/connection/{pause_gate,lifecycle}.rs`).
+
+Out of scope, deliberately: the rest of the pause-barrier design — the Raft `PrepareSlotHandoff`
+op, the drain round trip, the handoff lease, and the fencing token are phase 2 of
+[rework issue 02](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md)
+and get their rows when they land. Also out of scope: the operator and `frogctl`, and the frozen
+redis-regression suite. `WAIT` has
 no cluster-mode special case at all — it is keyless, counts *this node's* replicas, and never
 redirects — so it is specced once in
 [Replication — failure modes](replication-failure-modes.md) (FM-REPLICATION-037..043) and not
@@ -1083,6 +1091,73 @@ than disguised as correct ownership.
 
 ---
 
+## FM-CLUSTER-079 — a slot-scoped pause parks its slot's writes and treats an unpinnable command as touching every slot
+
+| Field | Value |
+|---|---|
+| Trigger | A pause is armed on one hash slot (`ClientRegistry::pause_slot`, as the migration finalization barrier does) while clients keep issuing commands across the keyspace. |
+| Observable | A write whose keys all hash to the barriered slot parks until the slot is released or the pause lapses; a write to any other slot is served immediately; a read of the barriered slot is served immediately under a `WRITE`-mode pause. A command that names no keys (`FLUSHALL`) or names keys in more than one slot cannot be pinned, so it parks against the *strongest* pause armed on any slot. |
+| NOT observable | A slot pause quiescing the node — that is `CLIENT PAUSE`'s job and the whole point of scoping is that the other 16383 slots keep serving. Nor `FLUSHALL` slipping past a barrier because it names no keys: it erases the barriered slot along with everything else, so "no slot" must fail closed rather than open. Nor a cross-slot key set answering `CROSSSLOT` from the pause gate: the gate is not the slot validator and runs before it, so a straddling key set collapses to the same unpinnable case rather than an error. |
+| Invariant | `PauseState` carries two independent dimensions — one node-global `PauseEntry` and a `HashMap<u16, PauseEntry>` — so per-slot barriers compose without interfering. `command_pause_slot` resolves a command's slot through the registry's own key extractor and `SlotValidator::same_slot`, answering `None` for both the keyless and the straddling case; `ClientRegistry::slot_pause(None)` folds the strongest live per-slot mode (`client_registry/mod.rs`, `connection/pause_gate.rs`). `should_pause_command` resolves the slot only when a slot-scoped pause actually exists, so the common unbarriered path costs one lock. |
+| Outcome variant | `PauseOverview { node, slot_scoped }` / `Option<PauseMode>` |
+| Forced by | `slot_pause_covers_only_its_slot`, `unpinnable_command_sees_the_strongest_slot_pause`, `single_key_command_pins_to_its_key_slot`, `hash_tagged_keys_in_one_slot_pin_together`, `unpinnable_commands_answer_none`, `slot_scoped_pause_parks_only_its_slots_writes` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-080 — the catch-up `MIGRATE` is exempt from the barrier on the slot it is draining
+
+| Field | Value |
+|---|---|
+| Trigger | A slot-scoped pause is armed on the slot a migration is finalizing, and the source node then runs the `MIGRATE` that ships the slot's remaining keys to the target. |
+| Observable | `MIGRATE` executes and answers normally (`+OK`, or `NOKEY` when nothing matched) while ordinary writes to that same slot are still parked. |
+| NOT observable | `MIGRATE` parking. It is `WRITE`-flagged and runs over an ordinary client connection, so without an exemption the barrier would park the very work whose completion releases it — a self-deadlock that no timeout short of the pause's own deadline can break, and that leaves the slot half-copied. |
+| Invariant | `exempt_from_slot_pause` names `MIGRATE` explicitly, and `should_pause_command` consults it before resolving a slot, so the exemption cannot be defeated by which keys the `MIGRATE` happens to name (`connection/pause_gate.rs`). The exemption is scoped to slot pauses alone: a node-global `CLIENT PAUSE` still parks `MIGRATE` exactly as Redis does. |
+| Outcome variant | n/a |
+| Forced by | `only_migrate_and_cluster_are_slot_pause_exempt`, `catch_up_migrate_runs_while_its_slot_is_barriered` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-081 — a slot barrier never parks the cluster control plane, including its own cancel
+
+| Field | Value |
+|---|---|
+| Trigger | A slot-scoped pause is armed — including in `ALL` mode, which parks reads too — and an operator issues a `CLUSTER` subcommand, notably `CLUSTER SETSLOT <slot> STABLE` against the barriered slot. |
+| Observable | Every `CLUSTER` subcommand is dispatched immediately and answers on its own merits. `CLUSTER SETSLOT <slot> STABLE` cancels the migration (FM-CLUSTER-035) and, with it, the operator's route out of a barriered slot. |
+| NOT observable | `CLUSTER` parking behind a slot pause. A barrier that can swallow its own cancel command is unrecoverable without restarting the node, which for the source of a half-finished migration is the worst available option. |
+| Invariant | `exempt_from_slot_pause` names `CLUSTER` as a whole rather than enumerating subcommands, so a new subcommand cannot be added into the trap by omission (`connection/pause_gate.rs`). As with `MIGRATE`, the exemption applies to slot-scoped pauses only. |
+| Outcome variant | n/a |
+| Forced by | `only_migrate_and_cluster_are_slot_pause_exempt`, `cluster_control_plane_is_never_parked_by_a_slot_barrier` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-082 — the operator's pause and a migration's barrier compose, and neither can release the other
+
+| Field | Value |
+|---|---|
+| Trigger | A node-global `CLIENT PAUSE` and one or more slot-scoped barriers are in force at the same time, and one of them is released or lapses. |
+| Observable | While both are armed the stronger of the two modes applies to any command they both cover. `CLIENT UNPAUSE` clears the node-global pause and leaves every slot barrier armed; releasing a slot barrier leaves the node-global pause in force; two slot barriers expire on their own deadlines. Node-global re-arming keeps its Redis merge rules — `ALL` never downgrades to `WRITE`, a shorter re-arm never shortens the deadline — and per-slot re-arming merges the same way within its own slot. Active expiry stays suppressed while *any* pause is armed. |
+| NOT observable | `CLIENT UNPAUSE` disarming a migration barrier. An operator command that silently cancels an in-flight handover's safety property would reintroduce exactly the acknowledged-then-orphaned write the barrier exists to prevent, and the operator has no way to know they did it. Nor the reverse: a barrier release ending an operator's deliberate quiesce early. |
+| Invariant | The node dimension and the per-slot map are separate fields of `PauseState`; `unpause` touches only the former and `unpause_slot` only one entry of the latter. `PauseMode::strongest` folds the two dimensions at the gate rather than merging them in storage, so neither can overwrite the other. `PauseEntry::arm` implements the max-mode/max-deadline merge once, for both dimensions (`client_registry/mod.rs`). |
+| Outcome variant | `PauseOverview` |
+| Forced by | `node_and_slot_pauses_release_independently`, `slot_pauses_expire_independently`, `node_pause_never_downgrades_or_shortens`, `strongest_pause_mode_prefers_all`, `node_pause_and_slot_barrier_release_independently` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-083 — a write transaction parks at `EXEC`, not at queue time, and re-validates after the barrier
+
+| Field | Value |
+|---|---|
+| Trigger | A client queues writes in a `MULTI` and issues `EXEC` while a pause — node-global or slot-scoped — is armed. |
+| Observable | Queuing is never parked: each queued command answers `QUEUED` immediately. `EXEC` parks and answers only after the pause releases, at which point the batch's slot routing is re-validated against the topology that exists *then* (`txn/src/exec.rs`), so a batch whose slot moved during the barrier is redirected rather than committed on the former owner. |
+| NOT observable | A write batch committing while a barrier is up. That is the acknowledged-then-orphaned write of FM-CLUSTER-037 with a whole transaction behind it. Nor `MULTI`/queuing itself parking: queuing performs no keyspace work, and blocking it would hold the pause's cost against clients that may still `DISCARD`. |
+| Invariant | The `TxnHost::wait_if_paused` seam is handed no queue, so the batch's slot cannot be resolved at the gate; `should_pause_command`'s companion `any_pause_active` therefore parks a write `EXEC` on *any* armed pause. Deliberately coarse: it over-parks by at most the barrier's own lifetime and never under-parks. The post-wait re-validation that makes the wait meaningful is unchanged. |
+| Outcome variant | `Response::Array` / `-MOVED` |
+| Forced by | `write_exec_parks_on_a_slot_barrier_and_commits_after_release` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+Accepted non-guarantee for phase 1: a write `EXEC` targeting an *unbarriered* slot also parks while
+any slot barrier is up. Narrowing it means widening the `TxnHost` seam so the host can see the
+queued batch's keys, which belongs with the phase-2 barrier work that owns that seam. It is
+deliberately left unpinned so phase 2 can narrow it without editing a row.
+
+---
+
 ## GAPS — behavior nothing forces
 
 Listed so the mutation run's survivors can be triaged against a known list rather than
@@ -1126,7 +1201,12 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 * Row 038's witness does not exist; the dispatcher needs a seam first.
 * The `cluster_*` integration binaries (`frogdb-server/crates/server/tests/cluster_{topology,
   slots,migration,failover,misc}.rs`, 185 tests) are end-to-end witnesses for most of these rows
-  and may be added to `Forced by` cells, but no row above relies on one as its *only* witness.
+  and may be added to `Forced by` cells, but no row above relies on one as its *only* witness —
+  with one exception. FM-CLUSTER-083's only witness is
+  `write_exec_parks_on_a_slot_barrier_and_commits_after_release` in `cluster_pause_barrier.rs`:
+  the `EXEC` gate is reached through the `TxnHost` seam from a live connection, and the unit-level
+  guard fixture (`connection/guards.rs`'s `ViewFixture`) holds no client registry, so there is no
+  socketless seam to force it at today.
 
 ## Redis deviations
 

@@ -177,13 +177,111 @@ pub enum PauseMode {
     Write,
 }
 
+impl PauseMode {
+    /// The stronger of two optional modes: `All` beats `Write` beats nothing.
+    ///
+    /// Used both when two pauses overlap in time (Redis never downgrades an
+    /// active pause) and when a node-global pause and a slot-scoped one both
+    /// cover the same command.
+    pub fn strongest(a: Option<Self>, b: Option<Self>) -> Option<Self> {
+        match (a, b) {
+            (Some(Self::All), _) | (_, Some(Self::All)) => Some(Self::All),
+            (Some(Self::Write), _) | (_, Some(Self::Write)) => Some(Self::Write),
+            (None, None) => None,
+        }
+    }
+}
+
+/// One armed pause: what it blocks and when it lapses.
+#[derive(Debug, Clone, Copy)]
+struct PauseEntry {
+    /// What this pause blocks.
+    mode: PauseMode,
+    /// When it lapses. Always set — `CLIENT PAUSE` and the slot barrier both
+    /// take a timeout, and an unbounded pause has no way back if its arming
+    /// party dies.
+    unpause_at: Instant,
+}
+
+impl PauseEntry {
+    /// Whether this pause is still in force at `now`.
+    fn active(&self, now: Instant) -> bool {
+        now < self.unpause_at
+    }
+
+    /// Fold a newly armed pause into whatever is already there, per Redis'
+    /// overlapping-pause rules: never downgrade the mode, never shorten the
+    /// deadline — but only against a pause that has not already lapsed.
+    fn arm(existing: Option<Self>, mode: PauseMode, unpause_at: Instant, now: Instant) -> Self {
+        match existing.filter(|e| e.active(now)) {
+            Some(live) => Self {
+                mode: PauseMode::strongest(Some(live.mode), Some(mode))
+                    .expect("both operands are Some"),
+                unpause_at: live.unpause_at.max(unpause_at),
+            },
+            None => Self { mode, unpause_at },
+        }
+    }
+}
+
 /// Pause state for the client registry.
+///
+/// Two independent dimensions, deliberately not merged into one entry:
+///
+/// - `node` is the operator's `CLIENT PAUSE` — node-global, Redis semantics.
+/// - `slots` are slot-scoped pauses, the machinery the slot-migration
+///   finalization barrier arms on the source node. A slot-scoped pause parks
+///   only commands whose keys hash to that slot.
+///
+/// Keeping them apart is what lets `CLIENT UNPAUSE` clear the operator's pause
+/// without silently disarming a migration barrier, and lets the barrier release
+/// its slot without lifting an operator pause that is still meant to be running
+/// (the composition requirement in the pause-barrier brief).
 #[derive(Debug, Default)]
 struct PauseState {
-    /// Current pause mode (None if not paused).
-    mode: Option<PauseMode>,
-    /// When the pause should automatically expire.
-    unpause_at: Option<Instant>,
+    /// The node-global pause (`CLIENT PAUSE`), if one is armed.
+    node: Option<PauseEntry>,
+    /// Slot-scoped pauses, keyed by CRC16 hash slot. Composed per slot, so two
+    /// concurrent slot finalizations never contend.
+    slots: HashMap<u16, PauseEntry>,
+}
+
+impl PauseState {
+    /// Whether any armed pause has lapsed and should be swept.
+    fn has_lapsed(&self, now: Instant) -> bool {
+        self.node.is_some_and(|e| !e.active(now)) || self.slots.values().any(|e| !e.active(now))
+    }
+
+    /// Drop every lapsed pause.
+    fn sweep(&mut self, now: Instant) {
+        self.node = self.node.filter(|e| e.active(now));
+        self.slots.retain(|_, e| e.active(now));
+    }
+
+    /// Whether anything at all is paused.
+    fn is_idle(&self) -> bool {
+        self.node.is_none() && self.slots.is_empty()
+    }
+}
+
+/// What is paused right now, read under a single lock.
+///
+/// The overwhelmingly common answer is "nothing", which is why the pause gate
+/// asks this question first: only a `slot_scoped` answer makes it worth
+/// resolving the command's keys to a hash slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PauseOverview {
+    /// The node-global pause mode, if one is in force.
+    pub node: Option<PauseMode>,
+    /// Whether at least one slot-scoped pause is in force.
+    pub slot_scoped: bool,
+}
+
+impl PauseOverview {
+    /// Whether any pause — node-global or slot-scoped — is in force.
+    pub fn is_active(&self) -> bool {
+        self.node.is_some() || self.slot_scoped
+    }
 }
 
 /// Unblock mode for CLIENT UNBLOCK.
@@ -419,9 +517,9 @@ impl Drop for ClientHandle {
 pub struct ClientRegistry {
     /// Map of connection ID to client entry.
     clients: RwLock<HashMap<u64, ClientEntry>>,
-    /// Pause state for CLIENT PAUSE.
+    /// Pause state: the node-global `CLIENT PAUSE` plus any slot-scoped pauses.
     pause_state: RwLock<PauseState>,
-    /// Whether active key expiry should be paused (true during PAUSE ALL or PAUSE WRITE).
+    /// Whether active key expiry should be paused (true while any pause is armed).
     expiry_paused: Arc<AtomicBool>,
     /// Server-wide per-command statistics (lowercase command name → stats).
     ///
@@ -723,84 +821,121 @@ impl ClientRegistry {
         self.with_client_mut(id, |entry| entry.set_multi(in_multi, queue_len));
     }
 
-    /// Set pause state.
+    /// Arm the node-global pause (`CLIENT PAUSE`).
     ///
     /// Follows Redis semantics for overlapping pauses:
     /// - Mode precedence: ALL takes priority over WRITE (never downgrade).
     /// - Time preservation: the maximum of old and new end times is kept.
     pub fn pause(&self, mode: PauseMode, timeout_ms: u64) {
-        let mut pause_state = self.pause_state.write().unwrap();
         let now = crate::clock::now();
-        let new_unpause_at = now + std::time::Duration::from_millis(timeout_ms);
-
-        // Check whether the existing pause is still active (not expired).
-        let existing_active = matches!(pause_state.unpause_at, Some(t) if t > now);
-
-        // Determine effective mode: ALL takes priority over WRITE,
-        // but only if the existing pause hasn't expired yet.
-        let effective_mode = if existing_active {
-            match pause_state.mode {
-                Some(PauseMode::All) => PauseMode::All,
-                _ => mode,
-            }
-        } else {
-            mode
-        };
-
-        // Determine effective end time: keep the later of old and new,
-        // but only if the existing pause hasn't expired yet.
-        let effective_unpause_at = if existing_active {
-            match pause_state.unpause_at {
-                Some(existing) if existing > new_unpause_at => existing,
-                _ => new_unpause_at,
-            }
-        } else {
-            new_unpause_at
-        };
-
-        pause_state.mode = Some(effective_mode);
-        pause_state.unpause_at = Some(effective_unpause_at);
-
-        // Suppress active expiry during both CLIENT PAUSE ALL and PAUSE WRITE.
-        // Redis suppresses expires during PAUSE WRITE to prevent replication
-        // stream writes while replicas catch up.
-        self.expiry_paused.store(true, Ordering::Relaxed);
+        let unpause_at = now + std::time::Duration::from_millis(timeout_ms);
+        let mut pause_state = self.pause_state.write().unwrap();
+        pause_state.node = Some(PauseEntry::arm(pause_state.node, mode, unpause_at, now));
+        self.publish_expiry_paused(&pause_state);
     }
 
-    /// Clear pause state.
+    /// Arm a pause scoped to one CRC16 hash slot.
+    ///
+    /// This is the slot-migration finalization barrier's half of the pause
+    /// machinery: it parks only commands whose keys hash to `slot`, so the
+    /// catch-up `MIGRATE` and the `CLUSTER SETSLOT` control plane keep running
+    /// on the very node the barrier is armed on. Overlapping arms of the *same*
+    /// slot fold with the same never-downgrade / never-shorten rule as
+    /// [`pause`](Self::pause); different slots compose independently.
+    pub fn pause_slot(&self, slot: u16, mode: PauseMode, timeout_ms: u64) {
+        let now = crate::clock::now();
+        let unpause_at = now + std::time::Duration::from_millis(timeout_ms);
+        let mut pause_state = self.pause_state.write().unwrap();
+        let armed = PauseEntry::arm(pause_state.slots.get(&slot).copied(), mode, unpause_at, now);
+        pause_state.slots.insert(slot, armed);
+        self.publish_expiry_paused(&pause_state);
+    }
+
+    /// Clear the node-global pause (`CLIENT UNPAUSE`).
+    ///
+    /// Deliberately leaves slot-scoped pauses armed: an operator lifting their
+    /// own pause must not disarm a migration barrier that is holding a slot's
+    /// writes back across an ownership handover. A barrier is released by
+    /// [`unpause_slot`](Self::unpause_slot) or by its own deadline.
     pub fn unpause(&self) {
         let mut pause_state = self.pause_state.write().unwrap();
-        pause_state.mode = None;
-        pause_state.unpause_at = None;
-        self.expiry_paused.store(false, Ordering::Relaxed);
+        pause_state.node = None;
+        self.publish_expiry_paused(&pause_state);
     }
 
-    /// Check current pause state.
-    /// Returns None if not paused (including auto-expiry).
-    pub fn check_pause(&self) -> Option<PauseMode> {
-        // First check with read lock
+    /// Release the pause on one hash slot, leaving every other pause — the
+    /// node-global one included — exactly as it was.
+    pub fn unpause_slot(&self, slot: u16) {
+        let mut pause_state = self.pause_state.write().unwrap();
+        pause_state.slots.remove(&slot);
+        self.publish_expiry_paused(&pause_state);
+    }
+
+    /// What is paused right now: the node-global mode plus whether any
+    /// slot-scoped pause is in force. Lapsed pauses are swept first, so a
+    /// deadline that has passed never reads as active.
+    pub fn pause_overview(&self) -> PauseOverview {
+        self.sweep_lapsed_pauses();
+        let pause_state = self.pause_state.read().unwrap();
+        PauseOverview {
+            node: pause_state.node.map(|e| e.mode),
+            slot_scoped: !pause_state.slots.is_empty(),
+        }
+    }
+
+    /// The slot-scoped pause covering `slot`.
+    ///
+    /// `None` for `slot` means "this command cannot be pinned to a single hash
+    /// slot" — it names no keys, or names keys in more than one slot — and is
+    /// answered fail-closed with the strongest pause armed on *any* slot: such a
+    /// command may touch the barriered slot, and the barrier exists precisely to
+    /// stop that. Node-global pauses are not consulted here; ask
+    /// [`pause_overview`](Self::pause_overview) for those.
+    pub fn slot_pause(&self, slot: Option<u16>) -> Option<PauseMode> {
+        self.sweep_lapsed_pauses();
+        let pause_state = self.pause_state.read().unwrap();
+        match slot {
+            Some(slot) => pause_state.slots.get(&slot).map(|e| e.mode),
+            None => pause_state
+                .slots
+                .values()
+                .fold(None, |acc, e| PauseMode::strongest(acc, Some(e.mode))),
+        }
+    }
+
+    /// Whether any pause at all — node-global or slot-scoped — is in force.
+    pub fn any_pause_active(&self) -> bool {
+        self.pause_overview().is_active()
+    }
+
+    /// Drop lapsed pauses, taking the write lock only when there is something
+    /// to drop.
+    fn sweep_lapsed_pauses(&self) {
+        let now = crate::clock::now();
         {
             let pause_state = self.pause_state.read().unwrap();
-            let mode = pause_state.mode?;
-            if let Some(unpause_at) = pause_state.unpause_at {
-                if crate::clock::now() < unpause_at {
-                    return Some(mode);
-                }
-            } else {
-                return Some(mode);
+            if !pause_state.has_lapsed(now) {
+                return;
             }
         }
-
-        // Pause expired, clear it
         let mut pause_state = self.pause_state.write().unwrap();
-        if let Some(unpause_at) = pause_state.unpause_at
-            && crate::clock::now() >= unpause_at
-        {
-            pause_state.mode = None;
-            pause_state.unpause_at = None;
-            self.expiry_paused.store(false, Ordering::Relaxed);
-        }
-        None
+        pause_state.sweep(crate::clock::now());
+        self.publish_expiry_paused(&pause_state);
+    }
+
+    /// Republish the shard-visible active-expiry suppression flag.
+    ///
+    /// Suppressed while *any* pause is armed, slot-scoped ones included. Redis
+    /// suppresses expires during `PAUSE WRITE` so the replication stream stays
+    /// quiet while replicas catch up; a slot barrier wants the same thing for a
+    /// stricter reason — an active-expiry deletion on the slot being handed over
+    /// is exactly the orphaned write the barrier is there to prevent. Suppressing
+    /// node-wide for a slot-scoped pause is broader than strictly needed, and
+    /// deliberately so: it errs toward not writing, and lazy expiry still hides
+    /// elapsed keys from readers.
+    fn publish_expiry_paused(&self, pause_state: &PauseState) {
+        self.expiry_paused
+            .store(!pause_state.is_idle(), Ordering::Relaxed);
     }
 
     /// Get the current number of connected clients.
@@ -1195,15 +1330,15 @@ mod tests {
         let registry = Arc::new(ClientRegistry::new());
 
         // Not paused initially
-        assert!(registry.check_pause().is_none());
+        assert!(!registry.any_pause_active());
 
         // Pause with long timeout
         registry.pause(PauseMode::Write, 10000);
-        assert_eq!(registry.check_pause(), Some(PauseMode::Write));
+        assert_eq!(registry.pause_overview().node, Some(PauseMode::Write));
 
         // Unpause
         registry.unpause();
-        assert!(registry.check_pause().is_none());
+        assert!(!registry.any_pause_active());
     }
 
     #[test]
@@ -1215,7 +1350,119 @@ mod tests {
 
         // Should be expired
         std::thread::sleep(std::time::Duration::from_millis(1));
-        assert!(registry.check_pause().is_none());
+        assert!(!registry.any_pause_active());
+        assert!(!registry.expiry_paused_flag().load(Ordering::Relaxed));
+    }
+
+    /// A node-global pause keeps its Redis overlap rules: `ALL` never downgrades
+    /// to `WRITE`, and a shorter re-arm never shortens the deadline.
+    // FM-CLUSTER-082
+    #[test]
+    fn node_pause_never_downgrades_or_shortens() {
+        let registry = ClientRegistry::new();
+
+        registry.pause(PauseMode::All, 10_000);
+        registry.pause(PauseMode::Write, 10);
+        let overview = registry.pause_overview();
+        assert_eq!(overview.node, Some(PauseMode::All));
+
+        // The 10 ms re-arm must not have replaced the 10 s deadline.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(registry.pause_overview().node, Some(PauseMode::All));
+    }
+
+    // FM-CLUSTER-079
+    /// A slot-scoped pause covers its own slot and nothing else.
+    #[test]
+    fn slot_pause_covers_only_its_slot() {
+        let registry = ClientRegistry::new();
+        registry.pause_slot(42, PauseMode::Write, 10_000);
+
+        assert_eq!(registry.slot_pause(Some(42)), Some(PauseMode::Write));
+        assert_eq!(registry.slot_pause(Some(43)), None);
+
+        let overview = registry.pause_overview();
+        assert!(overview.slot_scoped);
+        assert_eq!(
+            overview.node, None,
+            "arming a slot barrier must not fabricate a node-global pause"
+        );
+    }
+
+    // FM-CLUSTER-079
+    /// A command that cannot be pinned to one slot (keyless, or cross-slot) is
+    /// answered fail-closed: the strongest pause armed on *any* slot applies.
+    #[test]
+    fn unpinnable_command_sees_the_strongest_slot_pause() {
+        let registry = ClientRegistry::new();
+        assert_eq!(registry.slot_pause(None), None);
+
+        registry.pause_slot(1, PauseMode::Write, 10_000);
+        assert_eq!(registry.slot_pause(None), Some(PauseMode::Write));
+
+        registry.pause_slot(2, PauseMode::All, 10_000);
+        assert_eq!(registry.slot_pause(None), Some(PauseMode::All));
+        // Per-slot composition: slot 1 is still only WRITE-paused.
+        assert_eq!(registry.slot_pause(Some(1)), Some(PauseMode::Write));
+    }
+
+    // FM-CLUSTER-082
+    /// The operator's pause and a slot barrier are released independently in
+    /// both directions.
+    #[test]
+    fn node_and_slot_pauses_release_independently() {
+        let registry = ClientRegistry::new();
+        registry.pause(PauseMode::Write, 10_000);
+        registry.pause_slot(7, PauseMode::Write, 10_000);
+
+        // CLIENT UNPAUSE must not disarm the barrier.
+        registry.unpause();
+        assert_eq!(registry.pause_overview().node, None);
+        assert_eq!(registry.slot_pause(Some(7)), Some(PauseMode::Write));
+        assert!(registry.any_pause_active());
+
+        // Re-arm the operator pause and release the barrier instead.
+        registry.pause(PauseMode::All, 10_000);
+        registry.unpause_slot(7);
+        assert_eq!(registry.slot_pause(Some(7)), None);
+        assert_eq!(
+            registry.pause_overview().node,
+            Some(PauseMode::All),
+            "barrier release must not clear an operator pause"
+        );
+    }
+
+    // FM-CLUSTER-082
+    /// Slot pauses expire per slot, and the expiry-suppression flag tracks
+    /// "anything armed", not just the node-global pause.
+    #[test]
+    fn slot_pauses_expire_independently() {
+        let registry = ClientRegistry::new();
+        registry.pause_slot(1, PauseMode::Write, 0);
+        registry.pause_slot(2, PauseMode::Write, 10_000);
+        assert!(registry.expiry_paused_flag().load(Ordering::Relaxed));
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert_eq!(registry.slot_pause(Some(1)), None);
+        assert_eq!(registry.slot_pause(Some(2)), Some(PauseMode::Write));
+        assert!(
+            registry.expiry_paused_flag().load(Ordering::Relaxed),
+            "slot 2 is still armed, so active expiry stays suppressed"
+        );
+
+        registry.unpause_slot(2);
+        assert!(!registry.expiry_paused_flag().load(Ordering::Relaxed));
+    }
+
+    // FM-CLUSTER-082
+    #[test]
+    fn strongest_pause_mode_prefers_all() {
+        use PauseMode::{All, Write};
+        assert_eq!(PauseMode::strongest(None, None), None);
+        assert_eq!(PauseMode::strongest(Some(Write), None), Some(Write));
+        assert_eq!(PauseMode::strongest(None, Some(Write)), Some(Write));
+        assert_eq!(PauseMode::strongest(Some(Write), Some(All)), Some(All));
+        assert_eq!(PauseMode::strongest(Some(All), Some(Write)), Some(All));
     }
 
     #[test]
