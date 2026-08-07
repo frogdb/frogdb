@@ -112,3 +112,54 @@ it is not a close call.
 
 The harness doubles as the acceptance test: assert *"iterations with an acknowledged write after
 commit = 0"* over ≥120 loaded iterations. It reports 118/120 today, so it is a live reproduction.
+
+## Comment — 2026-08-06: phase 1 landed (slot-scoped pause), issue stays open
+
+Sequencing step 2 of the brief §7 — the pause *mechanism*, landed independently and ahead of the
+Raft two-phase work so it can be reviewed and mutation-tested on its own. **Nothing arms it in
+production yet**: the barrier that will arm it is phase 2.
+
+What exists now:
+
+* **`PauseState` has two independent dimensions** (`core/src/client_registry/mod.rs`) — one
+  node-global `PauseEntry` (today's `CLIENT PAUSE`, semantics unchanged) and a
+  `HashMap<u16, PauseEntry>` of per-slot pauses. `PauseEntry::arm` implements the Redis merge rule
+  (max mode, max deadline) once for both. New API: `pause_slot`, `unpause_slot`, `slot_pause`,
+  `pause_overview`, `any_pause_active`; `check_pause` is gone. `unpause` clears only the node
+  dimension, so `CLIENT UNPAUSE` can never disarm a migration barrier.
+* **`should_pause_command` is slot-aware** (`server/src/connection/lifecycle.rs`). One lock answers
+  the common unbarriered case; a command's slot is resolved only when a slot pause actually exists.
+  The two decisions scoping needs are pure functions in the new
+  `server/src/connection/pause_gate.rs`, so they are unit-testable without a socket.
+* **Fail-closed on unpinnable commands.** A command naming no keys (`FLUSHALL`) or keys in more than
+  one slot cannot be pinned, so it parks against the strongest pause armed on *any* slot. `FLUSHALL`
+  erases the barriered slot along with everything else; "no slot" is not "no exposure".
+* **Both brief §4 hazards are dodged by design and pinned by test.** `MIGRATE` (hazard 3) and
+  `CLUSTER` (hazard 4, including the `SETSLOT … STABLE` escape hatch) are exempt from *slot-scoped*
+  pauses only; a node-global `CLIENT PAUSE` still parks both, exactly as Redis does.
+* **Test seam:** `DEBUG PAUSE-SLOT <slot> <timeout-ms> [WRITE|ALL]` (0 ms disarms).
+  `CLIENT PAUSE` was deliberately **not** extended — Redis has no slot argument and the parity break
+  would be visible to every client library.
+* **Spec:** `FM-CLUSTER-079..083` in `.scratch/hardening/specs/cluster-failure-modes.md`, with the
+  "pause barrier is out of scope" line replaced by a scope bullet and a pointer back to this issue
+  for the phase-2 rows.
+
+Tests: `frogdb-server/crates/server/tests/cluster_pause_barrier.rs` (5 integration witnesses),
+plus unit tests in `client_registry/mod.rs` and `connection/pause_gate.rs`.
+
+The `exec.rs` post-wait re-validation contract is untouched, and the previously-missing coverage
+this issue called for now exists: `write_exec_parks_on_a_slot_barrier_and_commits_after_release`
+pins that queuing is never parked, `EXEC` is, and the batch commits only after release.
+
+**Known phase-1 limitation, deliberately unpinned.** `frogdb-txn` is LOCKED and
+`TxnHost::wait_if_paused(&mut self)` is handed no queue, so the server cannot resolve a transaction's
+slot at the gate. A write `EXEC` therefore parks on *any* armed pause, including a barrier on a slot
+it never touches. That over-parks by at most the barrier's own lifetime and never under-parks.
+Narrowing it means widening the `TxnHost` seam, which belongs with phase 2; FM-CLUSTER-083 records
+the non-guarantee in prose rather than pinning it, so phase 2 can narrow it without a spec edit.
+
+Still to build (phase 2, brief §6 Option A): `PrepareSlotHandoff` as a Raft op, the drain
+(shard-mailbox round trip), the prepare deadline the measurement forced, the handoff lease, and the
+fencing token at the execute seam that covers commands already past the routing guard. The Lua-script
+acceptance criterion above is a phase-2 deliverable — a slot-scoped pause alone does not stop a
+script that validated its key set before the barrier armed.

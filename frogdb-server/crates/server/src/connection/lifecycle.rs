@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use frogdb_core::ClientMemoryUsage;
 
 use super::ConnectionHandler;
+use super::pause_gate;
 use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS};
 use crate::scatter::ScatterGather;
 
@@ -336,8 +337,18 @@ impl ConnectionHandler {
     /// Returns `true` if the command must wait, `false` if it's exempt or no
     /// pause is active.
     ///
-    /// `cmd_args` is the raw argument list for the command (used to inspect
-    /// EVAL/EVALSHA script bodies for `#!lua flags=no-writes` shebangs).
+    /// `cmd_args` is the raw argument list for the command. It feeds two
+    /// decisions: which hash slot the command is pinned to (for slot-scoped
+    /// pauses) and whether an EVAL/EVALSHA script body carries a
+    /// `#!lua flags=no-writes` shebang.
+    ///
+    /// Two pause dimensions compose here. The node-global `CLIENT PAUSE` applies
+    /// to every command, exactly as it always has. A slot-scoped pause — what the
+    /// slot-migration finalization barrier arms — applies only to commands that
+    /// can reach its slot, and never to the handover's own control and copy
+    /// traffic (see
+    /// [`exempt_from_slot_pause`](crate::connection::pause_gate::exempt_from_slot_pause)).
+    /// When both cover a command, the stronger mode wins.
     pub(crate) fn should_pause_command(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) -> bool {
         // Certain commands are always exempt from pause
         let is_exempt = matches!(
@@ -349,7 +360,20 @@ impl ConnectionHandler {
             return false;
         }
 
-        match self.admin.client_registry.check_pause() {
+        // One lock for the common "nothing is paused" answer; the command's key
+        // set is only resolved to a slot when a slot-scoped pause actually exists.
+        let overview = self.admin.client_registry.pause_overview();
+        if !overview.is_active() {
+            return false;
+        }
+        let slot_mode = if overview.slot_scoped && !pause_gate::exempt_from_slot_pause(cmd_name) {
+            let slot = pause_gate::command_pause_slot(&self.core.registry, cmd_name, cmd_args);
+            self.admin.client_registry.slot_pause(slot)
+        } else {
+            None
+        };
+
+        match PauseMode::strongest(overview.node, slot_mode) {
             Some(PauseMode::All) => true,
             Some(PauseMode::Write) => {
                 // Get command flags to determine if this is a write/script
@@ -392,6 +416,21 @@ impl ConnectionHandler {
             }
             None => false,
         }
+    }
+
+    /// Whether *any* pause is in force, node-global or slot-scoped.
+    ///
+    /// EXEC's gate, and deliberately coarser than
+    /// [`should_pause_command`](Self::should_pause_command). The `TxnHost` seam
+    /// hands `wait_if_paused` no queue, so the transaction's slot cannot be
+    /// resolved here, and a write batch that runs while a barrier is up is
+    /// precisely the acknowledged-then-orphaned write the barrier exists to
+    /// prevent. So a write EXEC parks on any armed pause — over-parking by at
+    /// most the barrier's own lifetime, and never under-parking. Narrowing it
+    /// means widening the `TxnHost` seam, which belongs with the barrier itself
+    /// rather than with this phase.
+    fn any_pause_active(&self) -> bool {
+        self.admin.client_registry.any_pause_active()
     }
 
     /// Check whether a script command has a `no-writes` flag via shebang
@@ -488,7 +527,7 @@ impl ConnectionHandler {
     /// in the EXEC path can take unbounded wall-clock time, so an unblocked
     /// call means the snapshot cannot have gone stale in between.
     pub(crate) async fn wait_if_paused_for_transaction(&self) -> bool {
-        if self.admin.client_registry.check_pause().is_none() {
+        if !self.any_pause_active() {
             return false;
         }
 
@@ -499,7 +538,7 @@ impl ConnectionHandler {
 
         // Wait until pause ends
         loop {
-            if self.admin.client_registry.check_pause().is_none() {
+            if !self.any_pause_active() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
