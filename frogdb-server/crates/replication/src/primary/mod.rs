@@ -27,6 +27,7 @@ use tokio::sync::broadcast;
 
 use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
+use crate::feed_gate::ReplicaFeedGate;
 use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
 use crate::identity::ReplicationIdentity;
 use crate::offset_coordinator::OffsetCoordinator;
@@ -230,6 +231,12 @@ pub struct PrimaryReplicationHandler {
     /// still reach PSYNC afterwards; without this latch it would register a
     /// fresh session behind the drain and keep the storage engine open.
     pub(crate) draining: AtomicBool,
+    /// Holds every streaming session's output while a slot-handoff write
+    /// barrier is armed on this node (see [`ReplicaFeedGate`]). Published by
+    /// the client registry from the same pause state the barrier reads, so the
+    /// two halves cannot disagree; a session consults it in
+    /// [`crate::replica_session::ReplicaSession::start_streaming`].
+    pub(crate) feed_gate: Arc<ReplicaFeedGate>,
 }
 
 impl PrimaryReplicationHandler {
@@ -244,6 +251,11 @@ impl PrimaryReplicationHandler {
         lag_config: LagThresholdConfig,
         backlog_config: BacklogConfig,
         write_timeout_ms: u64,
+        // Passed rather than defaulted so a new construction site has to say
+        // which gate it is on: a handler wired to a fresh `ReplicaFeedGate::open()`
+        // ships through slot-handoff barriers, which is right for a test double
+        // and wrong for the production node.
+        feed_gate: Arc<ReplicaFeedGate>,
     ) -> Self {
         let (wal_broadcast, _) = broadcast::channel(10000);
         let replay = PartialSyncReplay::new(&backlog_config);
@@ -285,7 +297,13 @@ impl PrimaryReplicationHandler {
             offsets,
             wait,
             draining: AtomicBool::new(false),
+            feed_gate,
         }
+    }
+
+    /// The replica-feed hold this handler's sessions obey.
+    pub fn feed_gate(&self) -> &Arc<ReplicaFeedGate> {
+        &self.feed_gate
     }
 
     /// Install the work that must complete before a FULLRESYNC checkpoint is

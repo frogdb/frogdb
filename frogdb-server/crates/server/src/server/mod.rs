@@ -267,6 +267,7 @@ impl Server {
             &infra.recovered_replication,
             &infra.rocks_store,
             &infra.shard_senders,
+            &infra.client_registry,
             &infra.metrics_recorder,
             &infra.is_replica_flag,
             #[cfg(not(feature = "turmoil"))]

@@ -114,6 +114,10 @@ pub(super) fn init_replication(
     recovered_replication: &frogdb_core::ReplicationState,
     rocks_store: &Option<Arc<RocksStore>>,
     shard_senders: &Arc<Vec<frogdb_core::ShardSender>>,
+    // Owner of the pause state the slot-handoff barrier arms; the primary
+    // handler is given its replica-feed gate so a barrier holds the feed as
+    // well as the acknowledgement (FM-CLUSTER-097).
+    client_registry: &Arc<frogdb_core::ClientRegistry>,
     _metrics_recorder: &Arc<dyn MetricsRecorder>,
     // The process-wide live role flag (minted in phase 1, owned by the
     // `RoleManager` from phase 3 on). Gates broadcasting, so promotion/demotion
@@ -153,6 +157,10 @@ pub(super) fn init_replication(
         },
         backlog_config(&config.replication),
         config.replication.replica_write_timeout_ms,
+        // The replication half of the slot-handoff write barrier
+        // (FM-CLUSTER-097). The registry publishes it from the same pause state
+        // the barrier arms, so this is a read handle, not a second flag.
+        client_registry.replica_feed_gate(),
     ));
     // A FULLRESYNC checkpoint must contain every write this node has already
     // acknowledged: it is the sole carrier of the writes made before the replica
@@ -490,6 +498,8 @@ mod tests {
                 ttl_secs: 0,
             },
             1000,
+            // No barrier is armed in these unit tests: an open gate ships.
+            frogdb_replication::ReplicaFeedGate::open(),
         ))
     }
 

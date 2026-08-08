@@ -1322,11 +1322,27 @@ Still unpinned after phase 2b, deliberately. A cross-shard script holding a VLL 
 a handoff has no row: the continuation-lock gate has two tracked bypasses of its own
 (`MULTI`/`EXEC`, `FCALL`), so a row written now would pin the barrier's behaviour on top of a seam
 that is itself known-leaky, and it belongs with those issues rather than ahead of them. Whether the
-barrier should also stall a replication primary's replica feed — Redis and Valkey both include
-`PAUSE_ACTION_REPLICA` — remains undecided, and so has no row rather than an unforced one. The
-residual window itself (`t_source - t_leader`, still ~0.7 ms p50 under load) is a replication lag
+barrier should also stall a replication primary's replica feed is no longer undecided — it does,
+and FM-CLUSTER-097 is that row. The residual window itself (`t_source - t_leader`, still ~0.7 ms p50 under load) is a replication lag
 and is not claimed to be closed; what FM-CLUSTER-095 claims is that nothing client-visible happens
 inside it.
+
+## FM-CLUSTER-097 — a slot-handoff barrier holds the node's replica feed for the barrier window
+
+| Field | Value |
+|---|---|
+| Trigger | A slot-scoped pause is armed on a node that is also a replication primary — the slot-handoff write barrier, hand-armed by `DEBUG PAUSE-SLOT` or armed by the handoff itself — while a replica is attached and streaming. |
+| Observable | Nothing the node applies during the barrier window reaches the replica: its `DBSIZE` does not move, on the barriered slot or any other. When the barrier ends — the handoff completes, aborts, or the pause simply lapses — the feed resumes and the replica converges on everything held, in offset order and with nothing dropped. A replica that PSYNCs *into* the window waits before it replays the backlog tail, so the held writes do not leak out of the other lane. |
+| NOT observable | A node-global `CLIENT PAUSE` holding the feed: it stops the writes themselves, so there is nothing new to ship and stalling a replica behind it would be pure lag — Redis likewise reserves `PAUSE_ACTION_REPLICA` for the migration pause. Nor a per-shard hold: frames carry a shard id but there is one monotonic replication offset (`OffsetCoordinator::advance`), so shipping shard B while holding shard A would put offsets on the wire out of order, which is worse than the anomaly. Nor rollback of the fenced-but-applied writes of FM-CLUSTER-095 — they are legitimate local state and they do ship once the hold ends; what the hold buys is that they do not ship *while the client is being told to retry elsewhere*. Nor a feed that can wedge: the hold carries the barrier's own deadline, so a finalizer that dies mid-handoff cannot leave the feed held. |
+| Invariant | `PauseState::feed_hold_until` derives the hold — the latest deadline across armed slot pauses — from the same pause state the write barrier reads, and `ClientRegistry::publish_pause_derived_state` republishes it to a `ReplicaFeedGate` on *every* pause mutation, so the two halves of the barrier cannot disagree about whether it is up (`core/src/client_registry/mod.rs`, `replication/src/feed_gate.rs`). The gate stores an `Instant`, not a latch: `hold_deadline` answers `None` once `clock::now()` passes it, so normal completion, abort, and a lapsed lease all release without anyone clearing anything. `ReplicaSession::start_streaming` waits on it after subscribing and buffers frames in a per-session `VecDeque` while held, draining in offset order on release, so ordering survives the hold and a held session cannot be `Lagged` off the broadcast channel. |
+| Outcome variant | `Option<Instant>` |
+| Forced by | `the_barrier_holds_the_replica_feed_until_the_handoff_releases_it`, `slot_barrier_publishes_and_clears_the_replica_feed_hold`, `a_node_pause_does_not_hold_the_replica_feed`, `a_lapsed_barrier_frees_the_feed_with_nobody_clearing_it`, `overlapping_barriers_hold_the_feed_to_the_later_deadline`, `a_published_deadline_holds_the_feed_until_it_lapses`, `a_lapsed_hold_releases_a_waiter_without_an_explicit_release`, `an_explicit_release_wakes_a_waiter_early`, `a_shortened_deadline_is_honoured`, `an_open_gate_holds_nothing`, `republishing_the_same_deadline_is_a_no_op` |
+| Bug refs | [12-barrier-vs-replica-feed-policy.md](../../replication-cluster-rework/issues/done/12-barrier-vs-replica-feed-policy.md) |
+
+The hold is node-wide for the barrier window (≤100 ms in production, backstopped by the handoff
+lease), which is what Redis 8.4 and Valkey 9.0 do: their atomic-slot-migration pause is node-wide
+and includes `PAUSE_ACTION_REPLICA`, stopping the primary from flushing replica output buffers so
+replicas cannot run ahead of a primary that is fencing its own clients.
 
 ---
 

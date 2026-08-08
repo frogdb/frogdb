@@ -33,6 +33,7 @@ fn divergence_handler(dir: &std::path::Path) -> crate::primary::PrimaryReplicati
             ttl_secs: 0,
         },
         0,
+        crate::feed_gate::ReplicaFeedGate::open(),
     )
 }
 
@@ -629,6 +630,7 @@ async fn save_state_persists_tracker_offset() {
             ttl_secs: 0,
         },
         0,
+        crate::feed_gate::ReplicaFeedGate::open(),
     );
 
     // The offset on disk starts at 0 even though it was never explicitly saved.
@@ -682,6 +684,7 @@ async fn wait_with_lagging_replica_broadcasts_a_stamped_getack() {
             ttl_secs: 0,
         },
         0,
+        crate::feed_gate::ReplicaFeedGate::open(),
     );
 
     // One streaming replica that has acked nothing while the stream is ahead.
@@ -754,6 +757,7 @@ fn stint_handler(
             ttl_secs: 0,
         },
         0,
+        crate::feed_gate::ReplicaFeedGate::open(),
     )
 }
 
