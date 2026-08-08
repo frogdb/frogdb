@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use frogdb_core::cluster::{
     ClusterCommand, ClusterNetworkFactory, ClusterRaft, ClusterResponse, ClusterState, NodeId,
-    NodeInfo, RaftProposer,
+    NodeInfo, RaftProposer, VoterChange, voter_change,
 };
 use frogdb_core::command::QuorumChecker;
 use openraft::ServerState;
@@ -47,6 +47,15 @@ use crate::flags::ClusterRuntimeFlags;
 pub trait DetectorRaft: RaftProposer + 'static {
     /// This node's current Raft server state, read at the moment of the call.
     fn server_state(&self) -> ServerState;
+
+    /// Apply the Raft voter-set change a command this detector just committed
+    /// owes (FM-CLUSTER-101).
+    ///
+    /// Part of the seam because the detector is the *third* commit site for a
+    /// node removal — the other two are in the connection layer and in the
+    /// leader-side `ForwardedWrite` receiver — and it is the only one that
+    /// cannot reach a real `ClusterRaft` from here.
+    fn spawn_voter_change(&self, change: VoterChange);
 }
 
 impl DetectorRaft for Arc<ClusterRaft> {
@@ -59,6 +68,10 @@ impl DetectorRaft for Arc<ClusterRaft> {
     // comparison — lives in `FailureDetector::is_leader`, which is forced.
     fn server_state(&self) -> ServerState {
         self.metrics().borrow().state
+    }
+
+    fn spawn_voter_change(&self, change: VoterChange) {
+        frogdb_core::cluster::spawn_voter_change((**self).clone(), change);
     }
 }
 
@@ -635,6 +648,15 @@ impl<R: DetectorRaft> FailureDetector<R> {
                             "Auto-failover rejected by cluster state machine"
                         );
                         return;
+                    }
+                    // A forced failover removes the old primary from the
+                    // topology, so it owes the same voter-set shrink
+                    // `CLUSTER FORGET` does — otherwise the node auto-failover
+                    // exists to evict stays in every quorum computation
+                    // (FM-CLUSTER-101). Derived from the command through the
+                    // shared rule so this site cannot drift from the other two.
+                    if let Some(change) = voter_change(&cmd) {
+                        self.raft.spawn_voter_change(change);
                     }
                     tracing::info!(
                         failed_primary = failed_node_id,
@@ -1312,6 +1334,7 @@ mod tests {
         outcome: Mutex<Result<ClusterResponse, RaftClientWriteError>>,
         delay: Mutex<Duration>,
         writes: Mutex<Vec<ClusterCommand>>,
+        voter_changes: Mutex<Vec<VoterChange>>,
     }
 
     impl Default for FakeRaftInner {
@@ -1321,6 +1344,7 @@ mod tests {
                 outcome: Mutex::new(Ok(ClusterResponse::Ok)),
                 delay: Mutex::new(Duration::ZERO),
                 writes: Mutex::new(Vec::new()),
+                voter_changes: Mutex::new(Vec::new()),
             }
         }
     }
@@ -1346,6 +1370,11 @@ mod tests {
 
         fn write_count(&self) -> usize {
             self.0.writes.lock().unwrap().len()
+        }
+
+        /// The voter-set changes this detector asked Raft for.
+        fn voter_changes(&self) -> Vec<VoterChange> {
+            self.0.voter_changes.lock().unwrap().clone()
         }
 
         /// The proposals seen so far. `ClusterCommand` carries no `PartialEq`,
@@ -1379,6 +1408,10 @@ mod tests {
     impl DetectorRaft for FakeRaft {
         fn server_state(&self) -> ServerState {
             *self.0.state.lock().unwrap()
+        }
+
+        fn spawn_voter_change(&self, change: VoterChange) {
+            self.0.voter_changes.lock().unwrap().push(change);
         }
     }
 
@@ -1726,6 +1759,56 @@ mod tests {
                 force: true,
             })],
             "the least-lagged replica wins despite losing the id tiebreak"
+        );
+    }
+
+    /// Auto-failover evicts the failed primary from the topology, so it owes the
+    /// Raft voter set the same shrink `CLUSTER FORGET` does. It is the one
+    /// removal site the connection layer never sees, and leaving the evicted
+    /// node a voter would keep it in every quorum computation — the failure the
+    /// failover exists to route around would still be counted.
+    // FM-CLUSTER-101
+    #[tokio::test]
+    async fn auto_failover_removes_the_failed_primary_from_the_voter_set() {
+        let f = build(
+            1,
+            vec![primary_node(1), primary_node(2), replica_node(3, 2)],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100),
+            network_reporting(&[(3, 500)]),
+        );
+
+        f.detector.trigger_auto_failover(2).await;
+
+        assert_eq!(
+            f.raft.voter_changes(),
+            vec![VoterChange::Remove { node_id: 2 }],
+            "the evicted primary stops voting"
+        );
+    }
+
+    /// A failover the state machine refused changed no topology, so it owes the
+    /// voter set nothing. Shrinking anyway would evict a node that is still
+    /// serving — the failure mode is the inverse of the one above and worse.
+    // FM-CLUSTER-101
+    #[tokio::test]
+    async fn a_rejected_auto_failover_leaves_the_voter_set_alone() {
+        let f = build(
+            1,
+            vec![primary_node(1), primary_node(2), replica_node(3, 2)],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100),
+            network_reporting(&[(3, 500)]),
+        );
+        f.raft.set_outcome(Ok(ClusterResponse::Error(
+            frogdb_core::cluster::ClusterError::NodeNotFound(3),
+        )));
+
+        f.detector.trigger_auto_failover(2).await;
+
+        assert!(
+            f.raft.voter_changes().is_empty(),
+            "a refused topology change owes no membership change"
         );
     }
 

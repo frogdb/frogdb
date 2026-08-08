@@ -2818,6 +2818,197 @@ async fn test_cluster_forget_removes_node() {
     harness.shutdown_all().await;
 }
 
+/// The Raft voter set a node believes in, as `(node_id, is_voter)` is not
+/// enough: the assertions below need to distinguish "not a voter" from "not
+/// known to Raft at all".
+fn raft_voter_ids(harness: &ClusterTestHarness, node_id: u64) -> Vec<u64> {
+    let raft = harness
+        .node(node_id)
+        .and_then(|n| n.raft())
+        .expect("node is running in cluster mode");
+    let membership = raft.metrics().borrow().membership_config.clone();
+    let mut ids: Vec<u64> = membership.membership().voter_ids().collect();
+    ids.sort_unstable();
+    ids
+}
+
+/// Poll every live node's voter set until `predicate` holds on all of them.
+async fn wait_for_voters(
+    harness: &ClusterTestHarness,
+    live: &[u64],
+    what: &str,
+    predicate: impl Fn(&[u64]) -> bool,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let views: Vec<Vec<u64>> = live.iter().map(|&id| raft_voter_ids(harness, id)).collect();
+        if views.iter().all(|v| predicate(v)) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}; voter sets: {views:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Send `CLUSTER FORGET <node_id_str>` to `nodes` in turn until one reply
+/// satisfies `accept`, or fail at the deadline naming the last reply seen.
+///
+/// Retrying is not flake-hiding: in the seconds after a node goes down the
+/// survivors answer `REDIRECT` naming a leader that no longer exists, because
+/// the writer could neither propose nor forward. That is election churn, not a
+/// verdict on the command.
+async fn forget_until(
+    harness: &ClusterTestHarness,
+    nodes: &[u64],
+    node_id_str: &str,
+    what: &str,
+    accept: impl Fn(&frogdb_protocol::Response) -> bool,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = "no reply".to_string();
+    while tokio::time::Instant::now() < deadline {
+        for &id in nodes {
+            if !harness.node(id).is_some_and(|n| n.is_running()) {
+                continue;
+            }
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                harness
+                    .node(id)
+                    .unwrap()
+                    .send("CLUSTER", &["FORGET", node_id_str]),
+            )
+            .await
+            {
+                Ok(resp) => {
+                    if accept(&resp) {
+                        return;
+                    }
+                    last = format!("{resp:?}");
+                }
+                Err(_) => last = "the propose never returned".to_string(),
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    panic!("timed out waiting for {what}; last reply: {last}");
+}
+
+/// CLUSTER FORGET shrinks the Raft voter set, not just the topology.
+///
+/// A node dropped from `ClusterState` but left in the Raft membership is still
+/// counted by every quorum, so forgetting a dead node used to make the cluster
+/// *less* available rather than more: the surviving nodes kept computing quorum
+/// over a node that no longer exists. Four nodes shrunk to three is the case
+/// that shows it — quorum falls from 3 to 2, so one more failure is survivable
+/// only if the removal actually reached Raft.
+// FM-CLUSTER-101
+#[tokio::test]
+async fn test_cluster_forget_shrinks_the_raft_voter_set() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(4).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(20))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+    let victim = node_ids[3];
+    let victim_cluster_id = harness.get_node_id_str(victim).unwrap();
+    let survivors: Vec<u64> = node_ids[..3].to_vec();
+
+    wait_for_voters(&harness, &node_ids, "all four nodes to be voters", |v| {
+        v.len() == 4
+    })
+    .await;
+
+    // The main use of FORGET is retiring a node that is already gone, so the
+    // removal has to commit without the removed node answering anything.
+    harness.shutdown_node(victim).await;
+
+    // Issued on whichever survivor answers rather than on a leader read a moment
+    // ago: a follower forwards, and the node just shut down may have been the
+    // leader.
+    forget_until(
+        &harness,
+        &survivors,
+        &victim_cluster_id,
+        "the FORGET of the shut-down node to commit",
+        |resp| !is_error(resp),
+    )
+    .await;
+
+    wait_for_voters(
+        &harness,
+        &survivors,
+        "the victim to stop being a voter",
+        |v| v.len() == 3 && !v.contains(&victim),
+    )
+    .await;
+
+    // Repeating FORGET on every surviving node is the documented operator
+    // procedure. The repeats are refused at the topology level — the node is
+    // already gone, and Redis answers its own `CLUSTER FORGET` of an unknown id
+    // with an error too — so what has to hold is that a refusal proposes no
+    // membership change: the voter set must not churn once per operator retry.
+    for &id in &survivors {
+        let _ = harness
+            .node(id)
+            .unwrap()
+            .send("CLUSTER", &["FORGET", &victim_cluster_id])
+            .await;
+    }
+    wait_for_voters(
+        &harness,
+        &survivors,
+        "the voter set to stay at three",
+        |v| v.len() == 3 && !v.contains(&victim),
+    )
+    .await;
+
+    // Three voters means quorum 2, so one more failure is survivable. With the
+    // victim still counted this would be 4 voters, quorum 3, and two live nodes
+    // could commit nothing.
+    let leader = harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    let sacrifice = *survivors.iter().find(|&&id| id != leader).unwrap();
+    let writer = *survivors
+        .iter()
+        .find(|&&id| id != leader && id != sacrifice)
+        .unwrap();
+    harness.kill_node(sacrifice).await;
+
+    // The probe is a FORGET of an id nobody has: the state machine refuses it,
+    // and that refusal is produced *after* the entry commits, so an "ERR node …
+    // not found" reply is proof of a quorum. Without one the propose never
+    // returns; without a leader the reply is a REDIRECT or CLUSTERDOWN, which is
+    // why the message is matched rather than merely "some error".
+    let probe_id = format!("{:040x}", 0xdead_beef_u64);
+    forget_until(
+        &harness,
+        &[writer, leader],
+        &probe_id,
+        "the surviving two of three voters to commit a Raft write",
+        |resp| {
+            get_error_message(resp)
+                .unwrap_or_default()
+                .contains("not found")
+        },
+    )
+    .await;
+
+    harness.shutdown_all().await;
+}
+
 /// Test 23: Large cluster with 10 nodes.
 ///
 /// Scenario: Verify cluster works at larger scale
