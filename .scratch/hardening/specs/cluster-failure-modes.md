@@ -4,7 +4,7 @@ Status: LOCKED (2026-08-05) — Phase 4 mutation gate passed (`frogdb-cluster` 9
 mutants, `frogdb-cluster-runtime` 99.0% on 224, vs an 0.80 gate; the four surviving mutants are
 all documented equivalents at the code). Behavior changes to this area are spec-first: edit the
 row, update the forcing test, then the code. Before pushing changes that touch these crates, run
-`just mutants-diff <crate>`. See `docs/agents/hardening-campaign.md`.
+`just mutants-diff <crate>`. See CLAUDE.md "Locked core areas".
 
 Every way FrogDB's cluster layer can refuse, redirect, reassign, or succeed, one table per mode.
 This is the reference the mutation run is measured against: a mutant that survives is a row nothing

@@ -48,7 +48,7 @@ Build recipes are in `Justfile` (do not run them).
 
 - Summary report: `.scratch/testing-improvements/audit/coverage-depth-2026-08-07.md`
   (the 2026-07-28 file is a superseded pointer stub).
-- Methodology: `docs/agents/coverage-depth.md` — read the "Reading the classes" table.
+- Methodology: `docs/agents/coverage-depth.md` (retired, git history) — "Reading the classes" table; current pointer: CLAUDE.md "Coverage depth".
 - Machine-readable: `target/llvm-cov/depth/depth.json` (21 MB), `tests.json` (27 MB),
   `target/llvm-cov/lcov.info` (11 MB). **Never `Read` these whole** — query with
   `python3 -c` / `jq --stream` and filter to your crate first.

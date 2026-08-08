@@ -30,7 +30,7 @@ and cluster operating modes. It uses RocksDB for configurable persistence.
   - a Kubernetes operator for FrogDB
 - website for info/documentation/marketing
 - the assets/ folder has images for branding
-- todo/ contains roadmap and unfinished/follow up items
+- .scratch/roadmap/ contains roadmap and unfinished/follow-up items
 
 ## Build/Task System
 

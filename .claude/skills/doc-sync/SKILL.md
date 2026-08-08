@@ -139,7 +139,7 @@ Options:
 - **Illustrative code examples**: Snippets marked as pseudocode or simplified examples
 - **ROADMAP.md phases**: These are historical/aspirational, not claims about current code
 - **SOURCES.md external links**: Don't check if external URLs are live
-- **todo/\***: These are explicitly future/unimplemented work
+- **.scratch/roadmap/\***: These are explicitly future/unimplemented work
 - **Comments about design rationale**: "We chose X because Y" — don't verify the reasoning
 
 ## Output Format
@@ -190,7 +190,7 @@ that avoid scanning all 50+ docs for every check.
 - `testing/jepsen/README.md` (Jepsen test docs)
 
 **Out of scope:**
-- `todo/**` — these are explicitly unimplemented/future work
+- `.scratch/roadmap/**` — these are explicitly unimplemented/future work
 - `.claude/skills/*/SKILL.md` — maintained by the skill-creator skill
 - Source code comments — not documentation drift
 - Git history / commit messages

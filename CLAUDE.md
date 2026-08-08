@@ -116,13 +116,29 @@ agent killed by the 600s watchdog:
 
 ## Agent skills
 
-### Hardening campaign (ACTIVE)
+### Locked core areas
 
-Foundation-hardening campaign is in progress: core areas (transactions, persistence, replication,
-cluster) are being extracted, specced, and mutation-tested; operator/frogctl are out of scope.
-The redis-regression compat suite was frozen during the campaign and is now unfrozen — it builds
-in `just check` and runs in `just test` again. **Read `docs/agents/hardening-campaign.md` before
-working on core-area code.**
+Four core areas are **locked** behind failure-mode specs and mutation gates: **txn**
+(`frogdb-txn` + `frogdb-vll`, gate 0.90), **persistence** (`frogdb-persistence` +
+`frogdb-recovery`, 0.85), **replication** (`frogdb-replication` +
+`frogdb-replication-runtime`, 0.85), **cluster** (`frogdb-cluster` +
+`frogdb-cluster-runtime`, 0.80). Boundary ADRs: `docs/adr/0002`–`0004`.
+
+- The specs (`.scratch/hardening/specs/<area>-failure-modes.md`, header `Status: LOCKED`)
+  are the contract: behavior changes are **spec-first** (failure-mode row → failing test →
+  fix). `just lint-failure-modes` enforces spec↔test agreement (every `FM-<AREA>-NNN` row
+  names its forcing tests; every tagged test matches a row) and runs in `just lint`.
+- Before pushing changes that touch a locked crate: `just mutants-diff <crate>` (push
+  discipline, not a CI gate). Full runs: `just mutants <crate>` + `just mutants-gate
+  <crate> <gate>`. A surviving mutant no test can kill is documented *at the code* with why
+  it is unobservable — never a blanket skip.
+- Put the forcing test in the mutated crate: `cargo mutants -p <crate>` runs only that
+  package's own tests, so a row forced solely from `frogdb-server` integration tests
+  contributes nothing to the owning crate's score.
+- Command families are cargo features (`frogdb-commands`): default `core-profile` covers the
+  common families; exotic ones (`json`, `stream`, `geo`, ...) need `full`/`cmd-full`, which
+  only docs-gen and allowlisted tooling may request (linted). Don't alternate feature flags
+  between commands in an iteration loop — it thrashes the build cache.
 
 ### Issue tracker
 
@@ -141,8 +157,9 @@ Multi-context: `CONTEXT-MAP.md` at root points to a per-context `CONTEXT.md`
 ### Coverage depth
 
 `just coverage-depth` adds per-line exec counts and per-function test diversity on top of
-plain line coverage (which function is reached by how many *distinct* tests). See
-`docs/agents/coverage-depth.md`.
+plain line coverage (which function is reached by how many *distinct* tests). Reports land in
+`.scratch/testing-improvements/audit/`; `just coverage-depth-calibrate <crate>` sizes a run,
+`just test-coverage-depth` tests the pipeline itself.
 
 ### Seam lints
 

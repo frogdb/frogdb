@@ -54,8 +54,8 @@ All four gaps closed behind the two-mechanism design (per-key `WatchEntry.live_a
 
 ## References
 
-- Ledger: `.superpowers/sdd/phase4b/progress.md` (tasks 9, 12; follow-up header); fix-stage ledger: `.superpowers/sdd/lazy-expiry/progress.md`
-- Fix-stage plan: `docs/superpowers/plans/2026-07-21-lazy-expiry-parity-fix.md`
+- Ledgers (retired, git history): `.superpowers/sdd/phase4b/progress.md` (tasks 9, 12; follow-up header); fix-stage ledger: `.superpowers/sdd/lazy-expiry/progress.md`
+- Fix-stage plan: `docs/superpowers/plans/2026-07-21-lazy-expiry-parity-fix.md` (retired, git history)
 - Effect-scope follow-up: `.scratch/concurrency-testing/proposals/lazy-expiry-effect-scope.md`
 - F3 two-seam fix: `673a52c9`; F1 drain: `63eff9a2`
-- Spec: `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`
+- Spec: `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md` (retired, git history)

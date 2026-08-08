@@ -21,7 +21,8 @@ The PRDs are done. The follow-up issues they filed are mostly closed — 2 open,
 
 ## Still open (2)
 
-02 migration finalization pause barrier · 03 Lua internal write validation
+03 Lua internal write validation (narrowed 2026-08-08 to cross-shard continuation) ·
+12 barrier vs replica-feed policy (awaiting user decision)
 
 ## Inbound references
 

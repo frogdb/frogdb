@@ -184,7 +184,7 @@ CONFIG SET per-request-spans no
 
 ## Reference Files
 
-- `todo/optimizations/PROFILING.md` — Full profiling infrastructure guide
+- `.scratch/roadmap/optimizations/PROFILING.md` — Full profiling infrastructure guide
 - `docs/TOKIO_CAUSAL_PROFILER.md` — tokio-coz design document
 - `testing/load/scripts/profile_load.py` — CPU profiling under load
 - `testing/load/scripts/causal_profile.py` — Causal profiling under load

@@ -673,7 +673,7 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 /// cluster's fault tolerance, so a transient error here must not be
 /// terminal. Failures after all retries are logged at `error` level.
 /// A full reconciliation loop (ClusterState nodes vs. Raft voters) is a
-/// documented follow-up in `todo/proposals/31-atomic-failover-command.md`.
+/// known follow-up, not yet implemented.
 /// How long [`spawn_add_raft_voter`] waits before retrying the attempt that just
 /// failed, or `None` when that attempt was the last one.
 ///

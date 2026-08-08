@@ -38,7 +38,7 @@ inputs, both since confirmed by direct measurement:
 Consequences: `coverage-nightly.yml` consumes `just coverage-lcov`, so **the CI coverage
 number is meaningless**; and the claim that the deduplicated figure "matches `llvm-cov export
 --format=lcov` exactly" is false. *(Attribution corrected during filing: that string is not in
-`docs/agents/coverage-depth.md` — it is emitted into every generated report by
+`docs/agents/coverage-depth.md` (since retired, git history) — it is emitted into every generated report by
 `scripts/coverage-depth.py:839`, with a matching comment at `:667`. The doc is what has to be
 corrected; the script is what says it.)* The per-file
 `line_counts` in `depth.json` are sound, and the strongest findings below are anchored on

@@ -32,8 +32,7 @@ Compliant reads, therefore, are `clock::now()`, `clock::system_now()`, and
 Scope is non-test code under `frogdb-server/crates/*/src`. Test code may read
 the OS clock freely: a test that wants real elapsed time is asking a question
 about the machine, not about the server's timeline. `frogctl/` and
-`frogdb-operator/` are out of campaign scope (see
-`docs/agents/hardening-campaign.md`) and out of the simulation — they are
+`frogdb-operator/` are out of the simulation — they are
 separate binaries that never run under a paused runtime.
 
 Exemptions are per file, carry a reason, and are count-pinned: adding a new

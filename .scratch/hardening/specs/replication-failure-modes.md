@@ -3,8 +3,7 @@
 Status: LOCKED (2026-08-04) — Phase 3 mutation gate passed (frogdb-replication 98.7% on 1180
 mutants, frogdb-replication-runtime 100% of viable, vs an 85% gate; the 15 surviving mutants are
 all documented equivalents at the code). Behavior changes to this area are spec-first: edit the
-row, update the forcing test, then the code. See docs/agents/hardening-campaign.md
-"Locked area rules".
+row, update the forcing test, then the code. See CLAUDE.md "Locked core areas".
 
 Every way FrogDB's replication link can fail, refuse, or succeed, one table per mode. This is the
 reference the mutation run is measured against: a mutant that survives is a row nothing forces.

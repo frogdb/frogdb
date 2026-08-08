@@ -20,7 +20,7 @@ evidence is always one hop away. Read `MASTER.md` first.
 | `INFRASTRUCTURE.md` | all 18 requested infrastructure items, tiered A/B/C with LOE provenance. Supersedes `MASTER.md` §6 |
 | `proposals/` | the 15 per-area agent proposals — the source of record for every finding |
 | `re-triage-2026-08-06.md` | **re-baseline of every open issue against the post-hardening tree** — verdict per issue, the 18 confirmed live defects, and what the campaign did and did not close |
-| `issues/open/` \| `issues/done/` | the 95 filed issues, 75 open / 20 closed |
+| `issues/open/` \| `issues/done/` | the 95 filed issues — 70 open; closed ones kept only where referenced, rest pruned (git history) |
 
 ## Re-triage, 2026-08-06
 

@@ -280,8 +280,7 @@ def test_workflow() -> Workflow:
     # is covered separately by `shuttle-tests` above): simulation tests plus the
     # ~20-seed-per-profile generated-workload sweeps (short workloads +
     # TxHeavy) that are the per-PR tier of the concurrency-invariant-testing
-    # design (see the "CI" section of
-    # docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md).
+    # design (`.scratch/concurrency-testing/`).
     # The nightly tier (1000+ seeds, all profiles, longer histories) lives in
     # concurrency-nightly.yml instead — too slow for a per-PR budget.
     turmoil_tests = w.job(

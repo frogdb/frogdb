@@ -40,7 +40,7 @@ merged `da1c0838`) fail-stops on but does not itself undo from disk:
   records already appended while the store rolls back — a related
   recovery-replay inconsistency candidate for *single-shard* rollback-mode
   transactions, tracked in the phase-4b plan's Honest Scoping Notes,
-  [`docs/superpowers/plans/2026-07-20-concurrency-phase4b-shard-driver.md`](../../../../docs/superpowers/plans/2026-07-20-concurrency-phase4b-shard-driver.md)).
+  `docs/superpowers/plans/2026-07-20-concurrency-phase4b-shard-driver.md` — retired, git history).
   Both are durability-phase, both are about a WAL that can contain a
   fragment of a transaction that never fully lands; the recovery scanner
   built for one should cover both shapes.
@@ -71,5 +71,6 @@ merged `da1c0838`) fail-stops on but does not itself undo from disk:
 
 Durability phase (not started). No persistence real path (RocksDB/FrogDB
 WAL) exists in the concurrency-testing harness yet — this issue depends on
-that phase landing first (see the spec's ["Known blind spots"](../../../../docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md#known-blind-spots-accepted)
-and ["Future phases"](../../../../docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md#phasing) sections).
+that phase landing first (see the design spec's "Known blind spots" and "Future phases"
+sections — `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`,
+retired, git history).

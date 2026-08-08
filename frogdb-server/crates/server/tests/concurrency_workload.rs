@@ -1,6 +1,7 @@
 //! Generated-workload seed sweep: drive seeded workloads against the real
 //! server under turmoil, run the invariant pipeline, and emit a repro file on
-//! any failure. See `docs/superpowers/plans/concurrency-phase3-bug-workflow.md`.
+//! any failure. Bug workflow: repro file → pinned regression test below
+//! (design docs retired; see `.scratch/concurrency-testing/` and git history).
 //!
 //! Turmoil-only: gated at the `mod concurrency_workload;` declaration in
 //! `tests/main.rs` (`#[cfg(feature = "turmoil")]`), so no inner `#![cfg]` here
@@ -315,8 +316,8 @@ fn seed_sweep_txheavy() {
     eprintln!("{}", summary.fifo_report_line("seed_sweep_txheavy"));
 }
 
-// Nightly generated-workload seed sweep (CI nightly tier, see the "CI" section
-// of `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`):
+// Nightly generated-workload seed sweep (CI nightly tier — see
+// `.github/workflows/workflow_gen/src/workflow_gen/workflows/concurrency_nightly.py`):
 // many more seeds and longer per-client histories than the per-PR tiers above,
 // across every profile including `MultiWaiter` (excluded from the per-PR tier
 // only because it has its own dedicated smoke test). Ignored by default —
@@ -653,8 +654,7 @@ mod determinism {
 }
 
 /// Pinned regressions: one named test per confirmed bug, carrying its
-/// hardcoded failing seed so it can never silently regress. See
-/// `docs/superpowers/plans/concurrency-phase3-bug-workflow.md`.
+/// hardcoded failing seed so it can never silently regress.
 mod regressions {
     use super::*;
 

@@ -1,5 +1,5 @@
-# cargo-mutants configuration for the hardening campaign
-# (docs/agents/hardening-campaign.md). Run via `just mutants <crate>` /
+# cargo-mutants configuration for the locked core areas
+# (see CLAUDE.md "Locked core areas"). Run via `just mutants <crate>` /
 # `just mutants-diff <crate>`; scores enforced by `just mutants-gate`.
 
 test_tool = "nextest"

@@ -95,7 +95,7 @@ coverage-lcov:
     {{dyld-env}} {{rocksdb-env}} cargo llvm-cov nextest --all --features frogctl/cli-tests --ignore-default-filter --lcov --output-path target/llvm-cov/lcov.info
 
 # Coverage *depth*: per-line exec counts + per-function test diversity
-# (see docs/agents/coverage-depth.md). Local-only; uses its own target dir.
+# (see CLAUDE.md "Coverage depth"). Local-only; uses its own target dir.
 coverage-depth crate="" pattern="":
     ./scripts/coverage-depth.py run {{ if crate != "" { "--crate " + crate } else { "" } }} {{ if pattern != "" { "--pattern " + pattern } else { "" } }}
     ./scripts/coverage-depth.py report
@@ -172,7 +172,7 @@ bench:
     {{dyld-env}} {{rocksdb-env}} cargo bench -p frogdb-benches
 
 # =============================================================================
-# Hardening campaign (see docs/agents/hardening-campaign.md)
+# Locked core areas (see CLAUDE.md "Locked core areas")
 # =============================================================================
 
 # Record an area's warm inner-loop cost (check + test-binary build medians)
@@ -1098,7 +1098,7 @@ lint-pubsub-confirmation-seam:
     fi
     echo "OK: pub/sub confirmations and the array-null shape each have one owner"
 
-# Gate: topology transitions are atomic (todo/proposals/31-atomic-failover-command.md).
+# Gate: topology transitions are atomic.
 # A failover or FAIL-marking must be ONE Raft entry (ClusterCommand::Failover /
 # MarkNodeFailed, which bump the epoch inside apply), never a saga of
 # RemoveNode/SetRole/AssignSlots followed by a separate IncrementEpoch write.

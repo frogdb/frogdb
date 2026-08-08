@@ -92,8 +92,8 @@ plus the contract call for part (i).
   it: `server/tests/search.rs:547-551` — *"visibility to FT.SEARCH follows on the shard's periodic
   search-commit tick (1s cadence)"*. The cost is `rg -c 'sleep' server/tests/search.rs` = **135**.
   Every one of those is a wall-clock race and a guaranteed source of instrumented-build flakes
-  (`docs/agents/coverage-depth.md` already documents timing-sensitive tests failing under
-  instrumentation).
+  (the retired coverage-depth doc recorded timing-sensitive tests failing under
+  instrumentation; see git history).
 - **Proposed test**: two parts. **(i)** Behaviour pin: document and assert the contract —
   either `HSET` then `FT.SEARCH` on one connection is immediately consistent (then the write path
   must commit, and the test asserts it with no sleep), or it is explicitly eventual (then the test

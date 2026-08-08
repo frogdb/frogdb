@@ -7,9 +7,9 @@ publish = false
 description = "Data-structure command implementations for FrogDB"
 
 # Command families are feature-gated so a targeted core-area build/test cycle can
-# skip the exotic ones (see docs/agents/hardening-campaign.md). `default` keeps
-# the always-compiled campaign surface; `full` restores the complete command set
-# and is what every registry-enumerating consumer (docs-gen, the frozen
+# skip the exotic ones (see CLAUDE.md "Locked core areas"). `default` keeps
+# the always-compiled core surface; `full` restores the complete command set
+# and is what every registry-enumerating consumer (docs-gen, the
 # redis-regression suite, the shard-driver harness) must depend on.
 [features]
 default = ["core-profile"]

@@ -4,8 +4,8 @@ The 63K-LOC `frogdb-redis-regression` compat suite (`frogdb-server/crates/redis-
 was frozen for the duration of the foundation-hardening campaign — gated behind a
 `regression` required-feature and out of `just check`/`just test` — which left compat
 breakage invisible to the PR-gating `test.yml` run. This workflow was the nightly signal
-that filled that gap. The freeze ended at campaign exit (see
-`docs/agents/hardening-campaign.md`): the suite is back in the default dev loop, so this
+that filled that gap. The freeze ended at campaign exit
+(2026-08-05): the suite is back in the default dev loop, so this
 tier is now a scheduled backstop rather than the only signal, mirroring the repo's other
 on-demand tiers (`concurrency_nightly.py` / `jepsen_nightly.py` / `coverage_nightly.py`):
 

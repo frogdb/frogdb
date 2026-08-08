@@ -4,9 +4,8 @@ Per-PR concurrency coverage (~20 seeds x short workloads) runs inline in
 `test.yml`'s `shuttle-tests`/`turmoil-tests` jobs plus the
 `seed_sweep_short_workloads`/`seed_sweep_txheavy` tests pulled in by
 `cargo nextest ... -E 'test(/simulation|seed_sweep/)'`-style filters (see
-`just concurrency`). This workflow is the nightly tier described in the "CI"
-section of
-`docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`:
+`just concurrency`). This workflow is the nightly tier of the
+concurrency-invariant-testing design (`.scratch/concurrency-testing/`):
 many more seeds, longer per-client histories, and every workload profile
 (including `MultiWaiter`, which the per-PR tier skips in favor of its own
 dedicated smoke test). It drives `seed_sweep_nightly` in
@@ -48,8 +47,7 @@ NIGHTLY_CRON = "14 3 * * *"
 # run count. Default 250 unique seeds x 4 profiles (Mixed, BlockingHeavy, TxHeavy, MultiWaiter)
 # = 1000 (seed, profile) generated-workload runs. This is our chosen reading of the spec's
 # "1000+ seeds" nightly bar as "1000+ generated-workload runs," since a literal 1000 *unique*
-# seeds x 4 profiles would be 4000 runs — see the phase-5 entry in
-# docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md for the same call-out.
+# seeds x 4 profiles would be 4000 runs.
 DEFAULT_SEEDS_PER_PROFILE = "250"
 
 REPRO_DIR = "target/concurrency-repros"

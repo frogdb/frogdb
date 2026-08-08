@@ -1,8 +1,7 @@
 # VLL (multi-shard locking) — failure modes
 
 Status: LOCKED (2026-08-01) — Phase 1 mutation gate passed (frogdb-vll 100% vs 90% gate).
-Behavior changes to this area are spec-first; see docs/agents/hardening-campaign.md
-"Locked area rules".
+Behavior changes to this area are spec-first; see CLAUDE.md "Locked core areas".
 
 Every way the shard-exclusive half of VLL can refuse a request, one table per mode. Same
 contract as [Transactions — failure modes](txn-failure-modes.md): a mutant that survives is a

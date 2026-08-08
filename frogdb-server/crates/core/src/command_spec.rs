@@ -5,8 +5,6 @@
 //! it emits, how it persists to the WAL, which blocking waiters it wakes, and
 //! its per-key access flags. The dispatcher derives behavior from this data
 //! instead of consulting a handful of opt-in trait methods per command.
-//!
-//! See `todo/proposals/01-declarative-command-spec.md`.
 
 use bytes::Bytes;
 use smallvec::{SmallVec, smallvec};

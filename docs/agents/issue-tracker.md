@@ -46,6 +46,14 @@ then regressed when a later commit deleted its cron. Reopening means flipping `S
 moving the file to `open/`, and appending a `## Reopened` section with the evidence; the
 original `## Resolution` stays for the record.
 
+### `done/` gets pruned
+
+A closed issue stays in `done/` only while something tracked outside it still cites it (a
+`CONTEXT.md` rationale, a test comment, another open issue). Unreferenced closed issues are
+deleted in periodic sweeps — **git history is the archive**, so nothing is lost; `git log --all
+--full-history -- '.scratch/<dir>/issues/done/<NN>-*'` recovers any of them. Do not treat an
+absent `done/` file as "never existed", and do not re-add pruned files.
+
 ## Citing an issue
 
 **Cite by number and directory, never by filename.** Filenames move between `open/` and
@@ -53,12 +61,12 @@ original `## Resolution` stays for the record.
 
 ```
 good:  see `.scratch/testing-improvements/issues/40`
-good:  (issue 59, `.scratch/testing-improvements/issues/`, CONFIRMED L1/C1)
+good:  (issue 67, `.scratch/testing-improvements/issues/`, CONFIRMED L1/C1)
 bad:   see `.scratch/testing-improvements/issues/40-fuzzing-continuous-corpus.md`
 ```
 
 In markdown, link the directory and put the number in the link text:
-`[issue 66](../../.scratch/testing-improvements/issues/)`.
+`[issue 40](../../.scratch/testing-improvements/issues/)`.
 
 Sub-issue numbers are real — `13-01`, `13-02` and `13-03` under `arch-deepening` are three
 distinct issues, not one. Cite the full number.

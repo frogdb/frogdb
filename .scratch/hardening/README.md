@@ -1,15 +1,17 @@
-# hardening — foundation-hardening campaign
+# hardening — foundation-hardening campaign (complete)
 
 State: active
 
-Working directory for the campaign that locks the four core areas — **transactions,
+Working directory for the campaign that locked the four core areas — **transactions,
 persistence, replication, cluster ops** — to near-zero correctness bugs with written-down
-failure modes. The agent-facing summary (phase table, command surface, out-of-scope list,
-locked-area rules) is [`docs/agents/hardening-campaign.md`](../../docs/agents/hardening-campaign.md);
-this directory holds the artefacts it refers to.
+failure modes. **The campaign exited 2026-08-05** (see
+[`retrospective-2026-08-05.md`](retrospective-2026-08-05.md)); the follow-on is
+[`hardening-2`](../hardening-2/). The locked-area rules agents must still follow live in
+`CLAUDE.md` ("Locked core areas"); this directory holds the specs those rules point at,
+plus the two remaining open issues.
 
-Each area runs the same sequence: **extract → failure-mode spec → close known bugs →
-mutation-test → fill gaps → lock**. Areas are strictly serial, one PR per step.
+Each area ran the same sequence: **extract → failure-mode spec → close known bugs →
+mutation-test → fill gaps → lock**.
 
 ## Layout
 
@@ -32,7 +34,8 @@ the forcing test, then change the code.
 | `specs/txn-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-txn` 100% vs 90% gate) |
 | `specs/vll-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-vll` 100% vs 90% gate) |
 | `specs/persistence-failure-modes.md` | LOCKED 2026-08-02 (phase 2, `frogdb-persistence` 99.1% / `frogdb-recovery` 100% vs 85% gate) |
-| `specs/replication-failure-modes.md` | draft — phase 3, whole area specced (FM-REPLICATION-001..053) |
+| `specs/replication-failure-modes.md` | LOCKED 2026-08-04 (phase 3, `frogdb-replication` 98.7% / `frogdb-replication-runtime` 100% of viable vs 85% gate) |
+| `specs/cluster-failure-modes.md` | LOCKED 2026-08-05 (phase 4, `frogdb-cluster` 99.6% / `frogdb-cluster-runtime` 99.0% vs 80% gate) |
 | `specs/blocking-failure-modes.md` | draft |
 
 ## Issues

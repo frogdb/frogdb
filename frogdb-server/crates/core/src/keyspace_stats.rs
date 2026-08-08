@@ -14,8 +14,6 @@
 //! - **INFO** reports `cumulative − baseline`. `CONFIG RESETSTAT` advances the
 //!   baseline to the current cumulative, so the operator-visible value drops to
 //!   zero while the Prometheus counter is untouched.
-//!
-//! See `todo/proposals/24-keyspace-stats-accounting.md`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

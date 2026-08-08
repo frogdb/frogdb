@@ -11,9 +11,9 @@ implementation issues remain open.
 
 | path | what |
 |---|---|
-| `proposals/` | round proposals + `INDEX.md`. Backlog empty; kept as the record |
+| `proposals/` | `INDEX.md` (the one-line-per-proposal record of every round) + the proposals still cited from open issues. Implemented proposal files pruned 2026-08-08 — full text in git history |
 | `issues/open/` | 15 open |
-| `issues/done/` | 5 closed |
+| `issues/done/` | closed issues; unreferenced ones pruned (git history) |
 
 Issues `13-01`/`13-02`/`13-03` are sub-issues of 13, not a single issue — cite them with the
 full number.

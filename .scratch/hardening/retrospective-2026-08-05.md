@@ -54,7 +54,7 @@ harness, and (b) mutation survivors pointing at asserted-nothing test coverage.
 1. **Extract → spec → fix → mutate → gap-fill → lock, strictly serial per area.** Each phase
    finished in 1-2 days because nothing was interleaved.
 2. **Mutation score as a floor with forcing tests in the owning crate.** The
-   `cargo mutants -p` scoping rule (documented in `docs/agents/hardening-campaign.md`) is why
+   `cargo mutants -p` scoping rule (now in CLAUDE.md "Locked core areas") is why
    scores are honest.
 3. **Spec-first bug fixing** (row → failing test → fix) and the two-way FM lint. Tags survived
    five test-file splits and dozens of merges without rotting.

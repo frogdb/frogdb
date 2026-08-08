@@ -7,7 +7,8 @@
 //! (BLMOVE/BRPOPLPUSH) with `$-1`. The high-level RESP2 codec collapses both to
 //! a single `Null`, so these assertions read the raw socket bytes directly.
 //!
-//! See `todo/proposals/12-blocking-wait-coordinator.md` (Correctness flags).
+//! The split was a correctness flag from the blocking-wait-coordinator
+//! refactor (proposal 12; see git history).
 
 use std::time::{Duration, Instant};
 

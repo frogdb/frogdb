@@ -13,9 +13,9 @@ The two known bypasses found alongside them — `CoreMsg::ExecTransaction` (roun
 they warn on every run and hard-fail the moment either arm gains a gate call, forcing promotion to
 `GATE` when the fix lands.
 
-Supersedes the reading-only findings in [`c3-arm-dispositions-wip.md`](c3-arm-dispositions-wip.md).
-The gate and the two arms are unchanged from that write-up; this document records the settled
-disposition, the concrete evidence, the forcing-test name, and whether a real bug was found.
+Supersedes an earlier reading-only write-up (removed; see git history). The gate and the two
+arms are unchanged from it; this document records the settled disposition, the concrete
+evidence, the forcing-test name, and whether a real bug was found.
 
 ## The gate (unchanged)
 

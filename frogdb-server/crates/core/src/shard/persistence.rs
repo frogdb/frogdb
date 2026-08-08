@@ -32,7 +32,7 @@ impl ShardWorker {
 // point — [`ShardWorker::persist`] — parameterized by a [`Durability`] enum,
 // over one narrow seam — [`WalTarget`] — so the store-existence probes
 // [`execute_wal_action`] performs are unit-testable without a `ShardWorker` or
-// RocksDB. See `todo/proposals/54-shard-persistence-bridge.md`.
+// RocksDB.
 
 /// Whether the persist bridge confirms durability after staging a command's
 /// WAL actions. The single axis of variation that used to be three functions

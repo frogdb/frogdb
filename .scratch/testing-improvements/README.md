@@ -20,16 +20,13 @@ and unit-level depth was largely *not* covered — that gap is what
 | `PRD.md` | the round-1 brief |
 | `audit/` | per-area findings + adversarial verdicts. **Live write target** — `scripts/coverage-depth.py` writes its reports here on every run |
 | `issues/open/` | still outstanding — see below |
-| `issues/done/` | 63 closed issues, kept as the record of what was decided and why |
+| `issues/done/` | closed issues that are still referenced from tracked files; unreferenced ones pruned (git history) |
 
-## Still open (4)
+## Still open (1)
 
 | # | issue | note |
 |---|---|---|
 | 40 | fuzzing continuous corpus | **done-then-regressed.** Landed in `81a4f910`, cron deleted by `2e2ea8bb`. Reopened 2026-07-28 with a `## Reopened` section; same work as round-2 infrastructure item I10 |
-| 65 | checkpoint multi-atomicity testbox flake | |
-| 66 | mutation testing | linked from `docs/agents/coverage-depth.md` |
-| 67 | minimal RDB fullsync carries no dataset | renumbered from a duplicate `66` on 2026-07-28 |
 
 ## Inbound references
 
@@ -41,7 +38,6 @@ Load-bearing (code reads these paths — changing them breaks a run):
 Documentation/comment references (rename-safe number+dir form):
 
 - `workflow_gen/…/fuzz.py`, `…/jepsen_nightly.py`
-- `docs/agents/coverage-depth.md`
 - `frogdb-server/crates/protocol/src/response.rs`
 - `frogdb-server/crates/redis-regression/tests/info_tcl.rs`
 - `frogdb-server/crates/server/src/commands/cluster/mod.rs`

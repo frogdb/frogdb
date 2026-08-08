@@ -27,8 +27,8 @@ pre-commit:
             # Cold clippy + the failure-modes listing run 10+ minutes — longer than the
             # agent harness command timeout, which historically forced agents into blanket
             # `git commit --no-verify`, skipping every hook including the fast ones. Agents
-            # are required to run `just lint` as a pre-push verification step instead
-            # (docs/agents/hardening-campaign.md), so the commit-time job is skipped for
+            # are required to run `just lint` as a pre-push verification step instead,
+            # so the commit-time job is skipped for
             # them; human commits from a terminal run it unchanged.
             run: |
               if [ "${CLAUDECODE:-}" = "1" ]; then

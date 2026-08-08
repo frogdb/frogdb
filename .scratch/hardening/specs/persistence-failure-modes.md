@@ -2,8 +2,7 @@
 
 Status: LOCKED (2026-08-02) — Phase 2 mutation gate passed (frogdb-persistence 99.1%,
 frogdb-recovery 100%, vs an 85% gate). Behavior changes to this area are spec-first: edit the
-row, update the forcing test, then the code. See docs/agents/hardening-campaign.md
-"Locked area rules".
+row, update the forcing test, then the code. See CLAUDE.md "Locked core areas".
 
 Every way FrogDB's durable-write path can fail, refuse, or succeed, one table per mode. This is
 the reference the mutation run is measured against: a mutant that survives is a row nothing forces.

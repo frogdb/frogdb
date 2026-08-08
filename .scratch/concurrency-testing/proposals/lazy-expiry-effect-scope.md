@@ -1,7 +1,7 @@
 # Proposal: Lazy-expiry effect-scope parity (notifications, tracking, search indexes)
 
 Status: done (2026-07-22) — all three whole-key effect classes closed; hash-field-death `"del"` variant resolved as a documented follow-up (see [Resolution](#resolution-2026-07-22))
-Origin: design ruling 3 of the lazy-expiry-parity fix-stage plan (`docs/superpowers/plans/2026-07-21-lazy-expiry-parity-fix.md`, 2026-07-21)
+Origin: design ruling 3 of the lazy-expiry-parity fix-stage plan (`docs/superpowers/plans/2026-07-21-lazy-expiry-parity-fix.md`, 2026-07-21; retired, git history)
 
 ## Problem
 
@@ -43,9 +43,9 @@ Commits: repros (ignored) `6ca2bcf1`; fix + un-ignore `5529768b`.
 
 ## References
 
-- Fix-stage plan (introduces the `take_lazily_purged` seam this proposal reuses, and Honest Scoping item 1 which first named this gap): `docs/superpowers/plans/2026-07-21-lazy-expiry-parity-fix.md`
+- Fix-stage plan (introduces the `take_lazily_purged` seam this proposal reuses, and Honest Scoping item 1 which first named this gap): `docs/superpowers/plans/2026-07-21-lazy-expiry-parity-fix.md` (retired, git history)
 - Parity proposal (the four version/WATCH + XREADGROUP-drain gaps this proposal's scope is deliberately split from): `.scratch/concurrency-testing/proposals/lazy-expiry-parity.md`
-- Deferred S8 keyspace-notification capture seam / phase-4c pub/sub oracle: `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`
+- Deferred S8 keyspace-notification capture seam / phase-4c pub/sub oracle: `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md` (retired, git history)
 
 ## Resolution (2026-07-22)
 

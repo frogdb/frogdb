@@ -14,10 +14,8 @@
 //! maintained here as an explicit decision-record so that the (now
 //! deleted) `testing/redis-compat/` TCL runner's removal didn't silently
 //! drop coverage. Each entry has a one-line reason. See
-//! [`todo/COMPATIBILITY.md`] for the companion roadmap and the port
+//! `.scratch/roadmap/compat/` for the remaining compat work and the port
 //! files under `tests/` for the tests that *are* implemented.
-//!
-//! [`todo/COMPATIBILITY.md`]: ../../../../todo/COMPATIBILITY.md
 //!
 //! ### AOF — FrogDB uses RocksDB instead of Redis AOF
 //! - `integration/aof.tcl` — AOF file format and loading
@@ -70,9 +68,9 @@
 //! - `unit/printver.tcl` — 0 tests, just prints the Redis version
 //!
 //! ### Deferred features (may become in-scope later)
-//! - `unit/tls.tcl` — TLS not yet implemented (tracked in `todo/TLS_PLAN.md`)
+//! - `unit/tls.tcl` — no port yet (server TLS has since shipped, 2026-07-28)
 //! - `unit/cluster/atomic-slot-migration.tcl` — deferred — waits for
-//!   cluster rebalancing (tracked in `todo/CLUSTER_REBALANCING.md`)
+//!   cluster rebalancing (tracked in `.scratch/roadmap/CLUSTER_REBALANCING.md`)
 //! - `unit/cluster/slot-stats.tcl` — deferred — needs per-slot metrics
 //!   infrastructure (`CLUSTER SLOT-STATS`, Redis 7.2+)
 //! - `unit/cluster/multi-slot-operations.tcl` — deferred — needs

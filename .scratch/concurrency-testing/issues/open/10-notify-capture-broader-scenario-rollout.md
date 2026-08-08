@@ -58,4 +58,4 @@ None — the seam and checker already exist (Phase 4c).
 - `frogdb-server/crates/core/tests/shard_driver/scenario_s8.rs` (worked example)
 - `frogdb-server/crates/core/src/shard/event_loop.rs` (`drive_capture_keyspace`,
   `apply_expiry_effects`)
-- Design doc S8 note: `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md`
+- Design doc S8 note: `docs/superpowers/specs/2026-07-17-concurrency-invariant-testing-design.md` (retired, git history)

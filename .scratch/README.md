@@ -12,15 +12,18 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 
 | directory | state | open | done | what |
 |---|---|--:|--:|---|
-| [testing-improvements-round2](testing-improvements-round2/) | active | 95 | 0 | round-2 testing-gap audit; 249 findings → 95 issues, incl. **~40 suspected live defects** |
-| [arch-deepening](arch-deepening/) | active | 15 | 5 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
-| [concurrency-testing](concurrency-testing/) | active | 8 | 8 | concurrency invariant testing; phases 1–5 shipped. Issue 11's findings re-verified 2026-08-02 and split into issues 12–16 — one real product bug (12), the rest harness/checker defects |
-| [replication-cluster-rework](replication-cluster-rework/) | active | 8 | 2 | four rework PRDs, all merged 2026-07-30; follow-ups outstanding |
-| [hardening](hardening/) | active | 6 | 2 | foundation-hardening campaign; failure-mode specs + mutation gates, txn/vll **locked** 2026-08-01 |
-| [naming-cleanup](naming-cleanup/) | active | 1 | 7 | canonical terminology; decisions now canon in `CONTEXT.md` files |
-| [testing-improvements](testing-improvements/) | archive-of-record | 2 | 65 | round-1 testing-gap audit. **Do not delete** — live write target + 10 inbound refs |
+| [testing-improvements-round2](testing-improvements-round2/) | active | 70 | 6 | round-2 testing-gap audit; 249 findings → 95 issues. Re-triaged 2026-08-06: **18 confirmed live defects** |
+| [arch-deepening](arch-deepening/) | active | 15 | 1 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
+| [hardening-2](hardening-2/) | active | 9 | 1 | second hardening campaign, detection-first; running |
+| [concurrency-testing](concurrency-testing/) | active | 4 | 6 | concurrency invariant testing; phases 1–5 shipped. Issue 11's findings re-verified 2026-08-02 and split into issues 12–16 — one real product bug (12), the rest harness/checker defects |
+| [replication-cluster-rework](replication-cluster-rework/) | active | 2 | 9 | four rework PRDs, all merged 2026-07-30; two follow-ups outstanding |
+| [hardening](hardening/) | active | 2 | 37 | foundation-hardening campaign, **exited 2026-08-05** — all four areas locked; specs remain the contract |
+| [naming-cleanup](naming-cleanup/) | active | 1 | 4 | canonical terminology; decisions now canon in `CONTEXT.md` files |
+| [testing-improvements](testing-improvements/) | archive-of-record | 1 | 18 | round-1 testing-gap audit. **Do not delete** — live write target + inbound refs |
+| [roadmap](roadmap/) | active | — | — | roadmap + unfinished/follow-up items (migrated from the retired `todo/`); not an issue tracker |
 
-Totals: **131 open, 88 done** across 219 issues.
+Totals: **104 open, 82 done**. `done/` holds only closed issues still referenced from
+tracked files; unreferenced closed issues are pruned — git history is the archive.
 
 ## Conventions
 
@@ -35,7 +38,7 @@ three that bite most often:
    ``` `.scratch/testing-improvements/issues/40` ``` — not the full
    `40-fuzzing-continuous-corpus.md` path. Filenames move between `open/` and `done/` and
    get renumbered; number + directory does not. Markdown links point at the directory:
-   `[issue 66](../../.scratch/testing-improvements/issues/)`.
+   `[issue 40](../../.scratch/testing-improvements/issues/)`.
 
 3. **A `## Resolution` heading does not mean closed.** `concurrency-testing/issues/11`
    carries two of them — a phase-5 resolution that a later section marks superseded, and a
