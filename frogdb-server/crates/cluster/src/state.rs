@@ -117,7 +117,10 @@ pub struct ClusterStateInner {
     /// Replicated (not node-local) so every node agrees on which finalization
     /// attempt a drain confirmation refers to: an ack from an aborted attempt
     /// carries a stale `seq` and is refused rather than vouching for the
-    /// attempt that replaced it. Never reset by anything but `ResetCluster`.
+    /// attempt that replaced it. Never reset by anything but `ResetCluster`,
+    /// and never rewound by a restore: both snapshot vehicles carry it, because
+    /// the migrations that survive into a snapshot cannot re-derive the seqs of
+    /// the ones that finished (FM-CLUSTER-100).
     #[serde(default)]
     pub handoff_seq: u64,
     /// Last applied log index.
@@ -144,11 +147,11 @@ impl ClusterState {
             slot_assignment: snapshot.slot_assignment,
             config_epoch: snapshot.config_epoch,
             migrations: snapshot.migrations,
-            // Snapshots do not carry the counter (it is finalization-window
-            // state, not cluster topology). Restarting at 0 is safe: any
-            // handoff that survived into a snapshot is already past its lease
-            // by the time a restored node serves finalizations.
-            handoff_seq: 0,
+            // The generation counter is carried by the DTO rather than
+            // re-derived: `max(seq)` over the surviving migrations is not the
+            // same number, because a completed or aborted handoff removes its
+            // record while its `seq` stays spent forever (FM-CLUSTER-100).
+            handoff_seq: snapshot.handoff_seq,
             last_applied_log: None,
             last_membership: StoredMembership::default(),
             active_version: snapshot.active_version,
@@ -407,6 +410,7 @@ impl ClusterStateInner {
             slot_assignment: self.slot_assignment.clone(),
             config_epoch: self.config_epoch,
             migrations: self.migrations.clone(),
+            handoff_seq: self.handoff_seq,
             active_version: self.active_version.clone(),
         }
     }
@@ -3980,6 +3984,154 @@ mod tests {
         // The identity cell is shared, not copied.
         restored.set_self_node_id(9);
         assert_eq!(original.self_node_id(), Some(9));
+    }
+
+    // ---- handoff generation across a restore (FM-CLUSTER-100) --------------
+
+    /// A cluster whose handoff generation has already advanced past a
+    /// *completed* handoff: slot 5 moved from node 1 to node 2, and the
+    /// migration record that carried `seq = 1` is gone with it. Nothing left in
+    /// the state names the generation, which is what makes re-deriving it from
+    /// the live migrations impossible.
+    fn state_past_a_completed_handoff() -> ClusterState {
+        let state = ClusterState::new();
+        for id in [1u64, 2] {
+            let port = 6379 + id as u16;
+            state
+                .apply_local(ClusterCommand::AddNode {
+                    node: NodeInfo::new_primary(id, test_addr(port), test_addr(port + 10_000)),
+                })
+                .expect("seeding a primary must succeed");
+        }
+        state
+            .apply_local(ClusterCommand::AssignSlots {
+                node_id: 1,
+                slots: vec![SlotRange::new(0, 10)],
+            })
+            .expect("seeding slots must succeed");
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .expect("begin must succeed");
+        let prepared_at_ms = state.arm_handoff_for_test(5, 1, 2);
+        state
+            .apply_local(ClusterCommand::CompleteSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+                proposed_at_ms: prepared_at_ms,
+            })
+            .expect("complete must succeed");
+        assert!(
+            state.get_slot_migration(5).is_none(),
+            "the record that carried seq 1 is gone"
+        );
+        state
+    }
+
+    /// Open a fresh migration of slot 5 back the other way and prepare it,
+    /// returning the `seq` the state minted. This is the only client-visible
+    /// reading of the generation counter.
+    fn mint_next_handoff_seq(state: &ClusterState) -> u64 {
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 2,
+                target_node: 1,
+            })
+            .expect("begin must succeed");
+        let (_, events) = state
+            .apply_command(ClusterCommand::PrepareSlotHandoff {
+                slot: 5,
+                source_node: 2,
+                target_node: 1,
+                barrier_ms: crate::types::HANDOFF_BARRIER_MS,
+                lease_ms: crate::types::HANDOFF_LEASE_MS,
+                proposed_at_ms: 2_000_000,
+            })
+            .expect("prepare must succeed");
+        match events.as_slice() {
+            [ClusterEvent::SlotHandoffPrepared { seq, .. }] => *seq,
+            other => panic!("expected exactly one prepared event, got {other:?}"),
+        }
+    }
+
+    /// The openraft vehicle: the serialized `ClusterStateInner` a leader ships
+    /// and `install_snapshot` deserializes. The generation is replicated state,
+    /// so it travels in the body like every other replicated field.
+    // FM-CLUSTER-100
+    #[test]
+    fn an_installed_snapshot_carries_the_handoff_generation() {
+        let state = state_past_a_completed_handoff();
+        let (meta, data) = state.encode_snapshot().expect("encoding must succeed");
+        let shipped: ClusterStateInner =
+            serde_json::from_slice(&data).expect("decoding must succeed");
+
+        let restored = ClusterState::new();
+        restored.restore_from_snapshot(shipped, &meta);
+
+        assert_eq!(
+            mint_next_handoff_seq(&restored),
+            2,
+            "a restored node that re-mints seq 1 hands out a generation \
+             some node has already fenced against"
+        );
+    }
+
+    /// The DTO vehicle: `ClusterSnapshot` -> `from_snapshot`. It must carry the
+    /// generation too — a completed handoff leaves no migration to re-derive it
+    /// from, so anything the DTO drops is reused, not recovered.
+    // FM-CLUSTER-100
+    #[test]
+    fn from_snapshot_carries_the_handoff_generation() {
+        let state = state_past_a_completed_handoff();
+        let dto = (*state.snapshot()).clone();
+        let restored = ClusterState::from_snapshot(dto, state.self_node_id_atomic());
+
+        assert_eq!(
+            mint_next_handoff_seq(&restored),
+            2,
+            "the reader DTO is also a restore vehicle: dropping the counter \
+             re-mints a seq that is already spent"
+        );
+    }
+
+    /// `ResetCluster` is the one thing allowed to rewind the generation, and it
+    /// clears every migration in the same entry — nothing can hold a fence
+    /// stamped against a slot this node still owns.
+    // FM-CLUSTER-100
+    #[test]
+    fn a_reset_is_the_one_rewind_and_it_survives_a_restore() {
+        let state = state_past_a_completed_handoff();
+        state
+            .apply_local(ClusterCommand::ResetCluster {
+                node_id: 1,
+                new_node_id: None,
+            })
+            .expect("reset must succeed");
+        assert_eq!(
+            state.read_inner().handoff_seq,
+            0,
+            "reset rewinds the generation deliberately"
+        );
+
+        let (meta, data) = state.encode_snapshot().expect("encoding must succeed");
+        let shipped: ClusterStateInner =
+            serde_json::from_slice(&data).expect("decoding must succeed");
+        let restored = ClusterState::new();
+        restored.restore_from_snapshot(shipped, &meta);
+        assert_eq!(
+            restored.read_inner().handoff_seq,
+            0,
+            "and the rewind is what the snapshot carries, not a floor of its own"
+        );
+
+        let dto = (*state.snapshot()).clone();
+        let via_dto = ClusterState::from_snapshot(dto, state.self_node_id_atomic());
+        assert_eq!(via_dto.read_inner().handoff_seq, 0);
     }
 
     /// The epoch minter is bounded below by the highest epoch any node claims,

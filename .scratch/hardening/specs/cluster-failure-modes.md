@@ -1187,7 +1187,7 @@ which is fail-closed rather than coarse (FM-CLUSTER-096).
 | Trigger | A slot's handoff is attempted more than once — the first attempt aborted or lapsed — and a message from the earlier attempt (a drain acknowledgement, an abort) arrives after the later one is prepared. Or a `PrepareSlotHandoff` names a source/target pair that does not match the open migration. |
 | Observable | `ConfirmSlotHandoffDrained` and `AbortSlotHandoff` take effect only when their `seq` matches the record's current attempt; otherwise they are refused (`HandoffNotReady`) or, for an abort of an attempt that is already gone, succeed with no event. `PrepareSlotHandoff` against a slot with no migration, or with mismatched endpoints, is refused without creating a record. |
 | NOT observable | A stale drain acknowledgement vouching for a fresh attempt. The stale ack was earned against a shard state that predates the current barrier, so honouring it would complete a handoff whose drain never happened — the same exposure as no barrier at all. |
-| Invariant | `ClusterStateInner::handoff_seq` is a replicated counter incremented on every accepted `PrepareSlotHandoff`; the minted value is carried in `SlotHandoffPrepared` and echoed by both follow-up commands, which filter on `h.seq == seq` before mutating (`cluster/src/{state,commands}.rs`). Because the counter is replicated it advances identically on every node; `ResetCluster` is the only thing that rewinds it, and it clears every migration in the same entry. |
+| Invariant | `ClusterStateInner::handoff_seq` is a replicated counter incremented on every accepted `PrepareSlotHandoff`; the minted value is carried in `SlotHandoffPrepared` and echoed by both follow-up commands, which filter on `h.seq == seq` before mutating (`cluster/src/{state,commands}.rs`). Because the counter is replicated it advances identically on every node; `ResetCluster` is the only thing that rewinds it, and it clears every migration in the same entry — a snapshot restore does not rewind it either (FM-CLUSTER-100). |
 | Outcome variant | `ClusterError::HandoffNotReady` / `ClusterError::InvalidOperation` |
 | Forced by | `a_stale_drain_ack_cannot_vouch_for_the_next_attempt`, `prepare_requires_a_migration_and_matching_parameters` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
@@ -1343,6 +1343,18 @@ The hold is node-wide for the barrier window (≤100 ms in production, backstopp
 lease), which is what Redis 8.4 and Valkey 9.0 do: their atomic-slot-migration pause is node-wide
 and includes `PAUSE_ACTION_REPLICA`, stopping the primary from flushing replica output buffers so
 replicas cannot run ahead of a primary that is fencing its own clients.
+
+## FM-CLUSTER-100 — the handoff generation survives a snapshot restore instead of restarting at zero
+
+| Field | Value |
+|---|---|
+| Trigger | A node rebuilds its cluster state from a snapshot rather than by replaying the log — openraft's `install_snapshot` after it fell too far behind, the persisted snapshot reloaded at boot, or the `ClusterSnapshot` DTO handed to `ClusterState::from_snapshot`. Some handoffs before that snapshot have already completed or aborted, so the records that carried their `seq` are gone. |
+| Observable | The next `PrepareSlotHandoff` the restored node applies mints a `seq` strictly greater than every `seq` the pre-snapshot cluster minted — the counter picks up where it left off through either restore vehicle. `ResetCluster` still rewinds it to `0`, and that rewind is itself what a later snapshot carries. |
+| NOT observable | A restored node re-minting a `seq` that is already spent. `SlotFence` compares `(owner, handoff_seq)` as a pure replicated fencing token (FM-CLUSTER-095) and reads absent-handoff as `0`, so a reused generation makes a stale fence compare equal and admit a command the prepare it was stamped before should have refused. Nor the counter being re-derived as `max(seq)` over the surviving migrations: a completed or aborted handoff removes its record and keeps its generation spent, so the derived value is exactly the reused one. |
+| Invariant | `handoff_seq` lives on `ClusterStateInner` and is projected by `to_snapshot`, so **both** vehicles carry it: openraft ships the serialized `ClusterStateInner` (`encode_snapshot`/`install_snapshot`/`attach_snapshot_store`), and the reader DTO carries the field for the sake of `from_snapshot`, which is the only restore path that goes through the projection (`cluster/src/{state,types}.rs`). Both sides are `#[serde(default)]`, so a snapshot written before the field existed reads as `0` — the pre-handoff state, where nothing has been minted. `ResetCluster` remains the sole rewind (FM-CLUSTER-086), and it clears every migration in the same entry, so no fence can outlive it. |
+| Outcome variant | `ClusterEvent::SlotHandoffPrepared { seq }` |
+| Forced by | `an_installed_snapshot_carries_the_handoff_generation`, `from_snapshot_carries_the_handoff_generation`, `a_reset_is_the_one_rewind_and_it_survives_a_restore` |
+| Bug refs | n/a — found by inspection while auditing the fencing token; the reader DTO dropped the counter and `from_snapshot` documented the reset as safe. |
 
 ---
 

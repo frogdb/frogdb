@@ -809,6 +809,17 @@ pub struct ClusterSnapshot {
     pub config_epoch: ConfigEpoch,
     /// Active slot migrations.
     pub migrations: BTreeMap<u16, SlotMigration>,
+    /// The handoff generation counter (`ClusterStateInner::handoff_seq`).
+    ///
+    /// No reader routes on it — the fence reads the per-slot `SlotHandoff::seq`
+    /// out of `migrations`. It is here because this DTO is also a *restore*
+    /// vehicle (`ClusterState::from_snapshot`), and the generation is the one
+    /// piece of replicated state nothing left in the table can re-derive: a
+    /// completed or aborted handoff takes its record away but not the promise
+    /// that its `seq` is spent. A restore that dropped it would re-mint a
+    /// generation some node has already fenced against (FM-CLUSTER-100).
+    #[serde(default)]
+    pub handoff_seq: u64,
     // `leader_id` removed (proposal 33): the leader is Raft runtime state, not
     // replicated metadata, so this DTO's builder cannot supply it. The debug
     // seam reads it live from `Raft::metrics().current_leader` instead.
