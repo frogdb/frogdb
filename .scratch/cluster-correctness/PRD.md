@@ -253,30 +253,30 @@ what the manual audit caught.
   production transition function; write TLA+ only if stateright's scope proves too small,
   as a recorded decision.
 
-## 8. Open decisions
+## 8. Decisions (all RULED 2026-08-08)
 
 1. **New dev-dependencies and CI budget.** `proptest` (W2) is uncontroversial house-style.
    `stateright` (W3) is a heavier bet: exhaustive checks are minutes-scale and belong in
-   the nightly, not per-commit. *Recommendation:* adopt both as dev-deps of
-   `frogdb-cluster`; per-commit runs get bounded-depth smoke configs (<10 s), nightly gets
-   the real budget; record the W3 exploration budget (states/minutes) in the model file
-   header so "it got slow" has a number.
+   the nightly, not per-commit. **RULED: adopt both; run the real budgets nightly.**
+   Per-commit runs get bounded-depth smoke configs (<10 s); record the W3 exploration
+   budget (states/minutes) in the model file header so "it got slow" has a number.
 2. **The dirty-state ruling INV-REF-1/2/3 forces.** `RemoveNode` leaves dangling
    migrations/replica parents (documented non-guarantee, pinned by test), and
    FM-CLUSTER-033 blesses `CompleteSlotMigration`'s unguarded owner insert.
-   *Recommendation:* fix the behavior rather than register exceptions — make `RemoveNode`
-   prune migrations and re-parent/detach replicas exactly as `Failover{force}` already
-   does (the asymmetry between the two removal paths is itself the smell), and guard the
-   Complete insert; amend both FM rows spec-first. Exceptions are the fallback, not the
-   default.
-3. **`DEBUG CLUSTER CHECK` exposure.** Always-on admin command vs gated.
-   *Recommendation:* always compiled, gated behind the existing admin/DEBUG surface like
-   its DEBUG siblings — Jepsen needs it in release builds, and a read-only self-check is
-   not attack surface beyond what DEBUG already grants.
-4. **Nightly seed budget for W4.** *Recommendation:* start at 500 seeds/night (≈ the
-   existing turmoil sims' per-seed cost × budgeted hour), tune from observed run time; the
-   number lives in one Justfile variable.
-5. **Catalog location.** Module in `frogdb-cluster` vs new crate.
-   *Recommendation:* module in `frogdb-cluster` — the mutation gate must see it, the
-   server crate already depends on the cluster crate for the L5 command, and a crate
-   boundary here is campaign 2's §4 ceremony finding all over again.
+   **RULED: fix the behavior, do not register exceptions** — make `RemoveNode` prune
+   migrations and re-parent/detach replicas exactly as `Failover{force}` already does
+   (the asymmetry between the two removal paths is itself the smell), and guard the
+   Complete insert; amend both FM rows spec-first.
+3. **`DEBUG CLUSTER CHECK` exposure.** **RULED: always compiled**, gated behind the
+   existing admin/DEBUG surface like its DEBUG siblings — Jepsen needs it in release
+   builds, and a read-only self-check is not attack surface beyond what DEBUG already
+   grants.
+4. **Nightly seed budget for W4.** **RULED: 500 seeds/night to start, runnable locally
+   on a laptop** — the recipe must work as a plain `just` invocation with the budget in
+   one Justfile variable, tuned from observed run time; nightly CI calls the same recipe.
+5. **Catalog location.** **RULED: module in `frogdb-cluster`** — the mutation gate must
+   see it, the server crate already depends on the cluster crate for the L5 command, and
+   a crate boundary here is campaign 2's §4 ceremony finding all over again.
+   Generalizing the catalog pattern to other areas stays a follow-up decision at exit
+   (§7); the layered architecture is not cluster-specific, but each area ports it
+   separately against its own state shape rather than through a shared framework.
