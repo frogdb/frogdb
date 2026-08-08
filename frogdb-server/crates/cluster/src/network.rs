@@ -679,8 +679,9 @@ const MAX_ATTEMPTS: u32 = 5;
 ///
 /// The replicated topology and the Raft voter set are two different maps of the
 /// same cluster, and every command that moves the first has to move the second
-/// or quorum is computed over nodes that are no longer there (a 3→2 shrink that
-/// leaves a 3-voter Raft cannot survive one further failure).
+/// or quorum is computed over nodes that are no longer there: a 4→3 shrink that
+/// leaves four voters behind still needs three of them, so retiring a dead node
+/// would make the cluster *less* fault-tolerant than leaving it alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoterChange {
     /// The command introduced a node: add it as a learner and promote it.
@@ -699,9 +700,10 @@ pub enum VoterChange {
 
 /// Derive the voter-set change `cmd` owes once it commits.
 ///
-/// A pure function of the command, so the two commit sites — the leader-local
-/// `propose` path in the connection layer and the leader-side `ForwardedWrite`
-/// receiver below — cannot disagree about what a command means for membership.
+/// A pure function of the command, so the three commit sites — the leader-local
+/// `propose` path in the connection layer, the leader-side `ForwardedWrite`
+/// receiver below, and the failure detector's auto-failover write — cannot
+/// disagree about what a command means for membership.
 /// The match is exhaustive rather than defaulted: a new `ClusterCommand` variant
 /// that moves the node set must say so here instead of silently owing nothing.
 pub fn voter_change(cmd: &ClusterCommand) -> Option<VoterChange> {
@@ -865,9 +867,10 @@ pub fn plan_voter_removal(
 /// The counterpart of [`spawn_add_raft_voter`], and its mirror in every respect:
 /// leader-only, spawned so the client response path is not blocked, and retried
 /// on the same backoff schedule. A departed node that stays a voter is counted
-/// by every quorum for ever — a 3-node cluster shrunk to 2 by `CLUSTER FORGET`
-/// still needs 2 of 3, so one further failure wedges it — which is why a
-/// transient failure here must not be terminal.
+/// by every quorum for ever — a 4-node cluster shrunk to 3 by `CLUSTER FORGET`
+/// still needs 3 of 4, so it survives no further failure at all, where a real
+/// 3-voter membership survives one — which is why a transient failure here must
+/// not be terminal.
 ///
 /// The removed node is normally unreachable (that is what `CLUSTER FORGET` is
 /// for), and this does not need it to answer: a membership change commits on the
