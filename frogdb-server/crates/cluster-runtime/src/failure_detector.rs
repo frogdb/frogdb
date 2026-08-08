@@ -88,6 +88,65 @@ impl Default for FailureDetectorConfig {
     }
 }
 
+/// Lower bound for `check_interval_ms`. A zero-length `tokio::time::interval`
+/// panics on its very first tick (`spawn_failure_detector_task`), and
+/// `raft_write_timeout`'s `saturating_mul(5)` assumes a nonzero cadence.
+pub const MIN_CHECK_INTERVAL_MS: u64 = 1;
+/// Upper bound for `check_interval_ms`. `HealthTable::stale_threshold`
+/// multiplies this by `fail_threshold + 2`; capping both factors keeps that
+/// multiplication well inside `Duration`'s representable range regardless of
+/// how the other factor is configured.
+pub const MAX_CHECK_INTERVAL_MS: u64 = 24 * 60 * 60 * 1000; // 24h
+
+/// Lower bound for `connect_timeout_ms`. A zero timeout makes
+/// `tokio::time::timeout` treat every probe as already elapsed, so every
+/// peer — reachable or not — reads as unreachable on the very first tick,
+/// producing mass false failures instead of real detection.
+pub const MIN_CONNECT_TIMEOUT_MS: u64 = 1;
+/// Upper bound for `connect_timeout_ms`, matching `MAX_CHECK_INTERVAL_MS`.
+pub const MAX_CONNECT_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000; // 24h
+
+/// Lower bound for `fail_threshold`. Zero would latch FAIL on the very first
+/// failure and clear it on the very first success (`HealthTable::
+/// record_failure`/`record_success`, both `>=` comparisons against the
+/// threshold), discarding the hysteresis the field exists to provide.
+pub const MIN_FAIL_THRESHOLD: u32 = 1;
+/// Upper bound for `fail_threshold`. `HealthTable::stale_threshold` computes
+/// `check_interval * (fail_threshold + 2)`, and `Duration`'s `Mul<u32>`
+/// panics on overflow; this cap keeps that product in range even at
+/// `MAX_CHECK_INTERVAL_MS`.
+pub const MAX_FAIL_THRESHOLD: u32 = 100_000;
+
+impl FailureDetectorConfig {
+    /// Clamp every field into the range the rest of this module assumes it
+    /// is in, pulling out-of-range values to the nearest bound rather than
+    /// rejecting them. See FM-CLUSTER-102.
+    ///
+    /// This is a bare timing knob with no cross-field relationship to
+    /// enforce (unlike, say, `heartbeat_interval_ms < election_timeout_ms`
+    /// in `ClusterConfigSection::validate()`, which rejects at config-parse
+    /// time because an ordering violation has no sane default to fall back
+    /// to). A single out-of-range field here has an obvious, harmless
+    /// nearest-bound reading, so silently sanitizing it at construction
+    /// matches this codebase's precedent for that shape of value — e.g.
+    /// `tls_watch.rs` floors `watch_debounce_ms` with
+    /// `Duration::from_millis(x).max(MIN_POLL_INTERVAL)` rather than
+    /// refusing to start.
+    fn clamped(self) -> Self {
+        Self {
+            check_interval_ms: self
+                .check_interval_ms
+                .clamp(MIN_CHECK_INTERVAL_MS, MAX_CHECK_INTERVAL_MS),
+            connect_timeout_ms: self
+                .connect_timeout_ms
+                .clamp(MIN_CONNECT_TIMEOUT_MS, MAX_CONNECT_TIMEOUT_MS),
+            fail_threshold: self
+                .fail_threshold
+                .clamp(MIN_FAIL_THRESHOLD, MAX_FAIL_THRESHOLD),
+        }
+    }
+}
+
 /// Per-node health tracking.
 #[derive(Debug, Clone, Default)]
 struct NodeHealth {
@@ -323,6 +382,10 @@ pub struct FailureDetector<R = Arc<ClusterRaft>> {
 
 impl<R: DetectorRaft> FailureDetector<R> {
     /// Create a new failure detector.
+    ///
+    /// `config` is clamped to safe bounds before it is stored (FM-CLUSTER-102):
+    /// every later read of `self.config` — including the accessor — sees the
+    /// sanitized values, never the ones the caller passed in.
     pub fn new(
         self_node_id: NodeId,
         config: FailureDetectorConfig,
@@ -331,6 +394,7 @@ impl<R: DetectorRaft> FailureDetector<R> {
         raft: R,
         network_factory: Arc<ClusterNetworkFactory>,
     ) -> Self {
+        let config = config.clamped();
         let health = HealthTable::new(
             config.fail_threshold,
             Duration::from_millis(config.check_interval_ms),
@@ -826,6 +890,110 @@ mod tests {
         assert_eq!(config.check_interval_ms, 1000);
         assert_eq!(config.connect_timeout_ms, 500);
         assert_eq!(config.fail_threshold, 5);
+    }
+
+    /// Zero is the classic misconfiguration for all three fields; the
+    /// constructor must clamp every one of them to its documented minimum
+    /// rather than storing the degenerate value, and latching must still
+    /// work — at the clamped threshold of 1 — once it does.
+    // FM-CLUSTER-102
+    #[tokio::test]
+    async fn degenerate_zero_config_is_clamped_to_safe_minimums() {
+        let f = build(
+            1,
+            vec![primary_node(1), primary_node(2)],
+            FailureDetectorConfig {
+                check_interval_ms: 0,
+                connect_timeout_ms: 0,
+                fail_threshold: 0,
+            },
+            ClusterRuntimeFlags::default(),
+            network_reporting(&[]),
+        );
+
+        assert_eq!(f.detector.config().check_interval_ms, MIN_CHECK_INTERVAL_MS);
+        assert_eq!(
+            f.detector.config().connect_timeout_ms,
+            MIN_CONNECT_TIMEOUT_MS
+        );
+        assert_eq!(f.detector.config().fail_threshold, MIN_FAIL_THRESHOLD);
+
+        // Latching still works at the clamped threshold of 1: one failure
+        // latches, one success clears it.
+        let verdict = || f.detector.health.read().unwrap().verdict(2, Instant::now());
+        f.detector.record_failure_local(2);
+        assert_eq!(verdict(), LocalVerdict::Failed);
+        f.detector.record_success_local(2);
+        assert_eq!(verdict(), LocalVerdict::Healthy);
+
+        // has_quorum exercises HealthTable::stale_threshold(); must not panic.
+        assert!(
+            f.detector.has_quorum(),
+            "self plus the now-healthy peer is 2 of 2"
+        );
+    }
+
+    /// `u64::MAX`/`u32::MAX` are the classic misconfiguration for an upper
+    /// bound: uncapped, `HealthTable::stale_threshold`'s `check_interval *
+    /// (fail_threshold + 2)` would overflow `Duration`'s `Mul<u32>` and
+    /// panic. The clamp caps both factors before the health table is ever
+    /// built.
+    // FM-CLUSTER-102
+    #[tokio::test]
+    async fn huge_config_values_are_clamped_and_do_not_overflow_the_staleness_multiply() {
+        let f = build(
+            1,
+            vec![primary_node(1), primary_node(2)],
+            FailureDetectorConfig {
+                check_interval_ms: u64::MAX,
+                connect_timeout_ms: u64::MAX,
+                fail_threshold: u32::MAX,
+            },
+            ClusterRuntimeFlags::default(),
+            network_reporting(&[]),
+        );
+
+        assert_eq!(f.detector.config().check_interval_ms, MAX_CHECK_INTERVAL_MS);
+        assert_eq!(
+            f.detector.config().connect_timeout_ms,
+            MAX_CONNECT_TIMEOUT_MS
+        );
+        assert_eq!(f.detector.config().fail_threshold, MAX_FAIL_THRESHOLD);
+
+        // Would panic on the `Duration` multiply before the clamp existed.
+        assert!(
+            !f.detector.has_quorum(),
+            "unprobed peers still do not count, clamp or not"
+        );
+    }
+
+    /// End-to-end: a zero check interval reaching `spawn_failure_detector_task`
+    /// unclamped would panic `tokio::time::interval` on its very first tick,
+    /// killing the task immediately. The constructor's clamp means the task
+    /// starts and keeps running instead.
+    // FM-CLUSTER-102
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test]
+    async fn a_zero_check_interval_does_not_panic_the_detector_task() {
+        let f = build(
+            1,
+            vec![primary_node(1)],
+            FailureDetectorConfig {
+                check_interval_ms: 0,
+                connect_timeout_ms: 0,
+                fail_threshold: 0,
+            },
+            ClusterRuntimeFlags::default(),
+            network_reporting(&[]),
+        );
+
+        let handle = spawn_failure_detector_task(Arc::clone(&f.detector));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !handle.is_finished(),
+            "the task must still be running, not panicked on the first tick"
+        );
+        handle.abort();
     }
 
     // FM-CLUSTER-052
