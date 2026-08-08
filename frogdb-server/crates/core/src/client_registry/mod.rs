@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use bitflags::bitflags;
 use bytes::Bytes;
+use frogdb_replication::ReplicaFeedGate;
 use tokio::sync::watch;
 
 use crate::sync::{Arc, RwLock};
@@ -261,6 +262,23 @@ impl PauseState {
     /// Whether anything at all is paused.
     fn is_idle(&self) -> bool {
         self.node.is_none() && self.slots.is_empty()
+    }
+
+    /// When the primary's replica feed may ship again, or `None` when nothing
+    /// is holding it (FM-CLUSTER-097).
+    ///
+    /// Only slot-scoped pauses hold the feed. They are armed by exactly one
+    /// thing — the slot-handoff barrier — and the barrier is the only pause
+    /// whose fenced writes can still *apply* locally (FM-CLUSTER-095), which is
+    /// what makes shipping them during the handover window an anomaly. A
+    /// node-global `CLIENT PAUSE` stops the writes themselves, so there is
+    /// nothing new to ship and no reason to stall a replica behind it — Redis
+    /// likewise reserves `PAUSE_ACTION_REPLICA` for the migration pause.
+    ///
+    /// The latest deadline across armed slots, so two overlapping handoffs
+    /// compose the same way the pauses themselves do (never shorten).
+    fn feed_hold_until(&self) -> Option<Instant> {
+        self.slots.values().map(|e| e.unpause_at).max()
     }
 }
 
@@ -521,6 +539,11 @@ pub struct ClientRegistry {
     pause_state: RwLock<PauseState>,
     /// Whether active key expiry should be paused (true while any pause is armed).
     expiry_paused: Arc<AtomicBool>,
+    /// The replication half of the slot-handoff barrier: holds the primary's
+    /// replica feed while a slot-scoped pause is armed (FM-CLUSTER-097).
+    /// Republished from [`PauseState`] alongside `expiry_paused`, so the write
+    /// barrier and the feed hold are two renderings of one fact.
+    replica_feed_gate: Arc<ReplicaFeedGate>,
     /// Server-wide per-command statistics (lowercase command name → stats).
     ///
     /// Updated inside `update_stats` from each connection's
@@ -544,6 +567,7 @@ impl ClientRegistry {
             clients: RwLock::new(HashMap::new()),
             pause_state: RwLock::new(PauseState::default()),
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            replica_feed_gate: ReplicaFeedGate::open(),
             command_stats: RwLock::new(HashMap::new()),
             error_stats: Arc::new(ErrorStats::new()),
         }
@@ -555,6 +579,16 @@ impl ClientRegistry {
     /// (both ALL and WRITE modes).
     pub fn expiry_paused_flag(&self) -> Arc<AtomicBool> {
         self.expiry_paused.clone()
+    }
+
+    /// Get a shared handle to the replica-feed hold.
+    ///
+    /// Handed to the primary replication handler at boot; its streaming
+    /// sessions keep frames off the wire while the hold is in force. Vended
+    /// exactly like [`expiry_paused_flag`](Self::expiry_paused_flag) — the
+    /// registry stays the one writer, and the consumer only reads.
+    pub fn replica_feed_gate(&self) -> Arc<ReplicaFeedGate> {
+        self.replica_feed_gate.clone()
     }
 
     /// Register a new client connection.
@@ -831,7 +865,7 @@ impl ClientRegistry {
         let unpause_at = now + std::time::Duration::from_millis(timeout_ms);
         let mut pause_state = self.pause_state.write().unwrap();
         pause_state.node = Some(PauseEntry::arm(pause_state.node, mode, unpause_at, now));
-        self.publish_expiry_paused(&pause_state);
+        self.publish_pause_derived_state(&pause_state);
     }
 
     /// Arm a pause scoped to one CRC16 hash slot.
@@ -848,7 +882,7 @@ impl ClientRegistry {
         let mut pause_state = self.pause_state.write().unwrap();
         let armed = PauseEntry::arm(pause_state.slots.get(&slot).copied(), mode, unpause_at, now);
         pause_state.slots.insert(slot, armed);
-        self.publish_expiry_paused(&pause_state);
+        self.publish_pause_derived_state(&pause_state);
     }
 
     /// Clear the node-global pause (`CLIENT UNPAUSE`).
@@ -860,7 +894,7 @@ impl ClientRegistry {
     pub fn unpause(&self) {
         let mut pause_state = self.pause_state.write().unwrap();
         pause_state.node = None;
-        self.publish_expiry_paused(&pause_state);
+        self.publish_pause_derived_state(&pause_state);
     }
 
     /// Release the pause on one hash slot, leaving every other pause — the
@@ -868,7 +902,7 @@ impl ClientRegistry {
     pub fn unpause_slot(&self, slot: u16) {
         let mut pause_state = self.pause_state.write().unwrap();
         pause_state.slots.remove(&slot);
-        self.publish_expiry_paused(&pause_state);
+        self.publish_pause_derived_state(&pause_state);
     }
 
     /// What is paused right now: the node-global mode plus whether any
@@ -920,10 +954,16 @@ impl ClientRegistry {
         }
         let mut pause_state = self.pause_state.write().unwrap();
         pause_state.sweep(crate::clock::now());
-        self.publish_expiry_paused(&pause_state);
+        self.publish_pause_derived_state(&pause_state);
     }
 
-    /// Republish the shard-visible active-expiry suppression flag.
+    /// Republish everything derived from the pause state: the shard-visible
+    /// active-expiry suppression flag, and the replica-feed hold.
+    ///
+    /// Both are pure functions of [`PauseState`] and are republished from this
+    /// one place on every mutation of it, so no consumer can hold a view the
+    /// pause state does not justify. The feed hold's rationale is on
+    /// [`PauseState::feed_hold_until`]; the expiry flag's follows.
     ///
     /// Suppressed while *any* pause is armed, slot-scoped ones included. Redis
     /// suppresses expires during `PAUSE WRITE` so the replication stream stays
@@ -933,9 +973,11 @@ impl ClientRegistry {
     /// node-wide for a slot-scoped pause is broader than strictly needed, and
     /// deliberately so: it errs toward not writing, and lazy expiry still hides
     /// elapsed keys from readers.
-    fn publish_expiry_paused(&self, pause_state: &PauseState) {
+    fn publish_pause_derived_state(&self, pause_state: &PauseState) {
         self.expiry_paused
             .store(!pause_state.is_idle(), Ordering::Relaxed);
+        self.replica_feed_gate
+            .publish(pause_state.feed_hold_until());
     }
 
     /// Get the current number of connected clients.
@@ -1452,6 +1494,72 @@ mod tests {
 
         registry.unpause_slot(2);
         assert!(!registry.expiry_paused_flag().load(Ordering::Relaxed));
+    }
+
+    // FM-CLUSTER-097
+    /// The replica-feed hold is a *derivation* of the pause state, not a second
+    /// flag: arming the barrier publishes a deadline, releasing it clears one,
+    /// and nobody has to remember to do either.
+    #[test]
+    fn slot_barrier_publishes_and_clears_the_replica_feed_hold() {
+        let registry = ClientRegistry::new();
+        let gate = registry.replica_feed_gate();
+        assert!(!gate.is_held(), "nothing is armed yet");
+
+        registry.pause_slot(11, PauseMode::Write, 10_000);
+        assert!(gate.is_held(), "arming the barrier must hold the feed");
+
+        registry.unpause_slot(11);
+        assert!(!gate.is_held(), "releasing the barrier must free the feed");
+    }
+
+    // FM-CLUSTER-097
+    /// A node-global `CLIENT PAUSE` stops the writes themselves, so there is
+    /// nothing new to ship and no reason to stall a replica behind it. Only the
+    /// slot barrier — whose fenced writes still apply locally — holds the feed.
+    #[test]
+    fn a_node_pause_does_not_hold_the_replica_feed() {
+        let registry = ClientRegistry::new();
+        registry.pause(PauseMode::All, 10_000);
+        assert!(
+            !registry.replica_feed_gate().is_held(),
+            "CLIENT PAUSE must not stall replication"
+        );
+    }
+
+    // FM-CLUSTER-097
+    /// The hold carries the barrier's own deadline, so a barrier nobody ever
+    /// released — the finalizer died, the lease ran out, no sweep happened —
+    /// still frees the feed. A wedged feed would be worse than the anomaly.
+    #[test]
+    fn a_lapsed_barrier_frees_the_feed_with_nobody_clearing_it() {
+        let registry = ClientRegistry::new();
+        registry.pause_slot(3, PauseMode::Write, 0);
+
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(
+            !registry.replica_feed_gate().is_held(),
+            "the published deadline has passed, so the hold must read as released"
+        );
+    }
+
+    // FM-CLUSTER-097
+    /// Two overlapping handoffs compose the way the pauses themselves do: the
+    /// hold runs to the later deadline, and releasing the earlier slot does not
+    /// free the feed while the other barrier is still up.
+    #[test]
+    fn overlapping_barriers_hold_the_feed_to_the_later_deadline() {
+        let registry = ClientRegistry::new();
+        registry.pause_slot(1, PauseMode::Write, 10_000);
+        registry.pause_slot(2, PauseMode::Write, 20_000);
+
+        registry.unpause_slot(1);
+        assert!(
+            registry.replica_feed_gate().is_held(),
+            "slot 2's barrier is still armed"
+        );
+        registry.unpause_slot(2);
+        assert!(!registry.replica_feed_gate().is_held());
     }
 
     // FM-CLUSTER-082

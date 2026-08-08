@@ -588,3 +588,136 @@ async fn an_exec_on_an_unbarriered_slot_runs_while_the_barrier_is_up() {
 
     harness.shutdown_all().await;
 }
+
+/// Poll `node`'s `DBSIZE` until it reaches `want`, or fail naming `what`.
+///
+/// Asked of a replica as readily as of a primary: `DBSIZE` is keyless and
+/// server-wide, so a replica answers it without a slot verdict, a redirect, or
+/// a `READONLY` handshake — which makes it the one observable that reads "what
+/// has this replica actually applied" without touching the routing layer under
+/// test.
+async fn wait_for_key_count(harness: &ClusterTestHarness, node: u64, want: i64, what: &str) {
+    let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+    loop {
+        let seen = local_key_count(harness, node).await;
+        if seen == want {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}: node {node} holds {seen} keys, wanted {want}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+// FM-CLUSTER-097
+/// The replication half of the barrier (rework issue 12).
+///
+/// The write barrier fences *acknowledgements*, not work: a write caught by it
+/// can still apply to the source's keyspace before the fence refuses to answer
+/// for it (FM-CLUSTER-095). Applied writes are broadcast, so without a hold on
+/// the feed a replica of the losing node would receive, during the handover
+/// window, writes the source's own clients were told to retry elsewhere. Redis
+/// and Valkey close the same window by including `PAUSE_ACTION_REPLICA` in the
+/// slot-migration pause — while it is up the primary stops flushing its replica
+/// output buffers.
+///
+/// So: a replica attached across a loaded handoff must see *nothing* the source
+/// applied while the barrier was armed, and must converge on all of it once the
+/// handoff releases the barrier. The write used here is on a slot the barrier
+/// does not cover, which is deliberate — the hold is node-wide (one monotonic
+/// replication offset means a per-shard hold would put offsets on the wire out
+/// of order), so an unbarriered slot's write is the sharpest probe of it: it
+/// applies on the source with no parking at all, and the only thing that can
+/// keep it off the wire is the hold.
+#[tokio::test]
+async fn the_barrier_holds_the_replica_feed_until_the_handoff_releases_it() {
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness.wait_for_leader(APPLY_WAIT).await.unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(30))
+        .await
+        .unwrap();
+
+    let node_ids = harness.node_ids();
+    let (source_id, target_id) = (node_ids[0], node_ids[1]);
+    let replica_id = harness.add_replica(source_id).await.unwrap();
+    harness
+        .wait_for_replication_link(source_id, 1, Duration::from_secs(20))
+        .await
+        .expect("the source never reported an attached replica");
+
+    // Three slots on the source: one to barrier, and two to carry writes whose
+    // *shipping* is the property under test.
+    let slots = slots_owned_by(&harness, source_id, 3).await;
+    let (barriered, before_slot, during_slot) = (slots[0], slots[1], slots[2]);
+    let before_key = key_for_slot(before_slot);
+    let during_key = key_for_slot(during_slot);
+
+    // Control: with no barrier armed the link ships promptly. Without it the
+    // later absence would be indistinguishable from a replica that never
+    // attached, and the test would pass with the hold deleted.
+    assert_eq!(
+        harness
+            .node(source_id)
+            .unwrap()
+            .send("SET", &[&before_key, "before"])
+            .await,
+        Response::ok()
+    );
+    wait_for_key_count(
+        &harness,
+        replica_id,
+        1,
+        "the pre-barrier write to replicate",
+    )
+    .await;
+
+    let target_hex =
+        open_migration_and_arm_barrier(&harness, source_id, target_id, barriered).await;
+
+    // A write on an unbarriered slot: acknowledged and applied on the source...
+    assert_eq!(
+        harness
+            .node(source_id)
+            .unwrap()
+            .send("SET", &[&during_key, "during"])
+            .await,
+        Response::ok(),
+        "a write outside the barriered slot must not park"
+    );
+    assert_eq!(
+        local_key_count(&harness, source_id).await,
+        2,
+        "the write should have applied on the source"
+    );
+
+    // ...and held off the wire for as long as the barrier is up. The control
+    // above landed well inside this window, so an unchanged replica here is the
+    // hold and not latency.
+    let probe_deadline = tokio::time::Instant::now() + PARK_PROBE;
+    while tokio::time::Instant::now() < probe_deadline {
+        assert_eq!(
+            local_key_count(&harness, replica_id).await,
+            1,
+            "the replica received a write the source applied under the handoff barrier"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // The handoff completes, which releases the barrier — and with it the feed.
+    finalize_handoff(&harness, source_id, barriered, &target_hex).await;
+
+    // Nothing is dropped: writes held during the window ship once it ends.
+    wait_for_key_count(
+        &harness,
+        replica_id,
+        2,
+        "the held write to ship after the barrier released",
+    )
+    .await;
+
+    harness.shutdown_all().await;
+}

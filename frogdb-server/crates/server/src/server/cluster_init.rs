@@ -1489,6 +1489,8 @@ mod tests {
                 ttl_secs: 0,
             },
             0,
+            // No barrier is armed in these unit tests: an open gate ships.
+            frogdb_replication::ReplicaFeedGate::open(),
         ))
     }
 
