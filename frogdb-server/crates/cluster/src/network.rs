@@ -660,6 +660,104 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 // Server-side helpers (used by cluster_bus)
 // ---------------------------------------------------------------------------
 
+/// How long a voter-set change waits before retrying the attempt that just
+/// failed, or `None` when that attempt was the last one.
+///
+/// Split out of the retry loop so the schedule is checkable without a live Raft
+/// and without sleeping: `attempt` is 1-based, so attempt `max_attempts` is
+/// terminal, and the backoff grows linearly with the attempt number.
+fn voter_retry_delay(attempt: u32, max_attempts: u32) -> Option<std::time::Duration> {
+    (attempt < max_attempts).then(|| std::time::Duration::from_millis(500 * attempt as u64))
+}
+
+/// How many times a voter-set change is attempted before it gives up. Shared by
+/// the add and the remove side so the two halves of membership cannot drift into
+/// different persistence.
+const MAX_ATTEMPTS: u32 = 5;
+
+/// The Raft voter-set change a *committed* [`ClusterCommand`] owes.
+///
+/// The replicated topology and the Raft voter set are two different maps of the
+/// same cluster, and every command that moves the first has to move the second
+/// or quorum is computed over nodes that are no longer there (a 3→2 shrink that
+/// leaves a 3-voter Raft cannot survive one further failure).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoterChange {
+    /// The command introduced a node: add it as a learner and promote it.
+    Add {
+        /// The joining node's Raft id.
+        node_id: NodeId,
+        /// Its cluster-bus address, which is what Raft dials.
+        addr: SocketAddr,
+    },
+    /// The command removed a node: drop it from the voter set.
+    Remove {
+        /// The departing node's Raft id.
+        node_id: NodeId,
+    },
+}
+
+/// Derive the voter-set change `cmd` owes once it commits.
+///
+/// A pure function of the command, so the two commit sites — the leader-local
+/// `propose` path in the connection layer and the leader-side `ForwardedWrite`
+/// receiver below — cannot disagree about what a command means for membership.
+/// The match is exhaustive rather than defaulted: a new `ClusterCommand` variant
+/// that moves the node set must say so here instead of silently owing nothing.
+pub fn voter_change(cmd: &ClusterCommand) -> Option<VoterChange> {
+    match cmd {
+        ClusterCommand::AddNode { node } => Some(VoterChange::Add {
+            node_id: node.id,
+            addr: node.cluster_addr,
+        }),
+        ClusterCommand::RemoveNode { node_id } => Some(VoterChange::Remove { node_id: *node_id }),
+        // A forced failover *removes* the old primary (`commands.rs`), so it
+        // shrinks the voter set exactly as `RemoveNode` does. A graceful one
+        // demotes it to a replica, which stays a voter: the node is still there.
+        ClusterCommand::Failover {
+            old_primary_id,
+            force,
+            ..
+        } => force.then_some(VoterChange::Remove {
+            node_id: *old_primary_id,
+        }),
+        // `ResetCluster` erases the whole topology on purpose; mapping that onto
+        // membership would mean the resetting node proposing the removal of every
+        // peer, i.e. dissolving the Raft group from inside it. The reset's
+        // relationship to Raft membership is deliberately unmodelled — see
+        // FM-CLUSTER-101 — and the local transport cleanup it does do is owned by
+        // `ResetProposed::Applied`.
+        ClusterCommand::ResetCluster { .. }
+        // Everything else moves slots, epochs, roles or flags, never the node set.
+        | ClusterCommand::AssignSlots { .. }
+        | ClusterCommand::RemoveSlots { .. }
+        | ClusterCommand::SetRole { .. }
+        | ClusterCommand::IncrementEpoch
+        | ClusterCommand::SetConfigEpoch { .. }
+        | ClusterCommand::MarkNodeFailed { .. }
+        | ClusterCommand::MarkNodeRecovered { .. }
+        | ClusterCommand::BeginSlotMigration { .. }
+        | ClusterCommand::PrepareSlotHandoff { .. }
+        | ClusterCommand::ConfirmSlotHandoffDrained { .. }
+        | ClusterCommand::AbortSlotHandoff { .. }
+        | ClusterCommand::CompleteSlotMigration { .. }
+        | ClusterCommand::CancelSlotMigration { .. }
+        | ClusterCommand::FinalizeUpgrade { .. } => None,
+    }
+}
+
+/// Apply a [`VoterChange`] to Raft in the background.
+///
+/// Must be called on the leader — it is the only node that may propose a
+/// membership entry — which is why both callers are commit sites that have just
+/// written through their own Raft handle.
+pub fn spawn_voter_change(raft: crate::ClusterRaft, change: VoterChange) {
+    match change {
+        VoterChange::Add { node_id, addr } => spawn_add_raft_voter(raft, node_id, addr),
+        VoterChange::Remove { node_id } => spawn_remove_raft_voter(raft, node_id),
+    }
+}
+
 /// Add a node to the Raft voter set (learner first, then promote).
 ///
 /// Must be called on the leader. Spawns a background task so the caller
@@ -674,19 +772,7 @@ impl RaftNetwork<TypeConfig> for ClusterNetwork {
 /// terminal. Failures after all retries are logged at `error` level.
 /// A full reconciliation loop (ClusterState nodes vs. Raft voters) is a
 /// known follow-up, not yet implemented.
-/// How long [`spawn_add_raft_voter`] waits before retrying the attempt that just
-/// failed, or `None` when that attempt was the last one.
-///
-/// Split out of the retry loop so the schedule is checkable without a live Raft
-/// and without sleeping: `attempt` is 1-based, so attempt `max_attempts` is
-/// terminal, and the backoff grows linearly with the attempt number.
-fn voter_retry_delay(attempt: u32, max_attempts: u32) -> Option<std::time::Duration> {
-    (attempt < max_attempts).then(|| std::time::Duration::from_millis(500 * attempt as u64))
-}
-
 pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std::net::SocketAddr) {
-    const MAX_ATTEMPTS: u32 = 5;
-
     tokio::spawn(async move {
         for attempt in 1..=MAX_ATTEMPTS {
             // Skip if the node is already a Raft voter (initial bootstrap
@@ -740,6 +826,102 @@ pub fn spawn_add_raft_voter(raft: crate::ClusterRaft, node_id: NodeId, addr: std
     });
 }
 
+/// What removing `node_id` takes, given the membership in force.
+///
+/// The three cases are not interchangeable. `RemoveVoters` subtracts from the
+/// voter set, so it is a silent no-op on a node that never got promoted;
+/// `RemoveNodes` is the only change that reaches a learner, and openraft refuses
+/// it (`LearnerNotFound`) while the node still votes. Classifying first is what
+/// makes one proposal enough, and what makes a repeated `CLUSTER FORGET` propose
+/// nothing at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoterRemoval {
+    /// Raft has never heard of the node, or has already dropped it.
+    Absent,
+    /// The node votes. Dropping it with `retain = false` takes its node entry
+    /// with it, so it is not left behind as a learner still being replicated to.
+    Voter,
+    /// The node is a learner — an add whose promotion never landed.
+    Learner,
+}
+
+/// Classify `node_id` against the membership in force. Pure, so the decision is
+/// checkable without a live Raft.
+pub fn plan_voter_removal(
+    membership: &openraft::Membership<NodeId, BasicNode>,
+    node_id: NodeId,
+) -> VoterRemoval {
+    if membership.voter_ids().any(|id| id == node_id) {
+        VoterRemoval::Voter
+    } else if membership.nodes().any(|(id, _)| *id == node_id) {
+        VoterRemoval::Learner
+    } else {
+        VoterRemoval::Absent
+    }
+}
+
+/// Remove a node from the Raft voter set.
+///
+/// The counterpart of [`spawn_add_raft_voter`], and its mirror in every respect:
+/// leader-only, spawned so the client response path is not blocked, and retried
+/// on the same backoff schedule. A departed node that stays a voter is counted
+/// by every quorum for ever — a 3-node cluster shrunk to 2 by `CLUSTER FORGET`
+/// still needs 2 of 3, so one further failure wedges it — which is why a
+/// transient failure here must not be terminal.
+///
+/// The removed node is normally unreachable (that is what `CLUSTER FORGET` is
+/// for), and this does not need it to answer: a membership change commits on the
+/// quorum of the *new* configuration, which the departed node is not in.
+pub fn spawn_remove_raft_voter(raft: crate::ClusterRaft, node_id: NodeId) {
+    tokio::spawn(async move {
+        for attempt in 1..=MAX_ATTEMPTS {
+            // Re-classified on every attempt: an earlier attempt may have landed
+            // and only failed to be observed, and the membership can move under a
+            // retry for reasons of its own.
+            let plan = {
+                let membership = raft.metrics().borrow().membership_config.clone();
+                plan_voter_removal(membership.membership(), node_id)
+            };
+
+            let change = match plan {
+                VoterRemoval::Absent => {
+                    tracing::debug!(node_id, "Node is not in Raft membership; nothing to remove");
+                    return;
+                }
+                VoterRemoval::Voter => {
+                    ChangeMembers::RemoveVoters(std::collections::BTreeSet::from([node_id]))
+                }
+                VoterRemoval::Learner => {
+                    ChangeMembers::RemoveNodes(std::collections::BTreeSet::from([node_id]))
+                }
+            };
+
+            // `retain = false`: a removed voter is dropped outright rather than
+            // demoted to a learner the leader keeps replicating to.
+            match raft.change_membership(change, false).await {
+                Ok(_) => {
+                    tracing::info!(node_id, ?plan, "Removed node from Raft membership");
+                    return;
+                }
+                Err(e) => match voter_retry_delay(attempt, MAX_ATTEMPTS) {
+                    Some(delay) => {
+                        tracing::warn!(node_id, attempt, error = %e, "Failed to remove node from Raft membership; retrying");
+                        tokio::time::sleep(delay).await;
+                    }
+                    None => {
+                        tracing::error!(
+                            node_id,
+                            error = %e,
+                            "Failed to remove node from Raft membership after {MAX_ATTEMPTS} \
+                             attempts; node is gone from cluster state but is STILL a Raft voter"
+                        );
+                    }
+                },
+            }
+        }
+    });
+}
+
 /// Handle incoming Raft-handle RPC requests from other cluster nodes.
 ///
 /// The parameter is [`RaftRpc`] — the subset serviced through the
@@ -760,12 +942,11 @@ pub async fn handle_rpc_request(raft: &crate::ClusterRaft, request: RaftRpc) -> 
             Err(e) => ClusterRpcResponse::Error(e.to_string()),
         },
         RaftRpc::ForwardedWrite(cmd) => {
-            // Extract AddNode info before the command is consumed by client_write
-            let add_node_info = if let ClusterCommand::AddNode { ref node } = cmd {
-                Some((node.id, node.cluster_addr))
-            } else {
-                None
-            };
+            // The membership side effect is derived before the command is
+            // consumed by `client_write`. This receiver is the leader, so it is
+            // the node that can perform it — the forwarding node deliberately
+            // does not (see `Proposed::Forwarded`).
+            let membership_change = voter_change(&cmd);
 
             match raft.client_write(cmd).await {
                 // The Raft write can commit while the state machine rejects the
@@ -778,8 +959,8 @@ pub async fn handle_rpc_request(raft: &crate::ClusterRaft, request: RaftRpc) -> 
                         // here — the only site that intentionally does so.
                         return ClusterRpcResponse::ForwardedWrite(Err(e.to_string()));
                     }
-                    if let Some((node_id, cluster_addr)) = add_node_info {
-                        spawn_add_raft_voter(raft.clone(), node_id, cluster_addr);
+                    if let Some(change) = membership_change {
+                        spawn_voter_change(raft.clone(), change);
                     }
                     ClusterRpcResponse::ForwardedWrite(Ok(()))
                 }
@@ -1371,6 +1552,251 @@ mod tests {
         }
 
         raft.shutdown().await.unwrap();
+    }
+
+    // ---- Raft voter removal ------------------------------------------------
+
+    /// The Raft voter set is the second map of the cluster, and every command
+    /// that moves the node set in the first one owes it a change. `RemoveNode`
+    /// is the one this row exists for: without it a forgotten node is counted by
+    /// every quorum for ever.
+    // FM-CLUSTER-101
+    #[test]
+    fn every_command_that_moves_the_node_set_owes_a_voter_change() {
+        let bus: SocketAddr = "127.0.0.1:16386".parse().unwrap();
+        let node = crate::types::NodeInfo::new_primary(7, "127.0.0.1:6386".parse().unwrap(), bus);
+
+        assert_eq!(
+            voter_change(&ClusterCommand::AddNode { node }),
+            Some(VoterChange::Add {
+                node_id: 7,
+                addr: bus
+            }),
+            "a join is promoted to a voter at its cluster-bus address"
+        );
+        assert_eq!(
+            voter_change(&ClusterCommand::RemoveNode { node_id: 7 }),
+            Some(VoterChange::Remove { node_id: 7 })
+        );
+
+        // A forced failover removes the old primary outright, so it shrinks the
+        // voter set exactly as CLUSTER FORGET does...
+        assert_eq!(
+            voter_change(&ClusterCommand::Failover {
+                old_primary_id: 7,
+                new_primary_id: 8,
+                force: true,
+            }),
+            Some(VoterChange::Remove { node_id: 7 })
+        );
+        // ...while a graceful one only demotes it, and a demoted primary is
+        // still a node of the cluster and still votes.
+        assert_eq!(
+            voter_change(&ClusterCommand::Failover {
+                old_primary_id: 7,
+                new_primary_id: 8,
+                force: false,
+            }),
+            None
+        );
+
+        // A reset is a whole-cluster teardown, not a membership edit: it is
+        // deliberately outside this rule.
+        assert_eq!(
+            voter_change(&ClusterCommand::ResetCluster {
+                node_id: 7,
+                new_node_id: None,
+            }),
+            None
+        );
+
+        // The slot / epoch / role / flag families move no nodes.
+        for cmd in [
+            ClusterCommand::IncrementEpoch,
+            ClusterCommand::MarkNodeFailed { node_id: 7 },
+            ClusterCommand::MarkNodeRecovered { node_id: 7 },
+            ClusterCommand::SetRole {
+                node_id: 7,
+                role: crate::types::NodeRole::Replica,
+                primary_id: Some(8),
+            },
+            ClusterCommand::CancelSlotMigration { slot: 1 },
+            ClusterCommand::FinalizeUpgrade {
+                version: "1.2.3".to_string(),
+            },
+        ] {
+            assert_eq!(voter_change(&cmd), None, "{cmd:?} moves no node");
+        }
+    }
+
+    /// Which change to propose is a function of the membership in force, and
+    /// getting it wrong is silent: `RemoveVoters` does nothing to a learner, and
+    /// `RemoveNodes` is refused while the node still votes.
+    // FM-CLUSTER-101
+    #[test]
+    fn a_removal_is_planned_against_the_membership_in_force() {
+        let node = |port: u16| BasicNode {
+            addr: format!("127.0.0.1:{port}"),
+        };
+        let membership = openraft::Membership::<NodeId, BasicNode>::new(
+            vec![std::collections::BTreeSet::from([1u64, 2])],
+            BTreeMap::from([(1u64, node(16379)), (2, node(16380)), (3, node(16381))]),
+        );
+
+        assert_eq!(plan_voter_removal(&membership, 2), VoterRemoval::Voter);
+        assert_eq!(
+            plan_voter_removal(&membership, 3),
+            VoterRemoval::Learner,
+            "a node Raft knows but does not count is a learner, and only RemoveNodes reaches it"
+        );
+        assert_eq!(
+            plan_voter_removal(&membership, 4),
+            VoterRemoval::Absent,
+            "a repeated FORGET must plan nothing rather than propose a no-op entry"
+        );
+    }
+
+    /// A learner whose promotion never landed is still a node Raft replicates
+    /// to. Forgetting it has to reach it, which `RemoveVoters` — the change the
+    /// voter case uses — would not.
+    // FM-CLUSTER-101
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forgetting_a_learner_drops_it_from_the_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        let raft = single_voter_raft(dir.path()).await;
+
+        // `blocking = false`: the membership entry commits on this node's own
+        // quorum, so the (unreachable) learner never has to answer.
+        raft.add_learner(
+            2,
+            BasicNode {
+                addr: "127.0.0.1:16380".to_string(),
+            },
+            false,
+        )
+        .await
+        .expect("adding a learner must commit on a one-voter cluster");
+        settle_until(&raft, "node 2 to be a learner", |m| {
+            plan_voter_removal(m, 2) == VoterRemoval::Learner
+        })
+        .await;
+
+        spawn_remove_raft_voter(raft.clone(), 2);
+        settle_until(&raft, "node 2 to leave the membership", |m| {
+            plan_voter_removal(m, 2) == VoterRemoval::Absent
+        })
+        .await;
+
+        raft.shutdown().await.unwrap();
+    }
+
+    /// Forgetting a node Raft never knew — the second `CLUSTER FORGET` of the
+    /// same id, or a node that was only ever in `ClusterState` — proposes
+    /// nothing. Proposing a no-op membership entry per retry would churn the log
+    /// on exactly the path an operator repeats across every surviving node.
+    // FM-CLUSTER-101
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forgetting_a_stranger_proposes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let raft = single_voter_raft(dir.path()).await;
+
+        let settled = *raft.metrics().borrow().membership_config.log_id();
+        spawn_remove_raft_voter(raft.clone(), 99);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(
+            raft.metrics().borrow().membership_config.log_id(),
+            &settled,
+            "forgetting a stranger must not move the membership entry in force"
+        );
+
+        raft.shutdown().await.unwrap();
+    }
+
+    /// The removal is proposed through Raft, so Raft's own guard applies: the
+    /// last voter is not removable. A cluster that could empty its own voter set
+    /// would be unrecoverable, and the node stays exactly as it was — this is a
+    /// refusal, not a partial application.
+    // FM-CLUSTER-101
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_last_voter_is_never_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let raft = single_voter_raft(dir.path()).await;
+
+        let settled = *raft.metrics().borrow().membership_config.log_id();
+        spawn_remove_raft_voter(raft.clone(), 1);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(
+            plan_voter_removal(raft.metrics().borrow().membership_config.membership(), 1),
+            VoterRemoval::Voter,
+            "the only voter must still be one"
+        );
+        assert_eq!(
+            raft.metrics().borrow().membership_config.log_id(),
+            &settled,
+            "a refused removal must leave no membership entry behind"
+        );
+
+        raft.shutdown().await.unwrap();
+    }
+
+    /// A live one-voter Raft on a fresh directory, settled far enough that the
+    /// bootstrap membership is visible in the metrics watch (which is updated
+    /// asynchronously, so reading it too early sees an empty one).
+    async fn single_voter_raft(dir: &std::path::Path) -> crate::ClusterRaft {
+        let storage = crate::storage::ClusterStorage::open(dir).unwrap();
+        let raft = openraft::Raft::new(
+            1,
+            Arc::new(openraft::Config {
+                election_timeout_min: 100,
+                election_timeout_max: 200,
+                heartbeat_interval: 50,
+                ..Default::default()
+            }),
+            ClusterNetworkFactory::with_timeouts(50, 50),
+            storage,
+            crate::state::ClusterStateMachine::new(),
+        )
+        .await
+        .expect("a single-node Raft must start");
+
+        raft.initialize(BTreeMap::from([(
+            1u64,
+            BasicNode {
+                addr: "127.0.0.1:16379".to_string(),
+            },
+        )]))
+        .await
+        .expect("bootstrapping one voter must succeed");
+
+        settle_until(&raft, "the bootstrap voter to appear", |m| {
+            plan_voter_removal(m, 1) == VoterRemoval::Voter
+        })
+        .await;
+        raft
+    }
+
+    /// Poll the membership watch until `predicate` holds, failing with what it
+    /// last saw. Membership changes are visible only through this watch, and it
+    /// lags the commit that produced them.
+    async fn settle_until(
+        raft: &crate::ClusterRaft,
+        what: &str,
+        predicate: impl Fn(&openraft::Membership<NodeId, BasicNode>) -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let membership = raft.metrics().borrow().membership_config.clone();
+            if predicate(membership.membership()) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}: {membership:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     /// A frame that never crossed the wire is not traffic. Reporting the

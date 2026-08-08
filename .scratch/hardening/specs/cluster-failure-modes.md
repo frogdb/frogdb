@@ -1344,6 +1344,24 @@ lease), which is what Redis 8.4 and Valkey 9.0 do: their atomic-slot-migration p
 and includes `PAUSE_ACTION_REPLICA`, stopping the primary from flushing replica output buffers so
 replicas cannot run ahead of a primary that is fencing its own clients.
 
+## FM-CLUSTER-101 — a node removed from the topology stops being a Raft voter
+
+| Field | Value |
+|---|---|
+| Trigger | A committed cluster command removes a node from the topology: `CLUSTER FORGET` (`RemoveNode`), or a forced failover (`Failover { force: true }`), which removes the old primary outright. Includes the removal of a node that is already down, of the Raft leader itself, and a `FORGET` repeated on every surviving node. |
+| Observable | The removed node leaves the Raft membership, so quorum is recomputed over the survivors: four voters shrunk to three survive one further failure, which four voters minus a departed one cannot. A node Raft knows only as a learner leaves the membership too. A removal that names a node Raft never knew — the second and third `FORGET` of the same id, the documented operator procedure — proposes nothing, leaving the membership entry in force exactly where it was. The last voter is never removed. |
+| NOT observable | The removal waiting on the removed node: a membership change commits on the quorum of the *new* configuration, so the node being retired — normally already dead, which is why it is being retired — cannot block its own removal. Nor the leader refusing to remove itself: `FORGET` is always executed on the leader (directly, or by the leader-side `ForwardedWrite` receiver after a follower forwarded it), so a self-skip would make forgetting the leader permanently impossible; openraft steps the leader down after the entry commits. Nor `ResetCluster` shrinking the voter set — a reset tears the whole cluster down and re-forms it, and its own `forget_nodes` handling drives the transport, so it is deliberately outside this rule. Nor a graceful `Failover { force: false }`, which demotes the old primary and leaves it a member: a demoted primary still votes. |
+| Invariant | `voter_change` is the single rule mapping a committed `ClusterCommand` to its voter-set effect, and both leader-side commit sites consult it — the leader-local arm in `connection/cluster.rs` and the `ForwardedWrite` receiver in `network.rs` — so a forwarded `FORGET` and a locally-proposed one shrink membership identically, and the forced failover is covered without the connection layer's `unregister_node` hint ever naming it. `spawn_remove_raft_voter` mirrors `spawn_add_raft_voter`: same `MAX_ATTEMPTS`, same `voter_retry_delay` backoff, both spawned off the commit path so a membership round trip cannot stall the client reply. Which change to propose is classified against the membership actually in force (`plan_voter_removal`), because the two openraft changes are not interchangeable: `RemoveVoters` cannot reach a learner and `RemoveNodes` is refused while the node still votes. `retain: false` drops the ex-voter from the node map rather than demoting it to a learner Raft would keep replicating to. |
+| Outcome variant | `Option<VoterChange>` / `VoterRemoval` |
+| Forced by | `every_command_that_moves_the_node_set_owes_a_voter_change`, `a_removal_is_planned_against_the_membership_in_force`, `forgetting_a_learner_drops_it_from_the_membership`, `forgetting_a_stranger_proposes_nothing`, `the_last_voter_is_never_removed`, `test_cluster_forget_shrinks_the_raft_voter_set` |
+| Bug refs | [87-cluster-residual-test-gaps.md](../../testing-improvements-round2/issues/open/87-cluster-residual-test-gaps.md) |
+
+The add half of this rule shipped with `CLUSTER MEET`; the remove half did not, so until now
+`change_membership` appeared exactly once in the repository. The asymmetry is silent — the topology
+`CLUSTER NODES` renders was correct the whole time — and it degrades availability in the direction
+operators least expect: retiring a dead node left it in every quorum computation for ever, so a
+cluster that had "removed" a failed node was less fault-tolerant than one that had not touched it.
+
 ---
 
 ## GAPS — behavior nothing forces

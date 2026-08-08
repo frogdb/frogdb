@@ -7,7 +7,7 @@
 use frogdb_core::ClusterRaft;
 use frogdb_core::cluster::{
     ClusterResponse, ClusterWriter, LeaderRedirect, ProposeError, Proposed, ResetProposed,
-    spawn_add_raft_voter,
+    spawn_voter_change, voter_change,
 };
 use frogdb_protocol::{RaftClusterOp, Response, SlotMigrationKind};
 
@@ -73,6 +73,15 @@ impl ConnectionHandler {
         // ownerless if the leader crashed between entries).
         let cmd = raft_op_to_command(&op);
 
+        // The Raft voter set follows the committed topology in both directions:
+        // a node this command adds becomes a voter, a node it removes stops
+        // being one. Derived here because `propose` consumes the command, and
+        // from the command rather than from the connection layer's
+        // register/unregister hints so that every membership-moving op is
+        // covered by one rule (`voter_change`), including the forced failover
+        // that removes the old primary without ever naming `unregister_node`.
+        let membership_change = voter_change(&cmd);
+
         // The writer owns the propose → (forward | redirect) saga and its
         // retained-for-forward command copy; the connection layer keeps only its
         // register/unregister side effects, which diverge by outcome.
@@ -85,22 +94,25 @@ impl ConnectionHandler {
                     return Response::error(format!("ERR {}", msg));
                 }
 
-                // Leader-local commit: register the node AND add it to the Raft
-                // voter set. This is the only voter-add on the pure-leader path
-                // (there is no remote receiver to do it).
+                // Leader-local commit: update the transport AND move the Raft
+                // voter set. This is the only voter change on the pure-leader
+                // path (there is no remote receiver to do it).
                 if let Some((node_id, addr)) = register_node {
                     network_factory.register_node(node_id, addr);
-                    spawn_add_raft_voter((**raft).clone(), node_id, addr);
                 }
                 if let Some(node_id) = unregister_node {
                     network_factory.remove_node(node_id);
                 }
+                if let Some(change) = membership_change {
+                    spawn_voter_change((**raft).clone(), change);
+                }
                 Response::ok()
             }
             Ok(Proposed::Forwarded) => {
-                // Forwarded to the leader: register only. The voter-add was
-                // performed by the leader-side `ForwardedWrite` receiver, so
-                // repeating it here would spawn a doomed follower `add_learner`.
+                // Forwarded to the leader: transport bookkeeping only. The voter
+                // change was performed by the leader-side `ForwardedWrite`
+                // receiver, so repeating it here would spawn a membership
+                // proposal doomed to `ForwardToLeader`.
                 if let Some((node_id, addr)) = register_node {
                     network_factory.register_node(node_id, addr);
                 }

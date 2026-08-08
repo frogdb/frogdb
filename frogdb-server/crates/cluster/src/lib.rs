@@ -56,8 +56,9 @@ pub mod writer;
 
 pub use network::{
     BoxedStream, BusRpc, ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest,
-    ClusterRpcResponse, FramedStream, RaftRpc, handle_rpc_request, new_framed, new_framed_tcp,
-    parse_rpc_message, send_rpc_response, spawn_add_raft_voter,
+    ClusterRpcResponse, FramedStream, RaftRpc, VoterChange, VoterRemoval, handle_rpc_request,
+    new_framed, new_framed_tcp, parse_rpc_message, plan_voter_removal, send_rpc_response,
+    spawn_add_raft_voter, spawn_remove_raft_voter, spawn_voter_change, voter_change,
 };
 pub use state::{
     ClusterState, ClusterStateMachine, DemotionEvent, PromotionEvent, RoleChangeEvent,
