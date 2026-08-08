@@ -31,7 +31,12 @@ enum Effect {
     Validate {
         asking: bool,
     },
-    WaitIfPaused,
+    /// The pause wait, with the batch that was handed to it — the slot-scoped
+    /// barrier can only narrow its parking if the queue actually reaches the
+    /// host.
+    WaitIfPaused {
+        commands: usize,
+    },
     ShardRoundTrip {
         target_shard: usize,
         commands: usize,
@@ -176,8 +181,10 @@ impl TxnHost for MockTxnHost {
         self.watched_slots_local
     }
 
-    async fn wait_if_paused(&mut self) -> bool {
-        self.effects.push(Effect::WaitIfPaused);
+    async fn wait_if_paused(&mut self, queue: &[ParsedCommand]) -> bool {
+        self.effects.push(Effect::WaitIfPaused {
+            commands: queue.len(),
+        });
         self.paused
     }
 
@@ -626,7 +633,7 @@ async fn a_blocking_pause_forces_a_second_slot_verdict() {
         host.effects,
         vec![
             Effect::Validate { asking: false },
-            Effect::WaitIfPaused,
+            Effect::WaitIfPaused { commands: 1 },
             Effect::Validate { asking: false },
         ],
         "a blocking pause must be bracketed by two verdicts"
@@ -649,13 +656,39 @@ async fn a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict() {
         host.effects,
         vec![
             Effect::Validate { asking: false },
-            Effect::WaitIfPaused,
+            Effect::WaitIfPaused { commands: 1 },
             Effect::ShardRoundTrip {
                 target_shard: 7,
                 commands: 1
             },
         ],
         "an unblocked pause must not re-take the snapshot"
+    );
+}
+
+// FM-CLUSTER-096 FM-CLUSTER-083
+#[tokio::test]
+async fn the_pause_barrier_is_handed_the_whole_batch() {
+    // The seam's whole point: a slot-scoped barrier can only park the batches
+    // that reach its slot if the host is told which commands the batch runs.
+    // Hand the algorithm a three-command queue and pin that all three arrive.
+    let mut host = MockTxnHost {
+        queue_has_writes: true,
+        paused: false,
+        ..Default::default()
+    };
+
+    let (outcome, _) = execute_transaction(
+        &mut host,
+        summary(vec![cmd("SET"), cmd("INCR"), cmd("APPEND")]),
+    )
+    .await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert!(
+        host.effects.contains(&Effect::WaitIfPaused { commands: 3 }),
+        "the pause barrier must see the batch, not just the fact of a batch: {:?}",
+        host.effects
     );
 }
 
@@ -671,7 +704,10 @@ async fn a_read_only_batch_never_reaches_the_pause_barrier() {
 
     assert_eq!(outcome, TransactionOutcome::Committed);
     assert!(
-        !host.effects.contains(&Effect::WaitIfPaused),
+        !host
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::WaitIfPaused { .. })),
         "PAUSE WRITE must not block a read-only MULTI: {:?}",
         host.effects
     );

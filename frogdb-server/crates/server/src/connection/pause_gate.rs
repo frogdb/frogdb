@@ -8,6 +8,9 @@
 //! socket:
 //!
 //! - [`command_pause_slot`] — which slot a command's keys pin it to, if any.
+//! - [`queue_pause_slot`] — the same question for a whole queued transaction,
+//!   which is what `EXEC` asks through the [`TxnHost`](frogdb_txn::TxnHost)
+//!   seam.
 //! - [`exempt_from_slot_pause`] — the commands a slot-scoped pause must never
 //!   park, on pain of deadlocking the very handover that armed it.
 //!
@@ -62,6 +65,39 @@ pub(crate) fn command_pause_slot(
 ) -> Option<u16> {
     let keys = registry.get_entry(cmd_name)?.keys(args);
     SlotValidator::same_slot(&keys).ok().flatten()
+}
+
+/// The hash slot a *queued transaction* is pinned to, for slot-scoped pause
+/// matching at `EXEC`.
+///
+/// The batch's answer is the fold of its commands' answers: `Some(slot)` only
+/// when every queued command pins to that same slot. One unpinnable command, or
+/// two commands pinning to different slots, collapses the whole batch to `None`
+/// — "may touch the barriered slot" — and callers park it on any armed
+/// slot-scoped pause. An empty queue never reaches here (`EXEC` returns early),
+/// but folds to `None` for the same fail-closed reason.
+///
+/// A batch is *not* the union of its commands' key sets for `-CROSSSLOT`
+/// purposes — a transaction may legitimately straddle slots where a single
+/// command may not. That difference is deliberate: this function is only asked
+/// whether a barrier can safely let the batch past, and a straddling batch can
+/// reach the barriered slot just as surely as a single straddling command can.
+pub(crate) fn queue_pause_slot(
+    registry: &CommandRegistry,
+    queue: &[frogdb_protocol::ParsedCommand],
+) -> Option<u16> {
+    let mut pinned = None;
+    for cmd in queue {
+        let name = cmd.name_uppercase();
+        let name = std::str::from_utf8(&name).ok()?;
+        let slot = command_pause_slot(registry, name, &cmd.args)?;
+        match pinned {
+            None => pinned = Some(slot),
+            Some(seen) if seen == slot => {}
+            Some(_) => return None,
+        }
+    }
+    pinned
 }
 
 #[cfg(all(test, not(feature = "turmoil")))]
@@ -130,5 +166,68 @@ mod tests {
         assert_eq!(command_pause_slot(&registry, "FLUSHALL", &[]), None);
         // Unknown command: nothing to resolve.
         assert_eq!(command_pause_slot(&registry, "NOSUCHCOMMAND", &[]), None);
+    }
+
+    fn queued(name: &str, args: &[&str]) -> frogdb_protocol::ParsedCommand {
+        frogdb_protocol::ParsedCommand {
+            name: Bytes::copy_from_slice(name.as_bytes()),
+            args: args.iter().map(|a| arg(a)).collect(),
+        }
+    }
+
+    // FM-CLUSTER-096
+    #[test]
+    fn a_batch_whose_commands_share_a_slot_pins_to_it() {
+        let registry = registry();
+        let queue = vec![
+            queued("SET", &["{t}a", "1"]),
+            queued("INCR", &["{t}b"]),
+            queued("GET", &["{t}c"]),
+        ];
+        assert_eq!(
+            queue_pause_slot(&registry, &queue),
+            Some(slot_for_key(b"{t}a"))
+        );
+    }
+
+    // FM-CLUSTER-096
+    #[test]
+    fn a_batch_straddling_slots_cannot_be_pinned() {
+        let registry = registry();
+        let queue = vec![
+            queued("SET", &["alpha", "1"]),
+            queued("SET", &["beta", "2"]),
+        ];
+        assert_ne!(slot_for_key(b"alpha"), slot_for_key(b"beta"));
+        assert_eq!(queue_pause_slot(&registry, &queue), None);
+    }
+
+    // FM-CLUSTER-096
+    #[test]
+    fn one_unpinnable_command_unpins_the_whole_batch() {
+        let registry = registry();
+        // FLUSHALL names no key but erases the barriered slot along with the
+        // rest, so the batch must park on any barrier.
+        let queue = vec![queued("SET", &["{t}a", "1"]), queued("FLUSHALL", &[])];
+        assert_eq!(queue_pause_slot(&registry, &queue), None);
+    }
+
+    // FM-CLUSTER-096
+    #[test]
+    fn an_empty_batch_is_unpinnable() {
+        let registry = registry();
+        assert_eq!(queue_pause_slot(&registry, &[]), None);
+    }
+
+    // FM-CLUSTER-096
+    #[test]
+    fn queued_command_names_are_matched_case_insensitively() {
+        let registry = registry();
+        let queue = vec![queued("set", &["foo", "1"])];
+        assert_eq!(
+            queue_pause_slot(&registry, &queue),
+            Some(slot_for_key(b"foo")),
+            "the queue holds the client's own casing; pinning must not depend on it"
+        );
     }
 }

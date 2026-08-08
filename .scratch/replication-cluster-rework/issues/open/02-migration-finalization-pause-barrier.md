@@ -43,12 +43,15 @@ Sketch:
 
 ## Acceptance criteria
 
-- [ ] A written comparison of Dragonfly's approach against FrogDB's Raft control plane, with the
-      failure modes of a source that dies while paused.
-- [ ] A decision recorded in the PRD directory: adopt, adopt-scoped (slot-scoped pause only), or
-      reject with the residual window documented as intended behavior.
-- [ ] If adopted: a test that a slot handoff completing concurrently with an in-flight Lua script
+- [x] A written comparison of Dragonfly's approach against FrogDB's Raft control plane, with the
+      failure modes of a source that dies while paused. (Phase 2a comment; the lease and the
+      abort-rather-than-proceed decision are the two places FrogDB deliberately differs.)
+- [x] A decision recorded in the PRD directory: adopt, adopt-scoped (slot-scoped pause only), or
+      reject with the residual window documented as intended behavior. (Adopt, Option A amended,
+      on the 2026-08-05 measurement.)
+- [x] If adopted: a test that a slot handoff completing concurrently with an in-flight Lua script
       cannot leave a write on the former owner (the property `EXEC` re-validation cannot provide).
+      (`a_script_in_flight_across_a_handoff_leaves_no_write_on_the_former_owner`, phase 2b.)
 
 ## Interaction with the EXEC re-validation already in place
 
@@ -262,3 +265,102 @@ and `live_handoff_at` is the lookup. Widening the `TxnHost` seam so a write `EXE
 slots it touches (the phase-1 over-park, still recorded in prose by FM-CLUSTER-083). The Lua
 acceptance criterion, which needs the execute-seam token rather than the routing guard. And flipping
 `cluster_finalization_window.rs` from a measurement harness to an assertion of 0/120.
+
+## Comment (2026-08-07): phase 2b landed — fencing token, slot-scoped EXEC parking, 0/132 asserted
+
+All four phase-2b deliverables are in. **Every acceptance criterion of this issue is met**, including
+the third one, which was the only one still open.
+
+**The fencing token (`slot_migration/slot_fence.rs`).** `stamp_fence` records
+`(slot, owner, handoff_seq)` when `ClusterSlotValidation` decides to serve locally; `fence_verdict`
+re-reads the snapshot at execution and refuses if either half moved. The carrier is the connection —
+one `Option<SlotFence>` field, stamped by the validation stage and spent at the dispatch driver's
+single `ShortCircuit` arm, which is where shard commands, bare scripts and `EXEC` all converge. It is
+spent before `record_error_response`, so accounting sees the response the client sees.
+
+Design decisions worth recording, because each one had a plausible-looking wrong answer:
+
+- **`handoff_seq`, not "am I still the owner?".** The naive token cannot work: the source only
+  learns ownership moved by *applying* `CompleteSlotMigration`, which is after the cluster committed
+  it — that lag is precisely the residual window. `handoff_seq` moves at `PrepareSlotHandoff`, a
+  full Raft round trip earlier, so the token is already stale when the window opens.
+- **Reply class per case.** `TRYAGAIN` while this node is still the owner: a prepared handoff can
+  still abort, and naming the target would bounce the client to a node that may never take the slot.
+  `MOVED` once ownership actually moved. `CLUSTERDOWN` when the new owner has no addressable entry.
+- **Per-slot, not a node-wide epoch.** The loaded measurement scenario fires `SETSLOT … STABLE` on
+  an unrelated slot every 2 ms; a global epoch would refuse constantly. Pinned by
+  `a_handoff_on_another_slot_is_invisible`.
+- **The token ignores the lease.** Expiry is a function of the clock, and a lease-filtered token
+  would read "unchanged" across a prepare whose lease had lapsed. The raw replicated `seq` is pure
+  data, consistent with FM-CLUSTER-089.
+- **Only the owner is stamped.** Fencing the importing target would have it answer `MOVED` naming
+  itself.
+- **Cluster awareness stays out of `frogdb-core`,** per the brief: the fence reads
+  `snapshot.migrations[slot].handoff.seq` at the server seam. `frogdb-cluster` was not touched, so
+  its lock is undisturbed.
+
+The coordinator and the dispatcher hold the same `Arc<ClusterState>` (`cluster_init.rs` builds one
+and passes it to both), so the stamp and the verdict are cut from the same published view.
+
+**`TxnHost` widening.** `wait_if_paused` now takes the queued batch. `queue_pause_slot` folds the
+batch's commands through the same `command_pause_slot` a single command uses and answers `None` —
+fail-closed — on the first unpinnable command or the first disagreement; `pause_active_for_batch`
+consults the node dimension first and the slot map only if a slot-scoped pause exists at all. The
+`exec.rs` contract survives verbatim: validate before the wait, re-validate *only* if it parked. An
+`EXEC` on an unbarriered slot now commits while a barrier is up, and a second `EXEC` on the
+barriered slot in the same test still parks — a narrowing, not a disarm.
+
+**Lua criterion.** `a_script_in_flight_across_a_handoff_leaves_no_write_on_the_former_owner`: an
+`EVAL` whose body is `redis.call('SET', KEYS[1], …)` parks on the barrier, the handoff completes
+underneath it, the reply is `MOVED`, and `DBSIZE` on the former owner is `0`. Every redirect
+assertion in `cluster_handoff_barrier.rs`, including the pre-existing FM-CLUSTER-092 one, is now
+paired with a `DBSIZE` check — being told `MOVED` is the client's half of the property; nothing
+landing on the node that stopped owning the slot is the cluster's half.
+
+**The acceptance harness now asserts.** `no_write_is_acknowledged_after_the_slot_is_handed_over_under_load`
+runs the loaded scenario (32 writers + Raft churn, shipped timing, source is a follower) for 132
+finalizations and asserts zero acked writes past the commit. **Result: 0/132, repeatedly, in ~3.5 s
+of runtime**, so it is not `#[ignore]`d; the four measurement cases stay ignored. Baseline for the
+same scenario on 2026-08-05 was 118/120. Two guards keep the pass from being vacuous: the sample
+count is asserted (discards cannot pass the case by emptying it), and a supermajority of iterations
+must have acked a write *before* the handoff (a source that refused everything would also score
+zero, but that is an outage, not a fix).
+
+Two honest caveats on that number:
+
+- The harness measures `t_last_ok` at the *client*, after the reply is read, while `t_leader` comes
+  straight off the leader's applied state. That biases towards false positives, never false
+  negatives — the safe direction for an acceptance case, but it means a badly starved machine can
+  turn a legitimately-early ack into a red run. The margin is the several milliseconds the drain
+  round trip and two Raft commits take.
+- **The residual window itself is not closed and is not claimed to be.** `t_source - t_leader` is
+  still ~0.7 ms p50 / ~2.5 ms p99 under load; it is a replication lag. The claim is that nothing
+  client-visible happens inside it. Relatedly, a fenced command's write may still have *applied*
+  locally — the fence refuses the acknowledgement, not the work — so its status is in doubt exactly
+  as a write whose connection dropped is, and the client's retry lands on the new owner. That is
+  at-least-once, not the acknowledged-then-orphaned write of FM-CLUSTER-037.
+
+**Spec.** New rows `FM-CLUSTER-093` (EXEC parked across a finalization), `094` (Lua), `095` (the
+fencing token), `096` (slot-scoped EXEC parking). FM-CLUSTER-083's "accepted non-guarantee for
+phase 1" is retired and its invariant rewritten; the phase-2a "still unpinned" paragraph is replaced
+with a phase-2b one. The Redis-deviations row claiming script slot validation is absent was stale
+since FM-CLUSTER-030 was fixed, and now describes the once-at-the-seam-plus-fence design against
+Redis' per-`redis.call` `scriptVerifyClusterState`.
+
+**Shard dispatch.** No dispatch arm changed, so no C3 classification and no
+`continuation-lock-gate.py` pin edits; the gate still reports 65 arms pinned. `just lint-gates` and
+`just lint-failure-modes` are green.
+
+**Mutation testing (`frogdb-txn` is locked).** `just mutants-diff frogdb-txn` found 2 mutants and
+both were unviable — the crate's diff is a trait signature (no body to mutate) and one call site
+inside `execute_transaction`, whose only mutation is replacing the whole function, which does not
+compile. A diff run with no viable mutants is no evidence, so the full crate run was used instead:
+`just mutants frogdb-txn` → **48 mutants, 38 caught, 0 missed, 10 unviable, score 100%**,
+`just mutants-gate frogdb-txn 0.90` PASS. Worth noting for the next agent who touches a locked
+crate with a signature-only diff: `mutants-diff` will look green while measuring nothing.
+
+**Still unpinned, deliberately.** The cross-shard script holding a VLL continuation across a handoff
+has no row: the continuation-lock gate has two tracked bypasses of its own (`MULTI`/`EXEC`, `FCALL`),
+so a row written now would pin barrier behaviour on top of a seam that is itself known-leaky. The
+`PAUSE_ACTION_REPLICA` question (should the barrier stall a primary's replica feed?) remains
+undecided.

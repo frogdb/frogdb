@@ -1146,15 +1146,15 @@ than disguised as correct ownership.
 | Trigger | A client queues writes in a `MULTI` and issues `EXEC` while a pause — node-global or slot-scoped — is armed. |
 | Observable | Queuing is never parked: each queued command answers `QUEUED` immediately. `EXEC` parks and answers only after the pause releases, at which point the batch's slot routing is re-validated against the topology that exists *then* (`txn/src/exec.rs`), so a batch whose slot moved during the barrier is redirected rather than committed on the former owner. |
 | NOT observable | A write batch committing while a barrier is up. That is the acknowledged-then-orphaned write of FM-CLUSTER-037 with a whole transaction behind it. Nor `MULTI`/queuing itself parking: queuing performs no keyspace work, and blocking it would hold the pause's cost against clients that may still `DISCARD`. |
-| Invariant | The `TxnHost::wait_if_paused` seam is handed no queue, so the batch's slot cannot be resolved at the gate; `should_pause_command`'s companion `any_pause_active` therefore parks a write `EXEC` on *any* armed pause. Deliberately coarse: it over-parks by at most the barrier's own lifetime and never under-parks. The post-wait re-validation that makes the wait meaningful is unchanged. |
+| Invariant | `TxnHost::wait_if_paused` is handed the queued batch, so the host resolves which slot the batch is pinned to before deciding (FM-CLUSTER-096); the decision itself stays on the host, where the registry and the pause state live. The two halves are ordered: the batch's slots are validated *before* the wait, and re-validated *only* if it actually parked (`txn/src/exec.rs`), so an unparked `EXEC` pays nothing and a parked one cannot resume past the topology change that parked it. |
 | Outcome variant | `Response::Array` / `-MOVED` |
-| Forced by | `write_exec_parks_on_a_slot_barrier_and_commits_after_release` |
+| Forced by | `write_exec_parks_on_a_slot_barrier_and_commits_after_release`, `an_exec_parked_by_the_barrier_wakes_up_redirected`, `the_pause_barrier_is_handed_the_whole_batch` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
 
-Accepted non-guarantee for phase 1: a write `EXEC` targeting an *unbarriered* slot also parks while
-any slot barrier is up. Narrowing it means widening the `TxnHost` seam so the host can see the
-queued batch's keys, which belongs with the phase-2 barrier work that owns that seam. It is
-deliberately left unpinned so phase 2 can narrow it without editing a row.
+Phase 1 shipped this deliberately coarse — the seam was handed no queue, so a write `EXEC` parked on
+*any* armed pause, over-parking batches that could not reach the barriered slot at all. Phase 2b
+widened the seam and narrowed the park; the residual over-park is now exactly the unpinnable batch,
+which is fail-closed rather than coarse (FM-CLUSTER-096).
 
 ## FM-CLUSTER-084 — ownership moves only under a prepared, drained, still-armed handoff
 
@@ -1264,12 +1264,69 @@ deliberately left unpinned so phase 2 can narrow it without editing a row.
 | Forced by | `a_write_parked_by_the_barrier_wakes_up_redirected` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
 
-Still unpinned after phase 2a, deliberately, because the code is not there yet: the fencing token at
-the execute seam, the `TxnHost` widening that would narrow FM-CLUSTER-083's over-park, and the Lua
-acceptance criterion (a single-shard script in flight when the barrier arms, and a cross-shard
-script holding a VLL continuation). Those are phase 2b of rework issue 02. Whether the barrier
-should also stall a replication primary's replica feed — Redis and Valkey both include
-`PAUSE_ACTION_REPLICA` — is undecided, and so has no row rather than an unforced one.
+## FM-CLUSTER-093 — a transaction parked across a finalization is redirected, not committed
+
+| Field | Value |
+|---|---|
+| Trigger | A client queues writes for a key in the migrating slot, issues `EXEC` while the finalization barrier is armed on the source, and the handoff completes underneath the parked batch. |
+| Observable | `EXEC` parks. On release the batch's slot routing is re-validated and the reply is `MOVED <slot> <target>`. The former owner's `DBSIZE` is unchanged: a queued `DEL` against a key that was resident before the migration opened leaves that key in place. |
+| NOT observable | The batch committing on the former owner and answering an array of results. Nor the redirect arriving with the write applied anyway — being told `MOVED` is the client's half of the property; nothing landing on the node that stopped owning the slot is the cluster's half, and a `-MOVED` with the `DEL` applied would satisfy the first while violating the second. |
+| Invariant | `EXEC` reaches the barrier by a different route than a bare write: it is neither `WRITE`- nor `SCRIPT`-flagged, so the pause gate waves it through and the batch parks inside `handle_exec` through the `TxnHost` seam, after its slot verdict was already taken. The post-wait re-validation in `txn/src/exec.rs` is what closes that gap, and it runs only when the batch actually parked (FM-CLUSTER-083). |
+| Outcome variant | `-MOVED` |
+| Forced by | `an_exec_parked_by_the_barrier_wakes_up_redirected` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-094 — a script in flight across a handoff leaves no write on the former owner
+
+| Field | Value |
+|---|---|
+| Trigger | An `EVAL` whose declared key is in the migrating slot is issued while the finalization barrier is armed, and the handoff completes while the script is in flight. |
+| Observable | The script parks, and on release answers `MOVED <slot> <target>`. `DBSIZE` on the former owner stays `0`: the `redis.call('SET', ...)` inside the script never becomes a key on the node that stopped owning the slot. |
+| NOT observable | The script's write surviving on the former owner. Scripts *declare* their keys rather than having them derived, and for a long time nothing validated the declaration at all (FM-CLUSTER-030) — a handoff is exactly the case where an unvalidated declaration turns into a silently orphaned write. Nor the script being answered `MOVED` after its effects were already applied and replicated. |
+| Invariant | A script is `SCRIPT`-flagged, so the pause gate parks it like a write and it re-enters `ClusterSlotValidation` on release; the execute-seam fence (FM-CLUSTER-095) covers the case where the handoff is prepared *after* validation admitted it. Redis reaches the same place from the other direction, re-checking cluster state per `redis.call` in `scriptVerifyClusterState`; FrogDB checks once at the seam because a FrogDB script's writes are applied as one effect set rather than call by call. |
+| Outcome variant | `-MOVED` |
+| Forced by | `a_script_in_flight_across_a_handoff_leaves_no_write_on_the_former_owner` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+## FM-CLUSTER-095 — a command validated before a handoff was prepared is refused at execution, not served
+
+| Field | Value |
+|---|---|
+| Trigger | A command's slot is validated on the owner, and a `PrepareSlotHandoff` for that slot applies on the same node before the command's response is produced. Includes the case where ownership itself has already moved on. |
+| Observable | The command is refused instead of acknowledged. `TRYAGAIN Slot <slot> finalization in progress` while the node is still the owner — a prepared handoff can still abort, so naming the target would bounce the client to a node that may never take the slot. `MOVED <slot> <addr>` once ownership has actually moved, and `CLUSTERDOWN` when the new owner cannot be addressed. An unchanged generation admits the command with no extra work. |
+| NOT observable | The refusal firing on a handoff prepared for a *different* slot: the token carries one slot's generation, not a node-wide epoch, so unrelated cluster traffic (`SETSLOT … STABLE` churn on another slot) cannot cause spurious refusals. Nor the target of a migration fencing itself — only the owner is stamped, since an importing node answering `MOVED` would name itself. Nor the token consulting the handoff *lease*: expiry is a function of the clock, and a lease-filtered token would read "unchanged" across a prepare whose lease had lapsed. The raw replicated `seq` is pure data (FM-CLUSTER-089). |
+| Invariant | `stamp_fence` records `(slot, owner, handoff_seq)` at validation time and `fence_verdict` compares it against the snapshot at execution time; the coordinator and the dispatcher share one `Arc<ClusterState>`, so the two reads are of the same published view (`slot_migration/slot_fence.rs`, `connection/{guards,dispatch}.rs`). The check is spent at the driver's single short-circuit arm, which covers shard commands, bare scripts and `EXEC` at once, and runs before error accounting so the recorded response is the final one. `handoff_seq` moves at *prepare*, a full Raft round trip before ownership does, which is why the token closes a window that "am I still the owner?" cannot: the source only learns ownership moved by applying `Complete`, and that lag is the window. The `TRYAGAIN` body is minted by the redirect seam like every other redirect (`types/src/redirect.rs`), forced there by `tryagain_slot_handoff_names_the_slot` and `the_two_tryagain_forms_share_a_prefix_and_differ_in_body` — `frogdb-types` is outside the crate set this lint tracks, so those two are named here rather than in `Forced by`. |
+| Outcome variant | `-TRYAGAIN` / `-MOVED` / `-CLUSTERDOWN` |
+| Forced by | `only_the_owner_is_stamped`, `a_prepared_handoff_is_part_of_the_stamp`, `an_unchanged_generation_admits_the_command`, `a_handoff_prepared_after_validation_refuses_with_tryagain`, `a_superseding_attempt_refuses_too`, `an_aborted_attempt_leaves_the_generation_where_it_was`, `ownership_that_moved_refuses_with_moved_at_the_new_owner`, `an_owner_we_cannot_address_degrades_to_clusterdown`, `a_slot_that_lost_its_owner_degrades_to_clusterdown`, `a_handoff_on_another_slot_is_invisible`, `no_write_is_acknowledged_after_the_slot_is_handed_over_under_load` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+A fenced command may still have *applied* locally — the fence refuses the acknowledgement, not the
+work. Its status is therefore in doubt exactly as a write whose connection dropped is, and the
+client's retry lands on the new owner. That is the ordinary at-least-once contract rather than the
+acknowledged-then-orphaned write of FM-CLUSTER-037, which is the whole distinction the barrier
+exists to draw.
+
+## FM-CLUSTER-096 — a barrier parks a transaction only if the batch can reach the barriered slot
+
+| Field | Value |
+|---|---|
+| Trigger | A slot barrier is armed and a client `EXEC`s a batch: all of whose commands pin to that slot, all to some other single slot, or which cannot be pinned at all. |
+| Observable | The batch pins to a slot only when every queued command pins to that *same* slot, matched case-insensitively against the client's own casing. A batch pinned elsewhere commits while the barrier is up; a batch pinned to the barriered slot parks; an unpinnable batch — straddling slots, containing a keyless command such as `FLUSHALL`, or empty — parks on any armed slot barrier. A node-global `CLIENT PAUSE` still parks everything. |
+| NOT observable | A barrier on one slot disarming for the others: a second `EXEC` on the barriered slot in the same test still parks, so this is a narrowing, not a disarm. Nor a straddling batch answering `CROSSSLOT` from the pause gate — a transaction may legitimately straddle slots where a single command may not, and the gate is only asked whether the barrier can safely let the batch past. Nor an unpinnable batch slipping through: `FLUSHALL` erases the barriered slot along with everything else. |
+| Invariant | `queue_pause_slot` folds the batch's commands through the same `command_pause_slot` a single command uses, returning `None` — fail-closed — on the first unpinnable command or the first disagreement (`connection/pause_gate.rs`). The fold is a pure function of the registry and the queue, so it is forced without a socket. `wait_if_paused` carries the queue across the `TxnHost` seam and `pause_active_for_batch` consults the node dimension first, the slot map only if a slot-scoped pause exists at all, so the unbarriered path costs one lock (`txn/src/host.rs`, `connection/{transaction,lifecycle}.rs`). |
+| Outcome variant | `Option<u16>` / `Response::Array` |
+| Forced by | `a_batch_whose_commands_share_a_slot_pins_to_it`, `a_batch_straddling_slots_cannot_be_pinned`, `one_unpinnable_command_unpins_the_whole_batch`, `an_empty_batch_is_unpinnable`, `queued_command_names_are_matched_case_insensitively`, `the_pause_barrier_is_handed_the_whole_batch`, `an_exec_on_an_unbarriered_slot_runs_while_the_barrier_is_up` |
+| Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
+
+Still unpinned after phase 2b, deliberately. A cross-shard script holding a VLL continuation across
+a handoff has no row: the continuation-lock gate has two tracked bypasses of its own
+(`MULTI`/`EXEC`, `FCALL`), so a row written now would pin the barrier's behaviour on top of a seam
+that is itself known-leaky, and it belongs with those issues rather than ahead of them. Whether the
+barrier should also stall a replication primary's replica feed — Redis and Valkey both include
+`PAUSE_ACTION_REPLICA` — remains undecided, and so has no row rather than an unforced one. The
+residual window itself (`t_source - t_leader`, still ~0.7 ms p50 under load) is a replication lag
+and is not claimed to be closed; what FM-CLUSTER-095 claims is that nothing client-visible happens
+inside it.
 
 ---
 
@@ -1317,11 +1374,14 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 * The `cluster_*` integration binaries (`frogdb-server/crates/server/tests/cluster_{topology,
   slots,migration,failover,misc}.rs`, 185 tests) are end-to-end witnesses for most of these rows
   and may be added to `Forced by` cells, but no row above relies on one as its *only* witness —
-  with one exception. FM-CLUSTER-083's only witness is
-  `write_exec_parks_on_a_slot_barrier_and_commits_after_release` in `cluster_pause_barrier.rs`:
-  the `EXEC` gate is reached through the `TxnHost` seam from a live connection, and the unit-level
-  guard fixture (`connection/guards.rs`'s `ViewFixture`) holds no client registry, so there is no
-  socketless seam to force it at today.
+  with two exceptions, both in the barrier family. FM-CLUSTER-093's and FM-CLUSTER-094's only
+  witnesses are integration tests in `cluster_handoff_barrier.rs`, because a parked `EXEC` and an
+  in-flight script are both reached through the `TxnHost` seam from a live connection and the
+  unit-level guard fixture (`connection/guards.rs`'s `ViewFixture`) holds no client registry.
+  FM-CLUSTER-083 was in the same position until phase 2b; widening the seam gave it a socketless
+  witness (`the_pause_barrier_is_handed_the_whole_batch`, in `frogdb-txn`), which is a second
+  argument for the widening beyond the over-park it narrowed. Note that `frogdb-txn`'s tests are
+  outside this area's `cargo mutants -p frogdb-cluster` gate, exactly as rows 018-030 are.
 
 ## Redis deviations
 
@@ -1337,4 +1397,4 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 | `CLUSTER BUMPEPOCH` | Not supported | Supported | Epoch changes are authorized by the replicated log; a manual bump would create a claim no entry justifies. |
 | `CLUSTER SET-CONFIG-EPOCH` | Sets the exact value; refused unless the node knows no peer and holds epoch 0 | Same two guards, same exact assignment | Identical (FM-CLUSTER-076). The command is replicated through Raft rather than applied locally, so the assignment is durable on the log; the guards are Redis' verbatim. |
 | `WAIT` in cluster mode | Per-node, keyless, never redirects | Per-node, keyless, never redirects | Identical. Cluster replicas attach over the same PSYNC link and ACK into the same tracker, so there is no cluster-mode branch to deviate in. |
-| Script slot validation | Currently absent for bare scripts (FM-CLUSTER-030) | Re-validated per `redis.call` (`scriptVerifyClusterState`) | A confirmed bug, not a design choice. |
+| Script slot validation | Once at the dispatch seam before the body runs, plus a fencing token re-checked at execution | Re-validated per `redis.call` (`scriptVerifyClusterState`) | Same window, closed at a different granularity. The absence of any check was a confirmed bug, fixed under FM-CLUSTER-030. Redis re-checks per call because each `redis.call` executes against live state as it runs; a FrogDB script's writes are applied as one effect set, so one verdict at the seam plus the execute-seam fence (FM-CLUSTER-095) covers what the per-call check covers. |

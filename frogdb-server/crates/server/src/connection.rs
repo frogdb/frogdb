@@ -157,6 +157,20 @@ pub struct ConnectionHandler {
     /// Whether the next command's reads should be tracked (computed before dispatch).
     pending_track_reads: bool,
 
+    /// The slot-ownership generation this command's slot validation was taken
+    /// against, when this node owns the slot
+    /// ([`SlotFence`](crate::slot_migration::SlotFence)).
+    ///
+    /// Stamped by `ClusterSlotValidation` (and by the EXEC-time batch
+    /// validator), consumed once by the dispatch driver after the command has
+    /// run and before its reply reaches the client. Lives on the handler rather
+    /// than being threaded through every executor because the commands that
+    /// need it terminate at three different dispatch stages — `Execute`
+    /// (shard commands), `ConnectionCommand` (scripts), and
+    /// `TransactionControl` (`EXEC`) — and all three funnel through the one
+    /// driver loop.
+    pending_slot_fence: Option<crate::slot_migration::SlotFence>,
+
     /// Whether the next command should suppress touch() (CLIENT NO-TOUCH mode).
     pending_no_touch: bool,
 
@@ -286,6 +300,7 @@ impl ConnectionHandler {
             pubsub_output_buffer_hard_limit: config.pubsub_output_buffer_hard_limit,
             tracking_io: TrackingIo::default(),
             pending_track_reads: false,
+            pending_slot_fence: None,
             pending_no_touch: false,
             is_admin: config.is_admin,
             admin_enabled: config.admin_enabled,

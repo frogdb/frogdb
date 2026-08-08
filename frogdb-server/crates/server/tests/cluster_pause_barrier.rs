@@ -344,10 +344,11 @@ async fn node_pause_and_slot_barrier_release_independently() {
 /// A write transaction parks at `EXEC`, not while queuing, and commits only
 /// after the barrier releases — so the post-wait re-validation in
 /// `txn/src/exec.rs` runs against the topology that exists *after* the
-/// handover rather than the one that existed when the batch was queued. Phase 1
-/// gates `EXEC` on any armed pause: the `TxnHost` seam hands `wait_if_paused` no
-/// queue, so the batch's slot cannot be resolved, and over-parking a batch is
-/// the safe direction.
+/// handover rather than the one that existed when the batch was queued.
+///
+/// This batch touches the barriered slot, so it parks either way. That the gate
+/// is *scoped* — a batch touching some other slot is no longer parked — is
+/// FM-CLUSTER-096, forced in `cluster_handoff_barrier.rs`.
 #[tokio::test]
 async fn write_exec_parks_on_a_slot_barrier_and_commits_after_release() {
     let server = TestServer::start_standalone().await;

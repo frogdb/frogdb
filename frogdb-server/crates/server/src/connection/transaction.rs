@@ -30,6 +30,7 @@ use frogdb_txn::{Deferral, ShardTxnReply, TxnHost};
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
+use crate::slot_migration::SlotVerdict;
 
 impl ConnectionHandler {
     /// Handle EXEC command - execute the queued transaction.
@@ -168,9 +169,22 @@ impl TxnHost for ConnectionHandler {
         queue: &[ParsedCommand],
         asking: bool,
     ) -> Option<Response> {
-        self.pre_dispatch_view()
+        // A validated batch stamps the fence the dispatch driver spends after
+        // `EXEC` finishes (see `ConnectionHandler::spend_slot_fence`), so a
+        // handoff prepared while the batch executes cannot be acknowledged.
+        // Re-validation after a pause re-stamps, replacing the stamp taken
+        // before the wait with one cut from the post-wait topology.
+        match self
+            .pre_dispatch_view()
             .validate_queued_batch(queue, asking)
             .await
+        {
+            SlotVerdict::Reply(redirect) => Some(redirect),
+            SlotVerdict::Serve(fence) => {
+                self.pending_slot_fence = fence;
+                None
+            }
+        }
     }
 
     fn watched_slots_still_local(&mut self, watches: &[WatchEntry], asking: bool) -> bool {
@@ -178,8 +192,11 @@ impl TxnHost for ConnectionHandler {
             .watched_slots_still_local(watches, asking)
     }
 
-    async fn wait_if_paused(&mut self) -> bool {
-        self.wait_if_paused_for_transaction().await
+    async fn wait_if_paused(&mut self, queue: &[ParsedCommand]) -> bool {
+        // Resolve the batch to a slot here, on the host, where the registry
+        // lives — the EXEC algorithm never learns what a hash slot is.
+        let slot = crate::connection::pause_gate::queue_pause_slot(&self.core.registry, queue);
+        self.wait_if_paused_for_transaction(slot).await
     }
 
     async fn send_shard_transaction(
