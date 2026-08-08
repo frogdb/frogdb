@@ -113,3 +113,9 @@ test-results/
 
 # Self-hosted runner secrets
 .github/runner/.env
+
+# VS Code config is distributed as a template (contrib/vscode) and installed by
+# `just vscode-setup`. Tracking it breaks `git worktree add` under agent sandboxes,
+# which deny writes to .vscode paths they cannot enumerate ahead of time.
+.vscode/
+website/.vscode/

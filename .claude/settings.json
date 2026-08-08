@@ -1,7 +1,7 @@
 {
   "sandbox": {
     "filesystem": {
-      "allowWrite": ["~/.blacksmith"]
+      "allowWrite": ["~/.blacksmith", "./.claude/worktrees"]
     }
   },
   "hooks": {
