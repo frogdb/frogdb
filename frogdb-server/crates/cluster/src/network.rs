@@ -1744,6 +1744,60 @@ mod tests {
         raft.shutdown().await.unwrap();
     }
 
+    /// The dispatcher is the single seam all three commit sites reach Raft
+    /// through, and it is the only place the two halves of the rule can be
+    /// confused for each other. If it dropped a change on the floor the
+    /// topology would stay correct while quorum silently kept counting a
+    /// removed node — or never counted an added one — which is exactly the
+    /// asymmetry this row exists to close.
+    // FM-CLUSTER-101
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_voter_change_dispatches_to_the_matching_raft_side_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let raft = single_voter_raft(dir.path()).await;
+
+        // Remove first, from a standing learner: the Add arm's voter promotion
+        // parks the group in a joint config that an unreachable node 2 can
+        // never help commit, and a removal proposed behind it would be stuck
+        // waiting on the same peer rather than on the dispatcher.
+        raft.add_learner(
+            2,
+            BasicNode {
+                addr: "127.0.0.1:16380".to_string(),
+            },
+            false,
+        )
+        .await
+        .expect("adding a learner must commit on a one-voter cluster");
+        settle_until(&raft, "node 2 to be a learner", |m| {
+            plan_voter_removal(m, 2) == VoterRemoval::Learner
+        })
+        .await;
+
+        spawn_voter_change(raft.clone(), VoterChange::Remove { node_id: 2 });
+        settle_until(&raft, "node 2 to leave the membership", |m| {
+            plan_voter_removal(m, 2) == VoterRemoval::Absent
+        })
+        .await;
+
+        // `add_learner` commits the membership entry before the promotion
+        // blocks on the (unreachable) peer, so node 2 reappearing in the
+        // membership is the signal that the Add arm ran.
+        spawn_voter_change(
+            raft.clone(),
+            VoterChange::Add {
+                node_id: 2,
+                addr: "127.0.0.1:16380".parse().unwrap(),
+            },
+        );
+        settle_until(&raft, "node 2 to reach the membership again", |m| {
+            m.nodes().any(|(known, _)| *known == 2)
+        })
+        .await;
+
+        raft.shutdown().await.unwrap();
+    }
+
     /// A live one-voter Raft on a fresh directory, settled far enough that the
     /// bootstrap membership is visible in the metrics watch (which is updated
     /// asynchronously, so reading it too early sees an empty one).

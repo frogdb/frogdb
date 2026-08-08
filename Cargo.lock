@@ -1651,6 +1651,7 @@ dependencies = [
  "frogdb-core",
  "frogdb-net",
  "openraft",
+ "tempfile",
  "tokio",
  "tracing",
 ]

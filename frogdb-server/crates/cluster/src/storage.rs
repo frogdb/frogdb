@@ -238,6 +238,13 @@ impl MetaDurability {
     /// getter for it and an fsync cannot be observed without cutting power —
     /// so the forcing test asserts the *classification* instead, and this is
     /// the single place a classification turns into a flag.
+    ///
+    /// DOCUMENTED EQUIVALENT (mutation testing): `write_opts ->
+    /// Default::default()` survives for that same reason and cannot be killed
+    /// from any in-process test — the returned `WriteOptions` is opaque, so
+    /// the mutant is indistinguishable from the real thing until a power cut.
+    /// What is forced instead is `MetaDurability::for_key`'s classification,
+    /// which this one line renders.
     fn write_opts(self) -> rocksdb::WriteOptions {
         let mut opts = rocksdb::WriteOptions::default();
         opts.set_sync(matches!(self, Self::Synced));

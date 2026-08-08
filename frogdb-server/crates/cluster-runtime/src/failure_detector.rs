@@ -975,6 +975,13 @@ mod tests {
             network_reporting(&[]),
         );
 
+        // Pinned as literals as well as by name: comparing the clamped config
+        // against the constant moves both sides together, so an arithmetic
+        // slip in the `24 * 60 * 60 * 1000` that defines the bound would go
+        // unnoticed.
+        assert_eq!(MAX_CHECK_INTERVAL_MS, 86_400_000, "24h in ms");
+        assert_eq!(MAX_CONNECT_TIMEOUT_MS, 86_400_000, "24h in ms");
+
         assert_eq!(f.detector.config().check_interval_ms, MAX_CHECK_INTERVAL_MS);
         assert_eq!(
             f.detector.config().connect_timeout_ms,
@@ -1978,6 +1985,71 @@ mod tests {
             f.raft.voter_changes().is_empty(),
             "a refused topology change owes no membership change"
         );
+    }
+
+    /// Both tests above drive the detector through a fake `DetectorRaft`, so
+    /// the production impl's one-line delegation to Raft is otherwise never
+    /// executed by anything. Dropping it would leave every one of those tests
+    /// green while, in production, every auto-failover's voter removal became
+    /// a silent no-op — the exact failure this row exists to prevent.
+    // FM-CLUSTER-101
+    #[cfg(not(feature = "turmoil"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_production_seam_reaches_raft_with_the_voter_change() {
+        use frogdb_core::cluster::{ClusterStateMachine, ClusterStorage};
+        use openraft::BasicNode;
+
+        let dir = tempfile::tempdir().unwrap();
+        let storage = ClusterStorage::open(dir.path()).unwrap();
+        let raft = openraft::Raft::new(
+            1,
+            Arc::new(openraft::Config {
+                election_timeout_min: 100,
+                election_timeout_max: 200,
+                heartbeat_interval: 50,
+                ..Default::default()
+            }),
+            ClusterNetworkFactory::with_timeouts(50, 50),
+            storage,
+            ClusterStateMachine::new(),
+        )
+        .await
+        .expect("a single-node Raft must start");
+        raft.initialize(BTreeMap::from([(
+            1u64,
+            BasicNode {
+                addr: "127.0.0.1:16379".to_string(),
+            },
+        )]))
+        .await
+        .expect("bootstrapping one voter must succeed");
+
+        let raft = Arc::new(raft);
+        DetectorRaft::spawn_voter_change(
+            &raft,
+            VoterChange::Add {
+                node_id: 2,
+                addr: "127.0.0.1:16380".parse().unwrap(),
+            },
+        );
+
+        // The membership watch lags the commit that moves it, and `add_learner`
+        // commits the entry before blocking on the (unreachable) peer's
+        // catch-up, so node 2 appearing there is the delegation's only witness.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let membership = raft.metrics().borrow().membership_config.clone();
+            if membership.membership().nodes().any(|(id, _)| *id == 2) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "node 2 never reached Raft: {membership:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        raft.shutdown().await.unwrap();
     }
 
     /// A replica's death is not a failover. Node 3 is a replica of 2 and node 4
