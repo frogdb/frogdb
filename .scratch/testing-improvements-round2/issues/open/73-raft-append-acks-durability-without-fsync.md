@@ -91,3 +91,18 @@ mention is the snapshot-store invariant, `cluster-failure-modes.md:290-293`), an
 resolution is entirely about the persistence snapshot stager, not the Raft log. A leader can still
 commit and act on a topology decision that a power failure erases. Status stays `ready-for-human`
 per the original triage — the deliverable is a durability/latency call plus a benchmark.
+
+## Update 2026-08-08 — the sibling landed, and its shape is the one to follow
+
+Hardening-2 issue 01 is fixed (**FM-CLUSTER-098**), so the asymmetry this issue keeps citing has
+changed: `save_vote` no longer flushes at all. It writes `KEY_VOTE` through `set_meta`, which
+renders a per-key `MetaDurability` class into the RocksDB write options — `Synced` for the vote,
+`Buffered` for `KEY_COMMITTED`/`KEY_LAST_PURGED`. The old `db.flush()` was worse than the issue
+described: it flushed the *default* column family while the vote lives in `raft_meta`.
+
+Nothing here is closed by that. `append` is still a plain `db.write(batch)` followed by
+`callback.log_io_completed(Ok(()))`, and it is still the only entry in `scripts/durable-ack.py`'s
+allowlist (`save_vote`'s entry was removed when the fix landed, as the gate's stale-entry check
+demands). The gate now recognises both durable shapes — an inline `write_opt` with
+`set_sync(true)`, and the classified chokepoint — so a fix in either shape satisfies it.
+`save_committed`'s "Revisit if `append` ever fsyncs" note still stands unchanged.

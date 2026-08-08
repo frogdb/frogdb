@@ -1,6 +1,6 @@
 # Raft `save_vote` flushes the wrong column family
 
-Status: ready-for-agent
+Status: done
 Type: bug (consensus safety / durability)
 Severity: likelihood 2/3 (every crash after a vote and before an unrelated default-CF flush),
 consequence 3/3 (Raft's vote-durability precondition — a node can vote twice in one term) — score 5
@@ -42,6 +42,39 @@ Needs the campaign-2 crash harness (W2): a subprocess node that `SIGKILL`s immed
 Until that exists, a `frogdb-cluster` unit test can at minimum assert that the write options used
 on the vote path carry `sync = true` (a seam assertion, not a durability proof) — record it as a
 level-2 witness in the durability spec, not as the row's final evidence.
+
+## Resolution
+
+Fixed 2026-08-08 under **FM-CLUSTER-098** (`.scratch/hardening/specs/cluster-failure-modes.md`).
+
+Durability is now a property of the metadata *key* rather than of the caller: `MetaDurability`
+(`cluster/src/storage.rs`) classifies `KEY_VOTE` as `Synced` and `KEY_COMMITTED` /
+`KEY_LAST_PURGED` as `Buffered`, and `set_meta`/`delete_meta` render that class into the
+`WriteOptions` at the single chokepoint every metadata write passes through. `save_vote` is now
+just `self.set_meta(KEY_VOTE, vote)` — the wrong-CF `flush()` is gone.
+
+The candidate fix's second half was evaluated as asked: `save_committed` stays buffered, for the
+reason its own doc comment already gives (the key is deliberately write-only; openraft re-derives
+the commit index from the leader, and reading back an index that names a lost log tail is worse
+than not reading it). `purge`'s `KEY_LAST_PURGED` stays buffered too — losing it un-purges a
+prefix the snapshot still covers and the next purge redoes the work. Neither had the *flush* bug:
+`save_vote` was the only caller that flushed at all.
+
+Seam lint: `scripts/durable-ack.py` had `save_vote` in its count-pinned allowlist as a tracked
+defect, and its "sync" test was an inline `write_opt(..)` + `set_sync(true)` in the method body —
+which the chokepoint form does not match, so the fix would have gone on being reported as an open
+defect. The gate now recognises the delegated shape as durable *only while all three links hold*
+(`for_key` classifies the key `Synced`, `write_opts` renders the class into `set_sync`, `set_meta`
+passes those options to an options-carrying write), and the `save_vote` allowlist entry is gone.
+Both broken-link cases were verified to fail the gate. `append` (round-2 issue 73) remains the one
+allowlisted entry.
+
+Forcing test: `the_vote_is_written_synced_to_the_meta_column_family` (level-2 witness, as this
+issue proposed) — it asserts the classification the vote path resolves to, that the record is in
+`raft_meta` and not the default CF, and that the default CF is empty, so the old `flush()` could
+never have been what made the vote durable. Verified to fail when the classification is regressed
+to `Buffered`. The level-5 crash witness still needs the campaign-2 crash harness; the sibling
+issue 73 (`append` acks non-synced) remains open and carries that machinery with it.
 
 ## Comments
 
