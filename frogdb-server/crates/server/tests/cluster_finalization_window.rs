@@ -11,18 +11,28 @@
 //! `LocalServeMigrating` and the node validates and serves — and acknowledges —
 //! a write for a slot the cluster has already handed away.
 //!
-//! This file measures that window. It is **not** an assertion test: it records
-//! latencies and prints a table, so every case is `#[ignore]`d and is run
-//! explicitly:
+//! This file measures that window, and — since phase 2b — asserts the one
+//! property the barrier was built to deliver.
 //!
-//! ```text
-//! cargo test -p frogdb-server --test cluster_finalization_window -- \
-//!     --ignored --nocapture --test-threads=1
-//! ```
+//! - The **measurement** cases sweep timings and load, record latencies and
+//!   print a table. They are `#[ignore]`d, because a table is not a verdict:
 //!
-//! The 2026-08-05 results and the build-vs-accept recommendation they support
-//! live in `.scratch/replication-cluster-rework/`
-//! `finalization-window-measurement-2026-08-05.md`.
+//!   ```text
+//!   cargo test -p frogdb-server --test cluster_finalization_window -- \
+//!       --ignored --nocapture --test-threads=1
+//!   ```
+//!
+//! - The **acceptance** case
+//!   ([`no_write_is_acknowledged_after_the_slot_is_handed_over_under_load`])
+//!   runs the same loaded scenario and asserts the criterion: across at least
+//!   120 finalizations under load, *zero* of them acknowledged a write on the
+//!   source after the cluster had committed the handoff. It is not `#[ignore]`d.
+//!
+//! The 2026-08-05 pre-barrier results and the build-vs-accept recommendation
+//! they support live in `.scratch/replication-cluster-rework/`
+//! `finalization-window-measurement-2026-08-05.md`. That run measured 118 of 120
+//! loaded finalizations acking a write past the commit; the acceptance case
+//! exists so the number cannot drift back up unnoticed.
 //!
 //! Everything here is test-only. No production code is instrumented: the
 //! per-node `Arc<ClusterState>` the harness already exposes
@@ -703,4 +713,112 @@ async fn measure_finalization_window_follower_source_loaded() {
 async fn measure_finalization_window_leader_source() {
     let samples = measure(LEADER_SOURCE_SHIPPED_TIMING).await;
     report(&LEADER_SOURCE_SHIPPED_TIMING, &samples);
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance
+// ---------------------------------------------------------------------------
+
+/// How many loaded finalizations the acceptance claim rests on.
+///
+/// The residual window is a race, and a race that does not fire in ten attempts
+/// has not been closed — it has been under-sampled. 120 is the sample size the
+/// 2026-08-05 measurement used to establish the baseline (118/120 exposed), so
+/// the acceptance case is directly comparable to it.
+const REQUIRED_FINALIZATIONS: usize = 120;
+
+/// The acceptance scenario: [`FOLLOWER_SOURCE_LOADED`]'s load profile, with
+/// headroom.
+///
+/// The extra iterations exist because [`measure`] discards an iteration whose
+/// setup errors or whose apply watcher times out. Discards are not evidence
+/// about the barrier either way, so they must not be able to shrink the sample
+/// below [`REQUIRED_FINALIZATIONS`] — and equally must not be able to *pass* the
+/// case by shrinking it to nothing, which is why the sample size is asserted.
+const LOADED_ACCEPTANCE: Scenario = Scenario {
+    name: "follower-source, loaded (32 writers + Raft churn), ACCEPTANCE",
+    heartbeat_ms: 250,
+    election_ms: 1000,
+    iterations: REQUIRED_FINALIZATIONS + 12,
+    load_writers: 32,
+    raft_churn: true,
+    source_is_leader: false,
+};
+
+/// **The** acceptance criterion for the slot-migration finalization barrier.
+///
+/// Under sustained write load and Raft churn, migrating a slot off a *follower*
+/// — the hard case, where the source learns of the commit a full replication lag
+/// after the leader does — must never leave a write acknowledged by the former
+/// owner after the cluster committed the handoff.
+///
+/// This is a behavioral claim, not a latency one. The residual window may still
+/// be non-zero (`t_source - t_leader` is a replication lag and no barrier can
+/// erase it); what the barrier and the execute-seam fence together guarantee is
+/// that nothing *client-visible* happens inside it. A write that the fence
+/// refuses may still have applied locally — it is simply never acknowledged, so
+/// its status is in doubt and the client's retry lands on the new owner, which
+/// is the ordinary at-least-once contract rather than a lost write.
+///
+/// Baseline before the barrier: 118 of 120 loaded finalizations acked a write
+/// past the commit. Required now: zero.
+///
+/// The measurement errs towards *over*-reporting exposure, never under:
+/// `t_last_ok` is when the prober's client observed the `+OK`, which is strictly
+/// after the source emitted it, while `t_leader` is read straight off the
+/// leader's applied state. A starved machine can therefore turn a write the
+/// source acked before the handoff into a false positive, and the margin that
+/// keeps it from doing so is the several milliseconds the drain round trip and
+/// two Raft commits take. A false *negative* has no such mechanism, which is the
+/// direction that matters for an acceptance case.
+// FM-CLUSTER-092 FM-CLUSTER-095
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn no_write_is_acknowledged_after_the_slot_is_handed_over_under_load() {
+    let samples = measure(LOADED_ACCEPTANCE).await;
+    report(&LOADED_ACCEPTANCE, &samples);
+
+    assert!(
+        samples.len() >= REQUIRED_FINALIZATIONS,
+        "only {} of {} finalizations were measured; the criterion needs at least \
+         {REQUIRED_FINALIZATIONS} samples to mean anything",
+        samples.len(),
+        LOADED_ACCEPTANCE.iterations,
+    );
+
+    // Guard against a vacuous pass: if the source refused *every* write on the
+    // migrating slot the exposure count would also be zero, but for the wrong
+    // reason — the barrier would be an availability outage, not a correctness
+    // fix.
+    //
+    // The threshold is a supermajority of iterations rather than all of them.
+    // Under 32 writers the probers' `SET` round trip runs to a few milliseconds
+    // while a whole finalization takes under one, so an occasional iteration
+    // legitimately hands over before any of the eight probers' first write comes
+    // back. That is prober jitter, not a refusal; a real outage does not shave a
+    // percent off this count, it collapses it to zero.
+    let served = samples.iter().filter(|s| s.probe_ok_count > 0).count();
+    assert!(
+        served * 10 >= samples.len() * 9,
+        "only {served} of {} finalizations acknowledged any write before the \
+         handoff; the source must keep serving its own slot right up to the \
+         handover, otherwise zero exposure is an outage rather than a barrier",
+        samples.len(),
+    );
+
+    let exposed: Vec<String> = samples
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let us = s.write_exposure_us?;
+            (us > 0.0).then(|| format!("#{i}: +{us:.1}µs after commit"))
+        })
+        .collect();
+    assert!(
+        exposed.is_empty(),
+        "{} of {} loaded finalizations acknowledged a write on the former owner \
+         after the cluster committed the handoff: {}",
+        exposed.len(),
+        samples.len(),
+        exposed.join(", "),
+    );
 }
