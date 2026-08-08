@@ -1,0 +1,282 @@
+# Cluster correctness — invariant-driven validation
+
+Status: **DRAFT** — open decisions in §8
+Author: 2026-08-08
+Related: [campaign 2](../hardening-2/PRD.md) (detection-first hardening, running),
+[cluster failure-mode spec](../hardening/specs/cluster-failure-modes.md) (LOCKED, 97 rows at
+audit time, 098–102 landing with the 2026-08-08 defect fixes),
+[replication-cluster rework](../replication-cluster-rework/PRD.md) (two-phase handoff, shipped)
+
+## 1. Why
+
+A full audit of the cluster area on 2026-08-08 found five live defects in a locked area
+carrying a 99.6% / 99.0% mutation score, 97 spec rows, and ~500 tests:
+
+1. `save_vote` flushed the wrong column family — vote not durable, double-vote → split-brain
+   precondition (campaign-2 issue 01, now fixed, FM-CLUSTER-098).
+2. `handoff_seq` zeroed by `from_snapshot` — fencing-generation reuse after snapshot restore
+   (fresh finding, now fixed, FM-CLUSTER-100).
+3. `CLUSTER FORGET` never shrinks the Raft voter set — quorum math permanently wrong after
+   membership shrink (round-2 87/F11, fix in flight, FM-CLUSTER-101).
+4. `get_log_reader` served a detached, never-invalidated log cache — Raft log divergence
+   (round-2 issue 53, now fixed, FM-CLUSTER-099).
+5. `check_interval_ms = 0` panics the failure-detector task — unvalidated config (spec GAP 8,
+   now fixed, FM-CLUSTER-102).
+
+Every one was found by a human reading code. None was found by the machinery — and each
+evades it *structurally*, not by bad luck:
+
+- **B1 — point witnesses do not quantify.** An FM row pins one scenario; a mutation score is
+  a floor on code that exists. Nothing in the current machinery states "handoff seqs are
+  never reused" *for all command sequences* — so the one sequence that violates it
+  (prepare → complete → snapshot → restore → prepare) was never generated. The spec's own
+  GAPS section and campaign 2's B1 ("mutation testing cannot see omissions") are the same
+  finding from the other side.
+- **B2 — no harness explores interleavings.** The turmoil cluster sims are five scripted
+  scenarios; Shuttle covers `frogdb-core` only (zero cluster coverage); the 209 integration
+  tests each replay one hand-written ordering. The space of message orderings around the
+  two-phase handoff and the failover composite has never been searched, randomly or
+  exhaustively.
+- **B3 — internal state is invisible to the black-box suites.** Jepsen checks client
+  histories. A ghost slot owner, a dangling `primary_id`, or an epoch below a node epoch is
+  not client-visible until it detonates later; no suite can currently ask a node "are your
+  invariants intact?"
+
+**Thesis: define cluster correctness once, as executable invariants, and check that single
+definition under *generated* permutations and faults at every fidelity level — instead of
+hand-writing one test per imagined scenario.** The audit's defect list is the outcome of one
+manual pass; this PRD is the machine that makes the next pass continuous.
+
+## 2. Shape of the system
+
+One catalog, five consumers:
+
+| layer | explores | cost/run | repro | new machinery |
+|---|---|---|---|---|
+| L1 post-apply self-check | every existing test's scenarios | ~free | exact | invariant module + one hook |
+| L2 proptest permutations | command sequences × crash points | seconds | shrunk sequence | generator + properties |
+| L3 stateright model check | all message interleavings, small scope | minutes | exact trace | protocol model |
+| L4 seeded turmoil schedules | network/crash/timing schedules | minutes–hours | seed | fault scheduler |
+| L5 Jepsen + live check | real processes, real faults | heavy | partial | `DEBUG CLUSTER CHECK` + checkers |
+
+The catalog is the single source of truth; every layer imports it rather than restating it.
+A violation report is identical in shape at every layer: stable invariant ID + detail string.
+
+## 3. Workstreams
+
+### W1 — Invariant catalog + self-checking state machine
+
+`frogdb-server/crates/cluster/src/invariants.rs`: pure functions over `&ClusterStateInner`,
+no I/O, returning `Vec<Violation>` (`id: &'static str`, `detail: String`). In-crate so the
+mutation gate sees both the catalog and its tests.
+
+Seed catalog — each entry names the defect class it would have caught, so no entry is
+decorative:
+
+| ID | claim | would have caught |
+|---|---|---|
+| INV-REF-1 | every `slot_assignment` owner exists in `nodes` | ghost owner via unguarded `CompleteSlotMigration` insert (FM-CLUSTER-033 blesses it today — see §8 D2) |
+| INV-REF-2 | every migration's source and target exist in `nodes` | `RemoveNode` dangling migrations (round-2 issue 62) |
+| INV-REF-3 | a Replica's `primary_id` names an existing Primary | orphaned replicas after removal |
+| INV-REF-4 | a Primary has `primary_id == None` | role/parent desync |
+| INV-EPOCH-1 | `config_epoch >= max(node config epochs)` | mint-below-node-epoch regressions |
+| INV-EPOCH-2 | a nonzero node epoch is unique among Primaries | epoch-collision reconcile bugs |
+| INV-HANDOFF-1 | `handoff_seq >= max(handoff.seq over migrations)` | **audit defect 2** (seq reuse after restore) |
+| INV-HANDOFF-2 | a live handoff exists only inside a migration for its own slot; `drained` implies prepared | orphaned barrier state |
+| INV-MIG-1 | a migrating slot's current owner is the migration's source | mid-migration ownership drift |
+| INV-SLOT-1 | every slot key `< 16384` | boundary/parse bugs |
+
+Two tiers, no third:
+
+- **HARD** — checked always; a violation is a defect by definition.
+- **DOCUMENTED-EXCEPTION** — the state is reachable today, the behavior is deliberate, and
+  the exception entry cites the FM row or issue that says so (e.g. `RemoveNode` dangling
+  refs, a documented non-guarantee with its own pinning test). An exception without a
+  citation is a build error. The catalog thereby forces every known-dirty state into an
+  explicit ruling instead of a silent shrug — see §8 D2.
+
+The hook, at the end of `ClusterState::apply_command` under
+`#[cfg(any(test, debug_assertions))]`: assert the catalog is clean after every apply. This
+retroactively upgrades all 219 cluster unit tests, 209 `cluster_*` integration tests, and
+the turmoil sims into invariant tests at zero authoring cost. Also hook `from_snapshot` /
+`install_snapshot` (restore must land in a clean state — the exact seam audit defect 2
+lived on).
+
+Each HARD invariant lands with a forcing test that constructs the violating state directly
+(via the existing test-only mutators) and asserts the catalog reports it — otherwise the
+catalog itself is dead code to the mutation gate.
+
+### W2 — Property-based permutation harness (proptest)
+
+New dev-dependency `proptest` in `frogdb-cluster` (§8 D1). One generator, four properties:
+
+- `arb_command_sequence(len)` — weighted strategy over all 18 `ClusterCommand` variants.
+  Stateful generation (tracks live node ids / assigned slots / open migrations) biased
+  ~80/20 toward commands valid in context, with garbage retained deliberately: a *rejected*
+  command must also preserve every invariant, and the rejection path is exactly where
+  validate-then-mutate bugs live.
+- **P1 — invariants always hold**: apply the sequence via `apply_local`, assert the catalog
+  clean after every step.
+- **P2 — snapshot/restore is lossless at any point**: apply a prefix, round-trip through
+  *both* snapshot vehicles (the serialized `ClusterStateInner` openraft path and the
+  `ClusterSnapshot` → `from_snapshot` DTO path — the audit showed they can disagree), apply
+  the suffix, compare against the uninterrupted run. Catches the entire audit-defect-2 class
+  for every field, not just `handoff_seq`, forever.
+- **P3 — replay determinism**: the same sequence applied to two fresh states yields
+  identical states (closes round-2 87/F2). Doubles as a purity guard: any wall-clock or
+  randomness sneaking into apply breaks it loudly.
+- **P4 — event conservation**: every `SlotHandoffPrepared` is eventually paired with exactly
+  one `SlotHandoffReleased` across the sequence (the `release_events()` funnel, stated as a
+  property instead of per-arm tests).
+
+Plus one non-property deliverable that fits nowhere better: **frozen encoding fixtures** for
+`ClusterCommand` and `ClusterStateInner` (golden JSON checked in, round-trip asserted) —
+round-2 87/F6; a silent serde rename is a rolling-upgrade wire break today.
+
+Runs in the normal test suite at moderate case counts; a `PROPTEST_CASES`-boosted pass joins
+the nightly.
+
+### W3 — Model checking the protocols (stateright)
+
+Exhaustive small-scope search where random search is weakest: shallow interleavings of the
+two protocols whose correctness is distributed across proposers, apply, and timers.
+
+- **Model 1 — two-phase handoff**: coordinator + source + target + Raft-as-serializer,
+  3 nodes / 2 slots / bounded retries. The transition function *is* production
+  `apply_command` — no hand-translated abstraction to drift (the decisive advantage over
+  TLA+ here). The model layer contributes only what Raft/network contribute in production:
+  ordering, loss, duplication, leader changes. Safety: no interleaving of
+  Prepare/Confirm/Abort/Complete/leader-change admits writes on two nodes for one slot;
+  seqs never reused. Liveness: every prepared handoff reaches Released or Completed.
+- **Model 2 — failover composite**: detector verdicts + `Failover{force}` racing
+  MarkNodeFailed/Recovered and concurrent proposals from two would-be leaders. Safety: at
+  most one Primary per slot after quiesce; epoch strictly grows across every promotion.
+- Both run as `#[test]`s with bounded depth in the nightly (§8 D1 for the per-commit
+  question); a found counterexample is checked in as a regression scenario replayed against
+  the real state machine.
+
+### W4 — Seeded fault schedules (deterministic simulation)
+
+Generalize the five scripted turmoil cluster sims into one seed-driven scheduler:
+
+- A seed derives the full schedule: which links partition when, which nodes SIGKILL/restart
+  when, message delay distributions, barrier/lease timer skew. Same seed → same run,
+  turmoil's determinism guarantee.
+- Invariant checking at quiesce via the L5 surface (`DEBUG CLUSTER CHECK`) on every
+  surviving node, plus the existing client-visible assertions (convergence, no acked-write
+  loss) — and cross-node checks a single-state catalog cannot express: pairwise epoch
+  monotonicity as observed by clients, single-writer-per-slot over the whole history.
+- Nightly sweep at a fixed seed budget (§8 D4); a failing seed is committed to a regression
+  list and runs forever after.
+- Durability faults (lose-unsynced-writes on kill) ride on campaign 2's W2 crash harness,
+  not turmoil — turmoil has no disk model. The raft-log/vote rows (FM-CLUSTER-098, issue
+  73) get their level-5 witnesses there; this PRD does not duplicate that machinery, it
+  consumes it.
+
+### W5 — Live invariant surface + Jepsen integration
+
+- `DEBUG CLUSTER CHECK`: admin/debug command returning the catalog's violations as a RESP
+  array (empty = clean). Always compiled — Jepsen runs release binaries (§8 D3 for gating).
+- Jepsen: add an invariant checker that calls it on every node at nemesis quiesce points and
+  at final; a non-empty reply fails the test with the violation IDs in the analysis.
+- Close the workload gaps the audit found: port `split-brain` and `zombie` workloads to the
+  raft topology (today they are replication-topology only, `run.py:264/272`); run the 11
+  raft workloads with no stored results plus the 4 `raft-extended` ones; store results.
+
+### W6 — Spec and gate integration
+
+- Cross-reference: each catalog invariant cites the FM rows it generalizes; rows whose
+  invariant is now universally checked note the invariant ID. `lint-failure-modes` gains an
+  optional `INV-*` vocabulary check (warn on dangling references) — small, same script.
+- Mutation: re-run `just mutants` + gates for `frogdb-cluster` and `frogdb-cluster-runtime`
+  on current code. Recorded scores predate rows 084–102 entirely; the catalog + property
+  tests should move in-crate kill coverage for the 29 rows currently forced only from
+  server-side integration tests.
+- Fix the two mis-tagged rows (campaign-2 issue 09) while in the file.
+
+## 4. Relationship to campaign 2
+
+Complementary, not competing. Campaign 2 asks "is the code that should exist present?"
+(chokepoints) and "is the evidence real?" (witness truth) — repo-wide. This PRD asks "does
+the cluster state machine satisfy its definition of correct under permutations nobody
+hand-wrote?" — one area, universal quantification. Shared infrastructure flows one way:
+this PRD consumes campaign 2's crash harness (W2) and seam-gate wiring (`just lint-gates`),
+and produces the invariant catalog that campaign 2's W3 re-witness pass can cite as forcing
+machinery for cluster rows. If the pattern pays for itself here, replication is the obvious
+second area (its FM spec has the same point-witness structure) — explicitly out of scope
+until this one exits.
+
+## 5. Sequencing
+
+1. W1 (catalog + hook + forcing tests) — unlocks everything, immediately upgrades ~430
+   existing tests.
+2. W2 (proptest) — highest defect-catching density per line; P2 alone retro-covers audit
+   defect 2's whole class.
+3. W6 mutation re-run — cheap once W1/W2 land in-crate; re-baselines the gate honestly.
+4. W4 (seeded schedules) and W5 (live surface + Jepsen) — W5's command is small and worth
+   doing early inside W4's first PR since W4 consumes it.
+5. W3 (stateright) — highest novelty, so last; scoped to the two named models, and dropped
+   without ceremony if the state space defeats the small-scope hypothesis (§8 D1 records
+   the budget).
+
+Retro-validation gate at each step: revert each of the five audit fixes in a scratch
+branch; count which layers flag it. Every one of the five must be caught by at least one
+layer before this PRD exits — that is the falsifiable claim that the machine now catches
+what the manual audit caught.
+
+## 6. Exit criteria
+
+1. Catalog exists in `frogdb-cluster`; every HARD invariant has a forcing test that fails
+   when its check is deleted (mutation-visible); every DOCUMENTED-EXCEPTION cites a row or
+   issue.
+2. Post-apply + post-restore hooks active in all test/debug builds; full suite green under
+   them (or each violation triaged into a fix or a cited exception — no third bucket).
+3. P1–P4 + encoding fixtures land in-crate; nightly high-case pass wired.
+4. Mutation gates re-run on current code, scores recorded, 084–102 inside the corpus.
+5. Seeded scheduler replaces the scripted sims; nightly sweep wired; regression-seed list
+   exists and is replayed in CI.
+6. `DEBUG CLUSTER CHECK` shipped; Jepsen invariant checker consumes it; raft-topology
+   split-brain + zombie workloads exist; the 15 result-less workloads have stored results.
+7. Stateright: both models shipped with recorded state-space size and properties, or a
+   written decision records why not (with the exploration budget that was tried).
+8. Retro-validation: all five 2026-08-08 audit defects mechanically caught by ≥1 layer.
+
+## 7. Out of scope
+
+- Fixing individual defects (they ride the campaign-2 wave tables; four of five audit fixes
+  already landed spec-first).
+- Extending the pattern to replication/persistence (explicitly a follow-up decision at
+  exit).
+- Performance/benchmarking of the cluster path; catalog checks are test/debug-only and add
+  zero release-build cost by construction.
+- TLA+ specs — stateright is this PRD's bet precisely because the model can embed the
+  production transition function; write TLA+ only if stateright's scope proves too small,
+  as a recorded decision.
+
+## 8. Open decisions
+
+1. **New dev-dependencies and CI budget.** `proptest` (W2) is uncontroversial house-style.
+   `stateright` (W3) is a heavier bet: exhaustive checks are minutes-scale and belong in
+   the nightly, not per-commit. *Recommendation:* adopt both as dev-deps of
+   `frogdb-cluster`; per-commit runs get bounded-depth smoke configs (<10 s), nightly gets
+   the real budget; record the W3 exploration budget (states/minutes) in the model file
+   header so "it got slow" has a number.
+2. **The dirty-state ruling INV-REF-1/2/3 forces.** `RemoveNode` leaves dangling
+   migrations/replica parents (documented non-guarantee, pinned by test), and
+   FM-CLUSTER-033 blesses `CompleteSlotMigration`'s unguarded owner insert.
+   *Recommendation:* fix the behavior rather than register exceptions — make `RemoveNode`
+   prune migrations and re-parent/detach replicas exactly as `Failover{force}` already
+   does (the asymmetry between the two removal paths is itself the smell), and guard the
+   Complete insert; amend both FM rows spec-first. Exceptions are the fallback, not the
+   default.
+3. **`DEBUG CLUSTER CHECK` exposure.** Always-on admin command vs gated.
+   *Recommendation:* always compiled, gated behind the existing admin/DEBUG surface like
+   its DEBUG siblings — Jepsen needs it in release builds, and a read-only self-check is
+   not attack surface beyond what DEBUG already grants.
+4. **Nightly seed budget for W4.** *Recommendation:* start at 500 seeds/night (≈ the
+   existing turmoil sims' per-seed cost × budgeted hour), tune from observed run time; the
+   number lives in one Justfile variable.
+5. **Catalog location.** Module in `frogdb-cluster` vs new crate.
+   *Recommendation:* module in `frogdb-cluster` — the mutation gate must see it, the
+   server crate already depends on the cluster crate for the L5 command, and a crate
+   boundary here is campaign 2's §4 ceremony finding all over again.
