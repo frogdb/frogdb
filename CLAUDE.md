@@ -1,17 +1,30 @@
 # FrogDB
 
-FrogDB is a modern, Redis-compatible in-memory database written in Rust. It supports both standalone
-and cluster operating modes. It uses RocksDB for configurable persistence.
+FrogDB is a modern, Redis 8.x-compatible database written in Rust. It supports both standalone
+and cluster operating modes as well as replication and configurable durability/persistence.
 
 > **Note**: `AGENTS.md` is a symlink to this file — they are the same document.
 
-## Philosophy
+## Goals
+
+- Correctness
+  - Specified behavior proven under various failure modes
+- Redis compatible (with differences documented)
+  - Deviations should be improvements
+- Easy to operate
+  - easy introspection and observability
+  - easy to adjust configuration without downtime
+- Fast
+  - Should be at least as fast as competing solutions
+- Scalable
+  - can operate as a single node with no disk, to cluster of nodes and replicas with persistence
+
+## Development Philosophy
 
 - FrogDB is unreleased, pre-production software. Breaking changes are acceptable — sweeping changes
   that would normally be prohibitive for production software are encouraged here when they improve
   implementation efficiency.
-- FrogDB aims to be correct, fast, easy to operate, and scalable
-- Inspiration is drawn from high-quality database projects like CockroachDB, ScyllaDB, FoundationDB
+- Inspiration is drawn from high-quality modern database projects like CockroachDB, ScyllaDB, FoundationDB
 - Upmost care should be taken to ensure the correctness of the system. Examples include:
   - Extensive regression tests derived from the official Redis test suite to ensure compatibility
   - Extensive distributed systems and concurrency testing to ensure expected behavior during various
@@ -67,7 +80,6 @@ just fmt-py                             # format Python code
 
 - When running a single test, target the owning crate to avoid rebuilding the entire workspace:
   `just test frogdb-server test_name`
-- If you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
 ### Execution mode: local (default) or testbox
 
@@ -156,8 +168,7 @@ Examples:
 - Write simple code, avoid unnecessary complexity
 - Code architecture choices should focus on making the software easy to change in the future
 - Follow idiomatic Rust patterns and use best practices
-- When implementing features or making changes, think about what unit + integration + concurrency
-  tests make sense to add. Consider edge cases.
+- When discovering a bug, write a regression test. Think about how we might prevent new bugs from occurring in a systematic fashion.
 - When designing features, research what implementation Redis, Valkey, and DragonflyDB use for the
   feature. This provides critical insight for decision making.
 - When adding new development tools or dependencies:
