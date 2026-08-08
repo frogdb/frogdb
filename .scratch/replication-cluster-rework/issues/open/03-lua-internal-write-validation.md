@@ -57,3 +57,17 @@ Decide and then implement one of:
 Research first: check what Redis (`scripting.c` / `script.c` slot checks), Valkey, and DragonflyDB
 do for a script whose slot moves mid-execution. Redis's answer is essentially (c) plus its own
 gossip-epoch mechanics; Dragonfly's is essentially (b).
+
+## Comment — 2026-08-07: mostly subsumed by the issue-02 barrier; scope narrowed to cross-shard
+
+Issue 02's Option A landed (phases 1/2a/2b). For **single-shard** scripts the subsumption holds:
+scripts execute inline in the shard event loop, so the pre-Complete drain waits them out, and the
+execute-seam fencing token (FM-CLUSTER-095) refuses the acknowledgement of anything that slips past
+the flip. Witness: `a_script_in_flight_across_a_handoff_leaves_no_write_on_the_former_owner`
+(FM-CLUSTER-094).
+
+What this issue still owns: a **cross-shard script holding a VLL continuation** across a handoff.
+The barrier work deliberately wrote no row for it, because the continuation-lock gate has two
+tracked bypasses of its own (`CoreMsg::ExecTransaction` — round-2 #50, `ScriptingMsg::FunctionCall`
+— hardening-2 #05); pinning barrier behaviour on a known-leaky seam would be a false claim. Sequence:
+fix #50/#05 first, then witness the cross-shard case here and write its row.

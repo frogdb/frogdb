@@ -1,6 +1,6 @@
 # Pause barrier at slot-migration finalization (Dragonfly parity)
 
-Status: needs-triage
+Status: done
 
 Disposition (2026-08-04, P3 lock review): cluster-scoped — the replication-area lock does not depend on this. Scheduled into Phase 4 cluster hardening (research task: Dragonfly source-side quiesce vs FrogDB's Raft apply). If adopted, subsumes rework 03.
 Type: AFK
@@ -364,3 +364,26 @@ has no row: the continuation-lock gate has two tracked bypasses of its own (`MUL
 so a row written now would pin barrier behaviour on top of a seam that is itself known-leaky. The
 `PAUSE_ACTION_REPLICA` question (should the barrier stall a primary's replica feed?) remains
 undecided.
+
+## Resolution — 2026-08-07: Option A (amended) built, acceptance criterion met
+
+All three acceptance boxes:
+
+- [x] Written comparison: `migration-pause-barrier-brief-2026-08-04.md` + the measurement doc.
+- [x] Decision recorded: adopt Option A slot-scoped, fail-closed, with the two measurement-forced
+      amendments (fencing token at the execute seam, explicit prepare deadline). User-approved.
+- [x] The Lua test: `a_script_in_flight_across_a_handoff_leaves_no_write_on_the_former_owner`
+      (`cluster_handoff_barrier.rs`) — the property EXEC re-validation cannot provide.
+
+Shipped in three merges: phase 1 slot-scoped pause (2026-08-06), phase 2a two-phase finalize saga
+with Raft-carried drain-ack + staggered deadlines (4c632ea6), phase 2b execute-seam fencing +
+slot-scoped EXEC parking + acceptance flip (0f5fcf49). Headline number: the loaded scenario in
+`cluster_finalization_window.rs` went from **118/120 acked-after-commit to an asserted 0/132**,
+running un-ignored in the default suite (~5 s). The `exec.rs:207` post-wait re-validation contract
+survived verbatim and now has the genuine parked-EXEC-across-finalization coverage this issue
+called for (`an_exec_parked_by_the_barrier_wakes_up_redirected`, FM-CLUSTER-093).
+
+Spec: FM-CLUSTER-084..096. Residuals, tracked elsewhere: cross-shard script holding a VLL
+continuation across a handoff has no row (blocked on the continuation-lock gate's own tracked
+bypasses — round-2 #50, hardening-2 #05); single-shard Lua re-validation for issue 03 is subsumed,
+its cross-shard half stays open on issue 03; the barrier-vs-replica-feed policy is issue 12.
