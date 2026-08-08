@@ -44,6 +44,10 @@ Scope. The cluster area is one replicated state machine plus the seams that read
   which commands one slot's pause parks, the two exemptions that keep it from deadlocking the
   handover, and how it composes with the operator's node-global `CLIENT PAUSE`
   (`core/src/client_registry/mod.rs`, `server/src/connection/{pause_gate,lifecycle}.rs`).
+* **Raft log storage (098..099)** — what the RocksDB-backed log store owes openraft below the
+  state machine: the durability class each metadata record is written at, and the coherence of the
+  log cache the long-lived log reader shares with the writing handle
+  (`cluster/src/storage.rs`).
 
 Out of scope, deliberately: the rest of the pause-barrier design — the Raft `PrepareSlotHandoff`
 op, the drain round trip, the handoff lease, and the fencing token are phase 2 of
@@ -1343,6 +1347,42 @@ The hold is node-wide for the barrier window (≤100 ms in production, backstopp
 lease), which is what Redis 8.4 and Valkey 9.0 do: their atomic-slot-migration pause is node-wide
 and includes `PAUSE_ACTION_REPLICA`, stopping the primary from flushing replica output buffers so
 replicas cannot run ahead of a primary that is fencing its own clients.
+
+## FM-CLUSTER-098 — an acknowledged vote is on the platter, not in an unsynced memtable
+
+| Field | Value |
+|---|---|
+| Trigger | openraft persists a vote — the node's own candidacy or a grant to a peer — and the machine loses power immediately after `save_vote` returns, before any later write happens to reach the disk. |
+| Observable | The restarted node's `read_vote` returns the vote that was acknowledged. The record lives in the `raft_meta` column family and is written with `sync`, so the acknowledgement and the durability are the same event. |
+| NOT observable | An `Ok` from `save_vote` that rests on `DB::flush()`: that flushes the **default** column family, which this storage never writes to at all, while the vote sits in `raft_meta` behind an unsynced WAL. Downstream, the thing that must never be observable is the node granting a second vote in the same term after a restart — Raft's single-leader argument is exactly the claim that this cannot happen, so a lost vote is a split-brain precondition rather than a performance detail. Nor the durability decision being the caller's: a future `set_meta` caller cannot write the vote buffered by forgetting to ask. |
+| Invariant | `MetaDurability::for_key` classifies each metadata key — `KEY_VOTE` synced, `KEY_COMMITTED` and `KEY_LAST_PURGED` buffered — and `set_meta`/`delete_meta` render that class into the write options at the one chokepoint every metadata write passes through (`cluster/src/storage.rs`). `save_vote` is then just that write: no `flush()`, misleading or otherwise. The two buffered keys are buffered on purpose — the committed index is deliberately never read back (openraft re-derives it from the leader), and losing the purge watermark only costs a repeat purge. `ClusterSnapshotStore::save` reached the same conclusion from the snapshot side and is the pattern this follows. |
+| Outcome variant | n/a |
+| Forced by | `the_vote_is_written_synced_to_the_meta_column_family` |
+| Bug refs | fixed: [01-save-vote-flushes-the-wrong-column-family.md](../../hardening-2/issues/done/01-save-vote-flushes-the-wrong-column-family.md) |
+
+The witness is level 2, and deliberately so: RocksDB exposes no getter for `sync` and an fsync
+cannot be observed without cutting power, so the test pins the *classification* the vote path
+resolves to plus the fact that the default column family is empty — proving the old `flush()` could
+never have been what made the vote durable. The level-5 witness (kill the process between the ack
+and the restart, assert the restored vote) needs the campaign-2 crash harness and belongs to
+[73](../../testing-improvements-round2/issues/) as much as to this row; `append` acks a log write
+non-synced for the same family of reasons and is still open.
+
+## FM-CLUSTER-099 — a log reader never serves an entry the writing handle truncated
+
+| Field | Value |
+|---|---|
+| Trigger | A leadership flap: entries are cached while the node is leader, it steps down, the conflicting suffix is truncated and different content is appended at the same indexes, and the log reader openraft created at startup is asked for those indexes again. Same shape for `purge`. |
+| Observable | The reader returns the entry that is on disk *now* — the replacement's log id and payload — and an index the owner invalidated is gone from the reader's view rather than answered from a copy. |
+| NOT observable | An entry from an overwritten term served at an index that was truncated and re-appended. openraft builds the reader once and holds it for the node's lifetime, so a detached cache is stale for the rest of the process: the leader would ship entries no quorum ever agreed on, or membership recovery would read the wrong entry — Raft log divergence produced entirely below the state machine. Nor the inverse: a reader filling the cache while the owner cannot see the fill, which would make coherence depend on which handle happened to read first. |
+| Invariant | One `Arc<RwLock<BTreeMap<u64, Entry>>>` is shared by the writing handle and every reader `get_log_reader` hands out, alongside the `DB` and the snapshot lock (`cluster/src/storage.rs`). `invalidate_cache_range` — the only invalidation, reached from `truncate` and `purge` — therefore reaches every reader by construction, instead of the owner invalidating a copy nobody reads. Sharing rather than dropping the cache keeps the read path's benefit; the coherence machinery is one `Arc`, because there is exactly one cache. |
+| Outcome variant | n/a |
+| Forced by | `a_log_reader_never_serves_an_entry_the_owner_truncated`, `cache_invalidation_reaches_a_reader` |
+| Bug refs | fixed: [53-stale-raft-log-reader-cache.md](../../testing-improvements-round2/issues/done/53-stale-raft-log-reader-cache.md) |
+
+Both witnesses are crate-level and deterministic, and they are the first tests anywhere to construct
+a reader through `get_log_reader`: the defect was found by reading, not by failure, because nothing
+outside openraft itself had ever exercised the reader clone.
 
 ---
 

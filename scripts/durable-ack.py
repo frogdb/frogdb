@@ -12,10 +12,23 @@ storage impl `frogdb-server/crates/cluster/src/storage.rs`.
 
 The invariant: every openraft storage method whose successful return (or
 callback) tells the consensus layer "this is on the platter" must issue its
-RocksDB write with sync options — `write_opt(batch, &opts)` where `opts` has
-`set_sync(true)`, the correct form at `storage.rs:139-143` (the snapshot
-`save`). A plain `db.write(batch)` or `db.flush()` returns before the WAL is
-fsynced, so a power cut erases a write consensus already counted as durable.
+RocksDB write with sync options. A plain `db.write(batch)` or `db.flush()`
+returns before the WAL is fsynced, so a power cut erases a write consensus
+already counted as durable.
+
+Two shapes satisfy it, because the impl has two kinds of durable-ack method:
+
+*Inline* — `write_opt(batch, &opts)` where `opts` has `set_sync(true)`, the
+form the snapshot `save` uses.
+
+*Through the metadata chokepoint* — `save_vote` writes one key rather than a
+batch, so it delegates to `set_meta`, which renders a per-key
+`MetaDurability` class into the write options (FM-CLUSTER-098). That counts
+as sync only while all three links hold: `MetaDurability::for_key` classifies
+the key as `Synced`, `write_opts` turns the class into `set_sync`, and
+`set_meta` hands those options to an options-carrying write. Break any link
+and the method reads as non-sync again, which is the point — the chokepoint
+is only a durability guarantee while it is wired end to end.
 
 Scoped to the three durable-ack methods:
 
@@ -30,11 +43,11 @@ restart; truncate/purge durability is re-established by the next append). Adding
 one to the durable-ack set is a code change that this pin is meant to force a
 decision on, not a silent widening.
 
-The two known-bad sites are consensus-safety defects whose *fix* is defect wave
-2, not this lint's job; they ride in the count-pinned allowlist with an issue
-reference, exactly as `clock-seam.py` does. A method that is allowlisted but has
-since been made sync is a stale entry and fails the gate — so the fix, when it
-lands, forces its own allowlist entry out.
+A known-bad site is a consensus-safety defect whose *fix* is defect wave 2, not
+this lint's job; it rides in the count-pinned allowlist with an issue reference,
+exactly as `clock-seam.py` does. A method that is allowlisted but has since been
+made sync is a stale entry and fails the gate — so the fix, when it lands,
+forces its own allowlist entry out, as `save_vote`'s did.
 """
 
 from __future__ import annotations
@@ -65,22 +78,27 @@ ALLOWLIST: dict[str, str] = {
         "73-raft-append-acks-durability-without-fsync.md (and hardening-2 issue 03, "
         ".scratch/hardening-2/issues/open/03-six-hand-rolled-durable-writers.md)"
     ),
-    "save_vote": (
-        "pre-existing consensus-safety defect (hardening-2 issue 01): `save_vote` "
-        "writes KEY_VOTE to the `raft_meta` CF via a non-sync `put_cf`, then calls "
-        "`db.flush()` which flushes the *default* CF — so the vote is not durable, "
-        "contradicting the doc at storage.rs:98-102. Fix is defect wave 2, tracked "
-        "by .scratch/hardening-2/issues/open/"
-        "01-save-vote-flushes-the-wrong-column-family.md"
-    ),
 }
 
-# The one correct durable form: a `write_opt(...)` paired with `set_sync(true)`
-# in the same method body. A method missing either half is non-sync — whether it
-# used `db.write(batch)` / `db.flush()` (issue 73 / issue 01) or a `write_opt`
-# with `set_sync(false)`.
+# The inline durable form: a `write_opt(...)` paired with `set_sync(true)` in the
+# same method body. A method missing either half is non-sync — whether it used
+# `db.write(batch)` / `db.flush()` (issue 73) or a `write_opt` with
+# `set_sync(false)` — unless it delegates to the metadata chokepoint below.
 SYNC_WRITE = re.compile(r"\bwrite_opt\s*\(")
 SET_SYNC = re.compile(r"\bset_sync\s*\(\s*true\s*\)")
+
+# The delegated durable form: `self.set_meta(KEY_X, ..)` as the method's whole
+# write, durable only if the chokepoint classifies `KEY_X` as `Synced`.
+DELEGATED_WRITE = re.compile(r"\bset_meta\s*\(\s*(KEY_[A-Z_]+)")
+# `if key == KEY_VOTE { Self::Synced` in `MetaDurability::for_key`, whitespace
+# normalized so rustfmt's line breaks do not decide whether the gate passes.
+CLASSIFIED_SYNCED = "== {key} {{ Self::Synced"
+# `write_opts` must derive the flag from the class, and `set_meta` must hand the
+# rendered options to an options-carrying write rather than a defaulted one.
+RENDERS_CLASS = re.compile(r"\bset_sync\s*\([^)]*Self::Synced")
+PASSES_OPTS = re.compile(
+    r"\b(?:put|delete)_cf_opt\s*\([^;]*MetaDurability::for_key\([^;]*write_opts"
+)
 
 
 def method_body(
@@ -108,6 +126,26 @@ def method_body(
     return None
 
 
+def chokepoint_syncs(lines: list[str], spans: list[tuple[int, int]], key: str) -> bool:
+    """Whether `set_meta(<key>, ..)` is a synced write.
+
+    All three links of the chokepoint have to hold: the key is classified
+    `Synced`, the class is rendered into `set_sync`, and the rendered options
+    reach the write. Any missing link and the caller counts as non-sync.
+    """
+    for_key = method_body(lines, "for_key", spans)
+    write_opts = method_body(lines, "write_opts", spans)
+    set_meta = method_body(lines, "set_meta", spans)
+    if for_key is None or write_opts is None or set_meta is None:
+        return False
+    classification = " ".join(for_key[1].split())
+    return (
+        CLASSIFIED_SYNCED.format(key=key) in classification
+        and bool(RENDERS_CLASS.search(write_opts[1]))
+        and bool(PASSES_OPTS.search(" ".join(set_meta[1].split())))
+    )
+
+
 def main() -> int:
     if not STORAGE.is_file():
         print(f"ERROR: {STORAGE} not found — did the raft storage impl move?", file=sys.stderr)
@@ -131,8 +169,11 @@ def main() -> int:
             return 1
         defn_line, body = found
         seen.add(name)
-        is_sync = bool(SYNC_WRITE.search(body)) and bool(SET_SYNC.search(body))
-        if not is_sync:
+        inline = bool(SYNC_WRITE.search(body)) and bool(SET_SYNC.search(body))
+        delegated = any(
+            chokepoint_syncs(lines, spans, key) for key in DELEGATED_WRITE.findall(body)
+        )
+        if not (inline or delegated):
             violations.append((name, defn_line))
 
     status = 0
@@ -157,6 +198,18 @@ def main() -> int:
         print("           let mut opts = rocksdb::WriteOptions::default();", file=sys.stderr)
         print("           opts.set_sync(true);", file=sys.stderr)
         print("           self.db.write_opt(batch, &opts)?;", file=sys.stderr)
+        print(
+            "       A single-key write may instead go through `set_meta` with the key",
+            file=sys.stderr,
+        )
+        print(
+            "       classified `MetaDurability::Synced` — but only while `for_key`,",
+            file=sys.stderr,
+        )
+        print(
+            "       `write_opts` and `set_meta` are still wired to each other.",
+            file=sys.stderr,
+        )
         print(
             "       A method whose non-sync write is a known, tracked defect goes", file=sys.stderr
         )

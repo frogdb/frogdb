@@ -196,11 +196,67 @@ impl ClusterSnapshotStore {
     }
 }
 
+/// How durable a metadata write has to be before `set_meta` returns.
+///
+/// The class is a function of the **key**, not of the caller: openraft's
+/// durability contract belongs to the record, so a future caller cannot write
+/// the vote non-durably by forgetting to ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetaDurability {
+    /// fsync before returning. Raft's safety argument rests on the record
+    /// being on the platter by the time the call reports success.
+    Synced,
+    /// Ordinary buffered write: a crash that loses the record leaves the node
+    /// recoverable, because the value is re-derived or the operation that
+    /// wrote it is idempotent.
+    Buffered,
+}
+
+impl MetaDurability {
+    /// The durability class of a metadata key.
+    ///
+    /// * `KEY_VOTE` — synced. openraft treats a returned `save_vote` as "the
+    ///   vote is durable, you may answer the `RequestVote`", and a vote that
+    ///   evaporates in a power cut lets the node grant a second vote in the
+    ///   same term: the precondition Raft's single-leader argument rests on.
+    /// * `KEY_COMMITTED` — buffered, and deliberately never read back
+    ///   ([`ClusterStorage::save_committed`]); openraft re-derives the commit
+    ///   index from the leader on restart.
+    /// * `KEY_LAST_PURGED` — buffered. Losing it un-purges a prefix that the
+    ///   snapshot still covers, and the next purge redoes the work.
+    fn for_key(key: &[u8]) -> Self {
+        if key == KEY_VOTE {
+            Self::Synced
+        } else {
+            Self::Buffered
+        }
+    }
+
+    /// Render the class as RocksDB write options.
+    ///
+    /// The `sync` flag itself has no in-process witness — RocksDB exposes no
+    /// getter for it and an fsync cannot be observed without cutting power —
+    /// so the forcing test asserts the *classification* instead, and this is
+    /// the single place a classification turns into a flag.
+    fn write_opts(self) -> rocksdb::WriteOptions {
+        let mut opts = rocksdb::WriteOptions::default();
+        opts.set_sync(matches!(self, Self::Synced));
+        opts
+    }
+}
+
 /// RocksDB-backed Raft log storage.
 pub struct ClusterStorage {
     db: Arc<DB>,
     /// Cache of recently accessed log entries.
-    log_cache: RwLock<BTreeMap<u64, Entry<TypeConfig>>>,
+    ///
+    /// Shared with every reader [`Self::get_log_reader`] hands out: openraft
+    /// builds that reader once at startup and holds it for the node's
+    /// lifetime, so a per-reader copy would go on serving entries that a later
+    /// `truncate` or `purge` invalidated on this handle — a leadership flap
+    /// re-appends different content at those indexes, and the reader would
+    /// hand out the overwritten term.
+    log_cache: Arc<RwLock<BTreeMap<u64, Entry<TypeConfig>>>>,
     /// Maximum number of entries to cache.
     cache_size: usize,
     /// Shared by every [`ClusterSnapshotStore`] handed out by
@@ -237,7 +293,7 @@ impl ClusterStorage {
 
         Ok(Self {
             db: Arc::new(db),
-            log_cache: RwLock::new(BTreeMap::new()),
+            log_cache: Arc::new(RwLock::new(BTreeMap::new())),
             cache_size: 1000,
             snapshot_save_lock: Arc::new(Mutex::new(())),
         })
@@ -302,7 +358,12 @@ impl ClusterStorage {
         Ok(Some(value))
     }
 
-    /// Set metadata value.
+    /// Set metadata value, at the durability its key calls for.
+    ///
+    /// Every metadata write goes through here, and the write options come from
+    /// [`MetaDurability::for_key`] rather than from the caller — the one
+    /// chokepoint where "is this record allowed to evaporate in a crash?" is
+    /// answered (FM-CLUSTER-098).
     #[allow(clippy::result_large_err)]
     fn set_meta<T: Serialize>(&self, key: &[u8], value: &T) -> Result<(), StorageError<NodeId>> {
         let data = serde_json::to_vec(value).map_err(|e| {
@@ -314,18 +375,22 @@ impl ClusterStorage {
 
         let cf = self.cf_meta();
         self.db
-            .put_cf(&cf, key, data)
+            .put_cf_opt(&cf, key, data, &MetaDurability::for_key(key).write_opts())
             .map_err(|e| self.io_error(openraft::ErrorVerb::Write, e))?;
 
         Ok(())
     }
 
-    /// Delete metadata value.
+    /// Delete metadata value, at the durability its key calls for.
+    ///
+    /// Same classification as [`Self::set_meta`]: removing a record is as
+    /// durability-sensitive as writing one, so the two agree by construction
+    /// rather than by the caller remembering.
     #[allow(clippy::result_large_err)]
     fn delete_meta(&self, key: &[u8]) -> Result<(), StorageError<NodeId>> {
         let cf = self.cf_meta();
         self.db
-            .delete_cf(&cf, key)
+            .delete_cf_opt(&cf, key, &MetaDurability::for_key(key).write_opts())
             .map_err(|e| self.io_error(openraft::ErrorVerb::Write, e))?;
         Ok(())
     }
@@ -469,23 +534,35 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
         self.get_meta(KEY_VOTE)
     }
 
+    /// A second handle on the same log, for openraft's read path.
+    ///
+    /// Everything is shared by `Arc` — the database, the snapshot lock, and
+    /// the log cache. The cache in particular: openraft creates this reader
+    /// once and keeps it for the node's lifetime, so a detached copy would
+    /// never see the `invalidate_cache_range` that `truncate` and `purge`
+    /// perform on the owning handle and would serve entries from an
+    /// overwritten term at indexes that were truncated and re-appended
+    /// (FM-CLUSTER-099).
     async fn get_log_reader(&mut self) -> Self::LogReader {
-        // Clone the storage for reading
-        // This is safe because RocksDB handles concurrent access
         ClusterStorage {
             db: Arc::clone(&self.db),
-            log_cache: RwLock::new(self.log_cache.read().clone()),
+            log_cache: Arc::clone(&self.log_cache),
             cache_size: self.cache_size,
             snapshot_save_lock: Arc::clone(&self.snapshot_save_lock),
         }
     }
 
+    /// Persist the vote, durably.
+    ///
+    /// A returned `Ok` is openraft's licence to answer the `RequestVote` that
+    /// prompted it, so the write is `sync` — `KEY_VOTE`'s durability class
+    /// ([`MetaDurability::for_key`]). It used to be a default (unsynced) write
+    /// followed by `DB::flush()`, which flushes the **default** column family
+    /// while the vote lives in `raft_meta`: the flush touched nothing the vote
+    /// depended on, and a power cut between the ack and the next unrelated
+    /// flush let the node vote twice in one term (FM-CLUSTER-098).
     async fn save_vote(&mut self, vote: &Vote<NodeId>) -> Result<(), StorageError<NodeId>> {
-        self.set_meta(KEY_VOTE, vote)?;
-        self.db
-            .flush()
-            .map_err(|e| self.io_error(openraft::ErrorVerb::Write, e))?;
-        Ok(())
+        self.set_meta(KEY_VOTE, vote)
     }
 
     /// Persist the committed index.
@@ -1152,6 +1229,184 @@ mod tests {
             remaining.iter().map(|e| e.log_id.index).collect::<Vec<_>>(),
             vec![1, 2, 3],
             "the kept index and everything below it survive"
+        );
+    }
+
+    /// The vote is written `sync`, into the column family it actually lives in.
+    ///
+    /// `save_vote` used to write the vote with default options and then call
+    /// `DB::flush()`, which flushes the **default** column family — a family
+    /// this storage never writes to at all. The vote lives in `raft_meta`, so
+    /// the flush was durability theatre: openraft was told the vote was on the
+    /// platter while it sat in an unsynced WAL, and a power cut there lets the
+    /// node grant a second vote in the same term.
+    ///
+    /// The fsync itself has no in-process witness (RocksDB exposes no getter
+    /// for `sync`, and observing an fsync means cutting power mid-test), so
+    /// this pins the two halves that *are* observable: the durability
+    /// classification the vote path resolves to, and the fact that the default
+    /// column family — everything `flush()` covers — is empty.
+    // FM-CLUSTER-098
+    #[tokio::test]
+    async fn the_vote_is_written_synced_to_the_meta_column_family() {
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+
+        assert_eq!(
+            MetaDurability::for_key(KEY_VOTE),
+            MetaDurability::Synced,
+            "the vote is the record Raft's one-vote-per-term argument rests on"
+        );
+        assert_eq!(
+            MetaDurability::for_key(KEY_COMMITTED),
+            MetaDurability::Buffered,
+            "the committed index is never read back — openraft re-derives it from the leader"
+        );
+        assert_eq!(
+            MetaDurability::for_key(KEY_LAST_PURGED),
+            MetaDurability::Buffered,
+            "losing the purge watermark only costs a repeat purge"
+        );
+
+        let vote = Vote::new_committed(7, 42);
+        storage.save_vote(&vote).await.unwrap();
+
+        let cf = storage.cf_meta();
+        assert!(
+            storage.db.get_cf(&cf, KEY_VOTE).unwrap().is_some(),
+            "the vote must be in the meta column family"
+        );
+        drop(cf);
+        assert!(
+            storage.db.get(KEY_VOTE).unwrap().is_none(),
+            "and nowhere else — a vote in the default CF would be a second copy to disagree with"
+        );
+        assert_eq!(
+            storage
+                .db
+                .property_int_value("rocksdb.num-entries-active-mem-table")
+                .unwrap(),
+            Some(0),
+            "the default column family holds nothing, so flushing it (what save_vote used to \
+             do) can never be what makes the vote durable"
+        );
+
+        drop(storage);
+        let mut reopened = ClusterStorage::open(dir.path()).unwrap();
+        let loaded = reopened
+            .read_vote()
+            .await
+            .unwrap()
+            .expect("the acknowledged vote must be there after a restart");
+        assert_eq!(loaded.leader_id().voted_for(), Some(42));
+        assert_eq!(loaded, vote);
+    }
+
+    /// A log reader created *before* a truncate never serves the entry the
+    /// truncate removed.
+    ///
+    /// openraft builds the log reader once at startup and holds it for the
+    /// node's lifetime, so a reader with its own copy of the cache is stale
+    /// forever after the first leadership flap: truncate the conflicting
+    /// suffix, re-append different content at the same index, and the reader
+    /// still hands out the entry from the overwritten term. That is Raft log
+    /// divergence — the leader ships an entry no node agreed on.
+    // FM-CLUSTER-099
+    #[tokio::test]
+    async fn a_log_reader_never_serves_an_entry_the_owner_truncated() {
+        use crate::types::ClusterCommand;
+        use openraft::EntryPayload;
+        use openraft::storage::RaftLogStorageExt;
+
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        storage
+            .blocking_append((9..=10).map(entry_at).collect::<Vec<_>>())
+            .await
+            .unwrap();
+
+        // The reader openraft would keep for the lifetime of the node, warmed
+        // on the entry that is about to be overwritten.
+        let mut reader = storage.get_log_reader().await;
+        let served = reader.try_get_log_entries(10..=10).await.unwrap();
+        assert!(
+            matches!(
+                served[0].payload,
+                EntryPayload::Normal(ClusterCommand::IncrementEpoch)
+            ),
+            "the reader starts out agreeing with the log"
+        );
+
+        // The flap: the conflicting suffix goes, and a different entry from a
+        // later term takes the same index.
+        storage
+            .truncate(LogId::new(openraft::CommittedLeaderId::new(1, 1), 9))
+            .await
+            .unwrap();
+        let replacement = Entry {
+            log_id: LogId::new(openraft::CommittedLeaderId::new(2, 1), 10),
+            payload: EntryPayload::Normal(ClusterCommand::RemoveNode { node_id: 7 }),
+        };
+        storage
+            .blocking_append(vec![replacement.clone()])
+            .await
+            .unwrap();
+
+        let after = reader.try_get_log_entries(10..=10).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            after[0].log_id, replacement.log_id,
+            "the reader must serve the entry that is on disk now, not the overwritten term"
+        );
+        assert!(
+            matches!(
+                after[0].payload,
+                EntryPayload::Normal(ClusterCommand::RemoveNode { node_id: 7 })
+            ),
+            "and the payload that came with it"
+        );
+    }
+
+    /// Invalidation on the owning handle reaches a reader's cache, and reaches
+    /// exactly the range it names.
+    ///
+    /// The reader shares one cache with the owner rather than copying it, so
+    /// there is no second cache to drift; this pins that directly, where the
+    /// sibling test pins the consequence.
+    // FM-CLUSTER-099
+    #[tokio::test]
+    async fn cache_invalidation_reaches_a_reader() {
+        use openraft::storage::RaftLogStorageExt;
+
+        let dir = tempdir().unwrap();
+        let mut storage = ClusterStorage::open(dir.path()).unwrap();
+        storage
+            .blocking_append((1..=3).map(entry_at).collect::<Vec<_>>())
+            .await
+            .unwrap();
+
+        let reader = storage.get_log_reader().await;
+        assert!(
+            reader.get_cached(2).is_some(),
+            "a reader sees what the owner cached before it existed"
+        );
+
+        storage.invalidate_cache_range(2, Some(2));
+        assert!(
+            reader.get_cached(2).is_none(),
+            "an invalidation on the owner must reach the reader, not just the owner's own copy"
+        );
+        assert!(
+            reader.get_cached(3).is_some(),
+            "and only over the range it names"
+        );
+
+        // The other direction too: one cache, so a reader's fill is the
+        // owner's fill and neither can hold a value the other has dropped.
+        reader.cache_entry(entry_at(2));
+        assert!(
+            storage.get_cached(2).is_some(),
+            "the owner and its readers share one cache, not two that agree by luck"
         );
     }
 }

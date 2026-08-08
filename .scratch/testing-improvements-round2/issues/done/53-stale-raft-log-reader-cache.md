@@ -1,6 +1,6 @@
 # A cloned `RaftLogReader` keeps a stale log cache and serves overwritten-term entries
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Origin: round-2 testing audit 2026-07-28 — 15 parallel area audits, `.scratch/testing-improvements-round2/`
 Source: proposals/11 F3 · MASTER.md §3
@@ -59,6 +59,31 @@ resulting divergence to this cache, and the repro is fully deterministic at the 
 ## Depends on
 
 Nothing.
+
+## Resolution
+
+Fixed 2026-08-08 under **FM-CLUSTER-099** (`.scratch/hardening/specs/cluster-failure-modes.md`) —
+option 1 of "What to fix": one `Arc<RwLock<BTreeMap<u64, Entry>>>` is now shared by the writing
+handle and every reader `get_log_reader` hands out, so `invalidate_cache_range` (the only
+invalidation, reached from `truncate` and `purge`) reaches every reader by construction. Option 2
+(drop the reader's cache) was not taken: sharing keeps the read path's benefit and the coherence
+machinery is a single `Arc`, since there is now exactly one cache rather than two that must agree.
+
+The suspicion was confirmed, not merely fixed around: both new tests were run against the previous
+`log_cache: RwLock::new(self.log_cache.read().clone())` and both fail there.
+
+Acceptance criteria:
+
+- [x] `a_log_reader_never_serves_an_entry_the_owner_truncated` — append E1@10, read `10..=10`
+      through a reader, `truncate(9)` and append a different E2@10 (later term, different payload)
+      on the owner, re-read through the **same** reader and assert E2. Failed before the fix.
+- [x] `cache_invalidation_reaches_a_reader` — a range the reader has cached is invalidated on the
+      owner; the reader no longer serves the pre-invalidation value, neighbouring indexes survive,
+      and a reader's own fill is visible to the owner (one cache, both directions).
+- [x] `truncate` and `invalidate_cache_range` now have coverage outside `integration_cluster`:
+      these two crate-level tests plus the pre-existing
+      `truncate_drops_only_the_tail_after_the_kept_index` all live in `frogdb-cluster`, so they
+      also count toward that crate's own mutation score.
 
 ## Re-triage 2026-08-06
 
