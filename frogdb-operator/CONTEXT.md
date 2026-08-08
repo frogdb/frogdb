@@ -4,7 +4,7 @@ Kubernetes operator for FrogDB (`frogdb-operator/`) plus deployment tooling
 (`frogdb-server/ops/*`: Helm charts, deb packaging, `frogdb-admin`). Reconciles the `FrogDB`
 custom resource into StatefulSets, Services, ConfigMaps, and PDBs. Config vocabulary is
 single-sourced from the server — see
-[ADR-0001](../docs/adr/0001-operator-imports-server-config-crate.md).
+[ADR-0001](../adr/0001-operator-imports-server-config-crate.md).
 
 ## Language
 

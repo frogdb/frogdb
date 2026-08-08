@@ -146,13 +146,13 @@ It also found why that family is worth less than it looks:
 - **Agent commits run three of them.** Eight run only via `just lint`, and lefthook's
   `rust-clippy` job skips entirely when `CLAUDECODE=1` (`lefthook.yml:34-37`). Only
   `no-typed-unwrap`, `keyspace-notify-routing` and `script-gate` are wired directly to lefthook.
-- There is no `docs/agents/` page for the family, so the convention is invisible to new agents.
+- There is no `agents/` page for the family, so the convention is invisible to new agents.
 
 **This is campaign-2 item zero.** Every rule below is worthless until the gates fire, and the fix
 is small: a `just lint-gates` recipe containing only the compile-free gates (sub-second), wired
 into lefthook *unconditionally* — the `CLAUDECODE=1` skip exists because clippy compiles, which
 these do not — plus a `seam-gates` CI job in `workflow_gen` listed in the required-jobs array, and
-`docs/agents/seam-lints.md` linked from `CLAUDE.md`. Filed as issue 06.
+`agents/seam-lints.md` linked from `CLAUDE.md`. Filed as issue 06.
 
 #### 3.1 Candidate rules
 

@@ -6,7 +6,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 - **`CONTEXT-MAP.md`** at the repo root — it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
 - The per-context **`CONTEXT.md`** for the area you're working in (see the map below).
-- **`docs/adr/`** — repo-wide architectural decisions. Also check `<context>/docs/adr/` for context-scoped decisions.
+- **`adr/`** — repo-wide architectural decisions. Also check `<context>/docs/adr/` for context-scoped decisions.
 
 If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The producer skill (`/grill-with-docs`) creates them lazily when terms or decisions actually get resolved.
 
@@ -17,7 +17,7 @@ This is a multi-context repo (a Rust workspace). Contexts map to top-level direc
 ```
 /
 ├── CONTEXT-MAP.md                     ← index of contexts
-├── docs/adr/                          ← workspace-wide decisions
+├── adr/                               ← workspace-wide decisions
 ├── frogdb-server/                     ← context: server (Redis-compatible DB engine)
 │   ├── CONTEXT.md
 │   ├── docs/adr/                      ← server-specific decisions

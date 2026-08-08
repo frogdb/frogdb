@@ -21,7 +21,7 @@ below exists because the drift it catches actually happened:
   5. Every feature directory needs a `README.md` with a `State:` line, so a reader
      can tell an active workspace from an archive without reading the issues.
 
-See `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. If you add or
+See `agents/issue-tracker.md` and `agents/triage-labels.md`. If you add or
 rename a `Status:` value, update `LEGAL` here in the same commit.
 
 Exit 0 clean, 1 on any violation.
@@ -125,7 +125,7 @@ def main() -> int:
         for e in errors:
             print(f"  {e}", file=sys.stderr)
         print(file=sys.stderr)
-        print("       See docs/agents/issue-tracker.md", file=sys.stderr)
+        print("       See agents/issue-tracker.md", file=sys.stderr)
         return 1
 
     total = sum(

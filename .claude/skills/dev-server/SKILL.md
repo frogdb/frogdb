@@ -65,7 +65,7 @@ Restart the dev server when:
 - **Build failure** — kill the server, fix the issue, then restart
 
 Do NOT restart for changes to:
-- `testing/`, `docs/`, `.github/` — no server binary impact
+- `testing/`, `adr/`, `agents/`, `.github/` — no server binary impact
 - `justfile` load test recipes — server binary unchanged
 - Python scripts — no server binary impact
 

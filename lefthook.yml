@@ -51,7 +51,7 @@ pre-commit:
         - "rust-toolchain.toml"
         - ".mise.toml"
       run: just sync-toolchain-check
-    # The compile-free seam-lint family (docs/agents/seam-lints.md). Unlike
+    # The compile-free seam-lint family (agents/seam-lints.md). Unlike
     # rust-clippy above, these are grep/regex checks with no compile step
     # (sub-second total), so there is no CLAUDECODE skip: the rationale for
     # skipping clippy under agents does not apply to a set of greps. Runs

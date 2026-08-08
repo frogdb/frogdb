@@ -166,7 +166,7 @@ def test_workflow() -> Workflow:
         ),
     )
 
-    # The compile-free seam-lint family (docs/agents/seam-lints.md):
+    # The compile-free seam-lint family (agents/seam-lints.md):
     # `just lint-gates` runs every `lint-*` gate except `lint-failure-modes`
     # (builds test binaries) and the turmoil lints — grep/regex checks with no
     # compile step, so this job needs no Rust toolchain, just `just` (for the

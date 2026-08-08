@@ -3,7 +3,7 @@
 Status: **LANDED.** Investigation complete, both forcing tests written and passing, dispositions
 approved, and the C3 lint built on top of them: `scripts/continuation-lock-gate.py`, recipe
 `just lint-continuation-lock`, 14th member of `just lint-gates`. The lint is a **count pin**, not
-a full 64-arm classification — see [`docs/agents/seam-lints.md`](../../docs/agents/seam-lints.md)
+a full 64-arm classification — see [`agents/seam-lints.md`](../../agents/seam-lints.md)
 (§ "`lint-continuation-lock`: a count pin instead of a full classification") for the shape and the
 script's module docstring for why. Both arms below are pinned `EXEMPT` with their reason and their
 forcing-test name, and the lint fails if either test disappears.

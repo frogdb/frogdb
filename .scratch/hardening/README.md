@@ -41,7 +41,7 @@ the forcing test, then change the code.
 ## Issues
 
 Filed under [`issues/`](issues/) per the
-[issue-tracker conventions](../../docs/agents/issue-tracker.md) — `Status:` line and
+[issue-tracker conventions](../../agents/issue-tracker.md) — `Status:` line and
 `open/`|`done/` subdirectory must agree, enforced by `just scratch-check`.
 
 The redis-regression suite was **frozen** during the campaign (a red `regression-run` got an

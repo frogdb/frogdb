@@ -1,7 +1,7 @@
 # Issue tracker: Local Markdown
 
 Issues and PRDs for this repo live as markdown files in `.scratch/`. See
-[`.scratch/README.md`](../../.scratch/README.md) for the current directory index and open/done
+[`.scratch/README.md`](../.scratch/README.md) for the current directory index and open/done
 counts.
 
 ## Conventions

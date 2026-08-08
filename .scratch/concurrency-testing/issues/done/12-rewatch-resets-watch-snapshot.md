@@ -104,7 +104,7 @@ re-WATCH — the same laundering in a different coat).
 
 ## Resolution
 
-Fixed spec-first, per the locked-area rules (`docs/agents/hardening-campaign.md`).
+Fixed spec-first, per the locked-area rules (`docs/agents/hardening-campaign.md`, retired — now CLAUDE.md "Locked core areas").
 
 **Spec.** New row **FM-TXN-050 — Re-WATCHing an already-watched key keeps the first snapshot** in
 `.scratch/hardening/specs/txn-failure-modes.md`, with FM-TXN-033's "NOT observable" cell

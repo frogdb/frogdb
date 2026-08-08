@@ -2,7 +2,7 @@
 
 FrogDB is a multi-context repo. Each bounded context has its own `CONTEXT.md` glossary and may
 have context-scoped ADRs under `<context>/docs/adr/`. Workspace-wide ADRs live in
-[`docs/adr/`](./docs/adr/).
+[`adr/`](./adr/).
 
 ## Contexts
 
@@ -19,7 +19,7 @@ have context-scoped ADRs under `<context>/docs/adr/`. Workspace-wide ADRs live i
 - **Operator → Server (config schema, compile-time)**: the operator imports the server's
   `frogdb-config` crate and emits `frogdb.toml` through the server's own serde types, so any
   server-side config rename breaks the operator build instead of drifting silently. See
-  [ADR-0001](./docs/adr/0001-operator-imports-server-config-crate.md).
+  [ADR-0001](./adr/0001-operator-imports-server-config-crate.md).
 - **Operator → Server (runtime)**: the operator's ConfigMap-mounted `frogdb.toml` and
   `FROGDB_<SECTION>__<KEY>` env overrides are consumed directly by the `frogdb-server` binary.
   Section/key vocabulary is the server's; the operator invents no config terms of its own except

@@ -23,7 +23,7 @@ the mutability/no-op partition.
 | `frogdb-server/crates/server/src/runtime_config.rs` | 2712 | `build_param_registry` (L685–L808, **16** immutable `ParamMeta`); `build_typed_params` (L816–L1611, **31** `ConfigParam` + **14** `NoopParam` = **45** mutable); the CONFIG GET/SET/REWRITE machinery; `test_param_registry_consistency` (L2171–L2206). |
 | `frogdb-server/ops/docs-gen/src/main.rs` | 324 | `build_param_lookup` (L125–L134) consumes `config_param_registry()` by `(section, field)` to enrich the generated config reference. Links the **config** crate, not the server crate. |
 | `frogdb-operator/src/config_gen.rs` | 162 | Imports `frogdb_config` for the serde `Config`/section structs **only** (L12); never touches `config_param_registry`/`ConfigParamInfo`/`ConfigParam`. The ADR-0001 consumer. |
-| `docs/adr/0001-operator-imports-server-config-crate.md` | 7 | The constraint: operator serializes through the server's own serde types; a rename must stay a compile error, not a runtime drift. |
+| `adr/0001-operator-imports-server-config-crate.md` | 7 | The constraint: operator serializes through the server's own serde types; a rename must stay a compile error, not a runtime drift. |
 
 ## Problem (concrete verified evidence)
 

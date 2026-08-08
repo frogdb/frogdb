@@ -18,7 +18,7 @@ Everything here is **future/unimplemented** work — none of it describes curren
 
 Not an issue tracker: these are design docs, not `Status:`-tracked issues. When work starts
 on one, open a `.scratch/<feature>/` directory per
-[`docs/agents/issue-tracker.md`](../../docs/agents/issue-tracker.md) and link back here.
+[`agents/issue-tracker.md`](../../agents/issue-tracker.md) and link back here.
 
 The retired `todo/` directory's implemented material (62 architecture proposals across 7
 rounds, the compat action-item breakdown, historical audits) lives in git history — see the

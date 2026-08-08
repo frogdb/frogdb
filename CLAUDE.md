@@ -122,7 +122,7 @@ Four core areas are **locked** behind failure-mode specs and mutation gates: **t
 (`frogdb-txn` + `frogdb-vll`, gate 0.90), **persistence** (`frogdb-persistence` +
 `frogdb-recovery`, 0.85), **replication** (`frogdb-replication` +
 `frogdb-replication-runtime`, 0.85), **cluster** (`frogdb-cluster` +
-`frogdb-cluster-runtime`, 0.80). Boundary ADRs: `docs/adr/0002`–`0004`.
+`frogdb-cluster-runtime`, 0.80). Boundary ADRs: `adr/0002`–`0004`.
 
 - The specs (`.scratch/hardening/specs/<area>-failure-modes.md`, header `Status: LOCKED`)
   are the contract: behavior changes are **spec-first** (failure-mode row → failing test →
@@ -142,17 +142,17 @@ Four core areas are **locked** behind failure-mode specs and mutation gates: **t
 
 ### Issue tracker
 
-Issues + PRDs live as markdown under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+Issues + PRDs live as markdown under `.scratch/<feature>/`. See `agents/issue-tracker.md`.
 
 ### Triage labels
 
 Five canonical roles, default strings (`needs-triage`, `needs-info`, `ready-for-agent`,
-`ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+`ready-for-human`, `wontfix`). See `agents/triage-labels.md`.
 
 ### Domain docs
 
 Multi-context: `CONTEXT-MAP.md` at root points to a per-context `CONTEXT.md`
-(server / operator / cli). See `docs/agents/domain.md`.
+(server / operator / cli). See `agents/domain.md`.
 
 ### Coverage depth
 
@@ -166,7 +166,7 @@ plain line coverage (which function is reached by how many *distinct* tests). Re
 Fifteen chokepoint gates encode "every X must go through Y" invariants (clock reads, metrics
 emission, redirect replies, durable-ack writes, ...). `just lint-gates` runs the compile-free subset on every commit
 (lefthook, unconditional) and in CI (`seam-gates` job); the full family runs in `just lint`. See
-`docs/agents/seam-lints.md`.
+`agents/seam-lints.md`.
 
 ### Remote compilation/testing: Blacksmith testboxes
 

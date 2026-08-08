@@ -72,7 +72,7 @@ across `crates/testing/` returns **nothing**, so the primitive would not just be
 first shuttle code in that crate. There is no VLL model under shuttle (`testing/src/models/` holds only
 the six datatype models: hash, kv, list, register, stream, stream_group, zset). Criterion 4 is also
 undone — the "loom is the wrong tool for VLL" conclusion lives only in proposal 12 and this issue; grep
-for `loom` across `docs/` and `crates/` finds only the unrelated "Virtual Lock Loom" gloss in
+for `loom` across the repo's markdown and `crates/` finds only the unrelated "Virtual Lock Loom" gloss in
 the phase-4b plan (retired, git history). Note the overlap with issue 03
 narrowed: the clock seam (`frogdb_types::clock`) now gives deterministic time under a *paused tokio*
 runtime workspace-wide, which is a different mechanism from shuttle's scheduler and does not make VLL

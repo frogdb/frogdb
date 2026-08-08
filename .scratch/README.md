@@ -27,7 +27,7 @@ tracked files; unreferenced closed issues are pruned — git history is the arch
 
 ## Conventions
 
-Full rules live in [`docs/agents/issue-tracker.md`](../docs/agents/issue-tracker.md). The
+Full rules live in [`agents/issue-tracker.md`](../agents/issue-tracker.md). The
 three that bite most often:
 
 1. **Status lives in two places and they must agree.** The `Status:` line and the

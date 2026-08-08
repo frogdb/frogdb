@@ -257,7 +257,7 @@ fmt-check crate="":
 # Depends on `lint-gates` rather than re-listing the compile-free gates: the two
 # hand-maintained lists had already drifted (`lint-no-typed-unwrap`,
 # `lint-keyspace-notify-routing` and `lint-script-gate` ran in `lint-gates` but
-# not in `lint`, contradicting docs/agents/seam-lints.md). One list, so `lint` is
+# not in `lint`, contradicting agents/seam-lints.md). One list, so `lint` is
 # always a superset of `lint-gates`.
 lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-failure-modes
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
@@ -266,7 +266,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-failure-modes
 # except `lint-failure-modes` (builds test binaries) and the turmoil lints
 # (compile via clippy, or exist only to police the turmoil feature). These are
 # grep/regex checks over source text, so the whole set runs in well under a
-# second (see docs/agents/seam-lints.md) and is cheap enough to run
+# second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
 lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock
@@ -1052,7 +1052,7 @@ lint-script-gate:
 # Verify the .scratch/ issue tracker is internally consistent: legal Status:
 # values, Status: agrees with the open/|done/ subdirectory, every feature dir has
 # a README.md with a State: line, no duplicate issue numbers.
-# See docs/agents/issue-tracker.md.
+# See agents/issue-tracker.md.
 scratch-check:
     ./scripts/scratch-check.py
 

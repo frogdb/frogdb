@@ -15,7 +15,7 @@ defects before a human audit did, then run the backlog through them.
 | path | what |
 |---|---|
 | `PRD.md` | the plan — evidence, workstreams, sequencing, exit criteria |
-| `issues/open/`, `issues/done/` | campaign-2 issues per the [issue-tracker](../../docs/agents/issue-tracker.md) conventions |
+| `issues/open/`, `issues/done/` | campaign-2 issues per the [issue-tracker](../../agents/issue-tracker.md) conventions |
 
 The live-defect backlog itself stays where it was filed
 (`../testing-improvements-round2/issues/open/`); campaign 2 references those numbers rather than
