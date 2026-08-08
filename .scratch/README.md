@@ -16,13 +16,13 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 | [arch-deepening](arch-deepening/) | active | 15 | 1 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
 | [hardening-2](hardening-2/) | active | 9 | 1 | second hardening campaign, detection-first; running |
 | [concurrency-testing](concurrency-testing/) | active | 4 | 6 | concurrency invariant testing; phases 1–5 shipped. Issue 11's findings re-verified 2026-08-02 and split into issues 12–16 — one real product bug (12), the rest harness/checker defects |
-| [replication-cluster-rework](replication-cluster-rework/) | active | 2 | 9 | four rework PRDs, all merged 2026-07-30; two follow-ups outstanding |
+| [replication-cluster-rework](replication-cluster-rework/) | active | 1 | 10 | four rework PRDs, all merged 2026-07-30; one follow-up outstanding |
 | [hardening](hardening/) | active | 2 | 37 | foundation-hardening campaign, **exited 2026-08-05** — all four areas locked; specs remain the contract |
 | [naming-cleanup](naming-cleanup/) | active | 1 | 4 | canonical terminology; decisions now canon in `CONTEXT.md` files |
 | [testing-improvements](testing-improvements/) | archive-of-record | 1 | 18 | round-1 testing-gap audit. **Do not delete** — live write target + inbound refs |
 | [roadmap](roadmap/) | active | — | — | roadmap + unfinished/follow-up items (migrated from the retired `todo/`); not an issue tracker |
 
-Totals: **104 open, 82 done**. `done/` holds only closed issues still referenced from
+Totals: **103 open, 83 done**. `done/` holds only closed issues still referenced from
 tracked files; unreferenced closed issues are pruned — git history is the archive.
 
 ## Conventions
