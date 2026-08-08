@@ -37,6 +37,15 @@ server-dir := justfile_directory() / "frogdb-server"
 default:
     @just --list
 
+# Install the shared VS Code config into .vscode/ (git-ignored — see contrib/vscode/README.md)
+vscode-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .vscode website/.vscode
+    cp contrib/vscode/root/*.json .vscode/
+    cp contrib/vscode/website/*.json website/.vscode/
+    echo "installed VS Code config into .vscode/ and website/.vscode/"
+
 # =============================================================================
 # Rust: Build & Check
 # =============================================================================
