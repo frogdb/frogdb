@@ -81,6 +81,14 @@ just fmt-py                             # format Python code
 - When running a single test, target the owning crate to avoid rebuilding the entire workspace:
   `just test frogdb-server test_name`
 
+### Editor config
+
+`.vscode/` and `website/.vscode/` are **git-ignored**; the shared config is a template in
+`contrib/vscode/`, installed with `just vscode-setup` (run it after a fresh clone). They are
+untracked because the Claude Code sandbox hard-denies writes to any `.vscode` path, which made
+`git worktree add` abort — see [contrib/vscode/README.md](contrib/vscode/README.md). Do not
+re-track them. `just vscode-setup` itself needs `dangerouslyDisableSandbox: true`.
+
 ### Execution mode: local (default) or testbox
 
 Builds and tests run in one of two modes. **`local` is the default.**
