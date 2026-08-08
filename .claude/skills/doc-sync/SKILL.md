@@ -10,7 +10,7 @@ description: >
 
 Detect and fix drift between FrogDB's documentation and the actual codebase. Documentation
 lives in `website/src/content/docs/` (architecture, operations, guides), plus project docs
-(`CLAUDE.md`, `README.md`, `AGENTS.md`), and `testing/jepsen/README.md`.
+(`CLAUDE.md`, `README.md`; `AGENTS.md` is a symlink to `CLAUDE.md`), and `testing/jepsen/README.md`.
 
 ## When To Use
 
@@ -186,7 +186,7 @@ that avoid scanning all 50+ docs for every check.
 - `website/src/content/docs/guides/*.md` (user docs)
 - `CLAUDE.md` (project instructions)
 - `README.md` (project overview)
-- `AGENTS.md` (agent guidelines)
+- `AGENTS.md` (symlink to `CLAUDE.md`)
 - `testing/jepsen/README.md` (Jepsen test docs)
 
 **Out of scope:**

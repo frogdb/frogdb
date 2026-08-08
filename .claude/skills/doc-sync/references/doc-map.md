@@ -75,5 +75,5 @@ Specific source files frequently quoted or referenced in docs.
 |-----|-------------|
 | `CLAUDE.md` | Justfile recipes, build commands, crate names, test runner config |
 | `README.md` | Feature list, getting started commands, crate names |
-| `AGENTS.md` | Crate names, skill references |
+| `AGENTS.md` | Symlink to `CLAUDE.md` — no separate sync needed |
 | `testing/jepsen/README.md` | Jepsen workloads, Docker commands, namespace names |

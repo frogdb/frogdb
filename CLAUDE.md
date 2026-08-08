@@ -1,12 +1,61 @@
 # FrogDB
 
-FrogDB is unreleased, pre-production software. Breaking changes are acceptable — sweeping changes
-that would normally be prohibitive for production software are encouraged here when they improve
-implementation efficiency.
+FrogDB is a modern, Redis 8.x-compatible database written in Rust. It supports both standalone
+and cluster operating modes as well as replication and configurable durability/persistence.
+
+> **Note**: `AGENTS.md` is a symlink to this file — they are the same document.
+
+## Goals
+
+- Correctness
+  - Specified behavior proven under various failure modes
+- Redis compatible (with differences documented)
+  - Deviations should be improvements
+- Easy to operate
+  - easy introspection and observability
+  - easy to adjust configuration without downtime
+- Fast
+  - Should be at least as fast as competing solutions
+- Scalable
+  - can operate as a single node with no disk, to cluster of nodes and replicas with persistence
+
+## Development Philosophy
+
+- FrogDB is unreleased, pre-production software. Breaking changes are acceptable — sweeping changes
+  that would normally be prohibitive for production software are encouraged here when they improve
+  implementation efficiency.
+- Inspiration is drawn from high-quality modern database projects like CockroachDB, ScyllaDB, FoundationDB
+- Upmost care should be taken to ensure the correctness of the system. Examples include:
+  - Extensive regression tests derived from the official Redis test suite to ensure compatibility
+  - Extensive distributed systems and concurrency testing to ensure expected behavior during various
+    failure modes like network partitions, disk failures, etc.
+  - Fuzz testing for security/stability
+- Easy to operate in a modern cloud environment, eg:
+  - Grafana/Prometheus/OpenTelemetry/dtrace for observability
+  - frogctl cli tool
+  - Debug web pages
+  - operational debug/profiling tools
+  - kubernetes operator
+
+## Main Components
+
+- FrogDB
+  - The database binary
+- frogctl
+  - cli tool for managing the database (ops)
+- frogdb-operator
+  - a Kubernetes operator for FrogDB
+- website for info/documentation/marketing
+- the assets/ folder has images for branding
+- .scratch/roadmap/ contains roadmap and unfinished/follow-up items
 
 ## Build System
 
-This project uses `just` (see `Justfile`). 
+This project uses `just` (see `Justfile`) for performing almost all tasks required in the
+development lifecycle: tests (unit, concurrency, web, fuzzing, jepsen, browser, load/memtier,
+regression/compatibility), linting, type checking, building (incl. cross-compilation), formatting,
+benchmarking, profiling, docker, debug server, website, code generation (docs/markdown, helm,
+grafana, debian), github runner, and cleanup/disk space.
 
 Examples:
 
@@ -24,11 +73,13 @@ just fmt frogdb-core                    # format a single crate
 just fmt-py                             # format Python code
 ```
 
-**IMPORTANT**: Check the `Justfile` for a recipe before using custom commands.
+**IMPORTANT**: Check the `Justfile` for a recipe before using custom commands like `cargo` directly.
+
+- **BAD**: `cargo test ...`
+- **GOOD**: `just test ...`
 
 - When running a single test, target the owning crate to avoid rebuilding the entire workspace:
   `just test frogdb-server test_name`
-- If you encounter an error with `sccache`, rerun the command prefixed with `RUSTC_WRAPPER=""`
 
 ### Execution mode: local (default) or testbox
 
@@ -86,14 +137,38 @@ agent killed by the 600s watchdog:
 6. **Never pipe a long run through filters** (`| grep | tail` buffers everything and hides
    progress); let the harness capture raw output.
 
+## Website/Documentation
+
+FrogDB has a website for documentation using Astro that is published to Github Pages.
+
+**IMPORTANT**: Check for relevant documentation to update when making API/behavior changes
+
+## Code generation
+
+Many markup files (yaml, json) in the repo are generated from Python or Rust scripts.
+
+- Check files for indications that these are generated
+- Make changes in the generator code, **not** the generated yaml/json.
+
+Examples:
+- github actions
+- helm charts
+- grafana
+- some documentation/markdown
+
+## Web/HTTP/HTML
+
+- **IMPORTANT**: use `bun` for Javascript/Typescript build/test/run/dev/install. **NOT**
+  npm/npx/yarn
+
 ## Agent Guidelines
 
 - Check the `Justfile` before performing an action to see if there is already a target to do this
   - eg. build/tests/linting, dev servers, code generation, 
+- Write simple code, avoid unnecessary complexity
 - Code architecture choices should focus on making the software easy to change in the future
 - Follow idiomatic Rust patterns and use best practices
-- When implementing features or making changes, think about what unit + integration + concurrency
-  tests make sense to add. Consider edge cases.
+- When discovering a bug, write a regression test. Think about how we might prevent new bugs from occurring in a systematic fashion.
 - When designing features, research what implementation Redis, Valkey, and DragonflyDB use for the
   feature. This provides critical insight for decision making.
 - When adding new development tools or dependencies:
@@ -113,6 +188,8 @@ agent killed by the 600s watchdog:
   worktree directory and not the main directory.
 - If you need a paragraph-long comment to justify why the workaround is OK, the code is wrong — fix
   the code.
+- When marking todo items complete in markdown files or elsewhere, don't mark them as completed or
+  strike them out `~~`, just remove them
 
 ## Agent skills
 
