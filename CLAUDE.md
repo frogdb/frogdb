@@ -158,7 +158,7 @@ Multi-context: `CONTEXT-MAP.md` at root points to a per-context `CONTEXT.md`
 
 `just coverage-depth` adds per-line exec counts and per-function test diversity on top of
 plain line coverage (which function is reached by how many *distinct* tests). Reports land in
-`.scratch/testing-improvements/audit/`; `just coverage-depth-calibrate <crate>` sizes a run,
+`.scratch/testing-improvements/audit/`; `just coverage-calibrate <crate>` sizes a run,
 `just test-coverage-depth` tests the pipeline itself.
 
 ### Seam lints
