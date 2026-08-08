@@ -771,7 +771,7 @@ const LOADED_ACCEPTANCE: Scenario = Scenario {
 /// keeps it from doing so is the several milliseconds the drain round trip and
 /// two Raft commits take. A false *negative* has no such mechanism, which is the
 /// direction that matters for an acceptance case.
-// FM-CLUSTER-092 FM-CLUSTER-095
+// FM-CLUSTER-095
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn no_write_is_acknowledged_after_the_slot_is_handed_over_under_load() {
     let samples = measure(LOADED_ACCEPTANCE).await;

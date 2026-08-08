@@ -212,6 +212,7 @@ mod tests {
         }
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn only_the_owner_is_stamped() {
         assert_eq!(
@@ -228,12 +229,14 @@ mod tests {
         assert_eq!(stamp_fence(&snapshot(None), SLOT, ME), None);
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn a_prepared_handoff_is_part_of_the_stamp() {
         let stamped = stamp_fence(&with_handoff(snapshot(Some(ME)), 9, false), SLOT, ME).unwrap();
         assert_eq!(stamped.handoff_seq, 9);
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn an_unchanged_generation_admits_the_command() {
         let snap = snapshot(Some(ME));
@@ -253,6 +256,7 @@ mod tests {
     /// not yet `CompleteSlotMigration`, so it still believes it owns the slot.
     /// This is exactly the residual window the measurement recorded, and the
     /// only signal available inside it is the handoff seq.
+    // FM-CLUSTER-095
     #[test]
     fn a_handoff_prepared_after_validation_refuses_with_tryagain() {
         let fence = stamp_fence(&snapshot(Some(ME)), SLOT, ME).unwrap();
@@ -264,6 +268,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn a_superseding_attempt_refuses_too() {
         let fence = stamp_fence(&with_handoff(snapshot(Some(ME)), 4, false), SLOT, ME).unwrap();
@@ -275,6 +280,7 @@ mod tests {
     /// ownership never moved — so a command that validated before it is still
     /// entitled to its answer. Refusing here would turn every aborted
     /// finalization into a burst of spurious `TRYAGAIN`s.
+    // FM-CLUSTER-095
     #[test]
     fn an_aborted_attempt_leaves_the_generation_where_it_was() {
         let fence = stamp_fence(&snapshot(Some(ME)), SLOT, ME).unwrap();
@@ -285,6 +291,7 @@ mod tests {
         assert!(fence_verdict(&aborted, fence).is_none());
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn ownership_that_moved_refuses_with_moved_at_the_new_owner() {
         let fence = stamp_fence(&snapshot(Some(ME)), SLOT, ME).unwrap();
@@ -293,6 +300,7 @@ mod tests {
         assert_eq!(error_text(&verdict), format!("MOVED {SLOT} 127.0.0.1:7002"));
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn an_owner_we_cannot_address_degrades_to_clusterdown() {
         let fence = stamp_fence(&snapshot(Some(ME)), SLOT, ME).unwrap();
@@ -305,6 +313,7 @@ mod tests {
         );
     }
 
+    // FM-CLUSTER-095
     #[test]
     fn a_slot_that_lost_its_owner_degrades_to_clusterdown() {
         let fence = stamp_fence(&snapshot(Some(ME)), SLOT, ME).unwrap();
@@ -318,6 +327,7 @@ mod tests {
     /// The fence is per slot: a handoff on a neighbouring slot must not refuse
     /// commands on this one. Under load a cluster finalizes slots continuously,
     /// and a coarser token would make every finalization a cluster-wide stall.
+    // FM-CLUSTER-095
     #[test]
     fn a_handoff_on_another_slot_is_invisible() {
         let fence = stamp_fence(&snapshot(Some(ME)), SLOT, ME).unwrap();

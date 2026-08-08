@@ -666,7 +666,7 @@ async fn a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict() {
     );
 }
 
-// FM-CLUSTER-096
+// FM-CLUSTER-096 FM-CLUSTER-083
 #[tokio::test]
 async fn the_pause_barrier_is_handed_the_whole_batch() {
     // The seam's whole point: a slot-scoped barrier can only park the batches

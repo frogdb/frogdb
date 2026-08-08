@@ -388,7 +388,7 @@ async fn a_source_that_cannot_drain_aborts_the_finalization() {
     harness.shutdown_all().await;
 }
 
-// FM-CLUSTER-093
+// FM-CLUSTER-093 FM-CLUSTER-083
 /// The same property as FM-CLUSTER-092, for a transaction rather than a single
 /// write — and it exercises a different code path to get there.
 ///
