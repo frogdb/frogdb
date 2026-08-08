@@ -32,6 +32,7 @@
 //! - REPLCONF ACK <offset> - Replica acknowledges offset
 
 pub mod apply;
+pub mod feed_gate;
 pub mod frame;
 pub mod fullsync;
 pub mod identity;
@@ -51,6 +52,7 @@ pub use apply::{
     ApplyError, ConsumeStats, ControlApplier, ReplicaApplier, ReplicaTxnBound, StreamedFrame,
     consume_frames, parse_frame_payload,
 };
+pub use feed_gate::ReplicaFeedGate;
 pub use frame::{
     CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
     serialize_command_to_resp,
