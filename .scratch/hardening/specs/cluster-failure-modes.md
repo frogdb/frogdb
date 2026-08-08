@@ -1414,6 +1414,18 @@ The add half of this rule shipped with `CLUSTER MEET`; the remove half did not, 
 operators least expect: retiring a dead node left it in every quorum computation for ever, so a
 cluster that had "removed" a failed node was less fault-tolerant than one that had not touched it.
 
+## FM-CLUSTER-102 — degenerate failure-detector config is clamped, not trusted verbatim
+
+| Field | Value |
+|---|---|
+| Trigger | `FailureDetectorConfig { check_interval_ms, connect_timeout_ms, fail_threshold }` constructed with a zero, or a `u64`/`u32::MAX`, value in any of the three fields. |
+| Observable | `FailureDetector::new` clamps every field into `[MIN_*, MAX_*]` before storing it, and `FailureDetector::config()` reports the clamped values — never the ones the caller passed. At the clamped minimum (`fail_threshold = 1`) latching still works: one failure latches, one success clears it. The detector's background task starts and keeps ticking on a clamped `check_interval_ms` instead of panicking on its first tick. |
+| NOT observable | A `tokio::time::interval` or `tokio::time::timeout` panic from a zero `check_interval_ms`/`connect_timeout_ms`. Nor a `Duration` multiplication overflow (`Mul<u32>` panics on overflow) out of `HealthTable::stale_threshold`'s `check_interval * (fail_threshold + 2)` at a huge `fail_threshold`. Nor mass false failures from a zero `connect_timeout_ms`, where `tokio::time::timeout` would treat every probe as already elapsed regardless of whether the peer answers. |
+| Invariant | `FailureDetectorConfig::clamped()` is a pure `.clamp(MIN, MAX)` per field, called once at the top of `FailureDetector::new` before the value is stored or handed to `HealthTable::new` (`failure_detector.rs`). Every later reader — `raft_write_timeout`, `spawn_failure_detector_task`'s interval/timeout construction, `trigger_auto_failover`'s probe timeout, `HealthTable::stale_threshold` — reads `self.config`/the table's own copy, so clamping once at construction is sufficient; there is no second path that could see the unclamped value. Out-of-range values are pulled to the nearest bound rather than rejected: this is a bare timing knob with no cross-field relationship to enforce (unlike `heartbeat_interval_ms < election_timeout_ms` in `ClusterConfigSection::validate()`, which rejects at config-parse time), so silently sanitizing it at construction matches this codebase's precedent for that shape of value (`tls_watch.rs` floors `watch_debounce_ms` with `Duration::from_millis(x).max(MIN_POLL_INTERVAL)` rather than refusing to start). |
+| Outcome variant | `FailureDetectorConfig` (clamped fields) |
+| Forced by | `degenerate_zero_config_is_clamped_to_safe_minimums`, `huge_config_values_are_clamped_and_do_not_overflow_the_staleness_multiply`, `a_zero_check_interval_does_not_panic_the_detector_task` |
+| Bug refs | — |
+
 ---
 
 ## GAPS — behavior nothing forces
@@ -1443,8 +1455,9 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 7. **Storage corruption paths** — `try_get_log_entries` with an `Excluded(0)` end bound silently
    reads to the end of the log; `purge` writes `last_purged` before the delete batch; the CF
    `.expect`s and `decode_log_key`'s fixed-width copy panic on a tampered DB.
-8. **Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
-    huge `fail_threshold` panics the staleness multiply. Nothing rejects either at load.
+8. ~~**Unvalidated detector config** — `check_interval_ms = 0` panics `tokio::time::interval`, and a
+    huge `fail_threshold` panics the staleness multiply. Nothing rejects either at load.~~ Fixed:
+    `FailureDetector::new` clamps all three fields at construction. See FM-CLUSTER-102.
 
 ## Tagging notes for whoever lands these
 
