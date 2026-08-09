@@ -744,7 +744,7 @@ fn known_defect(state: &ClusterStateInner, command: &ClusterCommand) -> Option<&
                     .migrations
                     .get(&slot)
                     .is_some_and(|migration| migration.source_node != *node_id)
-                    && state.slot_assignment.get(&slot).is_none()
+                    && !state.slot_assignment.contains_key(&slot)
             })
             .then_some("issue 16: AssignSlots hands a migrating slot to a third node"),
 
