@@ -19,6 +19,7 @@
             [jepsen.frogdb.db :as db]
             [jepsen.frogdb.expiry :as expiry]
             [jepsen.frogdb.hash :as hash]
+            [jepsen.frogdb.invariant :as invariant]
             [jepsen.frogdb.lag :as lag]
             [jepsen.frogdb.nemesis :as nemesis]
             [jepsen.frogdb.pubsub-order :as pubsub-order]
@@ -263,14 +264,27 @@
             :ssh (when (or local? docker? multi-node? cluster-mode?)
                    {:dummy? true})
             :client (:client workload)
-            :nemesis (:nemesis nemesis-pkg)
+            :nemesis (if cluster-mode?
+                       (invariant/wrap-nemesis (:nemesis nemesis-pkg))
+                       (:nemesis nemesis-pkg))
             :checker (checker/compose
-                       {:workload (:checker workload)
-                        :stats (stats-ignoring stats-all-fail-ok-fs)
-                        :exceptions (checker/unhandled-exceptions)
-                        :perf (checker/perf)})
+                       (merge
+                         {:workload (:checker workload)
+                          :stats (stats-ignoring stats-all-fail-ok-fs)
+                          :exceptions (checker/unhandled-exceptions)
+                          :perf (checker/perf)}
+                         ;; DEBUG CLUSTER CHECK invariant sweep (cluster-correctness
+                         ;; issue 07) — wired on every raft-topology workload by
+                         ;; default, never opt-in per workload. See
+                         ;; jepsen.frogdb.invariant's namespace docstring for the
+                         ;; quiesce/final hook design.
+                         (when cluster-mode?
+                           {:cluster-invariants (invariant/checker)})))
             :generator (gen/phases
-                         ;; Main test phase: mix client operations with nemesis
+                         ;; Main test phase: mix client operations with nemesis.
+                         ;; No :cluster-check op is ever emitted here — this is
+                         ;; the active-nemesis window the checker must not touch
+                         ;; (issue 07's overhead constraint).
                          (->> (:generator workload)
                               (gen/nemesis (:generator nemesis-pkg))
                               (gen/time-limit (:time-limit opts)))
@@ -278,13 +292,21 @@
                          (gen/log "Recovering from faults...")
                          (gen/nemesis (:final-generator nemesis-pkg))
                          (gen/sleep 5)
+                         ;; Quiesce-point invariant sweep: every nemesis package's
+                         ;; :final-generator has now fully healed the cluster, so
+                         ;; no fault is active by construction.
+                         (when cluster-mode?
+                           (gen/nemesis (gen/once (invariant/cluster-check-op))))
                          ;; Final reads to verify state
                          (gen/log "Final reads...")
                          (gen/clients
                            (or (:final-generator workload)
                                (->> (gen/repeat {:f :read})
                                     (gen/limit 10)
-                                    (gen/stagger 0.1)))))})))
+                                    (gen/stagger 0.1))))
+                         ;; Final invariant sweep, after the final reads.
+                         (when cluster-mode?
+                           (gen/nemesis (gen/once (invariant/cluster-check-op)))))})))
 
 ;; ===========================================================================
 ;; CLI Options
