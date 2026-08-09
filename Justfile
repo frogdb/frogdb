@@ -168,9 +168,11 @@ concurrency-nightly SEEDS='250' OPS='150':
 # dev loop stays sub-second; this is the boosted pass, and the `cluster-nightly` workflow
 # calls exactly this recipe so the budget lives in one place (PRD .scratch/cluster-correctness
 # §8 D4). CASES sets PROPTEST_CASES; the harness falls back to its own default if it is unset,
-# unparseable or zero, so a typo cannot silently reduce the run to nothing.
+# unparseable or zero, so a typo cannot silently reduce the run to nothing. The
+# `cluster-proptest` nextest profile lifts the default profile's 120s hard kill for these
+# tests only — at this budget the quadratic property runs for minutes on purpose.
 cluster-proptest CASES='200000':
-    {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run -p frogdb-cluster -E 'test(/properties/)'
+    {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run --profile cluster-proptest -p frogdb-cluster -E 'test(/properties/)'
 
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency

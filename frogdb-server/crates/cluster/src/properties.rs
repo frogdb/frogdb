@@ -33,16 +33,26 @@
 //! - **P1** ([`p1_every_apply_leaves_the_catalog_clean`]) — every state a
 //!   sequence reaches satisfies every HARD entry of the catalog, whether the
 //!   command was accepted or refused.
-//!
-//! P2 (snapshot/restore losslessness), P3 (replay determinism) and P4 (handoff
-//! event conservation) land on this generator in issue 04.
+//! - **P2** ([`p2_a_snapshot_restore_at_any_point_is_lossless`]) — cutting the
+//!   sequence at *any* point and rebuilding the state from a snapshot, through
+//!   either vehicle, produces the same final state as the uninterrupted run.
+//! - **P3** ([`p3_replaying_a_sequence_is_deterministic`]) — the same sequence
+//!   replayed on a second fresh state produces the same states and the same
+//!   outcomes, step for step.
+//! - **P4** ([`p4_a_prepared_handoff_is_released_exactly_once`]) — the handoff
+//!   events a sequence emits account for every prepared handoff exactly once.
 //!
 //! # Case budget
 //!
 //! [`DEFAULT_CASES`] in the normal suite, raised by the `PROPTEST_CASES`
 //! environment variable — `just cluster-proptest` is the boosted pass, and the
-//! nightly workflow calls that same recipe.
+//! nightly workflow calls that same recipe. P2 is quadratic in the sequence
+//! length where the others are linear, so it draws [`HEAVY_CASE_DIVISOR`]-th of
+//! whatever budget is in force rather than a count of its own.
 
+use std::collections::BTreeMap;
+
+use openraft::StoredMembership;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
@@ -50,8 +60,8 @@ use proptest::test_runner::TestRunner;
 use crate::invariants;
 use crate::state::{ClusterState, ClusterStateInner};
 use crate::types::{
-    CLUSTER_SLOTS, ClusterCommand, HANDOFF_BARRIER_MS, HANDOFF_LEASE_MS, NodeId, NodeInfo,
-    NodeRole, SlotHandoff, SlotRange,
+    CLUSTER_SLOTS, ClusterCommand, ClusterEvent, HANDOFF_BARRIER_MS, HANDOFF_LEASE_MS, NodeId,
+    NodeInfo, NodeRole, SlotHandoff, SlotRange,
 };
 
 /// Cases run when nothing overrides the budget. Sized for the normal
@@ -91,6 +101,31 @@ fn cases_from(raw: Option<&str>) -> u32 {
 fn config() -> ProptestConfig {
     ProptestConfig {
         cases: cases_from(std::env::var(CASES_ENV).ok().as_deref()),
+        ..ProptestConfig::default()
+    }
+}
+
+/// The fraction of the budget the quadratic property (P2) draws.
+///
+/// A P2 case forks at *every* split point and replays the whole remaining
+/// suffix through two snapshot vehicles, so one sequence of `n` commands costs
+/// on the order of `n²` applies and `2n` round trips where a P1/P3/P4 case
+/// costs `n`. Run at the same count it would dominate the boosted pass
+/// entirely. Taking a documented fraction keeps the budget in one place —
+/// raising `PROPTEST_CASES` still raises P2 — while leaving the boosted run
+/// proportionate: one P2 case is worth roughly a hundred restore comparisons,
+/// so a divided budget is not a thinner search of the same space.
+const HEAVY_CASE_DIVISOR: u32 = 8;
+
+/// [`cases_from`], scaled down for the quadratic property. Rounds up, so no
+/// budget however small silences P2 completely.
+fn heavy_cases_from(raw: Option<&str>) -> u32 {
+    cases_from(raw).div_ceil(HEAVY_CASE_DIVISOR)
+}
+
+fn heavy_config() -> ProptestConfig {
+    ProptestConfig {
+        cases: heavy_cases_from(std::env::var(CASES_ENV).ok().as_deref()),
         ..ProptestConfig::default()
     }
 }
@@ -752,6 +787,115 @@ fn known_defect(state: &ClusterStateInner, command: &ClusterCommand) -> Option<&
     }
 }
 
+// ---- comparing whole states ------------------------------------------------
+
+/// The full-field rendering two states are compared by.
+///
+/// Both halves are load-bearing. The JSON is the projection that actually
+/// crosses nodes — the Raft snapshot body and the golden fixtures
+/// ([`crate::encoding_golden`]) are this exact document — so a divergence P2 or
+/// P3 reports reads like a fixture diff. The `Debug` rendering covers whatever
+/// serde would elide: a field added later behind `#[serde(skip)]` would make
+/// two genuinely different states compare equal on the JSON alone, and a
+/// comparison with a blind spot in it is precisely how FM-CLUSTER-100 survived
+/// a suite that already round-tripped snapshots.
+fn render(inner: &ClusterStateInner) -> String {
+    format!(
+        "{}\n{inner:?}",
+        serde_json::to_string_pretty(inner).expect("the cluster state serializes")
+    )
+}
+
+/// The first line on which two renderings differ, with a little context.
+///
+/// A rendered state runs to hundreds of lines; printing both in full buries the
+/// one field that moved, which is the only thing the counterexample is about.
+fn first_difference(want: &str, got: &str) -> String {
+    let (want_lines, got_lines): (Vec<&str>, Vec<&str>) =
+        (want.lines().collect(), got.lines().collect());
+    for (i, (a, b)) in want_lines.iter().zip(got_lines.iter()).enumerate() {
+        if a != b {
+            return format!(
+                "line {}:\n  uninterrupted: {a}\n  restored:      {b}",
+                i + 1
+            );
+        }
+    }
+    format!(
+        "the shared prefix matches; the renderings differ in length ({} uninterrupted lines vs \
+         {} restored)",
+        want_lines.len(),
+        got_lines.len()
+    )
+}
+
+/// The two ways a node's replicated state comes back from a snapshot.
+///
+/// They are separate code paths over separate payloads, and the audit found
+/// them disagreeing: `from_snapshot` zeroed `handoff_seq` while the openraft
+/// path carried it (FM-CLUSTER-100). P2 therefore exercises each one on its
+/// own rather than assuming the pair is interchangeable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Vehicle {
+    /// `encode_snapshot` → serialized [`ClusterStateInner`] →
+    /// `restore_from_snapshot`, which is byte-for-byte what
+    /// `RaftStateMachine::install_snapshot` and the boot-time reload do.
+    Openraft,
+    /// The published [`crate::types::ClusterSnapshot`] DTO →
+    /// `ClusterState::from_snapshot`, the projection path.
+    Dto,
+}
+
+const VEHICLES: [Vehicle; 2] = [Vehicle::Openraft, Vehicle::Dto];
+
+/// Rebuild `state` through `vehicle`, as the production restore paths do.
+fn round_trip(state: &ClusterState, vehicle: Vehicle) -> ClusterState {
+    match vehicle {
+        Vehicle::Openraft => {
+            let (meta, data) = state.encode_snapshot().expect("the state serializes");
+            let decoded: ClusterStateInner =
+                serde_json::from_slice(&data).expect("its own encoding deserializes");
+            let restored = ClusterState::new();
+            restored.restore_from_snapshot(decoded, &meta);
+            restored
+        }
+        Vehicle::Dto => {
+            ClusterState::from_snapshot((*state.snapshot()).clone(), state.self_node_id_atomic())
+        }
+    }
+}
+
+/// Whether the two openraft bookkeeping fields are still at their defaults.
+///
+/// They are the one asymmetry between the vehicles: the DTO does not carry
+/// `last_applied_log` / `last_membership`, because only openraft's own `apply`
+/// writes them and this harness drives the transition function directly. That
+/// makes a full-field comparison legitimate for *both* vehicles — but only as
+/// long as the premise holds, so P2 asserts it instead of quietly excluding the
+/// two fields from [`render`]. An excluded field is an unchecked field, which
+/// is the shape of the defect P2 exists to retro-cover.
+fn openraft_bookkeeping_is_inert(inner: &ClusterStateInner) -> bool {
+    inner.last_applied_log.is_none()
+        && format!("{:?}", inner.last_membership)
+            == format!(
+                "{:?}",
+                StoredMembership::<NodeId, openraft::BasicNode>::default()
+            )
+}
+
+/// The prepared handoffs the state is holding, as P4's ledger records them:
+/// `slot -> (seq, source node)`.
+fn live_handoffs(inner: &ClusterStateInner) -> BTreeMap<u16, (u64, NodeId)> {
+    inner
+        .migrations
+        .iter()
+        .filter_map(|(slot, migration)| {
+            let handoff = migration.handoff.as_ref()?;
+            Some((*slot, (handoff.seq, migration.source_node)))
+        })
+        .collect()
+}
+
 // ---- the properties --------------------------------------------------------
 
 proptest! {
@@ -778,6 +922,238 @@ proptest! {
                  {outcome:?}\nfull sequence: {commands:#?}",
                 invariants::render(&violations),
             );
+        }
+    }
+
+    /// **P3** — replaying a sequence on a second fresh state reproduces it
+    /// exactly, state for state and outcome for outcome.
+    ///
+    /// The transition function is supposed to be a pure function of
+    /// `(state, command)`: every deadline it records comes from the proposer's
+    /// `proposed_at_ms`, never from a clock the state machine reads itself,
+    /// because two nodes applying the same entry at different instants would
+    /// otherwise compute different deadlines and diverge. This property is that
+    /// claim, universally quantified — a `SystemTime::now()`, a `rand`, or an
+    /// iteration order that depends on hash seeding anywhere under `apply`
+    /// breaks it (round-2 87/F2).
+    ///
+    /// The second replay runs *after* the first has finished rather than
+    /// interleaved with it, so the two runs are separated by the whole first
+    /// replay. That separation is what gives a stray clock read a chance to
+    /// return a different value; interleaving the two would sample the clock
+    /// twice within the same microsecond and see nothing. It is a guard, not a
+    /// proof: a read at second resolution can still agree across both runs.
+    #[test]
+    fn p3_replaying_a_sequence_is_deterministic(
+        commands in arb_command_sequence(SEQUENCE_LEN),
+    ) {
+        let first = ClusterState::new();
+        let trace: Vec<(String, String)> = commands
+            .iter()
+            .map(|command| {
+                let outcome = format!("{:?}", first.apply_command(command.clone()));
+                (outcome, render(&first.read_inner()))
+            })
+            .collect();
+
+        let second = ClusterState::new();
+        for (step, command) in commands.iter().enumerate() {
+            let outcome = format!("{:?}", second.apply_command(command.clone()));
+            let (want_outcome, want_state) = &trace[step];
+            prop_assert_eq!(
+                &outcome,
+                want_outcome,
+                "step {} returned a different outcome on replay\ncommand: {:?}",
+                step,
+                command
+            );
+            let replayed = render(&second.read_inner());
+            prop_assert!(
+                replayed == *want_state,
+                "step {step} reached a different state on replay:\n{}\ncommand: {command:?}",
+                first_difference(want_state, &replayed)
+            );
+        }
+    }
+
+    /// **P4** — the handoff event stream accounts for every prepared handoff
+    /// exactly once.
+    ///
+    /// # The conservation claim, exactly as asserted
+    ///
+    /// A ledger is built from the events alone: a
+    /// [`ClusterEvent::SlotHandoffPrepared`] adds `slot -> (seq, source)`, a
+    /// [`ClusterEvent::SlotHandoffReleased`] removes it. After **every**
+    /// command the ledger must equal the set of prepared handoffs the state
+    /// itself holds. Three things follow, and each is asserted where it can be
+    /// named:
+    ///
+    /// 1. **No release is spurious or doubled.** A `SlotHandoffReleased` must
+    ///    remove a ledger entry whose `seq` *and* `source_node` it matches — so
+    ///    a release for a `seq` that was never prepared, a second release of the
+    ///    same handoff, or one naming the wrong source is a counterexample.
+    /// 2. **No prepared handoff disappears silently.** Every arm that drops a
+    ///    migration record funnels through `release_events`, so the ledger and
+    ///    the state come back into agreement in the same transition. A record
+    ///    removed on some path that forgot the funnel leaves an entry in the
+    ///    ledger the state no longer has, and the per-step equality fires.
+    /// 3. **Supersession is the one licensed exception, and only under a lapsed
+    ///    lease.** A `PrepareSlotHandoff` on a slot whose previous handoff has
+    ///    outlived its lease replaces it with no release event: the prepared
+    ///    record's lease *is* the consensus-level backstop that lets a later
+    ///    attempt take over from a finalizer that died, and the source's barrier
+    ///    (two orders of magnitude shorter than the lease) lapsed long before.
+    ///    The property does not wave this through — it re-reads the pre-command
+    ///    state and requires that the replaced handoff was the one in the ledger
+    ///    and that it really had expired at the proposer's timestamp, so a
+    ///    change that let a *live* handoff be superseded without a release would
+    ///    fail here.
+    ///
+    /// Handoffs still open when the sequence ends need no separate treatment:
+    /// they are exactly the entries the state still holds, and the per-step
+    /// equality already says the ledger holds those and nothing else. Their
+    /// release is owed to a command the sequence never issued, which is a
+    /// truncated history rather than a leak.
+    #[test]
+    fn p4_a_prepared_handoff_is_released_exactly_once(
+        commands in arb_command_sequence(SEQUENCE_LEN),
+    ) {
+        let state = ClusterState::new();
+        let mut ledger: BTreeMap<u16, (u64, NodeId)> = BTreeMap::new();
+
+        for (step, command) in commands.iter().enumerate() {
+            // Read the record a prepare is about to replace *before* applying,
+            // so the supersession check below can judge it against the
+            // proposer's own timestamp.
+            let replacing = match command {
+                ClusterCommand::PrepareSlotHandoff { slot, proposed_at_ms, .. } => state
+                    .read_inner()
+                    .migrations
+                    .get(slot)
+                    .and_then(|migration| migration.handoff.clone())
+                    .map(|handoff| (handoff, *proposed_at_ms)),
+                _ => None,
+            };
+
+            let Ok((_, events)) = state.apply_command(command.clone()) else {
+                // A refused command emits nothing, so the ledger cannot move.
+                continue;
+            };
+
+            for event in events {
+                match event {
+                    ClusterEvent::SlotHandoffPrepared { slot, source_node, seq, .. } => {
+                        let Some(displaced) = ledger.insert(slot, (seq, source_node)) else {
+                            continue;
+                        };
+                        let lapsed = replacing.as_ref().is_some_and(|(handoff, proposed_at_ms)| {
+                            (handoff.seq, handoff.lease_expired_at(*proposed_at_ms))
+                                == (displaced.0, true)
+                        });
+                        prop_assert!(
+                            lapsed,
+                            "step {step} superseded the handoff on slot {slot} without releasing \
+                             it, and the record it replaced was not a lapsed \
+                             {displaced:?}\nreplaced: {replacing:?}\ncommand: {command:?}\nfull \
+                             sequence: {commands:#?}"
+                        );
+                    }
+                    ClusterEvent::SlotHandoffReleased { slot, source_node, seq } => {
+                        prop_assert_eq!(
+                            ledger.remove(&slot),
+                            Some((seq, source_node)),
+                            "step {} released a handoff the ledger does not owe (slot {}, seq \
+                             {})\ncommand: {:?}\nfull sequence: {:#?}",
+                            step,
+                            slot,
+                            seq,
+                            command,
+                            commands
+                        );
+                    }
+                    _ => {}
+                }
+            }
+
+            let held = live_handoffs(&state.read_inner());
+            prop_assert!(
+                ledger == held,
+                "step {step} left the event ledger disagreeing with the state: the events say \
+                 {ledger:?} is prepared, the state holds {held:?}\ncommand: {command:?}\nfull \
+                 sequence: {commands:#?}"
+            );
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(heavy_config())]
+
+    /// **P2** — a snapshot taken at *any* point of a sequence, restored through
+    /// *either* vehicle, resumes into the same state the uninterrupted run
+    /// reaches.
+    ///
+    /// The sequence is walked once and forked at every split point `0..=len`:
+    /// at each one the live state is round-tripped through both
+    /// [`Vehicle`]s independently, and each restored copy replays the remaining
+    /// suffix. Two comparisons per fork — the restored state against the live
+    /// one it was built from, and the resumed final state against the
+    /// uninterrupted run — because they fail for different reasons: the first
+    /// names a field the snapshot dropped, the second catches a difference that
+    /// only becomes visible in how the state *behaves* afterwards, which is
+    /// what a dropped generation counter is (FM-CLUSTER-100: `handoff_seq`
+    /// restored as `0` re-mints a `seq` that is already spent).
+    ///
+    /// Both vehicles are exercised separately on purpose. They are different
+    /// code over different payloads and the audit caught them disagreeing;
+    /// checking only one would have been checking the half that was right.
+    #[test]
+    fn p2_a_snapshot_restore_at_any_point_is_lossless(
+        commands in arb_command_sequence(SEQUENCE_LEN),
+    ) {
+        let uninterrupted = ClusterState::new();
+        for command in &commands {
+            let _ = uninterrupted.apply_command(command.clone());
+        }
+        let want = {
+            let inner = uninterrupted.read_inner();
+            prop_assert!(
+                openraft_bookkeeping_is_inert(&inner),
+                "the harness drove openraft bookkeeping after all, so the DTO vehicle's \
+                 comparison below is no longer full-field: {inner:?}"
+            );
+            render(&inner)
+        };
+
+        let live = ClusterState::new();
+        for split in 0..=commands.len() {
+            let before = render(&live.read_inner());
+            for vehicle in VEHICLES {
+                let restored = round_trip(&live, vehicle);
+                let carried = render(&restored.read_inner());
+                prop_assert!(
+                    carried == before,
+                    "the {vehicle:?} vehicle did not carry the state across a snapshot taken \
+                     after {split} of {} commands:\n{}\nfull sequence: {commands:#?}",
+                    commands.len(),
+                    first_difference(&before, &carried)
+                );
+
+                for command in &commands[split..] {
+                    let _ = restored.apply_command(command.clone());
+                }
+                let resumed = render(&restored.read_inner());
+                prop_assert!(
+                    resumed == want,
+                    "resuming after a {vehicle:?} snapshot taken at split {split} of {} diverged \
+                     from the uninterrupted run:\n{}\nfull sequence: {commands:#?}",
+                    commands.len(),
+                    first_difference(&want, &resumed)
+                );
+            }
+            if let Some(command) = commands.get(split) {
+                let _ = live.apply_command(command.clone());
+            }
         }
     }
 }
@@ -839,6 +1215,27 @@ mod tests {
         assert_eq!(cases_from(Some("lots")), DEFAULT_CASES);
         assert_eq!(cases_from(Some("0")), DEFAULT_CASES);
         assert_eq!(cases_from(Some("-1")), DEFAULT_CASES);
+    }
+
+    /// The quadratic property scales with the same budget and never rounds away
+    /// to nothing — a divisor larger than the budget would otherwise ask
+    /// proptest for zero cases, which is a silently disabled property.
+    #[test]
+    fn the_quadratic_property_takes_a_fraction_of_the_same_budget() {
+        assert_eq!(
+            heavy_cases_from(None),
+            DEFAULT_CASES.div_ceil(HEAVY_CASE_DIVISOR)
+        );
+        assert_eq!(
+            heavy_cases_from(Some("200000")),
+            200_000 / HEAVY_CASE_DIVISOR
+        );
+        assert!(heavy_cases_from(Some("1")) >= 1);
+        assert!(heavy_cases_from(Some("nonsense")) >= 1);
+        assert!(
+            heavy_cases_from(Some("100000")) < cases_from(Some("100000")),
+            "the divisor must actually divide, or the boosted pass is all P2"
+        );
     }
 
     // ---- generator shape ---------------------------------------------------
