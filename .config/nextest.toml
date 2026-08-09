@@ -73,6 +73,17 @@ filter = "test(simulation::test_cluster_)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 test-group = "cluster"
 
+# The cluster state-machine property harness (`frogdb-cluster` `properties`
+# module). At the default case budget it finishes in well under a second; `just
+# cluster-proptest` raises `PROPTEST_CASES` by three orders of magnitude for the
+# nightly pass, and at ~7k cases/s in debug the nightly budget alone is ~30s.
+# Keep a hard kill — unlike the nightly seed sweep this test also runs in the
+# default suite, so a genuine hang must still be caught — but at 4 x 30s rather
+# than the default 3 x 5s.
+[[profile.default.overrides]]
+filter = "package(frogdb-cluster) & test(properties::)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
 # The nightly generated-workload seed sweep (opt-in via `just concurrency-nightly`;
 # see concurrency_workload.rs) runs however many seeds x profiles the caller asks
 # for via FROGDB_CONCURRENCY_SEEDS, so its runtime is not bounded the way the

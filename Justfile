@@ -169,7 +169,7 @@ concurrency-nightly SEEDS='250' OPS='150':
 # calls exactly this recipe so the budget lives in one place (PRD .scratch/cluster-correctness
 # §8 D4). CASES sets PROPTEST_CASES; the harness falls back to its own default if it is unset,
 # unparseable or zero, so a typo cannot silently reduce the run to nothing.
-cluster-proptest CASES='20000':
+cluster-proptest CASES='200000':
     {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run -p frogdb-cluster -E 'test(/properties/)'
 
 # Run the full test suite (unit + integration + concurrency + simulation)
