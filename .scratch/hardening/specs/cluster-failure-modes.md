@@ -91,22 +91,22 @@ Test names are bare function names, resolved against the crate list in `scripts/
 `MEET` and `FORGET` have no `ClusterCommand` of their own: they are server-layer verbs that lower to
 `AddNode` / `RemoveNode`, so their replicated semantics are exactly rows 001 and 002.
 
-## FM-CLUSTER-002 — `RemoveNode` orphans the departing node's slots rather than transferring them
+## FM-CLUSTER-002 — `RemoveNode` orphans the departing node's slots and prunes every reference to it
 
 | Field | Value |
 |---|---|
 | Trigger | `CLUSTER FORGET <node>` against a node that owns slots, has open migrations, or has replicas parented to it. |
-| Observable | The node disappears from `CLUSTER NODES`. Every slot it owned becomes *unassigned* — a client keyed into one of those slots gets `CLUSTERDOWN`, not a `MOVED` to some successor. Forgetting an unknown node is `NodeNotFound`. |
-| NOT observable | Slots silently retargeted at another node: `FORGET` is not a failover, and inventing a successor here would hand a keyspace to a node that never received its data. Nor an epoch bump — removing a node changes no node's authority. |
-| Invariant | The arm is `slot_assignment.retain(owner != node_id)` followed by `nodes.remove` (`commands.rs:110-113`); transfer lives only in `Failover`, which validates a named successor first. |
-| Outcome variant | `ClusterResponse::Ok` / `ClusterError::NodeNotFound` |
-| Forced by | `test_remove_node_clears_slots`, `test_remove_node_nonexistent`, `remove_node_leaves_migrations_and_replicas_dangling` |
-| Bug refs | — |
+| Observable | The node disappears from `CLUSTER NODES`. Every slot it owned becomes *unassigned* — a client keyed into one of those slots gets `CLUSTERDOWN`, not a `MOVED` to some successor. Every migration naming it as source *or* target is cancelled, and a cancelled migration that had a prepared handoff emits its `SlotHandoffReleased` so the surviving source drops the barrier it armed. Every replica parented to it is *detached*: its `primary_id` clears, its role does not change, and `CLUSTER NODES` renders `-` for its master id. Migrations between two surviving nodes and replicas of other primaries are untouched. Forgetting an unknown node is `NodeNotFound`. |
+| NOT observable | Slots silently retargeted at another node: `FORGET` is not a failover, and inventing a successor here would hand a keyspace to a node that never received its data. For the same reason the orphaned replicas are not re-parented onto some other primary — `FORGET` names no successor, so there is nobody to re-parent them onto. Nor a surviving migration or `primary_id` that names a node the cluster no longer has: the migration could never complete and would block its slot, and the parent pointer would render a dangling master id in `CLUSTER NODES` and point a replication stream at a node the topology has dropped. Nor an epoch bump — removing a node changes no node's authority. Nor a promotion of the detached replicas: minting a replication identity is a role transition, and `FORGET` is not one of the two commands that own those (FM-CLUSTER-001). |
+| Invariant | The arm mirrors the removal half of `Failover { force: true }` (FM-CLUSTER-036) through the same two helpers, so the two removal paths cannot drift: `slot_assignment.retain(owner != node_id)`, then `prune_migrations_naming` (whose release events are the `release_events` contract), then `reparent_children(.., None)` — the same helper the failover calls with `Some(successor)` — then `nodes.remove` (`commands.rs`, `RemoveNode` arm). The paths differ only in whether a successor was named: transfer of slots and role still live only in `Failover`, which validates that successor first. Redis parity: `clusterDelNode` clears the node's `migrating_slots_to`/`importing_slots_from` entries and `freeClusterNode` nulls its slaves' `slaveof` without promoting them. |
+| Outcome variant | `ClusterResponse::Ok` / `ClusterError::NodeNotFound`; `ClusterEvent::SlotHandoffReleased` per pruned prepared handoff |
+| Forced by | `test_remove_node_clears_slots`, `test_remove_node_nonexistent`, `remove_node_prunes_migrations_and_detaches_replicas`, `remove_node_prunes_a_migration_that_only_targets_it_and_releases_its_barrier`, `remove_node_keeps_migrations_and_parents_that_do_not_name_it` |
+| Bug refs | fixed: issue 01, `.scratch/cluster-correctness/issues/`; round-2 issue 62 (11/F5), `.scratch/testing-improvements-round2/issues/` |
 
-Accepted non-guarantee, pinned by `remove_node_leaves_migrations_and_replicas_dangling`: `RemoveNode`
-cleans up neither migrations that name the removed node nor the `primary_id` of its replicas. Only a
-*force* `Failover` does that (FM-CLUSTER-036). A `FORGET` of a migration endpoint therefore leaves a
-migration that can never complete; the operator's recovery is `SETSLOT … STABLE` (FM-CLUSTER-035).
+The dangling references `RemoveNode` used to leave — pinned until 2026-08-08 by
+`remove_node_leaves_migrations_and_replicas_dangling`, which now asserts the pruning under its new
+name — were the ruling PRD §8 D2 reversed: fix the behavior rather than register the dirty state as
+an invariant exception. The slots staying *unassigned* is the part that remains deliberate.
 
 ## FM-CLUSTER-003 — slot assignment is validate-all-then-apply
 
@@ -519,17 +519,17 @@ skipping it. See FM-CLUSTER-028.
 | Forced by | `test_begin_migration_source_not_found`, `test_begin_migration_target_not_found`, `test_begin_migration_wrong_owner`, `begin_migration_accepts_an_unassigned_slot` |
 | Bug refs | — |
 
-## FM-CLUSTER-033 — completing a migration is the one ownership transfer that does not consult the slot map
+## FM-CLUSTER-033 — completing a migration consults the node table, never the slot map
 
 | Field | Value |
 |---|---|
-| Trigger | `SETSLOT <slot> NODE <target>` closing an open migration, including onto a slot the map still shows as owned by the source. |
-| Observable | Ownership moves to the target and the migration record is removed. With no migration open the command is `InvalidOperation("no migration in progress for slot N")`; with mismatched source or target it is `InvalidOperation("migration parameters don't match")`. |
-| NOT observable | A `SlotAlreadyAssigned` refusal at the moment of completion — that guard exists to stop *concurrent claims*, and a completion is the resolution of a claim that was already accepted at begin time. Nor an epoch bump: the ownership swap is authorized by the migration record, not by a new epoch. |
-| Invariant | The parameter match against the recorded migration is what makes the unguarded `slot_assignment.insert` safe (`commands.rs:404-436`): only the exact pair that opened the migration may close it. |
-| Outcome variant | `ClusterResponse::Ok` / `ClusterError::InvalidOperation` |
-| Forced by | `test_complete_migration_no_active`, `test_complete_migration_params_mismatch`, `complete_migration_transfers_ownership_over_an_existing_owner` |
-| Bug refs | — |
+| Trigger | `SETSLOT <slot> NODE <target>` closing an open migration, including onto a slot the map still shows as owned by the source, and one whose target is no longer a cluster member. |
+| Observable | Ownership moves to the target and the migration record is removed. A target that is not in `nodes` is `NodeNotFound(target)` and nothing moves — not the slot, not the migration record. With no migration open the command is `InvalidOperation("no migration in progress for slot N")`; with mismatched source or target it is `InvalidOperation("migration parameters don't match")`. |
+| NOT observable | A `SlotAlreadyAssigned` refusal at the moment of completion — that guard exists to stop *concurrent claims*, and a completion is the resolution of a claim that was already accepted at begin time. Nor an epoch bump: the ownership swap is authorized by the migration record, not by a new epoch. Nor a slot owner that is not a member (the "ghost owner" of INV-REF-1): the slot map would name a node no client can be redirected to and no operator can `FORGET`, and the coverage readers count such a slot as `ok` (FM-CLUSTER-073), so the cluster would report itself healthy while a shard of the keyspace was unreachable. |
+| Invariant | Two guards, and deliberately only two: the parameter match against the recorded migration (only the exact pair that opened the migration may close it) and a membership check on the target, which is the node the arm is about to write into `slot_assignment` (`commands.rs`, `CompleteSlotMigration` arm). The slot map is still not consulted — the migration record authorizes the transfer. The node table is, because a migration record can outlive the membership it was validated against at begin time (FM-CLUSTER-032): a snapshot installed from a leader running an older binary, or any future arm that drops a node without pruning, presents exactly that shape. The source is not checked: it is never written into the slot map, and its release event on a node that has left is a no-op. |
+| Outcome variant | `ClusterResponse::Ok` / `ClusterError::{InvalidOperation, NodeNotFound}` |
+| Forced by | `test_complete_migration_no_active`, `test_complete_migration_params_mismatch`, `complete_migration_transfers_ownership_over_an_existing_owner`, `complete_migration_refuses_a_target_that_is_no_longer_a_member` |
+| Bug refs | fixed: issue 01, `.scratch/cluster-correctness/issues/`; round-2 issue 62 (11/F5 ghost-owner consequence), `.scratch/testing-improvements-round2/issues/` |
 
 ## FM-CLUSTER-034 — a completed migration emits exactly one event, and a failed one emits none
 
@@ -549,7 +549,7 @@ skipping it. See FM-CLUSTER-028.
 |---|---|
 | Trigger | `SETSLOT <slot> STABLE`, on a slot with an open migration and on one without. |
 | Observable | The slot stops reporting as migrating. Both cases answer `Ok`. |
-| NOT observable | An error for cancelling a migration that is not open. `STABLE` is the operator's recovery verb — for a half-finished handshake, for a migration stranded by a `FORGET` (FM-CLUSTER-002), for an aborted script — and a recovery verb that fails when the state is already clean cannot be used blindly. |
+| NOT observable | An error for cancelling a migration that is not open. `STABLE` is the operator's recovery verb — for a half-finished handshake, for a migration whose finalizer died before it could complete, for an aborted script — and a recovery verb that fails when the state is already clean cannot be used blindly. A migration whose endpoint was forgotten is no longer one of its cases: `FORGET` prunes those itself (FM-CLUSTER-002). |
 | Invariant | The arm is an unconditional `migrations.remove(&slot)` returning `Ok` (`commands.rs:438-442`), so it is idempotent by construction rather than by a presence check. |
 | Outcome variant | `ClusterResponse::Ok` |
 | Forced by | `test_cancel_slot_migration`, `test_cancel_slot_migration_nonexistent` |
@@ -562,7 +562,7 @@ skipping it. See FM-CLUSTER-028.
 | Trigger | An automatic (force) failover of a primary that is the source or target of an open migration, and a graceful failover alongside an unrelated migration. |
 | Observable | Migrations naming the removed node are gone. Migrations between two other nodes survive both forms of failover untouched. |
 | NOT observable | A migration left pointing at a node that is no longer a member — it can never complete, and its slot stays in a migrating state that nothing will clear except manual intervention. |
-| Invariant | The force branch applies `migrations.retain(source != old && target != old)` in the same transition that removes the node (`commands.rs:271-280`), so no window exists in which the node is gone and its migrations are not. |
+| Invariant | The force branch calls `prune_migrations_naming(old_primary_id)` in the same transition that removes the node (`commands.rs`, `Failover` arm), so no window exists in which the node is gone and its migrations are not. `RemoveNode` calls the same helper (FM-CLUSTER-002), which is what keeps the two removal paths from drifting apart again. |
 | Outcome variant | `ClusterResponse::Epoch` |
 | Forced by | `test_failover_force_cancels_migrations_of_removed_node`, `test_failover_graceful_keeps_unrelated_migrations`, `force_failover_reports_moved_slots_and_prunes_only_related_migrations` |
 | Bug refs | — |

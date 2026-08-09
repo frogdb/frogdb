@@ -1,11 +1,11 @@
 //! Command handlers for cluster state mutations.
 
 use crate::types::{
-    ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, NodeRole, SlotHandoff,
+    ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, NodeId, NodeRole, SlotHandoff,
     SlotMigration,
 };
 
-use super::state::{ClusterState, EpochReconciliation};
+use super::state::{ClusterState, ClusterStateInner, EpochReconciliation};
 
 /// The release events a removed [`SlotMigration`] owes.
 ///
@@ -29,6 +29,52 @@ fn release_events(migration: SlotMigration) -> Vec<ClusterEvent> {
             seq: h.seq,
         }],
         None => Vec::new(),
+    }
+}
+
+/// Cancel every migration that names `node_id` as source or target, returning
+/// the [`release_events`] they owe.
+///
+/// A migration referencing a node the cluster no longer has can never complete
+/// and blocks its slot until someone cancels it, so both arms that drop a node
+/// — `RemoveNode` (FM-CLUSTER-002) and `Failover { force: true }`
+/// (FM-CLUSTER-036) — call this in the same transition that removes it. Sharing
+/// the helper is what keeps the two removal paths from drifting apart: the
+/// asymmetry between them *was* the defect.
+fn prune_migrations_naming(inner: &mut ClusterStateInner, node_id: NodeId) -> Vec<ClusterEvent> {
+    let doomed: Vec<u16> = inner
+        .migrations
+        .iter()
+        .filter(|(_, m)| m.source_node == node_id || m.target_node == node_id)
+        .map(|(slot, _)| *slot)
+        .collect();
+    doomed
+        .into_iter()
+        .filter_map(|slot| inner.migrations.remove(&slot))
+        .flat_map(release_events)
+        .collect()
+}
+
+/// Point every replica of `old_primary_id` at `new_parent`, skipping the new
+/// parent itself so a promoted node is never made its own replica.
+///
+/// `Failover` passes the successor it validated; `RemoveNode` passes `None`,
+/// which *detaches* the replicas — `FORGET` names no successor, and inventing
+/// one would hand a replication stream to a node that never held the data, the
+/// same reason the departing node's slots are orphaned rather than transferred.
+/// A detached replica keeps its role: minting a replication identity is a role
+/// transition, and those belong to `SetRole` and `Failover`. Redis does exactly
+/// this in `freeClusterNode`, which nulls its slaves' `slaveof` and promotes
+/// nobody.
+fn reparent_children(
+    inner: &mut ClusterStateInner,
+    old_primary_id: NodeId,
+    new_parent: Option<NodeId>,
+) {
+    for node in inner.nodes.values_mut() {
+        if node.primary_id == Some(old_primary_id) && Some(node.id) != new_parent {
+            node.primary_id = new_parent;
+        }
     }
 }
 
@@ -140,13 +186,23 @@ impl ClusterState {
                 if !inner.nodes.contains_key(&node_id) {
                     return Err(ClusterError::NodeNotFound(node_id));
                 }
-                // Remove slot assignments for this node
+                // Remove slot assignments for this node. They stay *unassigned*:
+                // retargeting them would hand a keyspace to a node that never
+                // received its data (FM-CLUSTER-002).
                 inner
                     .slot_assignment
                     .retain(|_, &mut owner| owner != node_id);
+
+                // Everything that *references* the departing node goes with it,
+                // through the same two helpers the force-failover removal path
+                // uses. A retired node must not leave a migration that can never
+                // complete or a parent pointer into a hole in the topology.
+                let events = prune_migrations_naming(&mut inner, node_id);
+                reparent_children(&mut inner, node_id, None);
+
                 inner.nodes.remove(&node_id);
                 tracing::info!(node_id, "Removed node from cluster");
-                Ok((ClusterResponse::Ok, Vec::new()))
+                Ok((ClusterResponse::Ok, events))
             }
 
             ClusterCommand::AssignSlots { node_id, slots } => {
@@ -350,7 +406,7 @@ impl ClusterState {
                 //    the old primary (a NodeDemoted event); a force failover
                 //    *removes* it, which is not a demotion.
                 let graceful_demotion = !force;
-                let mut pruned_migrations = Vec::new();
+                let mut pruned_releases = Vec::new();
                 if force {
                     if old_exists {
                         inner.nodes.remove(&old_primary_id);
@@ -359,20 +415,9 @@ impl ClusterState {
                     // and would block future migrations of those slots. A pruned
                     // migration still owes its release event: a surviving source
                     // that had armed a barrier for a handoff to the removed node
-                    // must be told to drop it (see `release_events`).
-                    let doomed: Vec<u16> = inner
-                        .migrations
-                        .iter()
-                        .filter(|(_, m)| {
-                            m.source_node == old_primary_id || m.target_node == old_primary_id
-                        })
-                        .map(|(slot, _)| *slot)
-                        .collect();
-                    for slot in doomed {
-                        if let Some(m) = inner.migrations.remove(&slot) {
-                            pruned_migrations.push(m);
-                        }
-                    }
+                    // must be told to drop it. `RemoveNode` prunes through the
+                    // same helper (FM-CLUSTER-002).
+                    pruned_releases = prune_migrations_naming(&mut inner, old_primary_id);
                 } else {
                     let old_node = inner.nodes.get_mut(&old_primary_id).unwrap();
                     old_node.role = NodeRole::Replica;
@@ -381,11 +426,7 @@ impl ClusterState {
 
                 // 4. Re-parent the old primary's remaining replicas so they
                 //    follow the successor instead of a demoted/removed node.
-                for node in inner.nodes.values_mut() {
-                    if node.primary_id == Some(old_primary_id) && node.id != new_primary_id {
-                        node.primary_id = Some(new_primary_id);
-                    }
-                }
+                reparent_children(&mut inner, old_primary_id, Some(new_primary_id));
 
                 // 5. Bump the config epoch in the same transition and let the
                 //    successor claim it, so the new slot ownership can never be
@@ -410,10 +451,7 @@ impl ClusterState {
                 // Order matters on a node that is both: the demotion is the old
                 // primary's, the promotion the successor's, and they can never
                 // name the same node (the two ids are validated distinct above).
-                let mut events: Vec<ClusterEvent> = pruned_migrations
-                    .into_iter()
-                    .flat_map(release_events)
-                    .collect();
+                let mut events: Vec<ClusterEvent> = pruned_releases;
                 if graceful_demotion {
                     events.push(ClusterEvent::NodeDemoted {
                         demoted_node_id: old_primary_id,
@@ -628,6 +666,19 @@ impl ClusterState {
                     ));
                 }
 
+                // The slot map is not consulted here — the migration record
+                // authorizes the transfer — but the node table is. Membership was
+                // checked at begin time (FM-CLUSTER-032) and a record can outlive
+                // it: a snapshot installed from a leader on an older binary
+                // carries migrations whose endpoints that binary never pruned. An
+                // owner that is not a member is a slot nothing can be redirected
+                // to, and the coverage readers count it as healthy
+                // (FM-CLUSTER-073). Only the target is checked: it is the id this
+                // arm writes into the slot map.
+                if !inner.nodes.contains_key(&target_node) {
+                    return Err(ClusterError::NodeNotFound(target_node));
+                }
+
                 // Ownership moves only under a prepared, drained, still-armed
                 // handoff. A `Complete` that raced past the barrier deadline is
                 // refused outright rather than half-applied: by then the source
@@ -818,7 +869,7 @@ mod tests {
 
     // FM-CLUSTER-002
     #[test]
-    fn remove_node_leaves_migrations_and_replicas_dangling() {
+    fn remove_node_prunes_migrations_and_detaches_replicas() {
         let state = state_with_primaries(2);
         // A replica parented to the node that is about to be forgotten.
         state
@@ -844,16 +895,103 @@ mod tests {
         assert_eq!(state.get_slot_owner(10), None);
         assert!(state.get_node(1).is_none());
 
-        // Accepted non-guarantee: neither the migration nor the child's parent
-        // pointer is cleaned up. Only a *force* Failover does that.
+        // Every reference to the departed node goes with it: the migration it
+        // sourced could never complete, and its child's parent pointer would
+        // render a dangling master id.
+        assert!(
+            state.get_slot_migration(5).is_none(),
+            "the migration naming the removed source must be pruned"
+        );
+        assert!(!state.is_slot_migrating(5));
+        let child = state.get_node(3).expect("the replica itself survives");
+        assert_eq!(child.primary_id, None, "the replica is detached");
+        assert_eq!(
+            child.role,
+            NodeRole::Replica,
+            "detaching is not a promotion — FORGET is not a role transition"
+        );
+    }
+
+    /// The target side of the same prune, and the release the pruned handoff
+    /// owes: a source that armed its barrier for a target that has just been
+    /// forgotten must be told to drop it rather than wait out the window.
+    // FM-CLUSTER-002
+    #[test]
+    fn remove_node_prunes_a_migration_that_only_targets_it_and_releases_its_barrier() {
+        let state = state_with_primaries(2);
+        assign(&state, 1, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+        state.arm_handoff_for_test(5, 1, 2);
+        let seq = state
+            .get_slot_migration(5)
+            .and_then(|m| m.handoff)
+            .expect("the handoff must be armed")
+            .seq;
+
+        // Node 2 is only the *target* of the migration, and owns no slots.
+        let (_, events) = state
+            .apply_command(ClusterCommand::RemoveNode { node_id: 2 })
+            .expect("forgetting a member must succeed");
+
+        assert!(
+            state.get_slot_migration(5).is_none(),
+            "the migration naming the removed target must be pruned"
+        );
+        assert_eq!(
+            events,
+            vec![ClusterEvent::SlotHandoffReleased {
+                slot: 5,
+                source_node: 1,
+                seq,
+            }],
+            "the surviving source is told to drop the barrier it armed"
+        );
+        assert_eq!(
+            state.get_slot_owner(5),
+            Some(1),
+            "the source keeps the slot it never handed over"
+        );
+    }
+
+    /// The prune is targeted, not a sweep: state that does not name the
+    /// departing node survives it untouched.
+    // FM-CLUSTER-002
+    #[test]
+    fn remove_node_keeps_migrations_and_parents_that_do_not_name_it() {
+        let state = state_with_primaries(3);
+        state
+            .apply_local(ClusterCommand::AddNode {
+                node: NodeInfo::new_replica(4, test_addr(6383), test_addr(16383), 2),
+            })
+            .unwrap();
+        assign(&state, 2, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 2,
+                target_node: 3,
+            })
+            .unwrap();
+
+        let (_, events) = state
+            .apply_command(ClusterCommand::RemoveNode { node_id: 1 })
+            .expect("forgetting a member must succeed");
+
+        assert!(events.is_empty(), "nothing was pruned, so nothing released");
         let migration = state
             .get_slot_migration(5)
-            .expect("the migration must survive the removal of its source");
-        assert_eq!(migration.source_node, 1, "and it still names the dead node");
+            .expect("a migration between two survivors is none of the removal's business");
+        assert_eq!((migration.source_node, migration.target_node), (2, 3));
         assert_eq!(
-            state.get_node(3).unwrap().primary_id,
-            Some(1),
-            "the replica still points at the removed primary"
+            state.get_node(4).unwrap().primary_id,
+            Some(2),
+            "a replica of another primary keeps its parent"
         );
     }
 
@@ -1123,6 +1261,53 @@ mod tests {
             state.config_epoch(),
             epoch_before,
             "completion is authorized by the migration record, not a new epoch"
+        );
+    }
+
+    /// The slot map is not consulted, but the node table is: an owner that is
+    /// not a member is a ghost the coverage readers would count as healthy
+    /// (FM-CLUSTER-073) while no client could ever be redirected to it.
+    ///
+    /// The state is built by installing a doctored snapshot rather than by
+    /// `RemoveNode`, which prunes the migration itself (FM-CLUSTER-002) — this
+    /// guard exists for the shape a snapshot from a leader on an older binary
+    /// still presents.
+    // FM-CLUSTER-033
+    #[test]
+    fn complete_migration_refuses_a_target_that_is_no_longer_a_member() {
+        let state = state_with_primaries(2);
+        assign(&state, 1, 0, 10);
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+            })
+            .unwrap();
+        let proposed_at_ms = state.arm_handoff_for_test(5, 1, 2);
+
+        // A snapshot carrying the migration but not its target.
+        let mut snapshot = (*state.snapshot()).clone();
+        snapshot.nodes.remove(&2);
+        let restored = ClusterState::from_snapshot(snapshot, state.self_node_id_atomic());
+
+        let err = restored
+            .apply_command(ClusterCommand::CompleteSlotMigration {
+                slot: 5,
+                source_node: 1,
+                target_node: 2,
+                proposed_at_ms,
+            })
+            .expect_err("ownership must not move onto a node that is not a member");
+        assert!(matches!(err, ClusterError::NodeNotFound(2)), "{err:?}");
+        assert_eq!(
+            restored.get_slot_owner(5),
+            Some(1),
+            "the slot map must not name a ghost"
+        );
+        assert!(
+            restored.get_slot_migration(5).is_some(),
+            "a refused completion mutates nothing at all"
         );
     }
 
