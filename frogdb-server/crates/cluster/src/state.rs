@@ -156,6 +156,14 @@ impl ClusterState {
             last_membership: StoredMembership::default(),
             active_version: snapshot.active_version,
         };
+
+        // Restore is the second mutation seam, and the one a past defect lived
+        // on: a state assembled from a snapshot never ran a transition, so
+        // nothing else would have checked it. See the twin hook in
+        // [`Self::restore_from_snapshot`], which covers the openraft vehicles.
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_clean(&inner, "from_snapshot");
+
         Self {
             cell: Arc::new(RwLock::new(StateCell::new(inner))),
             self_node_id,
@@ -240,6 +248,11 @@ impl ClusterState {
     /// metadata rather than the serialized body: openraft treats the metadata as
     /// authoritative for how far the state machine has advanced, and the two can
     /// legitimately differ when a leader ships a snapshot it trimmed itself.
+    ///
+    /// This is the chokepoint for *both* openraft restore vehicles —
+    /// [`RaftStateMachine::install_snapshot`] and the persisted snapshot
+    /// reloaded by [`ClusterStateMachine::attach_snapshot_store`] — so the
+    /// invariant hook below covers them without either call site repeating it.
     pub fn restore_from_snapshot(
         &self,
         mut restored: ClusterStateInner,
@@ -247,7 +260,10 @@ impl ClusterState {
     ) {
         restored.last_applied_log = meta.last_log_id;
         restored.last_membership = meta.last_membership.clone();
-        *self.write_inner() = restored;
+        let mut guard = self.write_inner();
+        *guard = restored;
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_clean(&guard, "restore_from_snapshot");
     }
 
     /// Get a snapshot of the current state.
@@ -3274,8 +3290,7 @@ mod tests {
     // FM-CLUSTER-044
     #[tokio::test]
     async fn test_role_changes_preserve_apply_order() {
-        let cluster = failover_fixture();
-        let mut sm = ClusterStateMachine::with_state(cluster);
+        let mut sm = ClusterStateMachine::with_state(failover_fixture());
         let mut rx = sm.enable_role_change_detection(1); // self = the primary
 
         let entries: Vec<_> = [
@@ -4252,5 +4267,76 @@ mod tests {
             "a receive buffer that starts non-empty corrupts the received snapshot"
         );
         assert_eq!(cursor.position(), 0);
+    }
+
+    // ---- invariant hooks at the mutation seams -----------------------------
+    //
+    // Three seams mutate the state machine: the transition function and the
+    // two restore vehicles. Each carries a `debug_assert_clean` hook, and each
+    // needs a test that forces the hook — otherwise a deleted hook is
+    // invisible and the catalog stops covering that seam without anything
+    // going red.
+
+    /// A state assembled from the reader DTO never ran a transition, so the
+    /// hook in `from_snapshot` is the only thing standing between a malformed
+    /// snapshot and a node serving from it.
+    #[test]
+    #[should_panic(expected = "invariants violated after from_snapshot")]
+    fn from_snapshot_refuses_a_malformed_snapshot() {
+        let state = failover_fixture();
+        let mut dto = (*state.snapshot()).clone();
+        // Slots 0..=100 belong to node 1; a DTO that drops the owner leaves
+        // every one of them naming a stranger (INV-REF-1).
+        dto.nodes.remove(&1);
+        let _ = ClusterState::from_snapshot(dto, Arc::new(AtomicU64::new(2)));
+    }
+
+    /// The openraft chokepoint, driven directly. Both openraft vehicles
+    /// (`install_snapshot` and the store reload in `attach_snapshot_store`)
+    /// funnel through here.
+    #[test]
+    #[should_panic(expected = "invariants violated after restore_from_snapshot")]
+    fn restore_from_snapshot_refuses_a_malformed_snapshot() {
+        let state = failover_fixture();
+        let mut shipped = (*state.read_inner()).clone();
+        shipped.nodes.remove(&1);
+        let (meta, _) = snapshot_payload(&state);
+        ClusterState::new().restore_from_snapshot(shipped, &meta);
+    }
+
+    /// ...and the same shape arriving over the wire, through the real
+    /// `RaftStateMachine::install_snapshot`, so the chokepoint claim above is
+    /// demonstrated rather than asserted in a doc comment.
+    #[tokio::test]
+    #[should_panic(expected = "invariants violated after restore_from_snapshot")]
+    async fn install_snapshot_refuses_a_malformed_snapshot() {
+        let state = failover_fixture();
+        let (meta, _) = snapshot_payload(&state);
+        let mut shipped = (*state.read_inner()).clone();
+        shipped.nodes.remove(&1);
+        let data = serde_json::to_vec(&shipped).unwrap();
+
+        let mut sm = ClusterStateMachine::new();
+        let _ = sm
+            .install_snapshot(&meta, Box::new(Cursor::new(data)))
+            .await;
+    }
+
+    /// The transition seam. `AddNode` validates nothing about the incoming
+    /// node's parent pointer, so registering a replica of a node that is not a
+    /// member leaves a dangling pointer (INV-REF-3) — the hook in
+    /// `apply_command` is what surfaces that, and this test is the standing
+    /// proof the hook runs on the accepted path.
+    ///
+    /// When the `AddNode`/`SetRole` parent validation lands (campaign issue 14)
+    /// this test stops panicking and must be re-pointed at whatever the next
+    /// reachable malformed transition is.
+    #[test]
+    #[should_panic(expected = "invariants violated after apply_command")]
+    fn apply_command_catches_a_transition_that_malforms_the_topology() {
+        let state = failover_fixture();
+        let _ = state.apply_command(ClusterCommand::AddNode {
+            node: NodeInfo::new_replica(9, test_addr(6389), test_addr(16389), 404),
+        });
     }
 }
