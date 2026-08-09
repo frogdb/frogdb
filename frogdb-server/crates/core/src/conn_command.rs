@@ -1096,6 +1096,9 @@ mod tests {
         fn allocsize_in_slot<'a>(&'a self, _slot: u16) -> BoxFuture<'a, usize> {
             unimplemented!()
         }
+        fn cluster_check(&self) -> Option<Vec<crate::Violation>> {
+            unimplemented!()
+        }
     }
 
     /// The one targeted assertion from the builder collapse: `ConnCtx::new`
