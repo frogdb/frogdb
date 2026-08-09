@@ -96,7 +96,28 @@ impl ClusterState {
         cmd: ClusterCommand,
     ) -> Result<(ClusterResponse, Vec<ClusterEvent>), ClusterError> {
         let mut inner = self.write_inner();
+        let outcome = Self::apply_to(&mut inner, cmd);
 
+        // Self-check seam. Every transition — accepted *or* rejected — has to
+        // leave the state machine satisfying the HARD invariant catalog, so
+        // every test in the crate that applies a command is also an invariant
+        // test. The rejected path is checked too: an arm that mutated before
+        // deciding to fail would show up here rather than at whatever later
+        // command tripped over the debris.
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_clean(&inner, "apply_command");
+
+        outcome
+    }
+
+    /// The transition function itself, split out so [`Self::apply_command`]
+    /// owns the one place the invariant hook can be attached. Arms `return`
+    /// freely; the hook still runs, which it could not if the match were
+    /// inlined into the caller.
+    fn apply_to(
+        inner: &mut ClusterStateInner,
+        cmd: ClusterCommand,
+    ) -> Result<(ClusterResponse, Vec<ClusterEvent>), ClusterError> {
         match cmd {
             ClusterCommand::AddNode { mut node } => {
                 let existed = inner.nodes.contains_key(&node.id);
@@ -197,8 +218,8 @@ impl ClusterState {
                 // through the same two helpers the force-failover removal path
                 // uses. A retired node must not leave a migration that can never
                 // complete or a parent pointer into a hole in the topology.
-                let events = prune_migrations_naming(&mut inner, node_id);
-                reparent_children(&mut inner, node_id, None);
+                let events = prune_migrations_naming(inner, node_id);
+                reparent_children(inner, node_id, None);
 
                 inner.nodes.remove(&node_id);
                 tracing::info!(node_id, "Removed node from cluster");
@@ -417,7 +438,7 @@ impl ClusterState {
                     // that had armed a barrier for a handoff to the removed node
                     // must be told to drop it. `RemoveNode` prunes through the
                     // same helper (FM-CLUSTER-002).
-                    pruned_releases = prune_migrations_naming(&mut inner, old_primary_id);
+                    pruned_releases = prune_migrations_naming(inner, old_primary_id);
                 } else {
                     let old_node = inner.nodes.get_mut(&old_primary_id).unwrap();
                     old_node.role = NodeRole::Replica;
@@ -426,7 +447,7 @@ impl ClusterState {
 
                 // 4. Re-parent the old primary's remaining replicas so they
                 //    follow the successor instead of a demoted/removed node.
-                reparent_children(&mut inner, old_primary_id, Some(new_primary_id));
+                reparent_children(inner, old_primary_id, Some(new_primary_id));
 
                 // 5. Bump the config epoch in the same transition and let the
                 //    successor claim it, so the new slot ownership can never be
@@ -1286,27 +1307,33 @@ mod tests {
             .unwrap();
         let proposed_at_ms = state.arm_handoff_for_test(5, 1, 2);
 
-        // A snapshot carrying the migration but not its target.
-        let mut snapshot = (*state.snapshot()).clone();
-        snapshot.nodes.remove(&2);
-        let restored = ClusterState::from_snapshot(snapshot, state.self_node_id_atomic());
+        // A snapshot carrying the migration but not its target. The catalog
+        // calls that shape malformed (INV-REF-2) and both restore vehicles
+        // assert against it, so the fixture is handed straight to the
+        // transition function instead of being installed through a
+        // `ClusterState`: the guard under test is a property of the
+        // transition, and a negative fixture is the only way to reach it.
+        let mut inner = (*state.read_inner()).clone();
+        inner.nodes.remove(&2);
 
-        let err = restored
-            .apply_command(ClusterCommand::CompleteSlotMigration {
+        let err = ClusterState::apply_to(
+            &mut inner,
+            ClusterCommand::CompleteSlotMigration {
                 slot: 5,
                 source_node: 1,
                 target_node: 2,
                 proposed_at_ms,
-            })
-            .expect_err("ownership must not move onto a node that is not a member");
+            },
+        )
+        .expect_err("ownership must not move onto a node that is not a member");
         assert!(matches!(err, ClusterError::NodeNotFound(2)), "{err:?}");
         assert_eq!(
-            restored.get_slot_owner(5),
-            Some(1),
+            inner.slot_assignment.get(&5),
+            Some(&1),
             "the slot map must not name a ghost"
         );
         assert!(
-            restored.get_slot_migration(5).is_some(),
+            inner.migrations.contains_key(&5),
             "a refused completion mutates nothing at all"
         );
     }

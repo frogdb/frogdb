@@ -45,6 +45,7 @@
 mod commands;
 #[cfg(test)]
 mod encoding_golden;
+pub mod invariants;
 pub mod network;
 pub mod state;
 pub mod stats;
@@ -56,6 +57,7 @@ pub mod version_gate;
 pub mod wire;
 pub mod writer;
 
+pub use invariants::{Citation, Invariant, Tier, Violation};
 pub use network::{
     BoxedStream, BusRpc, ClusterNetwork, ClusterNetworkFactory, ClusterRpcRequest,
     ClusterRpcResponse, FramedStream, RaftRpc, VoterChange, VoterRemoval, handle_rpc_request,
