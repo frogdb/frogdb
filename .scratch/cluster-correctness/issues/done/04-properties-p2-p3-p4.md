@@ -101,6 +101,18 @@ default profile hard-kills `properties::` tests at 120 s and boosted P2 legitima
 minutes. The real bound stays the nightly job's `timeout-minutes`, following the
 `seed_sweep_nightly` precedent.
 
+One full boosted pass was run locally at the default `CASES=200000` and came back green:
+
+```
+PASS [1147.684s] frogdb-cluster properties::p3_replaying_a_sequence_is_deterministic
+PASS [2786.994s] frogdb-cluster properties::p2_a_snapshot_restore_at_any_point_is_lossless
+Summary [2786.998s] 15 tests run: 15 passed (4 slow), 269 skipped
+```
+
+P2 is the long pole — 25 000 sequences x (len+1) split points x 2 vehicles x 2 comparisons —
+and it ran under heavy contention from parallel agents; its own accumulated CPU time was
+~31 min. P4 and P1 finish inside the 480 s slow threshold.
+
 ### Retro-validation of FM-CLUSTER-100 (evidence for issue 13)
 
 The fix was reverted locally (uncommitted, since restored) in two steps.
@@ -155,6 +167,7 @@ observed were the two deliberately induced above.
 
 - `just test frogdb-cluster` — 283/283 pass (the 4 properties plus a unit test pinning the
   heavy-budget division).
+- `just cluster-proptest` — one boosted pass, 15/15 green (output above).
 - `just check frogdb-cluster`, `just fmt` — clean.
 - `just lint-failure-modes` — OK, 278 failure modes, 1382 test references, 1382 tags. The
   properties carry no `FM-` tag, matching P1: they are universally quantified, not point
