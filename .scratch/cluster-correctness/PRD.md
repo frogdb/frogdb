@@ -155,6 +155,16 @@ two protocols whose correctness is distributed across proposers, apply, and time
   question); a found counterexample is checked in as a regression scenario replayed against
   the real state machine.
 
+**Model 1 shipped** (issue 10, `frogdb-cluster/src/model/`). The small-scope hypothesis
+*bends* rather than breaking: breadth and depth do not compose. Two slots **with** retries
+did not terminate inside 25 s / 7 GB, so the full budget is two exhaustive configs run side
+by side instead of one product — `cross_slot_scope()` (2 slots, 1 attempt: 1 306 692 states,
+depth 30, 8 s release) and `deep_scope()` (1 slot, 3 attempts, 2 dup acks, 2 leader changes:
+12 186 542 states, depth 54, 65 s release). Per-commit smoke is 31 324 states in 0.8 s
+debug. Payoff: one counterexample that is neither issue 14 nor 15 — a source whose apply of
+`Complete` lags its apply of `Prepare` past `barrier_ms` re-admits writes for a slot the
+target already owns (issue 16), replayed against the state machine in `model/replay.rs`.
+
 ### W4 — Seeded fault schedules (deterministic simulation)
 
 Generalize the five scripted turmoil cluster sims into one seed-driven scheduler:
@@ -260,6 +270,11 @@ what the manual audit caught.
    the nightly, not per-commit. **RULED: adopt both; run the real budgets nightly.**
    Per-commit runs get bounded-depth smoke configs (<10 s); record the W3 exploration
    budget (states/minutes) in the model file header so "it got slow" has a number.
+   *Model 1 as built (issue 10):* smoke 31 324 states / 0.8 s debug per commit; nightly
+   `cluster-model-nightly` + `just model-check` run the two full configs (1.3 M and 12.2 M
+   states, 8 s and 65 s release solo, ~2.5 min under parallel load), pinned one-at-a-time
+   in `.config/nextest.toml` because `deep_scope()` holds ~3 GB resident. The full runs are
+   `#[ignore]`d, so `just lint-failure-modes` now lists with `--run-ignored all`.
 2. **The dirty-state ruling INV-REF-1/2/3 forces.** `RemoveNode` leaves dangling
    migrations/replica parents (documented non-guarantee, pinned by test), and
    FM-CLUSTER-033 blesses `CompleteSlotMigration`'s unguarded owner insert.

@@ -82,6 +82,22 @@ test-group = "cluster"
 filter = "test(concurrency_workload::seed_sweep_nightly)"
 slow-timeout = { period = "60s" }
 
+# The two full-budget stateright model checks (opt-in via `just model-check`;
+# see frogdb-server/crates/cluster/src/model/) enumerate the whole reachable
+# state space of the two-phase slot handoff, driving the production state
+# machine once per transition. Each holds several GB of visited states and
+# saturates every core, so they get their own single-threaded group as well as
+# generous headroom — but no force-terminate, because the real budget is the
+# nightly job's `timeout-minutes`. Both are `#[ignore]`d and so invisible to
+# `just test`; only the bounded-depth smoke config runs per commit.
+[test-groups.model-check]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "test(model::tests::handoff_model_full)"
+slow-timeout = { period = "60s" }
+test-group = "model-check"
+
 # HyperLogLog cardinality tests add tens of thousands of elements over the
 # socket (sparse→dense promotion + repeated PFCOUNT) and run ~14s in debug —
 # right at the default 15s hard kill, so they tip over under parallel load.

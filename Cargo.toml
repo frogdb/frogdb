@@ -75,6 +75,9 @@ smallvec = "1"
 # Property-based testing
 proptest = "1"
 
+# Explicit-state model checking
+stateright = "0.31"
+
 # Configuration
 figment = { version = "0.10", features = ["toml", "env"] }
 serde = { version = "1", features = ["derive"] }
