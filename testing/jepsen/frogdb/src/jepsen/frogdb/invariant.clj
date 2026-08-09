@@ -159,7 +159,16 @@
   []
   (reify checker/Checker
     (check [_ test history opts]
-      (let [sweeps (->> history (filter #(= :cluster-check (:f %))))
+      (let [;; Every :cluster-check op appears twice in the history: once as
+            ;; the dispatch entry (no :value yet) and once completed (:value
+            ;; the {node -> check-node result} map `wrap-nemesis` returned).
+            ;; Both share :f :cluster-check and even :type :info (nemesis ops
+            ;; use :info for both phases — see the :heal generator entries
+            ;; alongside :cluster-check in frogdb-test's :generator), so only
+            ;; `(map? (:value op))` distinguishes a completed sweep from its
+            ;; own dispatch entry — filtering on :f alone would double-count
+            ;; every sweep in :sweeps-run below.
+            sweeps (->> history (filter #(and (= :cluster-check (:f %)) (map? (:value %)))))
             per-sweep (map (fn [op]
                              (let [results (:value op)
                                    violations (into {}
