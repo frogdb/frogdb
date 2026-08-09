@@ -163,6 +163,15 @@ concurrency-turmoil PATTERN='seed_sweep':
 concurrency-nightly SEEDS='250' OPS='150':
     {{dyld-env}} {{rocksdb-env}} FROGDB_CONCURRENCY_SEEDS={{SEEDS}} FROGDB_CONCURRENCY_OPS_PER_CLIENT={{OPS}} cargo nextest run -p frogdb-server --features turmoil --run-ignored all -E 'test(/seed_sweep_nightly/)'
 
+# Run the cluster state-machine property harness (frogdb-cluster `properties` module) at a
+# raised proptest budget. The default suite runs the same tests at a small case count so the
+# dev loop stays sub-second; this is the boosted pass, and the `cluster-nightly` workflow
+# calls exactly this recipe so the budget lives in one place (PRD .scratch/cluster-correctness
+# §8 D4). CASES sets PROPTEST_CASES; the harness falls back to its own default if it is unset,
+# unparseable or zero, so a typo cannot silently reduce the run to nothing.
+cluster-proptest CASES='200000':
+    {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run -p frogdb-cluster -E 'test(/properties/)'
+
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
 

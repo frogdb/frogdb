@@ -114,7 +114,16 @@ impl ClusterState {
     /// owns the one place the invariant hook can be attached. Arms `return`
     /// freely; the hook still runs, which it could not if the match were
     /// inlined into the caller.
-    fn apply_to(
+    ///
+    /// Visible to the crate for one reason: the property harness
+    /// ([`crate::properties`]) folds a generated sequence through the
+    /// transition function *while generating it*, to bias the next command on
+    /// the state the previous ones actually produced. That fold must not run
+    /// the assertion hook — a panic raised inside a proptest strategy escapes
+    /// the runner's `catch_unwind` and aborts the run without shrinking, so the
+    /// generator drives this seam and the property drives
+    /// [`Self::apply_command`].
+    pub(crate) fn apply_to(
         inner: &mut ClusterStateInner,
         cmd: ClusterCommand,
     ) -> Result<(ClusterResponse, Vec<ClusterEvent>), ClusterError> {

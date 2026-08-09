@@ -47,6 +47,8 @@ mod commands;
 mod encoding_golden;
 pub mod invariants;
 pub mod network;
+#[cfg(test)]
+mod properties;
 pub mod state;
 pub mod stats;
 pub mod storage;
