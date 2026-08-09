@@ -359,4 +359,16 @@ impl DebugProvider for ConnectionHandler {
                 .sum()
         })
     }
+
+    /// DEBUG CLUSTER CHECK — run the invariant catalog against the live
+    /// `ClusterState`. A plain read-lock borrow (see
+    /// `ClusterState::check_invariants`), so unlike its scatter-gather
+    /// siblings this never awaits anything; `None` in standalone mode, where
+    /// there is no `ClusterState` to check.
+    fn cluster_check(&self) -> Option<Vec<frogdb_core::Violation>> {
+        self.cluster
+            .cluster_state
+            .as_ref()
+            .map(|cs| cs.check_invariants())
+    }
 }

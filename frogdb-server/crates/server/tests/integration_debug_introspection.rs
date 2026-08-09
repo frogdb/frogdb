@@ -32,6 +32,23 @@ async fn debug_locktable_unknown_still_errors_are_isolated() {
 }
 
 #[tokio::test]
+async fn debug_cluster_check_errors_outside_cluster_mode() {
+    // A standalone node has no `ClusterState` to check against; the invariant
+    // catalog is cluster-only, so DEBUG CLUSTER CHECK must say so rather than
+    // silently reporting an empty (and therefore misleadingly "clean") array.
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let resp = client.command(&["DEBUG", "CLUSTER", "CHECK"]).await;
+    match resp {
+        Response::Error(e) => {
+            assert!(String::from_utf8_lossy(&e).contains("cluster support disabled"));
+        }
+        other => panic!("expected error, got {other:?}"),
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
 async fn debug_waitqueue_empty_on_idle_server() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;

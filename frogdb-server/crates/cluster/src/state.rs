@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
 
+use crate::invariants::Violation;
 use crate::storage::{ClusterSnapshotStore, StoredClusterSnapshot};
 use crate::types::{
     CLUSTER_SLOTS, ClusterCommand, ClusterError, ClusterEvent, ClusterResponse, ClusterSnapshot,
@@ -274,6 +275,20 @@ impl ClusterState {
     /// return the same allocation.
     pub fn snapshot(&self) -> Arc<ClusterSnapshot> {
         Arc::clone(&self.cell.read().published)
+    }
+
+    /// Evaluate the invariant catalog against the live replicated state.
+    ///
+    /// Read-only (a plain read-lock borrow of [`ClusterStateInner`], never a
+    /// [`Self::write_inner`]) and reports every tier, not just HARD — this is
+    /// the reporting view `DEBUG CLUSTER CHECK` exposes to an operator, so a
+    /// [`crate::invariants::Tier::DocumentedException`] shows up too, the same
+    /// way [`crate::invariants::check_all`] behaves everywhere else it is
+    /// called. Compare [`Self::restore_from_snapshot`]'s
+    /// `debug_assert_clean`, which asserts HARD-only and only in test/debug
+    /// builds; this method is always compiled and never panics.
+    pub fn check_invariants(&self) -> Vec<Violation> {
+        crate::invariants::check_all(&self.read_inner())
     }
 
     /// Get node info by ID.
@@ -4338,5 +4353,50 @@ mod tests {
         let _ = state.apply_command(ClusterCommand::AddNode {
             node: NodeInfo::new_replica(9, test_addr(6389), test_addr(16389), 404),
         });
+    }
+
+    // ---- check_invariants (DEBUG CLUSTER CHECK's live self-check) ---------
+    //
+    // These inject a violation the same way the catalog's own forcing tests
+    // in `invariants.rs` do: mutate `ClusterStateInner` directly through
+    // `write_inner`, not `apply_command`, so the accepted-path hook above
+    // never fires and the fixture can be built without panicking.
+
+    #[test]
+    fn check_invariants_is_clean_on_a_well_formed_state() {
+        let state = failover_fixture();
+        assert_eq!(state.check_invariants(), Vec::new());
+    }
+
+    #[test]
+    fn check_invariants_reports_an_injected_dangling_slot_owner() {
+        let state = failover_fixture();
+        {
+            let mut guard = state.write_inner();
+            // A slot owned by a node that is not a cluster member (INV-REF-1).
+            // `failover_fixture` only assigns slots 0..100, so 200 is untouched.
+            guard.slot_assignment.insert(200, 404);
+        }
+        let violations = state.check_invariants();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].id, "INV-REF-1");
+        assert!(violations[0].detail.contains("404"));
+    }
+
+    #[test]
+    fn check_invariants_reports_every_tier_including_documented_exceptions() {
+        let state = failover_fixture();
+        {
+            let mut guard = state.write_inner();
+            // Node 2 (a replica) parented onto node 3 (also a replica) is a
+            // replication chain: INV-REF-3B, the catalog's one
+            // DocumentedException. `check_hard` is blind to it by design; the
+            // live self-check must not be, or an operator loses visibility
+            // into a reachable-but-deliberately-unenforced state.
+            guard.nodes.get_mut(&2).unwrap().primary_id = Some(3);
+        }
+        let violations = state.check_invariants();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].id, "INV-REF-3B");
     }
 }

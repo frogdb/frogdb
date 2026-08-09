@@ -599,6 +599,19 @@ pub trait DebugProvider: Send + Sync {
     /// DEBUG ALLOCSIZE-SLOTS-ASSERT — total allocated memory for keys in `slot`,
     /// summed across every shard. The executor compares against the expectation.
     fn allocsize_in_slot<'a>(&'a self, slot: u16) -> BoxFuture<'a, usize>;
+
+    /// DEBUG CLUSTER CHECK — evaluate the cluster invariant catalog
+    /// (`frogdb_cluster::invariants`) against this node's live replicated
+    /// state, every tier (a [`crate::Violation`] fires from a
+    /// `Tier::DocumentedException` too, not only `Tier::Hard` — the reporting
+    /// view an operator wants is strictly more informative than the
+    /// hook-asserted subset). `None` when the node is not running in cluster
+    /// mode; the executor turns that into the same "cluster support disabled"
+    /// error every other cluster-only DEBUG/CLUSTER surface returns. `Some` is
+    /// empty exactly when the state is clean. A plain state read — no shard
+    /// round-trip, no mutation — so it stays cheap enough to run at every
+    /// Jepsen nemesis quiesce point in a release build.
+    fn cluster_check(&self) -> Option<Vec<crate::Violation>>;
 }
 
 /// The connection-local MONITOR machinery, abstracted so the connection-command
@@ -1081,6 +1094,9 @@ mod tests {
             unimplemented!()
         }
         fn allocsize_in_slot<'a>(&'a self, _slot: u16) -> BoxFuture<'a, usize> {
+            unimplemented!()
+        }
+        fn cluster_check(&self) -> Option<Vec<crate::Violation>> {
             unimplemented!()
         }
     }
