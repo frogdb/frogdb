@@ -286,11 +286,15 @@ def load_test_paths(nextest_output: Path | None) -> set[str]:
 
     Each listing line is `<binary-id> <test-path>` (or an indented test path
     under a binary heading); the test path is the last field either way.
+
+    `--run-ignored all` because a nightly-budget test (`#[ignore]`d, run by a
+    scheduled workflow or a `just` recipe) still forces the failure mode its
+    row names; without it such a row reads as a typo.
     """
     if nextest_output is not None:
         text = nextest_output.read_text()
     else:
-        cmd = ["cargo", "nextest", "list", "--color", "never"]
+        cmd = ["cargo", "nextest", "list", "--color", "never", "--run-ignored", "all"]
         for crate in NEXTEST_CRATES:
             cmd += ["-p", crate]
         text = run_listing(cmd)
@@ -302,7 +306,7 @@ def load_test_paths(nextest_output: Path | None) -> set[str]:
         for crate, feature in NEXTEST_FEATURE_VARIANTS:
             text += run_listing(
                 [
-                    *["cargo", "nextest", "list", "--color", "never"],
+                    *["cargo", "nextest", "list", "--color", "never", "--run-ignored", "all"],
                     *["-p", crate, "--features", feature],
                 ]
             )

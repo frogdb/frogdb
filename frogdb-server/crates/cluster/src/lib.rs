@@ -46,6 +46,8 @@ mod commands;
 #[cfg(test)]
 mod encoding_golden;
 pub mod invariants;
+#[cfg(test)]
+mod model;
 pub mod network;
 #[cfg(test)]
 mod properties;

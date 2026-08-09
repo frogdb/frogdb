@@ -174,6 +174,22 @@ concurrency-nightly SEEDS='250' OPS='150':
 cluster-proptest CASES='200000':
     {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run --profile cluster-proptest -p frogdb-cluster -E 'test(/properties/)'
 
+# Run the stateright models at their full exploration budget (CI nightly tier, not part of
+# `just test`). The default suite carries only the bounded-depth smoke configs, which finish in
+# well under 10s; this runs the `#[ignore]`d full-scope checks, which enumerate the whole
+# reachable space and are the numbers recorded in each model's file header.
+#
+# Release profile: the models drive the *production* state machine (frogdb-cluster's
+# `apply_command`) once per explored transition, so the run is dominated by debug-build overhead
+# otherwise. `debug_assert_clean` stays on either way — cfg(test) covers it — so the invariant
+# self-check is not lost by optimizing.
+#
+# Laptop-runnable by construction (PRD .scratch/cluster-correctness/ §8 D1) — the whole default
+# pattern is well under a minute of compute; PATTERN narrows to a single model, e.g.
+# `just model-check handoff_model_full_deep`.
+model-check PATTERN='handoff_model_full':
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-cluster --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
+
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
 
