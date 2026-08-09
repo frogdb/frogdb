@@ -497,6 +497,44 @@ TESTS: tuple[TestDefinition, ...] = (
         cluster_flag=True,
         suites=("raft", "all"),
     ),
+    # split-brain-raft / zombie-raft: the split-brain and zombie workloads
+    # (previously replication-topology only, see split-brain/zombie above),
+    # ported to the Raft cluster topology (issue 08). Raft-cluster mode has no
+    # primary/replica ROLE distinction (ADR-0001: Raft carries cluster
+    # metadata only, so a freshly formed cluster is all primaries, each
+    # independently owning and serving its own disjoint slot range) — see the
+    # split_brain_raft.clj / zombie_raft.clj docstrings for how each
+    # workload's checked property was adapted:
+    #   - split-brain-raft asserts the majority (2 of 3) never self-fences
+    #     while the isolated minority (n1) does, and the cluster converges
+    #     (every node unfenced) after heal.
+    #   - zombie-raft asserts no "phantom commit" — a write the server told
+    #     the client was CLUSTERDOWN-rejected must never later be observed as
+    #     n1's live value — and that n1 rejoins unfenced after heal.
+    # Both reuse the existing :partition/:primary-isolated nemesis (already
+    # topology-aware; on :raft it isolates n1 from n2/n3 by container IP,
+    # the same op leader-election-partition/cross-slot-partition/
+    # slot-migration-partition already use above), which is a genuine 2-vs-1
+    # Raft quorum split on the 3-node default cluster — no new nemesis wiring
+    # was needed.
+    TestDefinition(
+        "split-brain-raft",
+        "split-brain-raft",
+        "partition",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
+    TestDefinition(
+        "zombie-raft",
+        "zombie-raft",
+        "partition",
+        60,
+        Topology.RAFT,
+        cluster_flag=True,
+        suites=("raft", "all"),
+    ),
     # raft-chaos: the harshest composed nemesis (kills, pauses, partitions, slow
     # network, disk, clock, memory on the slot-owning nodes) driven against the
     # key-routing workload. The key-routing checker now validates DATA — every

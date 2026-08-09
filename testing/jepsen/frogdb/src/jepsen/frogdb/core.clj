@@ -44,6 +44,8 @@
             [jepsen.frogdb.slot-migration :as slot-migration]
             [jepsen.frogdb.cross-slot :as cross-slot]
             [jepsen.frogdb.key-routing :as key-routing]
+            [jepsen.frogdb.split-brain-raft :as split-brain-raft]
+            [jepsen.frogdb.zombie-raft :as zombie-raft]
             ;; Gap analysis workloads
             [jepsen.frogdb.migration-recovery :as migration-recovery]
             [jepsen.frogdb.concurrent-migration :as concurrent-migration]
@@ -100,6 +102,8 @@
    :slot-migration slot-migration/workload
    :cross-slot cross-slot/workload
    :key-routing key-routing/workload
+   :split-brain-raft split-brain-raft/workload
+   :zombie-raft zombie-raft/workload
    ;; Cluster-mode data replication (per-node PSYNC inside a Raft cluster)
    :cluster-replication cluster-replication/workload
    :cluster-lag lag/cluster-workload
@@ -196,7 +200,8 @@
                                        :cross-slot :key-routing
                                        :cluster-replication :cluster-lag
                                        :migration-recovery :concurrent-migration
-                                       :membership-routing :rolling-restart}
+                                       :membership-routing :rolling-restart
+                                       :split-brain-raft :zombie-raft}
                                      (keyword (:workload opts)))
         multi-node? (or replication? replication-workload?)
         cluster-mode? (or cluster? cluster-workload?)
