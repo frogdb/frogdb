@@ -6,12 +6,13 @@
 //! subcommands are pure (STRUCTSIZE, HELP, HASHING, RESP3), some sleep the
 //! connection task (SLEEP), and several round-trip the shards (VLL,
 //! SET-ACTIVE-EXPIRE, KEYSIZES-HIST-ASSERT, ALLOCSIZE-SLOTS-ASSERT) or reach
-//! server-only subsystems (TRACING, PUBSUB LIMITS, BUNDLE).
+//! server-only subsystems (TRACING, PUBSUB LIMITS, BUNDLE, CLUSTER CHECK).
 //!
 //! The subcommand routing and argument parsing live here in the executor; the
 //! per-subcommand *I/O* that needs the handler (the tracer, per-shard messages,
 //! this connection's subscription counts, the `frogdb_debug` bundle machinery,
-//! the `enable-debug-command` gate) stays behind the [`frogdb_core::DebugProvider`]
+//! the live `ClusterState`, the `enable-debug-command` gate) stays behind the
+//! [`frogdb_core::DebugProvider`]
 //! seam, implemented for `ConnectionHandler` in
 //! [`crate::connection::debug_handler`]. The wire output of every subcommand
 //! is byte-for-byte identical to the pre-migration `dispatch_debug`.
@@ -220,6 +221,13 @@ impl ConnectionCommand for DebugConnCommand {
                     let shard_id = shard_for_key(&key, num_shards);
                     debug.expire_backdate(shard_id, key, ms).await
                 }
+                b"CLUSTER" => {
+                    if args.len() > 1 && args[1].eq_ignore_ascii_case(b"CHECK") {
+                        format_cluster_check_response(debug.cluster_check())
+                    } else {
+                        Response::error("ERR Unknown DEBUG CLUSTER subcommand. Use CHECK.")
+                    }
+                }
                 b"PAUSE-SLOT" => debug_pause_slot(client_registry, args),
                 b"KEYSIZES-HIST-ASSERT" => keysizes_hist_assert(debug, args).await,
                 b"ALLOCSIZE-SLOTS-ASSERT" => allocsize_slots_assert(debug, args).await,
@@ -291,6 +299,8 @@ fn debug_help() -> Response {
         "    Cross-check the expiry index against entry deadlines.",
         "DEBUG EXPIRE-BACKDATE <key> <ms>",
         "    Backdate a key's TTL <ms> into the past so it is already expired (test support).",
+        "DEBUG CLUSTER CHECK",
+        "    Run the cluster invariant catalog against live state; empty array = clean.",
         "DEBUG PAUSE-SLOT <slot> <timeout-ms> [WRITE|ALL]",
         "    Arm a slot-scoped pause (0 ms disarms it) as the migration barrier does (test support).",
         "DEBUG PUBSUB LIMITS",
@@ -806,6 +816,29 @@ fn format_expiry_index_check_response(
     Response::Map(shards)
 }
 
+/// Format `DEBUG CLUSTER CHECK` — a RESP array of `{id, detail}` maps, one per
+/// catalog violation of every tier, empty when the state is clean. `None`
+/// (standalone mode, no `ClusterState` to check) becomes the same "cluster
+/// support disabled" error every other cluster-only DEBUG/CLUSTER surface
+/// returns — never a silently-empty array, which would read as "clean"
+/// instead of "not applicable".
+fn format_cluster_check_response(violations: Option<Vec<frogdb_core::Violation>>) -> Response {
+    match violations {
+        None => Response::error("ERR This instance has cluster support disabled"),
+        Some(violations) => Response::Array(
+            violations
+                .into_iter()
+                .map(|v| {
+                    Response::Map(vec![
+                        (Response::bulk("id"), Response::bulk(v.id)),
+                        (Response::bulk("detail"), Response::bulk(v.detail)),
+                    ])
+                })
+                .collect(),
+        ),
+    }
+}
+
 /// Parse the optional `DURATION <seconds>` of DEBUG BUNDLE GENERATE. The `Err`
 /// string is the raw `ERR …` message the caller wraps in [`Response::error`].
 fn parse_bundle_duration(args: &[Bytes]) -> Result<u64, String> {
@@ -1095,6 +1128,24 @@ mod tests {
     /// without a live `ConnectionHandler`.
     struct StubDebug {
         enabled: bool,
+        cluster_check: Option<Vec<frogdb_core::Violation>>,
+    }
+
+    impl StubDebug {
+        fn new(enabled: bool) -> Self {
+            Self {
+                enabled,
+                cluster_check: Some(Vec::new()),
+            }
+        }
+
+        fn with_cluster_check(
+            mut self,
+            cluster_check: Option<Vec<frogdb_core::Violation>>,
+        ) -> Self {
+            self.cluster_check = cluster_check;
+            self
+        }
     }
 
     impl DebugProvider for StubDebug {
@@ -1162,11 +1213,14 @@ mod tests {
         fn allocsize_in_slot<'a>(&'a self, _slot: u16) -> BoxFuture<'a, usize> {
             Box::pin(async { 0 })
         }
+        fn cluster_check(&self) -> Option<Vec<frogdb_core::Violation>> {
+            self.cluster_check.clone()
+        }
     }
 
     #[tokio::test]
     async fn sleep_disabled_reports_error() {
-        let stub = StubDebug { enabled: false };
+        let stub = StubDebug::new(false);
         let fx = super::tests_fixture::Deps::new();
         let resp = DebugConnCommand
             .execute(&mut fx.ctx(Some(&stub)), &[arg("SLEEP"), arg("0")])
@@ -1176,7 +1230,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_subcommand_errors() {
-        let stub = StubDebug { enabled: true };
+        let stub = StubDebug::new(true);
         let fx = super::tests_fixture::Deps::new();
         let resp = DebugConnCommand
             .execute(&mut fx.ctx(Some(&stub)), &[arg("NOPE")])
@@ -1186,7 +1240,7 @@ mod tests {
 
     #[tokio::test]
     async fn expire_backdate_dispatches_to_provider_on_valid_args() {
-        let stub = StubDebug { enabled: true };
+        let stub = StubDebug::new(true);
         let fx = super::tests_fixture::Deps::new();
         let resp = DebugConnCommand
             .execute(
@@ -1200,7 +1254,7 @@ mod tests {
 
     #[tokio::test]
     async fn expire_backdate_rejects_bad_arity_and_ms() {
-        let stub = StubDebug { enabled: true };
+        let stub = StubDebug::new(true);
         let fx = super::tests_fixture::Deps::new();
 
         // Missing the ms argument.
@@ -1233,7 +1287,7 @@ mod tests {
 
     #[tokio::test]
     async fn dangerous_subcommand_is_unsupported() {
-        let stub = StubDebug { enabled: true };
+        let stub = StubDebug::new(true);
         let fx = super::tests_fixture::Deps::new();
         let resp = DebugConnCommand
             .execute(&mut fx.ctx(Some(&stub)), &[arg("RELOAD")])
@@ -1244,6 +1298,65 @@ mod tests {
             }
             other => panic!("expected error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn cluster_check_reports_an_empty_array_when_clean() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("CLUSTER"), arg("CHECK")])
+            .await;
+        assert_eq!(resp, Response::Array(vec![]), "got {resp:?}");
+    }
+
+    #[tokio::test]
+    async fn cluster_check_reports_violations_as_id_detail_maps() {
+        let stub = StubDebug::new(true).with_cluster_check(Some(vec![frogdb_core::Violation {
+            id: "INV-REF-1",
+            detail: "slot 200 owned by unknown node 404".to_string(),
+        }]));
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("CLUSTER"), arg("CHECK")])
+            .await;
+        assert_eq!(
+            resp,
+            Response::Array(vec![Response::Map(vec![
+                (Response::bulk("id"), Response::bulk("INV-REF-1")),
+                (
+                    Response::bulk("detail"),
+                    Response::bulk("slot 200 owned by unknown node 404")
+                ),
+            ])]),
+            "got {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cluster_check_reports_cluster_disabled_error_in_standalone_mode() {
+        let stub = StubDebug::new(true).with_cluster_check(None);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("CLUSTER"), arg("CHECK")])
+            .await;
+        match resp {
+            Response::Error(e) => assert!(
+                String::from_utf8_lossy(&e).contains("cluster support disabled"),
+                "got {e:?}"
+            ),
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cluster_unknown_subcommand_errors() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("CLUSTER"), arg("NOPE")])
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
     }
 }
 
