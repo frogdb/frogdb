@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a443474d600d6b898adefe085b04627b1e98746342351e03e176b2b14972e2af # shrinks to commands = [AddNode { node: NodeInfo { id: 5, addr: 127.0.0.1:6384, cluster_addr: 127.0.0.1:16384, role: Primary, primary_id: None, config_epoch: 0, flags: NodeFlags { handshake: false, fail: false, pfail: false, noaddr: false }, replica_priority: 100, version: "0.1.0" } }, AddNode { node: NodeInfo { id: 1, addr: 127.0.0.1:6380, cluster_addr: 127.0.0.1:16380, role: Primary, primary_id: None, config_epoch: 0, flags: NodeFlags { handshake: false, fail: false, pfail: false, noaddr: false }, replica_priority: 100, version: "0.1.0" } }, BeginSlotMigration { slot: 0, source_node: 1, target_node: 1 }, AssignSlots { node_id: 5, slots: [SlotRange { start: 0, end: 0 }] }]

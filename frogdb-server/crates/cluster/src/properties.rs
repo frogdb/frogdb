@@ -51,7 +51,7 @@ use crate::invariants;
 use crate::state::{ClusterState, ClusterStateInner};
 use crate::types::{
     CLUSTER_SLOTS, ClusterCommand, HANDOFF_BARRIER_MS, HANDOFF_LEASE_MS, NodeId, NodeInfo,
-    NodeRole, SlotRange,
+    NodeRole, SlotHandoff, SlotRange,
 };
 
 /// Cases run when nothing overrides the budget. Sized for the normal
@@ -60,10 +60,16 @@ use crate::types::{
 /// through `PROPTEST_CASES`.
 const DEFAULT_CASES: u32 = 96;
 
-/// Commands per generated sequence. Long enough to reach a prepared-and-drained
-/// handoff behind a couple of failovers, short enough that a counterexample is
-/// readable before shrinking starts.
-const SEQUENCE_LEN: usize = 24;
+/// Upper bound on commands per generated sequence; lengths are drawn uniformly
+/// from `1..=SEQUENCE_LEN`, so the average sequence is half this.
+///
+/// Long enough to reach a prepared-and-drained handoff behind a couple of
+/// failovers — the migration lifecycle is four commands deep *after* a cluster
+/// with assigned slots exists, and at 24 the average sequence ran out before
+/// `CompleteSlotMigration` was ever admissible. Shrinking pulls a counterexample
+/// back down (the issue-16 repro reduced to four commands), so the length costs
+/// coverage, not readability.
+const SEQUENCE_LEN: usize = 48;
 
 /// The environment variable that raises [`DEFAULT_CASES`].
 const CASES_ENV: &str = "PROPTEST_CASES";
@@ -107,17 +113,35 @@ const RESET_ID_OFFSET: NodeId = 100;
 /// assignments contend, plus the last legal slot as a boundary probe.
 const SLOT_POOL: [u16; 6] = [0, 1, 2, 3, 7, CLUSTER_SLOTS - 1];
 
-/// How far the virtual clock advances between steps, in milliseconds. Includes
-/// jumps past [`HANDOFF_BARRIER_MS`] and past [`HANDOFF_LEASE_MS`] so barrier
-/// expiry and lease expiry are both reachable without a real clock.
-const CLOCK_STEPS: [u64; 5] = [0, 25, 250, HANDOFF_BARRIER_MS + 1, HANDOFF_LEASE_MS + 1];
+/// How far the virtual clock advances between steps, in milliseconds.
+///
+/// Small on purpose. A prepare and the complete that finishes it are several
+/// commands apart, so a pool that could jump [`HANDOFF_LEASE_MS`] on any step
+/// makes the clock alone refuse essentially every completion — which is what
+/// `the_generator_reaches_prepared_drained_and_completed_handoffs` caught. The
+/// expiry paths do not need a big clock: a `0` in [`BARRIER_POOL`] /
+/// [`LEASE_POOL`] arms a handoff that is *already* expired, which reaches the
+/// same two rejection arms from the other side.
+const CLOCK_STEPS: [u64; 6] = [0, 0, 1, 25, 25, HANDOFF_BARRIER_MS + 1];
 
 /// Barrier windows offered to `PrepareSlotHandoff`. `0` is an already-elapsed
-/// window, which a `CompleteSlotMigration` must refuse.
-const BARRIER_POOL: [u64; 3] = [0, HANDOFF_BARRIER_MS, HANDOFF_BARRIER_MS * 4];
+/// window, which a `CompleteSlotMigration` must refuse — held to a quarter of
+/// the draws because the barrier and the lease each have to be live for a
+/// completion to be admissible at all.
+const BARRIER_POOL: [u64; 4] = [
+    0,
+    HANDOFF_BARRIER_MS,
+    HANDOFF_BARRIER_MS * 4,
+    HANDOFF_BARRIER_MS * 4,
+];
 
 /// Lease windows offered to `PrepareSlotHandoff`, on the same principle.
-const LEASE_POOL: [u64; 3] = [0, HANDOFF_LEASE_MS, HANDOFF_LEASE_MS * 4];
+const LEASE_POOL: [u64; 4] = [
+    0,
+    HANDOFF_LEASE_MS,
+    HANDOFF_LEASE_MS * 4,
+    HANDOFF_LEASE_MS * 4,
+];
 
 /// Where the virtual clock starts. Nonzero so a `prepared_at_ms` is never
 /// confused with "unset".
@@ -166,12 +190,17 @@ const WEIGHTS: [(Variant, u32); 18] = [
     (Variant::Failover, 6),
     (Variant::MarkNodeFailed, 3),
     (Variant::MarkNodeRecovered, 3),
-    (Variant::BeginSlotMigration, 10),
-    (Variant::PrepareSlotHandoff, 9),
-    (Variant::ConfirmSlotHandoffDrained, 8),
-    (Variant::AbortSlotHandoff, 4),
-    (Variant::CompleteSlotMigration, 8),
-    (Variant::CancelSlotMigration, 4),
+    (Variant::BeginSlotMigration, 14),
+    (Variant::PrepareSlotHandoff, 12),
+    (Variant::ConfirmSlotHandoffDrained, 12),
+    // `AbortSlotHandoff` and `CancelSlotMigration` are the two arms that
+    // *always* succeed, handoff or not, so every draw of one tears down a
+    // migration the four stages above spent several draws building. Held low
+    // deliberately — at parity with the rest of the lifecycle they starved
+    // `CompleteSlotMigration` of a drained handoff entirely.
+    (Variant::AbortSlotHandoff, 2),
+    (Variant::CompleteSlotMigration, 12),
+    (Variant::CancelSlotMigration, 2),
     (Variant::FinalizeUpgrade, 2),
     (Variant::ResetCluster, 1),
 ];
@@ -316,7 +345,13 @@ fn slot_ref(state: &ClusterStateInner, i: u8, in_context: bool) -> u16 {
 /// The `i`th open migration, as `(slot, source, target, handoff seq)`.
 fn migration_ref(state: &ClusterStateInner, i: u8) -> Option<(u16, NodeId, NodeId, Option<u64>)> {
     let slots: Vec<u16> = state.migrations.keys().copied().collect();
-    let slot = nth(&slots, i)?;
+    migration_ref_for(state, nth(&slots, i)?)
+}
+
+fn migration_ref_for(
+    state: &ClusterStateInner,
+    slot: u16,
+) -> Option<(u16, NodeId, NodeId, Option<u64>)> {
     let migration = state.migrations.get(&slot)?;
     Some((
         slot,
@@ -324,6 +359,40 @@ fn migration_ref(state: &ClusterStateInner, i: u8) -> Option<(u16, NodeId, NodeI
         migration.target_node,
         migration.handoff.as_ref().map(|handoff| handoff.seq),
     ))
+}
+
+/// The `i`th open migration whose handoff satisfies `wanted`, in the same shape
+/// [`migration_ref`] returns.
+fn migration_ref_where(
+    state: &ClusterStateInner,
+    i: u8,
+    wanted: impl Fn(&SlotHandoff) -> bool,
+) -> Option<(u16, NodeId, NodeId, Option<u64>)> {
+    let slots: Vec<u16> = state
+        .migrations
+        .iter()
+        .filter(|(_, migration)| migration.handoff.as_ref().is_some_and(&wanted))
+        .map(|(slot, _)| *slot)
+        .collect();
+    migration_ref_for(state, nth(&slots, i)?)
+}
+
+/// The `i`th migration that has a handoff at all — the only shape
+/// `ConfirmSlotHandoffDrained` and `AbortSlotHandoff` can acknowledge live.
+fn prepared_migration_ref(
+    state: &ClusterStateInner,
+    i: u8,
+) -> Option<(u16, NodeId, NodeId, Option<u64>)> {
+    migration_ref_where(state, i, |_| true)
+}
+
+/// The `i`th migration whose handoff has been confirmed drained — the only
+/// shape `CompleteSlotMigration` admits.
+fn drained_migration_ref(
+    state: &ClusterStateInner,
+    i: u8,
+) -> Option<(u16, NodeId, NodeId, Option<u64>)> {
+    migration_ref_where(state, i, |handoff| handoff.drained)
 }
 
 fn addr_of(id: NodeId, offset: u16) -> std::net::SocketAddr {
@@ -377,21 +446,31 @@ fn build(state: &ClusterStateInner, clock_ms: u64, step: Step) -> ClusterCommand
         },
 
         Variant::AssignSlots => {
-            // In context: start from a slot nobody owns, so the assignment can
-            // succeed. Out of context: any pool slot, which will often already
-            // belong to someone else.
+            // In context: a run of slots nobody owns and nobody is migrating,
+            // so the assignment can succeed. Skipping migrating slots is not
+            // squeamishness about the issue-16 shape — an in-context draw that
+            // the muzzle then drops costs the sequence a step, which is how the
+            // generator starves itself of completed migrations. Out of context:
+            // any pool slot, which will often already belong to someone else.
+            let free = |slot: &u16| {
+                !state.slot_assignment.contains_key(slot) && !state.migrations.contains_key(slot)
+            };
             let start = if in_context {
                 SLOT_POOL
                     .iter()
                     .copied()
-                    .find(|slot| !state.slot_assignment.contains_key(slot))
+                    .find(free)
                     .unwrap_or(SLOT_POOL[a as usize % SLOT_POOL.len()])
             } else {
                 SLOT_POOL[slot_pick as usize % SLOT_POOL.len()]
             };
-            let end = start
+            let limit = start
                 .saturating_add(u16::from(span % 4))
                 .min(CLUSTER_SLOTS - 1);
+            let end = match in_context {
+                true => (start..=limit).take_while(free).last().unwrap_or(start),
+                false => limit,
+            };
             ClusterCommand::AssignSlots {
                 node_id: node_ref(state, a, in_context),
                 slots: vec![SlotRange::new(start, end)],
@@ -477,7 +556,20 @@ fn build(state: &ClusterStateInner, clock_ms: u64, step: Step) -> ClusterCommand
         },
 
         Variant::BeginSlotMigration => {
-            let slot = slot_ref(state, slot_pick, in_context);
+            // In context, prefer an assigned slot that is not *already*
+            // migrating: `MigrationInProgress` is the one rejection that also
+            // starves every later stage of the handoff lifecycle of a record to
+            // work on.
+            let idle: Vec<u16> = state
+                .slot_assignment
+                .keys()
+                .copied()
+                .filter(|slot| !state.migrations.contains_key(slot))
+                .collect();
+            let slot = match in_context.then(|| nth(&idle, slot_pick)).flatten() {
+                Some(slot) => slot,
+                None => slot_ref(state, slot_pick, in_context),
+            };
             let source_node = match in_context {
                 // The owner, which is the only source the arm accepts for an
                 // assigned slot.
@@ -528,8 +620,13 @@ fn build(state: &ClusterStateInner, clock_ms: u64, step: Step) -> ClusterCommand
         }
 
         Variant::CompleteSlotMigration => {
+            // In context, prefer a migration whose handoff is already drained —
+            // the only shape the arm admits. Falling back to any open migration
+            // (and, out of context, to a bare slot) keeps the rejection arms
+            // reachable.
+            let drained = drained_migration_ref(state, slot_pick);
             let (slot, source_node, target_node) = match in_context
-                .then(|| migration_ref(state, slot_pick))
+                .then(|| drained.or_else(|| migration_ref(state, slot_pick)))
                 .flatten()
             {
                 Some((slot, source, target, _)) => (slot, source, target),
@@ -576,7 +673,13 @@ fn build(state: &ClusterStateInner, clock_ms: u64, step: Step) -> ClusterCommand
 /// A `(slot, seq)` pair for the two handoff acknowledgements: the live one when
 /// in context, and a neighbouring `seq` — the classic stale ack — when not.
 fn handoff_ref(state: &ClusterStateInner, step: Step) -> (u16, u64) {
-    match migration_ref(state, step.slot) {
+    // In context, look past the migrations that have no handoff at all —
+    // acknowledging one of those is the stale-ack case, not the live one.
+    let live = step
+        .in_context
+        .then(|| prepared_migration_ref(state, step.slot))
+        .flatten();
+    match live.or_else(|| migration_ref(state, step.slot)) {
         Some((slot, _, _, Some(seq))) if step.in_context => (slot, seq),
         Some((slot, _, _, seq)) => (slot, seq.unwrap_or(0).wrapping_add(1)),
         None => (slot_ref(state, step.slot, false), u64::from(step.b % 4)),
@@ -628,6 +731,22 @@ fn known_defect(state: &ClusterStateInner, command: &ClusterCommand) -> Option<&
                     && old_primary_id != new_primary_id
             })
             .then_some("issue 15: graceful failover strands a migration at the demoted primary"),
+
+        // Issue 16 — `AssignSlots` never consults `migrations`, and
+        // `BeginSlotMigration` accepts an unassigned slot (the follower-seed
+        // allowance). The two compose: a migrating-but-unassigned slot can be
+        // handed to a node that is not the migration's source (INV-MIG-1).
+        ClusterCommand::AssignSlots { node_id, slots } => slots
+            .iter()
+            .flat_map(SlotRange::iter)
+            .any(|slot| {
+                state
+                    .migrations
+                    .get(&slot)
+                    .is_some_and(|migration| migration.source_node != *node_id)
+                    && state.slot_assignment.get(&slot).is_none()
+            })
+            .then_some("issue 16: AssignSlots hands a migrating slot to a third node"),
 
         _ => None,
     }
@@ -778,6 +897,12 @@ mod tests {
     /// The 80/20 bias is real in both directions: a generator that only
     /// produced garbage would exercise nothing but the rejection arms, and one
     /// that only produced valid commands would never test them.
+    ///
+    /// The band is well below [`IN_CONTEXT_BIAS`] because in-context is an
+    /// *aim*, not a guarantee: the slot pool saturates, a migration is already
+    /// open on the slot the draw wanted, a failover names a node with no
+    /// replicas. Those refusals are states worth reaching, so the assertion is
+    /// a drift alarm, not a target.
     #[test]
     fn the_generator_mixes_accepted_and_rejected_commands() {
         let (mut accepted, mut rejected) = (0usize, 0usize);
@@ -794,7 +919,7 @@ mod tests {
         assert!(total > 1_000, "too few commands to judge: {total}");
         let accepted_share = accepted as f64 / total as f64;
         assert!(
-            (0.4..=0.95).contains(&accepted_share),
+            (0.25..=0.9).contains(&accepted_share),
             "accepted share {accepted_share:.2} ({accepted} of {total}) — the generator has \
              drifted into all-garbage or all-valid"
         );
@@ -892,11 +1017,40 @@ mod tests {
         let _ = state.apply_local(failover);
     }
 
-    /// The muzzle is narrow: neither pinned shape is filtered when its
-    /// precondition is absent, so P1 still quantifies over the neighbouring
-    /// states.
+    /// Issue 16, likewise, and this is the shrunk P1 counterexample itself: a
+    /// migration opened over an unassigned slot (legal — the follower-seed
+    /// allowance) followed by an assignment of that slot to a third node.
     #[test]
-    fn the_muzzle_only_covers_the_two_pinned_shapes() {
+    #[should_panic(expected = "INV-MIG-1")]
+    fn pinned_issue_16_assign_slots_hands_a_migrating_slot_to_a_third_node() {
+        let state = ClusterState::new();
+        for id in [5, 1] {
+            state
+                .apply_local(ClusterCommand::AddNode {
+                    node: node_info(id, None),
+                })
+                .expect("seeding a primary must succeed");
+        }
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 0,
+                source_node: 1,
+                target_node: 1,
+            })
+            .expect("a migration over an unassigned slot is accepted");
+
+        let assign = ClusterCommand::AssignSlots {
+            node_id: 5,
+            slots: vec![SlotRange::new(0, 0)],
+        };
+        assert!(known_defect(&state.read_inner(), &assign).is_some());
+        let _ = state.apply_local(assign);
+    }
+
+    /// The muzzle is narrow: no pinned shape is filtered when its precondition
+    /// is absent, so P1 still quantifies over the neighbouring states.
+    #[test]
+    fn the_muzzle_only_covers_the_pinned_shapes() {
         let state = ClusterState::new();
         state
             .apply_local(ClusterCommand::AddNode {
@@ -935,6 +1089,39 @@ mod tests {
                     old_primary_id: 1,
                     new_primary_id: 2,
                     force: false,
+                }
+            )
+            .is_none()
+        );
+        // An assignment over a slot with no migration is not muzzled.
+        assert!(
+            known_defect(
+                &inner,
+                &ClusterCommand::AssignSlots {
+                    node_id: 1,
+                    slots: vec![SlotRange::new(0, 9)],
+                }
+            )
+            .is_none()
+        );
+        drop(inner);
+
+        // Nor is an assignment to the migration's *own* source: that is the
+        // follower catching up on the seed it already holds.
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 0,
+                source_node: 1,
+                target_node: 1,
+            })
+            .unwrap();
+        let inner = state.read_inner();
+        assert!(
+            known_defect(
+                &inner,
+                &ClusterCommand::AssignSlots {
+                    node_id: 1,
+                    slots: vec![SlotRange::new(0, 0)],
                 }
             )
             .is_none()

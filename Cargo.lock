@@ -1630,6 +1630,7 @@ dependencies = [
  "openraft",
  "parking_lot",
  "postcard",
+ "proptest",
  "rocksdb",
  "semver",
  "serde",
