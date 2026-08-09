@@ -1,0 +1,8 @@
+{
+  "CompleteSlotMigration": {
+    "slot": 304,
+    "source_node": 19,
+    "target_node": 20,
+    "proposed_at_ms": 1700000000456
+  }
+}

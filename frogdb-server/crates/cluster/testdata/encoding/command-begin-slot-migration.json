@@ -1,0 +1,7 @@
+{
+  "BeginSlotMigration": {
+    "slot": 300,
+    "source_node": 13,
+    "target_node": 14
+  }
+}

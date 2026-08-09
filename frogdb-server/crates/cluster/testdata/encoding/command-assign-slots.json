@@ -1,0 +1,15 @@
+{
+  "AssignSlots": {
+    "node_id": 3,
+    "slots": [
+      {
+        "start": 0,
+        "end": 99
+      },
+      {
+        "start": 16383,
+        "end": 16383
+      }
+    ]
+  }
+}

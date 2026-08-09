@@ -1,0 +1,11 @@
+{
+  "RemoveSlots": {
+    "node_id": 4,
+    "slots": [
+      {
+        "start": 100,
+        "end": 199
+      }
+    ]
+  }
+}

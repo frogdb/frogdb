@@ -1,0 +1,7 @@
+{
+  "Failover": {
+    "old_primary_id": 9,
+    "new_primary_id": 10,
+    "force": true
+  }
+}

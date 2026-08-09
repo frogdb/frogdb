@@ -1,0 +1,7 @@
+{
+  "SetRole": {
+    "node_id": 5,
+    "role": "Replica",
+    "primary_id": 6
+  }
+}

@@ -43,6 +43,8 @@
 //! | Config epochs                 | Slot migrations (data)       |
 
 mod commands;
+#[cfg(test)]
+mod encoding_golden;
 pub mod network;
 pub mod state;
 pub mod stats;

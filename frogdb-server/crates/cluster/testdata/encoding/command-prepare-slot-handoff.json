@@ -1,0 +1,10 @@
+{
+  "PrepareSlotHandoff": {
+    "slot": 301,
+    "source_node": 15,
+    "target_node": 16,
+    "barrier_ms": 1500,
+    "lease_ms": 9000,
+    "proposed_at_ms": 1700000000123
+  }
+}

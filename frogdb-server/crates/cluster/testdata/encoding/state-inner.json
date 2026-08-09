@@ -1,0 +1,116 @@
+{
+  "nodes": {
+    "1": {
+      "id": 1,
+      "addr": "10.0.0.1:6379",
+      "cluster_addr": "10.0.0.1:16379",
+      "role": "Primary",
+      "primary_id": null,
+      "config_epoch": 41,
+      "flags": {
+        "handshake": false,
+        "fail": false,
+        "pfail": true,
+        "noaddr": false
+      },
+      "replica_priority": 7,
+      "version": "1.2.3"
+    },
+    "2": {
+      "id": 2,
+      "addr": "10.0.0.2:6379",
+      "cluster_addr": "10.0.0.2:16379",
+      "role": "Primary",
+      "primary_id": null,
+      "config_epoch": 42,
+      "flags": {
+        "handshake": false,
+        "fail": false,
+        "pfail": true,
+        "noaddr": false
+      },
+      "replica_priority": 7,
+      "version": "1.2.3"
+    },
+    "3": {
+      "id": 3,
+      "addr": "10.0.0.3:6379",
+      "cluster_addr": "10.0.0.3:16379",
+      "role": "Replica",
+      "primary_id": 1,
+      "config_epoch": 43,
+      "flags": {
+        "handshake": false,
+        "fail": false,
+        "pfail": true,
+        "noaddr": false
+      },
+      "replica_priority": 7,
+      "version": "1.2.3"
+    }
+  },
+  "slot_assignment": {
+    "0": 1,
+    "1": 1,
+    "16383": 2
+  },
+  "config_epoch": 23,
+  "migrations": {
+    "7": {
+      "slot": 7,
+      "source_node": 1,
+      "target_node": 2,
+      "handoff": {
+        "seq": 4,
+        "prepared_at_ms": 1700000000000,
+        "barrier_ms": 1500,
+        "lease_ms": 9000,
+        "drained": true
+      }
+    },
+    "8": {
+      "slot": 8,
+      "source_node": 2,
+      "target_node": 1,
+      "handoff": null
+    }
+  },
+  "handoff_seq": 5,
+  "last_applied_log": {
+    "leader_id": {
+      "term": 6,
+      "node_id": 1
+    },
+    "index": 42
+  },
+  "last_membership": {
+    "log_id": {
+      "leader_id": {
+        "term": 6,
+        "node_id": 1
+      },
+      "index": 42
+    },
+    "membership": {
+      "configs": [
+        [
+          1,
+          2,
+          3
+        ]
+      ],
+      "nodes": {
+        "1": {
+          "addr": "10.0.0.1:16379"
+        },
+        "2": {
+          "addr": "10.0.0.2:16379"
+        },
+        "3": {
+          "addr": "10.0.0.3:16379"
+        }
+      }
+    }
+  },
+  "active_version": "1.2.3"
+}
