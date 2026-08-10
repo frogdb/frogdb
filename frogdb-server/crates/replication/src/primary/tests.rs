@@ -1295,11 +1295,10 @@ async fn a_promotion_persists_its_boundary_without_ever_rewinding_it() {
     // A later stint whose boundary sits *below* the persisted save point must not
     // drag it back down: the file describes data this node still holds.
     handler.end_primary_stint();
-    // The received head runs ahead of the applied head (frames decoded but not
-    // yet applied), which is how a save point can legitimately sit above the
-    // next promotion boundary — INV-OFFSET-2 refuses a save point above the
-    // live head, and this fixture must model a state the node can be in.
-    received.frame_advance(&frame_of(4_100));
+    // A save point above the boundary the next stint settles at: what a node
+    // that ran to 5000, followed a shorter history, and is now promoted again
+    // holds. INV-OFFSET-2 reports it as a violation and is tiered as a
+    // documented exception for exactly this state — see issue 16.
     handler.state.write().offset_at_save = 5_000;
     let (second_boundary, snapshot) = handler.begin_primary_stint().unwrap();
     assert_eq!(second_boundary, 900, "the applied head has not moved");

@@ -742,12 +742,19 @@ mod tests {
     async fn a_continue_carrying_an_id_shifts_the_history_and_a_bare_one_does_not() {
         let state = Arc::new(RwLock::new(ReplicationState::new()));
         let old_id = state.read().replication_id.clone();
-        let (verdict, _offsets) =
-            psync_against(b"+CONTINUE promoted-id\r\n", state.clone(), 700).await;
+        let (verdict, _offsets) = psync_against(
+            b"+CONTINUE cafebabecafebabecafebabecafebabecafebabe\r\n",
+            state.clone(),
+            700,
+        )
+        .await;
         assert!(matches!(verdict.unwrap(), SyncType::PartialSync));
         {
             let st = state.read();
-            assert_eq!(st.replication_id, "promoted-id");
+            assert_eq!(
+                st.replication_id,
+                "cafebabecafebabecafebabecafebabecafebabe"
+            );
             assert_eq!(
                 st.secondary_id.as_deref(),
                 Some(old_id.as_str()),
@@ -770,6 +777,39 @@ mod tests {
         assert_eq!(st.secondary_offset, -1);
     }
 
+    /// Issue 17 of `.scratch/replication-correctness/issues/`, muzzled: the
+    /// `+CONTINUE` path writes the peer's bytes into this node's identity
+    /// without asking whether they are a replication id at all. Persisted, the
+    /// malformed id makes `ReplicationState::validate()` refuse the next boot —
+    /// a node that synced fine comes back dead. The disk path already validates
+    /// (`read_staged_replication_metadata`); the three wire paths do not.
+    ///
+    /// Un-ignore when issue 17 lands.
+    #[tokio::test]
+    #[ignore = "issue 17: the wire paths adopt a replication id without validating it"]
+    async fn a_continue_carrying_a_malformed_id_is_refused() {
+        for garbage in ["not-a-replid", "ABCDEF", &"f".repeat(41), &"f".repeat(39)] {
+            let state = Arc::new(RwLock::new(ReplicationState::new()));
+            let held = state.read().replication_id.clone();
+            let script = format!("+CONTINUE {garbage}\r\n");
+            let (verdict, _offsets) = psync_against(script.as_bytes(), state.clone(), 700).await;
+
+            let st = state.read();
+            assert_eq!(
+                st.replication_id, held,
+                "[{garbage:?}] a malformed grant must not become this node's identity"
+            );
+            assert_eq!(
+                st.secondary_id, None,
+                "[{garbage:?}] nor shift the history it never left"
+            );
+            assert!(
+                verdict.is_err(),
+                "[{garbage:?}] the link must drop so the reconnect asks again"
+            );
+        }
+    }
+
     /// The ordinary reconnect: the primary echoes back the id this node is
     /// already on. Shifting on that would file the node's *own* current history
     /// as its failover window and clobber whatever real window it was holding —
@@ -780,7 +820,7 @@ mod tests {
         let (same_id, prior_window) = {
             let mut st = state.write();
             // A window this node earned earlier and must keep.
-            st.shift_replication_id("current-id".to_string(), 42);
+            st.shift_replication_id("beefcafebeefcafebeefcafebeefcafebeefcafe".to_string(), 42);
             (st.replication_id.clone(), st.secondary_id.clone())
         };
 

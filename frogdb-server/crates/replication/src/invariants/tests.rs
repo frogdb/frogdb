@@ -162,8 +162,12 @@ fn the_catalog_holds_the_seed_sixteen_with_unique_ids() {
     );
 }
 
+/// Two entries are excepted and both name their ruling. The list is asserted
+/// whole so a third exception cannot be added quietly: an exception is a ruling
+/// that a dirty state is legitimate, and each one is a claim this catalog stops
+/// making.
 #[test]
-fn only_the_chained_replication_entry_is_excepted() {
+fn every_documented_exception_names_its_ruling() {
     let excepted: Vec<(&str, &str)> = CATALOG
         .iter()
         .filter_map(|inv| match inv.tier {
@@ -171,12 +175,16 @@ fn only_the_chained_replication_entry_is_excepted() {
             Tier::DocumentedException(citation) => Some((inv.id, citation.as_str())),
         })
         .collect();
-    assert_eq!(excepted.len(), 1, "exactly one documented exception");
-    assert_eq!(excepted[0].0, "INV-ROLE-1");
-    assert!(
-        excepted[0].1.contains("48-chained-replication-contract"),
-        "the exception cites the ruling that makes it one, got {:?}",
-        excepted[0].1
+    assert_eq!(
+        excepted,
+        vec![
+            ("INV-OFFSET-2", ".scratch/replication-correctness/issues/16"),
+            (
+                "INV-ROLE-1",
+                ".scratch/testing-improvements/issues/done/48-chained-replication-contract.md"
+            ),
+        ],
+        "every exception cites the ruling that makes it one"
     );
 }
 
@@ -313,12 +321,19 @@ fn inv_offset_1_forces_both_inversions_of_the_durability_chain() {
     assert_reports(&pair, &["INV-OFFSET-1"]);
 }
 
+/// Reported, never asserted: the save point is monotone and a backwards full
+/// resync leaves it above the head this node holds, which is shipped behaviour
+/// until issue 16 rules on it — so the entry is a `DocumentedException` and the
+/// hooks must stay quiet about it.
 #[test]
-fn inv_offset_2_forces_a_state_file_claiming_more_than_the_stream() {
+fn inv_offset_2_reports_a_state_file_claiming_more_than_the_stream() {
     let mut view = clean_view();
     view.state.as_mut().unwrap().offset_at_save = 101;
-    assert_reports(&view, &["INV-OFFSET-2"]);
-    assert!(check_hard(&view)[0].detail.contains("101"));
+    assert_reports(&view, &[]);
+    let reported = check_all(&view);
+    assert_eq!(reported.len(), 1);
+    assert_eq!(reported[0].id, "INV-OFFSET-2");
+    assert!(reported[0].detail.contains("101"));
 }
 
 #[test]
@@ -355,6 +370,18 @@ fn inv_offset_4_forces_a_failover_window_past_the_stream() {
     view.promotion.as_mut().unwrap().boundary = 101;
     assert_reports(&view, &["INV-OFFSET-4"]);
     assert!(check_hard(&view)[0].detail.contains("101"));
+
+    // A live head of 0 is a full resync in flight, not an empty stream: the
+    // grant rewound the head and the window still describes the keyspace this
+    // node is holding until the payload lands. Skipped, not violated.
+    let mut rewound = clean_state();
+    rewound.secondary_offset = 700;
+    rewound.offset_at_save = 0;
+    let view = ReplicationView::empty()
+        .with_state(rewound)
+        .with_offsets(0, 0, 0);
+    assert_reports(&view, &[]);
+    assert!(check_all(&view).is_empty());
 }
 
 #[test]

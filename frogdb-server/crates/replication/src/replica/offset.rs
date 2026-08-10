@@ -1061,4 +1061,32 @@ mod tests {
         assert_eq!(shared.load(Ordering::Acquire), 3);
         assert_eq!(applied.current(), 3);
     }
+
+    /// Issue 16 of `.scratch/replication-correctness/issues/`, muzzled: both
+    /// reconcile paths raise `offset_at_save` with a `max` and nothing lowers
+    /// it, so a node that followed a history whose head is below its own save
+    /// point keeps claiming the higher offset — on disk, in `INFO`, and (after
+    /// a restart seeds the live head from the file) as its own history.
+    ///
+    /// The invariant catalog reports the state as INV-OFFSET-2 and carries it
+    /// as a documented exception citing this issue, because
+    /// `primary::tests::a_promotion_persists_its_boundary_without_ever_rewinding_it`
+    /// asserts today's behaviour deliberately. Un-ignore when the ruling lands.
+    #[tokio::test]
+    #[ignore = "issue 16: a backwards full resync leaves the save point above the live head"]
+    async fn save_point_follows_a_backwards_full_resync() {
+        let state = state_with_save(5_000);
+        let offsets = ReplicaOffset::new(state.clone(), seeded(5_000), AppliedOffset::detached(0));
+
+        // A new primary grants a history whose head is below where this node
+        // ran: the dataset it now holds stops at 900.
+        assert!(offsets.reset_to(900));
+        assert_eq!(offsets.current(), 900);
+
+        let persisted = offsets.reconcile_for_persist().await;
+        assert_eq!(
+            persisted.offset_at_save, 900,
+            "the file must describe the data this node holds, not the one it used to"
+        );
+    }
 }
