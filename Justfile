@@ -187,7 +187,7 @@ cluster-proptest CASES='200000':
 # Laptop-runnable by construction (PRD .scratch/cluster-correctness/ §8 D1) — the whole default
 # pattern is well under a minute of compute; PATTERN narrows to a single model, e.g.
 # `just model-check handoff_model_full_deep`.
-model-check PATTERN='handoff_model_full':
+model-check PATTERN='(handoff|failover)_model_full':
     {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-cluster --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
 
 # Run the full test suite (unit + integration + concurrency + simulation)

@@ -69,6 +69,6 @@ jobs:
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
         shared-key: cluster-model-nightly
-    - name: Model-check the two-phase slot handoff
+    - name: Model-check the slot handoff and the failover composite
       run: |
         just model-check

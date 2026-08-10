@@ -102,6 +102,8 @@ use stateright::{Model, Property};
 use crate::state::ClusterState;
 use crate::types::{ClusterCommand, ClusterEvent, ClusterSnapshot, NodeId, NodeInfo, SlotRange};
 
+/// Model 2: the failover composite, built on the same infrastructure.
+mod failover;
 #[cfg(test)]
 mod replay;
 #[cfg(test)]

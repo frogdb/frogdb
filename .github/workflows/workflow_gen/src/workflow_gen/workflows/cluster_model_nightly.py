@@ -3,13 +3,14 @@
 The cluster-correctness campaign's W3 wave (`.scratch/cluster-correctness/PRD.md`
 §3 W3, §8 D1) added explicit-state models that drive the *production* cluster
 state machine (`frogdb-cluster`'s `apply_command`) through every interleaving of
-the two-phase slot handoff inside a small scope. D1 ruled: per-commit runs get
-bounded-depth smoke configs (< 10 s, in the default suite), and the real
-exploration budgets run nightly.
+the two-phase slot handoff (model 1) and of the failover composite (model 2)
+inside a small scope. D1 ruled: per-commit runs get bounded-depth smoke configs
+(< 10 s, in the default suite), and the real exploration budgets run nightly.
 
 This workflow is that nightly tier. It drives the `#[ignore]`d full-scope model
-tests in `frogdb-server/crates/cluster/src/model/` via `just model-check`, which
-also exists so the same budget is runnable on a laptop.
+tests in `frogdb-server/crates/cluster/src/model/` via `just model-check`, whose
+default pattern covers every full config of both models, and which also exists
+so the same budget is runnable on a laptop.
 """
 
 from workflow_gen.helpers import (
@@ -67,7 +68,7 @@ def cluster_model_nightly_workflow() -> Workflow:
                 libclang_step(),
                 cargo_cache_step(shared_key="cluster-model-nightly"),
                 run_step(
-                    name="Model-check the two-phase slot handoff",
+                    name="Model-check the slot handoff and the failover composite",
                     run=script("""\
                         just model-check
                     """),
