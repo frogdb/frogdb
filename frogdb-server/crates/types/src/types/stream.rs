@@ -1,5 +1,6 @@
 //! Stream value types.
 
+use crate::clock;
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -511,14 +512,14 @@ impl Consumer {
 
     /// Get idle time in milliseconds (time since last seen).
     pub fn idle_ms(&self) -> u64 {
-        self.last_seen.elapsed().as_millis() as u64
+        clock::elapsed(self.last_seen).as_millis() as u64
     }
 
     /// Get inactive time in milliseconds (time since last active consumption).
     /// Returns -1 if the consumer has never actively consumed entries.
     pub fn inactive_ms(&self) -> i64 {
         match self.active_time {
-            Some(t) => t.elapsed().as_millis() as i64,
+            Some(t) => clock::elapsed(t).as_millis() as i64,
             None => -1,
         }
     }

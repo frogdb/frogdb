@@ -17,6 +17,7 @@ use frogdb_persistence::{
 use frogdb_types::types::{KeyMetadata, KeyType, Value};
 
 use super::rocks::RocksStore;
+use crate::clock;
 use crate::noop::ExpiryIndex;
 use crate::store::{HashMapStore, Store};
 
@@ -108,7 +109,7 @@ pub fn recover_all_shards(
         results.push(sink.into_parts());
     }
 
-    total_stats.duration_ms = start.elapsed().as_millis() as u64;
+    total_stats.duration_ms = clock::elapsed(start).as_millis() as u64;
 
     tracing::info!(
         num_shards = rocks.num_shards(),

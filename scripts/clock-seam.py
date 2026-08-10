@@ -79,10 +79,11 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
         "epoch it then advances off the monotonic (virtualizable) clock",
     ),
     "frogdb-server/crates/server/src/latency_test.rs": (
-        2,
+        3,
         "`LATENCY TEST` measures the host's intrinsic scheduling jitter: it "
-        "busy-loops until real time elapses. On a paused clock the loop's own "
-        "`elapsed()` never advances and the command would hang forever",
+        "busy-loops until real time elapses (two `Instant::now()` reads plus "
+        "the loop's own `.elapsed()` bound). On a paused clock none of the "
+        "three advances and the command would hang forever",
     ),
     "frogdb-server/crates/config/src/cluster.rs": (
         1,
@@ -139,9 +140,11 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
         "against other services' wall clocks",
     ),
     "frogdb-server/crates/tokio-coz/src/hooks.rs": (
-        1,
+        2,
         "causal-profiler shim around the tokio runtime, not server logic; it "
-        "has no frogdb dependency and is never compiled into a simulated host",
+        "has no frogdb dependency and is never compiled into a simulated host. "
+        "Its epoch `Instant::now()` and the `.elapsed()` that stamps each "
+        "sample are deliberately real: the profiler is measuring the machine",
     ),
 }
 
@@ -154,6 +157,17 @@ STD_INSTANT_QUALIFIED = re.compile(r"\bstd::time::Instant::now\b")
 STD_SYSTEM_QUALIFIED = re.compile(r"\bstd::time::SystemTime::now\b")
 BARE_INSTANT = re.compile(r"(?<![:\w])Instant::now\b")
 BARE_SYSTEM = re.compile(r"(?<![:\w])SystemTime::now\b")
+
+# `x.elapsed()` is `std::time::Instant::now() - x`: it reads the OS clock
+# regardless of which clock produced `x`. Seaming the *anchor* and then
+# measuring its age with `.elapsed()` therefore silently un-seams the site —
+# the failure this rule exists to catch, because the anchor read looks
+# compliant to every other predicate here (issue 23,
+# `.scratch/cluster-correctness/issues/done/`). The seam's own
+# `clock::elapsed(x)` is the compliant form. `tokio::time::Instant::elapsed`
+# *is* virtual, so files whose `Instant` is tokio's are exempt by the same
+# import test the bare-`Instant::now` rule uses.
+ELAPSED = re.compile(r"\.elapsed\(\)")
 
 IMPORTS_STD_INSTANT = re.compile(r"^\s*use std::time::(?:\{[^}]*\bInstant\b|Instant\b)", re.M)
 IMPORTS_TOKIO_INSTANT = re.compile(r"^\s*use tokio::time::(?:\{[^}]*\bInstant\b|Instant\b)", re.M)
@@ -172,15 +186,15 @@ def scan(path: Path) -> list[Finding]:
     text = path.read_text()
     # Fast path: `::now` (not `::now()`) so a file that only reads the clock via
     # the paren-less value form is not skipped before the real predicates run.
-    if "::now" not in text.replace(" ", ""):
+    squashed = text.replace(" ", "")
+    if "::now" not in squashed and ".elapsed()" not in squashed:
         return []
     lines = text.splitlines()
     spans = cfg_test_spans(lines)
     # A bare `Instant::now()` is only an OS-clock read if this file's `Instant`
     # is std's. A file that imports tokio's is already on the timer's clock.
-    bare_instant_is_std = bool(IMPORTS_STD_INSTANT.search(text)) and not bool(
-        IMPORTS_TOKIO_INSTANT.search(text)
-    )
+    tokio_instant = bool(IMPORTS_TOKIO_INSTANT.search(text))
+    bare_instant_is_std = bool(IMPORTS_STD_INSTANT.search(text)) and not tokio_instant
     findings = []
     for idx, line in enumerate(lines):
         stripped = line.lstrip()
@@ -194,6 +208,8 @@ def scan(path: Path) -> list[Finding]:
             kind = "SystemTime::now()"
         elif BARE_INSTANT.search(line) and bare_instant_is_std:
             kind = "Instant::now() (std)"
+        elif ELAPSED.search(line) and not tokio_instant:
+            kind = ".elapsed() (std Instant)"
         else:
             continue
         findings.append(Finding(str(rel), idx + 1, kind, stripped))
@@ -238,6 +254,7 @@ def main() -> int:
         print("       Read through the seam instead:", file=sys.stderr)
         print("         frogdb_types::clock::now()          (monotonic)", file=sys.stderr)
         print("         frogdb_types::clock::system_now()   (wall clock)", file=sys.stderr)
+        print("         frogdb_types::clock::elapsed(x)     (age of `x`)", file=sys.stderr)
         print("       (`frogdb_core::clock` re-exports both; inside", file=sys.stderr)
         print(
             "       frogdb-core/frogdb-types the style is `crate::clock::now()`.)", file=sys.stderr

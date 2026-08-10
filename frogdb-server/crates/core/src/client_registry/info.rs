@@ -8,6 +8,7 @@ use bytes::Bytes;
 use super::ClientFlags;
 use super::ClientMemoryUsage;
 use super::stats::ClientStats;
+use crate::clock;
 
 /// Client connection information snapshot.
 #[derive(Debug, Clone)]
@@ -51,8 +52,8 @@ pub struct ClientInfo {
 impl ClientInfo {
     /// Format as CLIENT LIST entry.
     pub fn to_client_list_entry(&self) -> String {
-        let age = self.created_at.elapsed().as_secs();
-        let idle = self.last_command_at.elapsed().as_secs();
+        let age = clock::elapsed(self.created_at).as_secs();
+        let idle = clock::elapsed(self.last_command_at).as_secs();
         let addr_str = self.addr.to_string();
         let laddr_str = self.local_addr.map(|a| a.to_string()).unwrap_or_default();
         let name_str = self

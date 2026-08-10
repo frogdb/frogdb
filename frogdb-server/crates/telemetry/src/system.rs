@@ -75,7 +75,7 @@ impl SystemMetricsCollector {
         );
 
         // Uptime
-        let uptime = self.start_time.elapsed().as_secs_f64();
+        let uptime = clock::elapsed(self.start_time).as_secs_f64();
         UptimeSeconds::set(&*self.recorder, uptime);
 
         // CPU times via getrusage (cumulative seconds)

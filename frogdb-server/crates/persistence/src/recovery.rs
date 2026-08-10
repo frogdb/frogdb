@@ -178,7 +178,7 @@ pub fn recover_shard_into<S: RestoreSink>(
         }
     }
 
-    stats.duration_ms = start.elapsed().as_millis() as u64;
+    stats.duration_ms = clock::elapsed(start).as_millis() as u64;
 
     tracing::info!(
         shard_id = shard_id,

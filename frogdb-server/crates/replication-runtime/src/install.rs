@@ -140,7 +140,7 @@ impl LiveSnapshotInstaller {
             keys = total,
             blobs = blob_count,
             shards = num_shards,
-            duration_ms = start.elapsed().as_millis() as u64,
+            duration_ms = clock::elapsed(start).as_millis() as u64,
             "Installed full-resync live dataset into the live keyspace"
         );
         Ok(())
@@ -196,7 +196,7 @@ impl LiveSnapshotInstaller {
         tracing::info!(
             keys = total,
             shards = num_shards,
-            duration_ms = start.elapsed().as_millis() as u64,
+            duration_ms = clock::elapsed(start).as_millis() as u64,
             "Installed full-resync checkpoint into the live keyspace"
         );
         Ok(())

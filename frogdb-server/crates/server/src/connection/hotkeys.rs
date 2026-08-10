@@ -28,6 +28,7 @@ use frogdb_core::{
 use frogdb_protocol::{MapReply, ParsedCommand, Response};
 
 use crate::connection::{ClusterDeps, ConnectionHandler};
+use frogdb_core::clock;
 
 /// The `CommandSpec` for HOTKEYS. Declared here alongside the executor (rather
 /// than in a stub `Command` impl) so the connection command is a single
@@ -408,7 +409,7 @@ fn hotkeys_get(ctx: &ConnCtx<'_>) -> Response {
         .collect();
 
     // Build the session duration
-    let duration_ms = session.started_at.elapsed().as_millis() as i64;
+    let duration_ms = clock::elapsed(session.started_at).as_millis() as i64;
 
     // Calculate the count
     let count = session.config.count as i64;

@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use frogdb_core::clock;
 use frogdb_core::{
     AccessSpec, ArgParser, Arity, Command, CommandContext, CommandError, CommandFlags, CommandSpec,
     EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyType, KeyspaceEventFlags, LookupSpec,
@@ -451,7 +452,7 @@ impl Command for ObjectCommand {
 
                 match ctx.store.get_metadata(key) {
                     Some(meta) => {
-                        let idle_secs = meta.last_access.elapsed().as_secs();
+                        let idle_secs = clock::elapsed(meta.last_access).as_secs();
                         Ok(Response::Integer(idle_secs as i64))
                     }
                     None => Ok(Response::null()),

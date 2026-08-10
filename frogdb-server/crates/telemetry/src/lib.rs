@@ -107,7 +107,7 @@ impl CommandTimer {
 
     /// Record the command completion (success).
     pub fn finish(self) {
-        let elapsed = self.start.elapsed();
+        let elapsed = clock::elapsed(self.start);
 
         CommandsTotal::inc(&*self.recorder, &self.command);
         CommandsDuration::observe(&*self.recorder, elapsed.as_secs_f64(), &self.command);
@@ -117,7 +117,7 @@ impl CommandTimer {
 
     /// Record a command error.
     pub fn finish_with_error(self, error_type: &str) {
-        let elapsed = self.start.elapsed();
+        let elapsed = clock::elapsed(self.start);
 
         CommandsTotal::inc(&*self.recorder, &self.command);
         CommandsDuration::observe(&*self.recorder, elapsed.as_secs_f64(), &self.command);

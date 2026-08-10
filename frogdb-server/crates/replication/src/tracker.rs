@@ -334,7 +334,7 @@ impl ReplicationTrackerImpl {
         self.get_streaming_replicas()
             .iter()
             // The disable check is first, so it short-circuits the clock read.
-            .filter(|r| max_lag.is_zero() || ack_is_fresh(r.last_ack_time.elapsed(), max_lag))
+            .filter(|r| max_lag.is_zero() || ack_is_fresh(clock::elapsed(r.last_ack_time), max_lag))
             .count() as u32
     }
 
@@ -546,7 +546,7 @@ impl ReplicationTrackerImpl {
         self.lag_disconnect_times
             .read()
             .get(&addr)
-            .is_some_and(|t| lag_cooldown_active(t.elapsed(), cooldown))
+            .is_some_and(|t| lag_cooldown_active(clock::elapsed(*t), cooldown))
     }
 }
 

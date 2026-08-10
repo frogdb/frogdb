@@ -289,7 +289,7 @@ impl AnnouncedOption {
 ///
 /// [`ReplicationTrackerImpl::replica_lag_secs`]: crate::tracker::ReplicationTrackerImpl::replica_lag_secs
 pub fn ack_age_secs(last_ack_time: Instant) -> f64 {
-    last_ack_time.elapsed().as_secs_f64()
+    clock::elapsed(last_ack_time).as_secs_f64()
 }
 
 /// Snapshot view of a replica session for read consumers (INFO, ROLE, cluster bus).
@@ -972,7 +972,7 @@ impl ReplicaSession {
             .inner
             .read()
             .sync_started_at
-            .map(|t| t.elapsed())
+            .map(|t| clock::elapsed(t))
             .unwrap_or_default();
         let rate_mbps = transfer_rate_mbps(total_size, elapsed);
         tracing::info!(
@@ -1096,7 +1096,7 @@ impl ReplicaSession {
                 .inner
                 .read()
                 .sync_started_at
-                .map(|t| t.elapsed().as_millis() as u64)
+                .map(|t| clock::elapsed(t).as_millis() as u64)
                 .unwrap_or_default(),
             "Live dataset streaming complete"
         );

@@ -18,6 +18,7 @@ use super::bindings::{lua_args_to_command, response_to_lua};
 use super::config::ScriptingConfig;
 use super::error::ScriptError;
 use super::gate::{CommandInvoker, CrossSlotTracker, ScriptCommandGate};
+use crate::clock;
 use crate::sync::MutexExt;
 
 /// Execution state for tracking script execution.
@@ -40,7 +41,7 @@ impl ExecutionState {
     #[allow(dead_code)]
     pub fn is_timed_out(&self) -> bool {
         if let Some(start) = self.start_time {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = clock::elapsed(start).as_millis() as u64;
             elapsed > self.timeout_ms
         } else {
             false
@@ -51,7 +52,7 @@ impl ExecutionState {
     #[allow(dead_code)]
     pub fn is_grace_exceeded(&self) -> bool {
         if let Some(start) = self.start_time {
-            let elapsed = start.elapsed().as_millis() as u64;
+            let elapsed = clock::elapsed(start).as_millis() as u64;
             elapsed > self.timeout_ms + self.grace_ms
         } else {
             false

@@ -25,11 +25,29 @@
 //! bug this module exists to prevent.
 
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Now, on the clock the expiry domain shares.
 pub fn now() -> std::time::Instant {
     tokio::time::Instant::now().into_std()
+}
+
+/// How long ago `since` was, on the clock [`now`] reads.
+///
+/// `Instant::elapsed()` is *not* this function: it is `std::time::Instant::
+/// now() - self`, so it reads the OS clock no matter which clock produced
+/// `since`. Under a paused runtime the two clocks run at different speeds —
+/// virtual time fast-forwards past idle periods while the OS clock crawls —
+/// so `clock::now()` + `.elapsed()` mixes timelines and yields a duration
+/// that depends on how loaded the host was. Every deadline, freshness check
+/// and idle-time reply in the server measures its age through here instead,
+/// which is why the clock-seam gate bans `.elapsed()` alongside
+/// `Instant::now()`.
+///
+/// Saturates at zero, as `Instant::elapsed()` does, so a reading taken before
+/// the clock was re-anchored cannot panic.
+pub fn elapsed(since: Instant) -> Duration {
+    now().saturating_duration_since(since)
 }
 
 /// Pairs the monotonic reading [`now`] returns with the wall-clock reading it

@@ -11,6 +11,7 @@ use super::message::ShardMessage;
 use super::panic_guard;
 use super::post_execution::{ENGINE_INTERNAL_CONN_ID, RemovalPropagation, RemovalReason};
 use super::worker::ShardWorker;
+use crate::clock;
 use crate::vll::ContinuationEvent;
 #[cfg(any(test, feature = "shard-driver"))]
 use bytes::Bytes;
@@ -127,7 +128,7 @@ impl ShardWorker {
                 // The data plane: kept last because it is the one arm that
                 // can be continuously ready under load.
                 Some(envelope) = self.message_rx.recv() => {
-                    let queue_latency = envelope.enqueued_at.elapsed().as_secs_f64();
+                    let queue_latency = clock::elapsed(envelope.enqueued_at).as_secs_f64();
                     let msg = envelope.message;
 
                     let msg_kind = msg.probe_type_str();

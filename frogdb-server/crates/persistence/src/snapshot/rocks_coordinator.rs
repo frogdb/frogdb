@@ -7,6 +7,7 @@ use super::{
     SaveHistory, SnapshotCoordinator, SnapshotError, SnapshotMode, SnapshotRequest, SnapshotStats,
 };
 use crate::rocks::RocksStore;
+use frogdb_types::clock;
 use frogdb_types::metrics::definitions::{
     PersistenceErrors, SnapshotDuration, SnapshotEpoch, SnapshotInProgress, SnapshotLastTimestamp,
     SnapshotSizeBytes,
@@ -278,7 +279,7 @@ impl SnapshotRun {
     ) {
         match result {
             Ok(Ok(md)) => {
-                let elapsed = started.elapsed();
+                let elapsed = clock::elapsed(started);
                 let sequence = md.sequence_number;
                 let path = self.snapshot_dir.join(format!("snapshot_{epoch:05}"));
                 // The artifact's own recorded completion time, so the value

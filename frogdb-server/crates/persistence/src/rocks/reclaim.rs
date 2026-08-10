@@ -188,7 +188,7 @@ pub(crate) fn run_reclamation(
     info!(
         shard_id,
         tier = ?tier,
-        duration_ms = start.elapsed().as_millis() as u64,
+        duration_ms = clock::elapsed(start).as_millis() as u64,
         "post-clear reclamation finished"
     );
 }

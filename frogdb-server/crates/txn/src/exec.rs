@@ -17,6 +17,7 @@ use tracing::debug;
 
 use crate::host::{Deferral, ShardTxnReply, TxnHost};
 use crate::state::{TransactionTarget, TxnSummary};
+use frogdb_core::clock;
 
 /// How a transaction ended. Every exit of [`execute_transaction`] names its
 /// variant, and the single call site in [`handle_exec`] records the metrics from
@@ -112,7 +113,7 @@ pub fn record_transaction_metrics(
     if let Some(start) = start_time {
         frogdb_telemetry::definitions::TransactionsDuration::observe(
             recorder,
-            start.elapsed().as_secs_f64(),
+            clock::elapsed(start).as_secs_f64(),
             label,
         );
     }
@@ -333,7 +334,7 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     }
 
     let duration_ms = start_time
-        .map(|s| s.elapsed().as_millis() as u64)
+        .map(|s| clock::elapsed(s).as_millis() as u64)
         .unwrap_or(0);
     debug!(
         conn_id = host.conn_id(),
