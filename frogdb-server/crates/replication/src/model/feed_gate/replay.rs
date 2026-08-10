@@ -88,7 +88,7 @@ async fn ship_a_buffered_frame(handoff: &Handoff, honour_the_gate: bool) -> bool
 /// anyway. The anomaly FM-CLUSTER-097 closes.
 // FM-CLUSTER-097
 #[tokio::test(start_paused = true)]
-async fn a_feed_that_ignores_the_gate_ships_inside_the_barrier_window() {
+async fn the_pre_fix_write_task_ships_inside_the_barrier_window() {
     let mut handoff = Handoff::new(1);
     handoff.arm(0, 2);
     assert!(

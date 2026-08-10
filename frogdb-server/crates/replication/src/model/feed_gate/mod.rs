@@ -86,6 +86,31 @@
 //! against a stored `Instant` — so small tick counts lose nothing and keep the
 //! clock from multiplying the state space.
 //!
+//! # The properties against the clauses
+//!
+//! The three safety clauses issue 09 names map onto the properties below:
+//!
+//! * *the feed is never held past its deadline* — `a_hold_in_force_is_future_and_bounded`,
+//!   plus the liveness property, which fails if any path can rest with a hold up;
+//! * *a release belonging to an ended barrier never opens a feed a later barrier
+//!   holds* — `the_gate_agrees_with_the_pause_state`, with
+//!   `a_publish_never_drops_a_later_deadline` stating the arm of it that a
+//!   too-eager `Unchanged` would break;
+//! * *a role change never leaves a hold with no owner* — the same agreement
+//!   clause, evaluated in the states after a `RoleChange`, which
+//!   `a_role_change_lands_inside_a_barrier_window` witnesses the model reaches.
+//!   The hold has no per-session owner to lose: the gate belongs to the client
+//!   registry (`replication_init.rs` hands the one `Arc` to the primary
+//!   handler), so sessions come and go around it. Modelling the sessions as
+//!   *replaced* by a role change is what makes that non-trivial — the sessions
+//!   that read the hold afterwards are not the ones that were asleep against it.
+//!
+//! Issue 09 also asks for `check_hard` over every explored state. The W1
+//! invariant catalog (issue 02) does not exist yet, so
+//! `a_hold_in_force_is_future_and_bounded` stands in for INV-GATE-1 in the
+//! shape the catalog will state it; when the catalog lands, this property is
+//! the thing to replace with a call into it.
+//!
 //! # The properties have teeth
 //!
 //! Three edits to the production decisions, each caught by the smoke config in
@@ -108,8 +133,13 @@
 //! |---|---|---|---|---|---|
 //! | [`smoke_scope`] | 2 barriers, 2 sessions, horizon 7 | 20,438 | 20 | 0.1s | default suite |
 //! | [`unheld_feed_scope`] | pre-`8d55cc4f`; 1 barrier, 1 session, horizon 3 | 44 | 9 | <0.1s | default suite |
-//! | [`overlapping_scope`] | 3 barriers, 3 sessions, horizon 12 | 3,942,370 | 41 | 12.9s | nightly |
-//! | [`churn_scope`] | 2 barriers, 3 sessions, 2 role changes, horizon 15 | 2,649,370 | 44 | 6.9s | nightly |
+//! | [`overlapping_scope`] | 3 barriers, 3 sessions, horizon 12 | 3,942,370 | ~42 | 12.9s | nightly |
+//! | [`churn_scope`] | 2 barriers, 3 sessions, 2 role changes, horizon 15 | 2,649,370 | ~45 | 6.9s | nightly |
+//!
+//! State counts are exact — every config is explored to exhaustion, so they are
+//! a property of the scope and not of the run. The reported *depth* is not: BFS
+//! runs multi-threaded, so which frontier a state is first reached on varies by
+//! a tick or two between runs. Only the counts are floored.
 
 use std::time::{Duration, Instant};
 
