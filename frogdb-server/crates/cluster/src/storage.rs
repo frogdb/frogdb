@@ -14,6 +14,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{NodeId, TypeConfig};
 
+/// openraft's storage conformance suite plus the log-cache coherence property.
+///
+/// A child module rather than a sibling because the oracle it judges against is
+/// the `raft_logs` column family itself, which means reaching past the cache to
+/// private state (`db`, `cf_logs`, the key codec) that no sibling can see.
+#[cfg(test)]
+mod conformance;
+
 /// Column family names for RocksDB.
 const CF_LOGS: &str = "raft_logs";
 const CF_META: &str = "raft_meta";

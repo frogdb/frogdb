@@ -44,9 +44,10 @@ Scope. The cluster area is one replicated state machine plus the seams that read
   which commands one slot's pause parks, the two exemptions that keep it from deadlocking the
   handover, and how it composes with the operator's node-global `CLIENT PAUSE`
   (`core/src/client_registry/mod.rs`, `server/src/connection/{pause_gate,lifecycle}.rs`).
-* **Raft log storage (098..099)** — what the RocksDB-backed log store owes openraft below the
-  state machine: the durability class each metadata record is written at, and the coherence of the
-  log cache the long-lived log reader shares with the writing handle
+* **Raft log storage (098..099, 103)** — what the RocksDB-backed log store owes openraft below the
+  state machine: the durability class each metadata record is written at, the coherence of the
+  log cache the long-lived log reader shares with the writing handle, and the range each of
+  `truncate`/`purge` is contracted to remove
   (`cluster/src/storage.rs`).
 
 Out of scope, deliberately: the rest of the pause-barrier design — the Raft `PrepareSlotHandoff`
@@ -1416,12 +1417,18 @@ non-synced for the same family of reasons and is still open.
 | NOT observable | An entry from an overwritten term served at an index that was truncated and re-appended. openraft builds the reader once and holds it for the node's lifetime, so a detached cache is stale for the rest of the process: the leader would ship entries no quorum ever agreed on, or membership recovery would read the wrong entry — Raft log divergence produced entirely below the state machine. Nor the inverse: a reader filling the cache while the owner cannot see the fill, which would make coherence depend on which handle happened to read first. |
 | Invariant | One `Arc<RwLock<BTreeMap<u64, Entry>>>` is shared by the writing handle and every reader `get_log_reader` hands out, alongside the `DB` and the snapshot lock (`cluster/src/storage.rs`). `invalidate_cache_range` — the only invalidation, reached from `truncate` and `purge` — therefore reaches every reader by construction, instead of the owner invalidating a copy nobody reads. Sharing rather than dropping the cache keeps the read path's benefit; the coherence machinery is one `Arc`, because there is exactly one cache. |
 | Outcome variant | n/a |
-| Forced by | `a_log_reader_never_serves_an_entry_the_owner_truncated`, `cache_invalidation_reaches_a_reader` |
+| Forced by | `a_log_reader_never_serves_an_entry_the_owner_truncated`, `cache_invalidation_reaches_a_reader`, `openraft_conformance_suite_through_a_long_lived_reader`, `a_reader_and_its_owner_never_disagree_with_the_column_family` |
 | Bug refs | fixed: [53-stale-raft-log-reader-cache.md](../../testing-improvements-round2/issues/done/53-stale-raft-log-reader-cache.md) |
 
-Both witnesses are crate-level and deterministic, and they are the first tests anywhere to construct
-a reader through `get_log_reader`: the defect was found by reading, not by failure, because nothing
-outside openraft itself had ever exercised the reader clone.
+The first two witnesses are crate-level and deterministic, and they were the first tests anywhere to
+construct a reader through `get_log_reader`: the defect was found by reading, not by failure,
+because nothing outside openraft itself had ever exercised the reader clone. The last two are the
+generated form of the same guarantee
+([issue 21](../../cluster-correctness/issues/done/21-no-layer-sees-the-raft-log-store.md)) — the
+whole openraft conformance suite re-run with every read served by a reader taken before the first
+write, and a property over generated append/truncate/purge sequences that judges both handles
+against the `raft_logs` column family itself rather than against another read through the same
+cache.
 
 ## FM-CLUSTER-100 — the handoff generation survives a snapshot restore instead of restarting at zero
 
@@ -1465,6 +1472,25 @@ cluster that had "removed" a failed node was less fault-tolerant than one that h
 | Outcome variant | `FailureDetectorConfig` (clamped fields) |
 | Forced by | `degenerate_zero_config_is_clamped_to_safe_minimums`, `huge_config_values_are_clamped_and_do_not_overflow_the_staleness_multiply`, `a_zero_check_interval_does_not_panic_the_detector_task` |
 | Bug refs | — |
+
+## FM-CLUSTER-103 — `truncate` removes the conflicting entry it names, not only what follows it
+
+| Field | Value |
+|---|---|
+| Trigger | openraft finds a follower's log conflicting with the leader's and issues `DeleteConflictLog { since }` (`raft_core.rs`, from `FollowingHandler::truncate_logs`). Two shapes reach the store: an `AppendEntries` batch that disagrees at `since`, where the leader's entries are re-appended immediately after the truncate, and a `prev_log_id` that does not match, where the append is **rejected** and nothing is written after the truncate at all. |
+| Observable | Everything from `log_id.index` upward is gone — from the `raft_logs` column family and from the log cache — so `get_log_state` names `log_id.index - 1` as the tail and a reopened store serves exactly the prefix openraft kept in memory. `truncate` at the very first index empties the log. This is openraft's own contract ("Truncate logs since `log_id`, inclusive"), so the statement of it is openraft's storage conformance suite rather than a reading of it. |
+| NOT observable | The entry *at* `log_id.index` surviving. openraft drops it from `RaftState::log_ids` the moment it emits the command, so a store that keeps it disagrees with the state that decided to remove it — and in the rejected-append shape nothing is written afterwards to overwrite the survivor. A restart then hands `get_log_state` a `last_log_id` from a term the leader already ruled conflicting, and the node campaigns and answers `AppendEntries` on the strength of an entry no quorum agreed on: Raft log divergence one index wide, manufactured by the store. Nor the mirror error at the cache: an entry deleted from RocksDB but left in the cache would be served by the very next read. |
+| Invariant | `truncate(log_id)` deletes the key range `[log_id.index, +oo)` and invalidates the cache over the same `[log_id.index, ..]` — one bound, written once and used for both, so the disk and the cache cannot drift apart by an index. `purge(log_id)` is the mirror at the other end, `[0, log_id.index]` inclusive, and the two together mean every deletion boundary in the store is inclusive of the index it names (`cluster/src/storage.rs`). |
+| Outcome variant | n/a |
+| Forced by | `truncate_removes_the_named_index_and_everything_after_it`, `openraft_conformance_suite`, `openraft_conformance_suite_through_a_long_lived_reader` |
+| Bug refs | fixed: [21-no-layer-sees-the-raft-log-store.md](../../cluster-correctness/issues/done/21-no-layer-sees-the-raft-log-store.md) |
+
+Found by the layer [issue 21](../../cluster-correctness/issues/done/21-no-layer-sees-the-raft-log-store.md)
+built, on its first run: `Suite::delete_logs_since_0` truncates a ten-entry log at index 0 and
+expects nothing left, and the store left one entry behind. Every FrogDB test that had ever exercised
+`truncate` was written against the store's own (exclusive) reading of the contract, so the
+off-by-one was self-consistent everywhere below openraft and invisible to every layer above it —
+which is exactly the claim the issue was filed to make.
 
 ---
 
