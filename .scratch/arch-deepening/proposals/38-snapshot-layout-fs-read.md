@@ -4,9 +4,23 @@
 
 The on-disk snapshot layout — `snapshot_NNNNN/`, `.snapshot_NNNNN.tmp`, `latest`,
 `metadata.json`, `checkpoint/` — has no owner. Its names are re-authored as string
-literals at four production construction sites and two production parse sites, plus
-twenty-one more in `frogdb-persistence`'s own tests and six across `frogdb-core` and
-`frogdb-server`. The knowledge "epoch 7 is the directory `snapshot_00007`, staged at
+literals throughout. Counting all five names (grep for `snapshot_{`, `"snapshot_`,
+`snapshot_00`, `"latest"`, `metadata.json`, `"checkpoint"` across
+`frogdb-server/crates`):
+
+- **Epoch names** (`snapshot_NNNNN` / `.snapshot_NNNNN.tmp`): four production
+  construction sites (`rocks_coordinator.rs:257,258,259,283`) and two production parse
+  sites (`rocks_coordinator.rs:122`, `stager.rs:228,230`); **34** in
+  `frogdb-persistence`'s own tests, 28 of them inside the `snapshot/tests.rs` ranges
+  cited below and six outside (380, 388, 414, 418, 426, 1307); nine more across
+  `frogdb-core` and `frogdb-server` (`test_harness.rs:342`,
+  `crash_recovery_tests.rs:934,975,1321,1403,1408`, `integration_persistence.rs:1611`,
+  `persistence_conn_command.rs:543`).
+- **The other three names** (`latest`, `metadata.json`, `checkpoint`): nine further
+  production sites — `stager.rs:150,171,179,182,266,269` and
+  `rocks_coordinator.rs:132,138,140`.
+
+The knowledge "epoch 7 is the directory `snapshot_00007`, staged at
 `.snapshot_00007.tmp`, pointed at by `latest`" lives in every caller's head rather than
 in a module.
 
@@ -17,9 +31,10 @@ methods and every one of them mutates (`write`, `rename`, `symlink`, `sync_file`
 `sync_dir`); the boot-time reader calls `std::fs::read_link`, `std::fs::read_to_string`,
 `std::fs::read_dir` and `Path::exists` directly
 (`rocks_coordinator.rs:113,133,136,142,145`), as does retention
-(`stager.rs:224`). The ADR's own stated cost — "a new publication path must be routed
-through the trait or it is untested by construction" — has a mirror image the ADR does
-not name: the read path is untested by construction for every failure that is not
+(`stager.rs:224`). The ADR's own stated cost
+(`adr/0003-persistence-durability-seams.md:40–42`) — "a new publication path must be
+routed through the trait or it is untested by construction" — has a mirror image the ADR
+does not name: the read path is untested by construction for every failure that is not
 "absent" or "garbage".
 
 This proposal introduces **`SnapshotLayout { root }`** as the single owner of the layout
@@ -32,24 +47,24 @@ row changes.
 
 | Path | Approx. lines involved | Role |
 |------|------|------|
-| `frogdb-server/crates/persistence/src/snapshot/rocks_coordinator.rs` (348) | 107–152, 250–266, 283 | The whole read half (`highest_snapshot_epoch`, `load_latest_metadata`) + two of the four name-construction sites |
+| `frogdb-server/crates/persistence/src/snapshot/rocks_coordinator.rs` (348) | 107–152, 256–266, 283 | The whole read half (`highest_snapshot_epoch`, `load_latest_metadata`) + the `SnapshotStager` struct literal (256–266) and the re-derived log path (283) |
 | `frogdb-server/crates/persistence/src/snapshot/stager.rs` (347) | 61–84, 133–138, 148–156, 170–185, 193–197, 216–248, 261–283 | Four layout-derived fields on the stager; `checkpoint`/`metadata.json`/`latest` literals; the retention parser |
-| `frogdb-server/crates/persistence/src/fs_seam.rs` (238) | 32–45, 50–93, 103–187 | `SnapshotFs` trait, `RealFs`, `RecordingFs` — gains read operations |
+| `frogdb-server/crates/persistence/src/fs_seam.rs` (238) | 29–45, 50–93, 103–187 | Module doc (the narrowness rule, 29–32), `SnapshotFs` trait, `RealFs`, `RecordingFs` — gains read operations |
 | `frogdb-server/crates/persistence/src/snapshot/mod.rs` (250) | 1–16 | Module declarations + re-exports; new `layout` module |
-| `frogdb-server/crates/persistence/src/snapshot/tests.rs` (1456) | 183–210, 231–266, 280–330, 480–605, 935–1140 | 21 hand-authored layout sites, incl. the duplicated stager construction and 10 `#[cfg(unix)]` gates |
-| `frogdb-server/crates/persistence/src/rocks/staged.rs` (unchanged) | 1–110, 136–162 | **Precedent only** — the same extraction, already done for `checkpoint_ready` |
+| `frogdb-server/crates/persistence/src/snapshot/tests.rs` (1456) | 183–210, 231–267, 280–330, 360–430, 480–605, 935–1140, 1307 | 34 hand-authored epoch-name sites (28 inside these ranges), incl. the duplicated stager construction (`stager_on`, 249–267) and 10 `#[cfg(unix)]` gates |
+| `frogdb-server/crates/persistence/src/rocks/staged.rs` (unchanged) | 1–110, 137–164 | **Precedent only** — the same extraction, already done for `checkpoint_ready` |
 | `frogdb-server/crates/core/src/persistence/test_harness.rs` | 340–380 | `create_test_snapshot_dir` / `write_snapshot_metadata` / `create_latest_symlink` re-author the layout |
-| `frogdb-server/crates/core/src/persistence/crash_recovery_tests.rs` | 934, 975, 1321, 1408 | `create_latest_symlink(&snapshot_dir, "snapshot_00001")` — the name as a bare literal |
+| `frogdb-server/crates/core/src/persistence/crash_recovery_tests.rs` | 934, 975, 1321, 1403, 1408 | `create_latest_symlink(&snapshot_dir, "snapshot_00001")` — the name as a bare literal — plus a hand-built `.snapshot_00002.tmp` at 1403 |
 | `frogdb-server/crates/server/src/connection/persistence_conn_command.rs` | 541–544 (`#[cfg(test)]`) | Sabotage test plants a file at a hand-built `.snapshot_{epoch:05}.tmp` |
 | `frogdb-server/crates/server/tests/integration_persistence.rs` | 1602–1625 | `wait_for_snapshot_checkpoint` re-implements the epoch scan, the `.tmp` exclusion, and the completeness check |
-| `website/src/content/docs/operations/backup-restore.md` | 22–29, 77 | The layout as an operator-facing contract (`snapshot_NNNNN/`, `latest`, `snapshot_00042`) |
+| `website/src/content/docs/operations/backup-restore.md` | 22–29, 77, 83–89 | The layout as an operator-facing contract (`snapshot_NNNNN/`, `latest`, `snapshot_00042`) — and the stale `search/` sidecar claim at 25 + the `cp -a "$SNAPSHOT/search"` step at 87–89 (the hotfix) |
 
 ## Problem
 
 ### 1. Four production sites author the same name; one of them is a pure re-derivation
 
 `RocksSnapshotCoordinator::execute` builds the stager's path trio inline
-(`rocks_coordinator.rs:255–266`):
+(the struct literal at `rocks_coordinator.rs:256–266`):
 
 ```rust
 SnapshotStager {
@@ -84,7 +99,8 @@ directories, and on `file_type().is_dir()` (which does not follow symlinks) to e
 
 ### 2. The test helper is a verbatim second author
 
-`snapshot/tests.rs:249–266` reproduces the coordinator's construction exactly:
+`stager_on` (`snapshot/tests.rs:249–267`, struct literal at 256–266) reproduces the
+coordinator's construction exactly:
 
 ```rust
 SnapshotStager {
@@ -95,8 +111,9 @@ SnapshotStager {
 }
 ```
 
-Its doc comment — "Build a stager with the standard `<snapshot_dir>` path layout" —
-states the problem plainly: there is a standard layout, and the test has to know it.
+Its `RealFs` wrapper's doc comment (`tests.rs:231`) — "Build a stager with the standard
+`<snapshot_dir>` path layout for `epoch`" — states the problem plainly: there is a
+standard layout, and the test has to know it.
 Every stager test therefore validates the *test helper's* idea of the layout, not the
 coordinator's. A change to the production format string does not fail a single test in
 `stager.rs`'s own suite.
@@ -133,19 +150,30 @@ Three consequences, all verified against the current tree:
   left behind" — but an `EIO` from `read_link`, or a `read_to_string` that fails
   mid-file, cannot be produced without syscall interposition. The one shape a *disk*
   failure actually produces is the one the suite cannot force.
-- **Six boot tests open a real RocksDB to exercise code that touches no database.**
+- **Six real RocksDB opens exercise code that touches no database.**
   `load_latest_metadata` is a private associated function and `highest_snapshot_epoch` is
   `pub(crate)` but has no direct caller in tests; both are reached only through
   `RocksSnapshotCoordinator::new`, which requires an `Arc<RocksStore>`. Every boot-seed
   test therefore calls `make_store` (`tests.rs:225–229`: a real `RocksStore::open` plus a
-  `put`) purely to get a coordinator. The interface is the test surface, and here the
-  test surface is a database.
+  `put`) purely to get a coordinator. The six calls, across three tests:
+  `coordinator_boot_keeps_the_epoch_when_latest_metadata_is_unreadable` (`tests.rs:1013`)
+  opens one per loop iteration — `tests.rs:1016` × the `("garbage", …)` and `("absent", …)`
+  cases; `test_coordinator_seeds_last_save_from_snapshot_metadata` (`1047`) opens one at
+  `1049`; `test_coordinator_seeds_none_without_a_usable_completion_time` (`1079`) opens
+  three, at `1086` (torn snapshot), `1103` (complete, no completion time) and `1114` (no
+  snapshot at all). The interface is the test surface, and here the test surface is a
+  database.
 - **Ten `#[cfg(unix)]` gates in `snapshot/tests.rs`** (lines 301, 416, 598, 960, 1011,
   1045, 1077, 1127, 1190, 1386) exist because the tests must create and read real
   symlinks. The `#[cfg(not(unix))]` arms in `RealFs::symlink` (`fs_seam.rs:70`) and
   `update_latest_symlink` (`stager.rs:276`) are unreachable by every test on every
-  platform the project builds for (`Justfile:731–736` targets
-  `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` only).
+  platform the project builds for. `Justfile:731–732` and `735–736` are two
+  cross-compilation recipes targeting `x86_64-unknown-linux-gnu` and
+  `aarch64-unknown-linux-gnu`; `release.yml:92–105` adds a `build-macos` job whose matrix
+  is `x86_64-apple-darwin` and `aarch64-apple-darwin` on `macos-latest`. macOS is unix, so
+  the conclusion is unchanged — and no workflow runs Windows at all: every `runs-on` in
+  `.github/workflows/` is `ubuntu-latest`, a `blacksmith-*-ubuntu` runner, or the
+  `${{ matrix.os }}` that expands only to `macos-latest`.
 
 ### 5. Writer and reader already disagree about `latest`, in the arm nobody can test
 
@@ -194,8 +222,8 @@ and nothing in the repository would fail.
 - **Precedent in-crate.** `rocks/staged.rs` is this proposal, already executed one
   directory over: "Before this module the dir/file names were string literals duplicated
   across the three crates; `StagedCheckpoint` is the single owner"
-  (`staged.rs:20–21`). Its test
-  `staged_paths_are_the_cross_crate_contract` (`staged.rs:143–162`) is the template for
+  (`staged.rs:19–20`). Its test
+  `staged_paths_are_the_cross_crate_contract` (`staged.rs:143–164`) is the template for
   the pinning test proposed below.
 
 ## Proposed change
@@ -216,8 +244,8 @@ A new `snapshot/layout.rs` owning every name and both directions of the mapping:
 `SnapshotStager` drops `snapshot_dir`, `tmp`, `final_dir` and `name` in favour of
 `layout` (keeping `epoch`), so the coordinator can no longer hand it an inconsistent
 trio. `record`'s logged path comes from the layout rather than a second `format!`.
-The scanners in `rocks_coordinator.rs` and `stager.rs`, the test helper at
-`tests.rs:249–266`, core's harness, and the server integration scan all route through it.
+The scanners in `rocks_coordinator.rs` and `stager.rs`, the test helper `stager_on`
+(`tests.rs:249–267`), core's harness, and the server integration scan all route through it.
 
 **Stage 2 — read operations on `SnapshotFs`.**
 
@@ -225,10 +253,28 @@ Add the four reads the layout needs (`read`, `read_dir` returning names, `read_l
 `exists`) to the trait, implement them on `RealFs` and `RecordingFs`, and move the boot
 reader off `std::fs`: `load_latest_metadata` and `highest_snapshot_epoch` become
 `SnapshotLayout` methods taking `&dyn SnapshotFs`, with `RealFs`-defaulting public
-wrappers — exactly the `load_staged_checkpoint` / `load_staged_checkpoint_with` pairing
-that `rocks/checkpoint.rs:39–49` already uses for the install side. `latest`
-resolution moves into the layout too, so the symlink-versus-plain-file question is
-answered in one place for both the writer and the reader (closing §5).
+wrappers — exactly the `load_staged_checkpoint` (`rocks/checkpoint.rs:40`, `pub`) /
+`load_staged_checkpoint_with` (`rocks/checkpoint.rs:47–50`, `pub(crate)`) pairing that the
+install side already uses. `latest` resolution moves into the layout too, so the
+symlink-versus-plain-file question is answered in one place for both the writer and the
+reader (closing §5).
+
+**Visibility constraint (Stage 2 only, and it is not optional).** `SnapshotFs` is
+`pub(crate)` (`fs_seam.rs:32`) and stays that way — it is a durability-protocol seam, not
+an API. But `SnapshotLayout` must be `pub` for core's harness and the server integration
+suite to use it (see *Cross-crate reach*). A `pub` method taking `&dyn SnapshotFs` would
+therefore be a `pub` signature naming a `pub(crate)` type: `private_interfaces`. The
+shape that satisfies both is the one `rocks/checkpoint.rs` already ships — the `_with`
+method is `pub(crate)` and the `pub` wrapper defaults the seam to `RealFs` and never
+names it:
+
+```rust
+pub fn latest_metadata(&self) -> Result<…> { self.latest_metadata_with(&RealFs) }
+pub(crate) fn latest_metadata_with(&self, fs: &dyn SnapshotFs) -> Result<…> { … }
+```
+
+Skipping this is the first thing an implementer hits, so it is stated here rather than
+discovered at `cargo check`.
 
 Deliberately **not** added: `remove_file` / `remove_dir_all`. Retention deletion has no
 durability ordering rule to enforce, so putting it behind the seam would buy fault
@@ -252,10 +298,17 @@ separate decision, not a prerequisite.
    seam, a fake can present `latest` as a plain file and the reader's fallback is
    exercisable on a supported platform, retiring several of the ten `#[cfg(unix)]` gates
    and turning §5's asymmetry into an assertion.
-4. **Six boot tests stop opening RocksDB.** `SnapshotLayout::latest_metadata(fs)` is
-   callable with a `TempDir` and no store, deleting the `make_store` dependency from the
-   boot-seed tests (`tests.rs:1013`, `1077`, `1127`, and the three cases inside them) —
-   the interface becomes the test surface.
+4. **Six RocksDB opens disappear from the boot-seed tests.**
+   `SnapshotLayout::latest_metadata_with(fs)` is callable with a `TempDir` and no store,
+   deleting the `make_store` dependency from all six sites enumerated in §4:
+   `tests.rs:1016` (twice — once per `("garbage" | "absent")` loop case in
+   `coordinator_boot_keeps_the_epoch_when_latest_metadata_is_unreadable`, `1013`),
+   `tests.rs:1049` (`test_coordinator_seeds_last_save_from_snapshot_metadata`, `1047`),
+   and `tests.rs:1086`, `1103`, `1114` (the three cases of
+   `test_coordinator_seeds_none_without_a_usable_completion_time`, `1079`). Note
+   `tests.rs:1127` (`test_coordinator_records_failed_then_recovered_save`) is **not** in
+   this set: it is an FM-022 *save* test and genuinely needs a store to checkpoint from.
+   The interface becomes the test surface.
 5. **Deletion test.** Delete `SnapshotLayout` and the complexity reappears in nine
    places across three crates (four constructors, three scanners, one test helper, one
    integration scan). It is not a pass-through.
@@ -288,20 +341,71 @@ separate decision, not a prerequisite.
   `coordinator_boot_keeps_the_epoch_when_latest_metadata_is_unreadable`,
   `test_incomplete_snapshot_skipped`, `test_corrupted_snapshot_metadata`,
   `test_truncated_metadata_recovery`, `test_missing_completion_marker`, and the
-  `test_stager_*` family; FM-018 forces `test_cleanup_old_snapshots`,
-  `test_cleanup_unlimited`, `test_stager_retention_across_epochs`; FM-023 forces
+  `test_stager_*` family; FM-018 forces all five of `test_stager_symlink_failure_is_nonfatal`,
+  `test_stager_retention_across_epochs`, `test_cleanup_old_snapshots`,
+  `test_cleanup_unlimited`, `test_config_default`; FM-023 forces
   `stager_fsyncs_metadata_and_staging_dir_before_install`,
   `stager_fsyncs_snapshot_dir_after_install_and_after_latest_repoint`,
   `staged_checkpoint_install_fsyncs_the_data_dir_parent`. Renaming any of them breaks
   the lint in both directions unless the spec moves with it.
 
-**`RecordingFs` trace compatibility — the concrete hazard.** FM-023's forced tests assert
-exact ordered traces via `RecordingFs::trace` (`fs_seam.rs:133–153`), and two of them live
-outside the snapshot module (`rocks/tests.rs:482–518`, `data_dir.rs:277`). If read
-operations are appended to the same `ops` vector, those traces gain entries and
-spec-forced tests fail on a change that alters no behavior — the worst possible signal.
-Mitigation: record reads separately, or keep `trace()` mutation-only and add an
-`all_ops()` for read-aware assertions. Decide this before writing any code.
+**`RecordingFs` trace compatibility — the concrete hazard, and the decision.**
+
+There are exactly four `RecordingFs::trace` (`fs_seam.rs:133–153`) call sites in the
+crate. Three of them are immune to this proposal, and naming the wrong ones obscures the
+one that is not:
+
+- `staged_checkpoint_install_fsyncs_the_data_dir_parent` (`rocks/tests.rs:489`, trace at
+  `500`, asserts `trace.len() == 4`) traces `RocksStore::load_staged_checkpoint_with`.
+  Proposal 38 leaves `rocks/checkpoint.rs` and `rocks/staged.rs` unchanged, so nothing new
+  is recorded on that path. **Immune.**
+- `marker_round_trips_through_an_atomic_publish` (`data_dir.rs:275`, trace at `283`) is
+  tagged **FM-PERSISTENCE-049**, not FM-023, and traces `DataDirMarker::stamp_with`, which
+  only writes/syncs/renames. **Immune**, and it is not one of FM-023's forced tests.
+- `stager_fsyncs_metadata_and_staging_dir_before_install` (`tests.rs:368`, trace at `379`)
+  asserts a **prefix**: `trace[..5]`, the five ops through the promotion rename. Anything
+  appended later cannot move it. **Immune.**
+
+The one that breaks is `stager_fsyncs_snapshot_dir_after_install_and_after_latest_repoint`
+(`tests.rs:402–437`, trace at `413`). It asserts an **open-ended tail** —
+`assert_eq!(trace[4..].to_vec(), expected)` with a five-element `expected` — so the trace
+must contain exactly nine ops and not one more. `SnapshotStager::run` calls
+`cleanup_old_snapshots` at `stager.rs:136`, *after* `update_latest_symlink`'s closing
+`sync_dir`, and retention's scan is a `std::fs::read_dir` (`stager.rs:224`). Routing that
+`read_dir` through the seam appends a sixth entry after the final `sync_dir`, and the
+test fails on a change that alters no behavior — the worst possible signal on a
+spec-forced test.
+
+**Decision (made here, not deferred): keep `trace()` mutation-only and add a separate read
+log with an `all_ops()` accessor for read-aware assertions.** Reasons:
+
+1. The durability protocol *is* the mutation sequence. `fs_seam.rs:29–32` says so
+   directly, and `trace()`'s own doc calls the rendering "readable as a protocol". A
+   `read_dir` in the middle of a fsync-ordering assertion is noise, not signal.
+2. All four existing assertions are then immune **by construction**, not by review — no
+   edit to any of them, including the two outside the snapshot module.
+3. FM-023's Invariant enumerates the seam by its mutation methods ("`sync_file`,
+   `sync_dir`, `rename`, `symlink`, `write`"). Keeping `trace()` to exactly that set keeps
+   the spec's vocabulary and the fake's vocabulary the same word.
+4. FM-049's `data_dir` assertion needs no edit either, so no locked-crate spec row outside
+   FM-023 is even in scope.
+
+**The narrowness rule lives in the module doc, not in ADR-0003.** ADR-0003's body
+(`adr/0003-persistence-durability-seams.md:14–19` on the seam, `40–42` on its cost) never
+states that the trait is restricted to mutations; it only says a *publication path* must
+be routed through the trait or it is untested by construction. The deliberate exclusion is
+in `fs_seam.rs:29–32`:
+
+> The subset of `std::fs` the checkpoint publishers use. Deliberately narrow: every
+> method here is one the durability ordering depends on, so a fake that records the call
+> sequence sees the whole protocol.
+
+Stage 2 makes that sentence false as written, so the same commit must rewrite it. The
+replacement rule: *a method belongs on `SnapshotFs` if it is either a durability-ordering
+operation or a layout query; the ordering trace (`trace()`) covers only the first, and the
+read log covers the second.* That is the whole content of the change to the seam's
+charter. **ADR-0003 needs no amendment** — its text remains true, and the rule it does
+state (route publication paths through the trait) is untouched.
 
 **On-disk compatibility.** The names are a live operator contract
 (`backup-restore.md:22–29,77`). A changed pad width or prefix orphans every existing
@@ -309,17 +413,21 @@ snapshot: retention would stop reaping them and the boot seed would restart at 1
 live directory. The pinning test must assert literal strings, never re-derive them with
 the same `format!` the code uses.
 
-**Scope boundaries versus siblings (file-level, no overlap):**
+**Scope boundaries versus siblings (each row is 38-vs-that-proposal; it is not a claim
+that the siblings do not overlap each other — 42 and 44 both own `rocks/mod.rs`, which is
+their problem, not 38's):**
 
-| Proposal | Owns | This proposal must not touch |
+| Proposal | Owns | 38-vs-it |
 |---|---|---|
 | 38 (this) | `snapshot/layout.rs` (new), `snapshot/rocks_coordinator.rs`, `snapshot/stager.rs`, `fs_seam.rs` (**additive only** — no existing method signature changes) | — |
-| 40 — FrameHeader codec unify | `serialization/mod.rs`, `serialization/probabilistic.rs`, `serialization/dataset.rs` | all of `serialization/` |
-| 42 — RocksSink `CommitEffects` | `rocks/flush.rs` | `rocks/flush.rs` |
-| 44 — RocksStore open shims | `rocks/mod.rs`, `rocks/columns.rs`, the `test-support` feature | `rocks/mod.rs`, `rocks/columns.rs` |
+| **41 — persistence small dedups** | PE10(a): `SnapshotStager.data_dir` (`stager.rs:70–74`), its four construction sites (`rocks_coordinator.rs:171,261`; `tests.rs:262,949`), and the trailing "`data_dir` is retained on the stager as that anchor" sentence (`stager.rs:98–125`) | **Real overlap — the same files and the same struct literals.** Different fields, though: 38 owns `snapshot_dir`/`tmp`/`final_dir`/`name` (the layout); 41 owns only `data_dir`, which is not a layout input. Adopt 41's own ruling: **land 41 first** (it is a one-field delete) so `SnapshotLayout` is authored against a stager with no vestigial field. If 38 lands first, 41 rebases onto the new constructor shape and the delete is unaffected. |
+| 40 — FrameHeader codec unify | `wal/…/mod.rs` frame build/decode, `serialization/probabilistic.rs`, `serialization/dataset.rs` | No overlap — 38 touches no serialization or frame code. |
+| 42 — RocksSink `CommitEffects` | `wal/flush.rs`, `wal/tests.rs`, `wal/writer.rs`, `rocks/checkpoint.rs`, `rocks/mod.rs`, `rocks/reclaim.rs`, `rocks/wal_watermark.rs` (there is no `rocks/flush.rs`) | No overlap — 38 touches none of these. `rocks/checkpoint.rs` is cited by 38 as *precedent only* (the `_with` wrapper pattern) and is not edited, so 42's ownership of it is uncontested. |
+| 44 — RocksStore open shims | `rocks/mod.rs`, `rocks/tests.rs`, the `test-support` feature | No overlap — 38 touches none of these. |
 
 Because 38's `fs_seam.rs` change is purely additive, 40/42/44 can land in any order
-relative to it. `rocks/staged.rs` and `rocks/checkpoint.rs` stay **unchanged** — the
+relative to it; 41 is the one sequencing constraint. `rocks/staged.rs` and
+`rocks/checkpoint.rs` stay **unchanged** — the
 `checkpoint_ready` layout already has its owner, and rerouting its `exists()` /
 `is_complete_db()` predicates through the seam would perturb FM-023's install-side trace
 assertions for no gain here. That is a separate decision, out of scope.
@@ -340,11 +448,44 @@ edge. `SnapshotStager` and `SnapshotFs` stay `pub(crate)`.
   convention. Zero trait changes means zero `RecordingFs` trace risk, so the mutation
   re-gate is a narrow diff.
 - **Stage 2 (M) — read operations on the seam.** Larger blast radius: the trait grows,
-  `RealFs`/`RecordingFs` grow, the boot reader moves, and the `RecordingFs` trace
-  decision above has to be made and validated against three FM-023-forced tests in two
-  modules.
+  `RealFs`/`RecordingFs` grow, the boot reader moves, the `pub`/`pub(crate)` wrapper
+  split above has to be honoured, and `fs_seam.rs`'s "Deliberately narrow" module doc has
+  to be rewritten in the same commit. The `RecordingFs` split (mutation `trace()` +
+  separate read log) is decided above, so the validation reduces to confirming that
+  `stager_fsyncs_snapshot_dir_after_install_and_after_latest_repoint` still sees a
+  nine-op `trace()` (a five-element `trace[4..]` tail) once retention's `read_dir` goes
+  through the seam.
 
-**Independently-landable hotfix: none — no live defect was found.** The reader/writer
-`latest` disagreement (§5) is confined to `#[cfg(not(unix))]` code that no shipped target
-compiles, and the four name constructions agree today. Stage 1 is the smallest slice
-worth landing on its own.
+**Independently-landable hotfix: a live documentation defect in the restore runbook.**
+
+`website/src/content/docs/operations/backup-restore.md:25` lists `search/` — "a copy of
+the search-index sidecar, if search indexes exist" — as a member of `snapshot_NNNNN/`, and
+the restore procedure at `:83–89` instructs the operator to copy it into the staged
+checkpoint:
+
+```bash
+if [ -d "$SNAPSHOT/search" ]; then
+  cp -a "$SNAPSHOT/search" "$(dirname "$DATA_DIR")/checkpoint_ready/search"
+fi
+```
+
+That copy no longer exists. Proposal 23 deleted the sidecar copy from the stager
+(`stager.rs:98–125` is the decision note left in its place: "a snapshot no longer copies
+the search-index sidecar … the copy is deleted"), and the exclusion is pinned by
+`test_stager_excludes_search_sidecar` (`tests.rs:317–344`, asserting
+`!dir.join("search").exists()`). So the operator-facing runbook documents a directory
+that snapshots no longer contain and tells operators to copy it during a
+restore. The `if [ -d ]` guard means the instruction silently no-ops rather than failing,
+which is why nothing has caught it — and it leaves an operator believing a snapshot backs
+up search indexes when it does not (they are rebuilt from the `search_meta` column family
+by `frogdb_core::IndexLifecycleManager::recover`).
+
+The fix is doc-only, zero risk, and independent of both stages: drop the `search/` bullet
+at `:25`, drop the `if [ -d "$SNAPSHOT/search" ]` block at `:87–89`, and drop the "plus
+the search sidecar, if present" clause from the step-2 comment at `:83–84`. It should
+land first — it is also the paragraph the pinning test's operator-contract argument rests
+on, and there is no point pinning a layout the docs describe wrongly.
+
+The reader/writer `latest` disagreement (§5) remains **not** a live defect: it is confined
+to `#[cfg(not(unix))]` code that no shipped target compiles, and the four name
+constructions agree today. Stage 1 is the smallest code slice worth landing on its own.

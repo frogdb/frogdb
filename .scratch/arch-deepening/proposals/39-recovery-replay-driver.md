@@ -153,6 +153,12 @@ hand-roll expiry mirroring). Delete `recover_all_shards`'s *body* and the
 complexity reappears in exactly one place — `frogdb_persistence::recovery`,
 where the rest of the protocol already is.
 
+The move is measurable, not cosmetic: store_recovery.rs's **non-test** portion
+(lines 1–127; `unit_tests` starts at 128) goes from 127 lines to roughly 87, a
+**−31%** cut, with the whole file 309 → ~271. What is left is the module doc's
+own claim — a `RestoreSink` impl, a factory closure, and unpacking — and nothing
+else.
+
 ### Latent: `duration_ms` is a log-only, unasserted, doubly-computed output
 
 `RecoveryStats::duration_ms` (recovery.rs:33) is written twice — once per shard
@@ -164,6 +170,12 @@ assertion: no test in the workspace reads it, and no spec row names it as an
 Observable or an Outcome variant (unlike `keys_failed`, `keys_expired_skipped`,
 and `first_failure`, all of which are). The per-shard value returned to callers
 by `recover_shard` is discarded by every caller.
+
+This is not a side note the move can leave alone. Today one of the two writes
+sits in `frogdb-core`, which has no gate; the move drags it into an 0.85-gated
+crate, where an unassertable write is a mutant nothing can kill. Deleting the
+field is therefore part of the move, not a companion to it — see
+[Required with the move](#required-with-the-move-delete-recoverystatsduration_ms).
 
 ## Proposed change
 
@@ -234,6 +246,72 @@ Three details the move must carry:
 - The whole-database `tracing::info!` at store_recovery.rs:113–123 moves with the
   driver. Its `num_shards` / `warm_keys` / `warm_stale` fields are all available
   from `rocks` and the aggregate; nothing in it touches a core type.
+- `frogdb-persistence`'s crate re-export list (`lib.rs:25–27`) gains
+  `recover_database_into` next to `recover_shard_into` / `recover_warm_shard_into`,
+  so `frogdb-core` imports it exactly the way it already imports those two
+  (store_recovery.rs:14–16). That makes **three** edited files, not two.
+
+### Required with the move: delete `RecoveryStats::duration_ms`
+
+Not an optional companion — the deletion lands in the same commit. `duration_ms`
+is a `pub` field on a struct in an 0.85-gated crate that **no test asserts**: a
+mutant replacing `stats.duration_ms = start.elapsed().as_millis() as u64` with
+`= 0` (recovery.rs:181, and store_recovery.rs:111 once it moves under the gate)
+survives by construction, and no test can be written to kill it that would not be
+asserting on wall-clock timing. Moving the second writer into
+`frogdb-persistence` without deleting the field would *import a guaranteed
+surviving mutant into the gated crate* — it makes the 0.85 number worse for no
+behavioral gain. Delete it with the move:
+
+- Drop the field (recovery.rs:33) and both writes (recovery.rs:181, and the
+  aggregate write that would otherwise ride along from store_recovery.rs:111).
+- Replace the three read sites — all `tracing` field bindings, recovery.rs:189,
+  store_recovery.rs:121, `recovery/src/shards.rs:56` — with a local `Instant`
+  elapsed computed at each logging site. The log output is unchanged; only the
+  carrier is. This is the one line `shards.rs` gives up in exchange for the
+  interface staying frozen.
+
+The field is written twice, read by three log bindings, asserted by no test,
+surfaced in no `INFO` field or metric, and named by no spec row — it fails the
+deletion test outright. Note the lane's characterization of it as a "dead output"
+is imprecise: it is not dead, it is **log-only and unasserted**, which is exactly
+the shape that becomes a liability the moment it crosses into a gated crate.
+
+### The second whole-database driver stays divergent
+
+`frogdb-persistence` will own *boot's* whole-database ordering rules. It will not
+own everyone's. `frogdb-replication-runtime`'s `read_snapshot`
+(`install.rs:237–256`) runs a structurally identical loop over the staged
+checkpoint — `for shard_id in 0..num_shards`, fresh sink per shard,
+`recover_shard_into`, then warm if enabled, push in shard order — and it is
+**spec-pinned in its own right**: FM-REPLICATION-053 ("a received checkpoint
+installs every shard of the staged DB, warm tier materialized",
+replication-failure-modes.md:1129, Invariant at line 1136) states the loop, the
+shard-order positionality of the returned vector, and the hot-beats-warm rule,
+forced by four named tests. It is a LOCKED replication row at gate 0.85.
+
+It differs in two ways that are not incidental:
+
+1. Its warm pass is `SnapshotSink::absorb_warm(&rocks, shard_id)`, not
+   `recover_warm_shard_into`. `absorb_warm` **materializes warm keys as hot
+   entries** (the staged DB is discarded after the install, so a warm key cannot
+   stay warm) and skips undecodable warm values with a warning rather than
+   counting them — behavior boot must not have.
+2. It folds **no statistics at all**. There is no `RecoveryStats` to combine; the
+   loop's product is `Vec<Vec<SnapshotEntry>>`, an install plan.
+
+**Ruling: it stays divergent by design.** Converging it onto
+`recover_database_into` would require a warm-pass hook in the persistence
+signature — a second callback, or a `RestoreSink` method that lets the sink
+substitute its own warm traversal — bought purely to share a five-line `for`
+loop, and it would put a replication-only behavior (warm→hot materialization)
+inside the function whose whole justification is that it states *boot's* rules
+unambiguously. The shared thing is already shared at the right granularity:
+`recover_shard_into`, the per-shard format read. This proposal therefore claims
+persistence supplies every ordering rule **for boot recovery** — the path
+`recover_all_shards` serves — and explicitly not that it becomes the single
+whole-database driver in the workspace. Any later attempt to unify the two
+belongs in its own proposal, with both spec rows in scope.
 
 ### Dependency direction — the move is acyclic
 
@@ -273,7 +351,9 @@ direct assertion with no core store, no `HashMapStore`, no server:
 - **Cross-shard first-failure precedence.** Corrupt a value in shard 2 and
   another in shard 0; assert `first_failure.shard_id == 0`. Today this is only
   reachable through `decode_failure_context_is_first_wins` in
-  `frogdb-recovery`'s suite — three crates from the fold it forces.
+  `frogdb-recovery`'s suite — two dependency hops from the fold it forces
+  (`frogdb-recovery` → `frogdb-core`, where the fold is) and from the crate that
+  owns the rule (`frogdb-core` → `frogdb-persistence`).
 - **Hot-beats-warm across shards.** Corrupt a hot value in shard 1 and a warm
   value in shard 0; assert the *warm* shard-0 failure wins, because shard 0 is
   walked first — the exact interleaving the comment at store_recovery.rs:96–98
@@ -286,8 +366,11 @@ direct assertion with no core store, no `HashMapStore`, no server:
   `bytes_loaded` on a multi-shard, tiered database. If `absorb` lands, a single
   unit test over two `RecoveryStats` values covers every counter without touching
   RocksDB at all.
-- **Shard-count fidelity (FM-PERSISTENCE-041).** `sinks.len() == num_shards`,
-  in order, forced inside the crate that produces the vector.
+- **Shard-count fidelity (FM-PERSISTENCE-041).** The returned `Vec<S>` is
+  `num_shards` long and in shard order — forced inside `frogdb-persistence`,
+  because with the factory form `frogdb-persistence` is the crate that *builds*
+  the vector. `MockSink`s made by a factory that records its `shard_id` argument
+  pin both the count and the order in one assertion, with no core store.
 
 **Mutation reachability — the real win.** Every mutant of the loop above is
 currently generated by no gated run. After the move, `cargo mutants -p
@@ -341,8 +424,9 @@ crate contributes nothing to the owning crate's score. The recommendation:
 frogdb-persistence` as push discipline, and `just mutants frogdb-persistence` +
 `just mutants-gate frogdb-persistence 0.85` for the full run. Expect the score to
 *move*, not merely hold — new mutable code lands in the gated crate, and the
-tests above exist to kill it. `frogdb-recovery` (0.85) is not touched.
-`frogdb-core` has no gate.
+tests above exist to kill it. Deleting `duration_ms` removes two guaranteed
+survivors from the gated crate's denominator, which is the other half of why the
+deletion is required rather than optional. `frogdb-core` has no gate.
 
 **Behavior-preservation risk.** The loop is order-sensitive in three coupled
 ways (shard ascending, hot-before-warm, one sink per pair), and the warm pass
@@ -355,12 +439,11 @@ pass, **before** the warm pass) must be preserved exactly, and the new
 cross-shard tests should land *before* the move so they pin the current behavior
 rather than the moved behavior.
 
-**`&mut [S]` vs a sink factory.** The slice form is proposed because it keeps
-persistence out of the construction business and lets the caller decide how the
-sinks are made. A factory (`impl FnMut(usize) -> S`) would let persistence own
-the count too, which is arguably better for FM-PERSISTENCE-041 — but it makes the
-sinks harder to get back out (they would have to be returned in a `Vec`). Open
-question for implementation; both stay acyclic.
+**`frogdb-recovery` re-gate is trivial but not zero.** `frogdb-recovery` also
+carries an 0.85 gate, and the `duration_ms` deletion changes one line in it
+(`shards.rs:56`, a `tracing` field binding). That line is unasserted before and
+after, so the score should not move; run `just mutants-diff frogdb-recovery`
+anyway, since the diff touches the crate.
 
 **Sibling boundaries — no file overlap.**
 
@@ -372,9 +455,16 @@ question for implementation; both stay acyclic.
   reshaped; this proposal is indifferent to that shape because it does not edit
   the file.
 - **Proposal 41 (small dedups)** must not claim `store_recovery.rs` or
-  `recovery.rs`. If 41 wants the `duration_ms` deletion, it should take it as the
-  hotfix below and this proposal drops the mention; otherwise 41 stays clear of
-  both files.
+  `recovery.rs`. The `duration_ms` deletion belongs to **this** proposal outright
+  — it is a required part of the move, not a loose cleanup either could take (41's
+  own `duration_ms` mentions are the WAL `trace!` fields at its lines 176/337, an
+  unrelated value). 41 stays clear of both files.
+- **Sequencing with 41.** No file overlap, but both land in `frogdb-persistence`
+  and both therefore re-gate it. Run the two mutation gates **serially**, not
+  concurrently: `just mutants` on a crate two branches are editing gives a score
+  neither branch can attribute, and `mutants-diff` on the second one to land needs
+  the first already merged to compute a meaningful diff. Either order works;
+  land-then-gate-then-land is the constraint, not the direction.
 - **Lane item 1 (`SnapshotLayout`)** and **item 6 (`RocksSink::commit` /
   `CommitEffects`)** are in `frogdb-persistence` but in `snapshot/` and `flush.rs`
   — no overlap with `recovery.rs`. Item 6 has the larger blast radius and is
@@ -384,12 +474,32 @@ question for implementation; both stay acyclic.
 ## Effort
 
 **M.** The code motion itself is S — one function moved down a dependency edge it
-already crosses, a generic parameter added, and a caller that shrinks to four
-lines with an unchanged interface. What makes it M is the locked-crate tax:
-writing the multi-shard/cross-tier tests that justify the move, appending them to
-two `Forced by` rows, re-pointing FM-PERSISTENCE-047's Invariant, and running the
-persistence mutation gate. Roughly two files edited, one spec file touched in two
-places, no manifest changes, no caller churn.
+already crosses, a generic parameter and a factory argument added, and a caller
+that shrinks to three lines with an unchanged interface. What makes it M is the
+locked-crate tax: writing the multi-shard/cross-tier tests that justify the move,
+appending them to two `Forced by` rows, re-pointing FM-PERSISTENCE-047's
+Invariant, and running the persistence mutation gate. Three files carry the move
+(`store_recovery.rs`, `persistence/src/recovery.rs`, `persistence/src/lib.rs`)
+plus one line in `recovery/src/shards.rs` for the `duration_ms` deletion, one
+spec file touched in two places, no manifest changes, no caller churn.
+
+### Landing steps
+
+Beyond the code motion and the tests, four things land in the same commit:
+
+1. Delete `RecoveryStats::duration_ms` and re-source the three log fields from
+   local `Instant`s (see above).
+2. Re-point FM-PERSISTENCE-047's Invariant (persistence-failure-modes.md:525) and
+   `record_first_failure`'s doc (recovery.rs:85–88) at `recover_database_into`.
+3. Append the new persistence tests to FM-PERSISTENCE-041's and -047's
+   `Forced by` rows.
+4. Fix the stale citation at
+   `.scratch/testing-improvements-round2/issues/open/03-injectable-clock-seam.md:82`,
+   which lists `core/src/persistence/store_recovery.rs` among the files that read
+   `clock::now()`/`system_now()`. After the move the only clock read in that file
+   is gone — the consumer becomes `persistence/src/recovery.rs`, which the same
+   sentence already needs to name. One-line edit; leaving it stale would leave a
+   clock-seam audit trail pointing at a file that no longer reads the clock.
 
 ### Independently-landable hotfix
 
@@ -402,14 +512,9 @@ misplacement legible to the next reader, is worth landing whether or not the mov
 happens, and touches nothing gated. It is also the cheapest way to stop the
 comment at 96–98 from being the only record of a rule the spec depends on.
 
-**Optional companion (S, needs the persistence re-gate).** Delete
-`RecoveryStats::duration_ms`. It is written twice, read only by three `tracing`
-field bindings (recovery.rs:189, store_recovery.rs:121,
-`recovery/src/shards.rs:56`), asserted by no test, surfaced in no `INFO` field or
-metric, and named by no spec row — it fails the deletion test. The per-shard and
-whole-database elapsed times can still be logged from a local `Instant` at each
-site without the value riding on a struct that crosses three crates. Note the
-lane's characterization of this as a "dead output" is imprecise: it is not dead,
-it is **log-only and unasserted**. Deleting it is a judgement call about whether
-those log fields earn a public struct field — flag it for the owner rather than
-bundling it silently into the move.
+The `RecoveryStats::duration_ms` deletion is **not** on this list. It was
+previously written up here as an optional companion; it is now a required part of
+the move — see [Required with the move](#required-with-the-move-delete-recoverystatsduration_ms).
+It could still be landed on its own ahead of the move (it needs the persistence
+re-gate either way), but it cannot be dropped from the move, because the move is
+what carries a second unassertable write into the gated crate.

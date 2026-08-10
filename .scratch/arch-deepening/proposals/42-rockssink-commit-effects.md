@@ -141,26 +141,35 @@ the conflation FM-PERSISTENCE-043 exists to prevent.
 | **FM-PERSISTENCE-043** (spec:102–112) | `synced_seq` | *"`synced_seq` is `fetch_max`'d only when that commit passed `sync = true`"* |
 | **FM-PERSISTENCE-012** (spec:198–208) | the clear barrier | *"Reclamation … runs **after** the clear commits and is coalesced per `(tier, shard)`"* |
 
-Forcing tests, all inside `frogdb-persistence` (so `cargo mutants -p
-frogdb-persistence` actually runs them):
+Forcing tests. These rows are **not** forced exclusively from inside
+`frogdb-persistence`: two of the three name tests that live in `frogdb-core`,
+which `cargo mutants -p frogdb-persistence` never runs. The in-crate subset is
+what the mutation gate actually sees, so it is called out separately below.
 
-- FM-035: `only_a_synced_rocks_sink_commit_records_the_durable_watermark`
-  (`wal/tests.rs:1655`), `test_wal_sequence` (`wal/tests.rs:145`),
+- FM-035, **in crate** (these are the killers the gate can use):
+  `only_a_synced_rocks_sink_commit_records_the_durable_watermark`
+  (`wal/tests.rs:1655`), `test_wal_sequence` (`wal/tests.rs:146`),
+  `wal_clean_reopen_recovers_all_without_signal` (`rocks/tests.rs:1290`),
   `the_watermark_file_round_trips_and_degrades_to_none` /
   `a_recovery_that_reaches_the_watermark_reports_nothing` /
   `a_short_recovery_reports_the_gap_once_and_re_baselines`
-  (`rocks/wal_watermark.rs:162, 189, 220`) — plus `test_wal_sequence_persistence`
-  and `test_async_wal_writer_recovery`.
-- FM-043: `durable_sequence_tracks_only_fsynced_commits_in_periodic_mode`
-  (`wal/tests.rs:1432`), `sync_mode_durable_sequence_equals_committed_sequence`
-  (1518), `empty_flush_advances_neither_sequence` (1540),
+  (`rocks/wal_watermark.rs:167, 194, 225`). **Out of crate**, and therefore
+  worth nothing to the gate: `test_wal_sequence_persistence`
+  (`core/src/persistence/crash_recovery_tests.rs:1752`) and
+  `test_async_wal_writer_recovery` (same file, 1685).
+- FM-043, all in crate:
+  `durable_sequence_tracks_only_fsynced_commits_in_periodic_mode`
+  (`wal/tests.rs:1432`), `…_in_async_mode` (1488),
+  `sync_mode_durable_sequence_equals_committed_sequence` (1518),
+  `empty_flush_advances_neither_sequence` (1540),
   `durable_sync_publishes_the_flushed_sequence_to_every_registered_writer`
   (`rocks/tests.rs:1355`).
-- FM-012: `test_sink_clear_is_a_flush_barrier_between_batches` (543),
-  `test_sink_clear_advances_committed_sequence` (578),
+- FM-012, **in crate**: `test_sink_clear_is_a_flush_barrier_between_batches`
+  (`wal/tests.rs:543`), `test_sink_clear_advances_committed_sequence` (578),
   `test_wal_clear_reclamation_end_to_end` (929),
   `clear_reclamation_keeps_data_gone_after_reopen` (`rocks/tests.rs:796`),
-  `clear_reclamation_preserves_post_clear_writes` (878).
+  `clear_reclamation_preserves_post_clear_writes` (878). **Out of crate**:
+  `clear_shard_routes_to_clear` (`core/src/shard/persistence.rs:631`).
 
 **Acceptance criterion (state it in the PR and hold to it).** The change is a
 pure interface move: after it lands, a production run must issue *the same
@@ -176,14 +185,23 @@ renamed**, so the `Forced by` lists stay byte-identical and
 (they gain the `settle` call), not moved. If review concludes any ordering must
 shift, that is a behavior change and the row is edited first.
 
-**One spec-text amendment is warranted and should ride along (doc-only).**
-FM-PERSISTENCE-035's Invariant says the watermark *"is advanced only by
-successful sync commits"*, but `RocksStore::durable_sync` also records it
-(`rocks/mod.rs:345`) — which is what FM-PERSISTENCE-003's Invariant (spec:85)
-already describes (*"re-record the on-disk WAL watermark"*). The 035 sentence is
-incomplete as written. Correcting it to "advanced only by a successful *sync*
-commit or by an out-of-band `durable_sync` — never by a checkpoint" costs
-nothing and removes a contradiction this proposal would otherwise inherit.
+**A spec-text contradiction was found here but is deliberately *not* part of
+this proposal.** FM-PERSISTENCE-035's Invariant says the watermark *"is advanced
+only by successful *sync* commits — never by a checkpoint"*, and that is
+incomplete: three other paths write it — `RocksStore::durable_sync`
+(`rocks/mod.rs:345`), the fresh-open seed (`rocks/mod.rs:295`), and
+`detect_and_reset`'s post-recovery re-baseline (`rocks/wal_watermark.rs:121`).
+The module doc already uses the umbrella phrasing this needs
+(`wal_watermark.rs:23–25`, *"only ever advanced after a durable sync"*), and
+FM-PERSISTENCE-043's Invariant (spec:109) shows the spec's own
+explicit-inclusion style (*"or by `publish_synced_through` from
+`RocksStore::durable_sync`"*). Editing a locked row here would contradict this
+proposal's own zero-spec-delta acceptance criterion, so it is **filed as a
+standalone doc-only change owned by the orchestrator**, on its own: replace the
+sentence with *"advanced only after something durable — a sync commit, an
+out-of-band `durable_sync`, or an open-time (re-)baseline — never by a
+checkpoint."* Proposal 42 inherits whichever wording is in the file when it
+lands and changes no spec text itself.
 
 ## Proposed change
 
@@ -197,14 +215,16 @@ applications out of `commit` into the method the caller drives.
 /// durability policy — decides when to apply them, via [`WriteSink::settle`].
 /// Deliberately carries no sequence number: the durable watermark is
 /// RocksDB's sequence space, not the engine's WAL counter.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct CommitEffects {
     /// The commit fsynced through its own batch, so the persisted durable-sync
     /// watermark may be advanced (FM-PERSISTENCE-035 / FM-PERSISTENCE-043).
     pub(super) durable: bool,
-    /// The commit landed a full-shard range tombstone, so post-clear space
-    /// reclamation is owed for this shard (FM-PERSISTENCE-012).
-    pub(super) cleared_shard: bool,
+    /// The commit landed a full-shard range tombstone whose upper bound this
+    /// is, so post-clear space reclamation is owed for this shard
+    /// (FM-PERSISTENCE-012). `None` for an ordinary commit. The bound travels
+    /// *in* the value so it can be owed at most once — see below.
+    pub(super) cleared_shard: Option<Vec<u8>>,
 }
 
 pub(super) trait WriteSink: Send {
@@ -219,7 +239,10 @@ pub(super) trait WriteSink: Send {
     /// correctness path: a sink that no-ops here still commits correctly — it
     /// merely reclaims disk space later and forfeits a corruption-detection
     /// signal on the next open. Called only for a commit that returned `Ok`.
-    fn settle(&mut self, effects: CommitEffects) {}
+    ///
+    /// No default body on purpose: every adapter states its choice (see the
+    /// mutation re-gate note).
+    fn settle(&mut self, effects: CommitEffects);
 }
 ```
 
@@ -230,17 +253,17 @@ pub(super) trait WriteSink: Send {
         let batch = std::mem::take(&mut self.batch);
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(sync);
-        let pending_clear = self.pending_clear_upper.take();
+        // Taken before the write, so a failed commit drops the staged bound
+        // exactly as today (`flush.rs:185`).
+        let cleared_shard = self.pending_clear_upper.take();
         self.rocks
             .write_batch_opt(batch, &write_opts)
-            .map_err(std::io::Error::other)?;   // a failed commit drops the
-                                                // staged clear bound, as today
-        self.pending_clear_bound = pending_clear;   // consumed by `settle`
-        Ok(CommitEffects { durable: sync, cleared_shard: pending_clear_was_some })
+            .map_err(std::io::Error::other)?;
+        Ok(CommitEffects { durable: sync, cleared_shard })
     }
 
     fn settle(&mut self, effects: CommitEffects) {
-        if effects.cleared_shard && let Some(upper) = self.pending_clear_bound.take() {
+        if let Some(upper) = effects.cleared_shard {
             self.rocks
                 .spawn_clear_reclamation(crate::rocks::CfTier::Main, self.shard_id, upper);
         }
@@ -250,23 +273,36 @@ pub(super) trait WriteSink: Send {
     }
 ```
 
-(The bound itself stays inside the sink — it is a RocksDB key, not something the
-engine should hold. `CommitEffects` carries the *decision*; the sink keeps the
-*datum*. An implementation that prefers to carry the `Vec<u8>` in the effects
-value is acceptable but leaks a storage detail into the engine's vocabulary and
-is not recommended.)
+**Carry the bound in the value, not in a parked sink field.** The obvious
+alternative — keep a `pending_clear_bound: Option<Vec<u8>>` on the sink and let
+`CommitEffects` carry only a `cleared_shard: bool` decision — was considered and
+rejected. It makes "settle exactly once per commit" a *temporal* invariant
+nothing enforces: a second `settle` (or a settle-less commit path) silently
+mis-reclaims, and `stage_clear` would be writing `pending_clear_upper` while
+`commit` writes a second field holding the same datum. Carrying the `Option<Vec<u8>>`
+keeps today's single-expression consumption (`take()` on the way out at
+`flush.rs:185`, consumed once at `195–200`) and makes over-settling
+unrepresentable — the bound is *moved* into the effects value and moved out of
+it again. The "it leaks a storage detail into the engine's vocabulary" objection
+is thin: the engine never inspects the bytes, and it already passes opaque
+storage keys straight through `stage_put`/`stage_delete`. Cost: `CommitEffects`
+is `Clone` but not `Copy`, so the engine reads the flag out before handing the
+value over (below).
 
-Both `FlushEngine` commit sites become:
+Both `FlushEngine` commit sites become (or, once **41** has landed, the single
+`record_commit_outcome` body — see the ordering bullet in *Risks* for the exact
+inherited signature):
 
 ```rust
         match self.sink.commit(self.is_sync) {
             Ok(effects) => {
+                let durable = effects.durable;                   // effects is moved next
                 self.sink.settle(effects);                       // same order as today
-                self.outcomes.record_success(max_seq, effects.durable);
+                self.outcomes.record_success(max_seq, durable);
                 …
 ```
 
-Note `record_success(max_seq, effects.durable)` replaces
+Note `record_success(max_seq, durable)` replaces
 `record_success(max_seq, self.is_sync)` (`flush.rs:588`, `644`): the engine now
 reads "did it fsync?" from the adapter that performed the commit rather than
 re-deriving it from configuration. Every adapter returns `durable: sync`, so the
@@ -296,20 +332,34 @@ concrete win.** `TestSink` grows a recorded `Vec<CommitEffects>` (three lines
 beside its existing `committed` log at `tests.rs:245`), and the following become
 plain in-memory engine tests on the flush thread that already exists:
 
-- A `sync`-mode engine reports `durable: true` on every successful commit; a
-  `periodic`/`async` engine never does — the FM-043 rule asserted at the seam
-  rather than only through `FlushOutcomes`.
-- A commit that **fails** settles nothing: `settle` is unreachable on the `Err`
-  arm by construction, so "a dropped batch never advances the watermark" is
-  pinned by the type, not by a comment.
-- A clear commit reports `cleared_shard: true`; the *next* ordinary commit
-  reports `false` — i.e. the pending bound is consumed exactly once, which is
-  today only implied by `pending_clear_upper.take()`.
+- A commit that **fails** settles nothing: the `Err` arm has no `settle` call,
+  so "a dropped batch never advances the watermark" becomes a property of the
+  `match` shape plus a test that injects a commit failure and asserts an empty
+  settle log. (It is *not* pinned by the type — `CommitEffects: Default` makes
+  `sink.settle(CommitEffects::default())` a one-liner anyone could add. The
+  guarantee is the call-site shape, held by a test.)
 - Ordering: `settle` is observed before the `synced_seq` store, so the on-disk
-  watermark can never trail a published in-memory durable sequence.
+  watermark can never trail a published in-memory durable sequence. This is the
+  ordering assertion that has no equivalent today at all.
 - `empty_flush_advances_neither_sequence` extends naturally to "an empty flush
   settles nothing" — the `staged_len() == 0` early return (`flush.rs:621–623`)
   never reaches the seam at all.
+
+Two wins that look available but are **not** worth banking:
+
+- *"A `sync`-mode engine reports `durable: true`, a `periodic`/`async` engine
+  never does."* This is already asserted RocksDB-free by
+  `test_fsync_seam_sync_flag_matches_mode` (`tests.rs:1261–1278`), which reads
+  `PageCacheSink`'s recorded `commit_syncs` for all three modes. A `durable`
+  assertion would restate it one field over. Real gain: nil.
+- *"The pending clear bound is consumed exactly once."* Against `TestSink` this
+  would test a re-implementation, not the production rule — `TestSink::stage_clear`
+  (`tests.rs:281–287`) pushes a `TestOp::Clear` and tracks no bound at all, so
+  the substitute would have to grow the very `take()` semantics under test. The
+  honest coverage for consume-once stays RocksDB-backed
+  (`test_wal_clear_reclamation_end_to_end`, `clear_reclamation_*`); what the
+  refactor adds there is that the rule is now *unrepresentably* violable (the
+  bound is moved, see the shape argument above) rather than merely tested.
 
 What stays RocksDB-backed, deliberately: the FM-035 forcing test
 `only_a_synced_rocks_sink_commit_records_the_durable_watermark`
@@ -320,17 +370,30 @@ the FM row's `Forced by` list is untouched. Likewise the reclamation end-to-end
 tests (`tests.rs:929`, `rocks/tests.rs:796, 878`) drive the real writer and are
 unaffected.
 
-**Mutation re-gate.** New mutable surface is small and each mutant has an
-in-crate killer: `durable: sync` → `true`/`false` dies on
-`only_a_synced_rocks_sink_commit_records_the_durable_watermark` and the FM-043
-trio; `if effects.durable` → `true` dies on the same; `cleared_shard` mutants
-die on `clear_reclamation_*` and `test_wal_clear_reclamation_end_to_end`. The
-default `settle` body (`{}`) on the trait is a genuine mutation-testing hazard —
-it is already the identity — so give the trait method **no** default body and
-implement it explicitly (as a no-op) on `TestSink`/`PageCacheSink`, which also
-forces any future adapter to make a conscious choice. Run
-`just mutants-diff frogdb-persistence` before pushing; the crate sits at 99.1%
-against an 0.85 gate, so there is no headroom argument for skipping it.
+**Mutation re-gate.** The new mutable surface is `RocksSink::settle` and the two
+fields `commit` fills in. `RocksSink::settle` has a **non-empty body**, so
+cargo-mutants will generate mutants for it (delete the `if effects.durable`
+guard, replace it with `true`/`false`, delete the `spawn_clear_reclamation`
+call), and the **only in-crate test that can kill the watermark ones is
+`only_a_synced_rocks_sink_commit_records_the_durable_watermark`
+(`wal/tests.rs:1655`) — after it gains the `settle` call.** That one-line test
+edit is therefore *gate-load-bearing*, not cosmetic: skip it and the watermark
+effect becomes unreachable from any `-p frogdb-persistence` test, and the
+mutants survive. The `cleared_shard` mutants die on `clear_reclamation_*`
+(`rocks/tests.rs:796, 878`) and `test_wal_clear_reclamation_end_to_end`
+(`wal/tests.rs:929`), which drive the real writer and need no edit. `durable:
+sync` → `true`/`false` in `commit` dies on the same watermark test.
+
+Give the trait method **no** default body and implement it explicitly (as a
+no-op) on `TestSink`/`PageCacheSink` — on **design** grounds: it forces any
+future adapter to make a conscious choice about the effects rather than
+inheriting silence. It is *not* a mutation-testing argument: cargo-mutants
+27.1.0 (pinned in `.mise.toml`) skips empty-body functions, trait defaults
+included, so a defaulted `fn settle(&mut self, _: CommitEffects) {}` generates
+zero mutants — as do the explicit no-op impls on the test sinks, which are
+`#[cfg(test)]` and skipped outright. Run `just mutants-diff frogdb-persistence`
+before pushing; the crate sits at 99.1% against an 0.85 gate, so there is no
+headroom argument for skipping it.
 
 ## Risks / open questions
 
@@ -343,6 +406,21 @@ against an 0.85 gate, so there is no headroom argument for skipping it.
   which this proposal edits *one* site instead of two, and the conflict
   disappears. Ordering hint for the dependency graph: **41 → 42**; 42 after
   every other persistence item.
+
+  **The inherited signature, stated so both implementers agree.** 41's PE7
+  extraction takes `result: std::io::Result<()>` and leaves the `self.sink.commit(…)`
+  call at *both* original sites, passing the result down. 42 therefore makes two
+  changes to 41's output, not one:
+
+  1. widen the parameter to `result: std::io::Result<CommitEffects>`;
+  2. move `self.sink.settle(effects)` **inside** `record_commit_outcome`, on the
+     `Ok` arm, immediately before `record_success` — so the
+     settle-before-`record_success` ordering (a behavior guarantee, see the next
+     bullet) lives in exactly one place instead of being duplicated at the two
+     call sites 41 just finished de-duplicating.
+
+  With that contract fixed, the sequencing 41 → 42 is sufficient; no other
+  coordination between the two changes is needed.
 - **Effect-vs-`record_success` ordering is behavior.** Applying `settle` after
   `record_success` would let a reader observe an advanced `synced_seq` while the
   watermark file still holds the older value. That direction is *safe* under
@@ -392,17 +470,15 @@ run before push. Budget the review, not the diff.
 
 ### Independently-landable hotfix
 
-**Yes, and it should land regardless of whether the refactor is accepted.** Two
-zero-risk, no-behavior edits that remove most of the *documented* dishonesty
-immediately:
-
-1. **Amend the `WriteSink::commit` doc** (`flush.rs:122–123`) to name both
-   effects and say that they run only on success — so the next reader of the
-   seam learns from the interface instead of from the adapter body. ~5 lines,
-   no code.
-2. **Fix the FM-PERSISTENCE-035 Invariant sentence** (spec:609) to include
-   `durable_sync` as an advancer, reconciling it with FM-PERSISTENCE-003's
-   Invariant (spec:85). Doc-only; no test or `Forced by` change.
-
-Neither conflicts with proposal 41, and both are strictly subsumed by this
+**Yes, and it should land regardless of whether the refactor is accepted.** One
+zero-risk, no-behavior edit removes most of the *documented* dishonesty
+immediately: **amend the `WriteSink::commit` doc** (`flush.rs:122–123`) to name
+both effects and say that they run only on success — so the next reader of the
+seam learns from the interface instead of from the adapter body. ~5 lines, no
+code. It does not conflict with proposal 41 and is strictly subsumed by this
 proposal if it lands.
+
+(The FM-PERSISTENCE-035 Invariant wording fix is deliberately **not** bundled
+here — see *Spec position* above. It is a standalone doc-only change owned by
+the orchestrator, because this proposal's acceptance criterion is zero spec
+delta.)

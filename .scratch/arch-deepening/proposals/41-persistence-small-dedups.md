@@ -22,18 +22,21 @@ pass-through, if complexity reappears across N callers it was earning its keep.
   and the same four metric families (`WalFlushDuration`, `WalFlushFailures`,
   `WalLostOps`, `WalLostBytes`). Extract one `record_commit_outcome`.
 - **PE10 (deletion tests).** Two kills and one **rejected** kill.
-  `SnapshotStager.data_dir` (stager.rs:70–74) is `#[allow(dead_code)]` behind a
-  28-line justification comment; `SnapshotScheduler::request()` / `schedule()`
+  `SnapshotStager.data_dir` (stager.rs:74) is `#[allow(dead_code)]` and read by
+  nobody — but it is the *tail* of a four-level, three-package cascade
+  (`RocksSnapshotCoordinator::new`'s parameter → coordinator field → `SnapshotRun`
+  field → stager field), so the delete is **S**, not the one-field XS an earlier
+  draft claimed. `SnapshotScheduler::request()` / `schedule()`
   (scheduler.rs:124–134, 191–199) are legacy siblings of `request_mode`, with zero
   production callers. **`RecoveredState.installed_staged_checkpoint` is NOT dead** —
   it is the named `Outcome variant` of two locked spec rows (see the verification
-  note). Deleting it is refused here.
+  note). Deleting it is refused here; proposal 43 independently confirms it stays.
 
 None of the three changes behavior. All three are inside the **locked** persistence
 area (`frogdb-persistence` + `frogdb-recovery`, gate 0.85), so they carry a mutation
-re-gate; PE10 additionally carries a **required spec edit**, because three of the
-tests it deletes are named in `Forced by` lists and `just lint-failure-modes` fails
-the moment a spec row names a test that no longer exists.
+re-gate; PE10 additionally carries a **narrow, required spec edit**, because two of
+the tests it deletes are named in an FM `Forced by` list and `just
+lint-failure-modes` fails the moment a spec row names a test that no longer exists.
 
 ## Files involved
 
@@ -42,14 +45,18 @@ the moment a spec row names a test that no longer exists.
 | `frogdb-server/crates/persistence/src/wal/writer.rs` | 394 | PE5: inherent `impl` + the 12-method `WalSink` delegation `impl` (333–381); `committed_sequence` (314–317) |
 | `frogdb-server/crates/persistence/src/wal/sink.rs` | 53 | PE5: the `WalSink` trait — the surviving interface. Unchanged, but it is the seam the change consolidates onto |
 | `frogdb-server/crates/persistence/src/wal/flush.rs` | 827 | PE7: `apply_clear` (559–613) and `flush` (620–678); `FlushOutcomes::record_success`/`record_failure` (271–290) |
-| `frogdb-server/crates/persistence/src/wal/tests.rs` | 2343 | PE5: ~30 concrete-typed call sites; the lone `wal.committed_sequence()` caller (2035) |
+| `frogdb-server/crates/persistence/src/wal/tests.rs` | 2343 | PE5: ~30 concrete-typed call sites; the lone `wal.committed_sequence()` caller (2035); the seven test-only `batch_size_threshold()` / `set_batch_size_threshold()` callers (118, 121, 122, 1593, 1597, 1601, 1614). **No new import** — `use super::*` (tests.rs:6) already re-exports `WalSink` via `wal/mod.rs:12` |
 | `frogdb-server/crates/persistence/src/snapshot/scheduler.rs` | 212 | PE10: `request()` (124–134) and `schedule()` (191–199) beside `request_mode` (144–152) |
-| `frogdb-server/crates/persistence/src/snapshot/stager.rs` | 347 | PE10: the `data_dir` field (70–74) and its justification comment (98–125) |
-| `frogdb-server/crates/persistence/src/snapshot/tests.rs` | 1456 | PE10: the scheduler tests that pin `request()` / `schedule()` (686–689, 737, 772, 815–841, 881) |
-| `frogdb-server/crates/core/src/persistence/tests.rs` | — | PE5: concrete-typed `wal.write_set` / `wal.flush_async` (146–148) — needs `WalSink` in scope |
-| `frogdb-server/crates/core/src/persistence/crash_recovery_tests.rs` | — | PE5: same, at 1697–1710 and 1758 |
-| `.scratch/hardening/specs/persistence-failure-modes.md` | — | PE10: `Forced by` lists of FM-PERSISTENCE-015 (line 252) and FM-PERSISTENCE-016 (line 264) must be edited in the same commit |
-| `frogdb-server/crates/recovery/src/lib.rs` | 270 | **Read-only here.** `installed_staged_checkpoint` (126) is spec-visible; handed to proposal 43 (see Risks) |
+| `frogdb-server/crates/persistence/src/snapshot/stager.rs` | 347 | PE10: the `data_dir` field (70–74). The sidecar-exclusion prose (98–123) **stays**; only the trailing anchor sentence (124–125) goes |
+| `frogdb-server/crates/persistence/src/snapshot/rocks_coordinator.rs` | 348 | PE10: the rest of the `data_dir` cascade — `new`'s parameter (50), the coordinator field (43, set 96), `SnapshotRun.data_dir` (224, set 171), the `execute` local (251), the `SnapshotStager` literal (261) |
+| `frogdb-server/crates/persistence/src/snapshot/tests.rs` | 1456 | PE10: the scheduler tests that pin `request()` / `schedule()` (686–689, 737, 772, 815–841, 881); the `stager` / `stager_on` helpers' `data_dir` parameter (234, 240, 251, 262) with 12 call sites; the `coordinator` helper's `data_dir` parameter (938, 949) with 13 call sites |
+| `frogdb-server/crates/core/src/persistence/tests.rs` | — | PE5: concrete-typed `wal.write_set` / `wal.flush_async` (147–148). **No new import** — `use crate::persistence::*` (tests.rs:8) re-exports `WalSink` through `persistence/mod.rs:13`'s glob of `frogdb_persistence::*` |
+| `frogdb-server/crates/core/src/persistence/crash_recovery_tests.rs` | — | PE5: concrete-typed calls at 1704, 1711, 1763–1764 — **needs `WalSink` added to the explicit `use super::wal::{DurabilityMode, WalConfig};` at line 26** (this file has no glob). PE10: `RocksSnapshotCoordinator::new`'s fourth argument (48, `db_path`) |
+| `frogdb-server/benchmarks/benches/persistence.rs` | 350 | **PE5, third package (`frogdb-benches`).** Constructs concrete `RocksWalWriter` (202, 252, 301) and calls `wal.write_set` (220, 270, 319); needs `WalSink` added to the explicit `use frogdb_core::persistence::{…}` at line 11–13. Compiled by neither `just check frogdb-persistence` nor `just check frogdb-core` |
+| `frogdb-server/crates/server/src/server/init.rs` | — | PE10: the **production** `RocksSnapshotCoordinator::new` call site (297), fourth argument `config.persistence.data_dir.clone()` (300) |
+| `frogdb-server/crates/server/src/connection/persistence_conn_command.rs` | — | PE10: `#[cfg(test)]` fixture call site (357), fourth argument at 365 |
+| `.scratch/hardening/specs/persistence-failure-modes.md` | — | PE10: **one** edit — drop `test_schedule_true` and `test_schedule_false` from FM-PERSISTENCE-015's `Forced by` (line 252). FM-PERSISTENCE-016 (line 264) needs **no** edit |
+| `frogdb-server/crates/recovery/src/lib.rs` | 270 | **Read-only here.** `installed_staged_checkpoint` (126) is spec-visible; proposal 43 confirms it stays (see Risks) |
 
 ## Problem
 
@@ -94,11 +101,30 @@ frogdb-server/crates/core/src/shard/builder.rs:379
 `grep -rn RocksWalWriter --include='*.rs'` outside `writer.rs` returns 40 hits: one
 production construction (builder.rs:379, boxed), one re-export chain
 (`persistence/src/lib.rs:39`, `wal/mod.rs:13`, `core/src/lib.rs:118`), nine
-doc-comment mentions, and the rest are test constructions. **Zero production call
-sites use the inherent methods.** The complexity that would "reappear" is a
-`use frogdb_persistence::WalSink;` line in the handful of test modules that hold a
-concrete `RocksWalWriter` — which is the correct outcome: the tests then cross the
-same seam production does. *The interface is the test surface.*
+doc-comment mentions, and the rest are test and benchmark constructions. **Zero
+production call sites use the inherent methods.**
+
+The complexity that would "reappear" is exactly **two `use`-list additions**, verified
+against the imports each caller already has:
+
+| Module holding a concrete `RocksWalWriter` | Calls trait methods on it? | Import edit |
+|---|---|---|
+| `persistence/src/wal/tests.rs` | yes | none — `use super::*` (line 6) already brings `WalSink` in from `wal/mod.rs:12` |
+| `core/src/persistence/tests.rs` | yes (147–148) | none — `use crate::persistence::*` (line 8) globs `frogdb_persistence::*`, which exports `WalSink` (`persistence/src/lib.rs:40`) |
+| `core/src/persistence/crash_recovery_tests.rs` | yes (1704, 1711, 1763–1764) | **add `WalSink`** to `use super::wal::{DurabilityMode, WalConfig};` (line 26) |
+| `core/src/persistence/test_harness.rs` | **no** — `create_wal_writer` (134) only constructs and returns | none (see the defect note below) |
+| `benchmarks/benches/persistence.rs` | yes (220, 270, 319) | **add `WalSink`** to `use frogdb_core::persistence::{…}` (11–13) |
+
+That is the correct outcome: the callers then cross the same seam production does.
+*The interface is the test surface.*
+
+Defect found while verifying: `CrashTestHarness::create_wal_writer`
+(`core/src/persistence/test_harness.rs:134`) has **zero callers** anywhere in the
+tree, hidden by the file-level `#![allow(dead_code)] // Many helpers available for
+future tests` at line 6. It is the same smell PE10(a) condemns, one crate over and at
+file scope rather than field scope. Out of scope for 41 (it is `frogdb-core`, not the
+locked persistence crates, and it is not on the PE5 path), but it is a standing
+deletion-test candidate worth its own item.
 
 The cost of the duplicate half is not the 49 lines, it is that the module has **two
 interfaces to keep in agreement**, with nothing enforcing the agreement beyond
@@ -164,12 +190,21 @@ guarantee currently depends on a hand-copied block staying in step with its twin
 
 Two real deltas the extraction must preserve rather than "clean up":
 
-1. **`last_flush` is assigned at different times.** `apply_clear` sets
-   `self.last_flush = clock::now()` **before** `commit` (flush.rs:585); `flush` sets
-   it **after** (flush.rs:641). `last_flush` drives the batch-timeout trigger, so
-   this is a behavioral difference, not a stylistic one. The extraction keeps each
-   call site's existing assignment point; the extracted function must not take it
-   over silently.
+1. **`last_flush` is assigned at different times — accidental copy-paste drift,
+   preserved for safety.** `apply_clear` sets `self.last_flush = clock::now()`
+   **before** `commit` (flush.rs:585); `flush` sets it **after** (flush.rs:641).
+   `last_flush` is the `Instant` field at flush.rs:395 that feeds
+   `since_last_flush()` (441) and therefore the batch-timeout arm of `should_flush`
+   (492). Nothing distinguishes the two paths, so this reads as drift rather than
+   design — but the drift's direction is known and benign, which is why it is
+   preserved rather than "fixed" here: setting it early makes the post-clear timeout
+   window short by one commit's duration, so the next timeout-triggered flush fires
+   slightly early. Never late, never skipped. In the common case it is invisible
+   anyway: `apply_clear`'s own barrier flush (flush.rs:561) runs `flush`, which
+   stamps `last_flush` at 641, and 585 then re-stamps it microseconds later.
+   The extraction keeps each call site's existing assignment point verbatim; the
+   extracted function must not take it over silently. This is **not** promoted to a
+   spec-first change — there is no observable to write a row against.
 2. **The log/trace text and the ops/bytes attribution differ.** The clear reports
    `(1, size_estimate)` with `"WAL shard clear committed"` / `"WAL clear flush
    failed; batch dropped"`; the batch reports `(flushed_ops, flushed_bytes)` with a
@@ -188,27 +223,70 @@ Two real deltas the extraction must preserve rather than "clean up":
 pub(crate) data_dir: PathBuf,
 ```
 
-Grepping `data_dir` across `persistence/src` confirms it: inside the stager the
-name appears only in that field declaration and in prose (stager.rs:10, 99, 107,
-124). It is constructed at rocks_coordinator.rs:171 and 261 and at tests.rs:262 and
-949, and read nowhere. It is not an accident — proposal 23 deliberately kept it as a
-"re-add anchor," documented across a 28-line comment (stager.rs:98–125).
+Grepping `data_dir` across `persistence/src` confirms the field is never read: inside
+the stager the name appears only in that declaration and in prose (stager.rs:10, 99,
+107, 124). It is not an accident — proposal 23 deliberately kept it as a "re-add
+anchor" (`03e7f39f^:.scratch/arch-deepening/proposals/23-search-sidecar-layout.md`;
+the file was pruned in 03e7f39f, so cite it through git).
 
-That comment is the argument for deletion. Per CLAUDE.md, "if you need a
-paragraph-long comment to justify why the workaround is OK, the code is wrong."
-More directly: a field that exists so a *hypothetical future* consumer has somewhere
-to plug in is the definition of a hypothetical seam — **one adapter means a
-hypothetical seam; two means a real one**, and here there are zero. Git history is
-the archive; proposal 23's re-add recipe (`SearchSidecar::copy_into`) is written down
-in the same comment and in the proposal, and re-adding one `PathBuf` field is a
-one-line change if it is ever needed. The `#[allow(dead_code)]` is currently
-suppressing exactly the signal that would tell us the truth.
+The argument for deletion is the zero-reader argument, and it stands on its own: a
+field that exists so a *hypothetical future* consumer has somewhere to plug in is the
+definition of a hypothetical seam — **one adapter means a hypothetical seam; two
+means a real one**, and here there are zero. Git history is the archive; proposal
+23's re-add recipe (`SearchSidecar::copy_into`) is written down in the surviving
+comment and in the proposal, and re-adding the field is mechanical if it is ever
+needed. The `#[allow(dead_code)]` is currently suppressing exactly the signal that
+would tell us the truth. No ADR check is owed — `adr/` holds only 0001–0004, and none
+of them speaks to the sidecar.
 
-Scope note: the *prose* at stager.rs:98–125 explaining why the sidecar is not copied
+**The cascade — this is why it is not a one-field delete.** The stager field is the
+tail of a four-level chain, verified end to end:
+
+```
+RocksSnapshotCoordinator::new(…, data_dir: PathBuf)     rocks_coordinator.rs:50   ← 4 external call sites
+  → RocksSnapshotCoordinator.data_dir                   rocks_coordinator.rs:43 (set 96)
+    → SnapshotRun.data_dir                              rocks_coordinator.rs:224 (set 171)
+      → let data_dir = self.data_dir.clone()            rocks_coordinator.rs:251
+        → SnapshotStager.data_dir                       rocks_coordinator.rs:261 → stager.rs:74
+```
+
+Deleting the stager field makes every level above it unread in turn, all the way up to
+the `new` parameter, whose four call sites live in **three packages**:
+
+| Call site | Package | Kind |
+|---|---|---|
+| `server/src/server/init.rs:297` (arg at 300, `config.persistence.data_dir.clone()`) | `frogdb-server` | **production** |
+| `server/src/connection/persistence_conn_command.rs:357` (arg at 365) | `frogdb-server` | `#[cfg(test)]` fixture |
+| `core/src/persistence/crash_recovery_tests.rs:48` (arg at 56, `db_path`) | `frogdb-core` | test |
+| `persistence/src/snapshot/tests.rs:941` (arg at 949) | `frogdb-persistence` | test |
+
+Two branches are available, and this proposal picks one explicitly:
+
+- **(chosen) Propagate the deletion to the top.** Drop the parameter and every
+  argument expression. Nothing further cascades: `init.rs`'s
+  `config.persistence.data_dir` is a live config field used elsewhere,
+  `persistence_conn_command.rs`'s `db_dir` is retained as `_db_dir`, and
+  `crash_recovery_tests.rs`'s `db_path` is also `RocksStore::open`'s argument. Inside
+  `snapshot/tests.rs` the `data_dir` parameter also disappears from the `stager` /
+  `stager_on` helpers (234, 240, 251, 262; 12 call sites) and the `coordinator`
+  helper (938, 949; 13 call sites) — the tests that genuinely need a live data dir
+  (`stager_excludes_search_sidecar`, via `write_search_sidecar`) keep their local
+  path, the rest drop it.
+- **(rejected) Stop the cascade with `#[allow(dead_code)]` on the coordinator
+  field.** One line, no cross-crate churn — and it relocates the smell one level up
+  rather than removing it, leaving the same suppressed signal behind a different
+  struct. That is not a deletion test, it is a deletion *gesture*.
+
+Choosing propagation re-prices this item from XS to **S**: one parameter, three
+fields, one local, four external call sites, two test-helper signatures and ~25
+helper call sites, spread over three packages. It is still entirely mechanical and
+still behavior-free, but it is not a one-liner and must not be scheduled as one.
+
+Scope note: the *prose* at stager.rs:98–123 explaining why the sidecar is not copied
 stays (it documents a real, test-pinned exclusion,
-`stager_excludes_search_sidecar`). Only the field, its `#[allow]`, the four
-construction sites, and the final "`data_dir` is retained on the stager as that
-anchor" sentence go.
+`stager_excludes_search_sidecar`) — only lines 124–125, the "`data_dir` is retained
+on the stager as that anchor" sentence, concern the field. The field's own
+justification is the three-line doc comment at stager.rs:70–72.
 
 **(b) `SnapshotScheduler::request()` and `::schedule()` — delete, with a spec edit.**
 Both are legacy siblings of `request_mode`. Production callers, verified:
@@ -245,19 +323,31 @@ shown below — `request()` is not even a special case of `request_mode`; it is 
 **The spec constraint (this is the part that makes it not a pure delete).** The tests
 that pin `request()` / `schedule()` are FM-tagged and named in locked rows:
 
-| Test (snapshot/tests.rs) | Uses | Named in |
-|---|---|---|
-| `test_scheduler_request_while_running_coalesces` (~683) | `request()` | FM-PERSISTENCE-015 `Forced by` (spec:252) |
-| `test_scheduler_schedule_only_while_running` (~812) | `schedule()` | FM-PERSISTENCE-015 (spec:252) |
-| `test_schedule_false` (~826) | `schedule()` | FM-PERSISTENCE-015 (spec:252) |
-| `test_schedule_true` (~833) | `schedule()` | FM-PERSISTENCE-015 (spec:252) |
-| `test_scheduler_request_after_finish_starts` (~766) | `request()` | FM-PERSISTENCE-016 `Forced by` (spec:264) |
-| `test_scheduler_epoch_monotonic_across_cycle` (~843) | `request()` | FM-PERSISTENCE-016 (spec:264) |
-| `test_scheduler_concurrent_request_storm` (~866) | `request()` | FM-PERSISTENCE-016 (spec:264) |
+| Test (snapshot/tests.rs) | Uses | Named in | Fate |
+|---|---|---|---|
+| `test_scheduler_request_while_running_coalesces` (683) | `request()` (686, 688) | FM-PERSISTENCE-015 `Forced by` (spec:252) | ported in place, name kept |
+| `test_scheduler_schedule_only_while_running` (813) | `schedule()` (815, 818) | FM-PERSISTENCE-015 (spec:252) | ported in place, name kept |
+| `test_schedule_false` (826) | `schedule()` (828) | FM-PERSISTENCE-015 (spec:252) | **deleted** (folds in) |
+| `test_schedule_true` (834) | `schedule()` (837) | FM-PERSISTENCE-015 (spec:252) | **deleted** (folds in) |
+| `test_scheduler_finish_with_pending_reschedule_reruns_once` (734) | `request()` (737) | FM-PERSISTENCE-016 `Forced by` (spec:264) | ported in place, name kept |
+| `test_scheduler_request_after_finish_starts` (768) | `request()` (772) | FM-PERSISTENCE-016 (spec:264) | ported in place, name kept |
+| `test_scheduler_epoch_monotonic_across_cycle` (844) | `request()` (847) | FM-PERSISTENCE-016 (spec:264) | ported in place, name kept |
+| `test_scheduler_concurrent_request_storm` (866) | `request()` (881) | FM-PERSISTENCE-016 (spec:264) | ported in place, name kept |
 
 `just lint-failure-modes` (part of `just lint`) enforces spec↔test agreement in both
 directions, so the spec edit is not optional and not deferrable — it lands in the
-same commit.
+same commit. But it is **narrow**, and deliberately so: porting a test's call site
+does not rename it, so only the two genuinely-deleted names move.
+
+- **FM-PERSISTENCE-016 (spec:264): no edit at all.** All four of its
+  `request()`-using tests keep their names.
+- **FM-PERSISTENCE-015 (spec:252): remove exactly two names** — `test_schedule_true`
+  and `test_schedule_false`. The other ten entries in that list are untouched.
+
+Rewriting more of a LOCKED row than the code forces is itself a risk: the row's
+`Trigger` / `Observable` / `NOT observable` / `Invariant` / `Outcome variant` fields
+describe guarantees this proposal does not change, and every gratuitous word changed
+there is a word a future reader has to re-derive. Two names out; nothing else.
 
 **The behavioral subtlety that makes the rewrite load-bearing.** `request()` is *not*
 `request_mode(Schedule)`. Compare scheduler.rs:124–134 with 144–152:
@@ -295,18 +385,73 @@ spec-first behavior change, not a cleanup. Out of scope here.
    writer.rs:310 (`Use [Self::committed_sequence] for "reached storage"`) to
    `WalLagStats::committed_sequence`. Change tests.rs:2035 to
    `wal.lag_stats().committed_sequence`.
-3. Add `use crate::wal::WalSink;` (or the crate-appropriate path) to the test modules
-   that hold a concrete `RocksWalWriter`: `persistence/src/wal/tests.rs`,
-   `core/src/persistence/tests.rs`, `core/src/persistence/crash_recovery_tests.rs`,
-   `core/src/persistence/test_harness.rs`.
-4. Keep `RocksWalWriter::new` and `Drop` inherent — construction is not part of the
-   seam, and `new` takes concrete `RocksStore`/`WalConfig` arguments.
+3. Add `WalSink` to exactly two existing `use` lists — `core/src/persistence/
+   crash_recovery_tests.rs:26` and `benchmarks/benches/persistence.rs:11–13`. The
+   other three modules holding a concrete `RocksWalWriter` need nothing (see the
+   import table under *Problem*).
+4. **Enumerate what survives on the inherent `impl` — all four of them.** After the
+   twelve trait methods and `committed_sequence` move out, `impl RocksWalWriter`
+   still holds:
+
+   | Survivor | Line | Verdict |
+   |---|---|---|
+   | `new` | 30 | **Keep.** Construction is not part of the seam; `new` takes concrete `RocksStore` / `WalConfig` arguments and every caller must know them. |
+   | `batch_size_threshold` | 96 | **Condemn — test-only.** |
+   | `set_batch_size_threshold` | 102 | **Condemn — test-only.** |
+   | `Drop` (separate `impl`, 323) | 323 | **Keep.** A trait impl of its own; not part of the duplication. |
+
+   `batch_size_threshold` / `set_batch_size_threshold` fail the same deletion test
+   PE5 applies to everything else. Every caller is a test: `wal/tests.rs:118, 121,
+   122, 1593, 1597, 1601, 1614`. Production never retunes the threshold through
+   them — it hands the writer a *shared* `Arc<AtomicUsize>` at construction
+   (`WalConfig::batch_size_threshold_handle`, `wal/config.rs:85`, adopted at
+   `wal/writer.rs:60–62`), wired from `server/src/server/init.rs:405` and driven live
+   by `CONFIG SET` through `runtime_config.rs:3065–3070`. So these two are exactly
+   the shape PE5 condemns: **a second interface kept alive by tests**, this time a
+   mutating one that lets a test change a value production reaches by a different
+   route entirely.
+
+   The honest resolution is to delete both and have the seven test call sites read
+   and store the shared atomic directly — the same handle production uses — which
+   also makes `test_wal_adopts_shared_batch_size_threshold_handle`
+   (`tests.rs:1576`) assert against the mechanism rather than a proxy for it. The
+   only assertion that cannot do this trivially is `tests.rs:1614`, which constructs a
+   writer with **no** handle (`solo`) and asserts the writer minted its own atomic
+   from `WalConfig::batch_size_threshold`; that assertion is about a real production
+   fallback (`writer.rs:62`), so if it cannot be expressed without the accessor, keep
+   `batch_size_threshold` as `pub(super)` with a doc comment saying it exists to
+   observe the mint-vs-adopt fallback, and delete `set_batch_size_threshold`
+   unconditionally. A getter kept for one specific internal observation is an
+   internal seam; a setter kept because tests find it convenient is not.
+
+   **Spec caution, found while verifying:** both callers are FM-tagged. The seven
+   call sites belong to exactly two tests — `test_wal_batch_threshold_live_retune`
+   (`tests.rs:91`, tag at 83) and `test_wal_adopts_shared_batch_size_threshold_handle`
+   (`tests.rs:1576`, tag at 1569) — and **both are named in FM-PERSISTENCE-013's
+   `Forced by` list** (spec:219). This is an in-place call-site port, so both keep
+   their names and FM-013 needs no edit; but it means this sub-item is not the
+   spec-free cleanup the rest of PE5 is, and `just lint-failure-modes` must be run
+   after it. If the port cannot preserve what FM-013 forces — "the writer *adopts*
+   the shared threshold cell, and a live set retunes the flush thread without a
+   restart" — abandon the sub-item and leave both accessors; PE5's main claim does
+   not depend on it.
 5. Keep `sink_tests::rocks_wal_writer_is_a_wal_sink` (writer.rs:387–393): it still
    pins object-safety, which is what `Box<dyn WalSink>` at builder.rs:379 needs.
 
 Note on cost: after the move, the previously-inherent async calls from tests go
 through `#[async_trait]`'s boxed futures. Production is unaffected — it already
 calls through `dyn WalSink`, so it already pays that boxing.
+
+**Benchmark discontinuity — call this out in the commit message.**
+`benchmarks/benches/persistence.rs` currently calls `wal.write_set` on a *concrete*
+`RocksWalWriter` in three hot loops (220, 270, 319), so today it measures the
+inherent method with no boxing. After PE5 the same loops go through
+`#[async_trait]`'s boxed future — a per-write heap allocation the benchmark did not
+previously pay. The published `persistence` bench numbers will shift, and the shift
+is an artifact of the benchmark being brought onto the production path, not a
+regression in production. Anyone comparing across this commit needs to know that.
+Note also that the alternative — leaving the benchmark on the inherent methods — is
+worse: it would mean the benchmark measures a code path production never runs.
 
 ### PE7 — `record_commit_outcome`
 
@@ -348,27 +493,47 @@ separate spec-first change against FM-PERSISTENCE-012.
 
 ### PE10 — the deletions
 
-1. Delete `SnapshotStager.data_dir`, its `#[allow(dead_code)]`, the four construction
-   sites (rocks_coordinator.rs:171, 261; tests.rs:262, 949 — plus the `data_dir`
-   parameter threading at tests.rs:234–262 and 938–949 if it becomes unused), and the
-   trailing "`data_dir` is retained on the stager as that anchor" sentence
-   (stager.rs:124–125). Keep the rest of the proposal-23 exclusion prose.
-   `stager_excludes_search_sidecar` continues to pin the exclusion.
+1. Delete the whole `data_dir` cascade, top to bottom: the `SnapshotStager.data_dir`
+   field and its `#[allow(dead_code)]` (stager.rs:73–74), `SnapshotRun.data_dir`
+   (rocks_coordinator.rs:224) with its assignment (171), local (251) and stager-literal
+   argument (261), the coordinator field (43, 96), the `new` parameter (50), and the
+   fourth argument at all four call sites (init.rs:300,
+   persistence_conn_command.rs:365, crash_recovery_tests.rs:56, snapshot/tests.rs:949).
+   Then the two test-helper signatures — `stager` / `stager_on` (tests.rs:234, 251)
+   and `coordinator` (tests.rs:938) — and their ~25 call sites. Finally the trailing
+   "`data_dir` is retained on the stager as that anchor" sentence
+   (stager.rs:124–125). Keep the rest of the proposal-23 exclusion prose;
+   `stager_excludes_search_sidecar` continues to pin the exclusion, and keeps its own
+   local data dir because `write_search_sidecar` writes into it.
 2. Delete `SnapshotScheduler::request()` and `::schedule()`. Port their tests to
    `request_mode(SnapshotMode::Schedule)` / `try_begin` + `arm_follow_up`, choosing
-   per test the call that drives the *same branch* the test was written to pin.
-   `test_schedule_true` / `test_schedule_false` (relocated trait-surface leftovers
-   asserting only "arms iff running") fold into
-   `test_scheduler_schedule_only_while_running`'s successor rather than surviving as
-   three near-duplicates.
-3. **Spec edit, same commit:** rewrite the `Forced by` lists of FM-PERSISTENCE-015
-   (spec:252) and FM-PERSISTENCE-016 (spec:264) to name the surviving tests. Neither
-   row's `Trigger`/`Observable`/`NOT observable`/`Invariant` changes — the guarantees
-   are unchanged, only the names of the tests forcing them. FM-PERSISTENCE-015's
-   `Invariant` already describes `request_mode` and nothing else, so the spec text is
-   already ahead of the code here.
-4. Verify with `just lint-failure-modes` before anything else, then
-   `just mutants-diff frogdb-persistence`.
+   per test the call that drives the *same branch* the test was written to pin, and
+   **keeping every ported test's name** — that is what holds the spec edit to two
+   lines. `test_schedule_true` / `test_schedule_false` (relocated trait-surface
+   leftovers asserting only "arms iff running") fold into
+   `test_scheduler_schedule_only_while_running` rather than surviving as three
+   near-duplicates; they are the only two names that disappear.
+3. **Spec edit, same commit — two names, one row.** Remove `test_schedule_true` and
+   `test_schedule_false` from FM-PERSISTENCE-015's `Forced by` (spec:252). Change
+   nothing else in that row, and nothing at all in FM-PERSISTENCE-016 (spec:264).
+   FM-PERSISTENCE-015's `Invariant` already describes `request_mode` and nothing
+   else, so the spec text is already ahead of the code here — which is another reason
+   not to touch it.
+4. Verify with `just lint-failure-modes` and `just lint-gates` before anything else,
+   then `just mutants-diff frogdb-persistence`. `lint-gates` is the compile-free
+   seam-gate family and is cheap; it matters here because **PE7** relocates four
+   typed metric emissions (`WalFlushDuration`, `WalFlushFailures`, `WalLostOps`,
+   `WalLostBytes`) and a `current_timestamp_ms()` read into a new function, and
+   `lint-metrics-chokepoint` and `lint-clock-seam` are exactly the chokepoints those
+   two kinds of call must pass through. (`current_timestamp_ms` at flush.rs:90
+   already routes through `clock::system_now()`, and `flush.rs` carries no
+   `clock-seam.py` allowlist entry, so the expectation is a clean pass — the point is
+   to find out before pushing, not after.)
+5. The compile loop spans **three** packages, so a crate-scoped check is not
+   sufficient for PE5: `just check frogdb-persistence`, then `just check
+   frogdb-core`, then a build of the benches (`frogdb-benches` — neither of the
+   first two compiles `benchmarks/benches/persistence.rs`), and `just check
+   frogdb-server` for PE10's `init.rs` / `persistence_conn_command.rs` call sites.
 
 ## Testability improvement
 
@@ -394,9 +559,14 @@ separate spec-first change against FM-PERSISTENCE-012.
   (`try_begin`/`request_mode` + the finish half), so the state machine's test matrix
   stops multiplying by an entry point no caller uses. Every FM-015/016 guarantee
   keeps a forcing test — through the seam production actually uses.
-- **PE10(a) restores the dead-code signal.** With `#[allow(dead_code)]` gone from the
-  stager, the compiler resumes reporting the next unused field instead of being
-  pre-silenced.
+- **PE10(a) restores the dead-code signal, and shortens three constructor
+  interfaces.** With `#[allow(dead_code)]` gone from the stager, the compiler resumes
+  reporting the next unused field instead of being pre-silenced. The cascade
+  deletion also removes a parameter from `RocksSnapshotCoordinator::new` and from the
+  `stager` / `stager_on` / `coordinator` test helpers — every one of those is a fact
+  a caller currently has to know and supply for no effect, which is interface weight
+  in the exact sense this vocabulary uses. Four test files stop threading a path that
+  goes nowhere.
 
 ## Risks / scope boundaries
 
@@ -409,9 +579,16 @@ separate spec-first change against FM-PERSISTENCE-012.
   `frogdb-persistence` itself, since `cargo mutants -p` runs only that package's
   tests.
 - No FM row may silently lose a forcing test. PE10's spec edit is a **required step**,
-  not a follow-up. PE5 and PE7 touch no FM-named test (verified:
-  `sync_mode_accessors_report_the_writers_own_shard_and_watermarks` is untagged; the
-  clear/flush tests keep their names and behavior).
+  not a follow-up. **Correction to an earlier draft: PE5 does touch FM-named tests**,
+  in one place — the `batch_size_threshold` / `set_batch_size_threshold` sub-item
+  rewrites call sites inside `test_wal_batch_threshold_live_retune` and
+  `test_wal_adopts_shared_batch_size_threshold_handle`, both named in
+  FM-PERSISTENCE-013's `Forced by` (spec:219). Names are preserved, so no spec edit
+  is owed, but `just lint-failure-modes` is not optional after PE5 either. The rest of
+  PE5 and all of PE7 touch no FM-named test (verified:
+  `sync_mode_accessors_report_the_writers_own_shard_and_watermarks` — the lone
+  `committed_sequence` caller — is untagged, nearest tags at tests.rs:1937 and 2096;
+  the clear/flush tests keep their names and behavior).
 - PE7 sits under FM-PERSISTENCE-012's `Invariant` ("`apply_clear` commits what is
   staged, applies the range delete, and commits again"). The extraction must not
   reorder the three phases or move the range-delete staging.
@@ -420,25 +597,33 @@ separate spec-first change against FM-PERSISTENCE-012.
 
 | Sibling | Owns | Overlap with 41 | Resolution |
 |---|---|---|---|
-| **38** snapshot-layout-fs-read (PE1) | `snapshot/rocks_coordinator.rs` (112–124, 136–145, 257–259, 283), `snapshot/stager.rs` (133/136 name authoring), `fs_seam.rs` | **Same files** as PE10(a): the stager's path fields and the coordinator's two `SnapshotStager{…}` constructions | Different fields. 38 owns `snapshot_dir`/`tmp`/`final_dir`/`name` (the *layout*); 41 owns only `data_dir` (not a layout input — it is the live data dir). Land **41 first** (it is a one-field delete) so 38's `SnapshotLayout` is authored against a stager with no vestigial field. If 38 lands first, 41 rebases to the new constructor shape — the delete is unaffected either way. |
+| **38** snapshot-layout-fs-read (PE1, REVISED) | New `snapshot/layout.rs`; `snapshot/rocks_coordinator.rs` (107–152 read half, 256–266 stager literal, 283); `snapshot/stager.rs` (61–84 fields, plus the literal/parser sites); `fs_seam.rs` (additive); `snapshot/tests.rs` (`stager_on`, 249–267) | **Real, and larger than the earlier draft admitted.** Per the cascade above, 41 is no longer a one-field delete: it edits `rocks_coordinator.rs` at 43, 50, 96, 171, 224, 251 **and** 261, and it changes the `stager` / `stager_on` / `coordinator` test-helper signatures. 38 restructures the same file's read half and rewrites the same `SnapshotStager` literal (256–266, of which 41 deletes 261) and the same `stager_on` helper (249–267, of which 41 deletes 262 plus the parameter). Direct textual collision: the stager literal and the test helper. Adjacent-but-disjoint: 38 does not touch `new`'s signature (46–51) or the coordinator's field list (34–44); 41 does not touch the layout fields or the parsers. | **The "land 41 first, it's a one-field delete" rationale is void** — 41(a) is S and cross-package, so it buys 38 nothing to wait for, and 38's own copy of that rationale (38's boundary table, 41 row) needs the same correction. Either order works mechanically; pick one and rebase, do not run them concurrently. Recommended: **land 38 first.** It has the larger, more structural diff in `rocks_coordinator.rs` / `stager.rs` / `stager_on`, and 41's deletion is a pure subtraction that rebases onto whatever shape 38 leaves (the `data_dir` field survives 38 untouched, since it is not a layout input). Reversing that makes 38 re-derive its line numbers against a moved constructor for no benefit. Whichever lands second re-verifies its cited line numbers before starting — every citation in both proposals for `rocks_coordinator.rs` above line 43 and `stager.rs` above line 74 shifts. |
 | **39** recovery-replay-driver (PE2) | `frogdb-core/src/.../store_recovery.rs:78–126`, new `persistence::recovery` | None. 41 does not touch core recovery or `RecoveredState` construction | — |
 | **40** frame-codec-unify (PE3+PE4) | `wal/…/mod.rs:88–148` frame build/decode, `probabilistic.rs:513–540`, `dataset.rs:84–106` | None. 41 touches `wal/writer.rs`, `wal/flush.rs`, `wal/sink.rs` — no frame encode/decode | — |
-| **42** rockssink-commit-effects (PE6) | `flush.rs:181–211` — `RocksSink::commit`, `spawn_clear_reclamation` + `record_wal_watermark`, returning `CommitEffects` | **Same file, adjacent concern.** 42 changes what `commit` *returns*; 41 changes what its two *callers* do with the return | Sequence **41 before 42** (the lane already marks 42 "sequence last"). 41 makes 42 strictly easier: after the extraction there is **one** place that consumes a commit result instead of two, so `CommitEffects` threads through a single function. If 42 landed first, 41 would have to duplicate the effects handling twice before deduplicating it. 41 must not touch `RocksSink::commit` or `record_wal_watermark`. |
-| **43** recovery-wrappers-staged-checkpoint (PE8) | `frogdb-recovery` phase wrappers, `staged.rs`/`replication.rs`/`functions.rs`, checkpoint/cluster module fold | **`RecoveredState.installed_staged_checkpoint`** — PE10's third item | **Handed to 43.** 41 makes no change in `frogdb-recovery`. See the verification note: the field is spec-visible, so any change to it is a spec-first decision that belongs with 43's staged-checkpoint rerouting, which is already spec-adjacent. |
+| **42** rockssink-commit-effects (PE6, REVISED) | `flush.rs:181–211` — `RocksSink::commit`, `spawn_clear_reclamation` + `record_wal_watermark`, returning `CommitEffects`; a new `WriteSink::settle` | **Same file, same lines.** 42 changes what `commit` *returns*; 41 changes what its two *callers* do with the return | Sequence **41 before 42** (the lane already marks 42 "sequence last"), and 42's revised text now agrees explicitly: its Risks section fixes the inherited signature — once PE7 lands, `record_commit_outcome` is widened from `result: io::Result<()>` to `result: io::Result<CommitEffects>` and `self.sink.settle(effects)` moves **inside** it, on the `Ok` arm before `record_success`. **Consequence to record: every `flush.rs` line 42 cites shifts once PE7 lands** — 42's `586`/`588`/`640`/`644`, its `559–613` and `620–678` ranges, and its `621–623` early-return citation all move or disappear into the extracted function. Implementation must therefore either (a) serialize 41 → *re-verify every 42 citation against the post-41 tree* → 42, or (b) assign both proposals to a single agent who carries the line numbers across. Do not hand 42 to a fresh agent working from its current citations. 41 must not touch `RocksSink::commit` or `record_wal_watermark`. |
+| **43** recovery-wrappers-staged-checkpoint (PE8) | `frogdb-recovery` phase wrappers, `staged.rs`/`replication.rs`/`functions.rs`, checkpoint/cluster module fold | **`RecoveredState.installed_staged_checkpoint`** — PE10's third item | **43 confirms it stays.** 43's own text rules "**Do not delete `RecoveredState.installed_staged_checkpoint`**" (43:402–407) on the same grounds 41 reaches independently, so this is agreement between two proposals rather than a hand-off of an open question. 41 makes no change in `frogdb-recovery`. |
 | **44** rocksstore-open-options (PE9) | `rocks/mod.rs` open shims, test-support shadow API, `columns.rs` | Minor: 41 *reads* `rocks/mod.rs:25–45` (`DurableSyncTarget`) as evidence but changes nothing there | 41 touches no file under `rocks/`. |
 
 ### Other risks
 
-- **Cross-crate test churn (PE5).** Deleting the inherent methods forces `use
-  WalSink` into four test modules across two crates (`frogdb-persistence`,
-  `frogdb-core`). Mechanical, but it means the change does not compile
-  crate-locally — plan a `just check frogdb-core` in the loop, not just
-  `just check frogdb-persistence`.
+- **Cross-package churn (PE5).** Deleting the inherent methods reaches three
+  packages: `frogdb-persistence` (no import edit), `frogdb-core` (one `use`-list
+  addition in `crash_recovery_tests.rs:26`), and `frogdb-benches` (one in
+  `benchmarks/benches/persistence.rs:11–13`). It therefore does not compile
+  crate-locally, and — the trap — **neither `just check frogdb-persistence` nor
+  `just check frogdb-core` builds the benchmark crate at all**, so a green
+  single-crate loop proves nothing about it. Build the benches explicitly before
+  pushing. PE10 adds a fourth package to the check loop (`frogdb-server`, for the
+  two `RocksSnapshotCoordinator::new` call sites).
 - **`FlushOutcomes`' own delegation is NOT part of this.** `impl DurableSyncTarget
   for FlushOutcomes` (flush.rs:370–378) has the same
-  `FlushOutcomes::committed_sequence(self)` shape, but the inherent method has four
-  real in-crate callers (flush.rs:355, 360; writer.rs:292) and is `pub(super)`, so
-  both halves earn their keep. Leave it.
+  `FlushOutcomes::committed_sequence(self)` shape as the `RocksWalWriter` wrapper PE5
+  deletes, but it survives the same criterion PE5 applies: the inherent method
+  (flush.rs:294, `pub(super)`) has **three production callers of the inherent half** —
+  flush.rs:355, flush.rs:360, writer.rs:292 — so it is load-bearing independently of
+  the trait. (flush.rs:372 is the trait delegation itself and is not evidence of
+  anything; the earlier draft's count of "four" double-counted it.) Both halves earn
+  their keep. Leave it.
 - **PE10(b) is the only item with any chance of a behavior delta**, via the
   `request()` → `request_mode(Schedule)` branch difference described above. If the
   storm test cannot be made to reach the `finish_and_maybe_rebegin` re-CAS-failure
@@ -451,21 +636,23 @@ separate spec-first change against FM-PERSISTENCE-012.
 
 ## Effort estimate
 
-**S overall**, three separable commits:
+**S–M overall**, four separable commits:
 
 | Item | Effort | Notes |
 |---|---|---|
-| PE5 | S | Mechanical code motion + four `use` lines + one test-assertion rewrite. Largest diff, lowest risk. |
-| PE7 | S | One extracted function, two call sites. Needs care on the `last_flush` timing delta and the log text. |
-| PE10(a) stager `data_dir` | XS | One field, four construction sites, one comment sentence. |
-| PE10(b) scheduler legacy | S | The code delete is trivial; the test port + spec edit is the work, and the storm-test branch coverage must be re-verified. |
+| PE5 | S | Mechanical code motion + **two** `use`-list additions + one test-assertion rewrite, across three packages. Largest diff, lowest risk. The `batch_size_threshold` accessor question (step 4) is the only judgement call. |
+| PE7 | S | One extracted function, two call sites. Needs care on the `last_flush` timing drift and the log text. Adds a `lint-gates` obligation (relocated metric emissions + clock read). |
+| PE10(a) `data_dir` cascade | **S** (was mis-estimated XS) | Not one field: one `new` parameter, three fields, one local, four external call sites across three packages, two test-helper signatures, ~25 helper call sites. Mechanical throughout, but it is a rebase-sensitive diff that collides with proposal 38. |
+| PE10(b) scheduler legacy | S | The code delete is trivial; the test port is the work, and the storm-test branch coverage must be re-verified. The spec edit is two names on one row. |
 | Mutation re-gate | — | `just mutants-diff frogdb-persistence`, testbox-class workload. |
 
-**Independently-landable hotfix: none.** Nothing here is a live bug — all three items
-are duplication or dead interface, and every behavior stays byte-identical. The
-closest thing to an urgent item is PE10(a), which is XS and can land on its own the
-moment proposal 38's stager shaping is settled.
+**Independently-landable hotfix: none.** Nothing here is a live bug — all four items
+are duplication or dead interface, and every behavior stays byte-identical (modulo the
+benchmark's boxing discontinuity, which is measurement, not production).
 
-**Recommended landing order:** PE10(a) → PE5 → PE7 → PE10(b) (last, because it is the
-only one carrying a spec edit and a coverage re-verification), all before proposal
-42.
+**Recommended landing order:** PE5 → PE7 → PE10(b) → PE10(a), with PE7 before proposal
+42 and PE10(a) **after** proposal 38. PE10(a) moves to the end precisely because it is
+no longer the cheap opener the earlier draft assumed: it is the one item with a real
+file-level collision against a sibling, so it should land when 38's shaping is
+settled rather than racing it. PE10(b) stays late among the rest because it is the
+only item carrying a spec edit and a coverage re-verification.
