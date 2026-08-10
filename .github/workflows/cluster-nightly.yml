@@ -5,7 +5,7 @@
 # Regenerate with: just workflow-gen
 # =============================================================================
 
-name: Cluster Properties Nightly
+name: Cluster Correctness Nightly
 'on':
   schedule:
   - cron: '47 3 * * *'
@@ -15,6 +15,11 @@ name: Cluster Properties Nightly
         description: proptest cases per property (default 200000; the dev-loop budget is ~96)
         required: false
         default: '200000'
+        type: string
+      seeds:
+        description: fault-scheduler seeds to sweep (default 500; the default suite runs 6)
+        required: false
+        default: '500'
         type: string
 jobs:
   gate:
@@ -78,3 +83,30 @@ jobs:
     - name: Run cluster property sweep at the nightly case budget
       run: |
         just cluster-proptest "${{ github.event.inputs.cases || '200000' }}"
+  cluster-seeds:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    name: Nightly Cluster Fault-Scheduler Seed Sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: cluster-nightly-seeds
+    - name: Run the fault-scheduler sweep at the nightly seed budget
+      run: |
+        just cluster-seeds "${{ github.event.inputs.seeds || '500' }}"

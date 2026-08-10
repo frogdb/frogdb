@@ -174,6 +174,27 @@ concurrency-nightly SEEDS='250' OPS='150':
 cluster-proptest CASES='200000':
     {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run --profile cluster-proptest -p frogdb-cluster -E 'test(/properties/)'
 
+# Run the seed-driven cluster fault-scheduler sweep (frogdb-server
+# `simulation::scheduler`, cluster-correctness issue 09). One u64 seed derives a whole
+# turmoil run — fault family, which links are held or slowed and when, which nodes are
+# SIGKILLed and restarted, per-node Raft timer skew, and the client workload — so a sweep
+# is just a range of seeds. Each seed ends in a quiesce check: the `frogdb-cluster`
+# invariant catalog (`check_hard`, via DEBUG CLUSTER CHECK) on every surviving node, plus
+# the cross-node checks a single-node catalog cannot express (client-observed epoch
+# monotonicity, single-writer-per-slot over the run history).
+#
+# SEEDS is the whole budget, in one place (PRD .scratch/cluster-correctness §8 D4): the
+# `cluster-nightly` workflow calls this recipe rather than duplicating a case count. A
+# six-seed smoke sweep runs in the default suite so the scheduler cannot rot, and every
+# seed that ever failed is replayed forever from
+# `frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt`.
+#
+# Seeds are split across CLUSTER_SEEDS_JOBS worker threads inside the one test (each
+# turmoil sim is single-threaded and self-contained); CLUSTER_SEEDS_START shifts the
+# range when you want a fresh block rather than a re-run of the same one.
+cluster-seeds SEEDS='500':
+    {{dyld-env}} {{rocksdb-env}} CLUSTER_SEEDS={{SEEDS}} cargo nextest run --profile cluster-seeds -p frogdb-server --features turmoil --run-ignored all -E 'test(simulation::scheduler::test_cluster_scheduler_seed_sweep)'
+
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
 
