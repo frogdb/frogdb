@@ -17,6 +17,12 @@ directions, so neither can drift:
 `Forced by | MISSING` is an error: a failure mode nobody forces is a gap, and
 the campaign closes gaps by writing the test, not by lowering the spec.
 
+A third, smaller direction: the cluster area's rows cite invariant-catalog
+entries by id (`INV-REF-1`, in the optional `Catalog` field or in prose), and
+the catalog is Rust. Any `INV-<something>` a spec mentions must be defined in
+`frogdb-server/crates/cluster/src/invariants.rs`, so a renamed or deleted entry
+cannot leave the spec pointing at nothing.
+
 The one exception is a mode that is real but needs machinery the campaign has
 not built yet (disk-full injection, a torn-file harness). Those may write
 `Forced by | MISSING ([gap: <file>](<link>))`, naming a filed issue under
@@ -42,6 +48,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SPEC_DIR = REPO / ".scratch/hardening/specs"
 SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
+# The cluster invariant catalog: the vocabulary of `INV-*` ids a spec may cite.
+INVARIANTS_RS = REPO / "frogdb-server/crates/cluster/src/invariants.rs"
 
 # Crates whose tests a failure-mode row may name. `cargo nextest list` over
 # these compiles their test binaries: seconds warm for frogdb-txn/frogdb-vll/
@@ -92,6 +100,14 @@ FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 # `MISSING ([gap: 03-disk-full-injection.md](../issues/03-disk-full-injection.md))`
 MISSING_GAP_RE = re.compile(r"MISSING\s*\(\[gap:[^\]]*\]\(([^)]+)\)\)")
+
+# An invariant-catalog citation anywhere in a spec: `INV-REF-1`, `INV-REF-3B`.
+# The glob form `INV-*` the prose uses to talk *about* the ids does not match,
+# because a segment must have at least one alphanumeric character.
+INV_REF_RE = re.compile(r"\bINV-[A-Z0-9]+(?:-[A-Z0-9]+)*")
+# `pub static CATALOG: &[Invariant] = &[` … `];`
+CATALOG_START_RE = re.compile(r"^pub static CATALOG\b")
+CATALOG_ID_RE = re.compile(r'^\s*id:\s*"(INV-[A-Z0-9-]+)"\s*,')
 
 # Every FM row carries the full schema; a missing field is a half-specified
 # failure mode.
@@ -252,6 +268,60 @@ def parse_specs(spec_dir: Path, errors: list[str]) -> list[FailureMode]:
             print(f"warning: gap in {area} numbering: {missing}", file=sys.stderr)
 
     return modes
+
+
+def load_catalog_ids(path: Path, errors: list[str]) -> set[str]:
+    """The `INV-*` ids the invariant catalog defines.
+
+    Bounded to the `CATALOG` static, so the throwaway entries the catalog's own
+    unit tests build (`INV-TEST-HARD` and friends) cannot widen the vocabulary a
+    spec is checked against.
+    """
+    if not path.is_file():
+        errors.append(f"invariant catalog missing: {path.relative_to(REPO)}")
+        return set()
+
+    ids: set[str] = set()
+    inside = False
+    for line in path.read_text().splitlines():
+        if not inside:
+            inside = bool(CATALOG_START_RE.match(line))
+            continue
+        if line.startswith("];"):
+            break
+        match = CATALOG_ID_RE.match(line)
+        if match:
+            ids.add(match.group(1))
+
+    if not ids:
+        errors.append(
+            f"{path.relative_to(REPO)}: no `INV-*` ids found in `CATALOG` — either the "
+            'static was renamed or its entries no longer spell `id: "INV-…"`, and '
+            "either way the vocabulary check below would pass vacuously"
+        )
+    return ids
+
+
+def check_invariant_vocabulary(spec_dir: Path, catalog_ids: set[str], errors: list[str]) -> int:
+    """Fail on an `INV-*` id a spec cites and the catalog does not define.
+
+    A dangling citation is always a bug — a renamed or deleted entry — so this
+    is an error rather than a warning: the cross-reference the `Catalog` field
+    promises is only worth reading if it cannot rot silently. The unused
+    direction is not checked; an entry the spec never cites is fine (see
+    `INV-SLOT-1`, which generalizes no row on purpose).
+    """
+    references = 0
+    for spec in sorted(spec_dir.glob("*-failure-modes.md")):
+        for lineno, line in enumerate(spec.read_text().splitlines(), start=1):
+            for ref in INV_REF_RE.findall(line):
+                references += 1
+                if ref not in catalog_ids:
+                    errors.append(
+                        f"{spec.relative_to(REPO)}:{lineno}: cites `{ref}`, which "
+                        f"{INVARIANTS_RS.relative_to(REPO)} does not define"
+                    )
+    return references
 
 
 def cargo_env() -> dict[str, str]:
@@ -451,6 +521,8 @@ def main() -> None:
 
     errors: list[str] = []
     modes = parse_specs(args.spec_dir, errors)
+    catalog_ids = load_catalog_ids(INVARIANTS_RS, errors)
+    invariant_refs = check_invariant_vocabulary(args.spec_dir, catalog_ids, errors)
     tags = scan_tags(SOURCE_ROOTS, errors)
     test_paths = load_test_paths(args.nextest_output)
     errors += check(modes, tags, test_paths)
@@ -465,7 +537,8 @@ def main() -> None:
     areas = sorted({mode.area for mode in modes})
     print(
         f"OK: {len(modes)} failure modes ({', '.join(areas)}), "
-        f"{references} test references, {len(tags)} tags"
+        f"{references} test references, {len(tags)} tags, "
+        f"{invariant_refs} invariant citations over {len(catalog_ids)} catalog entries"
     )
 
 

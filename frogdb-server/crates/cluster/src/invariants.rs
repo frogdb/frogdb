@@ -32,6 +32,23 @@
 //! [`Tier::DocumentedException`], because the transitions admit replication
 //! chains today. Its citation names the issue that closes the gap.
 //!
+//! # Cross-reference with the failure-mode spec
+//!
+//! An FM row states its guarantee for one transition; an entry here states a
+//! well-formedness claim for every state. Where the two meet, the citation is
+//! recorded on both sides and neither may drift:
+//!
+//! - each entry's `check_*` function names, in prose, the rows it generalizes
+//!   — "deleting the code that row names makes this entry fire";
+//! - each generalized row carries a `Catalog` field naming the entry ids, and
+//!   `just lint-failure-modes` fails on an `INV-*` id the spec mentions and
+//!   [`CATALOG`] does not define.
+//!
+//! Prose, not a `// FM-…` tag: a tag is the lint's claim that the *item below
+//! it* forces that row, and these functions are catalog entries rather than
+//! forcing tests. See `.scratch/hardening/specs/cluster-failure-modes.md`,
+//! "The `Catalog` field".
+//!
 //! # What "clean" does not claim
 //!
 //! Two states the catalog deliberately accepts, because a correct transition
@@ -297,6 +314,14 @@ pub(crate) fn debug_assert_clean(state: &ClusterStateInner, seam: &str) {
 
 /// A slot owned by a node the topology does not have is a slot nothing can be
 /// redirected to, and the coverage readers count it as healthy.
+///
+/// Generalizes the ownership half of FM-CLUSTER-002 (`FORGET` leaves the
+/// departing node's slots *unassigned* rather than pointing at it),
+/// FM-CLUSTER-003 (`AssignSlots` against an unknown node is `NodeNotFound`),
+/// FM-CLUSTER-033 (whose `NOT observable` already names this entry as "the
+/// ghost owner"), FM-CLUSTER-040/041 (a failover transfers every slot to a
+/// successor it validated) and FM-CLUSTER-042 (the replayed failover's "end
+/// state is coherent").
 fn check_ref_1(state: &ClusterStateInner) -> Vec<Violation> {
     state
         .slot_assignment
@@ -315,6 +340,11 @@ fn check_ref_1(state: &ClusterStateInner) -> Vec<Violation> {
 
 /// A migration naming a node that is gone can never complete, and blocks its
 /// slot until someone cancels it.
+///
+/// Generalizes FM-CLUSTER-032 (a begin validates both endpoints before
+/// recording anything), FM-CLUSTER-002 and FM-CLUSTER-036 (the two removal
+/// paths prune every migration naming the node they remove, through the same
+/// `prune_migrations_naming` helper).
 fn check_ref_2(state: &ClusterStateInner) -> Vec<Violation> {
     let mut violations = Vec::new();
     for (slot, migration) in &state.migrations {
@@ -341,6 +371,11 @@ fn check_ref_2(state: &ClusterStateInner) -> Vec<Violation> {
 /// A replica whose parent pointer leads nowhere streams from a node the
 /// topology does not link it to. A *detached* replica (`primary_id == None`) is
 /// not that: see the module docs.
+///
+/// Generalizes FM-CLUSTER-005 (a `SetRole{Replica}` naming a non-member parent
+/// is `NodeNotFound`), FM-CLUSTER-002 (`FORGET` detaches the departing node's
+/// replicas instead of leaving the pointer) and FM-CLUSTER-040/041 (a failover
+/// re-parents the old primary's siblings onto the successor).
 fn check_ref_3(state: &ClusterStateInner) -> Vec<Violation> {
     replicas_with_parents(state)
         .filter(|(_, primary_id)| !state.nodes.contains_key(primary_id))
@@ -358,6 +393,12 @@ fn check_ref_3(state: &ClusterStateInner) -> Vec<Violation> {
 /// The other half of the PRD's INV-REF-3 claim — the parent is a *primary* —
 /// held apart because it is the one seed the current transitions do not
 /// uphold. See the entry's citation in [`CATALOG`].
+///
+/// It would complete FM-CLUSTER-005 — that row's title says "names a primary
+/// that exists", but its `Observable` only requires the parent to *resolve*,
+/// which is [`check_ref_3`]. The row's `Catalog` cell therefore names this
+/// entry as the open half rather than as a universal check: it is reported,
+/// never asserted, until issue 14 closes the gap.
 fn check_ref_3b(state: &ClusterStateInner) -> Vec<Violation> {
     replicas_with_parents(state)
         .filter(|(_, primary_id)| {
@@ -394,6 +435,13 @@ fn replicas_with_parents(state: &ClusterStateInner) -> impl Iterator<Item = (Nod
 /// A primary carrying a parent pointer is a role/parent desync: the metadata
 /// plane calls it a primary while the pointer says it should be following
 /// someone.
+///
+/// Generalizes FM-CLUSTER-001 (a re-registration restores role *and*
+/// `primary_id` from the recorded node, so the pair cannot come apart),
+/// FM-CLUSTER-006 (both reset forms force this node to `Primary` with no
+/// parent), FM-CLUSTER-040 ("the successor is a primary with no parent"),
+/// FM-CLUSTER-041 (the demoted primary takes the role and the pointer in one
+/// entry) and FM-CLUSTER-042 (the replay's coherent end state).
 fn check_ref_4(state: &ClusterStateInner) -> Vec<Violation> {
     state
         .nodes
@@ -415,6 +463,14 @@ fn check_ref_4(state: &ClusterStateInner) -> Vec<Violation> {
 
 /// The cluster-wide counter dominates every per-node epoch, so the next epoch
 /// it mints outranks every claim already recorded (FM-CLUSTER-010).
+///
+/// Generalizes that row's dominance relation — which the row itself can only
+/// state over one generated command sequence — plus FM-CLUSTER-011 (a
+/// collision mint lands strictly above the counter), FM-CLUSTER-076
+/// (`SET-CONFIG-EPOCH` ratchets the counter up to the assigned value and never
+/// follows it down), FM-CLUSTER-040/041 (the successor is stamped with the
+/// bumped counter) and FM-CLUSTER-042 (the replay bumps again, which is safe
+/// precisely because of this relation).
 fn check_epoch_1(state: &ClusterStateInner) -> Vec<Violation> {
     let Some((node_id, claimed)) = state
         .nodes
@@ -441,6 +497,12 @@ fn check_epoch_1(state: &ClusterStateInner) -> Vec<Violation> {
 /// Only a primary's epoch arbitrates slot ownership, so two primaries holding
 /// the same nonzero epoch have no tie-break. Zero is "unassigned" and never
 /// collides, matching Redis' `clusterHandleConfigEpochCollision`.
+///
+/// Generalizes FM-CLUSTER-010's "no two *primaries* share a nonzero epoch",
+/// FM-CLUSTER-011 (the collision is resolved against the arriving node, and a
+/// replica claiming a primary's epoch is not one) and FM-CLUSTER-012 (epoch
+/// `0` is exempt here for the reason it is exempt there). FM-CLUSTER-040/041
+/// stamp the successor, which is where a promotion could manufacture a tie.
 fn check_epoch_2(state: &ClusterStateInner) -> Vec<Violation> {
     let mut violations = Vec::new();
     let mut claimed_by: BTreeMap<ConfigEpoch, NodeId> = BTreeMap::new();
@@ -466,6 +528,11 @@ fn check_epoch_2(state: &ClusterStateInner) -> Vec<Violation> {
 /// The generation counter is spent, never re-derived: a `seq` above it means
 /// the counter was rewound behind a live handoff and the next prepare will
 /// reuse a generation a fence already accepted (FM-CLUSTER-100).
+///
+/// Generalizes FM-CLUSTER-100 across both restore vehicles — the hook runs at
+/// `from_snapshot` and `restore_from_snapshot`, the exact seam that defect
+/// lived on — and FM-CLUSTER-086, which is the row that makes `handoff_seq` a
+/// replicated counter every follow-up message filters on.
 fn check_handoff_1(state: &ClusterStateInner) -> Vec<Violation> {
     state
         .migrations
@@ -490,6 +557,13 @@ fn check_handoff_1(state: &ClusterStateInner) -> Vec<Violation> {
 /// migration filed under a slot it does not name would arm the barrier for one
 /// slot and fence another, and a `drained` handoff carrying the unminted
 /// generation `0` was marked drained without ever having been prepared.
+///
+/// Generalizes FM-CLUSTER-088 (handoffs are stored per migration record keyed
+/// by slot, so there is no shared cell for two slots to contend on) and
+/// FM-CLUSTER-090 (only the record's own slot is fenced) on the first clause;
+/// FM-CLUSTER-084 (`Complete` admits only a drained record) and
+/// FM-CLUSTER-086 (a confirm takes effect only when its `seq` matches the
+/// current attempt) on the second.
 fn check_handoff_2(state: &ClusterStateInner) -> Vec<Violation> {
     let mut violations = Vec::new();
     for (slot, migration) in &state.migrations {
@@ -521,6 +595,12 @@ fn check_handoff_2(state: &ClusterStateInner) -> Vec<Violation> {
 /// authorizes moving the slot *from* its source, so a slot whose owner is
 /// someone else would hand a keyspace over on the strength of a stale record.
 /// An unassigned slot is not drift — see the module docs.
+///
+/// Generalizes FM-CLUSTER-032's owner check (which runs once, at begin time,
+/// against a record that then outlives the check), FM-CLUSTER-033 (the swap
+/// moves ownership and drops the record in the same transition) and
+/// FM-CLUSTER-084 (ownership moves only under a prepared, drained,
+/// still-armed handoff).
 fn check_mig_1(state: &ClusterStateInner) -> Vec<Violation> {
     state
         .migrations
@@ -544,6 +624,12 @@ fn check_mig_1(state: &ClusterStateInner) -> Vec<Violation> {
 
 /// Slot keys are `0..CLUSTER_SLOTS`. A key above the range is unreachable by
 /// hashing, so nothing routes to it and nothing ever clears it.
+///
+/// Generalizes no FM row, deliberately, and the spec says so: FM-CLUSTER-018
+/// derives the range by hashing and FM-CLUSTER-075 enforces it at the
+/// `SlotRange` parse boundary, but neither states it of the replicated slot
+/// map, which is reachable from `AssignSlots` and `BeginSlotMigration` with a
+/// `u16` that never passed either. This entry is the state-side backstop.
 fn check_slot_1(state: &ClusterStateInner) -> Vec<Violation> {
     let mut violations = Vec::new();
     for slot in state.slot_assignment.keys() {

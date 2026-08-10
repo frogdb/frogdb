@@ -4841,6 +4841,12 @@ maxmemory = 0
     // time observes the change. A test that only asserted GET would pass against
     // a parameter that stores into the manager and reaches nothing.
 
+    // FM-CLUSTER-059
+    // The liveness half of that row: it is the `CONFIG SET` path that makes the
+    // self-fence knob live, and only a test that goes through `ConfigManager`
+    // can see a knob regress to startup-only. The row's other tests drive
+    // `ClusterRuntimeFlags` directly, so they would all still pass against a
+    // parameter that reaches nothing.
     #[test]
     fn cluster_flag_sets_reach_the_live_flags() {
         let config = test_config();
