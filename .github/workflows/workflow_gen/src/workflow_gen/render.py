@@ -17,6 +17,9 @@ from workflow_gen.workflows.link_check import link_check_workflow
 from workflow_gen.workflows.regression_nightly import regression_nightly_workflow
 from workflow_gen.workflows.release import release_workflow
 from workflow_gen.workflows.release_please import release_please_workflow
+from workflow_gen.workflows.replication_model_nightly import (
+    replication_model_nightly_workflow,
+)
 from workflow_gen.workflows.test import test_workflow
 
 HEADER = """\
@@ -47,6 +50,7 @@ WORKFLOWS = {
     "coverage-nightly.yml": coverage_nightly_workflow,
     "jepsen-nightly.yml": jepsen_nightly_workflow,
     "regression-nightly.yml": regression_nightly_workflow,
+    "replication-model-nightly.yml": replication_model_nightly_workflow,
     "build.yml": build_workflow,
     "release.yml": release_workflow,
     "release-please.yml": release_please_workflow,

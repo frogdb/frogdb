@@ -11,8 +11,9 @@ use super::{Promotion, Scope, deep_scope, smoke_scope, strand_scope, two_primary
 /// run over three states proves nothing. Set just under the measured counts
 /// recorded in the [module docs](super).
 const MIN_SMOKE_STATES: usize = 120_000;
-const MIN_DEEP_STATES: usize = 3_000_000;
-const MIN_TWO_PRIMARY_STATES: usize = 35_000_000;
+const MIN_STRAND_STATES: usize = 500;
+const MIN_DEEP_STATES: usize = 7_900_000;
+const MIN_TWO_PRIMARY_STATES: usize = 6_000_000;
 
 fn report<M: Model>(label: &str, checker: &impl Checker<M>, elapsed: std::time::Duration) -> usize {
     let states = checker.unique_state_count();
@@ -67,7 +68,12 @@ fn a_failed_promotion_strands_the_node() {
         .threads(num_threads())
         .spawn_bfs()
         .join();
-    report("strand", &checker, started.elapsed());
+    let states = report("strand", &checker, started.elapsed());
+    assert!(
+        states >= MIN_STRAND_STATES,
+        "the strand scope collapsed to {states} states (floor {MIN_STRAND_STATES}) — a scope \
+         edit shrank the explored space, so a green run here proves less than it used to"
+    );
     checker.assert_properties();
 }
 

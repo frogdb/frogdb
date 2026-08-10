@@ -190,6 +190,19 @@ cluster-proptest CASES='200000':
 model-check PATTERN='(handoff|failover)_model_full':
     {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-cluster --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
 
+# Run the exhaustive replication model-checking configurations (frogdb-replication
+# `src/model`, replication-correctness issue 08).
+#
+# A sibling of `model-check` rather than a widened PATTERN on it: the two crates' models are
+# budgeted, floored and scheduled independently, and a single recipe that compiled both would
+# make the cheap one pay for the expensive one on every invocation. Same release rationale as
+# above — every explored transition calls the production decision functions
+# (`plan_primary_stint`, `PartialSyncReplay::handle_partial_sync_request`, `select_psync_arm`).
+#
+# The `model-check` nextest group pins these one at a time; each is a saturating parallel BFS.
+replication-model-check PATTERN='promotion_model_full':
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-replication --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
+
 # Run the seed-driven cluster fault-scheduler sweep (frogdb-server
 # `simulation::scheduler`, cluster-correctness issue 09). One u64 seed derives a whole
 # turmoil run — fault family, which links are held or slowed and when, which nodes are

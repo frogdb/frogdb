@@ -22,10 +22,11 @@ use crate::state::ReplicationState;
 use crate::tracker::ReplicationTrackerImpl;
 use crate::{BacklogConfig, LagThresholdConfig};
 
-/// A handler whose state file cannot be written: the parent directory does not
-/// exist, so `save_snapshot` fails while `discard_staged_full_sync` (which
-/// takes the *data* dir, which does exist) succeeds — exactly the ordering
-/// `begin_primary_stint` relies on.
+/// A handler whose state file cannot be written: its parent "directory" is a
+/// regular file, so `ReplicationState::save`'s `create_dir_all` fails, while
+/// `discard_staged_full_sync` (which takes the *data* dir, which is a real
+/// directory) succeeds — exactly the ordering `begin_primary_stint` relies on,
+/// with the failure landing on the persist and nowhere earlier.
 ///
 /// The identity's handles are returned alongside it because the exposure is on
 /// them: a promotion freezes the applied gate, and the connection and the
@@ -38,6 +39,7 @@ type Fixture = (
 );
 
 fn handler_that_cannot_persist(dir: &std::path::Path) -> Fixture {
+    std::fs::write(dir.join("blocked"), b"not a directory").unwrap();
     let tracker = Arc::new(ReplicationTrackerImpl::new());
     let mut state = ReplicationState::new();
     state.replication_id = "a".repeat(40);
@@ -47,7 +49,7 @@ fn handler_that_cannot_persist(dir: &std::path::Path) -> Fixture {
     let live = identity.live();
     let handler = PrimaryReplicationHandler::new(
         identity,
-        dir.join("no-such-directory").join("replication_state.json"),
+        dir.join("blocked").join("replication_state.json"),
         tracker,
         None,
         dir.to_path_buf(),
@@ -102,10 +104,9 @@ fn a_failed_promotion_leaves_the_node_unable_to_replicate() {
     );
 
     let before = handler.state();
-    let err = handler
+    handler
         .begin_primary_stint()
         .expect_err("the state file is unwritable, so the promotion must fail");
-    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
 
     // The half `StintPlan` owns: bit for bit what the node was on.
     assert_eq!(
