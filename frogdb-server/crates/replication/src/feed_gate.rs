@@ -71,6 +71,21 @@ pub enum FeedGatePublish {
     Store { held_until: Option<Instant> },
 }
 
+/// The hold a set of armed slot barriers justifies: the latest deadline across
+/// them, or `None` when none is armed.
+///
+/// The derivation half of the publish, pure over the armed deadlines. It lives
+/// here rather than beside the pause state it reads because it is the rule the
+/// *gate* is defined by — two overlapping handoffs compose the way the pauses
+/// themselves do, and a barrier that ends while a later one is still armed must
+/// leave the feed held to the later deadline. `frogdb_core`'s
+/// `PauseState::feed_hold_until` is the caller that supplies the entries; the
+/// model check ([`crate::model`]) is the other, and it is checking this rule
+/// rather than a transcription of it.
+pub fn decide_feed_hold_until(armed: impl IntoIterator<Item = Instant>) -> Option<Instant> {
+    armed.into_iter().max()
+}
+
 /// Decide a publish: pure over `(current, next)`, touches nothing.
 ///
 /// Deliberately a plain equality and not "only accept a later deadline": the
@@ -242,6 +257,24 @@ mod decision_tests {
                 "publishing {next:?} over {current:?}"
             );
         }
+    }
+
+    /// The derivation over the shapes the pause state presents: nothing armed,
+    /// one barrier, and two overlapping ones in either arrival order. The
+    /// answer is the *latest* deadline, so a barrier that ends while a later
+    /// one is still armed cannot open the feed.
+    // FM-CLUSTER-097
+    #[test]
+    fn the_hold_is_the_latest_deadline_across_armed_barriers() {
+        let t = timeline();
+        assert_eq!(decide_feed_hold_until([]), None);
+        assert_eq!(decide_feed_hold_until([t(100)]), Some(t(100)));
+        assert_eq!(decide_feed_hold_until([t(100), t(500)]), Some(t(500)));
+        assert_eq!(
+            decide_feed_hold_until([t(500), t(100)]),
+            Some(t(500)),
+            "arrival order must not change the composed hold"
+        );
     }
 
     /// A shortened deadline is a real change, not a no-op the way it would be
