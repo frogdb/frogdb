@@ -36,6 +36,8 @@ pub mod feed_gate;
 pub mod frame;
 pub mod fullsync;
 pub mod identity;
+#[cfg(test)]
+mod model;
 pub mod net_bytes;
 pub mod offset_coordinator;
 pub mod primary;
