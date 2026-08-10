@@ -933,7 +933,9 @@ mod tests {
             ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
             ("000042.sst".to_string(), (0u8..=200).collect()),
         ];
-        let mut body = encode_checkpoint_body(&files, "primary-replid", offset).await;
+        let mut body =
+            encode_checkpoint_body(&files, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", offset)
+                .await;
         body.extend_from_slice(tail);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
@@ -991,7 +993,10 @@ mod tests {
         // Offset adopted into the live head + visible through the shared atomic.
         assert_eq!(f.offsets.current(), 4242);
         // Replication id adopted into live state.
-        assert_eq!(f.state.read().replication_id, "primary-replid");
+        assert_eq!(
+            f.state.read().replication_id,
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
         // Link up: Streaming, with the derived atomic set in lockstep.
         assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
         assert!(f.link_up.load(Ordering::Acquire));
@@ -1153,7 +1158,13 @@ mod tests {
         installer: Option<SnapshotInstaller>,
         tail: &[u8],
     ) -> CheckpointFixture {
-        let mut body = encode_dataset_body(&blobs, "primary-replid", offset, corrupt).await;
+        let mut body = encode_dataset_body(
+            &blobs,
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            offset,
+            corrupt,
+        )
+        .await;
         body.extend_from_slice(tail);
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
@@ -1242,7 +1253,10 @@ mod tests {
             4242,
             "offset adopted after the install"
         );
-        assert_eq!(f.state.read().replication_id, "primary-replid");
+        assert_eq!(
+            f.state.read().replication_id,
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
         assert_eq!(f.conn.connection_state, ConnectionState::Streaming);
         assert!(f.link_up.load(Ordering::Acquire));
 
@@ -1396,8 +1410,8 @@ mod tests {
     #[tokio::test]
     async fn a_full_sync_that_never_delivers_a_dataset_leaves_the_old_history_alone() {
         const GRANTED_ID: &str = "0123456789012345678901234567890123456789";
-        const OLD_ID: &str = "old-primary-replid-aaaaaaaaaaaaaaaaaaaa";
-        const PRE_FAILOVER_ID: &str = "pre-failover-replid-bbbbbbbbbbbbbbbbbbb";
+        const OLD_ID: &str = "abadcafeabadcafeabadcafeabadcafeabadcafe";
+        const PRE_FAILOVER_ID: &str = "facefeedfacefeedfacefeedfacefeedfacefeed";
 
         /// One way the grant goes unkept: what the primary sends after the
         /// PSYNC request, how the failure reads, and the `(id, offset)` the
@@ -1538,15 +1552,16 @@ mod tests {
             ("CURRENT".to_string(), b"MANIFEST-000005\n".to_vec()),
             ("000042.sst".to_string(), (0u8..=200).collect()),
         ];
-        let body = encode_checkpoint_body(&files, "primary-replid", 4242).await;
+        let body =
+            encode_checkpoint_body(&files, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 4242).await;
         // Cut mid-transfer: the first file's header is on the wire, the rest of
         // the payload and the whole trailer are not.
         let truncated = &body[..body.len() / 3];
 
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let mut st = ReplicationState::new();
-        st.replication_id = "old-primary-replid".to_string();
-        st.secondary_id = Some("pre-failover-replid".to_string());
+        st.replication_id = "abadcafeabadcafeabadcafeabadcafeabadcafe".to_string();
+        st.secondary_id = Some("facefeedfacefeedfacefeedfacefeedfacefeed".to_string());
         st.secondary_offset = 700;
         let state = Arc::new(RwLock::new(st));
         // 0 because `psync` already rewound the live head when it took the grant.
@@ -1580,8 +1595,14 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "got: {err}");
 
         let state = state.read();
-        assert_eq!(state.replication_id, "old-primary-replid");
-        assert_eq!(state.secondary_id.as_deref(), Some("pre-failover-replid"));
+        assert_eq!(
+            state.replication_id,
+            "abadcafeabadcafeabadcafeabadcafeabadcafe"
+        );
+        assert_eq!(
+            state.secondary_id.as_deref(),
+            Some("facefeedfacefeedfacefeedfacefeedfacefeed")
+        );
         assert_eq!(state.secondary_offset, 700);
         assert_eq!(
             psync_request_args(&state.replication_id, offsets.current()),
@@ -1771,13 +1792,19 @@ mod tests {
             let keep = keep.clone();
             Box::pin(async move {
                 let (mut client, server) = tokio::io::duplex(64 * 1024);
-                let body =
-                    encode_dataset_body(&[b"shard-zero".to_vec()], "primary-replid", 99, false)
-                        .await;
+                let body = encode_dataset_body(
+                    &[b"shard-zero".to_vec()],
+                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                    99,
+                    false,
+                )
+                .await;
                 let mut script: Vec<u8> = Vec::new();
                 // Three `REPLCONF`s, then the granted full resync.
                 script.extend_from_slice(b"+OK\r\n+OK\r\n+OK\r\n");
-                script.extend_from_slice(b"+FULLRESYNC primary-replid 99\r\n");
+                script.extend_from_slice(
+                    b"+FULLRESYNC deadbeefdeadbeefdeadbeefdeadbeefdeadbeef 99\r\n",
+                );
                 CheckpointStreamCodec::write_snapshot_prelude(&mut script, 1)
                     .await
                     .unwrap();

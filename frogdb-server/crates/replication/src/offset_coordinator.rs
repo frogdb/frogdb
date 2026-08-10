@@ -396,6 +396,9 @@ mod tests {
         let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
+        // The stream has to have reached 100 for a replica to ack it
+        // (`INV-OFFSET-3`); an ack past the live head is the seeded-ack defect.
+        coord.advance(&payload(100));
 
         coord.ingest_replica_ack(session.id(), 100);
         assert_eq!(session.acked_offset(), 100);
@@ -415,6 +418,8 @@ mod tests {
         let session = tracker.register_replica("127.0.0.1:6380".parse().unwrap());
         session.force_phase_for_test(Phase::Streaming);
         let mut acks = tracker.subscribe_acks();
+        // The primary has streamed to 100; the replica has acked nothing yet.
+        coord.advance(&payload(100));
 
         coord.seed_replica_position(session.id(), 100);
         assert_eq!(session.resume_offset(), 100);
@@ -447,6 +452,8 @@ mod tests {
         let s2 = tracker.register_replica("127.0.0.1:6381".parse().unwrap());
         s1.force_phase_for_test(Phase::Streaming);
         s2.force_phase_for_test(Phase::Streaming);
+        // Neither replica can ack past the stream head (`INV-OFFSET-3`).
+        coord.advance(&payload(250));
         coord.ingest_replica_ack(s1.id(), 100);
         coord.ingest_replica_ack(s2.id(), 250);
         assert_eq!(coord.min_acked(), Some(100));

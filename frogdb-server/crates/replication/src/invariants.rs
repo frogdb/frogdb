@@ -123,7 +123,8 @@ pub static CATALOG: &[Invariant] = &[
     },
     Invariant {
         id: "INV-OFFSET-4",
-        claim: "the frozen failover offset never exceeds the live offset",
+        claim: "the frozen failover offset never exceeds the live offset, outside an in-flight \
+                full resync",
         tier: Tier::Hard,
         requires: &[ViewField::State, ViewField::LiveOffset],
         check: inv_offset_4,
@@ -400,10 +401,20 @@ fn inv_offset_3(view: &ReplicationView) -> Vec<Violation> {
 
 /// A frozen failover offset above the live offset makes `window_contains`
 /// accept a resume request for a range this node never wrote.
+///
+/// Skipped at a live head of 0, which is not "this node wrote nothing" but "a
+/// full resync is in flight": taking a `+FULLRESYNC` grant rewinds the live head
+/// to 0 *before* the dataset lands, and the window deliberately keeps standing
+/// over the keyspace this node is still holding until the payload is installed
+/// (FM-REPLICATION-001, round-2 issue 51 — see
+/// `a_full_sync_that_never_delivers_a_dataset_leaves_the_old_history_alone`).
+/// The narrowing costs nothing: a window over a genuinely empty stream is
+/// unreachable, because a window is only ever frozen from an offset the node
+/// reached.
 fn inv_offset_4(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let live = live(view);
-    if state.secondary_offset < 0 || state.secondary_offset as u64 <= live {
+    if live == 0 || state.secondary_offset < 0 || state.secondary_offset as u64 <= live {
         return Vec::new();
     }
     vec![Violation::new(
@@ -498,7 +509,13 @@ fn inv_backlog_2(view: &ReplicationView) -> Vec<Violation> {
 fn inv_backlog_3(view: &ReplicationView) -> Vec<Violation> {
     let backlog = backlog(view);
     let mut violations = Vec::new();
-    if backlog.entries > backlog.max_entries {
+    // Both caps bind from the second entry on. The newest command is always
+    // retained, whatever the caps say: the eviction loop stops on an empty
+    // deque, because a loop that drains the ring cannot terminate and would
+    // wedge every later write behind the entries lock (FM-REPLICATION-047). So
+    // a degenerate `max_entries = 0`, or a single command larger than the whole
+    // byte cap, legitimately leaves exactly one entry standing.
+    if backlog.entries > backlog.max_entries.max(1) {
         violations.push(Violation::new(
             "INV-BACKLOG-3",
             format!(
@@ -507,9 +524,6 @@ fn inv_backlog_3(view: &ReplicationView) -> Vec<Violation> {
             ),
         ));
     }
-    // A single command larger than the whole byte cap is retained rather than
-    // dropped: evicting it would leave the ring permanently empty and every
-    // PSYNC would full-resync. The cap binds from the second entry on.
     if backlog.bytes > backlog.max_bytes && backlog.entries > 1 {
         violations.push(Violation::new(
             "INV-BACKLOG-3",

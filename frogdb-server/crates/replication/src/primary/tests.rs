@@ -238,19 +238,23 @@ fn divergence_record_no_streaming_replicas_uses_zero_floor() {
 // FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_push_and_extract() {
+    // Offsets advance by exactly the pushed payload's length, because the one
+    // caller (`broadcast_tagged`) advances the offset with the same bytes it
+    // records. A fixture that skips bytes describes a ring with holes in it,
+    // which `INV-BACKLOG-1` (rightly) reports as a defect.
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
-    rb.push(10, 0, Bytes::from("cmd1"));
-    rb.push(20, 0, Bytes::from("cmd2"));
-    rb.push(30, 0, Bytes::from("cmd3"));
+    rb.push(4, 0, Bytes::from("cmd1"));
+    rb.push(8, 0, Bytes::from("cmd2"));
+    rb.push(12, 0, Bytes::from("cmd3"));
     let writes = rb.extract_divergent_writes(0);
     assert_eq!(writes.len(), 3);
-    assert_eq!(writes[0], (10, Bytes::from("cmd1")));
-    assert_eq!(writes[1], (20, Bytes::from("cmd2")));
-    assert_eq!(writes[2], (30, Bytes::from("cmd3")));
-    let writes = rb.extract_divergent_writes(20);
+    assert_eq!(writes[0], (4, Bytes::from("cmd1")));
+    assert_eq!(writes[1], (8, Bytes::from("cmd2")));
+    assert_eq!(writes[2], (12, Bytes::from("cmd3")));
+    let writes = rb.extract_divergent_writes(8);
     assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0], (30, Bytes::from("cmd3")));
-    let writes = rb.extract_divergent_writes(30);
+    assert_eq!(writes[0], (12, Bytes::from("cmd3")));
+    let writes = rb.extract_divergent_writes(12);
     assert!(writes.is_empty());
 }
 
@@ -258,27 +262,27 @@ fn test_ring_buffer_push_and_extract() {
 #[test]
 fn test_ring_buffer_entry_limit_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
-    rb.push(10, 0, Bytes::from("cmd1"));
-    rb.push(20, 0, Bytes::from("cmd2"));
-    rb.push(30, 0, Bytes::from("cmd3"));
-    rb.push(40, 0, Bytes::from("cmd4"));
+    rb.push(4, 0, Bytes::from("cmd1"));
+    rb.push(8, 0, Bytes::from("cmd2"));
+    rb.push(12, 0, Bytes::from("cmd3"));
+    rb.push(16, 0, Bytes::from("cmd4"));
     let writes = rb.extract_divergent_writes(0);
     assert_eq!(writes.len(), 3);
-    assert_eq!(writes[0].0, 20);
-    assert_eq!(writes[2].0, 40);
+    assert_eq!(writes[0].0, 8);
+    assert_eq!(writes[2].0, 16);
 }
 
 // FM-REPLICATION-016
 #[test]
 fn test_ring_buffer_byte_limit_eviction() {
     let rb = ReplicationRingBuffer::new(100, 10);
-    rb.push(10, 0, Bytes::from("abcde"));
-    rb.push(20, 0, Bytes::from("fghij"));
-    rb.push(30, 0, Bytes::from("klmno"));
+    rb.push(5, 0, Bytes::from("abcde"));
+    rb.push(10, 0, Bytes::from("fghij"));
+    rb.push(15, 0, Bytes::from("klmno"));
     let writes = rb.extract_divergent_writes(0);
     assert_eq!(writes.len(), 2);
-    assert_eq!(writes[0].0, 20);
-    assert_eq!(writes[1].0, 30);
+    assert_eq!(writes[0].0, 10);
+    assert_eq!(writes[1].0, 15);
 }
 
 // FM-REPLICATION-016
@@ -355,7 +359,7 @@ fn test_ring_buffer_extract_is_nondestructive() {
 fn ring_buffer_reset_closes_the_window_and_lets_the_floor_move_down() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
     rb.arm_start(1000);
-    rb.push(1010, 0, Bytes::from("cmd1"));
+    rb.push(1004, 0, Bytes::from("cmd1"));
     assert_eq!(rb.start_offset(), Some(1000));
 
     rb.reset();
@@ -469,12 +473,12 @@ fn backlog_geometry_first_byte_offset_follows_eviction() {
 fn backlog_geometry_after_a_reset_claims_no_window() {
     let rb = ReplicationRingBuffer::new(100, 8192);
     rb.arm_start(1000);
-    rb.push(1010, 0, Bytes::from("cmd1"));
-    assert!(rb.geometry(1010).active);
+    rb.push(1004, 0, Bytes::from("cmd1"));
+    assert!(rb.geometry(1004).active);
 
     rb.reset();
 
-    let geometry = rb.geometry(1010);
+    let geometry = rb.geometry(1004);
     assert!(!geometry.active);
     assert_eq!(geometry.first_byte_offset, 0);
     assert_eq!(geometry.histlen, 0);
@@ -497,14 +501,14 @@ fn backlog_geometry_histlen_never_underflows() {
 fn test_ring_buffer_oldest_offset_tracks_eviction() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
     assert_eq!(rb.oldest_offset(), None);
-    rb.push(10, 0, Bytes::from("cmd1"));
-    assert_eq!(rb.oldest_offset(), Some(10));
-    rb.push(20, 0, Bytes::from("cmd2"));
-    rb.push(30, 0, Bytes::from("cmd3"));
-    assert_eq!(rb.oldest_offset(), Some(10));
+    rb.push(4, 0, Bytes::from("cmd1"));
+    assert_eq!(rb.oldest_offset(), Some(4));
+    rb.push(8, 0, Bytes::from("cmd2"));
+    rb.push(12, 0, Bytes::from("cmd3"));
+    assert_eq!(rb.oldest_offset(), Some(4));
     // Eviction raises the oldest retained offset (Redis repl_backlog_off).
-    rb.push(40, 0, Bytes::from("cmd4"));
-    assert_eq!(rb.oldest_offset(), Some(20));
+    rb.push(16, 0, Bytes::from("cmd4"));
+    assert_eq!(rb.oldest_offset(), Some(8));
 }
 
 // FM-REPLICATION-015
@@ -512,26 +516,26 @@ fn test_ring_buffer_oldest_offset_tracks_eviction() {
 fn test_ring_buffer_extract_backlog_is_contiguous_and_bounded() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
     // Arm at 0 so the whole range is inside the window; without this the first
-    // push opens the window at its own *start* offset (10 - len("cmd1")).
+    // push opens the window at its own *start* offset (4 - len("cmd1")).
     rb.arm_start(0);
-    rb.push(10, 0, Bytes::from("cmd1"));
-    rb.push(20, 0, Bytes::from("cmd2"));
-    rb.push(30, 0, Bytes::from("cmd3"));
-    rb.push(40, 0, Bytes::from("cmd4"));
+    rb.push(4, 0, Bytes::from("cmd1"));
+    rb.push(8, 0, Bytes::from("cmd2"));
+    rb.push(12, 0, Bytes::from("cmd3"));
+    rb.push(16, 0, Bytes::from("cmd4"));
     // (start, end] — exclusive lower, inclusive upper.
-    let tail = rb.extract_backlog(10, 30).expect("inside the window");
+    let tail = rb.extract_backlog(4, 12).expect("inside the window");
     assert_eq!(
         tail,
-        vec![(20, 0, Bytes::from("cmd2")), (30, 0, Bytes::from("cmd3"))]
+        vec![(8, 0, Bytes::from("cmd2")), (12, 0, Bytes::from("cmd3"))]
     );
     // start == end yields an empty (caught-up) tail.
     assert!(
-        rb.extract_backlog(40, 40)
+        rb.extract_backlog(16, 16)
             .expect("inside the window")
             .is_empty()
     );
     // Whole tail above start.
-    let all = rb.extract_backlog(0, 40).expect("inside the window");
+    let all = rb.extract_backlog(0, 16).expect("inside the window");
     assert_eq!(all.len(), 4);
     assert!(all.windows(2).all(|w| w[0].0 < w[1].0));
 }
@@ -547,29 +551,29 @@ fn test_ring_buffer_extract_backlog_is_contiguous_and_bounded() {
 fn an_evicted_resume_point_is_refused_not_truncated() {
     let rb = ReplicationRingBuffer::new(3, 1024 * 1024);
     rb.arm_start(0);
-    rb.push(10, 0, Bytes::from("cmd1"));
-    rb.push(20, 0, Bytes::from("cmd2"));
-    rb.push(30, 0, Bytes::from("cmd3"));
+    rb.push(4, 0, Bytes::from("cmd1"));
+    rb.push(8, 0, Bytes::from("cmd2"));
+    rb.push(12, 0, Bytes::from("cmd3"));
     // The fourth push evicts `cmd1` and raises the floor to where it ended.
-    rb.push(40, 0, Bytes::from("cmd4"));
-    assert_eq!(rb.start_offset(), Some(10));
+    rb.push(16, 0, Bytes::from("cmd4"));
+    assert_eq!(rb.start_offset(), Some(4));
 
     assert_eq!(
-        rb.extract_backlog(0, 40),
+        rb.extract_backlog(0, 16),
         Err(BacklogTruncated {
             requested: 0,
-            floor: Some(10)
+            floor: Some(4)
         }),
         "a resume below the floor must be refused, not served short"
     );
     // The boundary is inclusive: a replica sitting exactly on the floor is the
     // lowest resume the window can still serve.
     let tail = rb
-        .extract_backlog(10, 40)
+        .extract_backlog(4, 16)
         .expect("floor == start is servable");
     assert_eq!(
         tail.iter().map(|(o, _, _)| *o).collect::<Vec<_>>(),
-        vec![20, 30, 40]
+        vec![8, 12, 16]
     );
 }
 
@@ -580,12 +584,12 @@ fn an_evicted_resume_point_is_refused_not_truncated() {
 fn a_closed_window_refuses_every_extraction() {
     let rb = ReplicationRingBuffer::new(100, 1024 * 1024);
     rb.arm_start(0);
-    rb.push(10, 0, Bytes::from("cmd1"));
+    rb.push(4, 0, Bytes::from("cmd1"));
     rb.reset();
 
-    for requested in [0, 5, 9] {
+    for requested in [0, 2, 3] {
         assert_eq!(
-            rb.extract_backlog(requested, 10),
+            rb.extract_backlog(requested, 4),
             Err(BacklogTruncated {
                 requested,
                 floor: None
@@ -594,7 +598,7 @@ fn a_closed_window_refuses_every_extraction() {
         );
     }
     // ... except for the empty range, which needs no history to serve.
-    assert_eq!(rb.extract_backlog(10, 10), Ok(Vec::new()));
+    assert_eq!(rb.extract_backlog(4, 4), Ok(Vec::new()));
 }
 
 #[tokio::test]
@@ -1291,6 +1295,11 @@ async fn a_promotion_persists_its_boundary_without_ever_rewinding_it() {
     // A later stint whose boundary sits *below* the persisted save point must not
     // drag it back down: the file describes data this node still holds.
     handler.end_primary_stint();
+    // The received head runs ahead of the applied head (frames decoded but not
+    // yet applied), which is how a save point can legitimately sit above the
+    // next promotion boundary — INV-OFFSET-2 refuses a save point above the
+    // live head, and this fixture must model a state the node can be in.
+    received.frame_advance(&frame_of(4_100));
     handler.state.write().offset_at_save = 5_000;
     let (second_boundary, snapshot) = handler.begin_primary_stint().unwrap();
     assert_eq!(second_boundary, 900, "the applied head has not moved");

@@ -317,7 +317,7 @@ impl ReplicationState {
     /// frozen behind where the stream has actually reached.
     pub fn new_replication_id(&mut self, live_offset: u64) {
         let minted = generate_replication_id();
-        self.shift_replication_id(minted, live_offset);
+        self.shift_replication_id_inner(minted, live_offset);
         tracing::info!(
             new_id = %self.replication_id,
             secondary_id = ?self.secondary_id,
@@ -356,9 +356,20 @@ impl ReplicationState {
     /// `requested_offset <= secondary_offset`, so it does not carry Redis's `+1`
     /// (see [`Self::window_contains`]).
     pub fn shift_replication_id(&mut self, new_id: String, live_offset: u64) {
+        self.shift_replication_id_inner(new_id, live_offset);
+        self.check_invariants("ReplicationState::shift_replication_id");
+    }
+
+    /// The shift itself, without the hook.
+    ///
+    /// Seams that are themselves hooked call this rather than the public
+    /// method: nested hooks would make the *inner* one fire first, so the outer
+    /// seam's own hook could never be forced and deleting it would go unnoticed
+    /// (it would also name the wrong seam in the panic). Each hook therefore
+    /// sits at exactly one seam, and every seam owns exactly one hook.
+    fn shift_replication_id_inner(&mut self, new_id: String, live_offset: u64) {
         self.secondary_id = Some(std::mem::replace(&mut self.replication_id, new_id));
         self.secondary_offset = live_offset as i64;
-        self.check_invariants("ReplicationState::shift_replication_id");
     }
 
     /// Drop the failover continuity window (`secondary_id` / `secondary_offset`).
@@ -372,9 +383,14 @@ impl ReplicationState {
     /// tail from the new history under the old id. Redis clears the window at
     /// exactly these points (`replication.c` `readSyncBulkPayload`).
     pub fn clear_secondary_window(&mut self) {
+        self.clear_secondary_window_inner();
+        self.check_invariants("ReplicationState::clear_secondary_window");
+    }
+
+    /// The clear itself, without the hook — see [`Self::shift_replication_id_inner`].
+    fn clear_secondary_window_inner(&mut self) {
         self.secondary_id = None;
         self.secondary_offset = -1;
-        self.check_invariants("ReplicationState::clear_secondary_window");
     }
 
     /// Adopt `replication_id` as this node's history, dropping any stale failover
@@ -384,9 +400,14 @@ impl ReplicationState {
     /// checkpoint metadata) goes through here so the window can never outlive the
     /// history it described. See [`Self::clear_secondary_window`].
     pub fn adopt_replication_history(&mut self, replication_id: String) {
-        self.replication_id = replication_id;
-        self.clear_secondary_window();
+        self.adopt_replication_history_inner(replication_id);
         self.check_invariants("ReplicationState::adopt_replication_history");
+    }
+
+    /// The adoption itself, without the hook — see [`Self::shift_replication_id_inner`].
+    fn adopt_replication_history_inner(&mut self, replication_id: String) {
+        self.replication_id = replication_id;
+        self.clear_secondary_window_inner();
     }
 
     /// Check whether a PSYNC request's offset window can be continued from this
@@ -443,7 +464,7 @@ impl ReplicationState {
         // Adopting a checkpoint means adopting the primary's history wholesale —
         // any failover window this node carried described a stream it no longer
         // holds, so it goes with it.
-        self.adopt_replication_history(meta.replication_id.clone());
+        self.adopt_replication_history_inner(meta.replication_id.clone());
         // A staged checkpoint offset *is* a save-point offset.
         self.offset_at_save = meta.replication_offset;
         self.check_invariants("ReplicationState::apply_staged_metadata");

@@ -256,7 +256,8 @@ fn inv_replid_1_forces_a_half_cleared_failover_window() {
     let mut view = clean_view();
     view.state.as_mut().unwrap().secondary_offset = -1;
     view.promotion = None;
-    assert_reports(&view, &["INV-REPLID-1", "INV-REPLID-1"]);
+    assert_reports(&view, &["INV-REPLID-1"]);
+    assert!(check_hard(&view)[0].detail.contains("secondary_offset=-1"));
 }
 
 #[test]
@@ -778,9 +779,12 @@ fn the_register_announced_replica_seam_is_hooked() {
 #[should_panic(expected = "ReplicationTrackerImpl::unregister_replica")]
 fn the_unregister_replica_seam_is_hooked() {
     let tracker = ReplicationTrackerImpl::new();
+    // The spare is registered *before* the duplicate pair starts streaming, so
+    // the registration hook sees a clean registry and this test can only fail
+    // at the seam it names.
+    let spare = tracker.register_replica(addr(6382));
     let _first = announced_session(&tracker, 7000);
     let _second = announced_session(&tracker, 7000);
-    let spare = tracker.register_replica(addr(6382));
     tracker.unregister_replica(spare.id());
 }
 
