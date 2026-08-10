@@ -2313,6 +2313,7 @@ mod tests {
             /// `FailureDetector::new`'s `config.clamped()` call is removed,
             /// because an unclamped `0` or `u64::MAX`/`u32::MAX` input is
             /// then reported back verbatim.
+            // FM-CLUSTER-102
             #[test]
             fn c1_admission_is_total(cfg in arb_failure_detector_config()) {
                 let f = build_with(cfg);
@@ -2352,6 +2353,7 @@ mod tests {
             /// `HealthTable::stale_threshold`. A future derivation reusing
             /// any of these fields is caught by this same property rather
             /// than needing its own row.
+            // FM-CLUSTER-102
             #[test]
             fn c2_every_derived_duration_is_finite_and_nonzero(cfg in arb_failure_detector_config()) {
                 let f = build_with(cfg);
