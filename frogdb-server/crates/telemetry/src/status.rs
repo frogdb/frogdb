@@ -21,6 +21,7 @@ use crate::definitions::{
 };
 use crate::health::HealthChecker;
 use crate::node_state::{NodeStateSnapshot, ShardState};
+use frogdb_types::clock;
 
 /// Deadline for the single node-state scatter behind `/status`. `/status` is a
 /// best-effort health surface: a shard that misses this deadline yields an empty
@@ -636,7 +637,7 @@ impl StatusCollector {
         ServerStatus {
             frogdb: FrogDbInfo {
                 version: env!("CARGO_PKG_VERSION").to_string(),
-                uptime_secs: self.start_time.elapsed().as_secs(),
+                uptime_secs: clock::elapsed(self.start_time).as_secs(),
                 process_id: std::process::id(),
                 timestamp,
                 timestamp_iso,

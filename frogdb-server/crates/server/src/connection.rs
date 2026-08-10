@@ -474,7 +474,7 @@ impl ConnectionHandler {
         };
 
         // Calculate elapsed time in microseconds for slowlog
-        let elapsed_us = now.elapsed().as_micros() as u64;
+        let elapsed_us = clock::elapsed(now).as_micros() as u64;
 
         // Check for errors in responses (reused by probe + metrics)
         let has_error = responses.iter().any(|r| matches!(r, Response::Error(_)));
@@ -637,7 +637,7 @@ impl ConnectionHandler {
                             debug!(
                                 conn_id = self.state.id,
                                 addr = %self.state.addr,
-                                session_duration_ms = self.state.created_at.elapsed().as_millis() as u64,
+                                session_duration_ms = clock::elapsed(self.state.created_at).as_millis() as u64,
                                 "Client disconnected"
                             );
                             break;

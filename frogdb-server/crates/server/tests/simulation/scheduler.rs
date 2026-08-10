@@ -958,6 +958,25 @@ struct Shared {
 /// Run one seed end to end, returning its outcome (violations included, not
 /// asserted).
 pub fn run_seed(seed: u64) -> RunOutcome {
+    run_seed_stretched(seed, Duration::ZERO)
+}
+
+/// [`run_seed`], with each `sim.step()` followed by `real_step_stretch` of
+/// *real* sleeping.
+///
+/// The stretch never touches the simulated clock, so a run's outcome must not
+/// move when it changes: every deadline the servers evaluate is supposed to be
+/// read off turmoil's virtual clock. What it does change is the ratio between
+/// real and simulated time — a step that simulates 1ms now takes milliseconds
+/// of wall clock — which is exactly what a loaded host does to the sweep, and
+/// what made the fingerprint load-dependent in cluster-correctness issue 23
+/// (`Instant::elapsed()` reads the OS clock whatever clock produced its
+/// anchor, so seaming the anchor alone left the measurement real).
+///
+/// This is a deterministic stand-in for "run it on a busy machine": it forces
+/// the same divergence a competing workload would, without depending on how
+/// many cores the machine has or how loaded it happens to be.
+pub fn run_seed_stretched(seed: u64, real_step_stretch: Duration) -> RunOutcome {
     let schedule = Schedule::from_seed(seed);
 
     let mut sim = Builder::new()
@@ -986,7 +1005,7 @@ pub fn run_seed(seed: u64) -> RunOutcome {
         Ok::<(), DriverError>(())
     });
 
-    step_with_faults(&mut sim, &schedule, &shared);
+    step_with_faults(&mut sim, &schedule, &shared, real_step_stretch);
     drop(dirs);
 
     let state = std::mem::take(&mut *shared.lock().expect("shared"));
@@ -1103,7 +1122,12 @@ fn spawn_scheduled_hosts(
 /// cost varies with the timer skew, and a fault landing before the first leader
 /// exists is a different (and far less interesting) scenario than the one the
 /// schedule describes.
-fn step_with_faults(sim: &mut turmoil::Sim<'_>, schedule: &Schedule, shared: &Arc<Mutex<Shared>>) {
+fn step_with_faults(
+    sim: &mut turmoil::Sim<'_>,
+    schedule: &Schedule,
+    shared: &Arc<Mutex<Shared>>,
+    real_step_stretch: Duration,
+) {
     let mut armed = vec![false; schedule.faults.len()];
     let mut healed = vec![false; schedule.faults.len()];
     let mut resolved: Option<Vec<FaultEpisode>> = None;
@@ -1112,6 +1136,9 @@ fn step_with_faults(sim: &mut turmoil::Sim<'_>, schedule: &Schedule, shared: &Ar
 
     loop {
         let finished = sim.step().expect("turmoil step");
+        if !real_step_stretch.is_zero() {
+            std::thread::sleep(real_step_stretch);
+        }
 
         if resolved.is_none() {
             let discovered = {
@@ -2469,13 +2496,30 @@ fn acked_at(at: Duration) -> AckedWrite {
 
 /// Same seed → same run. The scheduler's core contract: two runs of one seed
 /// produce byte-identical fingerprints, so a failing seed replays exactly.
+///
+/// The replay runs *slowed down in real time* ([`run_seed_stretched`]) while
+/// the first run does not. The two runs therefore disagree about wall clock
+/// and agree about simulated time, which is the only difference a busy CI box
+/// makes to a turmoil sweep — and the difference that used to change the
+/// answer (cluster-correctness issue 23). Asserting equality across the skew
+/// is what makes this a gate on "the fingerprint is a function of the seed"
+/// rather than of the machine.
 #[test]
 fn test_cluster_scheduler_same_seed_same_run() {
     let seed = SMOKE_SEEDS[0];
     let a = run_seed(seed);
-    let b = run_seed(seed);
+    let b = run_seed_stretched(seed, REPLAY_REAL_STRETCH);
     assert_fingerprints_equal(seed, &a.fingerprint, &b.fingerprint);
 }
+
+/// Real time added per simulated step in the determinism replay.
+///
+/// A step simulates 1ms and costs a few hundred microseconds of real time, so
+/// half a millisecond of sleep is enough to invert the ratio: real time now
+/// outruns simulated time, and any duration measured off the OS clock reads
+/// several times larger in the replay than in the first run. Larger values
+/// only buy a longer test — the pre-fix divergence reproduces from ~2x on.
+const REPLAY_REAL_STRETCH: Duration = Duration::from_micros(500);
 
 /// The default-suite smoke sweep: one seed per fault family, so the scheduler
 /// cannot rot between nightly sweeps.

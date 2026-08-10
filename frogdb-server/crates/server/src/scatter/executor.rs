@@ -131,7 +131,7 @@ impl ScatterGatherExecutor {
         let num_shards = partition.shard_keys.len();
         frogdb_core::probes::fire_scatter_done(
             command_name,
-            start.elapsed().as_micros() as u64,
+            clock::elapsed(start).as_micros() as u64,
             num_shards as u64,
         );
 

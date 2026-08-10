@@ -13,6 +13,7 @@ use super::config::ScriptingConfig;
 use super::error::ScriptError;
 use super::gate::{CrossSlotTracker, ScriptInvoker};
 use super::lua_vm::LuaVm;
+use crate::clock;
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
 use crate::shard::slot_for_key;
@@ -342,7 +343,7 @@ impl ScriptExecutor {
                 "Write commands are not allowed from read-only scripts".into(),
             ));
         }
-        let dur = start.elapsed().as_millis() as u64;
+        let dur = clock::elapsed(start).as_millis() as u64;
         match result {
             Ok(v) => {
                 debug!(script_sha = %script_sha, duration_ms = dur, "Script executed");

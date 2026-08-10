@@ -1,3 +1,4 @@
+use crate::clock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -136,7 +137,7 @@ impl OperationCounters {
 
     /// Seconds elapsed on the monotonic baseline.
     fn elapsed_secs(&self) -> u64 {
-        let base = self.epoch.elapsed().as_secs();
+        let base = clock::elapsed(self.epoch).as_secs();
         #[cfg(test)]
         let base = base + self.clock_bias_secs;
         base

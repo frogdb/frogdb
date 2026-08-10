@@ -247,7 +247,7 @@ pub fn install_timeout_hook(lua: &Lua, start: Instant, hook: TimeoutHook) {
         {
             return Err(mlua::Error::RuntimeError("Script killed".to_string()));
         }
-        let elapsed = start.elapsed().as_millis() as u64;
+        let elapsed = clock::elapsed(start).as_millis() as u64;
         // Reading the flag on an `Arc<AtomicBool>` rather than through the
         // execution-state mutex is required, not a micro-optimization: this
         // hook runs on the very thread that holds that mutex while

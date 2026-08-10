@@ -12,6 +12,7 @@
 //!   +---------------------------------------+
 //! ```
 
+use crate::clock;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -140,7 +141,7 @@ impl HotkeySession {
         if self.config.duration_ms == 0 {
             return false;
         }
-        self.started_at.elapsed().as_millis() as u64 >= self.config.duration_ms
+        clock::elapsed(self.started_at).as_millis() as u64 >= self.config.duration_ms
     }
 
     /// Check if a slot is in the selected set.

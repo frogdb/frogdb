@@ -439,7 +439,7 @@ impl<S: WriteSink> FlushEngine<S> {
     }
 
     pub(super) fn since_last_flush(&self) -> Duration {
-        self.last_flush.elapsed()
+        clock::elapsed(self.last_flush)
     }
 
     /// Open a write group: suppress the engine's own flush triggers until the
@@ -591,7 +591,7 @@ impl<S: WriteSink> FlushEngine<S> {
                     .store(current_timestamp_ms(), Ordering::Release);
                 WalFlushDuration::observe(
                     &*self.metrics,
-                    start.elapsed().as_secs_f64(),
+                    clock::elapsed(start).as_secs_f64(),
                     &self.shard_label,
                 );
                 trace!(shard_id = self.shard_id, seq, "WAL shard clear committed");
@@ -645,7 +645,7 @@ impl<S: WriteSink> FlushEngine<S> {
                 self.lag
                     .last_flush_timestamp_ms
                     .store(current_timestamp_ms(), Ordering::Release);
-                let duration = start.elapsed();
+                let duration = clock::elapsed(start);
                 WalFlushDuration::observe(
                     &*self.metrics,
                     duration.as_secs_f64(),

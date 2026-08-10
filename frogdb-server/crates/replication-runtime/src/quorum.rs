@@ -9,6 +9,7 @@
 //! the arming latch with it (FM-REPLICATION-062), so a decommissioned replica
 //! leaves a writable primary while a lost one leaves a fenced one.
 
+use frogdb_core::clock;
 use frogdb_core::command::QuorumChecker;
 use frogdb_core::metrics::WriteFenceReporter;
 use frogdb_core::{ReplicationTrackerImpl, ack_is_fresh};
@@ -143,7 +144,7 @@ impl ReplicationQuorumChecker {
         self.tracker
             .get_streaming_replicas()
             .iter()
-            .filter(|r| ack_is_fresh(r.last_ack_time.elapsed(), freshness_timeout))
+            .filter(|r| ack_is_fresh(clock::elapsed(r.last_ack_time), freshness_timeout))
             .count()
     }
 

@@ -15,6 +15,7 @@ use super::ConnectionHandler;
 use super::pause_gate;
 use super::state::{STATS_SYNC_INTERVAL_COMMANDS, STATS_SYNC_INTERVAL_MS};
 use crate::scatter::ScatterGather;
+use frogdb_core::clock;
 
 /// Client-tracking IO plumbing owned by the connection handler: the
 /// invalidation delivery channel and the optional REDIRECT forwarding task.
@@ -218,7 +219,8 @@ impl ConnectionHandler {
     /// Syncs every STATS_SYNC_INTERVAL_COMMANDS commands or STATS_SYNC_INTERVAL_MS milliseconds.
     pub(super) fn maybe_sync_stats(&mut self) {
         let should_sync = self.state.local_stats.commands_total >= STATS_SYNC_INTERVAL_COMMANDS
-            || self.state.last_stats_sync.elapsed().as_millis() as u64 >= STATS_SYNC_INTERVAL_MS;
+            || clock::elapsed(self.state.last_stats_sync).as_millis() as u64
+                >= STATS_SYNC_INTERVAL_MS;
 
         if should_sync {
             if self.state.local_stats.has_data() {

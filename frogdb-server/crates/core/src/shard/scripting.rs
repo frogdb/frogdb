@@ -12,6 +12,7 @@ use crate::registry::CommandRegistry;
 use crate::scripting::{CacheDisposition, ScriptExecutor, ScriptOutcome};
 
 use super::worker::ShardWorker;
+use crate::clock;
 
 impl ShardWorker {
     /// Handle EVAL / EVAL_RO - execute a Lua script.
@@ -144,7 +145,7 @@ impl ShardWorker {
         // landed.
         self.run_script_write_effects(script_writes, conn_id).await;
 
-        let elapsed = start.elapsed().as_secs_f64();
+        let elapsed = clock::elapsed(start).as_secs_f64();
 
         match outcome.disposition {
             CacheDisposition::Hit => {

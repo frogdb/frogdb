@@ -24,7 +24,7 @@ fn baseline() -> &'static Instant {
 }
 
 fn now_us() -> u64 {
-    baseline().elapsed().as_micros() as u64
+    clock::elapsed(*baseline()).as_micros() as u64
 }
 
 /// Rate limit configuration for a user.

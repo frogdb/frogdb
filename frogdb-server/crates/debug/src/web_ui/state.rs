@@ -323,8 +323,8 @@ pub fn client_snapshots_from_registry(registry: &ClientRegistry) -> Vec<ClientSn
                 name,
                 lib_name,
                 lib_ver,
-                age_secs: info.created_at.elapsed().as_secs(),
-                idle_secs: info.last_command_at.elapsed().as_secs(),
+                age_secs: clock::elapsed(info.created_at).as_secs(),
+                idle_secs: clock::elapsed(info.last_command_at).as_secs(),
                 flags: info.flags.to_flag_string(),
                 commands_total: stats.commands_total,
                 bytes_recv: stats.bytes_recv,
@@ -443,7 +443,7 @@ impl DebugState {
 
     /// Get uptime in seconds.
     pub fn uptime_seconds(&self) -> u64 {
-        self.server_info.start_time.elapsed().as_secs()
+        clock::elapsed(self.server_info.start_time).as_secs()
     }
 
     /// Get the server role.

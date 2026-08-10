@@ -58,7 +58,7 @@ impl ConnectionHandler {
         } else {
             self.handle_ft_aggregate(&delegated_args).await
         };
-        let elapsed_us = start.elapsed().as_micros() as f64;
+        let elapsed_us = clock::elapsed(start).as_micros() as f64;
 
         // Build profile info matching RediSearch format
         let profile_info = Response::Array(vec![
