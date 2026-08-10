@@ -250,9 +250,10 @@ what the manual audit caught.
 7. Stateright: both models shipped with recorded state-space size and properties, or a
    written decision records why not (with the exploration budget that was tried).
 8. Retro-validation: all five 2026-08-08 audit defects mechanically caught by ≥1 layer.
-   **Run 2026-08-09 — NOT met, 3/5** (§6.1): FM-CLUSTER-099 and FM-CLUSTER-102 survive every
-   layer; blocked on issues [21](issues/open/21-no-layer-sees-the-raft-log-store.md) and
-   [22](issues/open/22-no-layer-generates-runtime-config-values.md).
+   **Run 2026-08-09 — 3/5 at the time of the run** (§6.1); FM-CLUSTER-099 has since been
+   covered by the layer [issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md)
+   built, leaving FM-CLUSTER-102 and [issue
+   22](issues/open/22-no-layer-generates-runtime-config-values.md).
 
 ### 6.1 Retro-validation results (issue 13, run 2026-08-09)
 
@@ -263,15 +264,17 @@ verdict** — they are the point witnesses the fix shipped with, so counting the
 the gate vacuous. They are listed anyway, because "the forcing test was the *only* thing
 that failed" is exactly the finding this gate exists to surface.
 
-Verdict: **3 of 5 caught by a non-forcing layer** (100, 101, 098). Two misses — 099 and
-102 — are filed as [issue 21](issues/open/21-no-layer-sees-the-raft-log-store.md) and
+Verdict at the time of the run: **3 of 5 caught by a non-forcing layer** (100, 101, 098).
+The two misses — 099 and 102 — were filed as
+[issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md) and
 [issue 22](issues/open/22-no-layer-generates-runtime-config-values.md); **exit criterion 8
-is not met until both close.**
+is not met until both close.** Issue 21 has since closed, so 099 is caught and 102 is the
+one remaining.
 
 | defect | revert | L1 catalog+hooks | L2 P1–P4 | L3 stateright | L4 seeded schedules | seam gates | L5 Jepsen | verdict |
 |---|---|---|---|---|---|---|---|---|
 | **098** vote durability | `MetaDurability::for_key` → always `Buffered` | miss (290/291; only the forcing test) | n/a — below the state machine | n/a — below the state machine | n/a — turmoil has no disk model (§3 W4) | **CAUGHT** `just lint-durable-ack` | n/a (issue 07 open) | **caught** (seam gate) |
-| **099** log-reader cache | `get_log_reader` → `Arc::new(RwLock::new(self.log_cache.read().clone()))` | miss (289/291; only the 2 forcing tests) | n/a — below the state machine | n/a — below the state machine | **miss** (100 seeds green; 500 seeds = the 36 known issue-20 seeds, zero new) | green | n/a (issue 07 open) | **MISS → [21](issues/open/21-no-layer-sees-the-raft-log-store.md)** |
+| **099** log-reader cache | `get_log_reader` → `Arc::new(RwLock::new(self.log_cache.read().clone()))` | miss (289/291; only the 2 forcing tests) | n/a — below the state machine | n/a — below the state machine | **miss** (100 seeds green; 500 seeds = the 36 known issue-20 seeds, zero new) | green | n/a (issue 07 open) | **caught** — by the storage-conformance layer [issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md) built in response to this miss |
 | **100** handoff generation | `from_snapshot` → `handoff_seq: 0` | **CAUGHT** INV-HANDOFF-1 via the `from_snapshot` hook | **CAUGHT** `p2_a_snapshot_restore_at_any_point_is_lossless` | **CAUGHT** `handoff_model_smoke`, `stale_source_admits_writes_after_ownership_moves` | not run (state-machine defect; the three layers above are decisive) | green | n/a (issue 07 open) | **caught** (3 layers) |
 | **101** voter removal | `voter_change`: `RemoveNode`/`Failover{force}` arms → `None` | miss (cluster 290/291, runtime 77/78; only the 2 forcing tests) | n/a — voter set is not on the `apply_command` path | n/a — membership deliberately unmodelled (`model/failover/mod.rs:432`) | **CAUGHT** `just cluster-seeds 100` → new seed 35 | green | n/a (issue 07 open) | **caught** (seeded schedules) |
 | **102** detector clamp | drop `let config = config.clamped();` | miss (75/78; only the 3 forcing tests) | n/a — different crate, no `apply_command` surface | n/a — the model generates verdicts, never a config | n/a — the scheduler never varies `FailureDetectorConfig` | not applicable | n/a (issue 07 open) | **MISS → [22](issues/open/22-no-layer-generates-runtime-config-values.md)** |
@@ -291,7 +294,13 @@ Per-defect notes:
   (`CLUSTER_SEEDS_JOBS=6`, 346.6 s): the leadership flaps that the FM row names as the
   trigger do occur in those schedules, but nothing compares what a reader serves against
   what is on disk, so a divergent read is only visible if it detonates client-side inside
-  the same run. See issue 21 for the proposed openraft storage-conformance layer.
+  the same run. [Issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md) closed this:
+  openraft's `testing::Suite` now runs against the real store twice, once through a
+  long-lived log reader, and a property judges both handles against the `raft_logs` column
+  family after every append/truncate/purge. Re-reverting the fix now fails that property,
+  shrunk to one operation and naming the term mismatch at the index. The suite also found
+  a live defect on its first run — `truncate` was exclusive where openraft contracts it
+  inclusive (FM-CLUSTER-103), fixed in the same branch.
 - **100** — reuses and confirms the revert experiment banked in
   [issue 04](issues/done/04-properties-p2-p3-p4.md); re-run on current `main` it is now a
   three-layer catch. P2 shrinks to a 3-command counterexample (`AddNode`,
