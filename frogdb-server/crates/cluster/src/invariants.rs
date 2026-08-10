@@ -70,78 +70,11 @@ use std::collections::BTreeMap;
 use crate::state::ClusterStateInner;
 use crate::types::{CLUSTER_SLOTS, ConfigEpoch, NodeId, NodeRole};
 
-/// A single violated invariant, at one offending place in the state.
-///
-/// One check can produce several: a state with three dangling slot owners
-/// reports three `INV-REF-1` violations, so the detail names which slots
-/// rather than only how many.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Violation {
-    /// The stable catalog id, e.g. `"INV-REF-1"`. Stable across refactors —
-    /// specs, issues and checker output all quote it.
-    pub id: &'static str,
-    /// What is wrong, naming the concrete ids involved.
-    pub detail: String,
-}
-
-impl Violation {
-    fn new(id: &'static str, detail: String) -> Self {
-        Self { id, detail }
-    }
-}
-
-impl std::fmt::Display for Violation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.id, self.detail)
-    }
-}
-
-/// The ruling that makes a [`Tier::DocumentedException`] legitimate.
-///
-/// Constructed only through [`Citation::failure_mode`] or [`Citation::issue`],
-/// both of which reject an empty reference. Because [`CATALOG`] is a `static`,
-/// those `const fn` assertions run at compile time: a citation-less — or
-/// blank-citation — exception is a build error, not a review comment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Citation(&'static str);
-
-impl Citation {
-    /// Cite the failure-mode row that rules the state deliberate, e.g.
-    /// `"FM-CLUSTER-033"`.
-    pub const fn failure_mode(row: &'static str) -> Self {
-        assert!(
-            !row.is_empty(),
-            "a DOCUMENTED-EXCEPTION must cite a failure-mode row"
-        );
-        Self(row)
-    }
-
-    /// Cite the issue that rules the state deliberate, e.g. a path under
-    /// `.scratch/cluster-correctness/issues/`.
-    pub const fn issue(reference: &'static str) -> Self {
-        assert!(
-            !reference.is_empty(),
-            "a DOCUMENTED-EXCEPTION must cite an issue"
-        );
-        Self(reference)
-    }
-
-    /// The cited reference.
-    pub const fn as_str(&self) -> &'static str {
-        self.0
-    }
-}
-
-/// How seriously the catalog takes a violation of an entry. See the module
-/// docs; there are two tiers and there is no third.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tier {
-    /// A violation is a defect. Asserted by the state-machine hook.
-    Hard,
-    /// The state is reachable and deliberate; the [`Citation`] says where that
-    /// was ruled. Reported by [`check_all`], never asserted.
-    DocumentedException(Citation),
-}
+// `Violation`, `Citation` and `Tier` are the shared catalog vocabulary,
+// defined once in `frogdb-types` so `frogdb-replication` can name them
+// without depending on this (locked) crate. See
+// `.scratch/replication-correctness/PRD.md` §8 D6.
+pub use frogdb_types::{Citation, Tier, Violation};
 
 /// One catalog entry: an id, the claim in one line, its tier, and the pure
 /// function that evaluates it.
