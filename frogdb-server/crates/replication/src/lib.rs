@@ -47,6 +47,8 @@ pub mod sync_counters;
 pub mod tracker;
 pub mod version_compat;
 pub mod wait_coordinator;
+#[cfg(test)]
+mod wire_golden;
 
 pub use apply::{
     ApplyError, ConsumeStats, ControlApplier, ReplicaApplier, ReplicaTxnBound, StreamedFrame,
