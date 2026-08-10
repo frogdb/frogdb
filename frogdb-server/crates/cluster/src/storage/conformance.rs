@@ -8,7 +8,7 @@
 //! openraft about what is on disk — is invisible to all of them
 //! (`.scratch/cluster-correctness/issues/done/21-no-layer-sees-the-raft-log-store.md`).
 //!
-//! This module is that missing layer, in two parts:
+//! This module is that missing layer, in three parts:
 //!
 //! * **[`openraft_conformance_suite`]** runs `openraft::testing::Suite` — the
 //!   log-store *and* state-machine conformance cases openraft ships for exactly
