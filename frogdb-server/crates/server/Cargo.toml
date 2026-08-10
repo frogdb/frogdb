@@ -184,6 +184,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 proptest.workspace = true
 frogdb-testing.workspace = true
 frogdb-test-harness.workspace = true
+# The shared simulation scheduler (tests/simulation/schedule.rs) is typed over
+# the invariant vocabulary rather than over any one arm's crate.
+frogdb-types.workspace = true
 rstest = "0.26"
 frogdb-telemetry = { workspace = true, features = ["testing"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }

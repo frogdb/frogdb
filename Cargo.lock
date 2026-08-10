@@ -1973,6 +1973,7 @@ dependencies = [
  "frogdb-test-harness",
  "frogdb-testing",
  "frogdb-txn",
+ "frogdb-types",
  "frogdb-vll",
  "futures",
  "hex",
