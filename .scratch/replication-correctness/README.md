@@ -9,4 +9,5 @@ schedules, `DEBUG REPLICATION CHECK` + Jepsen sweep, spec/gate integration. All 
 ruled 2026-08-10.
 
 Issues: 15 filed under [issues/open/](issues/open/) (2026-08-10), dependency order 01 → (02, 06,
-07, 11 parallel) → … → 15.
+07, 11 parallel) → … → 15. Issues 01 and 02 are in [issues/done/](issues/done/); the catalog's
+first pass added 16 and 17, both defects it found in shipped replication behavior.
