@@ -1,0 +1,61 @@
+# Cluster fault-scheduler regression seeds (cluster-correctness issue 09).
+#
+# Every seed here once failed a sweep. `test_cluster_scheduler_regression_seeds`
+# replays all of them in the default suite, forever — a seed leaves this file
+# only if the scenario it pins stops existing, never because it got slow.
+#
+# Format, one entry per line:
+#
+#     <seed> <family> [EXPECTED-FAILURE:<issue>] <why it is here>
+#
+# The family column is checked against `Schedule::from_seed(seed).family` by
+# `test_scheduler_regression_seed_file_parses`. It is not decoration: if the
+# derivation's draw order ever changes, a seed silently starts replaying a
+# different scenario, and that check is what catches it. When the derivation
+# changes deliberately, re-derive this column rather than deleting the check.
+#
+# Seeds whose defect is not yet fixed carry an `EXPECTED-FAILURE:<issue>`
+# column, the same way the cluster proptest muzzles its known-open cases —
+# never dropped, so the fix turns the muzzle off rather than needing the case
+# rediscovered. Such a seed is asserted to *still fail*: when the issue is
+# fixed, `test_cluster_scheduler_regression_seeds` goes red and says to delete
+# the marker. The sweeps skip muzzled seeds so they report only new failures.
+
+# The two scripted sims this scheduler subsumed, kept as named regressions so
+# the scenarios they pinned keep running under the generalized harness:
+#
+#   seed 2 — no faults: MOVED/ASK redirect following must converge on the one
+#            correct owner and stay there (was
+#            `test_cluster_moved_redirect_convergence`).
+#   seed 5 — leader isolated mid slot-migration; the surviving majority must
+#            re-elect, commit the ownership transfer, and converge on a single
+#            owner after the heal (was
+#            `test_cluster_leader_partition_mid_migration_converges`).
+2 healthy subsumes test_cluster_moved_redirect_convergence: MOVED/ASK convergence with no faults
+5 leader-isolation subsumes test_cluster_leader_partition_mid_migration_converges: leader isolated mid-migration
+
+# Open defects the scheduler found. Each is muzzled against its issue and
+# asserted to still reproduce; delete the marker with the fix.
+#
+#   issue-20 = .scratch/cluster-correctness/issues/open/
+#              20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md
+#
+# Issue 17 is dense: 10 of the first 100 seeds hit it, and 36 of the 490
+# unmuzzled seeds in a 500-seed sweep. Only the ten below are muzzled — 46
+# replays of one defect would cost the per-PR suite minutes and add nothing over
+# the canonical seeds 3 and 72 — so the nightly sweep stays red until it is
+# fixed, and the rest of its seeds are listed in the issue. Triage rule —
+# an `XNODE-SLOT-1` whose probe shows a node serving a slot that the other nodes'
+# `CLUSTER NODES` no longer list at all is issue 20, not a new defect. When it is
+# fixed, prune these to seeds 3 and 72 (the canonical case and the divergent-value
+# flavor) rather than keeping nine copies of one scenario.
+3 replica-partition EXPECTED-FAILURE:issue-20 XNODE-SLOT-1: forced auto-failover evicts the old primary from the Raft voter set, so it never learns it lost slot 14438 and keeps serving it after the heal
+13 replica-partition EXPECTED-FAILURE:issue-20 same split as seed 3
+17 replica-partition EXPECTED-FAILURE:issue-20 same split as seed 3
+21 mixed EXPECTED-FAILURE:issue-20 same split as seed 3, reached through a mixed schedule rather than a single held edge
+24 replica-partition EXPECTED-FAILURE:issue-20 same split as seed 3
+25 replica-partition EXPECTED-FAILURE:issue-20 same split as seed 3
+39 replica-partition EXPECTED-FAILURE:issue-20 same split as seed 3, on slot 865 rather than 14438
+50 replica-partition EXPECTED-FAILURE:issue-20 same split as seed 3
+72 replica-partition EXPECTED-FAILURE:issue-20 worst flavor of the seed-3 split: both halves serve the same key with *different* values (n0=v42, n2=v8), and a second slot splits in the same run
+99 mixed EXPECTED-FAILURE:issue-20 same split as seed 3, reached through a mixed schedule

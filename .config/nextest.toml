@@ -73,6 +73,17 @@ filter = "test(simulation::test_cluster_)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 test-group = "cluster"
 
+# The seed-driven fault scheduler that generalizes those sims
+# (`simulation::scheduler`, cluster-correctness issue 09). Its default-suite entry points
+# each replay several whole 3-node sims back-to-back (the six-seed smoke sweep, the
+# determinism double-run, the regression-seed list), so they cost roughly what a handful
+# of the scripted sims above cost — same headroom, same concurrency cap. The sweep
+# proper is `#[ignore]`d out of this tier; see the `cluster-seeds` profile.
+[[profile.default.overrides]]
+filter = "test(simulation::scheduler::)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+test-group = "cluster"
+
 # The cluster state-machine property harness (`frogdb-cluster` `properties`
 # module). At the default case budget the whole module finishes in well under a
 # second. Keep a hard kill — unlike the nightly seed sweep this test also runs
@@ -95,6 +106,17 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 
 [[profile.cluster-proptest.overrides]]
 filter = "package(frogdb-cluster) & test(properties::)"
+slow-timeout = { period = "120s" }
+
+# The cluster fault-scheduler sweep, selected by `just cluster-seeds` (and therefore by
+# the nightly workflow, which is exactly that recipe). How long it runs is the caller's
+# SEEDS budget, so — like `seed_sweep_nightly` — mark it slow and never force-terminate
+# it; the real bound is the CI job's `timeout-minutes`. Everything else inherits the
+# default profile unchanged.
+[profile.cluster-seeds]
+
+[[profile.cluster-seeds.overrides]]
+filter = "test(simulation::scheduler::test_cluster_scheduler_seed_sweep)"
 slow-timeout = { period = "120s" }
 
 # The nightly generated-workload seed sweep (opt-in via `just concurrency-nightly`;
