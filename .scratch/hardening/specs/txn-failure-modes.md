@@ -78,7 +78,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Trigger | `DISCARD` with a transaction open, queued commands present or not, `exec_abort` set or not. |
 | Observable | `+OK`. A following `EXEC` answers `-ERR EXEC without MULTI` (FM-TXN-002); a following `MULTI` opens a clean transaction whose EXEC is unaffected by concurrent writes to previously watched keys. |
 | NOT observable | Any queued command executing; a surviving `exec_abort` poisoning the *next* transaction; a surviving watch causing a later spurious abort; a surviving sticky `ASKING`. |
-| Invariant | `TransactionState::discard` resets queue, watch set, slot accumulator, `exec_abort` and `asking` in one move, and reports the discarded queue length to the metrics recorder under the `discarded` label. |
+| Invariant | `TransactionState::discard` resets queue, watch set, slot accumulator and `exec_abort` in one move and returns the discarded queue length as `TxnMetrics`; the sticky `ASKING` flag lives connection-side and is cleared by `ConnectionState::discard_transaction`, whose DISCARD executor reports the returned metrics to the recorder under the `discarded` label. |
 | Outcome variant | n/a (`DISCARD` never enters `execute_transaction`) |
 | Forced by | `test_multi_discard`, `discard_resets_everything_including_watches`, `asking_cleared_by_discard`, `test_multi_exec_cross_slot_returns_error` |
 | Bug refs | none |
