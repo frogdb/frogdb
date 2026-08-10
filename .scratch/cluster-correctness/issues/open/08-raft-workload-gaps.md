@@ -129,6 +129,7 @@ noted above) at current HEAD.
 | # | Workload | Verdict | Notes |
 |---|----------|---------|-------|
 | 1 | `cross-slot-partition` | PASS (1:14) | `valid? true` all sub-checks; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
+| 2 | `cross-slot-kill` | PASS (1:16) | `valid? true` all sub-checks; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 
 ### Remaining
 
