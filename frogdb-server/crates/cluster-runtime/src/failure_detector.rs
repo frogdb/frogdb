@@ -2221,4 +2221,159 @@ mod tests {
         .await;
         handle.abort();
     }
+
+    // ---- Generated config admission (issue 22, FM-CLUSTER-102) -------------
+    //
+    // `FailureDetectorConfig` is startup data: it arrives from `frogdb.conf`
+    // (`ClusterConfigSection`) or a hand-built value in a test, and nothing
+    // upstream of `FailureDetector::new` validates it. The three point
+    // witnesses above (`degenerate_zero_config_is_clamped_to_safe_minimums`,
+    // `huge_config_values_are_clamped_and_do_not_overflow_the_staleness_multiply`,
+    // `a_zero_check_interval_does_not_panic_the_detector_task`) each pin one
+    // hand-picked degenerate input. This module generates the space between
+    // and around those points so a clamp regression that misses the exact
+    // literals above still gets caught.
+    //
+    // No other constructor in this crate takes a millisecond knob straight
+    // from a config struct — `handoff_barrier`'s `barrier_ms` is relayed data
+    // from a Raft-replicated event, not a value admitted here, and every
+    // other module's `new` takes booleans/priorities with no timing
+    // arithmetic downstream. `FailureDetectorConfig` is the crate's only
+    // instance of this shape today; C1/C2 are written generically enough
+    // (drive any generated config through the real constructor, check what
+    // comes out and what derives from it) that a second one added later
+    // slots into the same two properties rather than needing its own.
+    mod config_admission {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Full-`u64`-range strategy for a millisecond knob, with the
+        /// degenerate values that define FM-CLUSTER-102 — 0, 1, `MAX`,
+        /// `MAX - 1` — weighted in rather than left to a 1-in-2^64 chance of
+        /// being drawn from `any::<u64>()`.
+        fn arb_ms_u64() -> impl Strategy<Value = u64> {
+            prop_oneof![
+                1 => Just(0u64),
+                1 => Just(1u64),
+                1 => Just(u64::MAX - 1),
+                1 => Just(u64::MAX),
+                6 => any::<u64>(),
+            ]
+        }
+
+        /// Same shape as [`arb_ms_u64`], over `fail_threshold`'s `u32` range.
+        fn arb_fail_threshold() -> impl Strategy<Value = u32> {
+            prop_oneof![
+                1 => Just(0u32),
+                1 => Just(1u32),
+                1 => Just(u32::MAX - 1),
+                1 => Just(u32::MAX),
+                6 => any::<u32>(),
+            ]
+        }
+
+        /// Every field of [`FailureDetectorConfig`] drawn independently over
+        /// its full representable range. Deliberately does **not** pre-clamp
+        /// or otherwise bias toward sane values: the whole point is to hand
+        /// the constructor exactly what an operator's config file, or a
+        /// caller that built the struct by hand, could contain.
+        fn arb_failure_detector_config() -> impl Strategy<Value = FailureDetectorConfig> {
+            (arb_ms_u64(), arb_ms_u64(), arb_fail_threshold()).prop_map(
+                |(check_interval_ms, connect_timeout_ms, fail_threshold)| FailureDetectorConfig {
+                    check_interval_ms,
+                    connect_timeout_ms,
+                    fail_threshold,
+                },
+            )
+        }
+
+        /// Build a detector from a generated config against a minimal fixture
+        /// (self plus one peer, default flags, a network on which nobody
+        /// answers). What C1/C2 exercise is the constructor's admission of
+        /// `cfg` and what derives from the config it stores, not the
+        /// detector's probing/reconciliation behavior, so the rest of the
+        /// fixture is intentionally the simplest one that type-checks.
+        fn build_with(cfg: FailureDetectorConfig) -> Fixture {
+            build(
+                1,
+                vec![primary_node(1), primary_node(2)],
+                cfg,
+                ClusterRuntimeFlags::default(),
+                network_reporting(&[]),
+            )
+        }
+
+        proptest! {
+            /// **C1** — admission is total: constructing a detector from
+            /// *any* generated [`FailureDetectorConfig`] never panics, and
+            /// the config it reports back through the accessor always lies
+            /// inside `[MIN_*, MAX_*]` for every field — never the raw value
+            /// a caller passed in. This is the universal form of the three
+            /// point witnesses; it fails on the first generated case once
+            /// `FailureDetector::new`'s `config.clamped()` call is removed,
+            /// because an unclamped `0` or `u64::MAX`/`u32::MAX` input is
+            /// then reported back verbatim.
+            #[test]
+            fn c1_admission_is_total(cfg in arb_failure_detector_config()) {
+                let f = build_with(cfg);
+                let admitted = f.detector.config();
+
+                prop_assert!(
+                    (MIN_CHECK_INTERVAL_MS..=MAX_CHECK_INTERVAL_MS)
+                        .contains(&admitted.check_interval_ms),
+                    "check_interval_ms {} outside [{MIN_CHECK_INTERVAL_MS}, {MAX_CHECK_INTERVAL_MS}]",
+                    admitted.check_interval_ms,
+                );
+                prop_assert!(
+                    (MIN_CONNECT_TIMEOUT_MS..=MAX_CONNECT_TIMEOUT_MS)
+                        .contains(&admitted.connect_timeout_ms),
+                    "connect_timeout_ms {} outside [{MIN_CONNECT_TIMEOUT_MS}, {MAX_CONNECT_TIMEOUT_MS}]",
+                    admitted.connect_timeout_ms,
+                );
+                prop_assert!(
+                    (MIN_FAIL_THRESHOLD..=MAX_FAIL_THRESHOLD).contains(&admitted.fail_threshold),
+                    "fail_threshold {} outside [{MIN_FAIL_THRESHOLD}, {MAX_FAIL_THRESHOLD}]",
+                    admitted.fail_threshold,
+                );
+
+                // Exercises `HealthTable::stale_threshold`'s multiply end to
+                // end through the admitted config; must not panic for any
+                // input this property generated.
+                let _ = f.detector.has_quorum();
+            }
+
+            /// **C2** — every duration this crate derives from an admitted
+            /// config is finite (its arithmetic does not overflow `Duration`)
+            /// and non-zero. Covers the three call sites that read
+            /// `FailureDetectorConfig` fields directly: `raft_write_timeout`,
+            /// the background task's interval/timeout construction
+            /// (mirrored from `spawn_failure_detector_task`, which needs a
+            /// live Tokio runtime to reach directly), and
+            /// `HealthTable::stale_threshold`. A future derivation reusing
+            /// any of these fields is caught by this same property rather
+            /// than needing its own row.
+            #[test]
+            fn c2_every_derived_duration_is_finite_and_nonzero(cfg in arb_failure_detector_config()) {
+                let f = build_with(cfg);
+                let admitted = f.detector.config().clone();
+
+                prop_assert!(f.detector.raft_write_timeout() > Duration::ZERO);
+
+                // Mirrors spawn_failure_detector_task's interval/timeout
+                // construction; a zero duration here is exactly what makes
+                // `tokio::time::interval` panic on its first tick.
+                let task_interval = Duration::from_millis(admitted.check_interval_ms);
+                let task_timeout = Duration::from_millis(admitted.connect_timeout_ms);
+                prop_assert!(task_interval > Duration::ZERO);
+                prop_assert!(task_timeout > Duration::ZERO);
+
+                // Mirrors HealthTable::stale_threshold's `check_interval *
+                // (fail_threshold + 2)` multiply; panics on overflow if the
+                // admitted values are not held inside their documented
+                // bounds.
+                let table = HealthTable::new(admitted.fail_threshold, task_interval);
+                prop_assert!(table.stale_threshold() > Duration::ZERO);
+            }
+        }
+    }
 }
