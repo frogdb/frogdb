@@ -600,6 +600,42 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU64, AtomicUsize};
 
+    /// The invariant hook in [`ReplicaConnection::set_state`] fires on a dirty
+    /// view. `set_state` is private, so its forcing test lives here rather than
+    /// with the rest of the seam tests in `invariants::tests`. The dirt is a
+    /// malformed replication id, which is what `INV-REPLID-3` claims about and
+    /// the only claim a replica-side view carries the fields for.
+    #[test]
+    #[should_panic(expected = "ReplicaConnection::set_state")]
+    fn the_set_state_seam_is_hooked() {
+        let (_client, server) = tokio::io::duplex(64);
+        let mut st = ReplicationState::new();
+        st.replication_id = "nonsense".to_string();
+        let state = Arc::new(RwLock::new(st));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(0)),
+            AppliedOffset::detached(0),
+        );
+
+        let mut conn = ReplicaConnection {
+            stream: Box::new(server),
+            _primary_addr: "127.0.0.1:6379".parse().unwrap(),
+            state,
+            connection_state: ConnectionState::Connected,
+            data_dir: PathBuf::from("/tmp/frogdb-test"),
+            offsets,
+            link_up: Arc::new(AtomicBool::new(false)),
+            ack_interval: Duration::from_secs(1),
+            snapshot_installer: None,
+            sync_refusal: Arc::new(RwLock::new(None)),
+            pending_stream_bytes: BytesMut::new(),
+            net_bytes: Arc::new(NetByteCounters::default()),
+        };
+
+        conn.set_state(ConnectionState::Streaming);
+    }
+
     #[test]
     fn psync_request_args_asks_full_resync_when_never_synced() {
         let (id, offset) = psync_request_args("abc", 0);

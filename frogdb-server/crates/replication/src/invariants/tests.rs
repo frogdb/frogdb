@@ -768,6 +768,15 @@ fn the_ring_buffer_arm_start_seam_is_hooked() {
 // only part of that state is exactly the defect it would catch; see the note
 // at the seam.
 
+// `PartialSyncReplay::handle_partial_sync_request` has no forcing test for the
+// same reason: the only field it adds to the backlog view is the grant, and a
+// grant exists only on the path that already proved both of `INV-BACKLOG-2`'s
+// bounds — `can_replay` refuses unless the floor is armed and at or below the
+// requested offset, and `window_contains` refuses unless that offset is at or
+// below the offset the grant replays to. No caller can hand it a decision that
+// fails the entry. The hook is the guard on those two checks staying paired
+// with the grant they justify.
+
 fn announced_session(
     tracker: &ReplicationTrackerImpl,
     port: u16,
@@ -841,3 +850,90 @@ fn the_set_phase_seam_is_hooked() {
 // The hook stays for the same reason as `reset`'s: it is the *pair* of
 // accessors it guards, and a future gate that latches `is_held` separately
 // would break here first.
+
+/// A coordinator whose identity is malformed, so every one of its seams has a
+/// dirty view to check — the four below differ only in which call reaches it.
+fn coordinator_over_a_malformed_identity() -> crate::offset_coordinator::OffsetCoordinator {
+    let tracker = ReplicationTrackerImpl::new_arc();
+    let mut state = clean_state();
+    state.replication_id = "nonsense".to_string();
+    let identity = crate::identity::ReplicationIdentity::adopting(state, &tracker);
+    crate::offset_coordinator::OffsetCoordinator::new(tracker, &identity)
+}
+
+#[test]
+#[should_panic(expected = "OffsetCoordinator::advance")]
+fn the_advance_seam_is_hooked() {
+    let coordinator = coordinator_over_a_malformed_identity();
+    coordinator.advance(&Bytes::from_static(b"*1\r\n$4\r\nPING\r\n"));
+}
+
+#[test]
+#[should_panic(expected = "OffsetCoordinator::settle_at_applied")]
+fn the_settle_at_applied_seam_is_hooked() {
+    let coordinator = coordinator_over_a_malformed_identity();
+    let _ = coordinator.settle_at_applied();
+}
+
+#[test]
+#[should_panic(expected = "OffsetCoordinator::ingest_replica_ack")]
+fn the_ingest_replica_ack_seam_is_hooked() {
+    let coordinator = coordinator_over_a_malformed_identity();
+    coordinator.ingest_replica_ack(1, 0);
+}
+
+#[test]
+#[should_panic(expected = "OffsetCoordinator::seed_replica_position")]
+fn the_seed_replica_position_seam_is_hooked() {
+    let coordinator = coordinator_over_a_malformed_identity();
+    coordinator.seed_replica_position(1, 0);
+}
+
+/// A promotion handler over `tracker`, so a test can dirty the registry the
+/// handler's whole-node view reads. The identity is clean: the stint seams are
+/// forced through the *session* claims, because every identity claim would fire
+/// at an inner seam first (`settle_at_applied`, `new_replication_id`) and name
+/// that seam instead of this one.
+fn stint_handler_over(
+    dir: &std::path::Path,
+    tracker: Arc<ReplicationTrackerImpl>,
+) -> crate::primary::PrimaryReplicationHandler {
+    let identity = crate::identity::ReplicationIdentity::adopting(clean_state(), &tracker);
+    crate::primary::PrimaryReplicationHandler::new(
+        identity,
+        dir.join("replication_state.json"),
+        tracker,
+        None,
+        dir.to_path_buf(),
+        crate::LagThresholdConfig {
+            threshold_bytes: 0,
+            threshold_secs: 0,
+            cooldown: std::time::Duration::from_secs(0),
+        },
+        crate::BacklogConfig::default(),
+        1_000,
+        crate::feed_gate::ReplicaFeedGate::open(),
+    )
+}
+
+#[test]
+#[should_panic(expected = "PrimaryReplicationHandler::begin_primary_stint")]
+fn the_begin_primary_stint_seam_is_hooked() {
+    let dir = tempfile::tempdir().unwrap();
+    let tracker = ReplicationTrackerImpl::new_arc();
+    let handler = stint_handler_over(dir.path(), tracker.clone());
+    let _first = announced_session(&tracker, 7000);
+    let _second = announced_session(&tracker, 7000);
+    let _ = handler.begin_primary_stint();
+}
+
+#[test]
+#[should_panic(expected = "PrimaryReplicationHandler::end_primary_stint")]
+fn the_end_primary_stint_seam_is_hooked() {
+    let dir = tempfile::tempdir().unwrap();
+    let tracker = ReplicationTrackerImpl::new_arc();
+    let handler = stint_handler_over(dir.path(), tracker.clone());
+    let _first = announced_session(&tracker, 7000);
+    let _second = announced_session(&tracker, 7000);
+    handler.end_primary_stint();
+}
