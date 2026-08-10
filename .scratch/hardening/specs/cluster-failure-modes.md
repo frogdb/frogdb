@@ -1430,6 +1430,14 @@ write, and a property over generated append/truncate/purge sequences that judges
 against the `raft_logs` column family itself rather than against another read through the same
 cache.
 
+Of the two generated witnesses only the property discriminates: re-reverting the fix leaves the
+reader-backed suite green, because openraft's own cases never read an index, overwrite it, and read
+it again through the same handle — the exact interleaving the detached cache needs. The property
+shrinks that interleaving to a single operation and reports it as a term mismatch at a named index.
+The reader-backed suite is listed here anyway because it is what makes the reader path conform at
+all — before it, no case in the suite ran through a reader — and it is the layer that would catch a
+reader diverging for any *other* reason.
+
 ## FM-CLUSTER-100 — the handoff generation survives a snapshot restore instead of restarting at zero
 
 | Field | Value |

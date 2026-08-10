@@ -62,6 +62,6 @@ Method notes worth carrying forward:
   below, one beside), and L1's hook is what multiplied a single 100 violation into three
   independent witnesses.
 
-New issues: [21](../open/21-no-layer-sees-the-raft-log-store.md) (openraft storage-conformance layer),
+New issues: [21](../done/21-no-layer-sees-the-raft-log-store.md) (openraft storage-conformance layer),
 [22](../open/22-no-layer-generates-runtime-config-values.md) (generated config admission). This gate
 should be re-run once both land.
