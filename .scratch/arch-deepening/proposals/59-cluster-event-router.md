@@ -24,18 +24,21 @@ FM-CLUSTER-037/038 routing unchanged". Verified against the current tree (`9a62f
 - **The claim is materially understated in one place.** The three channels are not symmetric
   copies of one rule — they implement *three different* delivery policies (self-filtered,
   broadcast, broadcast-with-consumer-side-filter), and one of the three, the slot-handoff pair
-  (`:990-1019`, 30 of the 83 lines), is **forced by no test anywhere in the workspace**. It is
-  the seam between FM-CLUSTER-087 (which forces the *emission*, in `commands.rs`) and
+  (`:990-1019`, 30 of the 83 lines), is **forced by no test in either locked crate**. It is the
+  seam between FM-CLUSTER-087 (which forces the *emission*, in `commands.rs`) and
   FM-CLUSTER-090 (which forces the *consumption*, in `cluster-runtime`); each locked crate
-  tests its own half and the adapter between them is tested by neither.
+  tests its own half, and the only tests that force the adapter between them live in
+  `frogdb-server` (`server/tests/cluster_handoff_barrier.rs`), which
+  `cargo mutants -p frogdb-cluster` never runs. The coverage exists; the **gate cannot see
+  it**, so the region scores as covered on a technicality.
 - **FM-CLUSTER-037/038 are the wrong rows.** -037 is the commit-to-apply window (routing is
   `route_with_snapshot`, an unrelated function) and -038 is the *consumer*
   (`cluster-runtime/src/migration_events.rs`). The rows this proposal actually touches are
   **FM-CLUSTER-043, -044, -045, -046** (role-event routing and reconciliation) and, for the
   new pins, **-034** and **-087**.
 - **One defect was found**, in the identity the self-filter compares against. It is labelled
-  **latent with a bounded reachability argument** below — not "live" — and the honest fix is
-  spec-first, so it is not folded into the extraction.
+  **live, user-visible, low-severity and bounded** below — reachable in one command on today's
+  tree — and the honest fix is spec-first, so it is not folded into the extraction.
 
 ## Files involved (verified at `9a62f79b`)
 
@@ -45,14 +48,19 @@ All paths under `frogdb-server/crates/` unless noted.
 |---|---:|---|
 | `cluster/src/state.rs` | 4402 | **the change.** `ClusterState.self_node_id: Arc<AtomicU64>` `:26-28`; `self_node_id()` `:210-213`, `set_self_node_id()` `:216-218`; `apply_local` `:338-342`; the four channel-facing event types `DemotionEvent` `:518-527`, `PromotionEvent` `:529-536`, `RoleChangeEvent` `:538-552`, `SlotMigrationCompleteEvent` `:554-560`, `SlotHandoffEvent` `:562-595`; **`ClusterStateMachine` fields `:598-611`**; ctor `new` `:615-624`; ctor `with_state` `:627-636`; `enable_role_change_detection` `:700-708`; `enable_migration_complete_notification` `:714-720`; `enable_slot_handoff_notification` `:729-735`; `self_role` `:744-747`; `reconcile_self_role` `:764-769`; `self_role_reconciler` `:776-786`; `emit_self_role_change` `:791-796`; `SelfRoleReconciler` `:824-829` + impl `:845-890`; **`apply` `:914-1040`, fan-out `:942-1024`**; ctor `get_snapshot_builder` `:1042-1054`; `install_snapshot` role diff `:1086`, `:1093-1096`; tests `:1166-4402` |
 | `cluster/src/types.rs` | 1313 | `ClusterEvent` `:477-537` — the five node-agnostic variants the router consumes. **Not changed by this proposal**; shared read-only with proposal 60 |
-| `cluster/src/commands.rs` | 2101 | `apply_command` `:94-…` — the producer. `release_events` `:18-32`; `ResetCluster` arm `:816-862`. **Not changed**; cited as the FM-CLUSTER-087 half that *is* tested (`abort_releases_the_barrier_and_keeps_the_migration` `:1578`, `cancel_releases_a_prepared_handoff` `:1610`, `force_failover_releases_the_handoffs_it_prunes` `:1643`, `reset_releases_prepared_handoffs` `:1675`) |
+| `cluster/src/commands.rs` | 2101 | `apply_command` `:94-…` — the producer. `release_events` `:18-32`; `SetRole` arm `:293-…` (emit sites `:318`, `:337-345`); `ResetCluster` arm `:816-861` (`this_node.role = NodeRole::Primary` `:834`). **Not changed**; cited as the FM-CLUSTER-087 half that *is* tested in-crate (`abort_releases_the_barrier_and_keeps_the_migration` `:1578`, `cancel_releases_a_prepared_handoff` `:1610`, `cancel_without_a_handoff_emits_nothing` `:1631`, `force_failover_releases_the_handoffs_it_prunes` `:1643`, `reset_releases_prepared_handoffs` `:1675`) |
+| `server/tests/cluster_handoff_barrier.rs` | 723 | **the coverage the `enable_*` grep could not see.** A real 3-node cluster driven through production wiring; forces both handoff arms end-to-end (`finalize_handoff` `:208`, `a_write_parked_by_the_barrier_wakes_up_redirected` `:240`, plus `:299`, `:391`, `:460`, `:519`, `:635`). Lives in `frogdb-server`, so `cargo mutants -p frogdb-cluster` never runs it. **Not changed** |
+| `server/src/slot_migration/mod.rs` | — | `spawn_handoff_barrier` `:118-131` — how the harness reaches `slot_handoff_tx` without ever naming `enable_slot_handoff_notification`: `run_slot_handoff_barrier` at `:128`. **Not changed** |
 | `cluster/src/lib.rs` | 95 | `pub use state::{…}` `:71-74` — the crate's public event surface. Gains the router type; `ClusterEvent` stays crate-internal |
 | `cluster/src/writer.rs` | 660 | `propose_reset` `:219-254`, `set_self_node_id(new_id)` `:250` — the HARD-reset re-key that the state machine's cached identity does not follow. **Not changed** by step 1 |
 | `cluster-runtime/src/handoff_barrier.rs` | 465 | the *precedent*: `HandoffAction` `:71-91`, **`plan_handoff_action` `:96-120`** (pure planner), `run_slot_handoff_barrier` `:175-…`, and `cluster_state.self_node_id()` `:190` — the consumer that reads the **live** identity. Also the downstream half of the untested seam. **Not changed** |
 | `cluster-runtime/src/migration_events.rs` | 251 | the other precedent (`plan_migration_notice` + delivery, FM-CLUSTER-038). **Not changed**; lane counter-example, deliberately untouched |
-| `server/src/server/cluster_init.rs` | 1938 | the single production wiring site: `cluster.set_self_node_id(node_id)` `:200`, `with_state` `:202`, `enable_role_change_detection` `:216`, `reconcile_self_role` `:226`, `enable_migration_complete_notification` `:237`, `enable_slot_handoff_notification` `:240`, `self_role_reconciler` `:421`, reconcile ticker `:704-727`. **Conflict edge with proposals 62 and 60** |
-| `server/src/commands/cluster/admin.rs` | — | `cluster_reset` `:390-429` — HARD mints `rand::random::<u64>()` as `new_node_id` (`:411-419`). Evidence for the reachability argument only |
-| `.scratch/hardening/specs/cluster-failure-modes.md` | 1500+ | FM-CLUSTER-034 `:566`, -043 `:685`, -044 `:697`, -045 `:709`, -046 `:721`, -087 `:1237`, -090 `:1274`; the mis-cited -037 `:603`, -038 `:615` |
+| `server/src/server/cluster_init.rs` | 1938 | the single production wiring site: `cluster.set_self_node_id(node_id)` `:200`, `with_state` `:202`, `enable_role_change_detection` `:216`, `reconcile_self_role` `:226`, `enable_migration_complete_notification` `:237`, `enable_slot_handoff_notification` `:240`, `self_role_reconciler` `:421`, reconcile ticker `:704-727`. **Not edited by this proposal** (criterion 3). An earlier draft called this a conflict edge with 60 and 62; neither opens the file — 60 rebuts it explicitly at `60-migration-table.md:607-611`, and 62 never mentions it |
+| `server/src/connection/deps.rs` | — | **the third home for node identity**: `ClusterDeps.node_id: Option<u64>` `:95`, set once at `:151` from `cluster_init`. ~15 readers (see §4). **Not changed** by either step |
+| `server/src/commands/cluster/admin.rs` | — | `cluster_reset` `:390-429` — the empty-store guard `:405-409`, HARD mints `rand::random::<u64>()` as `new_node_id` (`:411-419`), and it reads `ctx.node_id` (`:395`) like every other admin command. Evidence for the reachability argument only |
+| `server/src/connection/cluster.rs` | 229 | `handle_reset_command` `:161-186` — transport cleanup only (`network_factory.remove_node`); nothing on the data path. Evidence for the reachability argument only |
+| `server/src/commands/cluster/mod.rs`, `server/src/commands/info.rs` | — | the user-visible pair: `cluster_myid` `:494-499` and `INFO replication`'s `role:` `:502-505` (rendered from `ctx.is_replica`, not from cluster state). Evidence only |
+| `.scratch/hardening/specs/cluster-failure-modes.md` | 1500+ | FM-CLUSTER-017 `:327`, -034 `:566`, -043 `:685`, -044 `:697`, -045 `:709`, -046 `:721`, -087 `:1237`, -090 `:1274`; the mis-cited -037 `:603`, -038 `:615`. The seven stale line-citations are in the Invariant cells at `:334`, `:573`, `:692` (two), `:704`, `:716`, `:728` |
 | `.cargo/mutants.toml` | 45 | gate config; no exclusion covers `state.rs` |
 
 ## Problem (verified evidence)
@@ -77,40 +85,75 @@ only by adjacency and comment. Nothing names the policy, so nothing can assert i
 happened to use, and the compiler's only help is match exhaustiveness — which the catch-all at
 `:1021-1022` already partially defeats for the role-event family.
 
-### 2. The slot-handoff arms are forced by nothing
+### 2. The slot-handoff arms are forced only from outside the gated crate
 
 `enable_slot_handoff_notification` (`state.rs:729`) has **exactly one caller in the workspace**:
-`cluster_init.rs:240`. No test anywhere constructs a `ClusterStateMachine`, enables that
-channel, and applies a `PrepareSlotHandoff`. Verified by exhaustive grep of the three
-`enable_*` methods: 24 test call sites for `enable_role_change_detection`, one for
-`enable_migration_complete_notification` (`state.rs:1722`, `test_migration_complete_event_fires`,
-FM-CLUSTER-034), **zero** for `enable_slot_handoff_notification`.
+`cluster_init.rs:240`. No test in either locked crate constructs a `ClusterStateMachine`,
+enables that channel, and applies a `PrepareSlotHandoff`. Verified by exhaustive grep of the
+three `enable_*` methods: 22 test call sites for `enable_role_change_detection` (23 hits in
+`state.rs` minus the definition at `:700`, all at or after `:1610`, i.e. inside `mod tests` at
+`:1167`), one for `enable_migration_complete_notification` (`state.rs:1722`,
+`test_migration_complete_event_fires`, FM-CLUSTER-034), **zero** for
+`enable_slot_handoff_notification`.
 
-The spec makes the gap legible rather than hiding it — both halves are specced, and the
-sentence that bridges them is prose in an Invariant cell, which `scripts/failure-modes.py`
-never parses:
+**That grep is not the whole story, and the correction sharpens the finding rather than
+softening it.** `server/tests/cluster_handoff_barrier.rs` (723 lines) drives a real 3-node
+cluster through production wiring and forces both handoff arms end to end. It never names
+`enable_slot_handoff_notification` — it reaches the channel the only way production does,
+`cluster_init.rs:240` → `slot_migration/mod.rs:118-131` → `run_slot_handoff_barrier` — which is
+structurally invisible to an `enable_*` grep. Two of its assertions bear directly on the 30
+lines at `state.rs:990-1019`:
 
-- **FM-CLUSTER-087** (`:1237`) forces *emission*: its four `Forced by` tests all live in
-  `commands.rs` (`:1578`, `:1610`, `:1643`, `:1675`) and assert the `Vec<ClusterEvent>`
-  returned by `apply_command`. Its Invariant cell then says *"The events are emitted from
-  `apply`, so they reach every node's dispatcher"* — an assertion about the 30 lines at
-  `state.rs:990-1019` that no test in its `Forced by` list executes.
-- **FM-CLUSTER-090** (`:1274`) forces *consumption*: its four tests live in
-  `cluster-runtime/src/handoff_barrier.rs` and drive `plan_handoff_action` /
-  `run_slot_handoff_barrier` from `SlotHandoffEvent` values the tests construct by hand
-  (`:249-266`).
+- `a_write_parked_by_the_barrier_wakes_up_redirected` (`:240`, FM-CLUSTER-092). A `SET` parks on
+  the migrating slot and wakes only when the barrier lifts; the lift can arrive *only* through
+  the `SlotHandoffReleased` arm at `state.rs:1007-1019` → `slot_handoff_tx` →
+  `run_slot_handoff_barrier`. Delete that arm and the test fails on
+  `.expect("the parked write never woke: the handoff did not release the barrier")`.
+- `finalize_handoff` (`:208`), the helper shared by four tests (`:258`, `:443`, `:502`, `:711`),
+  requires the
+  `SlotHandoffPrepared` arm at `state.rs:990-1006` *including* `seq`: the source only confirms
+  the drain after `plan_handoff_action` arms from that event, and the confirmation is filtered
+  on `h.seq == seq`. Deleting the arm, mis-carrying a field, or dropping `seq` lands as a
+  `SETSLOT … NODE` that never completes.
 
-So the workspace proves "`apply_command` emits a `ClusterEvent::SlotHandoffPrepared`" and
-proves "a `SlotHandoffEvent::Prepared` arms the barrier", and proves nothing about the
-translation joining them. The two are separate types with separate field sets, translated by
-hand at `:998-1005` and `:1013-1017`. Field-name shorthand makes a *swap* impossible today,
-but the arm being deleted, the guard being inverted, or `seq` being dropped are all changes
-that compile and that no test in either locked crate observes.
+Five more tagged tests in that file exercise the same path: `:299` (FM-CLUSTER-091/-087), `:391`
+(-093/-083), `:460` (-094), `:519` (-096), `:635` (-097).
 
-Because the whole fan-out is *inside* `apply`, `cargo mutants` sees it as part of one target
-(`apply`'s body), killed trivially by any of the many tests that apply an entry. The 0.80 gate
-therefore scores this region as covered. **The gate is not wrong; the shape of the code is
-hiding a blind spot from it.**
+So the true claim is narrower and more actionable than "untested":
+
+> **No test in `frogdb-cluster` or `frogdb-cluster-runtime` forces the translation, and
+> `cargo mutants -p frogdb-cluster` never runs the tests that do.**
+
+`cargo mutants -p <crate>` runs only that package's own tests (CLAUDE.md: *"Put the forcing test
+in the mutated crate"*), so the `frogdb-server` integration coverage contributes **zero** to the
+0.80 gate on `frogdb-cluster`. Compounding it: because the whole fan-out is *inside* `apply`,
+`cargo mutants` sees it as part of one target (`apply`'s body), killed trivially by any of the
+many in-crate tests that apply an entry. **The gate is not wrong; the shape of the code plus the
+placement of the forcing tests is hiding a blind spot from it** — the region is genuinely
+exercised, and genuinely unscoreable.
+
+The spec records the seam honestly, and the sentence that bridges the halves is prose in an
+Invariant cell, which `scripts/failure-modes.py` never parses:
+
+- **FM-CLUSTER-087** (`:1237`) forces *emission*: **six** `Forced by` tests, five in-crate in
+  `commands.rs` (`abort_releases_the_barrier_and_keeps_the_migration` `:1578`,
+  `cancel_releases_a_prepared_handoff` `:1610`, `cancel_without_a_handoff_emits_nothing` `:1631`,
+  `force_failover_releases_the_handoffs_it_prunes` `:1643`, `reset_releases_prepared_handoffs`
+  `:1675`) asserting the `Vec<ClusterEvent>` returned by `apply_command`, plus
+  `a_source_that_cannot_drain_aborts_the_finalization`
+  (`server/tests/cluster_handoff_barrier.rs:299`). Its Invariant cell says *"The events are
+  emitted from `apply`, so they reach every node's dispatcher"* — and the sixth test **does**
+  execute those 30 lines, from `frogdb-server`. The row is honest; what it cannot say is that the
+  only test executing its Invariant is one the owning crate's mutation gate never runs.
+- **FM-CLUSTER-090** (`:1274`) forces *consumption*: its four tests
+  (`handoff_barrier.rs:307`, `:343`, `:365`, `:396`) drive `plan_handoff_action` /
+  `run_slot_handoff_barrier` from `SlotHandoffEvent` values they construct by hand.
+
+The two channel-facing types are separate types with separate field sets, translated by hand at
+`:998-1005` and `:1013-1017`. Field-name shorthand makes a *swap* impossible today, but the arm
+being deleted, a field being mis-carried, or `seq` being dropped are all changes that compile,
+that no test in either locked crate observes, and that only a 3-node integration test in a third
+crate catches — minutes of wall clock, and invisible to `just mutants-gate frogdb-cluster 0.80`.
 
 ### 3. Four fields, three constructors, one "must remember" comment
 
@@ -133,13 +176,18 @@ on the replication side.
 
 ### 4. The identity the self-filter uses is a boot-time copy, and it is the wrong one
 
-There are **two** homes for "which node am I":
+There are **three** homes for "which node am I", and the third has the most readers:
 
 - `ClusterState.self_node_id: Arc<AtomicU64>` (`:26-28`), whose doc-comment states the
   contract explicitly: *"Shared across all connections so that HARD reset (which generates a
   new node ID) is visible immediately."* Read via `ClusterState::self_node_id()` (`:210-213`).
 - `ClusterStateMachine.self_node_id: Option<NodeId>` (`:600-601`), a plain `u64` copy taken
   once at `enable_role_change_detection` (`:705`) and never updated.
+- `ClusterDeps.node_id: Option<u64>` (`connection/deps.rs:95`), set once at `:151` from
+  `cluster_init` and read as `ctx.node_id` at ~15 sites: `admin.rs:132`, `:194`, `:247`, `:356`,
+  `:395` (inside `cluster_reset` itself), `:452`, `:486`; `commands/cluster/mod.rs:483`, `:487`,
+  `:497`, `:511`, `:556`, `:560`; `commands/info.rs:486` and `:502` (`master_replid` rendering);
+  `server/shards.rs:180`. This one is a boot-time copy too, and nothing re-points it.
 
 `SelfRoleReconciler` (`:824-829`) copies the *second* one again, at `:779`, into a handle that
 `cluster_init.rs:421` captures for the life of the process.
@@ -148,7 +196,7 @@ There are **two** homes for "which node am I":
 (`:250`) and cannot update the second — the state machine has been moved into
 `openraft::Raft::new` by then. `CLUSTER RESET HARD` mints `new_node_id` as
 `rand::random::<u64>()` (`admin.rs:411-419`), and the `ResetCluster` arm re-keys this node's
-record to it (`commands.rs:839-849`).
+record to it (`commands.rs:840-845`).
 
 After a HARD reset, therefore, for the remaining life of the process:
 
@@ -165,34 +213,92 @@ The three mechanisms the spec relies on to keep the data-path role converged wit
 replicated role are all keyed off the same stale copy, so they fail together and silently.
 Note the asymmetry that makes this a genuine inconsistency rather than a design choice: the
 *handoff* consumer already reads the live identity (`handoff_barrier.rs:190`
-`cluster_state.self_node_id()`), because it was written later and reached for the shared cell.
-Two consumers of the same question, two answers.
+`cluster_state.self_node_id()`, a live atomic read on the production path), because it was
+written later and reached for the shared cell. Three homes for one question, and the two that
+decide routing give different answers.
 
-**Labelled latent, not live**, and the reason is stated so a reviewer can disagree with the
-label rather than with a hidden assumption: reaching the *consequence* (a role change lost)
-requires the re-keyed node to be re-admitted to a cluster and then demoted, without a restart
-in between — and `CLUSTER RESET HARD` changes only the cluster-state identity, not openraft's
-node id, which is fixed at `Raft::new` from config or `hash_addr_to_node_id`
-(`cluster_init.rs:181-185`, `:425`). A node cannot currently rejoin Raft under its new random
-id, so the full path does not close on today's tree. What *is* reachable with certainty is the
-silent disarming of FM-CLUSTER-045 and -046 for that process — the safety nets stop reporting.
-This is the same *class* as
+**Step 2 below re-points exactly one of the three.** It fixes the state machine's copy — the one
+the role filter and the reconciler read — and deliberately leaves `ClusterDeps.node_id` alone,
+because that field is a per-connection dependency snapshot with its own lifetime and its own
+proposal-sized problem. The visible consequence of that scope choice, stated so nobody discovers
+it later: **after a HARD reset, `CLUSTER MYID` still answers the pre-reset id**
+(`commands/cluster/mod.rs:497-498`), as does `master_replid` in `INFO replication`
+(`info.rs:486`, `:502`). Step 2 makes role routing correct; it does not make the node's announced
+identity correct.
+
+#### Label: **live**, user-visible, low severity, bounded — not latent
+
+An earlier draft of this proposal labelled the defect *latent*, on the argument that reaching a
+consequence needs the re-keyed node to rejoin a cluster and then be demoted. That argument is
+correct **only for consequence 1** (a lost role change): `CLUSTER RESET HARD` changes the
+cluster-state identity, not openraft's node id, which is fixed at `Raft::new` from config or
+`hash_addr_to_node_id` (`cluster_init.rs:181-185`, `:425`), so a node cannot currently rejoin
+Raft under its new random id. Consequence 1 stays latent.
+
+Consequences 2 and 3 need no rejoin at all. The following trace closes in **one command** on
+today's tree, and was verified end to end:
+
+1. `cluster_reset` (`admin.rs:390-429`) rejects only on a non-empty keyspace
+   (`if !ctx.store.is_empty()`, `:405-409`) — despite the comment saying "masters". So an
+   **empty replica** can issue `CLUSTER RESET HARD`.
+2. The `ResetCluster` arm sets `this_node.role = NodeRole::Primary` (`commands.rs:833-834`) and
+   re-keys the record under the new id (`:840-845`). The only events it returns are
+   `release_events` for the migrations it cleared (`:826-829`) — **never `NodePromoted`**.
+3. `handle_reset_command` (`connection/cluster.rs:161-186`) does transport cleanup only
+   (`network_factory.remove_node`). Nothing on the data path is touched.
+4. So the data path stays `is_replica`, and the two views contradict each other in a way an
+   operator sees immediately: `INFO replication` renders `role:slave` from `ctx.is_replica`
+   (`info.rs:502-505`), while `CLUSTER NODES` renders the one surviving node — this one, under
+   its **new** id — with role `master` from cluster state
+   (`commands/cluster/mod.rs:480-489` → `wire.rs:93-96`). The third identity home makes that
+   output stranger still: `render_cluster_nodes` matches the `myself` flag against
+   `ctx.node_id`, which is the *pre-reset* id, so the node's own row comes back **without
+   `myself`** (`wire.rs:41-46`). `role:slave` on one command, `master` and no `myself` on the
+   next.
+5. The mechanism that exists to converge exactly this — `SelfRoleReconciler`, which is *why*
+   FM-CLUSTER-046 exists — is disarmed by the stale copy. It holds the pre-reset id
+   (`state.rs:827`); `self_role()` (`:847-849`) looks that id up in a `nodes` map now keyed by
+   the new id, gets `None`, and `reconcile` takes its early return to `RoleReconcile::Agreed`
+   (`:853-855`) **forever**. The runtime ticker at `cluster_init.rs:704-727` spins silently for
+   the life of the process.
+6. **The same reset under SOFT converges.** The id is unchanged, `self_role()` returns
+   `Primary`, `(role == Replica) == data_path_is_replica` is false, and the reconciler emits
+   `Promoted`. HARD-versus-SOFT differing here is the tell that this is the stale copy's doing
+   and not an unrelated gap.
+
+So: user-visible contradiction, reachable in one command, permanent for the process. A data path
+serving one role while the cluster believes the other is precisely what FM-CLUSTER-046's own
+prose says the reconciler exists to prevent (*"a failure that nothing re-drives leaves the node
+serving one role while the cluster believes the other until it restarts"*, `state.rs:809-813`).
+**Live.**
+
+**Bounded, and that is why it is low severity, not a stop-ship.** It requires an *empty*
+keyspace, so no data is at risk; the node owns no slots after the reset; and a restart repairs
+it (as does `REPLICAOF NO ONE`). Nothing silently corrupts. It is the same *class* as
 [`.scratch/cluster-correctness/issues/open/20-…`](../../cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md)
 (a node's data path keeps a role the cluster has moved on from) reached by a different route,
 and is **not** that issue.
 
+The label change does not change the *plan*: the fix still amends the meaning of a locked row,
+so it is step 2's spec-first job and not a hotfix. It does change the triage output — a live
+user-visible divergence should be **filed as an issue against FM-CLUSTER-046** rather than left
+as prose inside an architecture proposal, whether or not this proposal is approved.
+
 ### 5. Why this is shallow (architecture vocabulary)
 
+- **The strongest argument first: the house pattern is a pure planner, and this is the one link
+  that does not have one.** `plan_handoff_action` (`handoff_barrier.rs:96-120`) and
+  `plan_migration_notice` (`migration_events.rs`) are pure functions of *(event, this node's id,
+  shard count)* returning a decision value; both are named **by name** in their rows' Invariant
+  cells (FM-CLUSTER-090, -038) as the reason the behaviour is legible. `EventRoute` /
+  `plan_event_route` is the same construct one layer up the same path: same inputs, same
+  return-a-decision shape, same reason. This proposal is not inventing a pattern for this seam —
+  it is finishing the one the two layers below it already use.
 - **The producer is deep; the consumers are deep; the middle is not.** `apply_command`
   (`commands.rs:94`) is a real **module**: `release_events` (`:18-32`) makes "a prepared
   handoff never disappears without a release" structural, and events are pushed only on `Ok`
-  paths so emit-on-failure is impossible (FM-CLUSTER-034's Invariant). `plan_handoff_action`
-  (`handoff_barrier.rs:96-120`) and `plan_migration_notice` are pure planners the spec
-  explicitly praises. Between two deep layers sits an 83-line block with no name.
-- **The house pattern already exists and this seam does not follow it.** Both downstream
-  consumers are *pure planner + thin delivery*, and both Invariant cells (FM-CLUSTER-090,
-  FM-CLUSTER-038) cite the planner **by name** as the reason the behaviour is legible. The
-  fan-out is the one link in the chain that is neither.
+  paths so emit-on-failure is impossible (FM-CLUSTER-034's Invariant). The consumers are the two
+  planners above. Between two deep layers sits an 83-line block with no name.
 - **The seam that was never cut.** Between "`apply_command` produced node-agnostic events" and
   "three channels with three consumers" sits a rule nobody owns: *decide whose event this is,
   translate it into the consumer's vocabulary, deliver it in apply order, and treat a closed
@@ -203,17 +309,29 @@ and is **not** that issue.
   lines reappear inside an openraft trait method; four fields reappear at three constructor
   sites; the "null the edges, keep the store" rule goes back to being a comment; the three
   delivery policies go back to being adjacency; and the slot-handoff translation goes back to
-  having no callable surface. The **leverage** is a two-line call standing in front of the
-  self-filter, the per-variant channel selection, the broadcast-vs-filtered policy, the
-  send-failure policy and the identity question. **Locality**: adding a sixth `ClusterEvent`
-  variant becomes one edit in one file with an exhaustive match that has no catch-all, instead
-  of an edit inside a 127-line trait method plus a review that has to notice three constructors.
+  having no callable surface.
+- **Where the leverage actually comes from — the test surface, not the call sites.** State this
+  honestly, because the usual form of the claim does not apply: `route()` will have **one
+  production caller** (`apply`), so the "N call sites" half of *leverage* (the round's
+  architecture vocabulary, `improve-codebase-architecture/LANGUAGE.md`: *"one implementation pays
+  back across N call sites and M tests"*) is carried almost entirely by the **M**. That is not a
+  weak version of the argument, it is the relevant one — the same document's own
+  principle is *"the interface is the test surface. Callers and tests cross the same seam. If
+  you want to test past the interface, the module is probably the wrong shape."* Today every
+  test of this behaviour has to reach *past* the interface — build a state machine, enable a
+  channel, construct `openraft::Entry` values, await `apply` — which is exactly the diagnosis
+  that the seam is in the wrong place. `plan_event_route` puts the seam where the tests want to
+  cross it, and it is the only reason the six criterion-4 assertions can exist in-crate where
+  the mutation gate can score them (§2). **Locality** is the ordinary kind: adding a sixth
+  `ClusterEvent` variant becomes one edit in one file with an exhaustive match that has no
+  catch-all, instead of an edit inside a 127-line trait method plus a review that has to notice
+  three constructors.
 - **A shallow version exists and must be rejected.** `fn route_events(&self, events:
   Vec<ClusterEvent>)` as a private method on `ClusterStateMachine` removes the nesting and
   nothing else: it still needs the state machine to exist, still cannot be called without
   openraft in scope, still leaves the four fields at three ctor sites, and still gives
   `cargo mutants` one target whose body-replacement is killed by the role tests while the
-  handoff arms stay unobserved. The depth is in the **pure planner**, because the planner is
+  handoff arms stay unscoreable in-crate. The depth is in the **pure planner**, because the planner is
   what makes "which policy does this variant get" a value a test can compare.
 
 ## Proposed change
@@ -269,14 +387,34 @@ impl ClusterEventRouter {
     pub(crate) fn enable_role_changes(&mut self, self_node_id: NodeId) -> mpsc::UnboundedReceiver<RoleChangeEvent>;
     pub(crate) fn enable_migration_complete(&mut self) -> mpsc::UnboundedReceiver<SlotMigrationCompleteEvent>;
     pub(crate) fn enable_slot_handoffs(&mut self) -> mpsc::UnboundedReceiver<SlotHandoffEvent>;
+
+    // --- what `self_role_reconciler` and `self_role` need back out. Spelled out
+    // here rather than discovered mid-refactor, because criterion 1 forbids the
+    // move from absorbing a design decision.
+
+    /// This node's id as the role filter sees it. `self_role`
+    /// (`state.rs:744-747`) is `router.self_node_id()? -> state.get_node(..)`.
+    pub(crate) fn self_node_id(&self) -> Option<NodeId>;
+
+    /// A **weak** clone of the role-change sender, for
+    /// [`SelfRoleReconciler`]. Weak is load-bearing and documented at
+    /// `state.rs:815-823`: a strong sender held by a long-lived reconciler
+    /// keeps the consumer — and through it the RocksDB handle — alive past
+    /// shutdown. `self_role_reconciler` (`:776-786`) is today
+    /// `self.role_change_tx.as_ref()?.downgrade()`; it becomes
+    /// `self.router.role_change_weak()?`, with the `Option` still carrying
+    /// "role-change detection is off" exactly as it does now.
+    pub(crate) fn role_change_weak(&self) -> Option<mpsc::WeakUnboundedSender<RoleChangeEvent>>;
 }
 ```
 
 `ClusterStateMachine` loses four fields and gains one: `router: ClusterEventRouter`. Its three
 `enable_*` methods (`:700`, `:714`, `:729`) stay as **public delegating one-liners** so
 `cluster_init.rs:216/237/240` is unchanged — the crate's public surface does not move, which
-keeps this proposal off proposal 62's wiring diff. `self_role`, `self_role_reconciler` and
-`emit_self_role_change` read the identity through the router. `apply`'s fan-out collapses to:
+keeps this proposal's `cluster_init.rs` diff empty. `self_role` (`:744-747`),
+`self_role_reconciler` (`:776-786`) and `emit_self_role_change` (`:791-796`) reach the identity
+and the weak sender through the two accessors above — the only two facts they need that the
+router now owns. `apply`'s fan-out collapses to:
 
 ```rust
 let (response, events) = self.state.apply_command(cmd).unwrap_or_else(|e| { /* unchanged */ });
@@ -297,8 +435,9 @@ deliberately *not* fixed here.
 Replace the router's `self_node_id: Option<NodeId>` with the `ClusterState` handle and read
 `state.self_node_id()` per event, so the role filter follows a HARD reset exactly as
 `handoff_barrier.rs:190` already does. `enable_role_changes(id)` additionally calls
-`state.set_self_node_id(id)` so the two homes converge at the one call site and the 24 existing
-role tests keep working unedited.
+`state.set_self_node_id(id)` so those two homes converge at the one call site and the 22
+existing role tests keep working unedited. (The third home, `ClusterDeps.node_id`, is out of
+scope — see §4.)
 
 This is a behaviour change and goes **row → failing test → fix**:
 
@@ -314,19 +453,31 @@ This is a behaviour change and goes **row → failing test → fix**:
   prose edits are a human-review item, exactly as proposal 53 records for FM-REPLICATION-001.
 
 Step 2 is **not** a hotfix and must not be smuggled into step 1: it changes what a locked row
-means, and §4's reachability argument says nothing is currently on fire.
+means. §4 labels the defect **live** rather than latent, which raises step 2's priority — it
+should be tracked as an issue against FM-CLUSTER-046 in its own right — but not its risk: the
+divergence needs an empty keyspace, costs no data, and a restart repairs it, so nothing about it
+justifies smuggling a behaviour change into a move commit.
 
 ### Acceptance criteria (LOCKED crate)
 
-1. **Step 1 changes no behaviour, and the existing tests prove it unedited.** All 24
-   `enable_role_change_detection` call sites in `state.rs` tests, `test_migration_complete_event_fires`
-   (`:1719`), and the `install_snapshot` / reconciler families (`:3363-3567`) must pass with
-   **zero edits**. If any of them appears in the step-1 diff, the move was not a move.
+1. **Step 1 changes no behaviour, and the existing tests prove it unedited.** All **22**
+   `enable_role_change_detection` call sites in `state.rs` tests (`:1610`–`:3599`; 23 grep hits
+   in the file minus the definition at `:700`), `test_migration_complete_event_fires` (`:1719`),
+   and the `install_snapshot` / reconciler families (`:3363-3567`) must pass with **zero edits**.
+   If any of them appears in the step-1 diff, the move was not a move. The two accessors in the
+   sketch above (`self_node_id`, `role_change_weak`) exist so that "what does the router have to
+   hand back" is settled *before* the diff, not decided inside it.
 2. **Apply order is preserved and asserted.** `test_role_changes_preserve_apply_order`
    (`:3307`, FM-CLUSTER-044) is the pin; `route` iterates the `Vec` in order and the two role
    variants continue to share one channel.
 3. **`enable_*` public signatures unchanged**, so `cluster_init.rs:216/237/240` is byte-identical
-   in the step-1 diff. (See the conflict edge with proposal 62.)
+   in the step-1 diff. The justification is **diff hygiene**, not a conflict avoidance: a
+   1938-line boot file that every cluster proposal touches is the worst place to spend a rebase,
+   and a move commit whose entire claim is "nothing changed" is far easier to review when the
+   wiring site is provably absent from it. (An earlier draft justified this by claiming proposal
+   62 will rewire `cluster_init.rs`. That is **false** — 62 as filed mentions `cluster_init.rs`
+   zero times and names `connection/cluster.rs:133-151` (`complete` at `:149`) as the finalizer's
+   sole caller. The constraint is worth keeping; the reason was not.)
 4. **The new tests land with step 1, not after it** — they are the entire mutation-score case:
 
    | new test | pins | row |
@@ -338,18 +489,31 @@ means, and §4's reachability argument says nothing is currently on fire.
    | `a_migration_complete_is_never_self_filtered` | broadcast, complementing `test_migration_complete_event_fires` | -034 |
    | `a_silent_router_delivers_nothing` | `ClusterEventRouter::silent()` over all five variants — the `get_snapshot_builder` rule as a test rather than a comment | -017 |
 
-   The first three are **new pins on behaviour that has never been forced**, which is the
-   proposal's main testability claim. Add them to the `Forced by` cells of -087 and -090; both
-   rows keep every existing entry.
+   The first three are **new in-crate pins on behaviour whose only current forcing tests live in
+   `frogdb-server`** (§2), which is the proposal's main testability claim. Add them to the
+   `Forced by` cells of -087 (`:1246`) and -090 (`:1284`). **Both rows keep every existing
+   entry** — -087 all six, including `a_source_that_cannot_drain_aborts_the_finalization`; -090
+   all four. Note that -087's `Forced by` cell is also edited by proposal 60, which flags the
+   same-line collision at `60-migration-table.md:614-…`; whichever lands second appends.
 5. **Forcing tests stay in the mutated crate.** All six are inline `#[cfg(test)]` tests in
    `frogdb-cluster`, alongside the module they force, so `cargo mutants -p frogdb-cluster`
    sees them. Nothing moves to `frogdb-server`.
-6. **Spec citation hygiene.** FM-CLUSTER-043's Invariant cites `state.rs:688-728`, -044 cites
-   `state.rs:333-347`, -045 cites `state.rs:787-797`, -046 cites `state.rs:517-527`, and -017
-   cites `state.rs:808-837` — **all five are already stale** on the current tree (they predate
-   the invariant-catalog commits) and all five must be re-cited in the step-1 commit. Meaning
-   is unchanged; only citations move, which is the D2 precedent's exact allowance. `Forced by`
-   cells change only by the additions in criterion 4.
+6. **Spec citation hygiene — seven stale citations across six rows**, all in Invariant cells, all
+   already stale on the current tree (they predate the invariant-catalog commits), all to be
+   re-cited in the step-1 commit:
+
+   | row | cell cites | what that region actually is today | real site |
+   |---|---|---|---|
+   | -017 (`:334`) | `state.rs:808-837` | the `SelfRoleReconciler` doc-comment | `get_current_snapshot` `:1107-…` |
+   | -034 (`:573`) | `commands.rs:10-17` | the `release_events` doc-comment | `apply_command` `:94-100` + the per-arm `Ok`-path pushes |
+   | -043 (`:692`) | `commands.rs:204-216` | `AddNode`'s epoch-collision warn + the head of `RemoveNode` | the `SetRole` arm `:293-…`, emit sites `:318` (`was_primary`) and `:337-345` |
+   | -043 (`:692`) | `state.rs:688-728` | the head of the `enable_*` block | the self-filter in `apply` `:947-970` |
+   | -044 (`:704`) | `state.rs:333-347` | `apply_local` | the fan-out loop `:942-1024` |
+   | -045 (`:716`) | `state.rs:787-797` | `emit_self_role_change` | `install_snapshot`'s before/after diff `:1086`, `:1093-1096` |
+   | -046 (`:728`) | `state.rs:517-527` | the `DemotionEvent` struct | `SelfRoleReconciler` fields `:826-828` + `emit`'s `upgrade()` `:868-871` |
+
+   Meaning is unchanged; only citations move, which is the D2 precedent's exact allowance.
+   `Forced by` cells change only by the additions in criterion 4.
 7. **Mutation re-gate: full run, not diff.** `just mutants-diff frogdb-cluster` before pushing,
    then `just mutants frogdb-cluster` + `just mutants-gate frogdb-cluster 0.80`. A full run is
    mandatory here because the extraction **relocates mutation targets**: today the fan-out is
@@ -364,15 +528,21 @@ means, and §4's reachability argument says nothing is currently on fire.
 awaiting `apply` — 20+ lines of scaffolding per assertion (`state.rs:1607-1640` is the
 canonical shape). Four consequences, each verified:
 
-1. **A 30-line untested region becomes six three-line assertions.** The slot-handoff
-   translation (`:990-1019`) has no test in the workspace (§2). With `plan_event_route` it is
-   `assert_eq!(plan_event_route(prepared_event, Some(1)), EventRoute::SlotHandoff(…))`. This is
-   not a re-shaping of existing coverage — it is coverage that does not exist.
+1. **A 30-line region moves from slow, crate-external coverage to fast, gate-visible coverage.**
+   The slot-handoff translation (`:990-1019`) is exercised today only by a 3-node integration
+   test in `frogdb-server` (§2) that `cargo mutants -p frogdb-cluster` never runs. With
+   `plan_event_route` it is
+   `assert_eq!(plan_event_route(prepared_event, Some(1)), EventRoute::SlotHandoff(…))`. **This
+   is a re-shaping of existing coverage, and that is the whole point**: minutes of cluster
+   bring-up that the 0.80 gate cannot see become microseconds of in-crate assertion that it can.
+   The integration tests stay — they cover the wiring, which no unit test can — but the
+   translation stops depending on them for its score.
 2. **The seam between two locked crates becomes assertable from one side.** FM-CLUSTER-087's
-   Invariant currently asserts, in prose, something no test in its `Forced by` list executes.
-   After this change `frogdb-cluster` can force the whole chain in one crate: `apply_command`
-   emits, `plan_event_route` translates, and the resulting `SlotHandoffEvent` is the exact
-   value `plan_handoff_action` already has tests for. Two proven halves plus a proven joint.
+   Invariant is executed today by exactly one of its six `Forced by` tests, and that one lives
+   in `frogdb-server`. After this change `frogdb-cluster` can force the whole chain in one
+   crate: `apply_command` emits, `plan_event_route` translates, and the resulting
+   `SlotHandoffEvent` is the exact value `plan_handoff_action` already has tests for. Two proven
+   halves plus a proven joint, all three inside the crates the gate measures.
 3. **The delivery *policy* becomes comparable.** "Role changes are self-filtered, handoffs are
    not" is currently asserted only negatively — by tests that would fail if a *role* event
    leaked (`test_demotion_detection_ignores_other_nodes`, `:1644`) — and not at all for the
@@ -393,16 +563,26 @@ canonical shape). Four consequences, each verified:
 
 | sibling | shared files | edge |
 |---|---|---|
-| **60 — migration-table (RC8)** | `cluster/src/types.rs` (`ClusterEvent` `:477-537`, read-only for me), `cluster/src/commands.rs` (untouched by me) | **Order: 59 first.** 60 is a large pure move of the handoff lifecycle into a `MigrationTable` type and the lane files it as "solo, land last". If 60 alters the `ClusterEvent` variant set, `plan_event_route` is then the *single* place that must follow — landing 59 first is what gives 60 that property instead of five loose match arms. **No production file is edited by both.** |
-| **62 — handoff-finalizer (RC11)** | `server/src/server/cluster_init.rs`; the `SlotHandoffEvent` type (`state.rs:562-595`) | **Real textual edge, mitigated by design.** 62 moves `SlotMigrationCoordinator::complete/poll` into `cluster-runtime` and will rewire the finalizer's construction in `cluster_init.rs`. Criterion 3 keeps 59's `cluster_init.rs` diff **empty** — the `enable_*` signatures are deliberately preserved. If 59 later drops that constraint, 59 rebases onto 62, not the reverse. `SlotHandoffEvent`'s definition and field set are unchanged by both; 59 tests its *production*, 62 its *consumption*. |
-| **61 — primary-snapshot-hooks (RC9+RC12)** | none | **No file overlap** (`frogdb-replication`). Same *shape* — post-construction `Option` setters collapsed into one wiring seam, mirroring ADR-0004's installer mitigation. Worth reviewing together for a consistent naming convention; land independently. |
+| **60 — migration-table (RC8)** | `cluster/src/types.rs` (`ClusterEvent` `:477-537`, read-only for me), `cluster/src/commands.rs` (untouched by me) | **Order: 59 first.** 60 is a large pure move of the handoff lifecycle into a `MigrationTable` type and the lane files it as "solo, land last". If 60 alters the `ClusterEvent` variant set, `plan_event_route` is then the *single* place that must follow — landing 59 first is what gives 60 that property instead of five loose match arms. **No production file is edited by both**, and 60 rebuts the `cluster_init.rs` edge an earlier draft of this proposal claimed (`60-migration-table.md:607-611`) — correctly. The one true collision is a **spec cell**: both extend FM-CLUSTER-087's `Forced by` at `:1246`. Whichever lands second appends to the other's line. |
+| **62 — handoff-finalizer (RC11)** | the `SlotHandoffEvent` type (`state.rs:562-595`) only | **No textual conflict.** 62 as filed touches `cluster_init.rs` **zero times** — it names `connection/cluster.rs:133-151` (`complete` at `:149`) as the finalizer's sole caller. Criterion 3 keeps 59's `cluster_init.rs` diff empty anyway, for diff hygiene. `SlotHandoffEvent`'s definition and field set are unchanged by both; 59 tests its *production*, 62 its *consumption*. Shared 0.80 gate; chain the PRs. |
+| **61 — primary-snapshot-hooks (RC9+RC12)** | `server/src/server/cluster_init.rs` — 61 cites the **test-only** ctor `:1492` (`split_brain_handler`) as evidence; 59 does not edit that file at all | **No conflict.** Otherwise disjoint (`frogdb-replication`). Same *shape* — post-construction `Option` setters collapsed into one wiring seam, mirroring ADR-0004's installer mitigation. Worth reviewing together for a consistent naming convention; land independently. |
 | **58 — auto-failover-propose-retry (RC6)** | `server/src/server/cluster_init.rs` (58 cites `:556-658` as **evidence only**, no edit) | **No conflict.** 58 owns `cluster-runtime/src/failure_detector.rs` + `cluster/src/network.rs`; 59 owns `cluster/src/state.rs`. Both need the 0.80 gate — chain the PRs and run the full gate once at the end. |
 | **57 — raft-network-send (RC5)** | `cluster/src/network.rs` (57's file, not mine) | No conflict; shared 0.80 gate only. |
 | **53 / 54 / 55 / 56** | none | `frogdb-replication`; disjoint crate and gate (0.85). |
 
+#### Note for the orchestrator's consistency sweep: siblings describe 59's region from an older tree
+
+Both 60 (`:454-457`) and 62 (`:566-568`) describe 59 as targeting `state.rs:879-1005`. On the
+current tree the fan-out is at **`:942-1024`**, and 59's full footprint is `:942-1024` plus
+`:518-611`, `:615-636`, `:700-796` and `:1042-1054`. **Disjointness holds either way** — 60's
+`state.rs` regions are `:107-135`, `:145-159`, `:319-327`, `:344-377`, `:433-447`, and the
+nearest approach is 59's read-only cite of `apply_local` `:338-342` against 60's `:344-377`,
+which are adjacent, not overlapping. No conclusion changes; the three proposals should just be
+made to agree on the numbers before they are read side by side.
+
 ### Risk — step 1's whole claim is "nothing changed", and only unedited tests prove it
 
-There is no new behavioural acceptance test for the move itself; it borrows the 24 role tests,
+There is no new behavioural acceptance test for the move itself; it borrows the 22 role tests,
 the migration test and the reconciler family. That is why criterion 1 is phrased as *zero
 edits to existing tests*: a step-1 diff that touches an existing assertion has stopped being a
 move. The six new tests in criterion 4 pin behaviour that was previously unpinned; they are
@@ -411,9 +591,13 @@ not evidence that the move was faithful.
 ### Risk — the extraction can lower the measured mutation score
 
 Stated plainly rather than discovered at gate time. Moving the fan-out out of `apply` converts
-masked coverage into measured coverage. If criterion 4's tests were skipped, the score would
-drop even though nothing got worse. They are therefore acceptance criteria, not follow-ups,
-and criterion 7 requires the full run rather than `mutants-diff` for exactly this reason.
+masked coverage into measured coverage. The masking has two layers, and criterion 4 is what
+answers both: the fan-out is currently one trivially-killed target inside `apply`, **and** the
+tests that genuinely force the handoff arms live in `frogdb-server`, which
+`cargo mutants -p frogdb-cluster` never runs (§2). If criterion 4's tests were skipped, the score
+would drop even though nothing got worse — and it would drop for an honest reason, which is
+worse than useless at gate time. They are therefore acceptance criteria, not follow-ups, and
+criterion 7 requires the full run rather than `mutants-diff` for exactly this reason.
 
 ### Risk — `EventRoute::NotOurs` re-introduces a catch-all
 
@@ -437,18 +621,28 @@ and separately reviewable.
 
 | step | scope | size |
 |---|---|---|
-| **1 — extraction (no behaviour change)** | New `cluster/src/state/events.rs`: `EventRoute`, `plan_event_route`, `ClusterEventRouter` + `silent()` + the three `enable_*` bodies. `ClusterStateMachine` loses four fields, gains `router`; three ctor sites collapse; `apply`'s `:942-1024` becomes one call; `self_role`/`self_role_reconciler`/`emit_self_role_change` read through the router. Six new tests (criterion 4). Five stale spec citations re-pointed; two `Forced by` cells extended. | **S** — ~180 new lines (≈half tests), ~95 deleted |
+| **1 — extraction (no behaviour change)** | New `cluster/src/state/events.rs`: `EventRoute`, `plan_event_route`, `ClusterEventRouter` + `silent()` + the three `enable_*` bodies. `ClusterStateMachine` loses four fields, gains `router`; three ctor sites collapse; `apply`'s `:942-1024` becomes one call; `self_role`/`self_role_reconciler`/`emit_self_role_change` read through the router's two accessors. Six new tests (criterion 4). Seven stale spec citations re-pointed; two `Forced by` cells extended. | **S** — ~180 new lines (≈half tests), ~95 deleted |
 | **2 — live identity (SPEC-FIRST, optional)** | FM-CLUSTER-043 and -046 amended; `a_hard_reset_re_points_the_role_filter` written **failing**; router holds `ClusterState`; `enable_role_changes` also calls `set_self_node_id`. | **M** — small diff, spec-first process is the cost |
 | **re-gate** | `mutants-diff frogdb-cluster`, then full `mutants` + `mutants-gate frogdb-cluster 0.80`. Chain with proposals 57/58/60 and gate once. | — |
 
-**Independently landable ahead of everything:** the five stale spec citations in criterion 6
-(FM-CLUSTER-017, -043, -044, -045, -046). Pure documentation, no code, no gate, correct
+**Independently landable ahead of everything:** the **seven** stale spec citations in criterion 6
+(FM-CLUSTER-017, -034, -043 ×2, -044, -045, -046). Pure documentation, no code, no gate, correct
 whether or not this proposal is approved.
 
-**No hotfix is proposed.** §4 is the only defect found and it is latent by the argument given
-there; its fix changes what a locked row means, which is step 2's job and not a hotfix's. If
-triage prefers a zero-risk partial, the honest one is a **doc-comment** on
-`ClusterStateMachine.self_node_id` (`state.rs:600-601`) recording that it is a boot-time copy
-that a HARD reset does not re-point, and cross-referencing the live reader at
-`handoff_barrier.rs:190` — which converts an invisible inconsistency into a visible one at
-zero behavioural risk.
+**No code hotfix is proposed, but §4 should be filed.** §4 is the only defect found, and it is
+now labelled **live** — one command deep, user-visible as `INFO`'s `role:slave` against
+`CLUSTER NODES`' `master`, permanent for the process. Its fix still changes what a locked
+row means, so it belongs to step 2's spec-first process rather than to a hotfix; what the label
+change does demand is an **issue against FM-CLUSTER-046**, so the divergence is tracked outside
+this proposal.
+
+The zero-risk partial that can land immediately is a **doc-comment** on
+`ClusterStateMachine.self_node_id` (`state.rs:600-601`). It must record the *consequence*, not
+just the mechanism — "a boot-time copy that a HARD reset does not re-point" understates it. The
+comment should say: this copy is taken once at `enable_role_change_detection` and never updated,
+so after `CLUSTER RESET HARD` it names a node that no longer exists in `inner.nodes`; every
+`SelfRoleReconciler` minted from it therefore reads `self_role() == None` and returns
+`RoleReconcile::Agreed` forever, silently disarming FM-CLUSTER-045 and -046 for the life of the
+process — while the live reader at `handoff_barrier.rs:190` (`cluster_state.self_node_id()`)
+answers the same question correctly. That converts an invisible inconsistency into a visible one
+at zero behavioural risk.
