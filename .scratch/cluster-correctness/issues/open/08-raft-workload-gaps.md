@@ -91,10 +91,45 @@ core server code). Worked around here with `--no-build` against the already-buil
 since it's a build-toolchain concern, not a database-correctness one — flagging here so
 the next pass (the 15-workload sweep) doesn't hit it cold.
 
+### Sweep pass (2026-08-10)
+
+Executing the deferred second acceptance-criteria bullet: run the previously result-less
+raft + raft-extended workloads, record results, triage failures against known issues
+14-20/23. This pass does not fix product defects.
+
+**Scope reconciliation.** The original per-workload list behind "11 raft workloads with no
+stored results" was not preserved anywhere in the repo (the workload-inventory audit that
+produced the count was an ephemeral analysis, not a checked-in doc — `store/` itself is
+gitignored, so there is no durable record of what had results at PRD-authoring time).
+Reconstructing it:
+
+- The raft suite has 22 workloads (`just jepsen-list`). `split-brain-raft`/`zombie-raft`
+  already have fresh, documented PASS results above (this pass's own smoke test) — out of
+  scope here.
+- Leftover local `store/` artifacts in this worktree (dated Feb 2026, ~6 months stale,
+  pre-dating this campaign) show partial history for 8 of the remaining 20:
+  `cluster-formation`, `leader-election`, `slot-migration`, `cross-slot`, `key-routing`,
+  `leader-election-partition`, `key-routing-kill`, `slot-migration-partition` — the
+  original raft-topology bring-up workloads. Nightly CI (`jepsen-nightly.yml`,
+  `CORE_SUITES` includes `raft`) already exercises all 22 raft-suite workloads on every
+  green main, so these 8 are not truly unexercised even though the local artifacts predate
+  this campaign.
+- That leaves 12 (not 11 — the exact original count could not be reconstructed; erring
+  toward completeness) raft workloads with no trustworthy local record: `cross-slot-partition`,
+  `cross-slot-kill`, `raft-chaos`, `list-append-raft`, `migration-recovery`,
+  `concurrent-migration`, `membership-routing`, `rolling-restart`, `raft-membership`,
+  `cluster-membership`, `cluster-replication`, `cluster-lag`.
+
+Ran these 12 plus all 4 `raft-extended` workloads (16 total) against a freshly built image
+(`just docker-build-debug`, in-Docker build — sidesteps the host zigbuild/usearch breakage
+noted above) at current HEAD.
+
+**Results:**
+
+<!-- SWEEP_RESULTS_TABLE -->
+
 ### Remaining
 
-- The 15-workload result-less sweep (11 raft + 4 `raft-extended` workloads) is unstarted —
-  out of scope for this pass per orchestrator instruction (long compute, scheduled
-  separately).
-- Issue-07's checker (third acceptance-criteria bullet) still pending on issue 07 landing;
-  not blocking.
+- Issue-07's checker (third acceptance-criteria bullet) is active in these runs (issue 07 is
+  done/merged) — `DEBUG CLUSTER CHECK` invariant assertions ran wherever the workload's
+  checker calls it.
