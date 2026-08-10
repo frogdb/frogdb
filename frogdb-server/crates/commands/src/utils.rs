@@ -941,6 +941,30 @@ pub fn require_same_shard(keys: &[Bytes], num_shards: usize) -> Result<(), Comma
     Ok(())
 }
 
+// ============================================================================
+// Untrusted-Payload Utilities
+// ============================================================================
+
+/// Clamp an attacker-supplied element count to what the remaining input bytes
+/// could actually hold, for use as a `Vec::with_capacity` argument.
+///
+/// The counts embedded in `*.LOADCHUNK` payloads are client-controlled: honouring
+/// a declared count of `u32::MAX` before reading the elements turns one small
+/// command into a multi-gigabyte allocation. Capacity is a hint, so clamping it
+/// costs nothing when the payload is honest (a few reallocations at worst) and
+/// removes the amplification when it is not — the per-element reads still decide
+/// whether the payload is actually valid.
+///
+/// This is the command-side twin of the persistence layer's `safe_capacity`;
+/// both must stay in step because they decode the same wire formats.
+#[inline]
+pub fn safe_capacity(count: usize, min_element_bytes: usize, available_bytes: usize) -> usize {
+    if min_element_bytes == 0 {
+        return count;
+    }
+    count.min(available_bytes / min_element_bytes)
+}
+
 #[cfg(test)]
 mod scan_seam_tests {
     use super::*;
