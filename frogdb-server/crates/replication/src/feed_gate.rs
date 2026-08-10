@@ -36,7 +36,7 @@
 //! put the offsets on the wire out of order, which is a worse bug than the one
 //! being fixed. So the hold is node-wide for the barrier window, which is also
 //! exactly what Redis/Valkey do: their pause is node-wide too.
-
+//!
 //! ## The decision is separable from the cell it lives in
 //!
 //! Both of the gate's rules — what a republish does to the value and to the
@@ -124,6 +124,7 @@ impl ReplicaFeedGate {
     /// Called by the owner of the pause state on every mutation of it. It is a
     /// republish of a derived value, not an independent latch, so a shortened
     /// deadline is honoured exactly like a lengthened one.
+    ///
     /// The I/O half of [`decide_publish`]: it owns the cell and the waiters and
     /// decides nothing itself.
     pub fn publish(&self, held_until: Option<Instant>) {
@@ -140,6 +141,7 @@ impl ReplicaFeedGate {
     /// The deadline of the hold in force right now, or `None` when the feed is
     /// free to ship. A published deadline that has already passed answers
     /// `None`: the gate expires itself.
+    ///
     /// The I/O half of [`decide_hold`]: it reads the cell and the clock, and
     /// decides nothing itself.
     pub fn hold_deadline(&self) -> Option<Instant> {

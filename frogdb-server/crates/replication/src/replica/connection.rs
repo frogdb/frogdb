@@ -2,8 +2,8 @@
 
 use crate::frame::serialize_command_to_resp;
 use crate::fullsync::{
-    CHECKPOINT_MARKER, CheckpointChecksum, CheckpointStager, CheckpointStreamCodec,
-    SNAPSHOT_MARKER, calculate_bytes_checksum, receive_checkpoint_files,
+    CheckpointChecksum, CheckpointStager, CheckpointStreamCodec, calculate_bytes_checksum,
+    receive_checkpoint_files,
 };
 use crate::net_bytes::NetByteCounters;
 use crate::state::ReplicationState;
@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::offset::ReplicaOffset;
 use super::payload_reader::PayloadReader;
+use super::psync::{
+    FullResyncPayload, PsyncArm, psync_request_args, select_full_resync_payload, select_psync_arm,
+};
 use super::{FullSyncPayload, InstallError, SnapshotInstaller};
 use parking_lot::RwLock;
 use std::time::Duration;
@@ -49,22 +52,6 @@ async fn read_resp_line<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<S
     }
     String::from_utf8(buf)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "RESP line is not valid UTF-8"))
-}
-
-/// Build the `(replication_id, offset)` pair for a reconnect `PSYNC` request
-/// from the replica's **live applied** offset. A live offset of 0 means the
-/// replica has never synced, so it asks for a full resync (`PSYNC ? -1`);
-/// otherwise it resumes from its live head under its current replication id.
-///
-/// Kept as a free function so the offset-source decision is unit-testable
-/// without a socket — the regression guard is that it is fed
-/// [`ReplicaOffset::current`], not the lagging persisted `offset_at_save`.
-fn psync_request_args(replication_id: &str, current_offset: u64) -> (String, i64) {
-    if current_offset == 0 {
-        ("?".to_string(), -1i64)
-    } else {
-        (replication_id.to_string(), current_offset as i64)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +208,14 @@ impl ReplicaConnection {
         Ok(())
     }
 
+    /// The I/O half of the replica-side `PSYNC` step: write the request, read
+    /// the lines, move the offset/state/link, and read the payload count.
+    ///
+    /// It selects nothing. Which arm the reply is and which payload the
+    /// envelope names are decided by [`select_psync_arm`] and
+    /// [`select_full_resync_payload`] (`replica/psync.rs`), the replica-side
+    /// twin of [`crate::primary::PartialSyncReplay::handle_partial_sync_request`]
+    /// → [`crate::primary::ReplayDecision`].
     pub(crate) async fn psync(&mut self) -> io::Result<SyncType> {
         // The reconnect offset MUST come from the live applied head
         // (`ReplicaOffset::current`), never the persisted `offset_at_save` which
@@ -235,14 +230,11 @@ impl ReplicaConnection {
         );
         self.stream.write_all(&cmd).await?;
         let line_buf = read_resp_line(&mut self.stream).await?;
-        let line = line_buf.trim();
-        if line.starts_with("+FULLRESYNC") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let new_repl_id = parts[1].to_string();
-                let new_offset: u64 = parts[2].parse().map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidData, "invalid offset in FULLRESYNC")
-                })?;
+        match select_psync_arm(line_buf.trim())? {
+            PsyncArm::FullResync {
+                granted_id,
+                granted_offset,
+            } => {
                 // Neither half of the granted history — id nor offset — is
                 // adopted here. A `+FULLRESYNC` line promises a dataset; until
                 // that dataset is installed this node still holds the *previous*
@@ -272,71 +264,42 @@ impl ReplicaConnection {
                         "replication stream retired during FULLRESYNC",
                     ));
                 }
-                tracing::info!(replication_id = %new_repl_id, offset = new_offset, "FULLRESYNC initiated");
+                tracing::info!(replication_id = %granted_id, offset = granted_offset, "FULLRESYNC initiated");
                 self.set_state(ConnectionState::Syncing);
                 let line_buf = read_resp_line(&mut self.stream).await?;
-                let line = line_buf.trim();
-                if !line.starts_with('$') {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "expected a checkpoint or dataset marker",
-                    ));
-                }
-                // Marker detection stays here (raw, byte-at-a-time reads) so the
-                // payload-kind decision is not entangled with the envelope, but
-                // the count parse routes through the codec.
-                let marker = &line[1..];
-                if marker == CHECKPOINT_MARKER || marker == SNAPSHOT_MARKER {
-                    let count_line = read_resp_line(&mut self.stream).await?;
-                    let count = CheckpointStreamCodec::parse_file_count(&count_line)?;
-                    if marker == CHECKPOINT_MARKER {
+                let payload = select_full_resync_payload(line_buf.trim())?;
+                // The count line belongs to whichever payload was named, so it
+                // is read after the selection and parsed through the codec.
+                let count_line = read_resp_line(&mut self.stream).await?;
+                let count = CheckpointStreamCodec::parse_file_count(&count_line)?;
+                match payload {
+                    FullResyncPayload::Checkpoint => {
                         tracing::info!(file_count = count, "FrogDB checkpoint FULLRESYNC");
                         Ok(SyncType::FullSyncCheckpoint { file_count: count })
-                    } else {
+                    }
+                    FullResyncPayload::LiveDataset => {
                         tracing::info!(blob_count = count, "FrogDB live-dataset FULLRESYNC");
                         Ok(SyncType::FullSyncSnapshot { blob_count: count })
                     }
-                } else {
-                    // Anything else — including the data-less minimal RDB older
-                    // primaries sent when persistence was disabled — carries no
-                    // dataset this node can install, and accepting it would mean
-                    // keeping a stale keyspace while claiming to be synced.
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("unsupported FULLRESYNC payload marker: {marker}"),
-                    ))
                 }
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "malformed FULLRESYNC response",
-                ))
             }
-        } else if line.starts_with("+CONTINUE") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let new_repl_id = parts[1].to_string();
-                // The primary shifted its id (it was promoted) but the stream is
-                // continuous: everything up to the current offset is identical
-                // under the old id, so it becomes this node's failover window
-                // rather than being discarded (Redis: `shiftReplicationId`).
-                let resumed_at = self.offsets.current();
-                let mut state = self.state.write();
-                if state.replication_id != new_repl_id {
-                    state.shift_replication_id(new_repl_id.clone(), resumed_at);
+            PsyncArm::Continue { granted_id } => {
+                if let Some(granted_id) = granted_id {
+                    // The primary shifted its id (it was promoted) but the stream is
+                    // continuous: everything up to the current offset is identical
+                    // under the old id, so it becomes this node's failover window
+                    // rather than being discarded (Redis: `shiftReplicationId`).
+                    let resumed_at = self.offsets.current();
+                    let mut state = self.state.write();
+                    if state.replication_id != granted_id {
+                        state.shift_replication_id(granted_id.clone(), resumed_at);
+                    }
+                    tracing::info!(replication_id = %granted_id, "Partial sync with new replication ID");
                 }
-                tracing::info!(replication_id = %new_repl_id, "Partial sync with new replication ID");
+                self.set_state(ConnectionState::Streaming);
+                tracing::info!("Partial sync (CONTINUE) initiated");
+                Ok(SyncType::PartialSync)
             }
-            self.set_state(ConnectionState::Streaming);
-            tracing::info!("Partial sync (CONTINUE) initiated");
-            Ok(SyncType::PartialSync)
-        } else if let Some(rest) = line.strip_prefix('-') {
-            Err(io::Error::other(format!("PSYNC error: {}", rest)))
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unexpected PSYNC response: {}", line),
-            ))
         }
     }
 
@@ -579,26 +542,13 @@ mod tests {
     use super::*;
     use crate::frame::ReplicationFrame;
     use crate::fullsync::{
-        CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata, calculate_bytes_checksum,
+        CHECKPOINT_MARKER, CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata,
+        SNAPSHOT_MARKER, calculate_bytes_checksum,
     };
     use crate::replica::offset::{AppliedOffset, ReplicaOffset};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU64, AtomicUsize};
-
-    #[test]
-    fn psync_request_args_asks_full_resync_when_never_synced() {
-        let (id, offset) = psync_request_args("abc", 0);
-        assert_eq!(id, "?");
-        assert_eq!(offset, -1);
-    }
-
-    #[test]
-    fn psync_request_args_resumes_from_the_live_offset() {
-        let (id, offset) = psync_request_args("myid", 500);
-        assert_eq!(id, "myid");
-        assert_eq!(offset, 500);
-    }
 
     /// Regression guard for the reconnect-offset hazard: the offset a reconnect
     /// `PSYNC` places in its request must equal the **live applied** head
