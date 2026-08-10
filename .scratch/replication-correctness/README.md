@@ -8,4 +8,5 @@ catalog, property-based permutation testing, model checking over production code
 schedules, `DEBUG REPLICATION CHECK` + Jepsen sweep, spec/gate integration. All §8 decisions
 ruled 2026-08-10.
 
-Issues: none yet — decomposition pending after PRD ruling.
+Issues: 15 filed under [issues/open/](issues/open/) (2026-08-10), dependency order 01 → (02, 06,
+07, 11 parallel) → … → 15.
