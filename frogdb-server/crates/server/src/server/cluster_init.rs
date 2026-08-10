@@ -385,10 +385,28 @@ pub(super) async fn init_cluster(
         // Determine if this node should bootstrap (lowest node_id)
         let should_bootstrap = initial_members.keys().next().copied() == Some(node_id);
 
-        // Create Raft config
+        // Create Raft config.
+        //
+        // openraft draws each election timeout from `election_timeout_min ..
+        // election_timeout_max` via `RT::thread_rng()` — for the tokio runtime
+        // that is `rand::thread_rng()`, seeded from OS entropy and *not* from
+        // turmoil's simulation RNG. Under turmoil that unseeded draw is the
+        // one input a seed cannot pin, so a replay of the same seed would take
+        // a different election path and "same seed → same run" (the seeded
+        // fault scheduler's core contract, `simulation::scheduler`) would be
+        // false. Collapsing the window to a single value makes `gen_range`
+        // constant; the scheduler skews `election_timeout_ms` *per node*
+        // instead, which is what breaks election ties — deterministically.
+        // Outside turmoil the production 2x window (and its jitter) is
+        // unchanged.
+        #[cfg(feature = "turmoil")]
+        let election_timeout_max = config.cluster.election_timeout_ms + 1;
+        #[cfg(not(feature = "turmoil"))]
+        let election_timeout_max = config.cluster.election_timeout_ms * 2;
+
         let raft_config = openraft::Config {
             election_timeout_min: config.cluster.election_timeout_ms,
-            election_timeout_max: config.cluster.election_timeout_ms * 2,
+            election_timeout_max,
             heartbeat_interval: config.cluster.heartbeat_interval_ms,
             ..Default::default()
         };

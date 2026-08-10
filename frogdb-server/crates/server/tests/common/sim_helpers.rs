@@ -369,7 +369,67 @@ pub async fn real_frogdb_cluster_node(
     data_dir: std::path::PathBuf,
     auto_failover: bool,
 ) -> Result<(), BoxError> {
+    real_frogdb_cluster_node_with(
+        ClusterNodeParams {
+            num_shards,
+            auto_failover,
+            ..ClusterNodeParams::default()
+        },
+        own_ip,
+        initial_nodes,
+        data_dir,
+    )
+    .await
+}
+
+/// The per-node knobs [`real_frogdb_cluster_node_with`] varies.
+///
+/// Split out of the positional argument list because the seeded fault scheduler
+/// (`simulation::scheduler`) skews the Raft timers *per node* from its seed:
+/// with `election_timeout_max = election_timeout_min + 1` under turmoil (see
+/// `cluster_init.rs`), openraft draws no jitter, so a distinct timeout per node
+/// is what breaks election ties — deterministically, rather than through an
+/// unseeded `thread_rng`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClusterNodeParams {
+    /// Data-plane shard count.
+    pub num_shards: usize,
+    /// Wires `cluster.auto_failover`.
+    pub auto_failover: bool,
+    /// Raft election timeout; must stay strictly above `heartbeat_interval_ms`.
+    pub election_timeout_ms: u64,
+    /// Raft heartbeat interval.
+    pub heartbeat_interval_ms: u64,
+}
+
+impl Default for ClusterNodeParams {
+    /// The values every scripted cluster sim used before the scheduler existed:
+    /// fast, simulated-clock timers so elections converge quickly in sim time.
+    fn default() -> Self {
+        Self {
+            num_shards: 1,
+            auto_failover: false,
+            election_timeout_ms: 300,
+            heartbeat_interval_ms: 50,
+        }
+    }
+}
+
+/// [`real_frogdb_cluster_node`] with the per-node knobs spelled out.
+pub async fn real_frogdb_cluster_node_with(
+    params: ClusterNodeParams,
+    own_ip: std::net::IpAddr,
+    initial_nodes: Vec<String>,
+    data_dir: std::path::PathBuf,
+) -> Result<(), BoxError> {
     use frogdb_server::config::ClusterConfigSection;
+
+    let ClusterNodeParams {
+        num_shards,
+        auto_failover,
+        election_timeout_ms,
+        heartbeat_interval_ms,
+    } = params;
 
     let config = Config {
         server: ServerConfig {
@@ -393,8 +453,8 @@ pub async fn real_frogdb_cluster_node(
             data_dir,
             // Fast, simulated-clock timers so elections converge quickly in sim
             // time. heartbeat must stay strictly below election_timeout_ms.
-            election_timeout_ms: 300,
-            heartbeat_interval_ms: 50,
+            election_timeout_ms,
+            heartbeat_interval_ms,
             auto_failover,
             ..Default::default()
         },

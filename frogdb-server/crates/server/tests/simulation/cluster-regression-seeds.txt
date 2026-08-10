@@ -1,0 +1,33 @@
+# Cluster fault-scheduler regression seeds (cluster-correctness issue 09).
+#
+# Every seed here once failed a sweep. `test_cluster_scheduler_regression_seeds`
+# replays all of them in the default suite, forever — a seed leaves this file
+# only if the scenario it pins stops existing, never because it got slow.
+#
+# Format, one entry per line:
+#
+#     <seed> <family> <why it is here>
+#
+# The family column is checked against `Schedule::from_seed(seed).family` by
+# `test_scheduler_regression_seed_file_parses`. It is not decoration: if the
+# derivation's draw order ever changes, a seed silently starts replaying a
+# different scenario, and that check is what catches it. When the derivation
+# changes deliberately, re-derive this column rather than deleting the check.
+#
+# Seeds whose defect is not yet fixed are recorded with an `EXPECTED-FAILURE`
+# note naming the issue, and muzzled in the replay test the same way the
+# cluster proptest muzzles its known-open cases — never dropped, so the fix
+# turns the muzzle off rather than needing the case rediscovered.
+
+# The two scripted sims this scheduler subsumed, kept as named regressions so
+# the scenarios they pinned keep running under the generalized harness:
+#
+#   seed 2 — no faults: MOVED/ASK redirect following must converge on the one
+#            correct owner and stay there (was
+#            `test_cluster_moved_redirect_convergence`).
+#   seed 5 — leader isolated mid slot-migration; the surviving majority must
+#            re-elect, commit the ownership transfer, and converge on a single
+#            owner after the heal (was
+#            `test_cluster_leader_partition_mid_migration_converges`).
+2 healthy subsumes test_cluster_moved_redirect_convergence: MOVED/ASK convergence with no faults
+5 leader-isolation subsumes test_cluster_leader_partition_mid_migration_converges: leader isolated mid-migration

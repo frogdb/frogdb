@@ -4864,6 +4864,14 @@ fn test_blocking_serve_replication_convergence_random_workload() {
 // node is the deterministic bootstrap leader.
 // =============================================================================
 
+/// The seed-driven fault scheduler (issue 09), which generalizes the scripted
+/// scenarios below: a `u64` derives the whole run — faults, timings, timer skew
+/// and workload — instead of each scenario hard-coding one. A submodule rather
+/// than a separate test binary so it can reuse the harness helpers in this
+/// section and so its tests stay inside the `test(/simulation/)` filter that
+/// `just concurrency` and the CI turmoil job select on.
+mod scheduler;
+
 /// The three cluster hostnames used by every cluster sim in this section.
 const CLUSTER_HOSTS: [&str; 3] = ["cluster-n1", "cluster-n2", "cluster-n3"];
 
