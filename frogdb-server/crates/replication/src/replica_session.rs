@@ -1005,7 +1005,7 @@ impl ReplicaSession {
             .inner
             .read()
             .sync_started_at
-            .map(|t| clock::elapsed(t))
+            .map(clock::elapsed)
             .unwrap_or_default();
         let rate_mbps = transfer_rate_mbps(total_size, elapsed);
         tracing::info!(

@@ -1,6 +1,6 @@
 # 02 — `ReplicationView` + invariant catalog + seam hooks
 
-Status: needs-triage
+Status: done
 
 ## Parent
 
@@ -70,18 +70,18 @@ rather than fixed here.
 
 ## Acceptance criteria
 
-- [ ] `ReplicationView` + catalog in `frogdb-replication` with all sixteen seed invariants; each
+- [x] `ReplicationView` + catalog in `frogdb-replication` with all sixteen seed invariants; each
       declares its required view fields and is skipped — not failed — when they are absent
-- [ ] `Violation`/`Citation`/`Tier` come from `frogdb-types`; every `DocumentedException` cites an
+- [x] `Violation`/`Citation`/`Tier` come from `frogdb-types`; every `DocumentedException` cites an
       FM row or issue, compile-enforced
-- [ ] Hooks live at all ten seams above in test/debug builds, each seam single-exit, plus a
+- [x] Hooks live at all ten seams above in test/debug builds, each seam single-exit, plus a
       `#[should_panic]` hook-forcing test per seam so a deleted hook goes red
-- [ ] One forcing test per HARD invariant, constructing the violating view directly and asserting
+- [x] One forcing test per HARD invariant, constructing the violating view directly and asserting
       the reported id, so the catalog is not dead code to the mutation gate
-- [ ] Full suite green under the hooks (the ~391 in-crate tests plus the 131 in
+- [x] Full suite green under the hooks (the ~391 in-crate tests plus the 131 in
       `integration_replication.rs`), or every violation triaged into a fix or a cited exception —
       no third bucket (exit criterion 2)
-- [ ] `just mutants-diff frogdb-replication` and `just lint-failure-modes` triaged before push
+- [x] `just mutants-diff frogdb-replication` and `just lint-failure-modes` triaged before push
 
 ## Blocked by
 

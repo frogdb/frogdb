@@ -217,7 +217,7 @@ pub static CATALOG: &[Invariant] = &[
 // Each is called only when its entry's `requires` fields are present, so the
 // `expect`s below are structural, not hopeful.
 
-fn state<'a>(view: &'a ReplicationView) -> &'a crate::state::ReplicationState {
+fn state(view: &ReplicationView) -> &crate::state::ReplicationState {
     view.state.as_ref().expect("entry requires State")
 }
 
@@ -225,7 +225,7 @@ fn live(view: &ReplicationView) -> u64 {
     view.live().expect("entry requires LiveOffset")
 }
 
-fn replicas<'a>(view: &'a ReplicationView) -> &'a [crate::view::ReplicaView] {
+fn replicas(view: &ReplicationView) -> &[crate::view::ReplicaView] {
     view.replicas.as_deref().expect("entry requires Replicas")
 }
 
@@ -333,13 +333,13 @@ fn inv_offset_1(view: &ReplicationView) -> Vec<Violation> {
             ),
         ));
     }
-    if let Some(live) = offsets.live {
-        if offsets.applied > live {
-            violations.push(Violation::new(
-                "INV-OFFSET-1",
-                format!("applied {} runs ahead of live {live}", offsets.applied),
-            ));
-        }
+    if let Some(live) = offsets.live
+        && offsets.applied > live
+    {
+        violations.push(Violation::new(
+            "INV-OFFSET-1",
+            format!("applied {} runs ahead of live {live}", offsets.applied),
+        ));
     }
     violations
 }
@@ -634,13 +634,13 @@ fn inv_gate_1(view: &ReplicationView) -> Vec<Violation> {
             ),
         ));
     }
-    if let (Some(remaining), Some(budget)) = (gate.hold_remaining, gate.barrier_budget) {
-        if remaining > budget {
-            violations.push(Violation::new(
-                "INV-GATE-1",
-                format!("feed gate holds for {remaining:?}, past the {budget:?} barrier budget"),
-            ));
-        }
+    if let (Some(remaining), Some(budget)) = (gate.hold_remaining, gate.barrier_budget)
+        && remaining > budget
+    {
+        violations.push(Violation::new(
+            "INV-GATE-1",
+            format!("feed gate holds for {remaining:?}, past the {budget:?} barrier budget"),
+        ));
     }
     violations
 }
