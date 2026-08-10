@@ -36,4 +36,23 @@
 
 # Open defects the scheduler found. Each is muzzled against its issue and
 # asserted to still reproduce; delete the marker with the fix.
-3 replica-partition EXPECTED-FAILURE:.scratch/cluster-correctness/issues/open/17-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md XNODE-SLOT-1: forced auto-failover evicts the old primary from the Raft voter set, so it never learns it lost slot 14438 and keeps serving it after the heal
+#
+#   issue-17 = .scratch/cluster-correctness/issues/open/
+#              17-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md
+#
+# Issue 17 is dense: 9 of the first 100 seeds hit it, so a sweep past seed 100
+# will keep finding fresh ones until it is fixed. Triage rule while it is open —
+# an `XNODE-SLOT-1` whose probe shows a node serving a slot that the other nodes'
+# `CLUSTER NODES` no longer list at all is issue 17, not a new defect. When it is
+# fixed, prune these to seeds 3 and 72 (the canonical case and the divergent-value
+# flavor) rather than keeping nine copies of one scenario.
+3 replica-partition EXPECTED-FAILURE:issue-17 XNODE-SLOT-1: forced auto-failover evicts the old primary from the Raft voter set, so it never learns it lost slot 14438 and keeps serving it after the heal
+13 replica-partition EXPECTED-FAILURE:issue-17 same split as seed 3
+17 replica-partition EXPECTED-FAILURE:issue-17 same split as seed 3
+21 mixed EXPECTED-FAILURE:issue-17 same split as seed 3, reached through a mixed schedule rather than a single held edge
+24 replica-partition EXPECTED-FAILURE:issue-17 same split as seed 3
+25 replica-partition EXPECTED-FAILURE:issue-17 same split as seed 3
+39 replica-partition EXPECTED-FAILURE:issue-17 same split as seed 3, on slot 865 rather than 14438
+50 replica-partition EXPECTED-FAILURE:issue-17 same split as seed 3
+72 replica-partition EXPECTED-FAILURE:issue-17 worst flavor of the seed-3 split: both halves serve the same key with *different* values (n0=v42, n2=v8), and a second slot splits in the same run
+99 mixed EXPECTED-FAILURE:issue-17 same split as seed 3, reached through a mixed schedule

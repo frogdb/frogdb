@@ -17,9 +17,8 @@ name: Cluster Correctness Nightly
         default: '200000'
         type: string
       seeds:
-        description: fault-scheduler seeds to sweep (default 500; the default suite runs 6)
+        description: fault-scheduler seeds to sweep (blank = the cluster-seeds recipe's own default; the per-PR suite runs a six-seed smoke sweep)
         required: false
-        default: '500'
         type: string
 jobs:
   gate:
@@ -109,4 +108,5 @@ jobs:
         shared-key: cluster-nightly-seeds
     - name: Run the fault-scheduler sweep at the nightly seed budget
       run: |
-        just cluster-seeds "${{ github.event.inputs.seeds || '500' }}"
+        seeds="${{ github.event.inputs.seeds }}"
+        just cluster-seeds ${seeds:+"$seeds"}

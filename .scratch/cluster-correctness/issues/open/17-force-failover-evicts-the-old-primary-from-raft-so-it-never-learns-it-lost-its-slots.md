@@ -38,8 +38,15 @@ precisely what closes it.
 ## Reproduction
 
 ```
-just cluster-seeds 1   # with CLUSTER_SEEDS_START=3 CLUSTER_SEEDS_JOBS=1
+CLUSTER_SEEDS_START=3 CLUSTER_SEEDS_JOBS=1 just cluster-seeds 1
 ```
+
+Not rare: **10 of the first 100 seeds** reproduce it — 3, 13, 17, 21, 24, 25, 39, 50, 72 and 99,
+all with the same signature, and they are the *only* failures in that range. Seed 72 is the
+worst flavor: both halves serve the same key with different values (`n0=v42`, `n2=v8`), so this is
+a divergence, not only a routing split. All nine are muzzled in the regression list against this
+issue; a sweep past seed 100 will keep finding fresh ones until the fix lands, and the triage rule
+is written at the top of that file.
 
 or, in the default suite, the regression-seed replay
 (`frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt`, seed 3), currently
@@ -105,9 +112,10 @@ reasons other than a partition.
       its forcing test in `frogdb-cluster` / `frogdb-cluster-runtime` (fails first)
 - [ ] No client-visible window in which two nodes serve the same slot after an automatic
       failover heals
-- [ ] Seed 3's EXPECTED-FAILURE muzzle is deleted from
-      `frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt`, and the seed
-      passes in the default suite
+- [ ] The EXPECTED-FAILURE muzzles for seeds 3, 13, 17, 21, 24, 25, 39, 50, 72 and 99 are deleted
+      from `frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt` (keeping 3
+      and 72 as plain regression seeds), and all of them pass in the default suite
+- [ ] `just cluster-seeds 500` is clean
 - [ ] `just lint-failure-modes` green
 - [ ] `just mutants-diff frogdb-cluster` and `just mutants-diff frogdb-cluster-runtime` triaged
 

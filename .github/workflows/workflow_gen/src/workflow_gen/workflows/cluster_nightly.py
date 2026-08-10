@@ -50,10 +50,6 @@ NIGHTLY_CRON = "47 3 * * *"
 # default; it is repeated here only so the workflow_dispatch input can show it.
 DEFAULT_CASES = "200000"
 
-# Seeds per fault-scheduler sweep. Must match the `cluster-seeds` recipe's own
-# default; repeated here only so the workflow_dispatch input can show it.
-DEFAULT_SEEDS = "500"
-
 
 def _cases_input() -> CommentedMap:
     inp = CommentedMap()
@@ -68,11 +64,15 @@ def _cases_input() -> CommentedMap:
 
 def _seeds_input() -> CommentedMap:
     inp = CommentedMap()
+    # No default: left empty, the step passes no argument and the `cluster-seeds`
+    # recipe's own `SEEDS` default applies. PRD §8 D4 puts the budget in one
+    # Justfile variable, and a default echoed here would be a second copy of it
+    # that nothing keeps in step.
     inp["description"] = (
-        f"fault-scheduler seeds to sweep (default {DEFAULT_SEEDS}; the default suite runs 6)"
+        "fault-scheduler seeds to sweep (blank = the cluster-seeds recipe's own "
+        "default; the per-PR suite runs a six-seed smoke sweep)"
     )
     inp["required"] = False
-    inp["default"] = SQ(DEFAULT_SEEDS)
     inp["type"] = "string"
     return inp
 
@@ -147,8 +147,13 @@ def cluster_nightly_workflow() -> Workflow:
                 *_common_steps(cache_key="cluster-nightly-seeds"),
                 run_step(
                     name="Run the fault-scheduler sweep at the nightly seed budget",
-                    run=script(f"""\
-                        just cluster-seeds "${{{{ github.event.inputs.seeds || '{DEFAULT_SEEDS}' }}}}"
+                    # `${seeds:+"$seeds"}` passes the argument only when the
+                    # dispatch input is non-empty, so a scheduled run (no
+                    # inputs) falls through to the recipe's default instead of
+                    # naming the budget a second time here.
+                    run=script("""\
+                        seeds="${{ github.event.inputs.seeds }}"
+                        just cluster-seeds ${seeds:+"$seeds"}
                     """),
                 ),
             ],

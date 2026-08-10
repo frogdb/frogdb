@@ -67,7 +67,7 @@ use turmoil::Builder;
 
 use super::{
     CLUSTER_HOSTS, RespConn, RespValue, attach_cluster_replica, node_id_of, owner_host_of,
-    parse_redirect, single_owner_soft, wait_cluster_ready,
+    parse_redirect, wait_cluster_ready,
 };
 use crate::common::sim_helpers::{
     CLUSTER_BUS_PORT, ClusterNodeParams, SERVER_PORT, real_frogdb_cluster_node_with,
@@ -1312,7 +1312,7 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
         }
         let mut owner = None;
         for _ in 0..POLL_STEPS {
-            if let Ok(Some(idx)) = single_owner_soft(name.as_bytes()).await {
+            if let Some(idx) = agreed_owner_soft(name.as_bytes()).await {
                 owner = Some(idx);
                 break;
             }
@@ -1322,7 +1322,7 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
             Some(idx) => {
                 final_owners.insert(slot, idx);
             }
-            // `single_owner_soft` collapses every kind of disagreement to
+            // `agreed_owner_soft` collapses every kind of disagreement to
             // `None` — the right shape for a poll loop, the wrong one for a
             // failure report — so re-probe each node and name what they
             // actually said.
@@ -1564,8 +1564,87 @@ async fn exec_anywhere(parts: &[&[u8]]) -> OpOutcome {
     OpOutcome::Unreachable
 }
 
+/// What one node's direct (no-redirect) `GET` says about who owns the slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OwnerVote {
+    /// The node answered for the slot itself, so it believes it is the owner:
+    /// a value, a nil, or an `ASK` — only a MIGRATING slot's *owner* emits
+    /// `ASK`, and it emits it for keys it does not hold, which is exactly the
+    /// steady state a migration interrupted by a fault leaves behind.
+    Serves,
+    /// The node disclaims the slot and names the owner it believes in.
+    Redirects(std::net::SocketAddr),
+    /// No usable answer: `CLUSTERDOWN`, `TRYAGAIN`, an unparseable redirect, a
+    /// dead connection. Never treated as agreement.
+    Unknown,
+}
+
+fn classify_owner_reply(reply: &RespValue) -> OwnerVote {
+    match reply {
+        RespValue::Error(e) => match parse_redirect(e) {
+            Some((false, target)) => OwnerVote::Redirects(target),
+            Some((true, _)) => OwnerVote::Serves,
+            None => OwnerVote::Unknown,
+        },
+        _ => OwnerVote::Serves,
+    }
+}
+
+/// Fold one vote per node into "the cluster agrees node *i* owns this slot",
+/// or `None` if it does not.
+///
+/// Agreement needs exactly one node serving the slot and every other node
+/// redirecting to *that* node's address. An `Unknown` anywhere is a
+/// non-answer, not a disagreement, but it still fails the poll — a settled
+/// cluster answers.
+fn agreed_owner(votes: &[OwnerVote], addrs: &[std::net::SocketAddr]) -> Option<usize> {
+    debug_assert_eq!(votes.len(), addrs.len());
+    let mut owner = None;
+    for (idx, vote) in votes.iter().enumerate() {
+        match vote {
+            OwnerVote::Unknown => return None,
+            OwnerVote::Serves if owner.replace(idx).is_some() => return None,
+            _ => {}
+        }
+    }
+    let owner = owner?;
+    votes
+        .iter()
+        .enumerate()
+        .all(|(idx, vote)| match vote {
+            OwnerVote::Redirects(target) => *target == addrs[owner],
+            _ => idx == owner,
+        })
+        .then_some(owner)
+}
+
+fn node_addr(idx: usize) -> std::net::SocketAddr {
+    std::net::SocketAddr::new(turmoil::lookup(CLUSTER_HOSTS[idx]), SERVER_PORT)
+}
+
+/// Poll every node once and ask whether they agree on the slot's owner.
+///
+/// Deliberately not [`assert_single_owner`]'s soft sibling in the parent
+/// module: that one reads any non-`MOVED` error as "no answer", which reports
+/// an interrupted migration — source `ASK`s, everyone else `MOVED`s to the
+/// source — as a convergence failure, when it is the cluster agreeing.
+async fn agreed_owner_soft(key: &[u8]) -> Option<usize> {
+    let mut votes = Vec::with_capacity(NODE_COUNT);
+    for idx in 0..NODE_COUNT {
+        let mut conn = RespConn::connect((node_addr(idx).ip(), SERVER_PORT))
+            .await
+            .ok()?;
+        votes.push(match conn.cmd(&[b"GET", key]).await {
+            Ok(reply) => classify_owner_reply(&reply),
+            Err(_) => OwnerVote::Unknown,
+        });
+    }
+    let addrs: Vec<std::net::SocketAddr> = (0..NODE_COUNT).map(node_addr).collect();
+    agreed_owner(&votes, &addrs)
+}
+
 /// One `GET` per node, rendered — the diagnostic behind an `XNODE-SLOT-1`
-/// convergence failure. [`single_owner_soft`] answers only "agreed / not
+/// convergence failure. [`agreed_owner_soft`] answers only "agreed / not
 /// agreed", so without this a failing seed reports that the cluster disagreed
 /// but not *how*, which is the whole content of the defect.
 async fn probe_owner_replies(key: &[u8]) -> String {
@@ -1895,20 +1974,30 @@ fn test_scheduler_regression_seed_file_parses() {
         !entries.is_empty(),
         "cluster-regression-seeds.txt parsed to nothing"
     );
+    // Mismatches are collected, not asserted one at a time: a draw-order change
+    // moves every seed at once, and re-deriving the column from one failure per
+    // run is as many runs as there are seeds.
+    let mut mismatches: Vec<String> = Vec::new();
     for entry in entries {
         let derived = Schedule::from_seed(entry.seed).family.as_str();
-        assert_eq!(
-            derived, entry.family,
-            "seed {} is recorded as family {:?} but now derives {derived:?} — \
-             Schedule::from_seed's draw order changed and the file must be re-derived",
-            entry.seed, entry.family
-        );
+        if derived != entry.family {
+            mismatches.push(format!(
+                "  {} is recorded as {:?} but derives {derived:?}",
+                entry.seed, entry.family
+            ));
+        }
         assert!(
             !entry.note.is_empty(),
             "seed {} has no diagnosis; every regression seed records why it is here",
             entry.seed
         );
     }
+    assert!(
+        mismatches.is_empty(),
+        "cluster-regression-seeds.txt's family column no longer matches \
+         Schedule::from_seed's draw order — re-derive it:\n{}",
+        mismatches.join("\n")
+    );
 }
 
 #[test]
@@ -1931,6 +2020,65 @@ fn test_scheduler_regression_seed_lines_parse_the_muzzle_column() {
             note: "split brain".to_string(),
         }
     );
+}
+
+#[test]
+fn test_owner_votes_read_ask_as_the_source_still_owning_the_slot() {
+    let addrs: Vec<std::net::SocketAddr> = (1..=3)
+        .map(|i| format!("192.168.0.{i}:6379").parse().expect("an addr"))
+        .collect();
+    let moved_to = |i: usize| RespValue::Error(format!("MOVED 865 {}", addrs[i]));
+
+    // A migration interrupted by a fault: the source still owns the slot and
+    // ASKs for the keys it no longer holds, everyone else MOVEDs to it. That
+    // is the cluster agreeing, and reading it as a disagreement failed 16 of
+    // the first 100 seeds against a defect that was not there (a sweep of that
+    // range went from 25 failures to 9 when this classification landed).
+    let votes = vec![
+        classify_owner_reply(&RespValue::Error("ASK 865 192.168.0.2:6379".to_string())),
+        classify_owner_reply(&moved_to(0)),
+        classify_owner_reply(&moved_to(0)),
+    ];
+    assert_eq!(agreed_owner(&votes, &addrs), Some(0));
+
+    // Plain ownership: one node answers, the others point at it.
+    let votes = vec![
+        classify_owner_reply(&moved_to(2)),
+        classify_owner_reply(&moved_to(2)),
+        classify_owner_reply(&RespValue::Bulk(Some(b"v".to_vec()))),
+    ];
+    assert_eq!(agreed_owner(&votes, &addrs), Some(2));
+
+    // Two nodes serving one slot — the split this check exists to catch.
+    let votes = vec![
+        classify_owner_reply(&RespValue::Bulk(Some(b"v".to_vec()))),
+        classify_owner_reply(&moved_to(2)),
+        classify_owner_reply(&RespValue::Bulk(None)),
+    ];
+    assert_eq!(agreed_owner(&votes, &addrs), None);
+
+    // A redirect naming somebody other than the node that served it.
+    let votes = vec![
+        classify_owner_reply(&RespValue::Bulk(None)),
+        classify_owner_reply(&moved_to(2)),
+        classify_owner_reply(&moved_to(0)),
+    ];
+    assert_eq!(agreed_owner(&votes, &addrs), None);
+
+    // No owner at all, and a non-answer, each fail the poll.
+    let votes = vec![
+        classify_owner_reply(&moved_to(0)),
+        classify_owner_reply(&moved_to(0)),
+        classify_owner_reply(&moved_to(0)),
+    ];
+    assert_eq!(agreed_owner(&votes, &addrs), None);
+    let votes = vec![
+        classify_owner_reply(&RespValue::Error("CLUSTERDOWN not serving".to_string())),
+        classify_owner_reply(&moved_to(0)),
+        classify_owner_reply(&RespValue::Bulk(None)),
+    ];
+    assert_eq!(votes[0], OwnerVote::Unknown);
+    assert_eq!(agreed_owner(&votes, &addrs), None);
 }
 
 #[test]

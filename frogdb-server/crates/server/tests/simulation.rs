@@ -5004,45 +5004,6 @@ async fn assert_single_owner(key: &[u8], ctx: &str) -> std::io::Result<usize> {
     Ok(owners[0])
 }
 
-/// Soft variant of [`assert_single_owner`]: returns `Ok(Some(idx))` only when
-/// exactly one node serves the key locally and all others redirect to it;
-/// otherwise `Ok(None)`. Used to poll for convergence without panicking.
-async fn single_owner_soft(key: &[u8]) -> std::io::Result<Option<usize>> {
-    let mut owners: Vec<usize> = Vec::new();
-    let mut owner_addr: Option<std::net::SocketAddr> = None;
-    let mut moved_targets: Vec<std::net::SocketAddr> = Vec::new();
-
-    for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
-        let ip = turmoil::lookup(*host);
-        let mut conn = match RespConn::connect((ip, SERVER_PORT)).await {
-            Ok(c) => c,
-            Err(_) => return Ok(None),
-        };
-        match conn.cmd(&[b"GET", key]).await {
-            Ok(RespValue::Error(e)) if e.starts_with("MOVED") => match parse_redirect(&e) {
-                Some((_, target)) => moved_targets.push(target),
-                None => return Ok(None),
-            },
-            Ok(RespValue::Error(_)) => return Ok(None),
-            Ok(_) => {
-                owners.push(idx);
-                owner_addr = Some(std::net::SocketAddr::new(ip, SERVER_PORT));
-            }
-            Err(_) => return Ok(None),
-        }
-    }
-
-    if owners.len() != 1 {
-        return Ok(None);
-    }
-    let owner_addr = owner_addr.unwrap();
-    if moved_targets.iter().all(|t| *t == owner_addr) {
-        Ok(Some(owners[0]))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Register the three cluster hosts on `sim`, each a real Raft node. Returns the
 /// tempdirs (must be kept alive until after `sim.run()`). `auto_failover` wires
 /// each node's `cluster.auto_failover` (leader promotes a successor after a peer
