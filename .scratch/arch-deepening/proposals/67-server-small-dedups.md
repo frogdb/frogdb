@@ -2,9 +2,22 @@
 
 Lane candidates: **SV5 + SV6 + SV7**.
 
-**Verified at HEAD `6e99f567`.** The lane briefs were written against `08c143d6`; every
-citation below was re-derived from the current tree, and three lane claims are corrected
-(SV5's line count, SV6's macro home, SV7's "LIVE" classification).
+**Verified at HEAD `43720822`** (revision 2, post-adversarial-review; first draft was verified
+at `6e99f567`). The lane briefs were written against `08c143d6`; every citation below was
+re-derived from the current tree, and three lane claims are corrected (SV5's line count,
+SV6's macro home, SV7's "LIVE" classification).
+
+**Revision log — what the adversarial review changed.** The three design rulings held (SV7 is
+a trap for the naive dedup; `ClusterDeps::cluster` cannot express `pubsub_forwarder`; no fifth
+shard-0 path for `debug_handler`). Four factual defects were fixed, none of which changes a
+conclusion:
+
+| # | Defect in revision 1 | Fix here |
+|---|---|---|
+| B1 | "`git log` returns five commits" — it returns **12**. The five cited were only the most recent | Full 12-commit table below. The tax argument *strengthens*: 11 substantive commits, every one plumbing into dead code, plus one file move |
+| B2 | "grepping `FM-` across that file set returns **no matches**" — **false**. `core/src/command.rs:1349` and `:1368` carry `FM-PERSISTENCE-022` | Restated precisely: two **prose** mentions in doc comments on `CommandContext` fields, zero FM-*tagged tests*. Conclusion (no spec edit owed) holds; the other 11 edited files are FM-clean |
+| B3 | The macro sketch was uncompilable: `$crate::Response` does not exist (`frogdb-core` does not re-export `frogdb_protocol` at its root — `lib.rs` has no `Response`), and `bytes::Bytes` was unhygienic | Sketch rewritten against paths that actually resolve: `::frogdb_protocol::Response`, `::bytes::Bytes`, `$crate::error::CommandError`, `$crate::CommandContext` |
+| B4 | "every item is `pub` inside a `pub mod connection`" as the `dead_code` suppressor — `mod builder;` (`connection.rs:21`) is **private**. The suppressor is the `pub use` at `connection.rs:71` | Corrected, and turned into **SV5 step 0**: delete `:71` alone and rustc itself reports the whole file dead — a compiler-issued zero-caller proof rather than a grep |
 
 ## Summary
 
@@ -14,15 +27,17 @@ complexity reappears across N callers it was earning its keep. Each part is inde
 landable, in any order; they share no file and no type.
 
 - **SV5 (dead `ConnectionHandlerBuilder`) — a literal deletion.** `connection/builder.rs`
-  (268 lines) has **zero callers**: the only references to any of its exported names are its
-  own definitions, one re-export (`connection.rs:71`), and one doc mention
-  (`connection.rs:6`). It survives `dead_code` only because every item is `pub` inside a
-  `pub mod connection` (lib.rs:13), i.e. it is nominally crate-public API. The cost is not
-  the 268 lines: **all five of the last five commits that touched the file were pure
-  field-plumbing** into a function nobody calls. Worse, it is a *second, already-wrong*
+  (267 lines) has **zero callers**: the only references to any of its exported names are its
+  own definitions, one re-export (`connection.rs:71`), and one stale doc paragraph
+  (`connection.rs:4–6`). It survives `dead_code` only because that one `pub use` re-exports
+  three of its items out of an otherwise-**private** module (`mod builder;`, `connection.rs:21`)
+  into the crate-public `pub mod connection` (`lib.rs:13`) — so rustc's reachability pass sees
+  a public root and stops. The cost is not the 267 lines: `git log` on the file returns **12**
+  commits, of which **11 are pure field-plumbing** into a function nobody calls (the twelfth
+  is the repo-wide directory move that created the path). Worse, it is a *second, already-wrong*
   assembly of the connection dependency graph — `with_cluster_parts` cannot set
   `pubsub_forwarder`, and `with_admin_parts` mints a per-connection cursor store where
-  production shares one node-wide. Delete the file, the re-export, the doc sentence, and the
+  production shares one node-wide. Delete the file, the re-export, the doc paragraph, and the
   now-caller-less `ClusterDeps::cluster`. **Latent trap, no behavior change.**
 - **SV6 (server-wide unreachable `execute()`, 28×).** Twenty-eight `Command::execute`
   bodies return the identical `CommandError::Internal { message: "internal: server-wide
@@ -45,30 +60,34 @@ landable, in any order; they share no file and no type.
 Nothing here is in a **locked** area. `frogdb-server`, `frogdb-commands` and `frogdb-core`
 are outside the four locked pairs (txn/vll, persistence/recovery,
 replication/replication-runtime, cluster/cluster-runtime; ADRs 0002–0004). **Zero FM-tagged
-tests live in any of the ten files touched** — verified by grepping `FM-` across exactly
-that file set (no matches). No spec edit is owed and no mutation re-gate is owed.
+tests live in any of the twelve edited files** — see *Spec / LOCKED impact* for the exact
+grep result (two prose mentions of `FM-PERSISTENCE-022`, no tagged tests). No spec edit is
+owed and no mutation re-gate is owed.
 
 ## Files involved
 
+**Twelve files are edited; five more are read-only evidence.** (Revision 1 said "ten"; the
+count was wrong, the set was not.)
+
 | Path | Lines | Part | Role |
 |---|---|---|---|
-| `frogdb-server/crates/server/src/connection/builder.rs` | 268 | SV5 | **Deleted in full.** `ConnectionHandlerBuilder` (42), `with_core_parts` (63), `with_admin_parts` (85), `with_cluster_parts` (111), `build` (182), `try_build` (210), `connection_builder` (237), `standalone_config` (252) |
-| `frogdb-server/crates/server/src/connection.rs` | — | SV5 | Two edits: the `mod builder;`/`pub use builder::{…}` re-export (71) and the doc sentence naming the builder (6). `from_deps` (263) — the surviving seam — is unchanged |
-| `frogdb-server/crates/server/src/connection/deps.rs` | — | SV5 | `ClusterDeps::cluster` (137–161): sole caller is builder.rs:124, so it falls with the builder. `ConnectionConfig` (175) and `AdminDeps` (59) are read-only evidence |
+| `frogdb-server/crates/server/src/connection/builder.rs` | 267 | SV5 | **Deleted in full.** Module doc (1–4), `ConnectionHandlerBuilder` (42), `new` (52), `with_core_parts` (63), `with_admin_parts` (85), `with_cluster_parts` (111), `as_admin` (162), `enable_admin_separation` (170), `build` (182), `try_build` (210), `connection_builder` (237), `standalone_config` (252) |
+| `frogdb-server/crates/server/src/connection.rs` | — | SV5 | **Three** edits: the `pub use builder::{…}` re-export (71 — the `dead_code` suppressor, deleted *first*, see step 0), the private `mod builder;` (21), and the module doc paragraph (4–6), which is stale twice over. `from_deps` (263) — the surviving seam — is unchanged |
+| `frogdb-server/crates/server/src/connection/deps.rs` | — | SV5 | `ClusterDeps::cluster` (137–161): sole caller is builder.rs:124, so it falls with the builder. `pubsub_forwarder: None` at 159 is why it cannot be adopted. `ConnectionConfig::default_for_testing` (218) and `AdminDeps` are read-only evidence |
 | `frogdb-server/crates/server/src/acceptor.rs` | — | SV5 | **Read-only.** The production construction path (`ConnectionConfig` literal 173, `from_deps` 335) and its comment at 168–172, which is the evidence the builder is redundant |
-| `frogdb-server/crates/server/src/server/subsystems.rs` | — | SV5 | **Read-only.** The production `AdminDeps`/`ClusterDeps` assembly (527, 536) the builder's parts-constructors diverge from. Owned by sibling **64** — 67 must not edit it |
-| `frogdb-server/crates/server/src/commands/search.rs` | 1335 | SV6 | **22** identical bodies: 57, 100, 144, 187, 230, 273, 317, 362, 405, 448, 494, 536, 578, 620, 662, 704, 746, 788, 830, 1246, 1289, 1332. Module doc (3–7) states the tripwire contract |
+| `frogdb-server/crates/server/src/server/subsystems.rs` | — | SV5 | **Read-only.** The production `AdminDeps` (527) / `ClusterDeps` (535) assembly the builder's parts-constructors diverge from — `cursor_store` 532, `recovery_stats` 533, `pubsub_forwarder` 545. Owned by sibling **64** — 67 must not edit it |
+| `frogdb-server/crates/server/src/commands/search.rs` | 1335 | SV6 | **22** identical bodies: 57, 100, 144, 187, 230, 273, 317, 362, 405, 448, 494, 536, 578, 620, 662, 704, 746, 788, 830, 1246, 1289, 1332. Module doc (3–7) states the tripwire contract. The file holds 26 `impl Command` blocks total; the other 4 are the key-based FT.SUG* commands |
 | `frogdb-server/crates/commands/src/timeseries.rs` | — | SV6 | **4** identical bodies: 1059, 1102, 1147, 1190. **Feature-gated** (`#[cfg(feature = "timeseries")]`, `commands/src/lib.rs:54`) — not in `core-profile` |
-| `frogdb-server/crates/server/src/commands/migrate_cmd.rs` | 376 | SV6 | 1 site (52). Same error, **site-specific comment**; spec is `KeySpec::Dynamic` + `AccessSpec::UniformRW` + a `dynamic_keys` method |
-| `frogdb-server/crates/server/src/commands/server.rs` | 271 | SV6 | 1 site (231, SHUTDOWN). Same error, site-specific comment. The other three `ServerWide` commands here (DBSIZE 40, FLUSHDB 72, FLUSHALL 120) have **real bodies** and are **not touched** |
-| `frogdb-server/crates/core/src/command.rs` (or a new `core::command` item) | — | SV6 | New home for the refusal function + the `#[macro_export]` macro |
+| `frogdb-server/crates/server/src/commands/migrate_cmd.rs` | 376 | SV6 | 1 site (52). Same error, **site-specific comment**; `MigrateCommand` (17) has `KeySpec::Dynamic` + `AccessSpec::UniformRW` + a `dynamic_keys` method (56) |
+| `frogdb-server/crates/server/src/commands/server.rs` | 271 | SV6 | 1 site (231, `ShutdownCommand` at 196, strategy at 216). Same error, site-specific comment. The other three `ServerWide` commands here (DBSIZE 40, FLUSHDB 72, FLUSHALL 120) have **real bodies** and are **not touched** |
+| `frogdb-server/crates/core/src/command.rs` | — | SV6 | New home for the refusal function + the `#[macro_export]` macro. Already carries two `FM-PERSISTENCE-022` **prose** mentions (1349, 1368) on `CommandContext` fields — doc comments, not tagged tests; see *Spec / LOCKED impact* |
 | `frogdb-server/crates/server/src/commands/stub.rs` | 306 | SV6 | **Read-only.** The precedent: `stub_command!` (23), `not_supported_command!` (134), `db_not_supported_command!` (205) |
 | `frogdb-server/crates/server/src/connection/search/helpers.rs` | 76 | SV7 | `query_shard0` (48–75) — the surviving interface, gains one parameter |
-| `frogdb-server/crates/server/src/connection/search/index_mgmt.rs` | 139 | SV7 | `handle_ft_info` (74–108, copy at 82–107) and `handle_ft_list` (111–138, copy at 112–137) |
+| `frogdb-server/crates/server/src/connection/search/index_mgmt.rs` | 139 | SV7 | `handle_ft_info` (74–107, copy at 82–107) and `handle_ft_list` (111–137, copy at 112–137) |
 | `frogdb-server/crates/server/src/connection/search/explain.rs` | 63 | SV7 | `handle_ft_explain` (12–62, copy at 21–61) — the only copy with post-processing (cli_mode, 42–53) |
 | `frogdb-server/crates/server/src/connection/search/synonyms.rs` | 88 | SV7 | `handle_ft_syndump` (55–87, copy at 61–86) |
-| `frogdb-server/crates/core/src/shard/execution.rs` | — | SV7 | **Read-only.** `execute_scatter_part_body` (739) and its `PartialResult::keyed(results)` tail (924) — the proof the empty arm is unreachable |
-| `frogdb-server/crates/core/src/shard/dispatch_core.rs` | — | SV7 | **Read-only.** `scatter_error_reply`'s keyless arm (220) — the other half of that proof |
+| `frogdb-server/crates/core/src/shard/execution.rs` | — | SV7 | **Read-only.** `execute_scatter_part_body` (739) and its `PartialResult::keyed(results)` tail (924) — the proof the empty arm is unreachable. Sibling **71** edits one *other* arm of this function (`ScatterOp::FtHybrid`, 888–895) |
+| `frogdb-server/crates/core/src/shard/dispatch_core.rs` | — | SV7 | **Read-only.** `scatter_error_reply`'s keyless arm (220) — half of the other proof; the rest is the three-caller sweep in *Problem → SV7* |
 
 ## Problem
 
@@ -88,10 +107,10 @@ names and every reference to them, verified by
 
 | Exported name | References outside builder.rs |
 |---|---|
-| `ConnectionHandlerBuilder` | `connection.rs:71` (re-export), `connection.rs:6` (doc prose) — and two `.scratch` notes that already flagged it |
+| `ConnectionHandlerBuilder` | `connection.rs:71` (re-export), `connection.rs:6` (doc prose) — and two `.scratch` notes that already flagged it (`testing-improvements-round2/issues/open/34-dead-code-deletion-sweep.md`, `proposals/03-server-net-connection.md`) |
 | `connection_builder` | `connection.rs:71` only |
 | `standalone_config` | `connection.rs:71` only |
-| `with_core_parts` / `with_admin_parts` / `with_cluster_parts` | builder.rs internal only |
+| `with_core_parts` / `with_admin_parts` / `with_cluster_parts` | builder.rs internal only (`with_core_parts` from `connection_builder` at 243; the other two from nothing) |
 | `try_build` / `enable_admin_separation` / `as_admin` | **none at all** — not even re-exported |
 
 There is no macro-generated caller (the crate's only `macro_rules!` are the three in
@@ -111,66 +130,105 @@ builder.rs:3–4). That job is already done, one layer down, by the types. The b
 fluent façade over a seam that needs none. In this vocabulary: it is a hypothetical seam.
 *One adapter means a hypothetical seam; two means a real one* — here there are zero.
 
-**Why it never showed up as dead code.** Every item is `pub`, and `connection` is a `pub
-mod` (lib.rs:13), so the whole file is nominally public crate API and rustc's `dead_code`
-pass has nothing to report. The signal that would have told us the truth is structurally
-suppressed — the same shape proposal 41 condemns in `#[allow(dead_code)]`, reached by a
-different route.
+**Why it never showed up as dead code — corrected.** Revision 1 said "every item is `pub`
+inside a `pub mod`". That is wrong in its mechanism, and the correct mechanism is sharper.
+`mod builder;` (`connection.rs:21`) is **private** — there is no `pub` on it. What keeps the
+file alive is one line: `pub use builder::{ConnectionHandlerBuilder, connection_builder,
+standalone_config};` (`connection.rs:71`). That single re-export lifts three items out of a
+private module into the crate-public `pub mod connection` (`lib.rs:13`), giving rustc's
+reachability analysis a public root; everything else in the file is reachable *from those
+three*, so nothing is reported.
 
-**The cost is the maintenance tax, and it is measurable.** `git log` for the file returns
-five commits, and *every one of them* is a field being plumbed into dead code:
+This is worth stating precisely because it converts the deletion's central claim from an
+assertion into a **compiler-checked fact**. Delete `:71` and nothing else, and rustc's
+`dead_code` pass has no public root left — it lights up the entire module. That is the proof
+of zero callers, issued by the compiler rather than by a grep, and it is why *Proposed change*
+makes it step 0. The signal that would have told us the truth was structurally suppressed —
+the same shape proposal 41 condemns in `#[allow(dead_code)]`, reached by a different route:
+here the suppressor is a re-export nobody imports.
 
-| Commit | Change to builder.rs |
-|---|---|
-| `10bb0150` bound pubsub output buffer | `+ pubsub_output_buffer_hard_limit: …DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,` |
-| `f1bfaf0c` delete dead hotshards config | `- hotshards_config: HotShardConfig::default(),` (+ import) |
-| `57ae8cef` failed shard drains fail checkpoint | `+ recovery_stats: Default::default(),` |
-| `36064128` extract slot migration coordinator | `+ slot_migration: Arc<…SlotMigrationCoordinator>,` (+ arg) |
-| `b02e00bc` DEBUG SLEEP gate | `+ enable_debug_command: false,` |
+**The cost is the maintenance tax, and it is measurable — 12 commits, not 5.** Revision 1
+cited five; that was the most recent five, not the log. The full history of the file, at 11
+substantive commits plus the directory move that created the path:
 
-`standalone_config` (builder.rs:253) is an **exhaustive** `ConnectionConfig` struct literal,
-so it is a compile error away from every new field. It is the third such literal in the
+| Commit | ±lines | Change to builder.rs |
+|---|---|---|
+| `57ae8cef` failed shard drains fail checkpoint | +1 | `+ recovery_stats: Default::default(),` |
+| `10bb0150` bound pubsub output buffer | +1 | `+ pubsub_output_buffer_hard_limit: …DEFAULT_PUBSUB_OUTPUT_BUFFER_HARD_LIMIT,` |
+| `f1bfaf0c` delete dead hotshards config | +1/−2 | `- hotshards_config: HotShardConfig::default(),` (+ import) |
+| `36064128` extract slot migration coordinator | +2 | `+ slot_migration: Arc<…SlotMigrationCoordinator>,` (+ arg) |
+| `b02e00bc` DEBUG SLEEP gate | +1 | `+ enable_debug_command: false,` |
+| `d7d855a9` TLS support | +3/−3 | TLS config fields plumbed through `standalone_config` |
+| `6964d65f` shard-queue-latency histogram | +3/−4 | `ShardSender`/`ShardReceiver` newtypes threaded through the builder's shard-sender args |
+| `203ae465` consolidate metrics architecture | +5/−10 | `MetricsRecorder` moved into `ObservabilityDeps`; the builder's observability assembly rewritten to match |
+| `360e9e65` RediSearch compatibility gaps | +1 | one more `ConnectionConfig` field |
+| `31803441` wire `ChaosConfig` into server | +2 | `ChaosConfig` plumbed |
+| `eb59b390` integration-test fixes | +1/−1 | `is_replica` flag plumbed |
+| `7ba151f0` refactor repo directory structure | +266 | the file's arrival at this path — a move, not a tax payment |
+
+Eleven substantive edits, **every one of them a field or type being plumbed into a function
+nobody calls**, spanning TLS, metrics, chaos injection, replica identity, cluster slot
+migration and persistence stats. The dead module has been dragged through four independent
+subsystem refactors. That is the leverage argument for deletion: the file's only observable
+behavior is to make unrelated changes bigger.
+
+`standalone_config` (builder.rs:252, literal from 253) is an **exhaustive**
+`ConnectionConfig` struct literal, so it is a compile error away from every new field — which
+is exactly why it kept appearing in those twelve diffs. It is the third such literal in the
 tree, beside the production one (`acceptor.rs:173`) and the test one
-(`ConnectionConfig::default_for_testing`, `deps.rs:216`). Two of those three are real.
+(`ConnectionConfig::default_for_testing`, `deps.rs:218`). Two of those three are real.
 
 **And it is not merely unused — it is already wrong.** If someone ever *did* adopt it, they
-would get a silently mis-assembled handler. Two verified divergences from the production
-assembly at `subsystems.rs:527–545`:
+would get a silently mis-assembled handler. Three verified divergences from the production
+assembly at `subsystems.rs:527–546` (line numbers re-derived at `43720822`; revision 1 said
+`cursor_store` `:531` → now `:532`, `recovery_stats` `:532` → `:533`, `ClusterDeps` `:536` →
+`:535`. Revision 1 also called these "two divergences" while listing three rows — it is
+three):
 
 | Dependency | Builder (`with_admin_parts` / `with_cluster_parts`) | Production (`subsystems.rs`) |
 |---|---|---|
-| `cursor_store` | `Arc::new(AggregateCursorStore::new())` minted per builder (builder.rs:97) | `cursor_store.clone()` — one store shared node-wide (subsystems.rs:531) |
-| `recovery_stats` | `Default::default()` (builder.rs:98) — INFO persistence' `rdb_last_load_*` would report zeros | `self.recovery_stats.clone()` — the real boot stats (subsystems.rs:532) |
-| `pubsub_forwarder` | **unreachable.** `with_cluster_parts` routes through `ClusterDeps::cluster`, which hard-codes `pubsub_forwarder: None` (deps.rs:159), and the builder only overrides `quorum_checker` (builder.rs:122–133) | set explicitly (subsystems.rs:545) |
+| `cursor_store` | `Arc::new(AggregateCursorStore::new())` minted per builder (builder.rs:97) | `cursor_store.clone()` — one store shared node-wide (subsystems.rs:532, from the single `AggregateCursorStore::new()` at :506) |
+| `recovery_stats` | `Default::default()` (builder.rs:98) — INFO persistence' `rdb_last_load_*` would report zeros | `self.recovery_stats.clone()` — the real boot stats (subsystems.rs:533) |
+| `pubsub_forwarder` | **unreachable.** `with_cluster_parts` routes through `ClusterDeps::cluster`, which hard-codes `pubsub_forwarder: None` (deps.rs:159), and the builder only overrides `quorum_checker` (builder.rs:123, spreading `..ClusterDeps::cluster(…)` at :124) | set explicitly (subsystems.rs:545, from the node-wide forwarder built at :460) |
 
 A cluster-mode connection built through the builder would have cluster pub/sub forwarding
 silently off. Deleting the file removes a trap, not just lines.
 
 **The cascade.** `ClusterDeps::cluster` (deps.rs:137–161, 25 lines) has exactly **one**
 caller in the tree: `builder.rs:124`. Production builds `ClusterDeps` as a direct literal
-with all ten fields (subsystems.rs:536). So the constructor falls with the builder — see
+with all ten fields (subsystems.rs:535–546). So the constructor falls with the builder — see
 *Proposed change* for the explicit branch.
 
 ### SV6 — one refusal, twenty-eight copies
 
 `ExecutionStrategy::ServerWide(op)` means the command's real implementation lives at the
-connection level, not on a shard. `dispatch.rs`'s `dispatch_server_wide` (223–…) is a
-**total** match over `ServerWideOp` — the doc there records that totality is the point
-("the compiler then forces a match arm here … so the name-keyed table plus drift tests this
-replaced are gone"). Every arm routes to a `ConnectionHandler::handle_*`. The shard never
+connection level, not on a shard. `dispatch.rs`'s `dispatch_server_wide` (**232**, doc from
+223) is a **total** match over `ServerWideOp` — the doc there records that totality is the
+point ("the compiler then forces a match arm here … so the name-keyed table plus drift tests
+this replaced are gone"). Every arm routes to a `ConnectionHandler::handle_*`. The shard never
 receives a `Command` for these; when a fan-out is needed, the connection sends
 `CoreMsg::ScatterRequest` and the shard answers it from `execute_scatter_part_body`
 (`core/shard/execution.rs:739`), a separate match that never resolves a `Command`.
 
-The three production `handler.execute(…)` call sites, and why each is closed to
-server-wide commands:
+**The four routes into a shard-side `execute()`, and why each is closed to server-wide
+commands.** (Revision 1 headed this table "the three production call sites" while listing
+four rows — three are literal `handler.execute(…)` sites, the fourth is the EXEC deferral,
+which is a route rather than a call site. Retitled.)
 
-| Call site | Closed by |
-|---|---|
-| `core/shard/execution.rs:241` — the shard command executor | The connection intercepts `ServerWide` at `DispatchStage::ServerWide` (dispatch.rs:67, 138) and never sends a shard `Command`. **This is the regression the tripwire guards.** |
-| `core/shard/scripting.rs:223` — Lua `redis.call` | `ScriptGate::reject_server_wide` (`core/scripting/gate.rs:437–451`) returns a clean error first |
-| `core/scripting/gate.rs:506` | same gate |
-| `connection/transaction.rs:141` → `run_server_wide` (240) | EXEC defers `ServerWide(op)` past the shard transaction into the *same* `dispatch_server_wide` |
+| Route | Kind | Closed by |
+|---|---|---|
+| `core/shard/execution.rs:241` — the shard command executor | `handler.execute(…)` | The connection intercepts `ServerWide` at `DispatchStage::ServerWide` (dispatch.rs:67, 138) and never sends a shard `Command`. **This is the regression the tripwire guards.** |
+| `core/scripting/gate.rs:506` — `ScriptInvoker::run_local` | `handler.execute(…)` | `ScriptGate::reject_server_wide` (`gate.rs:441–451`, doc 436–440) is called from `gate.rs:278` **before** routing, so a server-wide name never reaches `run_local` |
+| `core/shard/scripting.rs:223` — the cross-shard script sub-command path | `handler.execute(…)` | **Transitively only.** This site has no local strategy check; it is reached from the `Plan::Remote` branch of the same `gate.rs:278` dispatch, so it is gated by the *originating* shard's invoker having already refused. The refusal is enforced one hop away, on another shard, by trust |
+| `connection/transaction.rs:141` → `run_server_wide` (240) | deferral, not a call | EXEC defers `ServerWide(op)` past the shard transaction into the *same* `dispatch_server_wide` |
+
+That third row is worth naming rather than glossing (revision 1 wrote it as if the gate
+guarded it directly). A cross-shard `redis.call` reaching `shard/scripting.rs:223` is
+protected by an invariant that lives in a *different process step on a different shard*, with
+no local assertion. This is precisely the shape of gap the tripwire exists for — it
+**strengthens** SV6's premise: the refusal body is not decoration, it is the only thing
+standing between a routing change on the originating shard and a server-wide command running
+against one shard's store and fabricating a plausible-looking success.
 
 So the body is a deliberate tripwire, exactly as `commands/search.rs:3–7` documents: "fail
 loudly so a routing regression yields an ERR reply instead of a fabricated success." Good
@@ -211,9 +269,10 @@ sharing a reply — but at a scale of one to three, while the 28-fold duplicatio
 **Why the whole-impl shape does not fit here** (this is the design constraint the lane brief
 did not have). The 28 sites do **not** share a spec skeleton:
 
-- `MigrateCommand` (migrate_cmd.rs:21) has `keys: KeySpec::Dynamic`, `access:
-  AccessSpec::UniformRW`, a three-flag union, **and an extra `dynamic_keys` trait method**.
-- `ShutdownCommand` (server.rs:200) has a four-flag union.
+- `MigrateCommand` (migrate_cmd.rs:17) has `keys: KeySpec::Dynamic`, `access:
+  AccessSpec::UniformRW`, a three-flag union, **and an extra `dynamic_keys` trait method**
+  (migrate_cmd.rs:56, itself covered by ten unit tests in the same file).
+- `ShutdownCommand` (server.rs:196) has a four-flag union.
 - Inside `search.rs`, only **7 of 13** `CommandSpec` fields are constant across all 26 impls
   (`access`, `wal`, `wakes`, `requires_same_slot`, `reindex`, `lookup`, `mutation`). `flags`
   splits 15 `READONLY` / 11 `WRITE`; `event` splits 15 `NotApplicable` / 11 `Suppressed`;
@@ -264,8 +323,28 @@ other than `Keyed`. Two facts close that off in the current tree:
 2. **Refusal / panic path.** `scatter_error_reply`'s keyless arm returns
    `PartialResult::shard_error(err)` (`dispatch_core.rs:220`) — deliberately, per the
    comment there, because the old empty-`Keyed` shape "dropped the error silently". All five
-   sites check `as_shard_error()` *before* `into_keyed_results()`, so a refusal is surfaced,
-   not folded into the empty arm.
+   sites check `as_shard_error()` *before* `into_keyed_results()`
+   (`types.rs:843`, which borrows the `Response` verbatim), so a refusal is surfaced, not
+   folded into the empty arm.
+
+<a id="err-sweep"></a>**What `err` can be — the three-caller sweep.** Revision 1 leaned on
+`dispatch_core.rs:220` alone for "the shard error is a `Response::Error`". That line does not
+establish it: eleven lines above, `scatter_error_reply` opens with `let msg = match &err {
+Response::Error(b) => …, _ => "ERR shard busy with continuation lock" }` (`:200–203`) — an
+explicit non-`Error` fallback, i.e. the author of that function did **not** assume the input
+is always an error. The invariant has to come from the callers, and there are exactly three:
+
+| Caller | `err` comes from | Value |
+|---|---|---|
+| `dispatch_core.rs:78` (continuation-lock refusal) | `can_execute_during_lock` (`worker.rs:855`) | `Response::error("ERR shard busy with continuation lock")` (`worker.rs:859`) — the only `Err` it can return |
+| `dispatch_core.rs:96` (scatter panic isolation) | `recover_from_panic` (`worker.rs:875`) | `Response::error(panic_guard::INTERNAL_ERROR)` (`worker.rs:903`) — its only return |
+| `vll.rs:68` (VLL-dequeued scatter panic) | `recover_from_panic`, same function | same |
+
+Both producers return `Response::Error` unconditionally, so every `PartialResult::ShardError`
+in the tree carries a `Response::Error`. The `_ =>` arm at `:202` is defensive, not a live
+shape. This is what step 4 of *Proposed change* actually rests on, and it is now written down
+rather than inferred from one line — with a test to pin it, since it is an invariant across
+three files that nothing currently enforces.
 
 So the divergence is **unobservable today**. It is still worth fixing, for two reasons.
 First, it is one fact ("what a shard-0 read replies when the shard returns nothing") stored
@@ -282,10 +361,25 @@ per-caller fact, so it belongs in the interface, not flattened out of it.
 
 ### SV5 — delete the builder
 
+0. **Let the compiler issue the proof first.** Delete *only* `connection.rs:71`, the
+   `pub use builder::{ConnectionHandlerBuilder, connection_builder, standalone_config};`, and
+   run `just check frogdb-server`. That line is the sole public root keeping the module
+   reachable (`mod builder;` at `:21` is private), so removing it should make rustc's
+   `dead_code` pass light up every item in `builder.rs` — a compiler-issued zero-caller proof
+   that supersedes the grep table in *Problem*. **If any warning is missing, stop**: something
+   reaches the file by a route this proposal did not find, and steps 1–3 are unsafe. This
+   costs one crate-local check and converts the proposal's central claim from evidence into a
+   verdict.
 1. `git rm frogdb-server/crates/server/src/connection/builder.rs`.
-2. `connection.rs`: drop `mod builder;` and the `pub use builder::{ConnectionHandlerBuilder,
-   connection_builder, standalone_config};` (71). Rewrite the doc sentence at line 6 to name
-   only `from_deps` and the four dependency structs — the seam that actually exists.
+2. `connection.rs`: drop the now-orphaned `mod builder;` (21), and **rewrite the module doc
+   paragraph at 4–6 wholesale** rather than editing the builder out of it. As written it is
+   stale twice over: it offers "the legacy `new()` method with many individual parameters"
+   — `ConnectionHandler::new` does not exist (the only `impl ConnectionHandler` block is at
+   `:240`; `grep 'pub fn new('` in `connection.rs` returns nothing) — and it offers "the
+   [`ConnectionHandlerBuilder`] for a fluent API", which this proposal deletes. Both halves of
+   a three-way choice are fiction; the replacement names `from_deps` (263) and the four
+   dependency structs, the seam that actually exists. The `# Dependency Groups` list below it
+   (8–15) is accurate and stays.
 3. **`ClusterDeps::cluster` (deps.rs:137–161): delete it too.** Its only caller is
    builder.rs:124. *(Alternative, explicitly rejected: keep it as "the documented cluster-mode
    assembly." It is not — it cannot express `pubsub_forwarder`, so keeping it preserves a
@@ -295,10 +389,13 @@ per-caller fact, so it belongs in the interface, not flattened out of it.
    correct one rather than inherit this one; note the hand-off rather than blocking on it.
 4. Confirm no doc link breaks: `connection.rs:6` is the only prose reference in the crate;
    the two `.scratch/testing-improvements-round2/` mentions are historical notes that
-   *predicted* this deletion and need no edit (git history is the archive).
+   *predicted* this deletion and need no edit (git history is the archive). Sibling **66**
+   names `connection/builder.rs` only to disambiguate it from `core/src/shard/builder.rs`
+   (`66:85`) and needs no edit either.
 
 Verification: `just check frogdb-server`, `just fmt`. There is no behavior to test — the
-change is a subtraction of unreachable code, which is the whole claim.
+change is a subtraction of unreachable code, which is the whole claim, and step 0 makes the
+compiler state it.
 
 ### SV6 — one refusal, two mechanisms, twenty-eight one-line call sites
 
@@ -306,6 +403,8 @@ Split the concern in two, because there are genuinely two facts:
 
 **(a) The reply — a function in `frogdb-core`.** The message and the reasoning are one fact
 and belong at the type that owns `CommandError`:
+
+In `core/src/command.rs`, beside the `Command` trait itself:
 
 ```rust
 /// The reply a `ServerWide` command gives if it is ever executed on a shard.
@@ -315,8 +414,8 @@ and belong at the type that owns `CommandError`:
 /// never on a shard, and the scripting gate refuses them before `run_local`.
 /// Reaching a shard executor is therefore a routing regression — fail loudly
 /// rather than fabricate a reply.
-pub fn server_wide_reached_shard_executor() -> CommandError {
-    CommandError::Internal {
+pub fn server_wide_reached_shard_executor() -> crate::error::CommandError {
+    crate::error::CommandError::Internal {
         message: "internal: server-wide command reached shard executor".to_string(),
     }
 }
@@ -333,30 +432,52 @@ macro_rules! server_wide_command_execute {
         fn execute(
             &self,
             _ctx: &mut $crate::CommandContext,
-            _args: &[bytes::Bytes],
-        ) -> Result<$crate::Response…, $crate::CommandError> {
-            Err($crate::command::server_wide_reached_shard_executor())
+            _args: &[::bytes::Bytes],
+        ) -> ::std::result::Result<
+            ::frogdb_protocol::Response,
+            $crate::error::CommandError,
+        > {
+            ::std::result::Result::Err(
+                $crate::command::server_wide_reached_shard_executor(),
+            )
         }
     };
 }
 ```
 
+**Every path in that expansion was checked to resolve** — revision 1's sketch did not, and
+would not have compiled:
+
+| Path | Why it resolves |
+|---|---|
+| `$crate::CommandContext` | re-exported at `core/src/lib.rs:71–76` |
+| `$crate::error::CommandError` | `core/src/error.rs:11` re-exports it from `frogdb-types`, with a comment saying that is exactly so `crate::error::CommandError` works. It is **not** at the core crate root |
+| `$crate::command::server_wide_reached_shard_executor` | new item in `pub mod command` (`lib.rs:15`) |
+| `::frogdb_protocol::Response` | **the fix for the broken `$crate::Response`.** `frogdb-core` does not re-export `frogdb_protocol` at its root — `lib.rs` has no `Response` in any `pub use` — so `$crate::Response` does not exist. The absolute path works because both expansion crates depend on `frogdb-protocol` directly (`server/Cargo.toml:115`, `commands/Cargo.toml:49`) |
+| `::bytes::Bytes` | same reasoning, and the leading `::` is what makes it hygienic — a bare `bytes::Bytes` would break in any module that shadows `bytes`. Both crates depend on it (`server/Cargo.toml:129`, `commands/Cargo.toml:50`) |
+
 Each of the 28 impls then reads `server_wide_command_execute!();` in place of ~13 lines.
 MIGRATE and SHUTDOWN keep their site-specific prose as a one-line `//` comment above the
 invocation — the part of their comment that is *shared* moves to the function's doc.
 
-**Macro home — decide explicitly.** `frogdb-core` currently has **zero** `#[macro_export]`
-(verified across `core/src` and `commands/src`; the only `macro_rules!` are crate-local:
-`core/src/command.rs:1793` `wal_mock!`, `core/src/store/typed.rs:222`
-`typed_family_accessors!`, `commands/src/json/mod.rs:83,100`). Exporting one puts
-`frogdb_core::server_wide_command_execute!` at the crate root, which is a new precedent.
+**Macro home — decide explicitly.** The 28 sites span two crates (`frogdb-server` ×24,
+`frogdb-commands` ×4), and a crate-local `macro_rules!` cannot serve both. So: **one
+`#[macro_export]` in `frogdb-core`.**
 
-- **(chosen) One `#[macro_export]` in core.** The 28 sites span two crates
-  (`frogdb-server` ×24, `frogdb-commands` ×4); a crate-local macro cannot serve both.
-- **(fallback, if the export is judged too big a step) Two crate-local `macro_rules!`**, one
-  per crate, matching `stub.rs` exactly. Acceptable **only because (a) already single-sources
-  the message** — the two macro copies would then be pure boilerplate with no fact in them.
-  Without (a), this fallback re-forks the string and is not worth doing.
+`frogdb-core` itself has no `#[macro_export]` today — its three `macro_rules!` are crate-local
+(`core/src/command.rs:1793` `wal_mock!`, `core/src/store/typed.rs:222`
+`typed_family_accessors!`, plus `commands/src/json/mod.rs:83,100` in the sibling crate). But
+this is a first *for the crate*, not for the workspace: `grep -rn '#\[macro_export\]'` returns
+**11** — eight in `crates/telemetry/src/testing.rs` (339, 360, 381, 398, 415, 429, 739, 760)
+and three in `crates/tokio-coz/src/progress.rs` (98, 114, 124). Cross-crate macro export is an
+established pattern here, so the choice needs no special defense.
+
+> *Footnote (revision 1 promoted this to a co-equal option; the precedent count demotes it).*
+> If a reviewer still objects to a root-level name on `frogdb_core`, the fallback is two
+> crate-local `macro_rules!`, one per crate, matching `stub.rs` exactly. It is acceptable
+> **only because (a) already single-sources the message** — the two macro copies would then
+> be pure boilerplate with no fact in them. Without (a), the fallback re-forks the string and
+> is not worth doing.
 
 Deletion test, both mechanisms: delete the macro and 28 sites regrow ~13 lines each (~364
 lines) plus a re-forked comment; delete the function and the message re-forks across macro
@@ -369,14 +490,21 @@ the real fix for "unreachable method that must nonetheless exist", but it reshap
 not stand in its way (28 one-line invocations are *easier* to delete wholesale than 28
 hand-written bodies).
 
-**Landing shape — two commits, because of the feature gate.** `commands/src/timeseries.rs`
-sits behind `#[cfg(feature = "timeseries")]` (`commands/src/lib.rs:54`), which is **not** in
-`core-profile` (`commands/Cargo.toml:15–18`); the server mirrors it as `cmd-timeseries`
-(`server/Cargo.toml:80`). So `just check frogdb-server` and `just check frogdb-commands` at
-default features **do not compile those four sites**. Land the 24 server-crate sites first
-under default features, then the 4 timeseries sites in a second commit checked with
-`--features cmd-timeseries` — and do not alternate feature flags inside one iteration loop
-(it thrashes the build cache).
+**Landing shape — two commits, because of the feature gate, and they are ordered.**
+`commands/src/timeseries.rs` sits behind `#[cfg(feature = "timeseries")]`
+(`commands/src/lib.rs:54–55`), and `timeseries` (`commands/Cargo.toml:21`) is **not** in
+`core-profile` (`:19`, which is what `default` selects at `:16`); the server mirrors it as
+`cmd-timeseries` (`server/Cargo.toml:80`). So `just check frogdb-server` and `just check
+frogdb-commands` at default features **do not compile those four sites**. Land the 24
+server-crate sites first under default features, then the 4 timeseries sites in a second
+commit checked with `--features cmd-timeseries` — and do not alternate feature flags inside
+one iteration loop (it thrashes the build cache).
+
+**The first commit carries both new core items.** `server_wide_reached_shard_executor` and
+`server_wide_command_execute!` land in `frogdb-core` *with* the SV6(server) commit, not
+split out and not deferred to the timeseries commit — the second commit is four
+`server_wide_command_execute!();` invocations and nothing else, and does not compile without
+them. The ordering is a hard dependency, not a preference.
 
 ### SV7 — parameterize the fallback, then delete the copies
 
@@ -411,14 +539,21 @@ Then:
    instead of inside the match arm.
 
 **Step 4 is behavior-preserving, and the reason must be written down rather than assumed.**
-Today the transform runs only on the value from `into_keyed_results()`; afterwards it runs
-on whatever the helper returns. It is guarded by `if let Response::Bulk(Some(ref b)) = resp`,
-and every path the helper can return *other than* the shard's own value is a
-`Response::Error`: `"ERR shard unavailable"`, `"ERR timeout"`, `"ERR shard dropped
-request"`, the `on_empty` error, and the shard error itself (built at
-`dispatch_core.rs:220` from a `Response::Error`). None matches `Bulk(Some(_))`, so the
-transform stays a no-op on all of them. Pin this with a test rather than leaving it as a
-reading (see *Testability*).
+Today the transform runs only on the value from `into_keyed_results()` (explain.rs:41–53);
+afterwards it runs on whatever the helper returns. It is guarded by `if let
+Response::Bulk(Some(ref b)) = resp`, and every path the helper can return *other than* the
+shard's own value is a `Response::Error`: `"ERR shard unavailable"` (helpers.rs:58),
+`"ERR timeout"` (:73), `"ERR shard dropped request"` (:72), the `on_empty` error, and the
+shard error itself. None matches `Bulk(Some(_))`, so the transform stays a no-op on all of
+them.
+
+The last of those five is the only non-local one, and it is the one revision 1 under-argued.
+"The shard error is a `Response::Error`" does **not** follow from `dispatch_core.rs:220`
+alone — see [the three-caller sweep](#err-sweep) above, which derives it from
+`worker.rs:859` and `worker.rs:903` being the only two producers, both returning
+`Response::error(…)` unconditionally. Pin it with a test rather than leaving it as a reading,
+precisely because it is an invariant spanning three files that no gate enforces (see
+*Testability*).
 
 Deletion test on the helper: delete `query_shard0_or` and the transport, the timeout, and
 four failure replies reappear at six call sites. It earns its keep — and it is now **deep**
@@ -435,7 +570,9 @@ in `explain.rs` and are trimmed in the other two).
   is negative surface — the crate stops publishing a construction interface that nothing
   exercises, so `ConnectionHandler`'s test surface and its production surface become the
   same seam (`from_deps`). *The interface is the test surface*; today there are two, and
-  only one of them is ever crossed.
+  only one of them is ever crossed. Note that step 0 is itself the check: rustc's
+  `dead_code` pass, once un-suppressed, is a stronger zero-caller assertion than any test
+  this proposal could add.
 - **SV6.** Twenty-eight untestable-by-construction bodies collapse to one function that
   **can** be unit-tested in `frogdb-core` — assert `server_wide_reached_shard_executor()`
   is `CommandError::Internal` with the expected message, in the crate that owns the type.
@@ -446,10 +583,17 @@ in `explain.rs` and are trimmed in the other two).
   *other* half of the contract.
 - **SV7.** The defensive arms — unavailable / dropped / timeout / shard-error / empty —
   become one function's behavior instead of five copies', so one test per arm covers six
-  call sites rather than one. Concretely worth pinning: (i) a shard-error reply is
-  surfaced verbatim and not folded into `on_empty` (the regression `dispatch_core.rs:220`
-  was written to prevent), and (ii) the FT.EXPLAINCLI transform does not fire on an error
-  reply — the exact invariant step 4 relies on, currently guaranteed only by reading.
+  call sites rather than one. Three worth pinning:
+  1. A shard-error reply is surfaced verbatim and not folded into `on_empty` — the
+     regression `dispatch_core.rs:220` was written to prevent.
+  2. The FT.EXPLAINCLI transform does not fire on an error reply — the exact invariant
+     step 4 relies on, currently guaranteed only by reading.
+  3. **The `err`-is-always-`Response::Error` invariant itself**, in `frogdb-core`: assert
+     that `can_execute_during_lock`'s refusal and `recover_from_panic`'s return both match
+     `Response::Error(_)`, so the three-caller sweep stops being a reading of today's tree.
+     Without it, someone can make `recover_from_panic` return a `Bulk` and silently break
+     FT.EXPLAINCLI's post-processing three crates away, with no test failing. This is the
+     one genuinely *new* assertion SV7 buys; the other two are consolidations.
 
 ## Spec / LOCKED impact
 
@@ -461,10 +605,23 @@ in `explain.rs` and are trimmed in the other two).
   `frogdb-cluster-runtime`); 67 touches `frogdb-server`, `frogdb-commands` and
   `frogdb-core`, none of which is in that set. No `just mutants-gate` obligation, and
   `just mutants-diff` is not owed as push discipline.
-- **No FM-tagged test is touched.** `grep -rn 'FM-'` over exactly the ten files in the
-  *Files involved* table returns nothing. (The server crate does carry FM tags — `commands/info.rs`, `commands/cluster/mod.rs` — but none of those files is in scope.)
-  `just lint-failure-modes` therefore needs no spec edit; run it anyway, since it is in
-  `just lint`.
+- **No FM-tagged test is touched — restated precisely, because revision 1 got the evidence
+  wrong.** It claimed `grep -rn 'FM-'` over the file set "returns nothing". It does not:
+  `grep -rn 'FM-'` over all seventeen files in the *Files involved* table returns **two**
+  hits, both in `core/src/command.rs`, which SV6 edits:
+
+  | Hit | What it is |
+  |---|---|
+  | `command.rs:1349` | doc comment on `CommandContext::snapshot_stats`: "…trigger new saves (issue 10 / FM-PERSISTENCE-022)" |
+  | `command.rs:1368` | doc comment on `CommandContext::recovery_stats`: "…(issue 42 / FM-PERSISTENCE-022)" |
+
+  Both are **prose in field doc comments, not `FM-`-tagged tests**, and neither field is
+  touched: SV6 adds a free function and a `macro_rules!` to the same file and modifies no
+  `CommandContext` field. `just lint-failure-modes` pairs spec rows with *tagged tests*, so
+  neither hit creates an obligation. The other sixteen files are FM-clean. **The conclusion
+  is unchanged — no spec edit is owed — but it now rests on reading the two hits rather than
+  on a grep that was never run correctly.** Run `just lint-failure-modes` anyway, since it is
+  in `just lint`.
 - **Seam gates.** None of the fifteen `lint-gates` members covers these files:
   `lint-error-sanitize` is single-file-pinned to `protocol/src/response.rs` (the gate's own
   docstring says so); no metric emission or `clock::` read is relocated, so
@@ -485,13 +642,13 @@ in `explain.rs` and are trimmed in the other two).
 | Sibling | Owns | Edge with 67 | Resolution |
 |---|---|---|---|
 | **63** server/mod.rs + init.rs | `server/mod.rs`, `server/init.rs` | None | — |
-| **64** subsystems.rs | `server/subsystems.rs` | **SV5, read-only-adjacent.** 67 cites `subsystems.rs:527–545` as the production `AdminDeps`/`ClusterDeps` assembly and **edits nothing there**. But SV5 deletes `ClusterDeps::cluster` from `connection/deps.rs`, and if 64's restructure adopts that constructor, it would resurrect a caller | Land SV5 first (it is a pure subtraction) or tell 64 the constructor is going. If 64 wants a named cluster-deps constructor, it should write a correct one — this one cannot set `pubsub_forwarder`. Either way 67 does not touch `subsystems.rs` |
+| **64** subsystems.rs | `server/subsystems.rs` | **SV5, read-only-adjacent.** 67 cites `subsystems.rs:527–546` as the production `AdminDeps`/`ClusterDeps` assembly and **edits nothing there**. But SV5 deletes `ClusterDeps::cluster` from `connection/deps.rs`, and if 64's restructure adopts that constructor, it would resurrect a caller | **Resolved on disk.** 64 states the same trap independently (`64:465–468`, `64:749`) and rules that its C1 moves the ten-field `ClusterDeps` literal into `build_acceptor_ctx` **verbatim**, adopting no named constructor — for the same reason 67 gives, that the constructor cannot set `pubsub_forwarder`. Both proposals reach the resolution unprompted, so no ordering constraint remains; landing SV5 first is still marginally cheaper (pure subtraction). 67 does not touch `subsystems.rs` either way |
 | **65** cluster_init.rs | `server/cluster_init.rs` | None | — |
-| **66** shard builder / shards.rs | `core/src/shard/builder.rs`, `shards.rs` | **Name collision only.** There are two `builder.rs` files; 67 deletes `server/src/connection/builder.rs`, 66 owns `core/src/shard/builder.rs`. Different crates, different files | Cite full paths in commits |
-| **68** exec-framing | `connection/transaction.rs`, `connection/dispatch.rs`, `connection/pubsub_conn_command.rs` | **SV6, read-only.** 67 cites `dispatch.rs:223–260` (`dispatch_server_wide`) and `transaction.rs:141,240` as the unreachability evidence and edits neither | If 68 reshapes `DispatchStage::ServerWide` or the EXEC deferral, SV6's *rationale prose* (the function doc in core) may need a wording refresh; the code does not. Whichever lands second re-reads the doc |
+| **66** shard builder / shards.rs | `core/src/shard/builder.rs`, `shards.rs` | **Name collision only.** There are two `builder.rs` files; 67 deletes `server/src/connection/builder.rs`, 66 owns `core/src/shard/builder.rs`. Different crates, different files | Confirmed on disk: 66 lists `connection/builder.rs` in its own table as "**not touched.** Proposal 67's file" (`66:85`), and agrees on its length (267). Cite full paths in commits |
+| **68** exec-framing | `connection/transaction.rs`, `connection/dispatch.rs`, `connection/pubsub_conn_command.rs` | **SV6, read-only.** 67 cites `dispatch.rs:232` (`dispatch_server_wide`, doc from 223) and `transaction.rs:141,240` as the unreachability evidence and edits neither | Line-drift only — re-verified at `43720822`, all three cites still resolve. If 68 reshapes `DispatchStage::ServerWide` or the EXEC deferral, SV6's *rationale prose* (the function doc in core) may need a wording refresh; the code does not. Whichever lands second re-reads the doc |
 | **69** runtime_config.rs | `server/src/runtime_config.rs` | None | — |
 | **70** acl | acl crate / `AclManager` | None. SV5 reads `CoreDeps.acl_manager` as a field name only | — |
-| **71** search index.rs / merge.rs | Ambiguous by name — resolve to `crates/search/src/index.rs` and/or `connection/search/merge.rs` before starting | **SV7, adjacent; SV6, not at all.** SV6's 22 sites are in the **server** crate (`server/src/commands/search.rs` — command *specs*), not the search crate and not `frogdb-commands`; the other 4 identical sites *are* commands-crate (`commands/src/timeseries.rs`). SV7 edits four files in `connection/search/` but **not** `merge.rs`: `index_mgmt.rs` and `synonyms.rs` import `super::merge::OkOrFirstError` for their *broadcast* handlers (`handle_ft_alter`, `handle_ft_dropindex`, `handle_ft_synupdate`), which SV7 leaves untouched | Confirm 71's actual file set first. If 71 owns `connection/search/merge.rs`, the only contact is those two `use` lines, which SV7 does not modify. If 71 owns `crates/search/src/index.rs`, there is no contact at all |
+| **71** search query plan | **Resolved — 71 is now on disk.** It edits `search/src/index.rs`, `search/src/wire.rs`, `core/shard/search/query.rs`, `core/shard/message.rs`, `core/shard/execution.rs`, `connection/search/hybrid.rs`, `connection/search/merge.rs`, `server/tests/search.rs` | **No file conflict, in either direction.** In `connection/search/`, 71 owns exactly `hybrid.rs` and `merge.rs`; SV7 owns exactly `helpers.rs`, `index_mgmt.rs`, `explain.rs`, `synonyms.rs`. Disjoint. SV6 has no contact at all: its 22 sites are in the **server** crate (`server/src/commands/search.rs` — command *specs*), not `frogdb-search`, and 71 touches neither that file nor `commands/src/timeseries.rs` | Two soft edges, neither blocking. (i) `index_mgmt.rs`/`synonyms.rs` import `super::merge::OkOrFirstError` (both at `:8`) for their *broadcast* handlers, which SV7 leaves untouched — if 71's `HitMerge` rework changes that type's path, one `use` line each moves, mechanically. (ii) 71 edits the `ScatterOp::FtHybrid` arm of `execution.rs` (888–895), which 67 reads at 739/868/869/879/911/912/917/924 as SV7's unreachability proof — different arms of the same match, so whichever lands second re-derives 67's line numbers but not its argument |
 
 ### Other risks
 
@@ -506,9 +663,12 @@ in `explain.rs` and are trimmed in the other two).
   (`server_wide_command_execute!();`) and grepping *it* finds all 28 — arguably a better
   index than today's. No lint script greps `fn execute` (verified across `scripts/*.py`).
 - **SV6 — `#[macro_export]` puts a name at `frogdb_core`'s root.** That is how
-  `macro_rules!` export works; the name is distinctive enough not to collide. If this is
-  unwanted, take the two-crate-local-macros fallback — it costs one extra macro copy and
-  loses nothing, because the message already lives in the core function.
+  `macro_rules!` export works; the name is distinctive enough not to collide. Revision 1
+  called this "a new precedent"; that overstated it — the workspace already has 11
+  `#[macro_export]`s (`telemetry/src/testing.rs` ×8, `tokio-coz/src/progress.rs` ×3), so the
+  novelty is confined to `frogdb-core` itself. If it is nonetheless unwanted, take the
+  two-crate-local-macros footnote — it costs one extra macro copy and loses nothing, because
+  the message already lives in the core function.
 - **SV6 — do not widen the scope by strategy.** The eight `ServerWide` commands with real
   `execute()` bodies (DBSIZE, FLUSHDB, FLUSHALL, SCAN, KEYS, RANDOMKEY, ES.ALL, and the
   gate's test probe) look like candidates and are not. DBSIZE's body reads `ctx.store.len()`;
@@ -519,18 +679,36 @@ in `explain.rs` and are trimmed in the other two).
   the conservative variant is to have `explain.rs` keep its own two-line wrapper that only
   transforms when the helper returned a non-error — no worse than the main design and still
   removes the copied transport.
-- **SV7 — a sixth shard-0 send exists and is out of scope.**
-  `connection/debug_handler.rs:173` sends `frogdb_core::shard::SearchMsg::GetPubSubLimitsInfo`
-  to `shard_senders[0]` with its own hard-coded `Duration::from_secs(5)` instead of
-  `self.scatter_gather_timeout`, and its own two error strings. It is a *different message
-  type* (`SearchMsg`, not `CoreMsg::ScatterRequest`), so `query_shard0` cannot absorb it.
-  But the hard-coded timeout beside a configurable one is genuine policy drift and is worth
-  a follow-up item; folding it into SV7 would require a second helper for a second message
-  family, which is one adapter, i.e. a hypothetical seam.
 - **SV7 — do not "fix" the two divergent fallbacks in this change.** Whether FT.INFO should
   reply `-ERR empty response` or `*0` when a shard returns nothing is a behavior question on
   an unreachable arm. Preserve both verbatim. If either is wrong, that is a separate change
   with its own reasoning — and, because the arm is unreachable, probably not worth making.
+
+### Out of scope, but file an issue: the sixth shard-0 send
+
+Revision 1 filed this as a risk bullet. It is not a risk of this change — it is a **live
+policy defect this change happens to surface**, and burying it in a risks list is the wrong
+disposition. Promoting it to a recommendation:
+
+`connection/debug_handler.rs:173` sends `frogdb_core::shard::SearchMsg::GetPubSubLimitsInfo`
+to `shard_senders[0]`, then waits on it with a hard-coded `std::time::Duration::from_secs(5)`
+(`:178`) instead of `self.scatter_gather_timeout`, plus its own two error strings
+(`"ERR timeout waiting for shard pub/sub info"`, `"ERR failed to query shard pub/sub info"`).
+
+**The design ruling stands: it does not belong in SV7.** It is a *different message type*
+(`SearchMsg`, not `CoreMsg::ScatterRequest`), so `query_shard0` cannot absorb it, and building
+a second helper for a second message family with one caller is one adapter — a hypothetical
+seam, exactly what SV5 exists to condemn.
+
+**But the timeout is a real, live divergence**, not a latent one like everything else in this
+proposal. `scatter_gather_timeout` is an operator-visible knob threaded from the
+`ConfigManager` through `ConnectionConfig` (`acceptor.rs:173`); the five FT shard-0 reads
+honor it and this sixth path ignores it. An operator who lowers the timeout to shed load, or
+raises it on a slow node, silently does not affect `DEBUG PUBSUB-LIMITS`. That is a
+single-line fix (`self.scatter_gather_timeout`) with a config-plumbing question attached
+(should a debug introspection read share the client-facing knob, or get its own?), which is
+why it is an issue and not a drive-by edit inside SV7. **Recommendation: file it against the
+issue tracker before landing SV7**, so the discovery is not lost when this proposal closes.
 
 ## Effort estimate
 
@@ -538,20 +716,28 @@ in `explain.rs` and are trimmed in the other two).
 
 | Item | Effort | Notes |
 |---|---|---|
-| SV5 | **XS–S** | One file deleted, two lines edited in `connection.rs`, one constructor deleted in `deps.rs`. Compiles crate-locally (`just check frogdb-server`). The only judgement call is the `ClusterDeps::cluster` cascade, and it is argued above |
+| SV5 | **XS–S** | One file deleted, three edits in `connection.rs` (re-export, `mod`, doc paragraph), one constructor deleted in `deps.rs`. Two crate-local checks, not one: step 0 (`:71` alone, to read the `dead_code` warnings) then the full deletion. The only judgement call is the `ClusterDeps::cluster` cascade, and it is argued above |
 | SV6 (24 server-crate sites) | **S** | One function + one macro in core, 24 mechanical call-site edits. Largest diff (~310 lines out), lowest risk — the emitted error is byte-identical |
-| SV6 (4 timeseries sites) | **XS** | Separate commit; must be checked with `--features cmd-timeseries`, which the default check does not build |
-| SV7 | **S** | One parameter, one wrapper, four call sites rewritten (~92 lines out, ~10 in). The `cli_mode` relocation needs the argued check plus a test |
+| SV6 (4 timeseries sites) | **XS** | Separate commit, ordered **after** SV6(server), which carries the core function and macro. Must be checked with `--features cmd-timeseries`, which the default check does not build |
+| SV7 | **S** | One parameter, one wrapper, four call sites rewritten (~92 lines out, ~10 in). The `cli_mode` relocation needs the argued check plus the three tests in *Testability* |
 | Mutation re-gate | **none** | No locked crate touched |
+| Issue to file | **XS** | `debug_handler.rs:178`'s hard-coded 5s vs `scatter_gather_timeout` — see *Out of scope, but file an issue*. Not part of any commit here |
 
 **Independently-landable hotfix candidates: none.** Every part is latent. SV5 removes a trap
 that would only fire if someone adopted the dead builder; SV6 changes no bytes on the wire;
-SV7's divergence sits on an arm that the current tree cannot reach. If any one of the three
-had to be picked as "most valuable first", it is **SV5** — it is the only part where the dead
-code is actively *costing* something today (five of five commits to the file were tax
-payments), and it is the cheapest to verify, being a literal deletion with a literal zero
-callers.
+SV7's divergence sits on an arm that the current tree cannot reach. The one live defect this
+proposal found — `debug_handler.rs:178` — is deliberately *not* in any of the three parts,
+and is filed rather than fixed.
+
+If any one of the three had to be picked as "most valuable first", it is **SV5** — it is the
+only part where the dead code is actively *costing* something today, and the corrected commit
+count sharpens rather than weakens that: **eleven of the twelve commits ever made to the file
+were tax payments** into unreachable code, across four unrelated subsystem refactors. It is
+also the cheapest to verify, being a literal deletion whose zero-caller premise the compiler
+will state out loud at step 0.
 
 **Recommended landing order:** SV5 → SV7 → SV6(server) → SV6(timeseries). SV5 first because
-it is pure subtraction and unblocks any coordination with sibling 64. SV6's timeseries
-commit last because it is the only one needing a non-default feature build.
+it is pure subtraction (and sibling 64 has independently ruled out resurrecting
+`ClusterDeps::cluster`, so no coordination is owed). SV6's timeseries commit last because it
+is the only one needing a non-default feature build — and it hard-depends on SV6(server) for
+the core function and macro.
