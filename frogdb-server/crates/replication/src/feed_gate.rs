@@ -37,12 +37,64 @@
 //! being fixed. So the hold is node-wide for the barrier window, which is also
 //! exactly what Redis/Valkey do: their pause is node-wide too.
 
+//! ## The decision is separable from the cell it lives in
+//!
+//! Both of the gate's rules — what a republish does to the value and to the
+//! waiters, and whether a published deadline is still in force — are functions
+//! of plain data ([`decide_publish`], [`decide_hold`]). [`ReplicaFeedGate`] is
+//! the I/O half: the mutex, the [`Notify`], the clock read, the sleep. The split
+//! is the one `PartialSyncReplay::handle_partial_sync_request` already has on
+//! the primary side, and it is what lets the transition be enumerated by a test
+//! (or a model checker) without a runtime.
+
 use std::sync::Arc;
 use std::time::Instant;
 
 use frogdb_types::clock;
 use parking_lot::Mutex;
 use tokio::sync::Notify;
+
+/// What publishing `next` over `current` does.
+///
+/// Two arms and no third: a republish either changes the value in force — and
+/// then every waiter has to re-evaluate, because the change may be a release, a
+/// shortening or a lengthening — or it changes nothing and must not wake
+/// anybody. The pause state republishes on *every* mutation of itself, most of
+/// which have nothing to do with slot handoff, so "changes nothing" is the
+/// common case rather than the corner one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedGatePublish {
+    /// The published value already is `next`: leave the cell and the waiters
+    /// alone.
+    Unchanged,
+    /// Store `held_until` and wake every waiter.
+    Store { held_until: Option<Instant> },
+}
+
+/// Decide a publish: pure over `(current, next)`, touches nothing.
+///
+/// Deliberately a plain equality and not "only accept a later deadline": the
+/// gate is a derived republish of the pause state, not a high-water latch, so a
+/// *shortened* deadline is honoured exactly like a lengthened one and a `None`
+/// releases immediately.
+pub fn decide_publish(current: Option<Instant>, next: Option<Instant>) -> FeedGatePublish {
+    if current == next {
+        FeedGatePublish::Unchanged
+    } else {
+        FeedGatePublish::Store { held_until: next }
+    }
+}
+
+/// The hold in force at `now`, given what was published: `Some(deadline)` while
+/// the feed must not ship, `None` when it is free.
+///
+/// Pure over `(published, now)` — the clock is a parameter, which is what makes
+/// "the gate expires itself" a fact a test can state at any instant rather than
+/// a race it has to wait out. The comparison is strict, so a hold is over at
+/// exactly its deadline rather than one tick later.
+pub fn decide_hold(published: Option<Instant>, now: Instant) -> Option<Instant> {
+    published.filter(|held_until| now < *held_until)
+}
 
 /// Holds the primary's replica feed for the duration of a slot-handoff write
 /// barrier.
@@ -72,13 +124,15 @@ impl ReplicaFeedGate {
     /// Called by the owner of the pause state on every mutation of it. It is a
     /// republish of a derived value, not an independent latch, so a shortened
     /// deadline is honoured exactly like a lengthened one.
+    /// The I/O half of [`decide_publish`]: it owns the cell and the waiters and
+    /// decides nothing itself.
     pub fn publish(&self, held_until: Option<Instant>) {
         {
             let mut guard = self.held_until.lock();
-            if *guard == held_until {
-                return;
+            match decide_publish(*guard, held_until) {
+                FeedGatePublish::Unchanged => return,
+                FeedGatePublish::Store { held_until } => *guard = held_until,
             }
-            *guard = held_until;
         }
         self.changed.notify_waiters();
     }
@@ -86,9 +140,11 @@ impl ReplicaFeedGate {
     /// The deadline of the hold in force right now, or `None` when the feed is
     /// free to ship. A published deadline that has already passed answers
     /// `None`: the gate expires itself.
+    /// The I/O half of [`decide_hold`]: it reads the cell and the clock, and
+    /// decides nothing itself.
     pub fn hold_deadline(&self) -> Option<Instant> {
-        let held_until = (*self.held_until.lock())?;
-        (clock::now() < held_until).then_some(held_until)
+        let published = *self.held_until.lock();
+        decide_hold(published, clock::now())
     }
 
     /// Whether the feed is held right now.
@@ -119,6 +175,123 @@ impl ReplicaFeedGate {
                 _ = changed => {}
                 _ = tokio::time::sleep_until(deadline.into()) => {}
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Deadlines as offsets from one origin the test fixes up front: the
+    /// decisions take the instant as a parameter, so nothing here needs the
+    /// clock to move — or to be read twice, which would make two offsets
+    /// incomparable.
+    fn timeline() -> impl Fn(u64) -> Instant {
+        let origin = clock::now();
+        move |offset_ms| origin + Duration::from_millis(offset_ms)
+    }
+
+    /// The publish decision, stated over the whole 2x2 of `(current, next)`
+    /// shapes: nothing→nothing, nothing→hold, hold→hold (same and different),
+    /// hold→nothing. Every arm that changes the value stores it and wakes;
+    /// exactly the two that do not, do not.
+    // FM-CLUSTER-097
+    #[test]
+    fn a_publish_stores_and_wakes_exactly_when_it_changes_the_value() {
+        let t = timeline();
+        let held = t(100);
+        let later = t(500);
+        let cases = [
+            (None, None, FeedGatePublish::Unchanged),
+            (
+                None,
+                Some(held),
+                FeedGatePublish::Store {
+                    held_until: Some(held),
+                },
+            ),
+            (Some(held), Some(held), FeedGatePublish::Unchanged),
+            (
+                Some(held),
+                Some(later),
+                FeedGatePublish::Store {
+                    held_until: Some(later),
+                },
+            ),
+            (
+                Some(later),
+                Some(held),
+                FeedGatePublish::Store {
+                    held_until: Some(held),
+                },
+            ),
+            (
+                Some(held),
+                None,
+                FeedGatePublish::Store { held_until: None },
+            ),
+        ];
+        for (current, next, expected) in cases {
+            assert_eq!(
+                decide_publish(current, next),
+                expected,
+                "publishing {next:?} over {current:?}"
+            );
+        }
+    }
+
+    /// A shortened deadline is a real change, not a no-op the way it would be
+    /// under a high-water latch — the anti-wedge property depends on it.
+    // FM-CLUSTER-097
+    #[test]
+    fn a_shorter_deadline_is_a_change() {
+        let t = timeline();
+        assert_eq!(
+            decide_publish(Some(t(30_000)), Some(t(10))),
+            FeedGatePublish::Store {
+                held_until: Some(t(10))
+            }
+        );
+    }
+
+    /// The hold decision over the three positions of `now` relative to the
+    /// published deadline, plus the unpublished case. Strictly before the
+    /// deadline holds; at it and past it do not.
+    // FM-CLUSTER-097
+    #[test]
+    fn a_published_hold_is_in_force_strictly_before_its_deadline() {
+        let t = timeline();
+        let deadline = t(100);
+        assert_eq!(decide_hold(Some(deadline), t(99)), Some(deadline));
+        assert_eq!(
+            decide_hold(Some(deadline), deadline),
+            None,
+            "the hold is over at its deadline, not one tick after it"
+        );
+        assert_eq!(decide_hold(Some(deadline), t(101)), None);
+        assert_eq!(
+            decide_hold(None, t(0)),
+            None,
+            "nothing published, nothing held, whatever the clock says"
+        );
+    }
+
+    /// Time only ever ends a hold: once `decide_hold` answers `None` for a
+    /// published deadline, no later instant brings it back. This is the
+    /// liveness half of FM-CLUSTER-097 as a property of the decision alone.
+    // FM-CLUSTER-097
+    #[test]
+    fn a_lapsed_hold_never_comes_back() {
+        let t = timeline();
+        let deadline = t(100);
+        for now_ms in 100..200 {
+            assert_eq!(
+                decide_hold(Some(deadline), t(now_ms)),
+                None,
+                "a hold that lapsed at 100ms must stay lapsed at {now_ms}ms"
+            );
         }
     }
 }

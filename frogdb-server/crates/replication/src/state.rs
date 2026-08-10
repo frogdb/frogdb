@@ -164,7 +164,12 @@ pub fn discard_staged_full_sync(data_dir: &Path) -> io::Result<()> {
 }
 
 /// Replication state that is persisted to disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Compared by value (`PartialEq`) so a transition over it can be *stated* as
+/// an equality — the promotion planner's rollback half
+/// ([`crate::primary::plan_primary_stint`]) is exactly "the state is the one it
+/// was", and a model checker over these states needs the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplicationState {
     /// Primary replication ID (40-char hex string).
     /// Generated when a node becomes a primary.

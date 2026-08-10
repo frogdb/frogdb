@@ -63,7 +63,8 @@ pub use net_bytes::{NetByteCounters, NetByteCountersSnapshot};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
     BacklogConfig, BacklogGeometry, BacklogTtl, DivergenceRecord, FunctionSnapshotHook,
-    LagThresholdConfig, LagThresholds, PreCheckpointHook, PrimaryReplicationHandler,
+    LagThresholdConfig, LagThresholds, PreCheckpointHook, PrimaryReplicationHandler, StintPlan,
+    plan_primary_stint,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{
