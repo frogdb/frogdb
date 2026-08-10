@@ -170,4 +170,22 @@ mod tests {
 
         assert_eq!(run_a, run_b);
     }
+
+    /// [`elapsed`] measures against the *paused* clock: burning real time
+    /// without advancing the runtime's timer must not move it, and advancing
+    /// the timer must move it by exactly that amount. This is the property
+    /// `Instant::elapsed()` does not have — it subtracts from
+    /// `std::time::Instant::now()`, i.e. the OS clock, whatever clock produced
+    /// the anchor — which is how host load reached a turmoil trace (see
+    /// `.scratch/cluster-correctness/issues/done/23-scheduler-fingerprint-is-load-dependent.md`).
+    #[tokio::test(start_paused = true)]
+    async fn elapsed_tracks_the_paused_clock_not_the_os_clock() {
+        let anchor = now();
+
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(elapsed(anchor), Duration::ZERO);
+
+        tokio::time::advance(Duration::from_secs(90)).await;
+        assert_eq!(elapsed(anchor), Duration::from_secs(90));
+    }
 }
