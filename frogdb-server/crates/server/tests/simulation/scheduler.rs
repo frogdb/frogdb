@@ -44,7 +44,7 @@
 //!    slot after heal, and no acked-write loss (scoped by
 //!    [`History::acked_write_is_checkable`] — the data plane runs without
 //!    persistence in these sims, so a SIGKILL of the owner legitimately loses
-//!    its keys).
+//!    its keys, and a slot migration moves ownership without moving keys).
 //! 3. **Cross-node checks a single-state catalog cannot express**
 //!    ([`check_cross_node`]): pairwise epoch monotonicity as observed by
 //!    clients, and single-writer-per-slot over the whole run history.
@@ -640,12 +640,33 @@ impl History {
 
     /// Was `w` still expected to be readable at quiesce?
     ///
-    /// These sims run with `persistence.enabled = false` on the data plane, so
-    /// a SIGKILL discards whatever the node held. A write acked while a crash
-    /// episode is still open is therefore legitimately gone; anything acked
-    /// after the last restart is not.
+    /// Two carve-outs, both about the *harness*, not about correctness:
+    ///
+    /// 1. These sims run with `persistence.enabled = false` on the data plane,
+    ///    so a SIGKILL discards whatever the node held. A write acked while a
+    ///    crash episode is still open is therefore legitimately gone; anything
+    ///    acked after the last restart is not.
+    /// 2. `CLUSTER SETSLOT ... NODE` transfers *ownership*, not keys — the same
+    ///    split Redis has, where the operator moves the payload with `MIGRATE`
+    ///    and SETSLOT only publishes the result. FrogDB has no `MIGRATE`, so
+    ///    the scheduler's migrate op cannot carry the data across, and a key
+    ///    whose slot was reassigned after the write is expected to read as
+    ///    missing on the new owner. Scoped per slot rather than globally, so a
+    ///    migration of one slot does not blind the check for the other five.
     pub fn acked_write_is_checkable(&self, schedule: &Schedule, w: &AckedWrite) -> bool {
-        !schedule.crash_open_at(w.at)
+        !schedule.crash_open_at(w.at) && !self.slot_reassigned_since(w.slot, w.seq)
+    }
+
+    /// Did a slot migration start at or after round `seq` for `slot`?
+    ///
+    /// `>=` rather than `>`: a migrate and a write inside the same round are not
+    /// ordered by anything the history records, so the same-round case has to be
+    /// treated as possibly-migrated. Over-approximating drops a checkable write;
+    /// under-approximating would report a phantom loss.
+    fn slot_reassigned_since(&self, slot: u16, seq: u64) -> bool {
+        self.churn
+            .iter()
+            .any(|c| matches!(c.scope, Churn::Slot(s) if s == slot) && c.seq >= seq)
     }
 
     /// The last acked write per key, in key order.
@@ -949,6 +970,19 @@ pub fn run_seed(seed: u64) -> RunOutcome {
     }
     for v in &violations {
         fingerprint.push(format!("violation {v}"));
+    }
+
+    // Triage affordance: a sweep reports only the seed and its violations (500
+    // fingerprints would drown the failure), so `CLUSTER_SEED_TRACE=1` replays
+    // one seed with its whole fingerprint on stderr — schedule, every op's
+    // outcome, the settled owners. Off by default; the fingerprint is a run
+    // output either way, so this only chooses whether to print it.
+    if std::env::var_os("CLUSTER_SEED_TRACE").is_some() {
+        eprintln!("--- seed {seed} fingerprint ---");
+        for line in &fingerprint {
+            eprintln!("{line}");
+        }
+        eprintln!("--- end seed {seed} ---");
     }
 
     RunOutcome {
@@ -1288,10 +1322,16 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
             Some(idx) => {
                 final_owners.insert(slot, idx);
             }
+            // `single_owner_soft` collapses every kind of disagreement to
+            // `None` — the right shape for a poll loop, the wrong one for a
+            // failure report — so re-probe each node and name what they
+            // actually said.
             None => findings.push(Violation {
                 id: "XNODE-SLOT-1",
                 detail: format!(
-                    "slot {slot} never converged on a single agreed owner after every fault healed"
+                    "slot {slot} ({name}) never converged on a single agreed owner \
+                     after every fault healed; nodes replied: {}",
+                    probe_owner_replies(name.as_bytes()).await
                 ),
             }),
         }
@@ -1524,6 +1564,47 @@ async fn exec_anywhere(parts: &[&[u8]]) -> OpOutcome {
     OpOutcome::Unreachable
 }
 
+/// One `GET` per node, rendered — the diagnostic behind an `XNODE-SLOT-1`
+/// convergence failure. [`single_owner_soft`] answers only "agreed / not
+/// agreed", so without this a failing seed reports that the cluster disagreed
+/// but not *how*, which is the whole content of the defect.
+async fn probe_owner_replies(key: &[u8]) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(NODE_COUNT);
+    for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
+        let ip = turmoil::lookup(*host);
+        let rendered = match RespConn::connect((ip, SERVER_PORT)).await {
+            Err(e) => format!("unreachable({})", e.kind()),
+            Ok(mut conn) => {
+                let reply = match conn.cmd(&[b"GET", key]).await {
+                    Err(e) => format!("io({})", e.kind()),
+                    Ok(RespValue::Error(e)) => format!("err({e})"),
+                    Ok(RespValue::Bulk(Some(v))) => {
+                        format!("value({})", String::from_utf8_lossy(&v))
+                    }
+                    Ok(RespValue::Bulk(None)) => "missing".to_string(),
+                    Ok(other) => format!("other({other:?})"),
+                };
+                // The data-plane reply alone cannot distinguish "this node
+                // believes it owns the slot" from "this node is answering as
+                // somebody's replica", and those are different defects. Its
+                // own topology view is what separates them.
+                let view = match conn.cmd(&[b"CLUSTER", b"NODES"]).await {
+                    Ok(RespValue::Bulk(Some(b))) => String::from_utf8_lossy(&b)
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" / "),
+                    _ => "<no CLUSTER NODES>".to_string(),
+                };
+                format!("{reply} view[{view}]")
+            }
+        };
+        parts.push(format!("n{idx}={rendered}"));
+    }
+    parts.join("  ")
+}
+
 /// Move `slot` (represented by `key`) to a node that does not currently own it,
 /// through the `IMPORTING`/`MIGRATING`/`NODE` dance.
 ///
@@ -1653,30 +1734,77 @@ fn parse_check_entry(item: &RespValue) -> Option<Violation> {
 /// The committed regression-seed list: seeds that once failed, replayed forever.
 ///
 /// Format, one entry per line, `#` comments and blank lines ignored:
-/// `<seed> <family> <why>`. The family is recorded so a change to
-/// [`Schedule::from_seed`]'s draw order is caught (the seed would map somewhere
-/// else) rather than silently replaying a different scenario.
+/// `<seed> <family> [EXPECTED-FAILURE:<issue>] <why>`. The family is recorded
+/// so a change to [`Schedule::from_seed`]'s draw order is caught (the seed
+/// would map somewhere else) rather than silently replaying a different
+/// scenario.
 const REGRESSION_SEEDS: &str = include_str!("cluster-regression-seeds.txt");
 
-/// Parse [`REGRESSION_SEEDS`] into `(seed, family token, note)`.
-fn regression_seeds() -> Vec<(u64, String, String)> {
+/// Marker opening the optional muzzle column.
+const EXPECTED_FAILURE: &str = "EXPECTED-FAILURE:";
+
+/// One line of [`REGRESSION_SEEDS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RegressionSeed {
+    seed: u64,
+    /// The family this seed derived when it was recorded.
+    family: String,
+    /// `Some(issue)` while the defect this seed found is still open. Such a
+    /// seed is expected to *fail*: the replay test asserts it still reproduces,
+    /// so the muzzle turns itself off when the fix lands instead of quietly
+    /// outliving it.
+    expected_failure: Option<String>,
+    note: String,
+}
+
+/// Parse [`REGRESSION_SEEDS`].
+fn regression_seeds() -> Vec<RegressionSeed> {
     REGRESSION_SEEDS
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| {
-            let mut parts = l.splitn(3, char::is_whitespace);
-            let seed: u64 = parts
-                .next()
-                .expect("a seed column")
-                .parse()
-                .unwrap_or_else(|e| {
-                    panic!("bad seed in cluster-regression-seeds.txt: {l:?} ({e})")
-                });
-            let family = parts.next().unwrap_or("").trim().to_string();
-            let note = parts.next().unwrap_or("").trim().to_string();
-            (seed, family, note)
-        })
+        .map(parse_regression_seed)
+        .collect()
+}
+
+fn parse_regression_seed(line: &str) -> RegressionSeed {
+    let mut parts = line.splitn(3, char::is_whitespace);
+    let seed: u64 = parts
+        .next()
+        .expect("a seed column")
+        .parse()
+        .unwrap_or_else(|e| panic!("bad seed in cluster-regression-seeds.txt: {line:?} ({e})"));
+    let family = parts.next().unwrap_or("").trim().to_string();
+    let rest = parts.next().unwrap_or("").trim();
+
+    let (expected_failure, note) = match rest.strip_prefix(EXPECTED_FAILURE) {
+        Some(tail) => {
+            let (issue, note) = tail.split_once(char::is_whitespace).unwrap_or((tail, ""));
+            assert!(
+                !issue.is_empty(),
+                "{EXPECTED_FAILURE} needs an issue after it: {line:?}"
+            );
+            (Some(issue.trim().to_string()), note.trim().to_string())
+        }
+        None => (None, rest.to_string()),
+    };
+
+    RegressionSeed {
+        seed,
+        family,
+        expected_failure,
+        note,
+    }
+}
+
+/// Seeds muzzled against an open issue, which the sweeps skip: a known-open
+/// defect must not drown out the *new* failures a sweep exists to find.
+/// `test_cluster_scheduler_regression_seeds` still replays each one and asserts
+/// it reproduces, so nothing stops being checked.
+fn muzzled_seeds() -> BTreeMap<u64, String> {
+    regression_seeds()
+        .into_iter()
+        .filter_map(|r| r.expected_failure.map(|issue| (r.seed, issue)))
         .collect()
 }
 
@@ -1762,14 +1890,47 @@ fn test_scheduler_faults_stay_inside_their_budget() {
 
 #[test]
 fn test_scheduler_regression_seed_file_parses() {
-    for (seed, family, _note) in regression_seeds() {
-        let derived = Schedule::from_seed(seed).family.as_str();
+    let entries = regression_seeds();
+    assert!(
+        !entries.is_empty(),
+        "cluster-regression-seeds.txt parsed to nothing"
+    );
+    for entry in entries {
+        let derived = Schedule::from_seed(entry.seed).family.as_str();
         assert_eq!(
-            derived, family,
-            "seed {seed} is recorded as family {family:?} but now derives {derived:?} — \
-             Schedule::from_seed's draw order changed and the file must be re-derived"
+            derived, entry.family,
+            "seed {} is recorded as family {:?} but now derives {derived:?} — \
+             Schedule::from_seed's draw order changed and the file must be re-derived",
+            entry.seed, entry.family
+        );
+        assert!(
+            !entry.note.is_empty(),
+            "seed {} has no diagnosis; every regression seed records why it is here",
+            entry.seed
         );
     }
+}
+
+#[test]
+fn test_scheduler_regression_seed_lines_parse_the_muzzle_column() {
+    assert_eq!(
+        parse_regression_seed("2 healthy subsumes the scripted MOVED sim"),
+        RegressionSeed {
+            seed: 2,
+            family: "healthy".to_string(),
+            expected_failure: None,
+            note: "subsumes the scripted MOVED sim".to_string(),
+        }
+    );
+    assert_eq!(
+        parse_regression_seed("3 replica-partition EXPECTED-FAILURE:issue-17 split brain"),
+        RegressionSeed {
+            seed: 3,
+            family: "replica-partition".to_string(),
+            expected_failure: Some("issue-17".to_string()),
+            note: "split brain".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -1998,6 +2159,44 @@ fn test_acked_writes_are_unchecked_only_while_a_crash_is_open() {
 }
 
 #[test]
+fn test_acked_writes_are_unchecked_once_their_slot_migrates() {
+    // `CLUSTER SETSLOT ... NODE` publishes new ownership; it does not carry the
+    // keys (FrogDB has no `MIGRATE`, same split as Redis). So a write is only
+    // expected back if its own slot has not been reassigned since — a migration
+    // of some *other* slot must leave it checkable.
+    let mut schedule = Schedule::from_seed(0);
+    schedule.faults = Vec::new();
+    let mut history = History::default();
+    history.churn_slot(5, 42);
+
+    let before = AckedWrite {
+        seq: 4,
+        slot: 42,
+        ..acked_at(Duration::ZERO)
+    };
+    let same_round = AckedWrite {
+        seq: 5,
+        slot: 42,
+        ..acked_at(Duration::ZERO)
+    };
+    let after = AckedWrite {
+        seq: 6,
+        slot: 42,
+        ..acked_at(Duration::ZERO)
+    };
+    let other_slot = AckedWrite {
+        seq: 4,
+        slot: 43,
+        ..acked_at(Duration::ZERO)
+    };
+
+    assert!(!history.acked_write_is_checkable(&schedule, &before));
+    assert!(!history.acked_write_is_checkable(&schedule, &same_round));
+    assert!(history.acked_write_is_checkable(&schedule, &after));
+    assert!(history.acked_write_is_checkable(&schedule, &other_slot));
+}
+
+#[test]
 fn test_fault_resolve_binds_the_leader_sentinel() {
     let resolved = FaultKind::HoldIsolate { node: LEADER }.resolve(2);
     assert_eq!(resolved, FaultKind::HoldIsolate { node: 2 });
@@ -2063,28 +2262,56 @@ fn test_cluster_scheduler_same_seed_same_run() {
 
 /// The default-suite smoke sweep: one seed per fault family, so the scheduler
 /// cannot rot between nightly sweeps.
+///
+/// Muzzled seeds are skipped here and replayed by
+/// `test_cluster_scheduler_regression_seeds` instead, which asserts they still
+/// reproduce — the family stays covered either way.
 #[test]
 fn test_cluster_scheduler_smoke_sweep() {
+    let muzzled = muzzled_seeds();
     for seed in SMOKE_SEEDS {
+        if muzzled.contains_key(&seed) {
+            continue;
+        }
         assert_seed_clean(seed);
     }
 }
 
 /// Every seed in the committed regression list, replayed forever.
+///
+/// A seed muzzled against an open issue is asserted to *still fail*: that is
+/// what makes the muzzle self-expiring. Fixing the issue turns this test red
+/// with an instruction to delete the muzzle, rather than leaving a stale
+/// EXPECTED-FAILURE marker hiding a seed that has quietly started passing.
 #[test]
 fn test_cluster_scheduler_regression_seeds() {
-    for (seed, family, note) in regression_seeds() {
+    for entry in regression_seeds() {
+        let RegressionSeed {
+            seed,
+            family,
+            expected_failure,
+            note,
+        } = entry;
         let outcome = run_seed(seed);
-        assert!(
-            outcome.violations.is_empty(),
-            "regression seed {seed} ({family}) failed again — {note}\n{}",
-            outcome
-                .violations
-                .iter()
-                .map(|v| format!("  - {v}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
+        let rendered = outcome
+            .violations
+            .iter()
+            .map(|v| format!("  - {v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        match expected_failure {
+            None => assert!(
+                outcome.violations.is_empty(),
+                "regression seed {seed} ({family}) failed again — {note}\n{rendered}"
+            ),
+            Some(issue) => assert!(
+                !outcome.violations.is_empty(),
+                "regression seed {seed} ({family}) is muzzled as EXPECTED-FAILURE against \
+                 {issue} but now passes — if {issue} is fixed, delete the \
+                 {EXPECTED_FAILURE}{issue} marker from cluster-regression-seeds.txt so the \
+                 seed is checked clean from here on"
+            ),
+        }
     }
 }
 
@@ -2095,21 +2322,34 @@ fn test_cluster_scheduler_regression_seeds() {
 /// Budget comes from `CLUSTER_SEEDS` (count) and `CLUSTER_SEEDS_START`
 /// (offset); worker threads from `CLUSTER_SEEDS_JOBS`. All three have laptop
 /// defaults, so the recipe works with no environment at all.
+///
+/// Seeds muzzled as EXPECTED-FAILURE are skipped, so a re-run of a range that
+/// contains one reports only what is new. The muzzle is per-seed, not
+/// per-defect: another seed hitting the same open issue still fails the sweep
+/// and is triaged against the issue by hand, which is the right default — the
+/// alternative is matching violations by text and silently swallowing a
+/// different defect that happens to render alike.
 #[test]
 #[ignore = "sweep: run via `just cluster-seeds`"]
 fn test_cluster_scheduler_seed_sweep() {
     let count: u64 = env_u64("CLUSTER_SEEDS", 500);
     let start: u64 = env_u64("CLUSTER_SEEDS_START", 1);
     let jobs: u64 = env_u64("CLUSTER_SEEDS_JOBS", 4).max(1);
+    let muzzled = muzzled_seeds();
 
     let failures: Arc<Mutex<Vec<(u64, String)>>> = Arc::new(Mutex::new(Vec::new()));
     std::thread::scope(|scope| {
         for worker in 0..jobs {
             let failures = failures.clone();
+            let muzzled = &muzzled;
             scope.spawn(move || {
                 let mut i = worker;
                 while i < count {
                     let seed = start + i;
+                    if muzzled.contains_key(&seed) {
+                        i += jobs;
+                        continue;
+                    }
                     // Each run brings up three real servers; a panic in one seed
                     // must not abort the sweep, so the failure is captured and
                     // reported alongside every other failing seed at the end.

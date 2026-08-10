@@ -6,7 +6,7 @@
 #
 # Format, one entry per line:
 #
-#     <seed> <family> <why it is here>
+#     <seed> <family> [EXPECTED-FAILURE:<issue>] <why it is here>
 #
 # The family column is checked against `Schedule::from_seed(seed).family` by
 # `test_scheduler_regression_seed_file_parses`. It is not decoration: if the
@@ -14,10 +14,12 @@
 # different scenario, and that check is what catches it. When the derivation
 # changes deliberately, re-derive this column rather than deleting the check.
 #
-# Seeds whose defect is not yet fixed are recorded with an `EXPECTED-FAILURE`
-# note naming the issue, and muzzled in the replay test the same way the
-# cluster proptest muzzles its known-open cases — never dropped, so the fix
-# turns the muzzle off rather than needing the case rediscovered.
+# Seeds whose defect is not yet fixed carry an `EXPECTED-FAILURE:<issue>`
+# column, the same way the cluster proptest muzzles its known-open cases —
+# never dropped, so the fix turns the muzzle off rather than needing the case
+# rediscovered. Such a seed is asserted to *still fail*: when the issue is
+# fixed, `test_cluster_scheduler_regression_seeds` goes red and says to delete
+# the marker. The sweeps skip muzzled seeds so they report only new failures.
 
 # The two scripted sims this scheduler subsumed, kept as named regressions so
 # the scenarios they pinned keep running under the generalized harness:
@@ -31,3 +33,7 @@
 #            `test_cluster_leader_partition_mid_migration_converges`).
 2 healthy subsumes test_cluster_moved_redirect_convergence: MOVED/ASK convergence with no faults
 5 leader-isolation subsumes test_cluster_leader_partition_mid_migration_converges: leader isolated mid-migration
+
+# Open defects the scheduler found. Each is muzzled against its issue and
+# asserted to still reproduce; delete the marker with the fix.
+3 replica-partition EXPECTED-FAILURE:.scratch/cluster-correctness/issues/open/17-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md XNODE-SLOT-1: forced auto-failover evicts the old primary from the Raft voter set, so it never learns it lost slot 14438 and keeps serving it after the heal
