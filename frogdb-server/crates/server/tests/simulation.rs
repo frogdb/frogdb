@@ -4872,6 +4872,12 @@ fn test_blocking_serve_replication_convergence_random_workload() {
 /// `just concurrency` and the CI turmoil job select on.
 mod scheduler;
 
+/// The arm-agnostic half of the fault scheduler (issue 11): seed derivation,
+/// fingerprint rendering, the regression list with its self-expiring muzzle,
+/// and generic fault application. `scheduler` is the cluster *arm* over this
+/// module; a replication arm is meant to be a sibling.
+mod schedule;
+
 /// The three cluster hostnames used by every cluster sim in this section.
 const CLUSTER_HOSTS: [&str; 3] = ["cluster-n1", "cluster-n2", "cluster-n3"];
 
