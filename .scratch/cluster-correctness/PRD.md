@@ -253,7 +253,7 @@ what the manual audit caught.
    **Run 2026-08-09 — 3/5 at the time of the run** (§6.1); FM-CLUSTER-099 has since been
    covered by the layer [issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md)
    built, leaving FM-CLUSTER-102 and [issue
-   22](issues/open/22-no-layer-generates-runtime-config-values.md).
+   22](issues/done/22-no-layer-generates-runtime-config-values.md).
 
 ### 6.1 Retro-validation results (issue 13, run 2026-08-09)
 
@@ -267,9 +267,10 @@ that failed" is exactly the finding this gate exists to surface.
 Verdict at the time of the run: **3 of 5 caught by a non-forcing layer** (100, 101, 098).
 The two misses — 099 and 102 — were filed as
 [issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md) and
-[issue 22](issues/open/22-no-layer-generates-runtime-config-values.md); **exit criterion 8
-is not met until both close.** Issue 21 has since closed, so 099 is caught and 102 is the
-one remaining.
+[issue 22](issues/done/22-no-layer-generates-runtime-config-values.md). Both have since
+closed — 099 is caught by the storage-conformance property and 102 by the
+config-admission properties C1/C2 (each proven by re-running the revert with the new
+layer in place) — so **exit criterion 8 is met: 5/5**.
 
 | defect | revert | L1 catalog+hooks | L2 P1–P4 | L3 stateright | L4 seeded schedules | seam gates | L5 Jepsen | verdict |
 |---|---|---|---|---|---|---|---|---|
@@ -277,7 +278,7 @@ one remaining.
 | **099** log-reader cache | `get_log_reader` → `Arc::new(RwLock::new(self.log_cache.read().clone()))` | miss (289/291; only the 2 forcing tests) | n/a — below the state machine | n/a — below the state machine | **miss** (100 seeds green; 500 seeds = the 36 known issue-20 seeds, zero new) | green | n/a (issue 07 open) | **caught** — by the storage-conformance layer [issue 21](issues/done/21-no-layer-sees-the-raft-log-store.md) built in response to this miss |
 | **100** handoff generation | `from_snapshot` → `handoff_seq: 0` | **CAUGHT** INV-HANDOFF-1 via the `from_snapshot` hook | **CAUGHT** `p2_a_snapshot_restore_at_any_point_is_lossless` | **CAUGHT** `handoff_model_smoke`, `stale_source_admits_writes_after_ownership_moves` | not run (state-machine defect; the three layers above are decisive) | green | n/a (issue 07 open) | **caught** (3 layers) |
 | **101** voter removal | `voter_change`: `RemoveNode`/`Failover{force}` arms → `None` | miss (cluster 290/291, runtime 77/78; only the 2 forcing tests) | n/a — voter set is not on the `apply_command` path | n/a — membership deliberately unmodelled (`model/failover/mod.rs:432`) | **CAUGHT** `just cluster-seeds 100` → new seed 35 | green | n/a (issue 07 open) | **caught** (seeded schedules) |
-| **102** detector clamp | drop `let config = config.clamped();` | miss (75/78; only the 3 forcing tests) | n/a — different crate, no `apply_command` surface | n/a — the model generates verdicts, never a config | n/a — the scheduler never varies `FailureDetectorConfig` | not applicable | n/a (issue 07 open) | **MISS → [22](issues/open/22-no-layer-generates-runtime-config-values.md)** |
+| **102** detector clamp | drop `let config = config.clamped();` | miss (75/78; only the 3 forcing tests) | n/a — different crate, no `apply_command` surface | n/a — the model generates verdicts, never a config | n/a — the scheduler never varies `FailureDetectorConfig` | not applicable | n/a (issue 07 open) | **caught** — by the config-admission properties `c1_admission_is_total` / `c2_every_derived_duration_is_finite_and_nonzero` [issue 22](issues/done/22-no-layer-generates-runtime-config-values.md) built in response to this miss |
 
 "n/a" above always means *structurally* out of reach, never "not bothered": every one is a
 layer whose input alphabet cannot express the defect, and each is named in the row.
