@@ -789,17 +789,20 @@ pub fn check_cross_node(history: &History) -> Vec<Violation> {
                 claims.entry(slot).or_default().insert(view.observer);
             }
         }
-        for (slot, owners) in claims {
-            if owners.len() > 1 {
-                violations.push(Violation {
-                    id: "XNODE-SLOT-1",
-                    detail: format!(
-                        "round {}: slot {slot} is claimed by {} nodes at once ({owners:?}), all reporting cluster_state:ok",
-                        round.seq,
-                        owners.len()
-                    ),
-                });
-            }
+        // One violation per *contiguous run* of slots with the same claimants.
+        // A split brain over a whole hash range is one fact, not 5462 of them:
+        // emitting it per slot buried a 500-seed sweep's real seed list under
+        // megabytes of near-identical lines.
+        for (owners, slots) in contiguous_claim_runs(&claims) {
+            violations.push(Violation {
+                id: "XNODE-SLOT-1",
+                detail: format!(
+                    "round {}: {} is claimed by {} nodes at once ({owners:?}), all reporting cluster_state:ok",
+                    round.seq,
+                    render_slot_run(slots),
+                    owners.len()
+                ),
+            });
         }
     }
 
@@ -827,6 +830,40 @@ pub fn check_cross_node(history: &History) -> Vec<Violation> {
     }
 
     violations
+}
+
+/// Group `slot -> claimants` into maximal runs of consecutive slots sharing one
+/// claimant set, preserving slot order. Only sets with more than one claimant
+/// are returned — a singly-claimed slot is not a violation.
+fn contiguous_claim_runs(
+    claims: &BTreeMap<u16, BTreeSet<usize>>,
+) -> Vec<(BTreeSet<usize>, Vec<u16>)> {
+    let mut runs: Vec<(BTreeSet<usize>, Vec<u16>)> = Vec::new();
+    for (&slot, owners) in claims {
+        if owners.len() < 2 {
+            continue;
+        }
+        match runs.last_mut() {
+            Some((prev_owners, slots))
+                if prev_owners == owners && slots.last().copied() == slot.checked_sub(1) =>
+            {
+                slots.push(slot);
+            }
+            _ => runs.push((owners.clone(), vec![slot])),
+        }
+    }
+    runs
+}
+
+/// `slot 42` / `slots 10922-16383 (5462 slots)`.
+fn render_slot_run(slots: Vec<u16>) -> String {
+    match (slots.first(), slots.last()) {
+        (Some(first), Some(last)) if first == last => format!("slot {first}"),
+        (Some(first), Some(last)) => {
+            format!("slots {first}-{last} ({} slots)", slots.len())
+        }
+        _ => "no slots".to_string(),
+    }
 }
 
 /// Drop the violations the catalog deliberates.
@@ -2175,6 +2212,38 @@ fn test_cross_node_catches_two_nodes_claiming_one_slot() {
     };
     let ids: Vec<&str> = check_cross_node(&history).iter().map(|v| v.id).collect();
     assert_eq!(ids, vec!["XNODE-SLOT-1"]);
+}
+
+/// A split brain covers a whole hash range, and reporting it slot by slot made
+/// one 500-seed sweep emit megabytes — the seed list, which is the thing a
+/// sweep exists to produce, scrolled away. Contiguous slots with the same
+/// claimants collapse to one violation; a discontinuity starts a new one.
+#[test]
+fn test_cross_node_collapses_a_claimed_slot_range_into_one_violation() {
+    let split: Vec<u16> = (100..=104).chain([200]).collect();
+    let history = History {
+        rounds: vec![Round {
+            seq: 1,
+            views: vec![
+                view(0, true, 1, &[], &split),
+                view(1, true, 1, &[], &split),
+                // A slot only this node claims is not a violation and must not
+                // join the run either.
+                view(2, true, 1, &[], &[105]),
+            ],
+        }],
+        ..History::default()
+    };
+    let details: Vec<String> = check_cross_node(&history)
+        .iter()
+        .map(|v| v.detail.clone())
+        .collect();
+    assert_eq!(details.len(), 2, "{details:?}");
+    assert!(
+        details[0].contains("slots 100-104 (5 slots)"),
+        "{details:?}"
+    );
+    assert!(details[1].contains("slot 200"), "{details:?}");
 }
 
 #[test]
