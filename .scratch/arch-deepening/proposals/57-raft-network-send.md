@@ -4,11 +4,13 @@ Round 38 · lane: cluster · effort **S** · LOCKED area (**cluster**, mutation 
 spec `.scratch/hardening/specs/cluster-failure-modes.md`)
 
 Covers exploration-lane candidate **RC5** ("RaftNetwork 3 copies of error mapping + dead
-no-op matches"). Verified against the current tree at HEAD `9a62f79b`; every citation below
-was read, not inherited. The lane brief was written against `08c143d6` — `network.rs` has
-since grown by 503 lines (`da1496fd`, `7f0c04dc`, `9cda642b`, all landing **after** `:660`),
-so RC5's own citations (`:574-656`, `:502`, `:517-520`) still hold exactly while RC6's
-(`:687-741`) no longer do. See [Boundaries](#risks--scope-boundaries-vs-siblings).
+no-op matches"). Verified at `9a62f79b`; every citation below was read, not inherited. HEAD has
+since moved, but `network.rs` is byte-unchanged since that commit
+(`git diff 9a62f79b..HEAD -- frogdb-server/crates/cluster/src/network.rs` is empty), so every
+line number here holds at HEAD as written. The lane brief was written against `08c143d6` —
+`network.rs` has since grown by 503 lines (`da1496fd`, `7f0c04dc`, `9cda642b`, all landing
+**after** `:660`), so RC5's own citations (`:574-656`, `:502`, `:517-520`) still hold exactly
+while RC6's (`:687-741`) no longer do. See [Boundaries](#risks--scope-boundaries-vs-siblings).
 
 ## Summary
 
@@ -23,7 +25,7 @@ That decision is not incidental plumbing. openraft's `RPCError` is a five-way cl
 and the caller of `RaftNetwork` acts on which arm it gets: `RPCError::Unreachable` is the
 **only** trigger that arms `RaftNetwork::backoff()` (openraft `replication/mod.rs:288-294`),
 and `RPCError::RemoteError` is the only arm that lets the chunked snapshot transport recognise
-a `SnapshotMismatch` and rewind to offset 0 (`network/snapshot_transport.rs:184-189`). All
+a `SnapshotMismatch` and rewind to offset 0 (`network/snapshot_transport.rs:184-191`). All
 three copies collapse every outcome onto `RPCError::Network` — the arm openraft documents as
 "failed to send the RPC request and should retry immediately" (`error.rs:287-289`). The
 collapse is invisible at each site because each site is only nine lines; it is only visible
@@ -35,9 +37,9 @@ The proposed change is the one the sibling module already made and the spec alre
 mapping for pub/sub RPCs, generic over the RPC future so it is unit-testable with a plain
 `async` block, with per-caller `extract` function pointers — and FM-CLUSTER-068 pins the
 resulting distinction as a correctness property ("A peer bug rendered as `Ok(0)` … collapsing
-the first into the second makes it invisible", spec `:1006`). Proposal 57 applies that exact
-shape to the Raft side: `map_raft_rpc(rpc, extract) -> Result<T, RPCError<…>>`, three
-three-line methods, three extractors.
+the first into the second makes it invisible", spec `:1007`, the row's *NOT observable* field).
+Proposal 57 applies that exact shape to the Raft side: `map_raft_rpc(rpc, extract) -> Result<T,
+RPCError<…>>`, three three-line methods, three extractors.
 
 **Live-bug claims.** The refactor itself claims **none** — it is a pure extraction with
 identical behaviour. Two *classification* defects are proven by code reading and labelled
@@ -53,14 +55,15 @@ out as an independently-landable hotfix.
 
 | path | lines | role in this proposal |
 |---|---:|---|
-| `frogdb-server/crates/cluster/src/network.rs` | 1877 | **the change.** `impl RaftNetwork` `:573-657` (`append_entries` `:574-601`, `vote` `:603-627`, `install_snapshot` `:629-656`; the triplicated arms `:590-598`/`:616-624`/`:645-653`); `NetworkErrorWrapper` `:89-98`; `send_rpc` `:438-453`; `send_rpc_pooled` `:461-504` (redundant arm `:502`); `send_rpc_oneshot` `:507-521` (identity match `:517-520`); `try_send_on_framed` `:528-561`; `open_framed_connection` `:564-570`; `new_client` `:326-347` (pins the Raft path to *one-shot*, `pool: None` `:341`); test module `:1024-1877` |
+| `frogdb-server/crates/cluster/src/network.rs` | 1877 | **the change.** `impl RaftNetwork` `:573-657` (`append_entries` `:574-601`, `vote` `:603-627`, `install_snapshot` `:629-656`; the triplicated arms `:590-598`/`:616-624`/`:645-653`); `NetworkErrorWrapper` `:89-98`; `send_rpc` `:438-453`; `send_rpc_pooled` `:461-504` (redundant arm `:502`); `send_rpc_oneshot` `:507-521` (identity match `:517-520`); `try_send_on_framed` `:528-561`; `open_framed_connection` `:564-570`; `new_client` `:326-347` (pins the Raft path to *one-shot*, `pool: None` `:341`); test module (`#[cfg(test)]` `:1024`, `mod tests` `:1025-1877`) |
 | `frogdb-server/crates/cluster/src/types.rs` | 1313 | `ClusterError::NetworkError(String)` `:613-615` — the flat, string-typed transport outcome the mapping has to classify from |
-| `frogdb-server/crates/cluster-runtime/src/pubsub.rs` | 771 | **the precedent, not a target.** `PubSubRpcError` `:38-46`, `send_pubsub_rpc` `:48-89`, `extract_broadcast_count` `:92-97`, `extract_forward_count` `:100-105` |
+| `frogdb-server/crates/cluster-runtime/src/pubsub.rs` | 771 | **the precedent, not a target.** `PubSubRpcError` `:38-46`, `send_pubsub_rpc` `:48-89` (the `extract` parameter `:62`), `extract_broadcast_count` `:92-97`, `extract_forward_count` `:100-105` |
 | `frogdb-server/crates/cluster-runtime/src/bus.rs` | 590 | **evidence, not a target.** `is_clean_disconnect` `:272-276` — a second consumer already forced to *string-match* `ClusterError::NetworkError`'s payload; `handle_rpc_request`'s caller `serve_connection` `:282-300` |
 | `frogdb-server/crates/server/src/server/cluster_init.rs` | 1938 | the production `openraft::Config` `:407-412` — `heartbeat_interval` and the election window that set the RPC deadlines openraft imposes on our impl |
 | `.scratch/hardening/specs/cluster-failure-modes.md` | 1573 | FM-CLUSTER-048 `:745-756`, -050 `:769-780`, -051 `:787-798`, -067 `:989-999`, -068 `:1001-1011`, -077 `:1108-1118`, -101 `:1454-1466` |
+| `frogdb-server/crates/cluster/src/state.rs` | — | **disambiguation only.** `RaftStateMachine::install_snapshot` `:1066-1105` — the *other* `install_snapshot`, not touched here |
 | `frogdb-server/crates/cluster-runtime/src/failure_detector.rs` | 2381 | **not touched.** Proposal 58's file (RC6, `trigger_auto_failover` + propose-retry) |
-| openraft 0.9.21 (`Cargo.lock:3328-3330`) | — | `error.rs:275-293` (`RPCError` arms + their contracts), `replication/mod.rs:283-305` + `:322-330` (backoff arming), `network/snapshot_transport.rs:117-216` (chunked send loop), `network/network.rs:150-163` (`backoff()` default) |
+| openraft 0.9.21 (`Cargo.lock:3328-3330`) | — | `error.rs:275-293` (`RPCError` arms + their contracts), `replication/mod.rs:283-305` + `:322-330` (backoff arming), `network/snapshot_transport.rs:117-216` (chunked send loop), `network/network.rs:136-148` (`full_snapshot` default) + `:150-163` (`backoff()` default), `src/config/config.rs:174-175` (`snapshot_max_chunk_size`) |
 
 ## Problem
 
@@ -127,7 +130,7 @@ already discarded it, so all three sites do the only thing they can — give up 
 triplication is the *symptom*; the narrow return type is the cause. A sibling module already
 paid the same tax visibly: `bus.rs:272-276` classifies the very same errors by
 `error_msg.contains("connection closed")`, which is precisely the string-matching
-FM-CLUSTER-050's Invariant (spec `:775`) rules out for Raft errors one layer up ("the match is
+FM-CLUSTER-050's Invariant (spec `:776`) rules out for Raft errors one layer up ("the match is
 on the specific `ClientWriteError` variant … rather than being classified by string matching").
 
 Two concrete consequences of the collapse, each labelled:
@@ -153,17 +156,18 @@ test witnesses it.
 **(b) `SnapshotMismatch` can never be recognised — latent, with a stated precondition.**
 `Chunked::send_snapshot` handles a `RemoteError` carrying
 `InstallSnapshotError::SnapshotMismatch` by resetting `offset = 0` and restarting the transfer
-(`snapshot_transport.rs:184-189`); every other `RPCError` arm falls through to a bare
-`continue` (`:172-176`, `:197`) that re-sends **the same chunk at the same offset** after a
-1 ms sleep (`:125-126`). The receiver raises `SnapshotMismatch` when it has no streaming state
-for this snapshot id and `req.offset != 0` (`:232-245`) — a follower that restarted
-mid-transfer. On our transport that error is flattened to a string at `network.rs:945` and
-mapped to `RPCError::Network` at `:645-647`, so the rewind arm is unreachable and the loop
-retries a permanently-rejected offset. Reachability precondition: `req.offset != 0` requires a
-**second** chunk, and `snapshot_max_chunk_size` defaults to 3 MiB (openraft `config.rs:174-175`;
-FrogDB takes `..Default::default()` at `cluster_init.rs:411`). A serialized `ClusterStateInner`
-is far below that for any realistic topology, so this is **latent**, not live — but it is a
-livelock rather than a slowdown when it does arrive, and it is invisible to every current test.
+(`snapshot_transport.rs:184-191`; `offset = 0` is `:190`, the one line that *is* the rewind);
+every other `RPCError` arm falls through to a bare `continue` (`:172-176`, `:197`) that re-sends
+**the same chunk at the same offset** after a 1 ms sleep (`:125-126`). The receiver raises
+`SnapshotMismatch` when it has no streaming state for this snapshot id and `req.offset != 0`
+(`:233-245`) — a follower that restarted mid-transfer. On our transport that error is flattened
+to a string at `network.rs:945` and mapped to `RPCError::Network` at `:645-647`, so the rewind
+arm is unreachable and the loop retries a permanently-rejected offset. Reachability
+precondition: `req.offset != 0` requires a **second** chunk, and `snapshot_max_chunk_size`
+defaults to 3 MiB (openraft `src/config/config.rs:174-175`; FrogDB takes `..Default::default()`
+at `cluster_init.rs:411`). A serialized `ClusterStateInner` is far below that for any realistic
+topology, so this is **latent**, not live — but it is a livelock rather than a slowdown when it
+does arrive, and it is invisible to every current test.
 
 ### 3. Two dead matches on the same path — and RC5's characterisation needs one correction
 
@@ -191,7 +195,7 @@ then `clippy::needless_match` is not catching the `:517-520` shape, and no exist
 
 ### 4. None of this is tested, and the crate is gated at 0.80
 
-`impl RaftNetwork` has **zero tests**. Grepping the 853-line test module (`:1024-1877`) for
+`impl RaftNetwork` has **zero tests**. Grepping the 853-line test module (`:1025-1877`) for
 `append_entries`, `vote(`, `install_snapshot`, `RaftNetwork` or `RPCError` returns nothing;
 the repo-wide grep for `RaftNetwork` returns only `network.rs` itself. `send_rpc_oneshot` is
 likewise untested in-crate — the one test that forces a failed connect,
@@ -208,6 +212,11 @@ gate, with nothing in-crate able to kill them.
 
 One function, three extractors, three three-line methods. Same **module** (`network.rs`), no
 new file, no change to the `try_send_on_framed` **seam** or to any wire byte.
+
+**Placement is part of the diff.** `map_raft_rpc` and the three extractors land immediately
+**before** `impl RaftNetwork` at `:573` — inside 57's region `:461-657`. They must **not** go
+after `:657`: that would cross the `// Server-side helpers (used by cluster_bus)` banner
+(`:659-661`) into proposal 58's half of the file (see [Boundaries](#vs-proposal-58-rc6-auto-failover--same-file-disjoint-region)).
 
 ```rust
 /// The one place a cluster-bus RPC outcome becomes an openraft `RPCError`.
@@ -229,7 +238,7 @@ async fn map_raft_rpc<F, T, E>(
 ) -> Result<T, RPCError<NodeId, BasicNode, RaftError<NodeId, E>>>
 where
     F: Future<Output = Result<ClusterRpcResponse, ClusterError>>,
-    E: std::error::Error,
+    E: std::error::Error + 'static,
 {
     let network_error = |msg: String| {
         RPCError::Network(NetworkError::new(&Unreachable::new(&NetworkErrorWrapper(msg))))
@@ -266,14 +275,18 @@ fn append_entries(&mut self, req: AppendEntriesRequest<TypeConfig>, _option: RPC
 }
 ```
 
-Type-level notes for the implementer, checked against openraft 0.9.21:
+Type-level notes for the implementer, checked against openraft 0.9.21 by reading — **none of
+this was compile-verified** (this proposal is read-only work), so treat the bounds as the
+starting point, not a guarantee:
 
 * `RPCError<NID, N, E>` requires `E: Error` (`error.rs:275`) and `RaftError<NID, E>` is
-  `thiserror`-derived with `E = Infallible` by default (`error.rs:35-45`). One bound,
-  `E: std::error::Error`, covers both call shapes — `RaftError<NodeId>` for
-  `append_entries`/`vote` and `RaftError<NodeId, InstallSnapshotError>` for `install_snapshot`.
-  `E` is otherwise unused in the body, which is exactly the point: the mapping never
-  constructs an API error.
+  `thiserror`-derived with `E = Infallible` by default (`error.rs:35-45`). Expect to need
+  `E: std::error::Error + 'static`, not bare `E: Error`: `RPCError`'s arms are
+  `#[error(transparent)]` (`error.rs:276`, `:280`, `:284`, `:288`, `:291`), and a transparent
+  `source()` hands back `&(dyn Error + 'static)`, which generally forces the `'static` bound
+  through. One bound covers both call shapes — `RaftError<NodeId>` for `append_entries`/`vote`
+  and `RaftError<NodeId, InstallSnapshotError>` for `install_snapshot`. `E` is otherwise
+  unused in the body, which is exactly the point: the mapping never constructs an API error.
 * The methods stay non-`async` returning `impl Future + Send`; they build and return the
   helper's future. `ClusterNetwork` is `Clone` over `Arc` fields, so the `'static` + `Send`
   bounds hold as they do today.
@@ -288,24 +301,32 @@ classification fix is a behaviour change in a LOCKED area and therefore spec-fir
 ### Why this is depth, not a wrapper
 
 The **deletion test**: delete `map_raft_rpc` and "what a cluster-bus failure means to Raft"
-must be re-decided at every `RaftNetwork` method — three today, and a fourth the moment
-FrogDB overrides `full_snapshot` or `backoff` (the two remaining hooks on the trait, both of
-which are on the table the day (a) or (b) is fixed). That is exactly today's state, and it is
-why the decision is undocumented: there is no one place for the doc comment to live.
+must be re-decided at every `RaftNetwork` method that returns an `RPCError` — three today, and
+one more for every response variant this transport learns to answer. That is exactly today's
+state, and it is why the decision is undocumented: there is no one place for the doc comment to
+live.
 
 The **interface** shrinks to what a caller must actually know — "hand me the RPC and the
 response shape you expect" — while the **implementation** hides the arm choice, the wrapper
-type, the arm ordering, and the loss of classification. **Leverage:** 3 callers now, plus the
-two unimplemented trait hooks, plus every future response variant. **Locality:** the mutants
-that model this decision concentrate in one 15-line body instead of being spread across three
-methods, and the one place a future typed-transport fix has to edit is one place.
+type, the arm ordering, and the loss of classification. **Leverage, stated honestly:** three
+callers today, plus every future `ClusterRpcResponse` variant this impl learns to accept, plus
+the fact that a typed-transport fix edits *one* site instead of three. It is specifically
+**not** leverage over the two unimplemented trait hooks: `backoff()`
+(`network/network.rs:161-163`) returns a `Backoff` and maps no error at all, and
+`full_snapshot` (`:136-148`) returns `StreamingError`, not `RPCError` — neither would ever
+call `map_raft_rpc`. **Locality:** the mutants that model this decision concentrate in one
+15-line body instead of being spread across three methods.
 
 The precedent is decisive and in-tree: `send_pubsub_rpc` (`pubsub.rs:48-89`) already made this
 exact move for the bus-local RPCs, with the same generic-over-the-future testability argument
-written into its own doc comment (`:56-57`), the same `extract: fn(&ClusterRpcResponse) -> Option<…>`
-parameter, and the same "was previously spelled out by hand at each site" motivation
-(`:50-54`). The codebase has already decided this shape is right for cluster-bus RPCs and
-applied it to one of the two families.
+written into its own doc comment (`:56-57`) and the same "was previously spelled out by hand at
+each site" motivation (`:50-54`). One deliberate difference in the Raft version: pubsub's
+parameter is `extract: fn(&ClusterRpcResponse) -> Option<usize>` (`:62`) — it *borrows*, because
+all it reads out is a `usize`. The Raft extractors must take the response **by value**
+(`fn(ClusterRpcResponse) -> Option<T>`), because they move the response payload out of its
+variant. Same shape, different ownership; do not copy the signature verbatim. The codebase has
+already decided this shape is right for cluster-bus RPCs and applied it to one of the two
+families.
 
 ## Testability improvement
 
@@ -324,10 +345,17 @@ without a socket.
   equivalents are the same four assertions.
 * **In the mutated crate.** The new tests go in `network.rs`'s own `#[cfg(test)] mod tests`, so
   they count for `cargo mutants -p frogdb-cluster` against the 0.80 gate. This matters here
-  specifically: FM-CLUSTER-051's `Forced by` list already leans on
-  `the_bus_serves_probes_and_raft_rpcs_on_one_connection`, which lives in
-  `cluster-runtime/src/bus.rs:525` and therefore contributes nothing to `frogdb-cluster`'s
-  score. Do not repeat that shape for this row.
+  specifically: FM-CLUSTER-051's `Forced by` list (spec `:796`) names nine tests, eight of them
+  in `network.rs`'s test module (`test_network_factory_node_registration` `:1031`,
+  `test_rpc_request_serialization` `:1046`, `test_from_shims_wrap_correct_arm` `:1060`,
+  `test_all_rpc_variants_roundtrip` `:1075`,
+  `the_pool_keeps_one_slot_per_peer_until_the_peer_is_removed` `:1305`,
+  `the_factory_reports_every_registered_address` `:1334`,
+  `the_voter_retry_schedule_backs_off_and_then_stops` `:1450`,
+  `adding_a_voter_runs_for_a_stranger_and_skips_an_existing_member` `:1470`) and the ninth,
+  `the_bus_serves_probes_and_raft_rpcs_on_one_connection`, in `cluster-runtime/src/bus.rs:525`
+  — which therefore contributes nothing to `frogdb-cluster`'s score. Do not repeat that shape
+  for this row.
 * **One mutant set instead of three.** The 27 identical lines currently mint three copies of
   every arm-deletion and message mutant, each needing its own killer and today getting none.
   After extraction there is one set, killed by the table test. Note for the implementer: the
@@ -355,19 +383,31 @@ without a socket.
 
   | row | what it owns | overlap with `:461-657` |
   |---|---|---|
-  | FM-CLUSTER-051 `:787-798` | the `Raft`/`Bus` envelope split + the address registry; 7 of its 9 forcing tests are in `network.rs`'s test module | **adjacent, not overlapping.** It pins the request *types*, not the failure mapping. Nearest row, and the natural place to name the new tests if a new row is judged excessive |
+  | FM-CLUSTER-051 `:787-798` | the `Raft`/`Bus` envelope split + the address registry; 8 of its 9 forcing tests are in `network.rs`'s test module (list under Testability) | **adjacent, not overlapping.** It pins the request *types*, not the failure mapping. Nearest row, and the natural place to name the new tests if a new row is judged excessive |
   | FM-CLUSTER-077 `:1108-1118` | "counting happens at the four wire seams and nowhere else", one of which is `try_send_on_framed` | **the constraint on the hotfix.** `record_sent`/`record_received` (`:541`, `:550`) must not move, and the `open_framed_connection` failure must keep counting nothing. Forced in-crate by `a_connection_that_never_opens_counts_nothing` (`:1861`) |
   | FM-CLUSTER-048 `:745-756` | `forward_write` (`:424-435`) — same `send_rpc` chain, different method | untouched; `a_forwarded_write_reports_the_leaders_verdict` (`:1414`) must stay green |
   | FM-CLUSTER-101 `:1454-1466` | `voter_change` / `spawn_*_raft_voter` (`:669-926`) | untouched — and see the proposal-58 edge below |
-  | FM-CLUSTER-045 `:709-718`, -100 `:1441-1452`, -017 | `install_snapshot` — **the `RaftStateMachine` method in `state.rs:787-797`**, not `RaftNetwork`'s | **disambiguation only.** Same name, different trait, different file. Do not read these rows as covering this code |
+  | FM-CLUSTER-045 `:709-718`, -100 `:1441-1452`, -017 | `install_snapshot` — **the `RaftStateMachine` method in `state.rs:1066-1105`** (the role diff is `:1086` and `:1093-1096`), not `RaftNetwork`'s | **disambiguation only.** Same name, different trait, different file. Do not read these rows as covering this code |
 
+* **Stale citation in the spec itself — flag for human review.** FM-CLUSTER-045's Invariant
+  (spec `:716`) cites `state.rs:787-797` for `install_snapshot`'s role sampling. That range is
+  stale: the method is now `state.rs:1066-1105`, with `role_before`/`role_after` at `:1086` and
+  `:1093-1096`. The behaviour the row describes is intact — only the line numbers rotted. This
+  is outside proposal 57's diff (it is a *different* `install_snapshot`, in a different file),
+  and `just lint-failure-modes` is name-keyed, so it will never catch a stale line citation in
+  Invariant prose. Raising it here because this proposal is the reason someone read the row.
 * **`just lint-failure-modes` is name-keyed and path-agnostic** (`scripts/failure-modes.py:5-24`):
-  it parses `Forced by` cells ↔ `// FM-<AREA>-NNN` tags bidirectionally and nothing else.
+  it parses `Forced by` cells ↔ `// FM-<AREA>-NNN` tags bidirectionally. There is one further
+  direction, and it is the one that matters for the paragraph below: every `INV-<…>` id a spec
+  row mentions — in the optional `Catalog` field *or in prose* — must resolve to an entry in
+  `frogdb-server/crates/cluster/src/invariants.rs` (`scripts/failure-modes.py:20-24`).
   The extraction moves no tagged test and renames none, so the lint is unaffected by the
-  refactor. **Invariant prose is never parsed**, so if the implementer adds the sentence this
-  code deserves — "`map_raft_rpc` is the single owner of the openraft error mapping" — to
-  FM-CLUSTER-051's Invariant, the lint will not check it and it will not check the lint.
-  **Flag for human review**, per the standing rule.
+  refactor. **Invariant prose is otherwise never parsed**, so if the implementer adds the
+  sentence this code deserves — "`map_raft_rpc` is the single owner of the openraft error
+  mapping" — to FM-CLUSTER-051's Invariant, the lint will not check it and it will not check
+  the lint. Two consequences: **flag the prose addition for human review**, per the standing
+  rule; and do **not** reach for an `INV-…` id while writing that sentence unless a matching
+  catalog entry exists, because that id *is* checked and an invented one fails `just lint`.
 * **New row vs. extended row.** Adding forcing tests to FM-CLUSTER-051 is additive and safe.
   Fixing (a) or (b) is *not*: both change what a caller of `RaftNetwork` observes, so both are
   spec-first — failure-mode row → failing test → fix — and neither belongs in this S refactor.
@@ -404,37 +444,47 @@ different spec file. **Verified: the Raft code is cluster-side** — `frogdb-rep
 no `RaftNetwork`, no `RPCError`, and no openraft dependency on this path. No shared symbol, no
 shared spec row, no ordering constraint.
 
-### vs proposal 58 (RC6, auto-failover) — same file, disjoint region, one stale citation to fix
+### vs proposal 58 (RC6, auto-failover) — same file, disjoint region
 
-58 owns `trigger_auto_failover` and the propose-retry loops: `failure_detector.rs:517-659` and
-`:461-511`, plus **`network.rs`'s retry loops** — which at the lane's base `08c143d6` were at
-`:687-741` and are now at `spawn_add_raft_voter:777-829` and `spawn_remove_raft_voter:878-926`
-(the file grew by 503 lines below `:660`; `git diff 08c143d6..HEAD` shows the first hunk at
-`@@ -660,6 +660,106 @@`). Two things follow:
+58 owns `trigger_auto_failover` and the propose-retry loops in `failure_detector.rs`, plus the
+lower half of `network.rs`. Three things to record:
 
-* **58 must re-derive its `network.rs` citations against HEAD**; `:687-741` now lands in the
-  middle of `VoterChange`/`voter_change` (`:685-749`), which is *not* a retry loop.
-* **The edge is real but empty of conflict.** 58's `network.rs` region is `:669-926`
-  (`voter_retry_delay`, `MAX_ATTEMPTS`, the two spawn loops); 57's is `:461-657`. Disjoint, in
-  that order, with `impl RaftNetwork` ending at `:657` and the server-side helpers section
-  beginning at `:659`. RC5's error mapping sites are **not** propose paths: `propose` reaches
-  Raft through `ClusterWriter` and `client_write`, and the only `network.rs` propose site is
-  `handle_rpc_request`'s `ForwardedWrite` arm (`:947-972`), which 57 does not touch and which
-  is governed by FM-CLUSTER-048/101 rather than by any `RPCError` mapping. Sequence them either
-  way; land whichever is ready first and rebase the other's line numbers.
-* One genuine shared surface: both proposals will want `just mutants frogdb-cluster` runs. Run
-  the gate once, after both merge.
+* **58's citations are already re-derived against HEAD — confirmed.** 58 is on disk
+  (`07be27a0`) and says so itself at its `:63-64`: it flags the lane brief's
+  `network.rs:687-741` as landing in the middle of `voter_change` rather than a retry loop, and
+  its own table gives the HEAD-correct ranges (`spawn_add_raft_voter` `:777-828`,
+  `spawn_remove_raft_voter` `:878-926`). No action for either author.
+* **The edge is real but empty of conflict.** 58's `network.rs` footprint is `:669-972` — its
+  Files table (`58…md:50`) claims `voter_retry_delay` `:669-671` through the `ForwardedWrite`
+  receiver `:947-972`, which is wider than the `:659-926` its own boundary section states.
+  Either way it is disjoint from 57's `:461-657`: `impl RaftNetwork` ends at `:657` and the
+  `// Server-side helpers (used by cluster_bus)` banner opens 58's half at `:659-661`. RC5's
+  error-mapping sites are **not** propose paths: `propose` reaches Raft through `ClusterWriter`
+  and `client_write`, and the `ForwardedWrite` arm (`:947-972`) is governed by
+  FM-CLUSTER-048/101 rather than by any `RPCError` mapping. Sequence the production halves
+  either way; land whichever is ready first and rebase the other's line numbers.
+* **One shared surface, and it is the test block.** `network.rs` has exactly one
+  `#[cfg(test)] mod tests` (`:1024` / `:1025-1877`), and both proposals append to it — 57 adds
+  the `map_raft_rpc` table test, 58 extends the tests around its retry loops, which already
+  sit at `:1450` (`the_voter_retry_schedule_backs_off_and_then_stops`) and `:1470`
+  (`adding_a_voter_runs_for_a_stranger_and_skips_an_existing_member`), both tagged
+  `// FM-CLUSTER-051` at `:1448` and `:1468`. Trivial to resolve but a real merge surface, so
+  fix a landing order for the test block: **57's tests append at the end of the module; 58's
+  changes stay in place around `:1450-1500`.** Whichever lands second rebases only its own
+  block. Both proposals want `just mutants frogdb-cluster` — run the gate **once, after both
+  merge**, not once each.
 
 ### Residual risk
 
 Low. Mechanical extraction, identical arms, identical strings, no wire byte, no config, no
 public API change (`map_raft_rpc` and the extractors are private; the three trait methods keep
-their signatures). Three things for review to check: the `ClusterRpcResponse::Error` arm still
-precedes the extractor arm; `_option: RPCOption` stays ignored exactly as today (openraft
-already imposes its own deadline around each call — `heartbeat_interval` for `append_entries`,
-`replication/mod.rs:435-437`, and `install_snapshot_timeout` for snapshot chunks,
-`snapshot_transport.rs:162` — so ignoring it is defensible and is *not* in scope to change
-here); and `self.clone()` still happens outside the returned future.
+their signatures). Four things for review to check: the helper sits **above** `:573` and not
+past the `:659` banner; the `ClusterRpcResponse::Error` arm still precedes the extractor arm;
+`_option: RPCOption` stays ignored exactly as today (openraft already imposes its own deadline
+around each call — `heartbeat_interval` for `append_entries`, `replication/mod.rs:435-437`, and
+`install_snapshot_timeout` for snapshot chunks, `snapshot_transport.rs:162` — so ignoring it is
+defensible and is *not* in scope to change here); and `self.clone()` still happens outside the
+returned future.
 
 Out of scope, noted so the next reader does not hunt: `_connect_timeout_ms`
 (`:364`, `:309`, `:342`, `:394`) is dead state — the connect timeout is baked into
@@ -449,8 +499,14 @@ boundary.
 
 **S.** One 15-line generic helper, three four-line extractors, three method bodies reduced to
 three lines each, one table-driven test with four cases, one `Forced by` cell extended (or one
-new row, if the reviewer prefers the classification statement to have its own home). Net
-deletion of roughly 45 lines. No behaviour change, no spec-first work, no wire or config change.
+new row, if the reviewer prefers the classification statement to have its own home).
+
+**Roughly line-neutral in production code — the deletion is of decisions, not of lines.**
+`impl RaftNetwork` is 85 lines today (`:573-657`); the replacement is about 97 production lines
+(helper body plus its 13-line doc comment ≈ 34, three extractors ≈ 21, three method bodies
+≈ 42). Do not expect a smaller file. What shrinks is the number of places the classification
+decision is made — three to one — and, consequently, the mutant population that models it. No
+behaviour change, no spec-first work, no wire or config change.
 
 The two classification defects are explicitly **not** in this S. Both are spec-first follow-ons
 against a typed transport error; (b) additionally needs the remote error to survive the wire as
