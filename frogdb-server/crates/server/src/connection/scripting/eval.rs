@@ -268,6 +268,10 @@ impl EvalKind {
 fn continuation_error_to_response(err: ContinuationError) -> Response {
     match err {
         ContinuationError::ShardUnavailable(_) => Response::error("ERR shard unavailable"),
+        ContinuationError::LockFailed {
+            error: frogdb_vll::VllError::ShardBusy,
+            ..
+        } => Response::error("BUSY shard busy with continuation lock; retry"),
         ContinuationError::LockFailed { error, .. } => {
             Response::error(format!("ERR lock acquisition failed: {error}"))
         }
@@ -277,5 +281,26 @@ fn continuation_error_to_response(err: ContinuationError) -> Response {
         ContinuationError::LockTimeout { shard_id } => {
             Response::error(format!("ERR lock acquisition timeout on shard {shard_id}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frogdb_vll::VllError;
+
+    // FM-VLL-002
+    #[test]
+    fn continuation_lock_shard_busy_maps_to_busy_reply() {
+        // A busy shard is transient: the client must see the retryable `-BUSY`
+        // reply, byte-identical to the scatter path, not a generic `-ERR`.
+        let resp = continuation_error_to_response(ContinuationError::LockFailed {
+            shard_id: 0,
+            error: VllError::ShardBusy,
+        });
+        assert_eq!(
+            resp,
+            Response::error("BUSY shard busy with continuation lock; retry")
+        );
     }
 }
