@@ -631,7 +631,7 @@ separate spec-first change against FM-PERSISTENCE-012.
   `arm_follow_up`, with its doc comment saying it exists to drive that branch
   deterministically) and delete only `schedule()`. That is a legitimate partial
   outcome, not a failure — a method kept because a test needs a specific internal
-  seam is an **internal seam**, which is a real thing; a method kept because three
+  seam is an **internal seam**, which is a real thing; a method kept because five
   tests happen to call it is not.
 
 ## Effort estimate
