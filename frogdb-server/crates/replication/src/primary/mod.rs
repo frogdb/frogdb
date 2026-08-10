@@ -444,7 +444,10 @@ impl PrimaryReplicationHandler {
         // re-installed under it (see [`crate::discard_staged_full_sync`]). If it
         // cannot be disarmed the promotion must not proceed.
         crate::discard_staged_full_sync(&self.data_dir)?;
-        let boundary = self.offsets.settle_at_applied();
+        // The unhooked settle: this promotion is itself a hooked seam, and it
+        // checks a wider view than the coordinator can assemble, so the nested
+        // hook would fire first and make the promotion's own check unreachable.
+        let boundary = self.offsets.settle_at_applied_inner();
         // The mint, the persist and the rollback happen under ONE write lock:
         // the minted id must not be observable (`INFO replication`, a PSYNC
         // window check) on a node that is about to roll it back and stay a

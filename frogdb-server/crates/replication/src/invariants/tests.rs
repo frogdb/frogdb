@@ -892,8 +892,10 @@ fn the_seed_replica_position_seam_is_hooked() {
 /// A promotion handler over `tracker`, so a test can dirty the registry the
 /// handler's whole-node view reads. The identity is clean: the stint seams are
 /// forced through the *session* claims, because every identity claim would fire
-/// at an inner seam first (`settle_at_applied`, `new_replication_id`) and name
-/// that seam instead of this one.
+/// at the state seam the promotion calls (`new_replication_id`) and name that
+/// seam instead of this one. The registry is the one dirt no seam under the
+/// promotion looks at — the settle it calls is the unhooked
+/// `settle_at_applied_inner`, for exactly this reason.
 fn stint_handler_over(
     dir: &std::path::Path,
     tracker: Arc<ReplicationTrackerImpl>,

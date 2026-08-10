@@ -198,8 +198,29 @@ impl OffsetCoordinator {
     /// value returned here.
     ///
     /// Called from the promotion path only, where the role flag still fences
-    /// writes, so nothing is racing the store.
+    /// writes, so nothing is racing the store. That path is a hooked seam
+    /// itself and takes [`Self::settle_at_applied_inner`]; this checked form is
+    /// what any *other* caller must use, and the hook is the reason a second
+    /// caller cannot quietly skip the check.
     pub fn settle_at_applied(&self) -> u64 {
+        let applied = self.settle_at_applied_inner();
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.view(),
+            "OffsetCoordinator::settle_at_applied",
+        );
+        applied
+    }
+
+    /// The settle itself, without the hook.
+    ///
+    /// [`crate::primary::PrimaryReplicationHandler::begin_primary_stint`] is a
+    /// hooked seam that calls this one, and a nested hook fires first: the
+    /// promotion's own check would then be unreachable, so deleting it would go
+    /// unnoticed and its panic would name the wrong seam. Same split, same
+    /// reason, as [`crate::state::ReplicationState::shift_replication_id`]'s.
+    /// The promotion checks the *wider* view once, at its own single exit.
+    pub(crate) fn settle_at_applied_inner(&self) -> u64 {
         let applied = self.applied.freeze();
         let received = self.current();
         // The guard is log-only: the store inside it writes the value `live`
@@ -215,11 +236,6 @@ impl OffsetCoordinator {
             );
             self.live.store(applied, Ordering::Release);
         }
-        #[cfg(any(test, debug_assertions))]
-        crate::invariants::debug_assert_view_clean(
-            &self.view(),
-            "OffsetCoordinator::settle_at_applied",
-        );
         applied
     }
 
