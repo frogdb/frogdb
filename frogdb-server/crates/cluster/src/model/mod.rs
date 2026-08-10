@@ -481,10 +481,10 @@ impl Sys {
                 let me = NODE_IDS[n];
                 let node = &self.nodes[n];
                 node.view.slot_assignment.get(&slot) == Some(&me)
-                    && !node
+                    && node
                         .armed
                         .get(&slot)
-                        .is_some_and(|a| self.now_ms < a.deadline_ms)
+                        .is_none_or(|a| self.now_ms >= a.deadline_ms)
             })
             .map(|n| NODE_IDS[n])
             .collect()

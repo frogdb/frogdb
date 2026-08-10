@@ -576,19 +576,10 @@ impl Model for Failover {
                     // `trigger_auto_failover` reads this node's own snapshot:
                     // it fails over only a primary, and only onto one of its
                     // replicas.
-                    let scoreable = view
-                        .nodes
-                        .get(&failed)
-                        .is_some_and(|n| n.is_primary())
-                        .then(|| {
-                            view.get_replicas(failed)
-                                .into_iter()
-                                .map(|r| idx(r.id))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    for c in scoreable {
-                        out.push(Action::Select(d, c));
+                    if view.nodes.get(&failed).is_some_and(|n| n.is_primary()) {
+                        for r in view.get_replicas(failed) {
+                            out.push(Action::Select(d, idx(r.id)));
+                        }
                     }
                     // Not a primary, no replicas, or the write failed three
                     // times: `trigger_auto_failover` returns, and nothing
@@ -606,9 +597,9 @@ impl Model for Failover {
         }
 
         if room && sys.takeovers < self.scope.max_takeovers {
-            for n in 0..NODES {
+            for (n, id) in NODE_IDS.iter().enumerate() {
                 let view = &sys.nodes[n].view;
-                let Some(me) = view.nodes.get(&NODE_IDS[n]) else {
+                let Some(me) = view.nodes.get(id) else {
                     continue;
                 };
                 // The admin path's replica leg. A primary's leg needs another

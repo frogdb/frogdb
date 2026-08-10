@@ -35,7 +35,7 @@ impl Node {
     fn new(id: NodeId, base: &ClusterSnapshot) -> Self {
         Self {
             id,
-            state: ClusterState::from_snapshot(base.clone(), Arc::new(AtomicU64::new(id.into()))),
+            state: ClusterState::from_snapshot(base.clone(), Arc::new(AtomicU64::new(id))),
             barrier_until_ms: None,
         }
     }
@@ -71,7 +71,7 @@ impl Node {
     /// across the finalization instant.
     fn admits_write(&self, now_ms: u64) -> bool {
         self.state.snapshot().slot_assignment.get(&SLOT) == Some(&self.id)
-            && !self.barrier_until_ms.is_some_and(|until| now_ms < until)
+            && self.barrier_until_ms.is_none_or(|until| now_ms >= until)
     }
 }
 
