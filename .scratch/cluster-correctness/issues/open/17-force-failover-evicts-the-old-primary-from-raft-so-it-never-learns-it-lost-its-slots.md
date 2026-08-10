@@ -4,7 +4,7 @@ Status: needs-triage
 
 ## Parent
 
-[PRD](../../PRD.md) §3 W4 — found by the seeded fault scheduler ([issue 09](09-seeded-fault-scheduler.md))
+[PRD](../../PRD.md) §3 W4 — found by the seeded fault scheduler ([issue 09](../done/09-seeded-fault-scheduler.md))
 on its first six-seed sweep, at **seed 3** (`replica-partition` family). Distinct from
 [issue 14](14-role-transitions-admit-malformed-parents.md) (role-transition validation),
 [issue 15](15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md) (the *graceful*
@@ -44,9 +44,22 @@ CLUSTER_SEEDS_START=3 CLUSTER_SEEDS_JOBS=1 just cluster-seeds 1
 Not rare: **10 of the first 100 seeds** reproduce it — 3, 13, 17, 21, 24, 25, 39, 50, 72 and 99,
 all with the same signature, and they are the *only* failures in that range. Seed 72 is the
 worst flavor: both halves serve the same key with different values (`n0=v42`, `n2=v8`), so this is
-a divergence, not only a routing split. All nine are muzzled in the regression list against this
-issue; a sweep past seed 100 will keep finding fresh ones until the fix lands, and the triage rule
-is written at the top of that file.
+a divergence, not only a routing split. All ten are muzzled in the regression list against this
+issue, and the triage rule is written at the top of that file.
+
+At the ruled nightly budget it is the **only** thing the sweep reports:
+`CLUSTER_SEEDS_JOBS=6 just cluster-seeds 500` (592s) fails **36 of the 490 unmuzzled seeds**,
+every one of them an `XNODE-SLOT-1` with this signature —
+
+```
+113 125 126 138 143 157 159 162 170 176 179 183 214 228 234 265 329 349 363 364
+387 398 401 406 424 427 430 438 450 452 460 470 478 485 491 493
+```
+
+Those 36 are deliberately **not** added to the regression list: 46 replays of one defect would add
+minutes to the per-PR suite and buy nothing over the canonical seeds 3 and 72. The consequence is
+that the nightly sweep stays red until this lands — which is the honest state, and the triage rule
+tells a reader which failures are already accounted for.
 
 or, in the default suite, the regression-seed replay
 (`frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt`, seed 3), currently

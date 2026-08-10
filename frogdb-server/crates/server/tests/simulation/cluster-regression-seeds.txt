@@ -40,8 +40,11 @@
 #   issue-17 = .scratch/cluster-correctness/issues/open/
 #              17-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md
 #
-# Issue 17 is dense: 9 of the first 100 seeds hit it, so a sweep past seed 100
-# will keep finding fresh ones until it is fixed. Triage rule while it is open —
+# Issue 17 is dense: 10 of the first 100 seeds hit it, and 36 of the 490
+# unmuzzled seeds in a 500-seed sweep. Only the ten below are muzzled — 46
+# replays of one defect would cost the per-PR suite minutes and add nothing over
+# the canonical seeds 3 and 72 — so the nightly sweep stays red until it is
+# fixed, and the rest of its seeds are listed in the issue. Triage rule —
 # an `XNODE-SLOT-1` whose probe shows a node serving a slot that the other nodes'
 # `CLUSTER NODES` no longer list at all is issue 17, not a new defect. When it is
 # fixed, prune these to seeds 3 and 72 (the canonical case and the divergent-value
