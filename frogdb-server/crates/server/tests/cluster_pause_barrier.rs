@@ -340,7 +340,7 @@ async fn node_pause_and_slot_barrier_release_independently() {
     server.shutdown().await;
 }
 
-// FM-CLUSTER-083
+// FM-CLUSTER-083, FM-TXN-040
 /// A write transaction parks at `EXEC`, not while queuing, and commits only
 /// after the barrier releases — so the post-wait re-validation in
 /// `txn/src/exec.rs` runs against the topology that exists *after* the
@@ -349,6 +349,13 @@ async fn node_pause_and_slot_barrier_release_independently() {
 /// This batch touches the barriered slot, so it parks either way. That the gate
 /// is *scoped* — a batch touching some other slot is no longer parked — is
 /// FM-CLUSTER-096, forced in `cluster_handoff_barrier.rs`.
+///
+/// It also carries FM-TXN-040's `Observable`, which that row's other two tests
+/// do not: they count `validate_queued_batch` calls in-process and never
+/// withhold a reply, whereas this one parks a real `EXEC` at the same barrier —
+/// reached through a slot pause rather than `CLIENT PAUSE`, but the same
+/// `TxnHost::wait_if_paused` call either way — and asserts the withheld
+/// single-element array arrives once the barrier lifts.
 #[tokio::test]
 async fn write_exec_parks_on_a_slot_barrier_and_commits_after_release() {
     let server = TestServer::start_standalone().await;

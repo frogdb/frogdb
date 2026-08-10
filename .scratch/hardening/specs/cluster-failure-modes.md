@@ -67,12 +67,32 @@ duplicated here.
 | Observable | What a client of some node sees: the reply, the redirect, `CLUSTER INFO`/`NODES`, the slot map. |
 | NOT observable | What must never appear in this mode. This is the half mutation testing attacks. |
 | Invariant | The internal guarantee, named at the mechanism that provides it. |
+| Catalog | *Optional.* The invariant-catalog entries that check this row's guarantee **universally** — see below. Absent on rows nothing in the catalog generalizes. |
 | Outcome variant | The enum variant / error string the mode reports through, or `n/a`. |
 | Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-CLUSTER-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
 | Bug refs | Known issues that touch this mode. |
 
 Test names are bare function names, resolved against the crate list in `scripts/failure-modes.py`
 (`NEXTEST_CRATES`).
+
+### The `Catalog` field
+
+A row states its guarantee for *one* transition; the invariant catalog
+(`frogdb-server/crates/cluster/src/invariants.rs`) states a well-formedness claim for *every*
+state, and `debug_assert_clean` evaluates the HARD tier at all three seams that produce
+one — `apply_command` (on the accepted **and** the rejected path), `from_snapshot`, and
+`restore_from_snapshot`. Every test in the crate that applies a command is therefore also an
+invariant test, and the property harness (`properties.rs`) quantifies the same catalog over
+generated command sequences.
+
+A row carries a `Catalog` field when a catalog entry generalizes the guarantee the row states
+point-wise: deleting the code the row names would make that entry fire. The cross-reference runs
+both ways — each entry's `check_*` function names the rows it generalizes — and
+`just lint-failure-modes` checks that every `INV-*` id a spec mentions exists in the catalog.
+`INV-SLOT-1` (slot keys below `CLUSTER_SLOTS`) is deliberately cited by no row: FM-CLUSTER-018
+derives the range by hashing and FM-CLUSTER-075 enforces it at the `SlotRange` parse boundary, but
+no row states it of the replicated slot map, so the entry is a backstop rather than a
+generalization.
 
 ---
 
@@ -84,6 +104,7 @@ Test names are bare function names, resolved against the crate list in `scripts/
 | Observable | The node's `addr` and `cluster_addr` are refreshed to the values in the incoming record; its `role` and `primary_id` in `CLUSTER NODES` are exactly what they were before. A node that has never been seen is added verbatim. The command always answers `ClusterResponse::Ok`. |
 | NOT observable | A restart flipping a replica back to `master` in `CLUSTER NODES` — which would point its replication stream at itself and orphan the primary's write path. Nor `NodeAlreadyExists`: that variant exists in `ClusterError` but `AddNode` never constructs it, so a re-register is never an error. Nor a role/promotion event: an `AddNode` that changes nothing emits nothing. |
 | Invariant | `apply_command`'s `AddNode` arm overwrites the incoming `role`/`primary_id` from the existing record before inserting (`commands.rs:43-54`), so role transitions have exactly one source — `SetRole` and `Failover` — and re-registration is not one of them. A binary-version mismatch against the highest version any *other* versioned peer reports warns and never rejects, so a mixed-version cluster still converges on membership; the warning carries that value under `max_peer_version`, not a name like `cluster_version` that would misread it as the cluster's consensus version. |
+| Catalog | `INV-REF-4` — the arm restores role and `primary_id` together, so no re-registration can leave a primary carrying a parent. |
 | Outcome variant | `ClusterResponse::Ok` |
 | Forced by | `test_add_node`, `test_add_duplicate_node`, `test_add_node_reregistration_keeps_recorded_role`, `test_add_node_mixed_version_succeeds`, `test_apply_local_shares_validated_path`, `a_disagreeing_re_registration_is_reported_on_either_half`, `test_node_flags_handshaking_sets_only_the_handshake_bit`, `mixed_version_warning_compares_against_the_other_versioned_nodes` |
 | Bug refs | — |
@@ -99,6 +120,7 @@ Test names are bare function names, resolved against the crate list in `scripts/
 | Observable | The node disappears from `CLUSTER NODES`. Every slot it owned becomes *unassigned* — a client keyed into one of those slots gets `CLUSTERDOWN`, not a `MOVED` to some successor. Every migration naming it as source *or* target is cancelled, and a cancelled migration that had a prepared handoff emits its `SlotHandoffReleased` so the surviving source drops the barrier it armed. Every replica parented to it is *detached*: its `primary_id` clears, its role does not change, and `CLUSTER NODES` renders `-` for its master id. Migrations between two surviving nodes and replicas of other primaries are untouched. Forgetting an unknown node is `NodeNotFound`. |
 | NOT observable | Slots silently retargeted at another node: `FORGET` is not a failover, and inventing a successor here would hand a keyspace to a node that never received its data. For the same reason the orphaned replicas are not re-parented onto some other primary — `FORGET` names no successor, so there is nobody to re-parent them onto. Nor a surviving migration or `primary_id` that names a node the cluster no longer has: the migration could never complete and would block its slot, and the parent pointer would render a dangling master id in `CLUSTER NODES` and point a replication stream at a node the topology has dropped. Nor an epoch bump — removing a node changes no node's authority. Nor a promotion of the detached replicas: minting a replication identity is a role transition, and `FORGET` is not one of the two commands that own those (FM-CLUSTER-001). |
 | Invariant | The arm mirrors the removal half of `Failover { force: true }` (FM-CLUSTER-036) through the same two helpers, so the two removal paths cannot drift: `slot_assignment.retain(owner != node_id)`, then `prune_migrations_naming` (whose release events are the `release_events` contract), then `reparent_children(.., None)` — the same helper the failover calls with `Some(successor)` — then `nodes.remove` (`commands.rs`, `RemoveNode` arm). The paths differ only in whether a successor was named: transfer of slots and role still live only in `Failover`, which validates that successor first. Redis parity: `clusterDelNode` clears the node's `migrating_slots_to`/`importing_slots_from` entries and `freeClusterNode` nulls its slaves' `slaveof` without promoting them. |
+| Catalog | `INV-REF-1`, `INV-REF-2`, `INV-REF-3` — the three dangling-reference shapes this arm prunes, checked after every transition rather than only after this one. |
 | Outcome variant | `ClusterResponse::Ok` / `ClusterError::NodeNotFound`; `ClusterEvent::SlotHandoffReleased` per pruned prepared handoff |
 | Forced by | `test_remove_node_clears_slots`, `test_remove_node_nonexistent`, `remove_node_prunes_migrations_and_detaches_replicas`, `remove_node_prunes_a_migration_that_only_targets_it_and_releases_its_barrier`, `remove_node_keeps_migrations_and_parents_that_do_not_name_it` |
 | Bug refs | fixed: issue 01, `.scratch/cluster-correctness/issues/`; round-2 issue 62 (11/F5), `.scratch/testing-improvements-round2/issues/` |
@@ -116,6 +138,7 @@ an invariant exception. The slots staying *unassigned* is the part that remains 
 | Observable | The whole command is refused with `SlotAlreadyAssigned(slot, owner)` and **no** slot in the batch changes hands. Re-assigning a slot to the node that already owns it is idempotent, not an error. Assigning to an unknown node is `NodeNotFound`. |
 | NOT observable | A partially applied batch — the prefix of the range moved and the suffix refused. That would leave the caller with an error and the cluster with a slot map neither side believes in. |
 | Invariant | The arm walks every slot of every range in a validation pass before it mutates anything (`commands.rs:118-140`), and `apply_command` holds one write lock for the whole command, so the transition is a single linearization point. |
+| Catalog | `INV-REF-1` — the `NodeNotFound` half: a slot assigned to a non-member is the ghost owner the catalog rejects wherever it appears. |
 | Outcome variant | `ClusterError::SlotAlreadyAssigned` |
 | Forced by | `test_assign_slots`, `test_assign_slots_node_not_found`, `test_assign_slots_already_assigned`, `test_assign_slots_idempotent`, `assign_slots_rejects_the_whole_batch_on_one_conflict` |
 | Bug refs | — |
@@ -140,6 +163,7 @@ an invariant exception. The slots staying *unassigned* is the part that remains 
 | Observable | `SetRole{Replica}` with no `primary_id` is `InvalidOperation("replica requires a primary_id")`; with a `primary_id` naming a node that is not a member it is `NodeNotFound(pid)`. Only a fully resolvable pairing is recorded. |
 | NOT observable | A replica recorded against a primary the cluster has never heard of — its data path would have nothing to attach to and `CLUSTER NODES` would render a dangling master id. |
 | Invariant | Both checks run before any mutation (`commands.rs:172-182`), so a rejected `SetRole` leaves role, parent, and events untouched. |
+| Catalog | `INV-REF-3` — the existence half, universally. The *parent is a Primary* half is the catalog's one `Tier::DocumentedException`, `INV-REF-3B`, because `AddNode` and `SetRole` still admit a replica as a parent (issue 14, `.scratch/cluster-correctness/issues/`). |
 | Outcome variant | `ClusterError::{InvalidOperation, NodeNotFound}` |
 | Forced by | `test_set_role`, `test_set_role_node_not_found`, `test_set_role_replica_without_primary`, `test_set_role_replica_primary_not_found` |
 | Bug refs | — |
@@ -152,6 +176,7 @@ an invariant exception. The slots staying *unassigned* is the part that remains 
 | Observable | Both forms clear the slot map, clear all migrations, forget every peer, and force this node to `Primary` with no parent. SOFT keeps the node id and both epochs. HARD re-keys the node under a freshly minted id and zeroes both the cluster counter and the node's own epoch. A reset naming a node that is not a member still clears everything and answers `Ok`. On a follower the reset is forwarded to the leader, or answered `REDIRECT`/`CLUSTERDOWN` if it cannot be — reset proposes through `ClusterWriter` like every other admin command (FM-CLUSTER-047..050). |
 | NOT observable | A reset that fails: the arm is infallible by construction, because a half-reset node is worse than a fully reset one. Nor a raw `ERR Raft error: APIError(ForwardToLeader(..))` on a follower — the `Debug` rendering of an openraft internal is not a redirect any client can follow. Nor a node that re-keyed itself locally after a reset that never landed. |
 | Invariant | `commands.rs:478-518` clears the slot map and migrations unconditionally before it branches, so no slot or migration can survive either form. `ClusterWriter::propose_reset` snapshots the peer list *before* proposing (a committed reset empties the topology), routes through `propose`, and applies the local identity update only on `Applied`. |
+| Catalog | `INV-REF-4` — "Primary with no parent" as a property of every state, not only of the one a reset produces. |
 | Outcome variant | `ClusterResponse::Ok` / `ResetProposed::{Applied, Rejected}` / `ProposeError::{Redirect, Raft}` |
 | Forced by | `test_reset_cluster_soft`, `test_reset_cluster_hard`, `test_reset_cluster_nonexistent_node`, `reset_on_a_follower_yields_a_redirect_not_a_raft_error`, `reset_forwarded_to_the_leader_reports_forwarded`, `reset_committed_on_the_leader_keeps_a_soft_reset_identity`, `reset_rejected_by_the_state_machine_changes_nothing_local`, `self_node_id_treats_zero_as_unset`, `from_snapshot_restores_the_table_and_keeps_the_local_identity` |
 | Bug refs | fixed: [39-cluster-reset-bypasses-the-cluster-writer.md](../issues/done/39-cluster-reset-bypasses-the-cluster-writer.md) |
@@ -210,6 +235,7 @@ crate cannot reach.
 | Observable | `cluster_current_epoch` in `CLUSTER INFO` is always at least the largest `config_epoch` in `CLUSTER NODES`, and no two *primaries* share a nonzero epoch. A collision mint always lands strictly above the counter's previous value. |
 | NOT observable | Two primaries claiming the same nonzero epoch — the state in which neither can be said to have superseded the other. Nor a mint that produces a value some node already holds. |
 | Invariant | `mint_config_epoch` is `counter.max(max_node_epoch()) + 1` (`state.rs:261-264`), so the mint reads the node epochs rather than trusting the counter, and the uncontested branch of `reconcile_incoming_epoch` ratchets the counter up to any accepted claim. |
+| Catalog | `INV-EPOCH-1`, `INV-EPOCH-2` — the dominance relation and the primary-uniqueness claim this row states, evaluated after every transition instead of over one generated command sequence. |
 | Outcome variant | `EpochReconciliation::{Accepted, Reassigned}` |
 | Forced by | `test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence`, `test_add_node_collision_mints_above_cluster_counter`, `test_add_node_uncontested_epoch_raises_cluster_counter`, `max_node_epoch_tracks_the_highest_claim` |
 | Bug refs | — |
@@ -226,6 +252,7 @@ increases are wrong; the invariant is the dominance relation above, within a clu
 | Observable | The incumbent keeps the contested epoch; the arriving node is stamped with a freshly minted one and a warning is logged. A node re-claiming *its own* recorded epoch is an ordinary upsert, not a collision. A *replica* claiming a primary's epoch is not a collision either. |
 | NOT observable | The incumbent being renumbered — the node that is already serving the slot map at that epoch is the one whose authority must not move. Nor a rejection: `AddNode` never refuses on epoch grounds, because refusing membership over a numbering conflict partitions the cluster instead of healing it. |
 | Invariant | The collision test requires `node.is_primary()` and a *different* id at the same epoch (`state.rs:296-300`), matching Redis' `clusterHandleConfigEpochCollision`, which likewise renumbers only one side and exempts replicas. |
+| Catalog | `INV-EPOCH-1`, `INV-EPOCH-2` — a mint that failed to clear the counter, or that left both primaries on the contested epoch, is caught wherever it happens. |
 | Outcome variant | `EpochReconciliation::Reassigned{claimed, assigned}` |
 | Forced by | `test_add_node_epoch_collision_reassigns_incoming_node`, `test_add_node_self_epoch_is_not_a_collision`, `test_add_node_replica_sharing_primary_epoch_is_not_a_collision` |
 | Bug refs | — |
@@ -238,6 +265,7 @@ increases are wrong; the invariant is the dominance relation above, within a clu
 | Observable | If the cluster already holds a nonzero epoch for that node id, the recorded value is preserved and the incoming 0 is discarded (the address is still refreshed). If it does not, 0 is accepted and the cluster counter is left alone. Two nodes may both sit at 0. |
 | NOT observable | A restart resetting a node's epoch to 0 and thereby forfeiting its authority. Nor two nodes at 0 being treated as a collision and burning a mint on every boot. |
 | Invariant | The zero branch of `reconcile_incoming_epoch` runs *before* the collision test and returns early (`state.rs:286-292`), so 0 can neither collide nor move the counter. |
+| Catalog | `INV-EPOCH-2` — the entry skips epoch `0` for the reason this row gives: it is "unassigned", not a claim, so it cannot collide. |
 | Outcome variant | `EpochReconciliation::{Preserved, Accepted}` |
 | Forced by | `test_add_node_zero_epoch_is_not_a_collision`, `test_add_node_zero_epoch_preserves_recorded_epoch` |
 | Bug refs | — |
@@ -318,6 +346,7 @@ group (010..017) and sits here rather than at the end of the file.
 | Observable | On a node that knows no other member and whose own `config_epoch` is still 0, the node's epoch becomes exactly `n` and `cluster_current_epoch` is ratcheted up to `n` if it was lower. Otherwise the command is refused: `InvalidOperation` naming which guard fired, or `NodeNotFound` if the receiving node is not in the topology. A refusal moves no epoch. |
 | NOT observable | Success reported for an assignment that did not happen — the previous behavior parsed `n`, discarded it, and issued a plain `IncrementEpoch`, so a bootstrap script asking for epoch 100 got epoch 1 and a `+OK`. Nor a live cluster renumbering a node by hand: FrogDB resolves collisions through FM-CLUSTER-011, so a manual assignment mid-life could only manufacture one. Nor the counter following an assignment *downwards* (FM-CLUSTER-010). |
 | Invariant | The `SetConfigEpoch` arm applies Redis' two `clusterCommand` guards (`dictSize(server.cluster->nodes) > 1`, `myself->configEpoch != 0`) before mutating, then sets the field and takes `config_epoch.max(epoch)` on the counter (`commands.rs:238-272`). The server handler is a pure adapter: it parses the argument and emits `RaftClusterOp::SetConfigEpoch { node_id: ctx.node_id, epoch }`, so the value can no longer be dropped between parse and apply. |
+| Catalog | `INV-EPOCH-1` — the counter never follows an assignment downwards. |
 | Outcome variant | `ClusterResponse::Epoch` / `ClusterError::{InvalidOperation, NodeNotFound}` |
 | Forced by | `set_config_epoch_assigns_the_exact_value_requested`, `set_config_epoch_never_lowers_the_cluster_counter`, `set_config_epoch_refused_once_the_node_knows_another_node`, `set_config_epoch_refused_once_the_node_holds_an_epoch`, `set_config_epoch_on_an_unknown_node_is_not_found`, `test_cluster_set_config_epoch_assigns_the_exact_value_on_a_lone_node`, `test_cluster_set_config_epoch_refused_once_the_node_knows_a_peer` |
 | Bug refs | fixed: [38-set-config-epoch-discards-its-argument.md](../issues/done/38-set-config-epoch-discards-its-argument.md) |
@@ -515,6 +544,7 @@ skipping it. See FM-CLUSTER-028.
 | Observable | An unknown source or target is `NodeNotFound`. A source that is not the recorded owner is `InvalidOperation("slot N is owned by X, not Y")`. A slot with no recorded owner is accepted. |
 | NOT observable | A migration recorded against a node that is not a member — it could never complete, and it would block the slot until someone cancelled it. |
 | Invariant | The owner check is conditional on the slot being present in `slot_assignment` (`commands.rs:381-390`), because a follower's slot map may legitimately be empty: bootstrap assigns slots locally, not through Raft. |
+| Catalog | `INV-REF-2`, `INV-MIG-1` — the endpoint-existence and owner-is-source claims, held for the life of the record rather than only at begin time. |
 | Outcome variant | `ClusterError::{NodeNotFound, InvalidOperation}` |
 | Forced by | `test_begin_migration_source_not_found`, `test_begin_migration_target_not_found`, `test_begin_migration_wrong_owner`, `begin_migration_accepts_an_unassigned_slot` |
 | Bug refs | — |
@@ -527,6 +557,7 @@ skipping it. See FM-CLUSTER-028.
 | Observable | Ownership moves to the target and the migration record is removed. A target that is not in `nodes` is `NodeNotFound(target)` and nothing moves — not the slot, not the migration record. With no migration open the command is `InvalidOperation("no migration in progress for slot N")`; with mismatched source or target it is `InvalidOperation("migration parameters don't match")`. |
 | NOT observable | A `SlotAlreadyAssigned` refusal at the moment of completion — that guard exists to stop *concurrent claims*, and a completion is the resolution of a claim that was already accepted at begin time. Nor an epoch bump: the ownership swap is authorized by the migration record, not by a new epoch. Nor a slot owner that is not a member (the "ghost owner" of INV-REF-1): the slot map would name a node no client can be redirected to and no operator can `FORGET`, and the coverage readers count such a slot as `ok` (FM-CLUSTER-073), so the cluster would report itself healthy while a shard of the keyspace was unreachable. |
 | Invariant | Two guards, and deliberately only two: the parameter match against the recorded migration (only the exact pair that opened the migration may close it) and a membership check on the target, which is the node the arm is about to write into `slot_assignment` (`commands.rs`, `CompleteSlotMigration` arm). The slot map is still not consulted — the migration record authorizes the transfer. The node table is, because a migration record can outlive the membership it was validated against at begin time (FM-CLUSTER-032): a snapshot installed from a leader running an older binary, or any future arm that drops a node without pruning, presents exactly that shape. The source is not checked: it is never written into the slot map, and its release event on a node that has left is a no-op. |
+| Catalog | `INV-REF-1`, `INV-MIG-1` — the ghost owner this row's `NOT observable` already names, plus the record/ownership agreement the swap resolves. |
 | Outcome variant | `ClusterResponse::Ok` / `ClusterError::{InvalidOperation, NodeNotFound}` |
 | Forced by | `test_complete_migration_no_active`, `test_complete_migration_params_mismatch`, `complete_migration_transfers_ownership_over_an_existing_owner`, `complete_migration_refuses_a_target_that_is_no_longer_a_member` |
 | Bug refs | fixed: issue 01, `.scratch/cluster-correctness/issues/`; round-2 issue 62 (11/F5 ghost-owner consequence), `.scratch/testing-improvements-round2/issues/` |
@@ -563,6 +594,7 @@ skipping it. See FM-CLUSTER-028.
 | Observable | Migrations naming the removed node are gone. Migrations between two other nodes survive both forms of failover untouched. |
 | NOT observable | A migration left pointing at a node that is no longer a member — it can never complete, and its slot stays in a migrating state that nothing will clear except manual intervention. |
 | Invariant | The force branch calls `prune_migrations_naming(old_primary_id)` in the same transition that removes the node (`commands.rs`, `Failover` arm), so no window exists in which the node is gone and its migrations are not. `RemoveNode` calls the same helper (FM-CLUSTER-002), which is what keeps the two removal paths from drifting apart again. |
+| Catalog | `INV-REF-2` — a migration naming a departed node, checked everywhere rather than only on the paths that prune one. |
 | Outcome variant | `ClusterResponse::Epoch` |
 | Forced by | `test_failover_force_cancels_migrations_of_removed_node`, `test_failover_graceful_keeps_unrelated_migrations`, `force_failover_reports_moved_slots_and_prunes_only_related_migrations` |
 | Bug refs | — |
@@ -618,6 +650,7 @@ keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in t
 | Observable | The old primary is gone from `CLUSTER NODES`; every slot it owned is owned by the successor; the successor is a primary with no parent; the old primary's other replicas are re-parented to the successor; the epoch is bumped once and the successor's `config_epoch` is stamped with it. |
 | NOT observable | Any intermediate state in which the failed primary's slots are ownerless, or in which the successor owns slots at a stale epoch. Slot ownership and the epoch that authorizes it propagate together, as in Redis. |
 | Invariant | One replicated log entry performs remove, transfer, promote, re-parent, and bump; there is no sequence of entries a crash can land between (`commands.rs:226-333`). |
+| Catalog | `INV-REF-1`, `INV-REF-3`, `INV-REF-4`, `INV-EPOCH-1`, `INV-EPOCH-2` — the coherence of the composite entry: no orphaned slot, no dangling or self-parented node, no epoch above the counter or shared with another primary. |
 | Outcome variant | `ClusterResponse::Epoch` |
 | Forced by | `test_failover_force_removes_old_and_transfers_everything`, `test_failover_absorb_between_primaries` |
 | Bug refs | — |
@@ -630,6 +663,7 @@ keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in t
 | Observable | The old primary stays a member, recorded as a replica of the successor; its slots move to the successor; sibling replicas are re-parented; the epoch is bumped once. |
 | NOT observable | A healthy node being evicted from the cluster by a planned failover — it is the new replica, and removing it would force a full re-`MEET` and a full resync. |
 | Invariant | The `force` flag selects between remove and demote inside the one atomic entry, so both shapes share the transfer/promote/bump path and cannot drift. |
+| Catalog | `INV-REF-1`, `INV-REF-3`, `INV-REF-4`, `INV-EPOCH-1`, `INV-EPOCH-2` — the demote-instead-of-remove shape shares the transfer/promote/bump path, so it owes the same postconditions as FM-CLUSTER-040. |
 | Outcome variant | `ClusterResponse::Epoch` |
 | Forced by | `test_failover_graceful_demotes_old_primary`, `failover_re_parents_only_the_old_primarys_replicas` |
 | Bug refs | — |
@@ -642,6 +676,7 @@ keeps meaning exactly what its name says; the `CLUSTERDOWN` path is visible in t
 | Observable | The second application finds the old primary already gone, transfers zero slots, and no-ops the promotion; the end state is coherent (old removed, successor primary, slots owned by the successor). The command and the resulting state both survive a JSON round trip. |
 | NOT observable | A replay corrupting the topology — replay is not an exceptional path, it is how a restarting node rebuilds state. |
 | Invariant | `force` allows an absent old primary, and promotion is idempotent because it sets rather than toggles. The one non-idempotent effect is the epoch, which is bumped again; that is safe under FM-CLUSTER-010's dominance invariant (bumping is always allowed) and is noted here so a future reader does not mistake it for a bug. |
+| Catalog | `INV-REF-1`, `INV-REF-4`, `INV-EPOCH-1` — "the end state is coherent" stated as checks, so a replay that corrupted the topology fails at the apply seam rather than at whatever later command tripped over it. |
 | Outcome variant | `ClusterResponse::Epoch` |
 | Forced by | `test_failover_force_replay_is_safe`, `test_failover_command_serde_roundtrip`, `test_state_snapshot_roundtrip_after_failover` |
 | Bug refs | — |
@@ -859,7 +894,7 @@ re-registers, so two nodes running selection concurrently mid-change can pick di
 | NOT observable | A knob that only takes effect at startup. Gating *installation* of the checker rather than its verdict is what made this startup-only before, and an operator riding out a partition cannot restart the node to change it. Nor `/status` claiming a fence reason the write path is not enforcing. |
 | Invariant | `SelfFenceGate::has_quorum` is `!flag || inner.has_quorum()` and `write_fence_reason` is derived from that same call, so the report cannot disagree with the gate (`flags.rs:126-139`). The wire wording is the *inner* checker's: `quorum_lost_error()` forwards to `inner.quorum_lost_error()`, whose `QuorumChecker` default is `CLUSTER_DOWN_QUORUM_LOST`, so a cluster fence keeps answering `CLUSTERDOWN` while the replication self-fence behind the same write gate answers its own `SELFFENCE` code (FM-REPLICATION-041). The gate never spells the string itself — a wrapper that hardcoded one would re-label whatever it wraps. |
 | Outcome variant | `Option<&'static str>` = `Some("cluster quorum lost")`; `CLUSTERDOWN The cluster is down (quorum lost, writes rejected)` |
-| Forced by | `auto_failover_flag_is_live`, `self_fence_gate_follows_live_flag`, `self_fence_gate_passes_through_healthy_quorum`, `self_fence_gate_reports_the_reason_it_gates_on`, `self_fence_gate_delegates_the_quorum_lost_wording` |
+| Forced by | `cluster_flag_sets_reach_the_live_flags`, `auto_failover_flag_is_live`, `self_fence_gate_follows_live_flag`, `self_fence_gate_passes_through_healthy_quorum`, `self_fence_gate_reports_the_reason_it_gates_on`, `self_fence_gate_delegates_the_quorum_lost_wording` |
 | Bug refs | `.scratch/hardening/issues/done/30-self-fence-flake-and-misleading-clusterdown.md` |
 
 ## FM-CLUSTER-060 — runtime flags derive from config with no field drift
@@ -1168,6 +1203,7 @@ which is fail-closed rather than coarse (FM-CLUSTER-096).
 | Observable | `Complete` moves the slot's owner and clears the migration only when the slot's record carries a handoff that is drained and whose barrier window has not elapsed. Otherwise it is refused with a retryable `HandoffNotReady` naming which of the three conditions failed, and nothing changes: the owner, the migration, and the prepared record are exactly as they were. |
 | NOT observable | Ownership moving on a `Complete` that arrived after the barrier window lapsed. By then the source has resumed serving the slot, so the writes it accepted in the interval would be stranded on a node that no longer owns them — the acknowledged-then-orphaned write of FM-CLUSTER-037, which this whole mechanism exists to close. Nor a partially applied `Complete`: the check precedes every mutation. |
 | Invariant | `SlotHandoff::admits_complete_at` is the single predicate — `drained && !barrier_expired && !lease_expired` — and `apply_command`'s `CompleteSlotMigration` arm consults it after the parameter match and before touching `slot_assignment` (`cluster/src/{types,commands}.rs`). The finalizer's own wait budget (`HANDOFF_DRAIN_WAIT_MS`) is deliberately shorter than the barrier window so both a successful `Complete` and an abort still land inside it. |
+| Catalog | `INV-MIG-1`, `INV-HANDOFF-2` — ownership and the migration record move together, and `drained` is only ever set on an attempt a prepare minted. |
 | Outcome variant | `ClusterResponse::Ok` + `[SlotMigrationCompleted, SlotHandoffReleased]` / `ClusterError::HandoffNotReady` |
 | Forced by | `complete_is_refused_without_a_prepared_handoff`, `complete_is_refused_while_the_handoff_is_undrained`, `prepare_then_drain_then_complete_moves_ownership`, `complete_is_refused_once_the_barrier_window_elapsed`, `handoff_model_smoke`, `handoff_model_full_cross_slot`, `handoff_model_full_deep` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
@@ -1192,6 +1228,7 @@ which is fail-closed rather than coarse (FM-CLUSTER-096).
 | Observable | `ConfirmSlotHandoffDrained` and `AbortSlotHandoff` take effect only when their `seq` matches the record's current attempt; otherwise they are refused (`HandoffNotReady`) or, for an abort of an attempt that is already gone, succeed with no event. `PrepareSlotHandoff` against a slot with no migration, or with mismatched endpoints, is refused without creating a record. |
 | NOT observable | A stale drain acknowledgement vouching for a fresh attempt. The stale ack was earned against a shard state that predates the current barrier, so honouring it would complete a handoff whose drain never happened — the same exposure as no barrier at all. |
 | Invariant | `ClusterStateInner::handoff_seq` is a replicated counter incremented on every accepted `PrepareSlotHandoff`; the minted value is carried in `SlotHandoffPrepared` and echoed by both follow-up commands, which filter on `h.seq == seq` before mutating (`cluster/src/{state,commands}.rs`). Because the counter is replicated it advances identically on every node; `ResetCluster` is the only thing that rewinds it, and it clears every migration in the same entry — a snapshot restore does not rewind it either (FM-CLUSTER-100). |
+| Catalog | `INV-HANDOFF-1`, `INV-HANDOFF-2` — the counter dominates every live attempt, and a `drained` record carrying the unminted seq `0` is a confirm that matched no attempt at all. |
 | Outcome variant | `ClusterError::HandoffNotReady` / `ClusterError::InvalidOperation` |
 | Forced by | `a_stale_drain_ack_cannot_vouch_for_the_next_attempt`, `prepare_requires_a_migration_and_matching_parameters`, `handoff_model_smoke`, `handoff_model_full_cross_slot`, `handoff_model_full_deep` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
@@ -1216,6 +1253,7 @@ which is fail-closed rather than coarse (FM-CLUSTER-096).
 | Observable | Both prepare, both drain, both complete. Each barrier fences only its own slot's writes; each attempt carries its own `seq`; aborting or completing one leaves the other untouched. |
 | NOT observable | A second finalization blocked behind the first, or one abort tearing down both barriers. Serialising them would make a busy shard's rebalance take a barrier window per slot, and the fencing has no cross-slot invariant to protect. |
 | Invariant | Handoffs are stored per migration record, keyed by slot, and the barrier is stored in `PauseState`'s slot-keyed map (FM-CLUSTER-079/082), so there is no shared cell for two slots to contend on. The drain is a shard *round trip*, not a lock: two `ClusterMsg::DrainSlot` messages for two slots on one shard are answered in order and neither holds the shard between messages. |
+| Catalog | `INV-HANDOFF-2` — a handoff filed under a slot it does not name is exactly the shared cell this row says two slots do not have. |
 | Outcome variant | n/a |
 | Forced by | `concurrent_handoffs_on_two_slots_do_not_interfere`, `handoff_model_full_cross_slot` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
@@ -1240,6 +1278,7 @@ which is fail-closed rather than coarse (FM-CLUSTER-096).
 | Observable | The node whose id equals the handoff's `source_node` arms a `WRITE`-mode pause on the slot and sends `ClusterMsg::DrainSlot` to shard `slot % num_shards`, confirming the drain only after the shard answers. Every other node ignores both events. A release lifts the barrier that node's own prepare armed. |
 | NOT observable | A node fencing a slot it does not own, which would park writes nobody asked to park. Nor the arm being deferred: `Prepared` and `Released` are not commutative, so arming from the spawned drain task could let a release be handled first and leave the slot fenced with nothing left to lift it. Only the drain round trip — the part that can block on a busy shard — is spawned. |
 | Invariant | `plan_handoff_action` is a pure function of the event, the node's own id, and the shard count, returning `Arm`/`Release`/`Ignore`; the runner arms and releases inline in its recv loop and spawns only `drain_shard` (`cluster-runtime/src/handoff_barrier.rs`). `num_shards == 0` is folded to shard 0 rather than dividing by zero. The pause is `WRITE`, not `ALL`: the source still holds the data and still owns the slot until `Complete`, so reads stay served — Redis/Valkey atomic slot migration pauses writes too. |
+| Catalog | `INV-HANDOFF-2` — the record's own slot is the slot armed; a migration filed under a foreign slot would fence one slot on another's behalf. |
 | Outcome variant | `HandoffAction::{Arm, Release, Ignore}` |
 | Forced by | `only_the_source_node_acts_on_a_handoff`, `drain_targets_slot_modulo_num_shards_and_survives_zero`, `a_prepare_arms_the_barrier_drains_the_shard_and_confirms`, `a_release_lifts_the_barrier_its_prepare_armed` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../../replication-cluster-rework/issues/open/02-migration-finalization-pause-barrier.md) |
@@ -1392,6 +1431,7 @@ outside openraft itself had ever exercised the reader clone.
 | Observable | The next `PrepareSlotHandoff` the restored node applies mints a `seq` strictly greater than every `seq` the pre-snapshot cluster minted — the counter picks up where it left off through either restore vehicle. `ResetCluster` still rewinds it to `0`, and that rewind is itself what a later snapshot carries. |
 | NOT observable | A restored node re-minting a `seq` that is already spent. `SlotFence` compares `(owner, handoff_seq)` as a pure replicated fencing token (FM-CLUSTER-095) and reads absent-handoff as `0`, so a reused generation makes a stale fence compare equal and admit a command the prepare it was stamped before should have refused. Nor the counter being re-derived as `max(seq)` over the surviving migrations: a completed or aborted handoff removes its record and keeps its generation spent, so the derived value is exactly the reused one. |
 | Invariant | `handoff_seq` lives on `ClusterStateInner` and is projected by `to_snapshot`, so **both** vehicles carry it: openraft ships the serialized `ClusterStateInner` (`encode_snapshot`/`install_snapshot`/`attach_snapshot_store`), and the reader DTO carries the field for the sake of `from_snapshot`, which is the only restore path that goes through the projection (`cluster/src/{state,types}.rs`). Both sides are `#[serde(default)]`, so a snapshot written before the field existed reads as `0` — the pre-handoff state, where nothing has been minted. `ResetCluster` remains the sole rewind (FM-CLUSTER-086), and it clears every migration in the same entry, so no fence can outlive it. |
+| Catalog | `INV-HANDOFF-1` — the counter dominates every surviving `seq` through both restore vehicles: the hook runs at `from_snapshot` and `restore_from_snapshot` as well as at `apply_command`. |
 | Outcome variant | `ClusterEvent::SlotHandoffPrepared { seq }` |
 | Forced by | `an_installed_snapshot_carries_the_handoff_generation`, `from_snapshot_carries_the_handoff_generation`, `a_reset_is_the_one_rewind_and_it_survives_a_restore`, `handoff_model_smoke`, `handoff_model_full_cross_slot`, `handoff_model_full_deep` |
 | Bug refs | n/a — found by inspection while auditing the fencing token; the reader DTO dropped the counter and `from_snapshot` documented the reset as safe. |

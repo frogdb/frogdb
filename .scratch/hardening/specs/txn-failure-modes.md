@@ -512,7 +512,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | NOT observable | The batch committing during the pause; the batch committing after the pause on a *stale* slot verdict — the topology may have moved while the transaction was parked, so the batch is validated a second time when the barrier actually blocked. |
 | Invariant | Exactly two `validate_queued_batch` calls when the barrier blocked, exactly one when it did not. The first verdict is never reused across a wait. |
 | Outcome variant | `TransactionOutcome::Committed`, or any redirect outcome if the second verdict refuses |
-| Forced by | `a_blocking_pause_forces_a_second_slot_verdict`, `a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict` |
+| Forced by | `a_blocking_pause_forces_a_second_slot_verdict`, `a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict`, `write_exec_parks_on_a_slot_barrier_and_commits_after_release` |
 | Bug refs | `.scratch/replication-cluster-rework/issues/02` |
 
 ## FM-TXN-041 — A read-only transaction never reaches the pause barrier
