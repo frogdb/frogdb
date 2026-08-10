@@ -51,43 +51,6 @@ pub fn reject_non_finite_delta(delta: f64) -> Result<(), CommandError> {
 }
 
 // ============================================================================
-// Glob Pattern Matching
-// ============================================================================
-
-/// Simple glob pattern matching (supports * and ?).
-///
-/// Used by SCAN, SSCAN, HSCAN, ZSCAN MATCH filters.
-pub fn simple_glob_match(pattern: &[u8], text: &[u8]) -> bool {
-    let mut p = 0;
-    let mut t = 0;
-    let mut star_p = None;
-    let mut star_t = None;
-
-    while t < text.len() {
-        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == text[t]) {
-            p += 1;
-            t += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
-            star_p = Some(p);
-            star_t = Some(t);
-            p += 1;
-        } else if let Some(sp) = star_p {
-            p = sp + 1;
-            star_t = Some(star_t.unwrap() + 1);
-            t = star_t.unwrap();
-        } else {
-            return false;
-        }
-    }
-
-    while p < pattern.len() && pattern[p] == b'*' {
-        p += 1;
-    }
-
-    p == pattern.len()
-}
-
-// ============================================================================
 // Hash-based scan cursor for SSCAN/HSCAN
 // ============================================================================
 
@@ -111,6 +74,11 @@ fn scan_hash(key: &[u8]) -> u64 {
 /// The `hash_key` function extracts the bytes used for hash-based ordering from each item.
 /// The `emit` function converts an item into Response values appended to `results`.
 /// `count` is the maximum number of items to emit (not response elements).
+///
+/// `match_pattern` is a full Redis glob evaluated by the canonical
+/// [`frogdb_core::glob_match`] — the same matcher SCAN/KEYS use — so
+/// HSCAN/SSCAN/ZSCAN `MATCH` supports `[...]` classes and `\` escapes and
+/// inherits its `MAX_STAR_COUNT` cap against pathological patterns.
 pub fn hash_cursor_scan<T>(
     items: impl Iterator<Item = T>,
     cursor: u64,
@@ -145,7 +113,7 @@ pub fn hash_cursor_scan<T>(
         }
 
         if let Some(pattern) = match_pattern
-            && !simple_glob_match(pattern, hash_key(&item))
+            && !frogdb_core::glob_match(pattern, hash_key(&item))
         {
             continue;
         }
