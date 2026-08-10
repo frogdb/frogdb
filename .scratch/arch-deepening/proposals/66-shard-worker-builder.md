@@ -2,15 +2,20 @@
 
 Round 38 · lane: server composition · effort **M** · candidate SV4
 Verified against the current tree at `55d73174` (worktree `arch-round-38-99`); every citation
-below was read at that SHA, none inherited from the candidate brief.
+below was read at that SHA, none inherited from the candidate brief. **Re-verified line by line
+at HEAD `159cb7a2`** after adversarial review; every correction that pass produced is folded in
+below, and the two claims it refuted (§7's universal "asserted by nothing", and the `ShardWiring`
+`Default`) are restated rather than repeated.
 
 ## Summary
 
 `ShardWorkerBuilder` (`shard/builder.rs`) is two different modules wearing one name.
 
 Its **assembly** half is real and earns its keep: `try_build` (`builder.rs:333-478`) is the only
-place in the tree that writes the `ShardWorker { .. }` struct literal — 43 fields across nine
-grouped sub-structs — and every constructor funnels through it. Its **wiring** half is a shell.
+place in the tree that writes the `ShardWorker { .. }` struct literal — **27 field initializers**
+(26 unconditional plus the `cfg(any(test, feature = "shard-driver"))` `driven_ticks`), matching
+`ShardWorker`'s declaration one-for-one (`worker.rs:106-209`), nine of them grouped sub-structs —
+and every constructor funnels through it. Its **wiring** half is a shell.
 Ten `with_*` methods exist for exactly the cluster / shared-flag / registry inputs production
 needs, and **not one of them has ever had a caller**: `with_cluster`, `with_quorum_checker`,
 `with_function_registry`, `with_recovery_stats`, `with_per_request_spans`, `as_replica`,
@@ -32,10 +37,19 @@ manager, and six shared `CONFIG SET` atomics are all defaults.
 The proposal is to move the *recipe* into `frogdb-core` behind the builder — a `ShardWiring`
 value object plus the 14 missing `with_*` methods — so the server supplies **values** and the
 builder owns **order and completeness**, and the harness can construct the same wiring the
-server does. Then delete the wrapper constructors (`ShardWorker::new` — itself dead —
-`with_eviction`, `with_fake_persistence`, `with_persistence`, ~110 lines with three
-`#[allow(clippy::too_many_arguments)]`), the ten dead builder methods, the four dead structs,
-and the `pub` on the setters whose sole production caller was `shards.rs`.
+server does. Then delete the ten dead builder methods, the four dead dependency-group structs,
+the one dead wrapper constructor (`ShardWorker::new`), and the `pub` on the setters whose sole
+production caller was `shards.rs`.
+
+The other three wrapper constructors **stay**. They are not dead and this proposal does not
+delete them: `ShardWorker::with_eviction` has **twelve** call sites — eleven core unit tests
+(`event_loop.rs:633`, `vll.rs:123`, `blocking.rs:1599`, `panic_guard.rs:346`, `eviction.rs:520`,
+`execution.rs:1365`, `dispatch_core.rs:253`, `diagnostics.rs:504`, `post_execution.rs:973` and
+`:995`, `rollback.rs:151`) plus the production branch at `shards.rs:143` — and
+`with_fake_persistence` / `with_persistence` are the other two production branches
+(`shards.rs:107`, `:126`). SV4-c retires only the *production* uses of the three; the eleven
+core-test callers keep compiling untouched, and budgeting them is explicitly *not* part of this
+change.
 
 **Live-vs-latent ruling.** The candidate brief's headline — *"builder.rs claims 'single
 construction path' … (doc false)"* — **does not survive verification, and is withdrawn**. The
@@ -56,14 +70,14 @@ executor, §5).
 |---|---:|---|
 | `frogdb-server/crates/core/src/shard/builder.rs` | 523 | **the change.** `ShardWorkerBuilder` struct `:94-123`, `new` `:127-158`, the 24 `with_*`/`as_replica` methods `:161-327`, `try_build` `:333-478`, `build` `:489-492`, `ShardBuilderError` `:41-56`, `WalMode` `:64-71`, doc `:73-93`, fake-WAL unit test `:495-523` |
 | `frogdb-server/crates/server/src/server/shards.rs` | 367 | **the change.** `ShardSpawnContext` (30 fields) `:20-56`, `spawn_shard_workers` `:66-315`, the three construction branches `:104-155`, the 25 setter calls `:157-302`, search recovery `:262-293`, tick pump `:332-367` |
-| `frogdb-server/crates/core/src/shard/worker.rs` | 1034 | **the change.** Four convenience constructors `:385-493` (`new` `:385`, `with_eviction` `:403`, `with_fake_persistence` `:435`, `with_persistence` `:464`); the 24 `pub` setters at `:231`, `:237`, `:258`, `:272`, `:279`, `:284`, `:289`, `:295`, `:303`, `:310`, `:319`, `:496`, `:510`, `:515`, `:524`, `:531`, `:538`, `:547`, `:566`, `:571`, `:576`, `:581`, `:586`, `:591`, `:596`; `data_dir()` default `:225-228` |
-| `frogdb-server/crates/core/src/shard/types.rs` | 1498 | **the change (deletions).** `ShardCoreDeps` `:671-687`, `ShardPersistenceDeps` `:690-701`, `ShardClusterDeps` `:704-731`, `ShardConfig` `:735-743` — all dead. Untouched above/below: `ShardIdentity` `:30-…` (`set_data_dir` `:72`, `set_is_replica_flag`, `role_controller`), `ShardPersistence`, and the two `// FM-` tagged tests at `:1268` (FM-PERSISTENCE-005) and `:1421` (FM-REPLICATION-061) |
+| `frogdb-server/crates/core/src/shard/worker.rs` | 1034 | **the change.** Four convenience constructors `:385-493` (`new` `:385`, `with_eviction` `:403`, `with_fake_persistence` `:435`, `with_persistence` `:464`); the **25** `pub` setters/installers at `:231`, `:237`, `:258`, `:272`, `:279`, `:284`, `:289`, `:295`, `:303`, `:310`, `:319`, `:496`, `:510`, `:515`, `:524`, `:531`, `:538`, `:547`, `:566`, `:571`, `:576`, `:581`, `:586`, `:591`, `:596` (of which `shards.rs` drives 23 — all but `set_is_replica` `:237` and the dead `set_replication_broadcaster` `:566`); the struct declaration `:106-209`; `data_dir()` default `:223-228` |
+| `frogdb-server/crates/core/src/shard/types.rs` | 1498 | **the change (deletions).** The `// Dependency Groups for ShardWorkerBuilder` banner `:665-667`, `ShardCoreDeps` `:669-686`, `ShardPersistenceDeps` `:688-700`, `ShardClusterDeps` `:702-731` (struct + its `impl`), `ShardConfig` `:733-744` — all dead; contiguous, so the deletion is the single span `:665-744`. Untouched above/below: `ShardIdentity` `:30-…` (`set_data_dir` `:72`, `set_is_replica_flag`, `role_controller`), `ShardPersistence`, and the two `// FM-` tagged tests at `:1268` (FM-PERSISTENCE-005) and `:1421` (FM-REPLICATION-061) |
 | `frogdb-server/crates/core/src/shard/mod.rs` | 96 | **the doc hotfix.** Header `:1-25` (false example `:19`, dead "Dependency Groups" `:7-12`); re-export lists `:70`, `:87-94` shrink with the deletions |
 | `frogdb-server/crates/shard-harness/src/harness.rs` | 399 | **the payoff.** `ShardDriver::new` `:60-95` — the builder call `:82-87` (four setters); `worker()` `&mut` escape hatch `:104-106` |
 | `frogdb-server/crates/shard-harness/Cargo.toml` | 32 | **the constraint.** Dependencies are `frogdb-core` (features `shard-driver`, `fake-wal`), `frogdb-commands`, `frogdb-protocol`, `frogdb-vll` — **no `frogdb-server`**. This is why the recipe must live in core. |
 | `frogdb-server/crates/server/src/server/mod.rs` | 598 | **edge, not owned.** The single `ShardSpawnContext` literal `:376-407` — 30 `infra.*`/`cluster.*`/`repl.*` field reads. Proposal 63's surface; see Risks |
 | `frogdb-server/crates/server/src/server/init.rs` | 669 | **read-only.** Produces `rocks_store` / `recovered_stores` / `recovery_stats` `:276-281`, `:469-470`; `InitResult` fields `:54-55` |
-| `frogdb-server/crates/recovery/src/lib.rs` | 270 | **read-only — the precondition source.** `persistence_active` `:189`, the Rocks branch `:211-213`, `fresh_shards` `:268` (LOCKED area: persistence/recovery, gate 0.85) |
+| `frogdb-server/crates/recovery/src/lib.rs` | 270 | **read-only — the precondition source.** The `rocks_backed` predicate `:188-190` (**not** `persistence_active`; no such identifier exists), the fresh-stores arm `:222`, `fresh_shards` `:268` (LOCKED area: persistence/recovery, gate 0.85) |
 | `frogdb-server/crates/recovery/src/shards.rs` | 183 | **read-only.** `restore` `:44-67` — "no existing data ⇒ `num_shards` fresh empty stores" `:60-66` |
 | `frogdb-server/crates/core/src/shard/search/lifecycle.rs` | 680 | **read-only.** `IndexLifecycleManager::new` `:80-90` (pure, no I/O), `set_data_dir` `:94-96`, `index_dir` `:101-106` |
 | `frogdb-server/crates/core/src/shard/wait_queue.rs` | 931 | **read-only.** `new()` `:116-118` = `with_limits(10000, 50000)`; `with_limits` `:121` |
@@ -193,7 +207,7 @@ field" into a panic that a two-more-arguments `new()` would have made a compile 
 Apply the deletion test to *this* module: delete `ShardBuilderError` + `try_build`'s fallibility
 and complexity **vanishes** — nothing reappears at any caller, because there is one caller and
 it panics. Apply it to the assembly body of `try_build` (`:347-477`) and complexity **reappears
-in five places**: the 43-field `ShardWorker { .. }` literal, the `WalMode` match
+in five places**: the 27-initializer `ShardWorker { .. }` literal, the `WalMode` match
 (`:376-405`), the `KeyspaceNotificationCoordinator` routing decision (`:420-425`), the
 `ScriptExecutor` fallible construction (`:412-416`), and the persistence/observability/eviction
 sub-struct grouping. The assembly is a deep module. The `Result` around it is a wrapper.
@@ -257,9 +271,16 @@ The recovered store is passed to two of the three constructors and **dropped on 
 on the floor and the worker starts on `HashMapStore::default()` (`builder.rs:437`).
 
 **Latent, not live.** Precondition: the `with_eviction` branch is reached only when
-`ctx.rocks_store.is_none()`, and `frogdb-recovery` returns `rocks: None` exactly when
-`persistence_active` is false (`recovery/src/lib.rs:189`, `:211-213`), in which case `shards` is
-`fresh_shards(num_shards)` (`:268`) — empty stores. The drop is therefore unobservable today.
+`ctx.rocks_store.is_none()`, and `frogdb-recovery` returns `rocks: None` exactly when its
+`rocks_backed` predicate is false (`recovery/src/lib.rs:188-190`), in which case `shards` is
+`fresh_shards(num_shards)` (`:222`, defined `:268`) — empty stores. `rocks_backed` is
+`inputs.persistence.enabled && !inputs.persistence.mode.eq_ignore_ascii_case("fake")`, so it is
+false in **two** distinct configurations — persistence disabled, and the `fake` WAL mode that is
+enabled-but-RocksDB-less — and *both* take the fresh-stores path. (The proposal previously named
+this predicate `persistence_active`, which does not exist in the tree; the correction widens the
+precondition rather than narrowing it, so the "unobservable today" conclusion is unchanged and
+the case for removing the dependence on it is stronger.) The drop is therefore unobservable
+today.
 It is a cross-crate precondition, enforced nowhere, in a **LOCKED** area (persistence/recovery,
 gate 0.85) that this proposal does not edit. Routing the branch through `with_store(store)`
 makes the code state-independent of that precondition without depending on it — a strict
@@ -294,12 +315,32 @@ it is:
   is no count pin, no exhaustive struct, no trait. The twelve harness scenario files
   (`shard-harness/tests/`, plus `main.rs`) drift further from production with each addition,
   silently.
-- **The wiring itself is asserted by nothing.** `ConfigManager::wal_failure_policy_flag()`
-  (`runtime_config.rs:1167`) has exactly one caller in the entire server crate:
-  `shards.rs:233`. If that line were deleted, every shard would fall back to
-  `WalFailurePolicy::default()` (`builder.rs:372-375`) — and the FM-PERSISTENCE-005 test at
-  `types.rs:1268-1272` would still pass, because it constructs a `ShardPersistence` directly.
-  The same holds for the other 23: no test in the tree asserts that a production-spawned shard
+- **The wiring is covered only indirectly and expensively, never at the seam.** The strong form
+  of this claim — "no test anywhere fails if you delete a wiring line" — is **false for at least
+  two of the 24**, and is withdrawn:
+  - `set_notify_keyspace_events` (`shards.rs:236`) *is* covered end to end. `ConfigManager`
+    owns the `Arc<AtomicU32>` (`runtime_config.rs:769`), `CONFIG SET notify-keyspace-events`
+    stores into it (`:2422`), `notify_keyspace_events_flags()` (`:3588`) hands out that same
+    `Arc`, and the worker holds it (`worker.rs:185`, set at `:538-539`) for
+    `keyspace_notify.rs` to read. Delete the line and the shard reads a private zeroed atomic
+    the `CONFIG SET` never touches, so the booted keyspace-notification tests fail —
+    `test_lrem_emits_keyspace_notification` (`integration_pubsub.rs:56`) among them, plus the
+    `pubsub_tcl` / `set_tcl` regression suites.
+  - `set_json_limits` (`shards.rs:200`) is likewise covered:
+    `test_json_set_respects_configured_max_depth` (`integration_json.rs:872`) boots a server at
+    `json_max_depth = 4` and asserts a depth-5 document is rejected; without the line every
+    shard keeps `JsonLimits::default()` and accepts it.
+
+  The accurate and still-sufficient claim is narrower: **the wiring is asserted only through
+  booted-server E2E, never at the seam, and 14 of the 24 have no in-core entry point at all.**
+  Coverage that exists is coverage of the *effect*, several crates downstream, at the price of a
+  full server boot — it names no wiring line, so a deleted one is diagnosed as "keyspace
+  notifications broke" rather than "shard 3 never got the flag". And it is not uniform: the
+  chosen example survives intact. `ConfigManager::wal_failure_policy_flag()`
+  (`runtime_config.rs:1167`) has exactly one caller in the entire server crate — `shards.rs:233`.
+  Delete it and every shard falls back to `WalFailurePolicy::default()` (`builder.rs:372-375`),
+  and the FM-PERSISTENCE-005 test at `types.rs:1268-1272` still passes, because it constructs a
+  `ShardPersistence` directly. No test in the tree asserts that a *production-spawned* shard
   observes the server-wide handle it is supposed to share.
 
 Concretely, the fields a harness-built worker has today that a production one does not: the
@@ -339,7 +380,9 @@ inside `try_build`.
 **Leverage**: a caller — server or harness — learns one type instead of 24 setter names and
 their ordering constraints. **Locality**: a new shared handle is added in one struct; every
 adapter that constructs it is forced by the compiler to decide what to pass, instead of silently
-inheriting a default. **Two adapters, not one**: production (`server/shards.rs`) and the harness
+inheriting a default. This holds *only* because `ShardWiring` has no `Default` — see SV4-b,
+where that is a stated design constraint rather than an afterthought. **Two adapters, not one**:
+production (`server/shards.rs`) and the harness
 (`shard-harness`) — which is the bar for introducing a seam at all, and is precisely what
 `ShardCoreDeps` never cleared.
 
@@ -356,8 +399,11 @@ Five steps, each independently compilable and reviewable.
 ### SV4-a — delete what nothing calls (no behavior)
 
 Remove: `with_core_deps`, `with_persistence_deps`, `with_cluster_deps` (`builder.rs:302-327`);
-`as_replica` (`:275-278`); `ShardCoreDeps`, `ShardPersistenceDeps`, `ShardClusterDeps`,
-`ShardConfig` (`types.rs:671-743`); `ShardWorker::new` (`worker.rs:385-399`);
+`as_replica` (`:275-278`); the `// Dependency Groups for ShardWorkerBuilder` block —
+`ShardCoreDeps`, `ShardPersistenceDeps`, `ShardClusterDeps`, `ShardConfig` and their banner,
+contiguous at `types.rs:665-744`; `ShardWorker::new` (`worker.rs:385-399`) **and only that
+constructor** — `with_eviction`, `with_fake_persistence` and `with_persistence` all have live
+callers (see Summary) and are untouched by SV4-a;
 `ShardWorker::set_replication_broadcaster` (`worker.rs:566-568`); the matching re-exports in
 `shard/mod.rs:70`, `:89-90` and `core/src/lib.rs:147-149`. Roughly 150 lines, zero call sites
 touched. `builder.rs:22-33`'s import of `ShardCoreDeps`/`ShardClusterDeps`/
@@ -365,9 +411,21 @@ touched. `builder.rs:22-33`'s import of `ShardCoreDeps`/`ShardClusterDeps`/
 
 ### SV4-b — `ShardWiring` in `frogdb-core`, plus the 14 missing `with_*`
 
-A new `shard/wiring.rs` holding one `#[derive(Clone)]` value object of node-wide handles, with
-a `Default` that is exactly today's builder defaults (so every existing builder call site is
-unaffected), and `ShardWorkerBuilder::with_wiring(&ShardWiring)` applying it. Fields, one per
+A new `shard/wiring.rs` holding one `#[derive(Clone)]` value object of node-wide handles and
+`ShardWorkerBuilder::with_wiring(&ShardWiring)` applying it.
+
+**`ShardWiring` does not implement `Default`.** It is constructed either field-by-field (every
+field named, so adding one is a compile error at every construction site) or through the single
+explicit escape hatch `ShardWiring::none()` — "deliberately unwired", byte-identical to today's
+builder defaults, for tests that genuinely want a bare shard. This is the whole Locality claim:
+a derived `Default` would let a new shared handle be added and silently inherited as `None` by
+every adapter, which is exactly the drift the seam exists to stop, and it would contradict the
+compile-error obligation stated under Testability. The cost of dropping `Default` is nil: the
+thirteen existing `ShardWorkerBuilder::new` call sites keep compiling because they use the
+individual `with_*` methods and never mention `ShardWiring` at all — not because a `Default`
+covers them.
+
+Fields, one per
 distinct wiring in §2's table, minus the six per-shard ones: `function_registry`,
 `keyspace_stats`, `recovery_stats`, `cluster: Option<ClusterHandles>` (the quad, kept together
 because production sets them from one `Option` each and they are meaningless apart),
@@ -412,10 +470,13 @@ The three-way constructor branch (`shards.rs:104-155`) collapses to selecting `w
 recover` block (`:262-293`) moves above `build()` and feeds `with_search_manager`. The tick
 pump (`:304`) and the `spawn(..)` (`:306-311`) stay exactly where they are.
 
-`ShardSpawnContext`'s 30 fields (`shards.rs:20-56`) shrink to the per-shard vectors, the
-per-shard inputs, `config`, `num_shards`, `shard_monitor`, and one `ShardWiring` — but **the
-struct's producer at `mod.rs:376-407` is proposal 63's surface** and this proposal does not
-restructure it (see Risks).
+**`ShardSpawnContext` is unchanged.** Its 30 fields (`shards.rs:20-56`) stay exactly as they
+are, and so does its sole literal at `mod.rs:376-407` — thirty `infra.*` / `cluster.*` / `repl.*`
+field reads that are **proposal 63's surface**. SV4-c builds the `ShardWiring` *from* `ctx`
+inside `spawn_shard_workers`; it does not narrow what `ctx` carries. Shrinking the struct to
+"per-shard vectors + `config` + `num_shards` + `shard_monitor` + one `ShardWiring`" is the
+obvious follow-up and it is deliberately **out of scope here**, because it is precisely the edit
+that would collide with 63 (see Risks).
 
 ### SV4-d — narrow the setters
 
@@ -426,20 +487,36 @@ With `shards.rs` no longer calling them, 21 of the 24 setters have no caller out
 (`event_loop.rs:518`, `execution.rs:1380`, `eviction.rs:535`, `event_loop.rs:658`,
 `post_execution.rs:1500`), `set_wal_failure_policy_flag` (`rollback.rs:435`,
 `scenario_s6.rs:57`), `set_is_replica` (`worker.rs:1004`), and `HashMapStore::set_warm_store`
-(five call sites across `core/tests/tiered_storage.rs`, `store/hashmap.rs:2476`,
-`eviction.rs:649`, `eviction_spill_failure.rs:82` — a *store* method, not a worker one, and out
-of scope). This is where the deletion test pays: `ShardWorker`'s post-construction mutation
+(defined `store/hashmap.rs:740`; **six** non-production call sites —
+`core/tests/tiered_storage.rs:18`, `:318`, `:459`, `store/hashmap.rs:2476`, `eviction.rs:649`,
+`shard-harness/tests/eviction_spill_failure.rs:82` — alongside the one production site
+`shards.rs:170`; a *store* method, not a worker one, and out of scope). This is where the deletion test pays: `ShardWorker`'s post-construction mutation
 surface stops being part of its public interface.
 
 ### SV4-e — a count pin so the seam cannot silently re-open
 
 A `lint-shard-wiring-seam` recipe in the family described by `agents/seam-lints.md`
-(`Justfile:329` lists the 14 current members), modelled on `lint-continuation-lock`
+(`Justfile:329` lists the 14 current `lint-gates` members), modelled on `lint-continuation-lock`
 (`Justfile:1312`, `scripts/continuation-lock-gate.py`) — the existing precedent for a count pin
 rather than a full classification. Invariant: *`server/shards.rs` contains zero
 `worker.set_*` / `worker.install_*` calls; every shard wiring goes through `ShardWiring`.* A
 compile-free `rg` rule, so it joins `lint-gates` and runs on every commit. Optional and cheap:
 pin `ShardWiring`'s field count so adding one is a deliberate two-file change.
+
+**This step is more than one `Justfile` line — budget the doc edits.** Becoming the fifteenth
+`lint-gates` member invalidates every hand-maintained count in the family's prose, and the repo
+has five of them plus a table:
+
+- `agents/seam-lints.md:4` "Fifteen of these ship today" → sixteen
+- `agents/seam-lints.md:9` "runs the compile-free **fourteen** of them" → fifteen
+- `agents/seam-lints.md:14` "`just lint` runs the full **fifteen**" → sixteen
+- `agents/seam-lints.md:39` "out of scope for … this doc's **\"the 15\"**" → "the 16"
+- a new row in the family table (`agents/seam-lints.md:20-37`)
+- `CLAUDE.md:243` "**Fifteen** chokepoint gates encode …" → Sixteen
+
+None is hard; all six are easy to miss, and the family's own history is that the two
+hand-maintained lists drifted precisely this way. Treat them as part of SV4-e's diff, not as
+follow-up.
 
 ## Testability improvement
 
@@ -467,9 +544,10 @@ The payoff is specific, not rhetorical: `ShardWiring` lives in `frogdb-core`, wh
    not itself a gated crate, but the wired state it produces — `ShardPersistence`'s failure-policy
    `Arc` (FM-PERSISTENCE-005), `ShardIdentity`'s role controller (FM-REPLICATION-061) — is the
    input every locked-area assertion downstream depends on.
-4. **The drift stops being silent.** SV4-e's count pin plus a non-`Default`-able `ShardWiring`
-   (or an explicit `ShardWiring::none()` for "deliberately unwired") turns "someone added a 26th
-   shared handle and the harness never learned" into a compile error or a lint failure.
+4. **The drift stops being silent.** SV4-e's count pin plus the non-`Default`-able `ShardWiring`
+   of SV4-b (with `ShardWiring::none()` as the one explicit "deliberately unwired" constructor)
+   turns "someone added a 26th shared handle and the harness never learned" into a compile error
+   or a lint failure.
 
 ## Spec / LOCKED impact
 
@@ -481,25 +559,30 @@ unaffected.
 
 **`types.rs` is edited and does carry two tags** — `// FM-PERSISTENCE-005` at `:1268` and
 `// FM-REPLICATION-061` at `:1421`, both in its test module. The deletion range for SV4-a is
-`:671-743`, entirely above both; neither test, tag, nor the `ShardPersistence` / `ShardIdentity`
+`:665-744`, entirely above both; neither test, tag, nor the `ShardPersistence` / `ShardIdentity`
 types they exercise are touched. The one doc-comment casualty is `ShardPersistenceDeps`'s field
 comment at `types.rs:697-698`, which cites "issue 42 / FM-PERSISTENCE-022" in prose — a prose
 reference in a dead struct, not a tag, and the same citation survives at `types.rs:409` on the
 live `ShardPersistence` field.
 
-**Two LOCKED-area Invariants name chains that begin at wiring this proposal moves.** Neither
-cites the wiring *site*, but an implementation that drops a wiring would break them silently:
+**One LOCKED-area Invariant and one forcing test name chains that begin at wiring this proposal
+moves.** Neither cites the wiring *site*, but an implementation that drops a wiring would break
+them silently:
 
-- **FM-REPLICATION-061** (replication, gate 0.85) — Invariant: "`ReplicaReplicationHandler::
+- **FM-REPLICATION-061** (replication, gate 0.85) — its **Invariant** field
+  (`replication-failure-modes.md:1427`) quotes the chain verbatim: "`ReplicaReplicationHandler::
   sync_refusal()` reaches INFO through `ReplicaStream::sync_refusal` → `RoleManager::sync_refusal`
-  → `RoleController::sync_refusal` → `ShardIdentity::master_sync_error()` → `ShardDiagnostics` /
+  … → `RoleController::sync_refusal` → `ShardIdentity::master_sync_error()` → `ShardDiagnostics` /
   `CommandContext`". `shards.rs:207` (`set_role_controller`) is the **only production writer** of
   `ShardIdentity::role_controller`. It is unconditional today; it must stay unconditional.
-- **FM-PERSISTENCE-005** (persistence, gate 0.85) — the shared `Arc<AtomicU8>` behind
-  `should_rollback` comes from `shards.rs:233`, whose source
-  (`ConfigManager::wal_failure_policy_flag`, `runtime_config.rs:1167`) has exactly one caller in
-  the server crate. Dropping it silently reverts every shard to `WalFailurePolicy::default()`
-  (`builder.rs:372-375`).
+- **FM-PERSISTENCE-005** (persistence, gate 0.85) — weaker, and stated as such. Its Invariant
+  (`persistence-failure-modes.md:121`) says nothing about the shared flag or where a shard gets
+  it; the dependence appears only in **Forced by** (`:123`), which names
+  `should_rollback_follows_shared_flag`. The shared `Arc<AtomicU8>` behind `should_rollback`
+  comes from `shards.rs:233`, whose source (`ConfigManager::wal_failure_policy_flag`,
+  `runtime_config.rs:1167`) has exactly one caller in the server crate. Dropping it silently
+  reverts every shard to `WalFailurePolicy::default()` (`builder.rs:372-375`) — and, as §7
+  records, that named test would not notice, because it never spawns a production shard.
 
 **No spec row changes, no failure-mode row is added, and no behavior a spec describes is
 altered** — with the single flagged exception of §5(b)'s script-executor error arm, which is
@@ -520,11 +603,15 @@ untouched because no shard `*Msg` dispatch arm is added or renamed.
 - **63 (server/mod.rs + init.rs bundles) — sharpest edge, at one expression.** The sole
   `ShardSpawnContext` literal is `mod.rs:376-407`, thirty `infra.*` / `cluster.*` / `repl.*`
   field reads. 63 renames or regroups the *producers*; 66 changes what the *consumer* wants. To
-  keep them independent, **66 does not restructure `ShardSpawnContext`'s producer side and does
-  not touch `mod.rs` or `init.rs`.** SV4-c builds the `ShardWiring` *inside*
-  `spawn_shard_workers`, from the `ctx` fields as they are named at the time of landing.
-  Shrinking `ShardSpawnContext` itself is a follow-up that should land after whichever of 63/66
-  goes second. If 63 lands first, 66's implementation re-derives `ctx` field names from the tree.
+  keep them independent, **66 touches neither `ShardSpawnContext`'s definition (`shards.rs:20-56`)
+  nor its producer — it does not edit `mod.rs` or `init.rs` at all.** SV4-c builds the
+  `ShardWiring` *inside* `spawn_shard_workers`, from the `ctx` fields as they are named at the
+  time of landing. Shrinking `ShardSpawnContext` itself is a follow-up that should land after
+  whichever of 63/66 goes second. If 63 lands first, 66's implementation re-derives `ctx` field
+  names from the tree. Checked against 63 as it stands on disk: 63 lists `shards.rs` as
+  "call-site only … `ShardSpawnContext` `:20-…` fed from bundles" and states explicitly that
+  **66 owns `shards.rs` internals** while 63 only feeds the literal at `mod.rs:376-407`. With
+  the shrink out of scope, the two are disjoint by both proposals' own accounts.
 - **64 (subsystems.rs `Subsystem` trait).** `subsystems.rs` (930 lines) is not read or written
   here. Shard spawning is `mod.rs` Phase 4 and is not currently a `Subsystem`; if 64 makes it
   one, it wraps `spawn_shard_workers`, which this proposal leaves as a function with the same
@@ -533,12 +620,15 @@ untouched because no shard `*Msg` dispatch arm is added or renamed.
   `cluster.cluster_state`, `cluster.node_id`, `cluster.network_factory`, `cluster.role_controller`,
   `cluster.is_replica_flag` — the values `ShardWiring` consumes. 66 reads them through `ctx`; 65
   changes how they are produced. No shared file.
-- **67 (ConnectionHandlerBuilder delete).** `server/src/connection/builder.rs` (267 lines) is a
-  *different* builder with confusingly similar members — its own `with_cluster` (`:104`) and
-  `try_build` (`:210`). 66 does not touch that file. The two proposals reach the **same verdict
-  about the same anti-pattern** (a builder whose fallible terminal has one caller that panics or
-  unwraps); if both land, the codebase should end with one story about builders, not two. Worth a
-  single reviewer reading both.
+- **67 (SV5, `ConnectionHandlerBuilder` delete).** `server/src/connection/builder.rs` (267 lines)
+  is a *different* builder with confusingly similar members — its own `with_cluster` (`:104`) and
+  `try_build` (`:210`). 66 does not touch that file. The two proposals reach **opposite verdicts,
+  and that is the point**: 67 deletes a builder with **zero** callers; 66 *deepens* one with
+  **thirteen**, because the deletion test says its assembly half earns its keep (§4). What they
+  share is only the diagnostic — the same fallible-terminal-with-one-panicking-or-unwrapping-caller
+  smell, which in one case means "this thing is unused, delete it" and in the other "the
+  `Result` is a wrapper, keep the module and drop the wrapper". A reviewer reading both should
+  expect the verdicts to differ and check the *reasoning* is the same, not the outcome.
 - **68 (exec-framing), 69 (config combinators), 70 (acl), 71 (search).** 69 touches
   `frogdb-config`, which `ShardWiring` reads *values* from but does not import; 71 touches search
   internals, and 66 only moves *where* `IndexLifecycleManager` is installed, never what it does.
@@ -568,24 +658,31 @@ untouched because no shard `*Msg` dispatch arm is added or renamed.
   "fake-wal")` (`builder.rs:120-121`, `:295`, `:390`), `any(test, feature = "shard-driver")`
   (`worker.rs:257`, `builder.rs:472`), and the server's `turmoil` (`shards.rs:98-102`, `:301-304`).
   `ShardWiring` must carry the cfg'd fields under the same gates, or the turmoil build breaks in
-  a way the default `just check` will not catch. `just lint-turmoil-features` (`Justfile:319`)
-  is the guard.
+  a way the default `just check` will not catch. `just lint-turmoil-features` (recipe at
+  `Justfile:349`; `Justfile:319` is where `lint` *depends* on it, not where it is defined) is
+  the guard.
 - **Blast radius.** ~150 lines deleted (SV4-a), ~250 added (SV4-b), ~150 deleted and ~40 added
   (SV4-c), visibility churn across ~21 methods (SV4-d). Every existing
   `ShardWorkerBuilder::new` call site — six in `frogdb-core` (`rollback.rs:548`,
   `dispatch_pubsub.rs:135`, `worker.rs:989`, `eviction.rs:550`, `event_loop.rs:1174`,
   `builder.rs:508`) and seven in the harness (`harness.rs:82`, `scenario_s6.rs:47`,
   `script_timeout_effects.rs:82`, `eviction_spill_failure.rs:93`, `shard_driver.rs:41` and
-  `:107`, `rendering_incrbyfloat.rs:35`) — keeps compiling unchanged, because `ShardWiring`
-  defaults to today's defaults and no existing `with_*` signature changes.
+  `:107`, `rendering_incrbyfloat.rs:35`) — keeps compiling unchanged, because all thirteen use
+  the individual `with_*` methods, none of whose signatures change, and none of them names
+  `ShardWiring`. (Not because `ShardWiring` has a `Default`; per SV4-b it deliberately does
+  not.) Separately, the eleven core unit tests that call `ShardWorker::with_eviction` are
+  likewise untouched: SV4-a deletes only `ShardWorker::new`.
 
 ## Effort
 
 **M.** Five commits. SV4-a is mechanical deletion, ~30 minutes, reviewable on its own. SV4-b is
 the design work: one new file, 14 methods, `try_build` restructured around four ordering-sensitive
-cases, and the §5(b) decision. SV4-c rewrites `spawn_shard_workers`' body. SV4-d is
-visibility churn guided by the census in §2. SV4-e is one `rg` rule plus a `Justfile` line plus
-an `agents/seam-lints.md` row. The full workspace test suite must run (this touches shard
+cases, and the §5(b) decision. SV4-c rewrites `spawn_shard_workers`' body and leaves
+`ShardSpawnContext` alone. SV4-d is visibility churn guided by the census in §2. SV4-e is one
+`rg` rule, one `Justfile` recipe, one `agents/seam-lints.md` table row, **and the five
+hand-maintained gate counts that a fifteenth `lint-gates` member invalidates** (four in
+`agents/seam-lints.md`, one in `CLAUDE.md`) — enumerated under SV4-e so they are not discovered
+at review. The full workspace test suite must run (this touches shard
 construction on every path, including the turmoil and fake-WAL branches); `just lint-gates`,
 `just lint-turmoil-features`, and `just lint-failure-modes` must pass. No wire change, no config
 change, no spec row change, and — modulo §5(b) — no behavior change.
