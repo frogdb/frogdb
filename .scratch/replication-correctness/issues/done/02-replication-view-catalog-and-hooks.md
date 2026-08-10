@@ -145,7 +145,14 @@ suite trips it.
   (`integration_pubsub::test_ssubscribe_client_receives_sunsubscribe_on_slot_migration`) is
   unrelated to replication and passes in isolation under the hooks.
 - `just lint` (workspace clippy, `--all-targets`) and `just lint-failure-modes` green.
-- `just mutants-diff frogdb-replication` triaged (see the commit series).
+- `just mutants-diff frogdb-replication`: 212 mutants over the diff, 4 missed on the first
+  pass, all four in the catalog itself. Three were legal boundary states nothing stood on — a
+  backlog floor exactly on the oldest entry's end, a feed-gate hold exactly at the barrier
+  budget, and `ReplicationView::empty` collapsing into the derived `Default` — and each now has
+  a test or, for `empty`, one constructor instead of two. The fourth (`< 0` → `<= 0` on
+  `INV-OFFSET-4`'s no-window sentinel) is unobservable: a window frozen at exactly 0 is caught
+  by the clause after it, so no test can tell the two apart. Documented at the code. Re-run:
+  212 mutants, 160 caught, 51 unviable, 1 missed — that one.
 
 The new `INV-*` ids are deliberately **not** cited in
 `.scratch/hardening/specs/replication-failure-modes.md` yet: `lint-failure-modes` resolves
