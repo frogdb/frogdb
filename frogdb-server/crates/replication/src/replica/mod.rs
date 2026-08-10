@@ -3,6 +3,7 @@
 pub(crate) mod connection;
 pub(crate) mod offset;
 mod payload_reader;
+pub mod psync;
 mod streaming;
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,9 @@ use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
 use offset::ReplicaOffset;
 pub use offset::{AppliedOffset, Claim, ReplicaApplyStint};
+pub use psync::{
+    FullResyncPayload, PsyncArm, psync_request_args, select_full_resync_payload, select_psync_arm,
+};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
