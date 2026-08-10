@@ -37,6 +37,8 @@ pub mod frame;
 pub mod fullsync;
 pub mod identity;
 pub mod invariants;
+#[cfg(test)]
+mod model;
 pub mod net_bytes;
 pub mod offset_coordinator;
 pub mod primary;
@@ -49,6 +51,8 @@ pub mod tracker;
 pub mod version_compat;
 pub mod view;
 pub mod wait_coordinator;
+#[cfg(test)]
+mod wire_golden;
 
 pub use apply::{
     ApplyError, ConsumeStats, ControlApplier, ReplicaApplier, ReplicaTxnBound, StreamedFrame,
@@ -65,7 +69,8 @@ pub use net_bytes::{NetByteCounters, NetByteCountersSnapshot};
 pub use offset_coordinator::OffsetCoordinator;
 pub use primary::{
     BacklogConfig, BacklogGeometry, BacklogTtl, DivergenceRecord, FunctionSnapshotHook,
-    LagThresholdConfig, LagThresholds, PreCheckpointHook, PrimaryReplicationHandler,
+    LagThresholdConfig, LagThresholds, PreCheckpointHook, PrimaryReplicationHandler, StintPlan,
+    plan_primary_stint,
 };
 pub use replica::{ReplicaConnection, ReplicaReplicationHandler};
 pub use replica_session::{

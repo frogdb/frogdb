@@ -190,6 +190,24 @@ cluster-proptest CASES='200000':
 model-check PATTERN='(handoff|failover)_model_full':
     {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-cluster --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
 
+# Run `frogdb-replication`'s stateright models at their full exploration budget (CI nightly
+# tier, not part of `just test`). Sibling of `model-check` above, which stays pointed at
+# `frogdb-cluster`: the two crates' models are budgeted, floored and scheduled
+# independently, and a single recipe that compiled both would make the cheap one pay for
+# the expensive one on every invocation.
+#
+# The default suite carries only the bounded smoke configs; this runs the `#[ignore]`d
+# full scopes recorded in each model's file header (feed_gate ~4M/~2.6M states,
+# promotion ~8M/~6.2M states). The `model-check` nextest group pins them one at a time;
+# each is a saturating parallel BFS.
+#
+# Release profile, same reasoning as `model-check`: the models drive the production
+# decision functions once per explored transition, so a debug build spends most of the
+# run in unoptimized checker plumbing. PATTERN narrows to one model or config, e.g.
+# `just replication-model-check feed_gate_model_full_churn`.
+replication-model-check PATTERN='(feed_gate|promotion)_model_full':
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-replication --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
+
 # Run the seed-driven cluster fault-scheduler sweep (frogdb-server
 # `simulation::scheduler`, cluster-correctness issue 09). One u64 seed derives a whole
 # turmoil run — fault family, which links are held or slowed and when, which nodes are

@@ -6,6 +6,7 @@
 //! - Streaming WAL updates to replicas
 //! - Handling REPLCONF ACKs
 
+pub mod promotion;
 pub mod replay;
 pub mod ring_buffer;
 #[cfg(test)]
@@ -38,6 +39,7 @@ use crate::tracker::ReplicationTrackerImpl;
 use crate::version_compat::{PRIMARY_VERSION, VersionVerdict};
 use crate::wait_coordinator::WaitCoordinator;
 
+pub use promotion::{StintPlan, plan_primary_stint};
 pub use replay::{BacklogTtl, FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{BacklogConfig, BacklogGeometry, BacklogTruncated, ReplicationRingBuffer};
 
@@ -386,6 +388,12 @@ impl PrimaryReplicationHandler {
     /// staged checkpoint it would have to re-fetch) for the exact bug the
     /// disarm exists to fix: a persisted new identity with an armed checkpoint
     /// from the deposed primary still waiting to be installed on the next boot.
+    ///
+    /// This method is the **I/O half** of the transition: the disarm, the head
+    /// freeze, the lock, the mint's entropy, the file, and the backlog. What the
+    /// transition *is* — the state it lands on, the state it falls back to, and
+    /// the floor it arms — is decided by [`plan_primary_stint`], which is pure
+    /// (see `primary/promotion.rs`).
     pub fn begin_primary_stint(&self) -> std::io::Result<(u64, ReplicationState)> {
         let outcome = self.begin_primary_stint_inner();
         // The whole-node view, and the only seam that can assemble one: the
@@ -454,19 +462,20 @@ impl PrimaryReplicationHandler {
         // replica. Holding a lock across file IO is deliberate here — it is one
         // small write, taken once per role change, and the alternative is a
         // window where the node advertises an identity it does not have.
-        let (snapshot, previous_id) = {
+        // The entropy is drawn out here so the decision below is a pure function
+        // of its inputs; everything the mint *means* lives in the planner.
+        let minted_id = crate::state::generate_replication_id();
+        let plan = {
             let mut state = self.state.write();
-            let previous = state.clone();
-            let previous_id = previous.replication_id.clone();
-            state.new_replication_id(boundary);
-            // Monotone bump, spelled as a `max` rather than a compare-and-assign:
-            // the persisted offset may never move back, and the two forms of the
-            // guard (`>` / `>=`) differ only in whether they redundantly re-store
-            // the value they already hold.
-            state.offset_at_save = state.offset_at_save.max(boundary);
-            let snapshot = state.clone();
-            if let Err(e) = self.save_snapshot(&snapshot) {
-                *state = previous;
+            let plan = plan_primary_stint(&state, minted_id, boundary);
+            *state = plan.minted.clone();
+            tracing::info!(
+                new_id = %state.replication_id,
+                secondary_id = ?state.secondary_id,
+                "Generated new replication ID"
+            );
+            if let Err(e) = self.save_snapshot(&plan.minted) {
+                *state = plan.rollback;
                 tracing::error!(
                     error = %e,
                     boundary,
@@ -474,10 +483,14 @@ impl PrimaryReplicationHandler {
                 );
                 return Err(e);
             }
-            (snapshot, previous_id)
+            plan
         };
+        // The id this node headed before the mint, which is what the promotion
+        // witness is built from: the rollback state is that node, bit for bit.
+        let previous_id = plan.rollback.replication_id;
+        let snapshot = plan.minted;
         self.replay.reset_backlog();
-        self.replay.arm_backlog_floor(boundary);
+        self.replay.arm_backlog_floor(plan.backlog_floor);
         tracing::info!(
             replication_id = %snapshot.replication_id,
             secondary_id = ?snapshot.secondary_id,

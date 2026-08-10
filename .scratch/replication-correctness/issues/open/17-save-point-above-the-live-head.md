@@ -1,4 +1,4 @@
-# 16 — the persisted save point survives a move to a shorter history
+# 17 — the persisted save point survives a move to a shorter history
 
 Status: needs-triage
 

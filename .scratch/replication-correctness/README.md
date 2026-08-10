@@ -8,6 +8,7 @@ catalog, property-based permutation testing, model checking over production code
 schedules, `DEBUG REPLICATION CHECK` + Jepsen sweep, spec/gate integration. All §8 decisions
 ruled 2026-08-10.
 
-Issues: 15 filed under [issues/open/](issues/open/) (2026-08-10), dependency order 01 → (02, 06,
-07, 11 parallel) → … → 15. Issues 01 and 02 are in [issues/done/](issues/done/); the catalog's
-first pass added 16 and 17, both defects it found in shipped replication behavior.
+Issues: 15 filed (2026-08-10), dependency order 01 → (02, 06, 07, 11 parallel) → … → 15. Closed
+so far under [issues/done/](issues/done/): 01, 02, 06, 07, 08, 09, 11. The validation layers have
+since filed three defects of their own under [issues/open/](issues/open/) — 16 (issue 08's
+promotion model), 17 and 18 (issue 02's catalog), all in shipped replication behavior.

@@ -164,7 +164,12 @@ pub fn discard_staged_full_sync(data_dir: &Path) -> io::Result<()> {
 }
 
 /// Replication state that is persisted to disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Compared by value (`PartialEq`) so a transition over it can be *stated* as
+/// an equality — the promotion planner's rollback half
+/// ([`crate::primary::plan_primary_stint`]) is exactly "the state is the one it
+/// was", and a model checker over these states needs the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplicationState {
     /// Primary replication ID (40-char hex string).
     /// Generated when a node becomes a primary.
@@ -491,6 +496,18 @@ pub fn generate_replication_id() -> String {
 /// Check if a string is a valid replication ID.
 pub fn is_valid_replication_id(id: &str) -> bool {
     id.len() == REPLICATION_ID_LEN && id.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A well-formed replication id made of one repeated hex digit, so two of them
+/// are visibly different in a failure message.
+///
+/// Shared by every test that needs to *name* an id rather than mint one:
+/// `INV-REPLID-3` holds at the seams, so an id like `"minted-id"` is not a
+/// harmless placeholder — it is a state the node is asserted never to be in.
+#[cfg(test)]
+pub(crate) fn hex_id(digit: char) -> String {
+    debug_assert!(digit.is_ascii_hexdigit(), "an id is hex or it is malformed");
+    std::iter::repeat_n(digit, REPLICATION_ID_LEN).collect()
 }
 
 #[cfg(test)]

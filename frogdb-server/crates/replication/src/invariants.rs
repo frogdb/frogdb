@@ -113,10 +113,10 @@ pub static CATALOG: &[Invariant] = &[
         // ever lowers it: a node that ran to X, then followed a history whose
         // head is below X (a `+FULLRESYNC` to a lower offset), keeps X on disk
         // while holding data only up to the new head. Reachable today, and the
-        // ruling on which of the two behaviours is right is issue 16 — until it
+        // ruling on which of the two behaviours is right is issue 17 — until it
         // lands, a hook that panicked here would fire on shipped behaviour.
         tier: Tier::DocumentedException(Citation::issue(
-            ".scratch/replication-correctness/issues/16",
+            ".scratch/replication-correctness/issues/17",
         )),
         requires: &[ViewField::State, ViewField::LiveOffset],
         check: inv_offset_2,

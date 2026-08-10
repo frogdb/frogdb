@@ -1,4 +1,4 @@
-# 17 — a replica adopts a replication id straight off the wire, unvalidated
+# 18 — a replica adopts a replication id straight off the wire, unvalidated
 
 Status: needs-triage
 

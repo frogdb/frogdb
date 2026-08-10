@@ -1,5 +1,19 @@
-//! Seed-driven fault scheduler for the turmoil cluster sims (cluster-correctness
-//! PRD §3 W4, issue 09).
+//! The **cluster arm** of the seed-driven fault scheduler for the turmoil sims
+//! (cluster-correctness PRD §3 W4, issue 09).
+//!
+//! # Where the seam is
+//!
+//! The seed→schedule derivation, the fingerprint, the regression/muzzle file
+//! machinery and generic fault application are topology-agnostic and live in
+//! [`super::schedule`]; this module supplies the cluster's half of the
+//! [`Arm`] contract — its `Family` and `Op` vocabularies, its [`Budget`], how
+//! its hosts are spawned, and the cross-node checks a single node's state
+//! cannot express (replication-correctness PRD §8 D8, issue 11).
+//!
+//! Three things deliberately do *not* move behind that seam:
+//! [`spawn_scheduled_hosts`], [`parse_cluster_nodes`] and [`check_cross_node`]
+//! are Raft-shaped, and so is the ~50-line [`run_seed`] driver — D8 rules that
+//! shape duplicated per arm rather than genericized.
 //!
 //! # What this replaces
 //!
@@ -61,10 +75,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use frogdb_cluster::{Tier, Violation, invariants::CATALOG};
-use rand::{RngExt, SeedableRng, rngs::StdRng};
+use frogdb_cluster::{Tier, invariants::CATALOG};
+use frogdb_types::Violation;
+use rand::{RngExt, rngs::StdRng};
 use turmoil::Builder;
 
+use super::schedule::{
+    self, Arm, Budget, EXPECTED_FAILURE, FaultEpisode, FaultKind, LEADER, RegressionSeed,
+    RunOutcome, Span, apply_fault, assert_fingerprints_equal, distinct, env_u64, episode,
+    hard_violations, muzzled_seeds, parse_check_entry, prune_concurrent_crashes, regression_seeds,
+};
 use super::{
     CLUSTER_HOSTS, RespConn, RespValue, attach_cluster_replica, node_id_of, owner_host_of,
     parse_redirect, wait_cluster_ready,
@@ -82,18 +102,12 @@ pub const NODE_COUNT: usize = CLUSTER_HOSTS.len();
 /// puts at least one key on each node.
 const KEYS: [&str; 6] = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
 
-/// Sentinel node index meaning "whichever node is the Raft leader at setup".
-/// Bound by [`FaultKind::resolve`]; never appears in a resolved schedule.
-pub const LEADER: usize = usize::MAX;
-
-/// Longest a schedule may hold a fault. Short on purpose: every held edge parks
-/// in-flight dials on turmoil ephemeral ports for the duration.
-const MAX_FAULT_MS: u64 = 5_000;
-/// Earliest a fault may arm, measured from the moment the cluster is ready.
-const MIN_ARM_MS: u64 = 300;
+/// The id a `DEBUG CLUSTER CHECK` entry is surfaced under when the catalog does
+/// not define it — never dropped, because an unknown id is itself news.
+const UNKNOWN_CHECK_ID: &str = "XNODE-CHECK-2";
 
 // =============================================================================
-// Schedule: the pure, seed-derived description of a run
+// The cluster arm: this topology's half of the shared derivation
 // =============================================================================
 
 /// The shape of fault a schedule injects. One family per scripted scenario the
@@ -152,91 +166,6 @@ impl Family {
     }
 }
 
-/// One injected fault. Node positions are *indices into [`CLUSTER_HOSTS`]*, not
-/// Raft node ids: a schedule is derived before the cluster exists, so "the
-/// leader" travels as [`LEADER`] until [`FaultKind::resolve`] binds it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum FaultKind {
-    /// Queue traffic on the `a`↔`b` edge (turmoil `hold`/`release`).
-    ///
-    /// `hold` rather than `partition` throughout: turmoil 0.7.1 leaks an
-    /// ephemeral port for every *cancelled* dial, which a sustained partition
-    /// exhausts, whereas a held dial stays pending and completes on release.
-    /// The peer is still starved of heartbeats past its election timeout, which
-    /// is the property under test.
-    HoldEdge { a: usize, b: usize },
-    /// Queue traffic between `node` and both peers.
-    HoldIsolate { node: usize },
-    /// Raise the `a`↔`b` link latency for the window, healed back to the
-    /// schedule's baseline.
-    SlowEdge { a: usize, b: usize, latency_ms: u64 },
-    /// SIGKILL `node` (turmoil `crash`) and restart it at the heal (`bounce`),
-    /// reusing the same data directory so the Raft log survives.
-    CrashRestart { node: usize },
-}
-
-impl FaultKind {
-    /// Bind the [`LEADER`] sentinel to the discovered leader index, collapsing
-    /// any self-edge onto a distinct peer.
-    fn resolve(self, leader: usize) -> Self {
-        let fix = |i: usize| if i == LEADER { leader } else { i };
-        match self {
-            FaultKind::HoldEdge { a, b } => {
-                let (a, b) = distinct(fix(a), fix(b));
-                FaultKind::HoldEdge { a, b }
-            }
-            FaultKind::HoldIsolate { node } => FaultKind::HoldIsolate { node: fix(node) },
-            FaultKind::SlowEdge { a, b, latency_ms } => {
-                let (a, b) = distinct(fix(a), fix(b));
-                FaultKind::SlowEdge { a, b, latency_ms }
-            }
-            FaultKind::CrashRestart { node } => FaultKind::CrashRestart { node: fix(node) },
-        }
-    }
-
-    /// Stable rendering for fingerprints.
-    fn render(self) -> String {
-        match self {
-            FaultKind::HoldEdge { a, b } => format!("hold-edge {a}-{b}"),
-            FaultKind::HoldIsolate { node } => format!("hold-isolate {node}"),
-            FaultKind::SlowEdge { a, b, latency_ms } => format!("slow-edge {a}-{b} {latency_ms}ms"),
-            FaultKind::CrashRestart { node } => format!("crash-restart {node}"),
-        }
-    }
-
-    /// True for the kinds that take a node's process down.
-    fn is_crash(self) -> bool {
-        matches!(self, FaultKind::CrashRestart { .. })
-    }
-}
-
-/// Force two node indices apart so an edge fault is never a self-loop, which
-/// turmoil treats as a no-op and would silently drop.
-fn distinct(a: usize, b: usize) -> (usize, usize) {
-    if a == b {
-        (a, (a + 1) % NODE_COUNT)
-    } else {
-        (a, b)
-    }
-}
-
-/// One fault episode: armed at `arm_at`, healed at `heal_at`, both measured in
-/// simulated time from the instant the cluster became ready.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FaultEpisode {
-    pub arm_at: Duration,
-    pub heal_at: Duration,
-    pub kind: FaultKind,
-}
-
-/// Per-node Raft timers. Skewing these across nodes is what makes leader
-/// election deterministic once the jitter window is collapsed (module docs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NodeTimers {
-    pub election_timeout_ms: u64,
-    pub heartbeat_interval_ms: u64,
-}
-
 /// One client-workload step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
@@ -269,173 +198,112 @@ impl Op {
     }
 }
 
-/// The complete, seed-derived description of a run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Schedule {
-    pub seed: u64,
-    pub family: Family,
+/// The cluster arm's marker type: three nodes with a real Raft majority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClusterArm;
+
+/// This arm's schedule. An alias rather than a newtype so the shared
+/// derivation's fields and methods read exactly as they did before the seam.
+pub type Schedule = schedule::Schedule<ClusterArm>;
+
+/// The cluster arm's per-run booleans, drawn between the latency and the
+/// faults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Toggles {
     pub auto_failover: bool,
     /// Attach the last host as a PSYNC replica before the workload starts.
     pub attach_replica: bool,
-    pub timers: [NodeTimers; NODE_COUNT],
-    /// Baseline link latency for the whole simulated network.
-    pub base_latency_ms: u64,
-    pub max_latency_ms: u64,
-    /// Faults, sorted by `(arm_at, heal_at, kind)`. May overlap (`Mixed`).
-    pub faults: Vec<FaultEpisode>,
-    pub ops: Vec<Op>,
-    /// Simulated gap between successive workload ops.
-    pub op_gap_ms: u64,
-    /// turmoil's wall for the whole run — the hang guard, not the expected
-    /// length.
-    pub sim_duration: Duration,
 }
 
-impl Schedule {
-    /// Derive the whole schedule from `seed`.
-    ///
-    /// Draw order is fixed and every branch consumes from the same [`StdRng`],
-    /// so this is a pure function of the seed — asserted by
-    /// `test_scheduler_derivation_is_pure`.
-    pub fn from_seed(seed: u64) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
+impl Arm for ClusterArm {
+    type Family = Family;
+    type Toggles = Toggles;
+    type Op = Op;
 
-        let family = Family::ALL[rng.random_range(0..Family::ALL.len())];
+    const HOSTS: &'static [&'static str] = &CLUSTER_HOSTS;
 
-        // Timer skew: a distinct election timeout per node, all well above the
-        // heartbeat interval, so the lowest-timeout reachable node wins any
-        // election without an unseeded jitter draw.
-        let heartbeat_interval_ms = rng.random_range(40..=60u64);
-        let base_election_ms = rng.random_range(280..=360u64);
-        let step_ms = rng.random_range(30..=70u64);
-        let mut timers = [NodeTimers {
-            election_timeout_ms: base_election_ms,
-            heartbeat_interval_ms,
-        }; NODE_COUNT];
-        for (i, t) in timers.iter_mut().enumerate() {
-            t.election_timeout_ms = base_election_ms + (i as u64) * step_ms;
-        }
+    /// The windows the cluster arm's schedules are drawn inside. Every number
+    /// here was a literal in `from_seed` before the seam and must stay
+    /// numerically identical: these values *are* the seeds' identity.
+    const BUDGET: Budget = Budget {
+        heartbeat_interval_ms: Span::new(40, 60),
+        base_election_ms: Span::new(280, 360),
+        election_step_ms: Span::new(30, 70),
+        base_latency_ms: Span::new(1, 8),
+        extra_latency_ms: Span::new(1, 20),
+        op_gap_ms: Span::new(60, 200),
+        quiesce_tail_ms: 2_000,
+        op_count: (12, 60),
+        sim_duration: Duration::from_secs(300),
+        // Earliest a fault may arm, measured from the moment the cluster is
+        // ready, and how long it is held. The hold is short on purpose: every
+        // held edge parks in-flight dials on turmoil ephemeral ports for the
+        // duration.
+        min_arm_ms: 300,
+        arm_jitter_ms: Span::new(0, 1_200),
+        hold_ms: Span::new(1_200, 5_000),
+    };
 
-        let base_latency_ms = rng.random_range(1..=8u64);
-        let max_latency_ms = base_latency_ms + rng.random_range(1..=20u64);
+    fn families() -> &'static [Family] {
+        &Family::ALL
+    }
 
+    fn family_token(family: Family) -> &'static str {
+        family.as_str()
+    }
+
+    fn derive_toggles(family: Family, rng: &mut StdRng) -> Toggles {
         let auto_failover = matches!(family, Family::AsymmetricEdge | Family::ReplicaPartition)
             || (family == Family::Mixed && rng.random_range(0..2u32) == 0);
         let attach_replica = family == Family::ReplicaPartition
             || (family == Family::Mixed && rng.random_range(0..5u32) < 2);
-
-        let faults = derive_faults(family, &mut rng);
-
-        // The workload must outlive the last heal, so every run ends with a
-        // quiesce window in which the network is whole again.
-        let fault_end_ms = faults
-            .iter()
-            .map(|f| f.heal_at.as_millis() as u64)
-            .max()
-            .unwrap_or(0);
-        let op_gap_ms = rng.random_range(60..=200u64);
-        let op_count = ((fault_end_ms + 2_000) / op_gap_ms).clamp(12, 60) as usize;
-        let ops = derive_ops(family, attach_replica, op_count, &mut rng);
-
-        Schedule {
-            seed,
-            family,
+        Toggles {
             auto_failover,
             attach_replica,
-            timers,
-            base_latency_ms,
-            max_latency_ms,
-            faults,
-            ops,
-            op_gap_ms,
-            sim_duration: Duration::from_secs(300),
         }
     }
 
-    /// Simulated instant after which no fault is armed, relative to readiness.
-    pub fn last_heal(&self) -> Duration {
-        self.faults
-            .iter()
-            .map(|f| f.heal_at)
-            .max()
-            .unwrap_or(Duration::ZERO)
+    fn render_toggles(toggles: &Toggles) -> Vec<String> {
+        vec![
+            format!("auto_failover {}", toggles.auto_failover),
+            format!("attach_replica {}", toggles.attach_replica),
+        ]
     }
 
-    /// True if a SIGKILL episode is still open at `at` — i.e. a write acked
-    /// then may legitimately be lost, because these sims run with the data
-    /// plane's persistence disabled.
-    pub fn crash_open_at(&self, at: Duration) -> bool {
-        self.faults
-            .iter()
-            .any(|f| f.kind.is_crash() && f.heal_at >= at)
+    fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
+        derive_faults(family, rng)
     }
 
-    /// Bind the [`LEADER`] sentinel against the discovered leader index.
-    pub fn resolve(&self, leader: usize) -> Self {
-        let mut resolved = self.clone();
-        for f in &mut resolved.faults {
-            f.kind = f.kind.resolve(leader);
-        }
-        resolved
+    fn derive_ops(family: Family, toggles: &Toggles, count: usize, rng: &mut StdRng) -> Vec<Op> {
+        derive_ops(family, toggles.attach_replica, count, rng)
     }
 
-    /// Canonical rendering, one line per field — the opening block of every run
-    /// fingerprint, so a *schedule* divergence is reported before any run
-    /// divergence.
-    pub fn render(&self) -> Vec<String> {
-        let mut lines = vec![
-            format!("seed {}", self.seed),
-            format!("family {}", self.family.as_str()),
-            format!("auto_failover {}", self.auto_failover),
-            format!("attach_replica {}", self.attach_replica),
-            format!(
-                "latency base={}ms max={}ms",
-                self.base_latency_ms, self.max_latency_ms
-            ),
-            format!("op_gap {}ms", self.op_gap_ms),
-        ];
-        for (i, t) in self.timers.iter().enumerate() {
-            lines.push(format!(
-                "timers[{i}] election={}ms heartbeat={}ms",
-                t.election_timeout_ms, t.heartbeat_interval_ms
-            ));
-        }
-        for (i, f) in self.faults.iter().enumerate() {
-            lines.push(format!(
-                "fault[{i}] {} arm={}ms heal={}ms",
-                f.kind.render(),
-                f.arm_at.as_millis(),
-                f.heal_at.as_millis()
-            ));
-        }
-        for (i, op) in self.ops.iter().enumerate() {
-            lines.push(format!("op[{i}] {}", op.render()));
-        }
-        lines
+    fn render_op(op: Op) -> String {
+        op.render()
     }
+}
+
+/// Draw one episode inside the cluster arm's budget.
+fn cluster_episode(rng: &mut StdRng, kind: FaultKind, out: &mut Vec<FaultEpisode>) {
+    episode(&ClusterArm::BUDGET, rng, kind, out);
+}
+
+/// Force two node indices apart over this arm's topology.
+fn distinct3(a: usize, b: usize) -> (usize, usize) {
+    distinct(a, b, NODE_COUNT)
 }
 
 /// Family-specific fault derivation. Every branch draws from the same `rng`.
 fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
-    fn episode(rng: &mut StdRng, kind: FaultKind, out: &mut Vec<FaultEpisode>) {
-        let arm = MIN_ARM_MS + rng.random_range(0..=1_200u64);
-        let hold = rng.random_range(1_200..=MAX_FAULT_MS);
-        out.push(FaultEpisode {
-            arm_at: Duration::from_millis(arm),
-            heal_at: Duration::from_millis(arm + hold),
-            kind,
-        });
-    }
-
     let mut faults: Vec<FaultEpisode> = Vec::new();
     match family {
         Family::Healthy => {}
         Family::LeaderIsolation => {
-            episode(rng, FaultKind::HoldIsolate { node: LEADER }, &mut faults);
+            cluster_episode(rng, FaultKind::HoldIsolate { node: LEADER }, &mut faults);
         }
         Family::AsymmetricEdge => {
             let victim = rng.random_range(0..NODE_COUNT);
-            episode(
+            cluster_episode(
                 rng,
                 FaultKind::HoldEdge {
                     a: LEADER,
@@ -449,7 +317,7 @@ fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
             // data-plane edge to one of the other two, which is where its
             // primary lives.
             let primary = rng.random_range(0..NODE_COUNT - 1);
-            episode(
+            cluster_episode(
                 rng,
                 FaultKind::HoldEdge {
                     a: primary,
@@ -460,7 +328,7 @@ fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
         }
         Family::CrashRestart => {
             let node = rng.random_range(0..NODE_COUNT);
-            episode(rng, FaultKind::CrashRestart { node }, &mut faults);
+            cluster_episode(rng, FaultKind::CrashRestart { node }, &mut faults);
         }
         Family::Mixed => {
             let count = rng.random_range(2..=3usize);
@@ -470,14 +338,14 @@ fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
                         node: rng.random_range(0..NODE_COUNT),
                     },
                     1 => {
-                        let (a, b) = distinct(
+                        let (a, b) = distinct3(
                             rng.random_range(0..NODE_COUNT),
                             rng.random_range(0..NODE_COUNT),
                         );
                         FaultKind::HoldEdge { a, b }
                     }
                     2 => {
-                        let (a, b) = distinct(
+                        let (a, b) = distinct3(
                             rng.random_range(0..NODE_COUNT),
                             rng.random_range(0..NODE_COUNT),
                         );
@@ -491,30 +359,12 @@ fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
                         node: rng.random_range(0..NODE_COUNT),
                     },
                 };
-                episode(rng, kind, &mut faults);
+                cluster_episode(rng, kind, &mut faults);
             }
         }
     }
 
     prune_concurrent_crashes(faults)
-}
-
-/// A `Mixed` schedule can draw two crashes with overlapping windows, which
-/// takes a three-node cluster below quorum and turns the run into a timeout
-/// rather than a test. Drop any crash episode overlapping one already kept.
-fn prune_concurrent_crashes(faults: Vec<FaultEpisode>) -> Vec<FaultEpisode> {
-    let mut kept: Vec<FaultEpisode> = Vec::new();
-    for f in faults {
-        let clashes = f.kind.is_crash()
-            && kept
-                .iter()
-                .any(|k| k.kind.is_crash() && f.arm_at < k.heal_at && k.arm_at < f.heal_at);
-        if !clashes {
-            kept.push(f);
-        }
-    }
-    kept.sort_by_key(|f| (f.arm_at, f.heal_at, f.kind));
-    kept
 }
 
 /// Workload derivation. Every family writes and reads; migrations and `WAIT`
@@ -866,21 +716,24 @@ fn render_slot_run(slots: Vec<u16>) -> String {
     }
 }
 
-/// Drop the violations the catalog deliberates.
+/// Every id the cluster catalog defines — the vocabulary a `DEBUG CLUSTER
+/// CHECK` reply is read against.
+fn catalog_ids() -> Vec<&'static str> {
+    CATALOG.iter().map(|inv| inv.id).collect()
+}
+
+/// The ids the catalog *deliberates*.
 ///
 /// `DEBUG CLUSTER CHECK` is the reporting view (`check_all`), so it includes
 /// `Tier::DocumentedException` entries. Those are ruled reachable by a cited
 /// failure-mode row or issue and are not defects; asserting on them would make
-/// the sweep red for a state the catalog blesses.
-pub fn hard_violations(reported: Vec<Violation>) -> Vec<Violation> {
-    let excepted: BTreeSet<&'static str> = CATALOG
+/// the sweep red for a state the catalog blesses. Handed to
+/// [`schedule::hard_violations`], which does the dropping.
+fn excepted_catalog_ids() -> BTreeSet<&'static str> {
+    CATALOG
         .iter()
         .filter(|inv| !inv.is_hard())
         .map(|inv| inv.id)
-        .collect();
-    reported
-        .into_iter()
-        .filter(|v| !excepted.contains(v.id))
         .collect()
 }
 
@@ -896,18 +749,6 @@ pub fn asserted_catalog_ids() -> Vec<&'static str> {
 // =============================================================================
 // Runner
 // =============================================================================
-
-/// Everything a finished run reports.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunOutcome {
-    pub seed: u64,
-    /// Canonical, line-per-event rendering. Two runs of one seed produce equal
-    /// fingerprints; when they do not, the first differing line names the event
-    /// that diverged.
-    pub fingerprint: Vec<String>,
-    /// Catalog + cross-node violations. Non-empty fails the run.
-    pub violations: Vec<Violation>,
-}
 
 /// Per-op outcome, recorded as an outcome *class* rather than a raw reply:
 /// retry counts and error strings carry sim-timing noise, the class carries the
@@ -1088,7 +929,7 @@ fn spawn_scheduled_hosts(
         let path = dirs[idx].path().to_path_buf();
         let params = ClusterNodeParams {
             num_shards: 1,
-            auto_failover: schedule.auto_failover,
+            auto_failover: schedule.toggles.auto_failover,
             election_timeout_ms: schedule.timers[idx].election_timeout_ms,
             heartbeat_interval_ms: schedule.timers[idx].heartbeat_interval_ms,
         };
@@ -1155,11 +996,11 @@ fn step_with_faults(
             let now = sim.elapsed().saturating_sub(origin);
             for (i, f) in faults.iter().enumerate() {
                 if !armed[i] && now >= f.arm_at {
-                    apply_fault(sim, schedule, f.kind, true);
+                    apply_fault(sim, &CLUSTER_HOSTS, schedule.base_latency_ms, f.kind, true);
                     armed[i] = true;
                 }
                 if armed[i] && !healed[i] && now >= f.heal_at {
-                    apply_fault(sim, schedule, f.kind, false);
+                    apply_fault(sim, &CLUSTER_HOSTS, schedule.base_latency_ms, f.kind, false);
                     healed[i] = true;
                 }
             }
@@ -1174,46 +1015,6 @@ fn step_with_faults(
             "seed {}: scheduled cluster sim did not finish",
             schedule.seed
         );
-    }
-}
-
-/// Arm (`arm = true`) or heal a single fault.
-fn apply_fault(sim: &mut turmoil::Sim<'_>, schedule: &Schedule, kind: FaultKind, arm: bool) {
-    match kind {
-        FaultKind::HoldEdge { a, b } => {
-            if arm {
-                sim.hold(CLUSTER_HOSTS[a], CLUSTER_HOSTS[b]);
-            } else {
-                sim.release(CLUSTER_HOSTS[a], CLUSTER_HOSTS[b]);
-            }
-        }
-        FaultKind::HoldIsolate { node } => {
-            for (i, peer) in CLUSTER_HOSTS.iter().enumerate() {
-                if i == node {
-                    continue;
-                }
-                if arm {
-                    sim.hold(CLUSTER_HOSTS[node], *peer);
-                } else {
-                    sim.release(CLUSTER_HOSTS[node], *peer);
-                }
-            }
-        }
-        FaultKind::SlowEdge { a, b, latency_ms } => {
-            let value = if arm {
-                Duration::from_millis(latency_ms)
-            } else {
-                Duration::from_millis(schedule.base_latency_ms)
-            };
-            sim.set_link_latency(CLUSTER_HOSTS[a], CLUSTER_HOSTS[b], value);
-        }
-        FaultKind::CrashRestart { node } => {
-            if arm {
-                sim.crash(CLUSTER_HOSTS[node]);
-            } else {
-                sim.bounce(CLUSTER_HOSTS[node]);
-            }
-        }
     }
 }
 
@@ -1242,7 +1043,7 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
         .expect("a leader index");
     let id_to_index: BTreeMap<u64, usize> = (0..NODE_COUNT).map(|i| (ids[i], i)).collect();
 
-    if schedule.attach_replica {
+    if schedule.toggles.attach_replica {
         // The last host becomes a PSYNC replica of a primary that is not the
         // Raft leader, matching the scripted WAIT sims: the metadata plane stays
         // whole while the data plane is what a fault can break. Tolerated on
@@ -1436,7 +1237,7 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
     for (idx, host) in CLUSTER_HOSTS.iter().enumerate() {
         match debug_cluster_check(host).await {
             Ok(reported) => {
-                for v in hard_violations(reported) {
+                for v in hard_violations(reported, &excepted_catalog_ids()) {
                     findings.push(Violation {
                         id: v.id,
                         detail: format!("node {idx}: {}", v.detail),
@@ -1833,41 +1634,18 @@ async fn debug_cluster_check(host: &str) -> std::io::Result<Vec<Violation>> {
     let ip = turmoil::lookup(host);
     let mut conn = RespConn::connect((ip, SERVER_PORT)).await?;
     match conn.cmd(&[b"DEBUG", b"CLUSTER", b"CHECK"]).await? {
-        RespValue::Array(Some(items)) => Ok(items.iter().filter_map(parse_check_entry).collect()),
+        RespValue::Array(Some(items)) => {
+            let known = catalog_ids();
+            Ok(items
+                .iter()
+                .filter_map(|item| parse_check_entry(item, &known, UNKNOWN_CHECK_ID))
+                .collect())
+        }
         RespValue::Error(e) => Err(std::io::Error::other(e)),
         other => Err(std::io::Error::other(format!(
             "DEBUG CLUSTER CHECK returned {other:?}"
         ))),
     }
-}
-
-/// One `{id, detail}` map from `DEBUG CLUSTER CHECK`, which RESP2 flattens to
-/// `[id, <v>, detail, <v>]`.
-fn parse_check_entry(item: &RespValue) -> Option<Violation> {
-    let RespValue::Array(Some(kv)) = item else {
-        return None;
-    };
-    let mut id = String::new();
-    let mut detail = String::new();
-    for pair in kv.chunks(2) {
-        let [RespValue::Bulk(Some(k)), RespValue::Bulk(Some(v))] = pair else {
-            continue;
-        };
-        match k.as_slice() {
-            b"id" => id = String::from_utf8_lossy(v).into_owned(),
-            b"detail" => detail = String::from_utf8_lossy(v).into_owned(),
-            _ => {}
-        }
-    }
-    // The catalog's ids are `&'static str`; recover the static so a reported
-    // violation has the same shape as a locally produced one. An id the catalog
-    // does not know is surfaced rather than dropped.
-    let id = CATALOG
-        .iter()
-        .map(|inv| inv.id)
-        .find(|c| *c == id)
-        .unwrap_or("XNODE-CHECK-2");
-    Some(Violation { id, detail })
 }
 
 // =============================================================================
@@ -1883,72 +1661,18 @@ fn parse_check_entry(item: &RespValue) -> Option<Violation> {
 /// scenario.
 const REGRESSION_SEEDS: &str = include_str!("cluster-regression-seeds.txt");
 
-/// Marker opening the optional muzzle column.
-const EXPECTED_FAILURE: &str = "EXPECTED-FAILURE:";
-
-/// One line of [`REGRESSION_SEEDS`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RegressionSeed {
-    seed: u64,
-    /// The family this seed derived when it was recorded.
-    family: String,
-    /// `Some(issue)` while the defect this seed found is still open. Such a
-    /// seed is expected to *fail*: the replay test asserts it still reproduces,
-    /// so the muzzle turns itself off when the fix lands instead of quietly
-    /// outliving it.
-    expected_failure: Option<String>,
-    note: String,
-}
-
-/// Parse [`REGRESSION_SEEDS`].
-fn regression_seeds() -> Vec<RegressionSeed> {
-    REGRESSION_SEEDS
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(parse_regression_seed)
-        .collect()
-}
-
-fn parse_regression_seed(line: &str) -> RegressionSeed {
-    let mut parts = line.splitn(3, char::is_whitespace);
-    let seed: u64 = parts
-        .next()
-        .expect("a seed column")
-        .parse()
-        .unwrap_or_else(|e| panic!("bad seed in cluster-regression-seeds.txt: {line:?} ({e})"));
-    let family = parts.next().unwrap_or("").trim().to_string();
-    let rest = parts.next().unwrap_or("").trim();
-
-    let (expected_failure, note) = match rest.strip_prefix(EXPECTED_FAILURE) {
-        Some(tail) => {
-            let (issue, note) = tail.split_once(char::is_whitespace).unwrap_or((tail, ""));
-            assert!(
-                !issue.is_empty(),
-                "{EXPECTED_FAILURE} needs an issue after it: {line:?}"
-            );
-            (Some(issue.trim().to_string()), note.trim().to_string())
-        }
-        None => (None, rest.to_string()),
-    };
-
-    RegressionSeed {
-        seed,
-        family,
-        expected_failure,
-        note,
-    }
+/// This arm's parsed regression list. Parsing and the self-expiring muzzle
+/// column live in [`super::schedule`]; only the file is per-arm.
+fn cluster_regression_seeds() -> Vec<RegressionSeed> {
+    regression_seeds(REGRESSION_SEEDS)
 }
 
 /// Seeds muzzled against an open issue, which the sweeps skip: a known-open
 /// defect must not drown out the *new* failures a sweep exists to find.
 /// `test_cluster_scheduler_regression_seeds` still replays each one and asserts
 /// it reproduces, so nothing stops being checked.
-fn muzzled_seeds() -> BTreeMap<u64, String> {
-    regression_seeds()
-        .into_iter()
-        .filter_map(|r| r.expected_failure.map(|issue| (r.seed, issue)))
-        .collect()
+fn cluster_muzzled_seeds() -> BTreeMap<u64, String> {
+    muzzled_seeds(REGRESSION_SEEDS)
 }
 
 /// Seeds the default suite always runs: a small smoke sweep, so the scheduler
@@ -2008,10 +1732,13 @@ fn test_scheduler_faults_stay_inside_their_budget() {
     for seed in 0..500u64 {
         let s = Schedule::from_seed(seed);
         for f in &s.faults {
-            assert!(f.arm_at >= Duration::from_millis(MIN_ARM_MS), "seed {seed}");
+            assert!(
+                f.arm_at >= Duration::from_millis(ClusterArm::BUDGET.min_arm_ms),
+                "seed {seed}"
+            );
             assert!(f.heal_at > f.arm_at, "seed {seed}: empty fault window");
             assert!(
-                f.heal_at - f.arm_at <= Duration::from_millis(MAX_FAULT_MS),
+                f.heal_at - f.arm_at <= Duration::from_millis(ClusterArm::BUDGET.max_fault_ms()),
                 "seed {seed}: fault window exceeds the budget"
             );
             if let FaultKind::HoldEdge { a, b } | FaultKind::SlowEdge { a, b, .. } = f.kind {
@@ -2033,7 +1760,7 @@ fn test_scheduler_faults_stay_inside_their_budget() {
 
 #[test]
 fn test_scheduler_regression_seed_file_parses() {
-    let entries = regression_seeds();
+    let entries = cluster_regression_seeds();
     assert!(
         !entries.is_empty(),
         "cluster-regression-seeds.txt parsed to nothing"
@@ -2061,28 +1788,6 @@ fn test_scheduler_regression_seed_file_parses() {
         "cluster-regression-seeds.txt's family column no longer matches \
          Schedule::from_seed's draw order — re-derive it:\n{}",
         mismatches.join("\n")
-    );
-}
-
-#[test]
-fn test_scheduler_regression_seed_lines_parse_the_muzzle_column() {
-    assert_eq!(
-        parse_regression_seed("2 healthy subsumes the scripted MOVED sim"),
-        RegressionSeed {
-            seed: 2,
-            family: "healthy".to_string(),
-            expected_failure: None,
-            note: "subsumes the scripted MOVED sim".to_string(),
-        }
-    );
-    assert_eq!(
-        parse_regression_seed("3 replica-partition EXPECTED-FAILURE:issue-20 split brain"),
-        RegressionSeed {
-            seed: 3,
-            family: "replica-partition".to_string(),
-            expected_failure: Some("issue-20".to_string()),
-            note: "split brain".to_string(),
-        }
     );
 }
 
@@ -2335,7 +2040,7 @@ fn test_hard_violations_drops_documented_exceptions() {
         id: hard[0],
         detail: "hard".to_string(),
     });
-    let kept = hard_violations(reported);
+    let kept = hard_violations(reported, &excepted_catalog_ids());
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].id, hard[0]);
 }
@@ -2367,7 +2072,7 @@ fn test_parse_check_entry_reads_a_catalog_id() {
         RespValue::Bulk(Some(b"detail".to_vec())),
         RespValue::Bulk(Some(b"slot 5 dangles".to_vec())),
     ]));
-    let v = parse_check_entry(&entry).expect("a violation");
+    let v = parse_check_entry(&entry, &catalog_ids(), UNKNOWN_CHECK_ID).expect("a violation");
     assert_eq!(v.id, known);
     assert_eq!(v.detail, "slot 5 dangles");
 
@@ -2379,8 +2084,10 @@ fn test_parse_check_entry_reads_a_catalog_id() {
         RespValue::Bulk(Some(b"?".to_vec())),
     ]));
     assert_eq!(
-        parse_check_entry(&unknown).expect("surfaced").id,
-        "XNODE-CHECK-2"
+        parse_check_entry(&unknown, &catalog_ids(), UNKNOWN_CHECK_ID)
+            .expect("surfaced")
+            .id,
+        UNKNOWN_CHECK_ID
     );
 }
 
@@ -2442,10 +2149,10 @@ fn test_acked_writes_are_unchecked_once_their_slot_migrates() {
 
 #[test]
 fn test_fault_resolve_binds_the_leader_sentinel() {
-    let resolved = FaultKind::HoldIsolate { node: LEADER }.resolve(2);
+    let resolved = FaultKind::HoldIsolate { node: LEADER }.resolve(2, NODE_COUNT);
     assert_eq!(resolved, FaultKind::HoldIsolate { node: 2 });
     // Binding must never produce a self-edge, which turmoil would drop.
-    let edge = FaultKind::HoldEdge { a: LEADER, b: 2 }.resolve(2);
+    let edge = FaultKind::HoldEdge { a: LEADER, b: 2 }.resolve(2, NODE_COUNT);
     let FaultKind::HoldEdge { a, b } = edge else {
         panic!("kind changed under resolve");
     };
@@ -2529,7 +2236,7 @@ const REPLAY_REAL_STRETCH: Duration = Duration::from_micros(500);
 /// reproduce — the family stays covered either way.
 #[test]
 fn test_cluster_scheduler_smoke_sweep() {
-    let muzzled = muzzled_seeds();
+    let muzzled = cluster_muzzled_seeds();
     for seed in SMOKE_SEEDS {
         if muzzled.contains_key(&seed) {
             continue;
@@ -2546,7 +2253,7 @@ fn test_cluster_scheduler_smoke_sweep() {
 /// EXPECTED-FAILURE marker hiding a seed that has quietly started passing.
 #[test]
 fn test_cluster_scheduler_regression_seeds() {
-    for entry in regression_seeds() {
+    for entry in cluster_regression_seeds() {
         let RegressionSeed {
             seed,
             family,
@@ -2596,7 +2303,7 @@ fn test_cluster_scheduler_seed_sweep() {
     let count: u64 = env_u64("CLUSTER_SEEDS", 500);
     let start: u64 = env_u64("CLUSTER_SEEDS_START", 1);
     let jobs: u64 = env_u64("CLUSTER_SEEDS_JOBS", 4).max(1);
-    let muzzled = muzzled_seeds();
+    let muzzled = cluster_muzzled_seeds();
 
     let failures: Arc<Mutex<Vec<(u64, String)>>> = Arc::new(Mutex::new(Vec::new()));
     std::thread::scope(|scope| {
@@ -2656,39 +2363,4 @@ fn test_cluster_scheduler_seed_sweep() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-}
-
-fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(default)
-}
-
-/// Compare two run fingerprints, reporting the *first* divergence with context
-/// rather than dumping two multi-hundred-line vectors.
-fn assert_fingerprints_equal(seed: u64, a: &[String], b: &[String]) {
-    if a == b {
-        return;
-    }
-    let first = a
-        .iter()
-        .zip(b.iter())
-        .position(|(x, y)| x != y)
-        .unwrap_or_else(|| a.len().min(b.len()));
-    let context_start = first.saturating_sub(3);
-    let mut msg = format!(
-        "seed {seed} did not reproduce: run A has {} lines, run B has {}; first difference at line {first}\n",
-        a.len(),
-        b.len()
-    );
-    for (i, line) in a.iter().enumerate().take(first).skip(context_start) {
-        msg.push_str(&format!("  both[{i}] {line}\n"));
-    }
-    msg.push_str(&format!(
-        "     A[{first}] {}\n     B[{first}] {}\n",
-        a.get(first).map_or("<end of run>", String::as_str),
-        b.get(first).map_or("<end of run>", String::as_str),
-    ));
-    panic!("{msg}");
 }

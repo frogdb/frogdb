@@ -278,7 +278,9 @@ impl PauseState {
     /// The latest deadline across armed slots, so two overlapping handoffs
     /// compose the same way the pauses themselves do (never shorten).
     fn feed_hold_until(&self) -> Option<Instant> {
-        self.slots.values().map(|e| e.unpause_at).max()
+        frogdb_replication::feed_gate::decide_feed_hold_until(
+            self.slots.values().map(|e| e.unpause_at),
+        )
     }
 }
 

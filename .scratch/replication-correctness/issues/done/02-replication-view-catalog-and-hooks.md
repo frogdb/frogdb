@@ -101,7 +101,7 @@ into the `view` module docs rather than left to be rediscovered.
 
 - `INV-ROLE-1` → `.scratch/testing-improvements/issues/done/48-chained-replication-contract.md`
   (the chained-replication non-guarantee, as the issue predicted).
-- `INV-OFFSET-2` → issue 16 (below). Not predicted: the catalog's first run found it.
+- `INV-OFFSET-2` → issue 17 (below). Not predicted: the catalog's first run found it.
 
 **Nested seams.** The rule the crate already applied to `shift_replication_id` now holds
 everywhere: a hooked seam that calls another hooked seam takes an unhooked `*_inner`, so each
@@ -120,13 +120,13 @@ hook would catch.
 Filed, not fixed here (§7), each pinned by a muzzled `#[ignore]` witness so the fix has a test
 waiting:
 
-- **Issue 16** (`issues/open/16-…`) — `offset_at_save` can sit above the live head: both
+- **Issue 17** (`issues/open/17-…`) — `offset_at_save` can sit above the live head: both
   reconcile paths raise it with a `max` and `reset_to` never lowers it, so a node that follows a
   shorter history keeps the higher save point on disk, re-seeds `live` from it on restart, and
   arms a failover window above data it does not hold. An existing test asserts today's behaviour
   deliberately, which makes this a ruling rather than a bug — hence the exception tier.
   Witness: `save_point_follows_a_backwards_full_resync` (`replica/offset.rs`).
-- **Issue 17** (`issues/open/17-…`) — the three replica-side wire paths (`psync`,
+- **Issue 18** (`issues/open/18-…`) — the three replica-side wire paths (`psync`,
   `receive_snapshot`, `receive_checkpoint`) adopt a peer-supplied replication id without
   validating it, while the disk path validates. A malformed id is unmatchable, so it costs
   permanent full resyncs and can make the node unbootable through `validate()`.

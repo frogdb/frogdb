@@ -1298,7 +1298,7 @@ async fn a_promotion_persists_its_boundary_without_ever_rewinding_it() {
     // A save point above the boundary the next stint settles at: what a node
     // that ran to 5000, followed a shorter history, and is now promoted again
     // holds. INV-OFFSET-2 reports it as a violation and is tiered as a
-    // documented exception for exactly this state — see issue 16.
+    // documented exception for exactly this state — see issue 17.
     handler.state.write().offset_at_save = 5_000;
     let (second_boundary, snapshot) = handler.begin_primary_stint().unwrap();
     assert_eq!(second_boundary, 900, "the applied head has not moved");

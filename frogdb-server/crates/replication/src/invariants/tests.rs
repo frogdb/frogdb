@@ -32,11 +32,7 @@ use crate::view::{
 
 // ---- fixtures ----------------------------------------------------------
 
-/// A well-formed replication id made of one repeated hex digit, so two of them
-/// are visibly different in a failure message.
-fn hex_id(digit: char) -> String {
-    std::iter::repeat_n(digit, 40).collect()
-}
+use crate::state::hex_id;
 
 fn addr(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
@@ -178,7 +174,7 @@ fn every_documented_exception_names_its_ruling() {
     assert_eq!(
         excepted,
         vec![
-            ("INV-OFFSET-2", ".scratch/replication-correctness/issues/16"),
+            ("INV-OFFSET-2", ".scratch/replication-correctness/issues/17"),
             (
                 "INV-ROLE-1",
                 ".scratch/testing-improvements/issues/done/48-chained-replication-contract.md"
@@ -323,7 +319,7 @@ fn inv_offset_1_forces_both_inversions_of_the_durability_chain() {
 
 /// Reported, never asserted: the save point is monotone and a backwards full
 /// resync leaves it above the head this node holds, which is shipped behaviour
-/// until issue 16 rules on it — so the entry is a `DocumentedException` and the
+/// until issue 17 rules on it — so the entry is a `DocumentedException` and the
 /// hooks must stay quiet about it.
 #[test]
 fn inv_offset_2_reports_a_state_file_claiming_more_than_the_stream() {

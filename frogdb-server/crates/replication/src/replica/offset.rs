@@ -1073,7 +1073,7 @@ mod tests {
     /// `primary::tests::a_promotion_persists_its_boundary_without_ever_rewinding_it`
     /// asserts today's behaviour deliberately. Un-ignore when the ruling lands.
     #[tokio::test]
-    #[ignore = "issue 16: a backwards full resync leaves the save point above the live head"]
+    #[ignore = "issue 17: a backwards full resync leaves the save point above the live head"]
     async fn save_point_follows_a_backwards_full_resync() {
         let state = state_with_save(5_000);
         let offsets = ReplicaOffset::new(state.clone(), seeded(5_000), AppliedOffset::detached(0));
