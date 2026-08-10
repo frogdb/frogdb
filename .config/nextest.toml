@@ -123,6 +123,17 @@ filter = "test(model::tests::handoff_model_full) | test(model::failover::tests::
 slow-timeout = { period = "60s" }
 test-group = "model-check"
 
+# The bounded-depth smoke configs of those same models do run per commit, and
+# they are not cheap: `failover_model_smoke` enumerates its depth-bounded state
+# space in ~10s run alone, which is two thirds of the default 15s hard kill. It
+# was killed as TIMEOUT in a run that shared the machine with a `cargo mutants`
+# pass, and passed in 10.3s immediately afterwards. Heavy, not hanging — give
+# them headroom rather than shrinking the depth bound, which is what the model
+# is for.
+[[profile.default.overrides]]
+filter = "test(model::tests::handoff_model_smoke) | test(model::failover::tests::failover_model_smoke)"
+slow-timeout = { period = "30s", terminate-after = 3 }
+
 # HyperLogLog cardinality tests add tens of thousands of elements over the
 # socket (sparse→dense promotion + repeated PFCOUNT) and run ~14s in debug —
 # right at the default 15s hard kill, so they tip over under parallel load.
