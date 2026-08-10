@@ -250,6 +250,81 @@ what the manual audit caught.
 7. Stateright: both models shipped with recorded state-space size and properties, or a
    written decision records why not (with the exploration budget that was tried).
 8. Retro-validation: all five 2026-08-08 audit defects mechanically caught by ≥1 layer.
+   **Run 2026-08-09 — NOT met, 3/5** (§6.1): FM-CLUSTER-099 and FM-CLUSTER-102 survive every
+   layer; blocked on issues [21](issues/open/21-no-layer-sees-the-raft-log-store.md) and
+   [22](issues/open/22-no-layer-generates-runtime-config-values.md).
+
+### 6.1 Retro-validation results (issue 13, run 2026-08-09)
+
+Method: each of the five 2026-08-08 audit fixes was inverted one at a time in the working
+tree (throwaway; never committed), the layers were run against the reverted tree, and the
+tree was restored before the next defect. **The spec forcing tests are excluded from the
+verdict** — they are the point witnesses the fix shipped with, so counting them would make
+the gate vacuous. They are listed anyway, because "the forcing test was the *only* thing
+that failed" is exactly the finding this gate exists to surface.
+
+Verdict: **3 of 5 caught by a non-forcing layer** (100, 101, 098). Two misses — 099 and
+102 — are filed as [issue 21](issues/open/21-no-layer-sees-the-raft-log-store.md) and
+[issue 22](issues/open/22-no-layer-generates-runtime-config-values.md); **exit criterion 8
+is not met until both close.**
+
+| defect | revert | L1 catalog+hooks | L2 P1–P4 | L3 stateright | L4 seeded schedules | seam gates | L5 Jepsen | verdict |
+|---|---|---|---|---|---|---|---|---|
+| **098** vote durability | `MetaDurability::for_key` → always `Buffered` | miss (290/291; only the forcing test) | n/a — below the state machine | n/a — below the state machine | n/a — turmoil has no disk model (§3 W4) | **CAUGHT** `just lint-durable-ack` | n/a (issue 07 open) | **caught** (seam gate) |
+| **099** log-reader cache | `get_log_reader` → `Arc::new(RwLock::new(self.log_cache.read().clone()))` | miss (289/291; only the 2 forcing tests) | n/a — below the state machine | n/a — below the state machine | **miss** (100 seeds green; 500 seeds = the 36 known issue-20 seeds, zero new) | green | n/a (issue 07 open) | **MISS → [21](issues/open/21-no-layer-sees-the-raft-log-store.md)** |
+| **100** handoff generation | `from_snapshot` → `handoff_seq: 0` | **CAUGHT** INV-HANDOFF-1 via the `from_snapshot` hook | **CAUGHT** `p2_a_snapshot_restore_at_any_point_is_lossless` | **CAUGHT** `handoff_model_smoke`, `stale_source_admits_writes_after_ownership_moves` | not run (state-machine defect; the three layers above are decisive) | green | n/a (issue 07 open) | **caught** (3 layers) |
+| **101** voter removal | `voter_change`: `RemoveNode`/`Failover{force}` arms → `None` | miss (cluster 290/291, runtime 77/78; only the 2 forcing tests) | n/a — voter set is not on the `apply_command` path | n/a — membership deliberately unmodelled (`model/failover/mod.rs:432`) | **CAUGHT** `just cluster-seeds 100` → new seed 35 | green | n/a (issue 07 open) | **caught** (seeded schedules) |
+| **102** detector clamp | drop `let config = config.clamped();` | miss (75/78; only the 3 forcing tests) | n/a — different crate, no `apply_command` surface | n/a — the model generates verdicts, never a config | n/a — the scheduler never varies `FailureDetectorConfig` | not applicable | n/a (issue 07 open) | **MISS → [22](issues/open/22-no-layer-generates-runtime-config-values.md)** |
+
+"n/a" above always means *structurally* out of reach, never "not bothered": every one is a
+layer whose input alphabet cannot express the defect, and each is named in the row.
+
+Per-defect notes:
+
+- **098** — the catcher is not one of this PRD's five layers but campaign 2's chokepoint
+  lint. `scripts/durable-ack.py` models the metadata path as three links (`for_key`
+  classifies, `write_opts` renders, `set_meta` passes) and fails with "`save_vote` has no
+  `write_opt(..)` with `set_sync(true)`". Worth recording precisely: at audit time
+  `save_vote` was on that lint's ALLOWLIST, so the gate existed and was muzzled — the fix
+  un-muzzled it. A gate is only a gate once its exception list is empty.
+- **099** — the strongest evidence of the miss is the 500-seed sweep
+  (`CLUSTER_SEEDS_JOBS=6`, 346.6 s): the leadership flaps that the FM row names as the
+  trigger do occur in those schedules, but nothing compares what a reader serves against
+  what is on disk, so a divergent read is only visible if it detonates client-side inside
+  the same run. See issue 21 for the proposed openraft storage-conformance layer.
+- **100** — reuses and confirms the revert experiment banked in
+  [issue 04](issues/done/04-properties-p2-p3-p4.md); re-run on current `main` it is now a
+  three-layer catch. P2 shrinks to a 3-command counterexample (`AddNode`,
+  `BeginSlotMigration`, `PrepareSlotHandoff`), and both the property and the two model
+  tests fail through the *same* `from_snapshot` hook message — `INV-HANDOFF-1: slot N
+  carries handoff seq 1 above the generation counter 0` — which is the layered design
+  working as advertised: one catalog, three consumers, one violation string.
+- **101** — `just cluster-seeds 100` fails on **seed 35** (`XNODE-SLOT-1: round 2: slots
+  10922-16383 (5462 slots) is claimed by 2 nodes at once ({0, 2}), all reporting
+  cluster_state:ok`), a seed that is green and unmuzzled on a clean tree. Two secondary
+  observations from the same run that are *not* catches: (a)
+  `test_cluster_scheduler_regression_seeds` also fails, but with "muzzled seed 3 now
+  passes" — reverting the fix makes the issue-20 seeds green, i.e. **issue 20 is a
+  consequence of the FM-CLUSTER-101 fix**, which is worth knowing but is muzzle
+  bookkeeping, not detection; (b) `test_cluster_scheduler_same_seed_same_run` fails under
+  the revert, but it fails on a clean tree too (seed 1, `commit-pending` vs `committed`),
+  so it is the pre-existing scheduler nondeterminism, not a signal.
+- **102** — the whole class ("a value that arrives from `frogdb.conf` reaches a constructor
+  that assumes it is sane") has no generated coverage anywhere in the cluster runtime;
+  `frogdb-cluster-runtime` has no `proptest` dependency at all. See issue 22.
+
+Two cross-cutting conclusions for the campaign, beyond the per-defect scoring:
+
+1. **The layers' reach is exactly the state machine.** Every catch landed on a defect that
+   is expressible as a `ClusterStateInner` transition or as a client-visible outcome of
+   one. Both misses live *outside* that boundary — one below it (the Raft log store), one
+   beside it (a runtime constructor's config admission). The PRD's §2 table implies five
+   fidelity levels over one system; in practice it is five levels over one *component*, and
+   the audit found defects in the other components at the same rate.
+2. **L1's blast radius is the reason 100 was a triple catch.** The invariant hook is what
+   turned a proptest and two model runs into three independent witnesses of one violation,
+   with an identical message. That is the argument for pushing the same hook down into the
+   log store and the runtime rather than writing more point tests there.
 
 ## 7. Out of scope
 
