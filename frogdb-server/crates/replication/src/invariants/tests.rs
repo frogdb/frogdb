@@ -398,6 +398,13 @@ fn inv_backlog_1_forces_a_floor_off_its_data_and_a_hole_in_the_ring() {
     view.backlog.as_mut().unwrap().start_offset = Some(51);
     assert_reports(&view, &["INV-BACKLOG-1"]);
 
+    // The floor may sit exactly *on* the oldest entry's end: the range is
+    // `(oldest_begin, oldest_end]`, and `arm_start` at an entry boundary is the
+    // ordinary shape after that entry is fully replayed.
+    let mut view = clean_view();
+    view.backlog.as_mut().unwrap().start_offset = Some(50);
+    assert_reports(&view, &[]);
+
     // A hole: the entries no longer tile their own range.
     let mut view = clean_view();
     view.backlog.as_mut().unwrap().bytes = 50;
@@ -548,6 +555,12 @@ fn inv_gate_1_forces_a_gate_lying_about_its_hold_and_one_past_the_budget() {
     let mut view = clean_view();
     view.feed_gate.as_mut().unwrap().hold_remaining = Some(Duration::from_millis(101));
     assert_reports(&view, &["INV-GATE-1"]);
+
+    // A hold of exactly the budget is what a barrier that uses all of its time
+    // publishes; the entry bounds the hold *by* the budget, not below it.
+    let mut view = clean_view();
+    view.feed_gate.as_mut().unwrap().hold_remaining = Some(Duration::from_millis(100));
+    assert_reports(&view, &[]);
 
     // A released gate with no hold is the ordinary state.
     let mut view = clean_view();

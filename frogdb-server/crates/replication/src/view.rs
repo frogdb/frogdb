@@ -282,7 +282,10 @@ pub struct PhaseChange {
 /// component's owner has a capture method that fills the groups it can reach
 /// (e.g. [`crate::PrimaryReplicationHandler::view`], which fills nearly all of
 /// them).
-#[derive(Debug, Clone, Default)]
+// Deliberately not `Default`: [`ReplicationView::empty`] is the one way to start
+// a view, so "carries nothing" is written once, in a place whose doc comment says
+// what it means.
+#[derive(Debug, Clone)]
 pub struct ReplicationView {
     /// The persisted identity: replid, failover window, `offset_at_save`.
     pub state: Option<ReplicationState>,
@@ -316,7 +319,20 @@ impl ReplicationView {
     /// A view that carries nothing. Every catalog entry is skipped against it,
     /// which is the correct reading: an empty capture is evidence of nothing.
     pub fn empty() -> Self {
-        Self::default()
+        Self {
+            state: None,
+            offsets: None,
+            apply_gate: None,
+            backlog: None,
+            replicas: None,
+            departure: None,
+            feed_gate: None,
+            fence: None,
+            role: None,
+            promotion: None,
+            grant: None,
+            phase_change: None,
+        }
     }
 
     /// Whether this view carries `field`.

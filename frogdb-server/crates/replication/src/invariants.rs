@@ -422,6 +422,10 @@ fn inv_offset_3(view: &ReplicationView) -> Vec<Violation> {
 fn inv_offset_4(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let live = live(view);
+    // `secondary_offset < 0` is the "no window" sentinel. Its boundary is
+    // unobservable — a window frozen at exactly 0 is caught by the clause after
+    // it, since a live head of 0 already returned above — so no test can tell
+    // `< 0` from `<= 0` here, and `cargo mutants` reports that flip as missed.
     if live == 0 || state.secondary_offset < 0 || state.secondary_offset as u64 <= live {
         return Vec::new();
     }
