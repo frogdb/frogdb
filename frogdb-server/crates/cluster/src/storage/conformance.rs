@@ -163,6 +163,7 @@ fn openraft_conformance_suite() {
 
 /// The same suite, with every read served by a pre-existing log reader.
 // FM-CLUSTER-099
+// FM-CLUSTER-103
 #[test]
 fn openraft_conformance_suite_through_a_long_lived_reader() {
     Suite::test_all(ReaderBackedStoreBuilder)

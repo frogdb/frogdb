@@ -637,8 +637,13 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
     }
 
     async fn truncate(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
-        // Delete all entries with index > log_id.index
-        let start_key = Self::encode_log_key(log_id.index + 1);
+        // "Truncate logs since `log_id`, inclusive" — openraft has already dropped
+        // `log_id` itself from its in-memory log ids, and in the rejected-append
+        // shape (`ensure_log_consecutive`) nothing is written afterwards to
+        // overwrite it, so leaving it on disk would resurrect a conflicting entry
+        // across a restart. One bound for both the key range and the cache.
+        let since = log_id.index;
+        let start_key = Self::encode_log_key(since);
         let mut batch = rocksdb::WriteBatch::default();
 
         let cf = self.cf_logs();
@@ -656,9 +661,9 @@ impl RaftLogStorage<TypeConfig> for ClusterStorage {
             .write(batch)
             .map_err(|e| self.io_error(openraft::ErrorVerb::Write, e))?;
 
-        self.invalidate_cache_range(log_id.index + 1, None);
+        self.invalidate_cache_range(since, None);
 
-        tracing::debug!(index = log_id.index, "Truncated log entries after index");
+        tracing::debug!(index = since, "Truncated log entries since index");
 
         Ok(())
     }
@@ -1203,13 +1208,19 @@ mod tests {
         assert_eq!(recovered[2].log_id.index, 3);
     }
 
-    /// Truncation drops everything *after* the kept index — in RocksDB and in
-    /// the cache alike, and starting one past the kept index in both. A cache
-    /// that keeps a truncated entry would serve a conflicting entry the leader
-    /// has already overwritten.
-    // FM-CLUSTER-017
+    /// `truncate(log_id)` removes `log_id` itself and everything above it — in
+    /// RocksDB and in the cache alike, from the same bound in both.
+    ///
+    /// openraft's contract is "truncate logs since `log_id`, **inclusive**": by
+    /// the time the command reaches the store, `log_id` is already gone from the
+    /// leader's view, and in the rejected-append shape nothing is written after
+    /// the truncate to overwrite it. An entry left behind at the named index is
+    /// therefore a conflicting entry that no quorum agreed on, resurrected as
+    /// `last_log_id` on the next open. A cache that kept it would serve it
+    /// without even a restart.
+    // FM-CLUSTER-103
     #[tokio::test]
-    async fn truncate_drops_only_the_tail_after_the_kept_index() {
+    async fn truncate_removes_the_named_index_and_everything_after_it() {
         use openraft::storage::RaftLogStorageExt;
 
         let dir = tempdir().unwrap();
@@ -1230,20 +1241,30 @@ mod tests {
 
         // Inspect the cache *before* any read, which would refill it from disk.
         assert!(
-            storage.get_cached(3).is_some(),
-            "invalidation starts one past the kept index"
+            storage.get_cached(2).is_some(),
+            "invalidation stops below the named index"
         );
         assert!(
-            storage.get_cached(4).is_none(),
-            "the truncated tail must leave the cache too"
+            storage.get_cached(3).is_none(),
+            "the named index must leave the cache, not just the tail above it"
         );
+        assert!(storage.get_cached(4).is_none());
         assert!(storage.get_cached(5).is_none());
 
         let remaining = storage.try_get_log_entries(..).await.unwrap();
         assert_eq!(
             remaining.iter().map(|e| e.log_id.index).collect::<Vec<_>>(),
-            vec![1, 2, 3],
-            "the kept index and everything below it survive"
+            vec![1, 2],
+            "everything below the named index survives, and nothing else"
+        );
+
+        // The named index is gone from disk too, not merely from the cache.
+        drop(storage);
+        let mut reopened = ClusterStorage::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened.get_log_state().await.unwrap().last_log_id,
+            Some(LogId::new(openraft::CommittedLeaderId::new(1, 1), 2)),
+            "a reopened store must not hand openraft back the truncated index"
         );
     }
 
@@ -1352,10 +1373,10 @@ mod tests {
             "the reader starts out agreeing with the log"
         );
 
-        // The flap: the conflicting suffix goes, and a different entry from a
-        // later term takes the same index.
+        // The flap: the conflicting suffix goes — starting at the conflicting
+        // index itself — and a different entry from a later term takes it.
         storage
-            .truncate(LogId::new(openraft::CommittedLeaderId::new(1, 1), 9))
+            .truncate(LogId::new(openraft::CommittedLeaderId::new(1, 1), 10))
             .await
             .unwrap();
         let replacement = Entry {
