@@ -110,6 +110,11 @@ impl ReplicationRingBuffer {
     /// a range this node never buffered.
     pub fn arm_start(&self, offset: u64) {
         self.start.fetch_max(offset as i64, Ordering::AcqRel);
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &crate::view::ReplicationView::empty().with_backlog(self.view()),
+            "ReplicationRingBuffer::arm_start",
+        );
     }
 
     /// Drop every buffered command and close the window — this node claims no
@@ -126,10 +131,40 @@ impl ReplicationRingBuffer {
     /// Takes the entries lock for the whole reset so a concurrent [`Self::push`]
     /// cannot interleave an entry with the cleared window.
     pub fn reset(&self) {
-        let mut entries = self.entries.lock();
-        entries.clear();
-        self.current_bytes.store(0, Ordering::Release);
-        self.start.store(UNARMED, Ordering::Release);
+        {
+            let mut entries = self.entries.lock();
+            entries.clear();
+            self.current_bytes.store(0, Ordering::Release);
+            self.start.store(UNARMED, Ordering::Release);
+        }
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &crate::view::ReplicationView::empty().with_backlog(self.view()),
+            "ReplicationRingBuffer::reset",
+        );
+    }
+
+    /// This ring's contribution to the invariant projection: the window it
+    /// claims, the range it actually retains, and the totals both caps bind.
+    ///
+    /// Everything here is O(1) — the ends of the deque and two counters — so
+    /// the seam hooks that call it on every buffered write stay cheap enough to
+    /// leave on in every debug build.
+    pub fn view(&self) -> crate::view::BacklogView {
+        let entries = self.entries.lock();
+        let front = entries.front();
+        crate::view::BacklogView {
+            start_offset: self.start_offset(),
+            // An entry ending at `offset` spans exactly its own payload, so it
+            // begins where the previous one ended.
+            oldest_begin: front.map(|cmd| cmd.offset.saturating_sub(cmd.resp_bytes.len() as u64)),
+            oldest_end: front.map(|cmd| cmd.offset),
+            newest_offset: entries.back().map(|cmd| cmd.offset),
+            entries: entries.len(),
+            bytes: self.current_bytes.load(Ordering::Acquire),
+            max_entries: self.max_entries,
+            max_bytes: self.max_bytes,
+        }
     }
 
     /// Lowest offset a `+CONTINUE` may resume from, or `None` while unarmed.
@@ -167,6 +202,18 @@ impl ReplicationRingBuffer {
     }
 
     pub fn push(&self, offset: u64, shard_id: u16, resp_bytes: Bytes) {
+        self.push_inner(offset, shard_id, resp_bytes);
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &crate::view::ReplicationView::empty().with_backlog(self.view()),
+            "ReplicationRingBuffer::push",
+        );
+    }
+
+    /// The push itself, split out so [`Self::push`] owns the one place the
+    /// invariant hook can sit — the entries lock has to be released before the
+    /// hook re-takes it to build the view.
+    fn push_inner(&self, offset: u64, shard_id: u16, resp_bytes: Bytes) {
         let entry_size = resp_bytes.len();
         let mut entries = self.entries.lock();
         // A push into a never-armed buffer implicitly opens the window at this

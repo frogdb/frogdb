@@ -160,6 +160,20 @@ impl ReplicaConnection {
         self.connection_state = state;
         self.link_up
             .store(state == ConnectionState::Streaming, Ordering::Release);
+        // The one seam in the crate that knows this node is a *follower*, so it
+        // is the one that fills the role field. It sees no downstream registry,
+        // so `INV-ROLE-1` is skipped here — see `crate::view`'s note on the
+        // honest cost of the optional fields.
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self
+                .offsets
+                .view()
+                .with_role(crate::view::RoleView::Replica {
+                    upstream: Some(self._primary_addr),
+                }),
+            "ReplicaConnection::set_state",
+        );
     }
 
     /// The buffered view of the socket every full-sync payload path must read

@@ -354,6 +354,37 @@ impl PartialSyncReplay {
         req_offset: u64,
         current_offset: u64,
     ) -> ReplayDecision {
+        let decision = self.decide_partial_sync(state, requested_id, req_offset, current_offset);
+        // Not one of the ten mutating seams — nothing was written here — but it
+        // is the only place a `+CONTINUE` grant exists as a value, and
+        // `INV-BACKLOG-2` is a claim about exactly that. The arms below return
+        // early, so the hook sits in the caller.
+        #[cfg(any(test, debug_assertions))]
+        {
+            let mut view = crate::view::ReplicationView::empty().with_backlog(self.backlog.view());
+            if let ReplayDecision::Continue(grant) = &decision {
+                view = view.with_grant(crate::view::ContinueGrant {
+                    replay_from: grant.replay_from,
+                    resume_offset: grant.resume_offset,
+                });
+            }
+            crate::invariants::debug_assert_view_clean(
+                &view,
+                "PartialSyncReplay::handle_partial_sync_request",
+            );
+        }
+        decision
+    }
+
+    /// The decision itself, split out so the caller owns the single exit the
+    /// invariant hook needs.
+    fn decide_partial_sync(
+        &self,
+        state: &ReplicationState,
+        requested_id: &str,
+        req_offset: u64,
+        current_offset: u64,
+    ) -> ReplayDecision {
         match self.can_replay(state, requested_id, req_offset, current_offset) {
             Err(reason) => ReplayDecision::FullResync(reason),
             // The extraction re-checks the window under the entries lock, so an
@@ -368,6 +399,11 @@ impl PartialSyncReplay {
                 Err(_) => ReplayDecision::FullResync(FullResyncReason::BacklogEvicted),
             },
         }
+    }
+
+    /// This replay's backlog, as the invariant projection sees it.
+    pub fn backlog_view(&self) -> crate::view::BacklogView {
+        self.backlog.view()
     }
 
     /// Both bounds. Composes the existing upper-bound window check

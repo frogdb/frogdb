@@ -133,7 +133,35 @@ impl AppliedOffset {
         // position instead of the last thing its previous replica stint landed.
         self.landed.fetch_max(advanced, Ordering::Release);
         self.progress.notify_waiters();
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(&self.view(), "AppliedOffset::advance_by");
         advanced
+    }
+
+    /// This pair's contribution to the invariant projection: the applied/landed
+    /// heads and the gate that admits movement of them.
+    ///
+    /// No live head — this type does not hold one. `INV-OFFSET-1` therefore
+    /// checks the pair alone here; see its doc comment.
+    pub fn view(&self) -> crate::view::ReplicationView {
+        crate::view::ReplicationView::empty()
+            .with_applied_pair(self.current(), self.landed())
+            .with_apply_gate(self.gate_view())
+    }
+
+    /// The gate's state, read under its own lock so `frozen` and `stint` are a
+    /// consistent pair rather than two separate samples.
+    pub fn gate_view(&self) -> crate::view::ApplyGateView {
+        let gate = self.gate.lock();
+        crate::view::ApplyGateView {
+            frozen: gate.frozen,
+            stint: gate.stint,
+            epoch: self.epoch.load(Ordering::Acquire),
+            diverged: match self.diverged.load(Ordering::Acquire) {
+                NO_DIVERGENCE => None,
+                epoch => Some(epoch),
+            },
+        }
     }
 
     /// Wait until the **landed** head reaches `target`, and return it.
@@ -214,6 +242,11 @@ impl AppliedOffset {
     /// above the offset the node vouches for.
     pub fn retire_replica_applies(&self) {
         self.gate.lock().stint += 1;
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.view(),
+            "AppliedOffset::retire_replica_applies",
+        );
     }
 
     /// The stint number a replica stream is running under right now. Captured
@@ -300,9 +333,14 @@ impl AppliedOffset {
     /// stops a write from landing above a boundary that no backlog covers and no
     /// replication-id window describes.
     pub fn freeze(&self) -> u64 {
-        let mut gate = self.gate.lock();
-        gate.frozen = true;
-        self.applied.load(Ordering::Acquire)
+        let boundary = {
+            let mut gate = self.gate.lock();
+            gate.frozen = true;
+            self.applied.load(Ordering::Acquire)
+        };
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(&self.view(), "AppliedOffset::freeze");
+        boundary
     }
 }
 
@@ -481,7 +519,32 @@ impl ReplicaOffset {
     /// yet: [`AppliedOffset`] moves later, in the consume loop.
     pub fn frame_advance(&self, frame: &ReplicationFrame) -> u64 {
         let n = OffsetCoordinator::frame_advance(frame);
-        self.live.fetch_add(n, Ordering::Release) + n
+        let received = self.live.fetch_add(n, Ordering::Release) + n;
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(&self.view(), "ReplicaOffset::frame_advance");
+        received
+    }
+
+    /// This stream's contribution to the invariant projection: the full
+    /// received/applied/landed triple, the applier's gate, and the identity the
+    /// three are measured against.
+    ///
+    /// The state is sampled with `try_read` because this runs inside the ingest
+    /// path, which a writer may hold the identity lock across; a debug-only
+    /// projection must never be the thing that deadlocks the node, and a view
+    /// without the identity simply skips the identity claims.
+    pub fn view(&self) -> crate::view::ReplicationView {
+        let view = crate::view::ReplicationView::empty()
+            .with_offsets(
+                self.current(),
+                self.applied.current(),
+                self.applied.landed(),
+            )
+            .with_apply_gate(self.applied.gate_view());
+        match self.state.try_read() {
+            Some(state) => view.with_state(state.clone()),
+            None => view,
+        }
     }
 
     /// The live *received* position. Replaces `state.offset_at_save` reads on the
@@ -512,7 +575,10 @@ impl ReplicaOffset {
     /// reach here after either. The caller must abandon the sync.
     #[must_use = "a refused reset means the stream must abandon this sync"]
     pub fn reset_to(&self, offset: u64) -> bool {
-        self.applied.reset_pair(self.stint, offset, &self.live)
+        let accepted = self.applied.reset_pair(self.stint, offset, &self.live);
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(&self.view(), "ReplicaOffset::reset_to");
+        accepted
     }
 
     /// Reconcile [`offset_at_save`] up to the **applied** head for persistence —

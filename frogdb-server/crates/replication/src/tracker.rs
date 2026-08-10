@@ -193,7 +193,30 @@ impl ReplicationTrackerImpl {
             address = %address,
             "Registered new replica"
         );
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.registry_view(),
+            "ReplicationTrackerImpl::register_announced_replica",
+        );
         session
+    }
+
+    /// The session registry and the departure latch that rides with it, as the
+    /// invariant projection sees them.
+    ///
+    /// Sorted by session id so a violation detail names the same sessions in
+    /// the same order on every run — a `HashMap` iteration order in a panic
+    /// message is a flaky failure waiting to happen.
+    pub fn registry_view(&self) -> crate::view::ReplicationView {
+        let mut replicas: Vec<crate::view::ReplicaView> = self
+            .replicas
+            .read()
+            .values()
+            .map(|session| session.view())
+            .collect();
+        replicas.sort_by_key(|replica| replica.id);
+        crate::view::ReplicationView::empty()
+            .with_replicas(replicas, self.last_streaming_departure())
     }
 
     /// Drop the replica's session from the registry.
@@ -205,6 +228,11 @@ impl ReplicationTrackerImpl {
                 "Unregistered replica"
             );
         }
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.registry_view(),
+            "ReplicationTrackerImpl::unregister_replica",
+        );
     }
 
     /// Record how a replica that *was streaming* left (FM-REPLICATION-062).
@@ -218,6 +246,11 @@ impl ReplicationTrackerImpl {
         tracing::debug!(
             departure = ?departure,
             "Recorded streaming replica departure"
+        );
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.registry_view(),
+            "ReplicationTrackerImpl::record_streaming_departure",
         );
     }
 

@@ -323,6 +323,25 @@ impl ReplicationState {
             secondary_id = ?self.secondary_id,
             "Generated new replication ID"
         );
+        self.check_invariants("ReplicationState::new_replication_id");
+    }
+
+    /// The identity half of the invariant projection: everything the catalog's
+    /// `INV-REPLID-*` and the state side of `INV-OFFSET-*` read.
+    pub fn view(&self) -> crate::view::ReplicationView {
+        crate::view::ReplicationView::empty().with_state(self.clone())
+    }
+
+    /// Assert the identity claims hold after `seam` mutated this state.
+    ///
+    /// A state-only view, which is exactly what these seams can see: the
+    /// offset-relative entries declare `LiveOffset` and are skipped here rather
+    /// than evaluated against a zero nobody measured.
+    fn check_invariants(&self, seam: &str) {
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(&self.view(), seam);
+        #[cfg(not(any(test, debug_assertions)))]
+        let _ = seam;
     }
 
     /// Adopt `new_id` as the primary history, demoting the current id into the
@@ -339,6 +358,7 @@ impl ReplicationState {
     pub fn shift_replication_id(&mut self, new_id: String, live_offset: u64) {
         self.secondary_id = Some(std::mem::replace(&mut self.replication_id, new_id));
         self.secondary_offset = live_offset as i64;
+        self.check_invariants("ReplicationState::shift_replication_id");
     }
 
     /// Drop the failover continuity window (`secondary_id` / `secondary_offset`).
@@ -354,6 +374,7 @@ impl ReplicationState {
     pub fn clear_secondary_window(&mut self) {
         self.secondary_id = None;
         self.secondary_offset = -1;
+        self.check_invariants("ReplicationState::clear_secondary_window");
     }
 
     /// Adopt `replication_id` as this node's history, dropping any stale failover
@@ -365,6 +386,7 @@ impl ReplicationState {
     pub fn adopt_replication_history(&mut self, replication_id: String) {
         self.replication_id = replication_id;
         self.clear_secondary_window();
+        self.check_invariants("ReplicationState::adopt_replication_history");
     }
 
     /// Check whether a PSYNC request's offset window can be continued from this
@@ -424,6 +446,7 @@ impl ReplicationState {
         self.adopt_replication_history(meta.replication_id.clone());
         // A staged checkpoint offset *is* a save-point offset.
         self.offset_at_save = meta.replication_offset;
+        self.check_invariants("ReplicationState::apply_staged_metadata");
     }
 }
 

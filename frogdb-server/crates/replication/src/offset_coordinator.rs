@@ -112,7 +112,49 @@ impl OffsetCoordinator {
         // invariant every "data this node holds" caller is written against.
         let live = self.live.fetch_add(n, Ordering::Release) + n;
         self.applied.advance_by(n);
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.offsets_view(),
+            "OffsetCoordinator::advance",
+        );
         live
+    }
+
+    /// The offset half of the invariant projection: the full triple, the
+    /// applier's gate, and the identity they are measured against.
+    ///
+    /// Deliberately *without* the session registry. This is built on the write
+    /// path, once per broadcast command, and walking every session there would
+    /// make a debug build's cost scale with the replica count for claims the
+    /// ACK seams below already force at the moment they can be broken.
+    ///
+    /// The identity is sampled with `try_read`: a promotion mutates it under
+    /// the write lock and calls into this type while holding it, and a
+    /// debug-only projection must never be the thing that deadlocks a node. A
+    /// view without the identity skips the identity claims, which is the
+    /// correct reading of "could not look".
+    pub fn offsets_view(&self) -> crate::view::ReplicationView {
+        let view = crate::view::ReplicationView::empty()
+            .with_offsets(
+                self.current(),
+                self.applied.current(),
+                self.applied.landed(),
+            )
+            .with_apply_gate(self.applied.gate_view());
+        match self.state.try_read() {
+            Some(state) => view.with_state(state.clone()),
+            None => view,
+        }
+    }
+
+    /// The widest view this type can reach: [`Self::offsets_view`] plus the
+    /// session registry, which is what the replica-position claims need.
+    pub fn view(&self) -> crate::view::ReplicationView {
+        let registry = self.tracker.registry_view();
+        let mut view = self.offsets_view();
+        view.replicas = registry.replicas;
+        view.departure = registry.departure;
+        view
     }
 
     /// Replica-side spelling of the advance *unit*. The replica advances its own
@@ -173,6 +215,11 @@ impl OffsetCoordinator {
             );
             self.live.store(applied, Ordering::Release);
         }
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.view(),
+            "OffsetCoordinator::settle_at_applied",
+        );
         applied
     }
 
@@ -196,6 +243,11 @@ impl OffsetCoordinator {
     /// waiters (delegates to the tracker's session registry + ack channel).
     pub fn ingest_replica_ack(&self, replica_id: u64, acked: u64) {
         self.tracker.record_ack(replica_id, acked);
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.view(),
+            "OffsetCoordinator::ingest_replica_ack",
+        );
     }
 
     /// Seed a resumed replica's *stream position* after backlog replay. A
@@ -209,6 +261,11 @@ impl OffsetCoordinator {
     /// no count.
     pub fn seed_replica_position(&self, replica_id: u64, position: u64) {
         self.tracker.seed_resume_position(replica_id, position);
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.view(),
+            "OffsetCoordinator::seed_replica_position",
+        );
     }
 
     /// Minimum acked offset across streaming replicas (for WAIT / safety).

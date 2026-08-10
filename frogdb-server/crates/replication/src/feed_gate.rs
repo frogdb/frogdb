@@ -38,7 +38,7 @@
 //! exactly what Redis/Valkey do: their pause is node-wide too.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use frogdb_types::clock;
 use parking_lot::Mutex;
@@ -73,14 +73,43 @@ impl ReplicaFeedGate {
     /// republish of a derived value, not an independent latch, so a shortened
     /// deadline is honoured exactly like a lengthened one.
     pub fn publish(&self, held_until: Option<Instant>) {
-        {
+        // Single exit, so the invariant hook below cannot be skipped by the
+        // unchanged-republish case: the early `return` this used to take is now
+        // a `changed` flag.
+        let changed = {
             let mut guard = self.held_until.lock();
-            if *guard == held_until {
-                return;
-            }
+            let changed = *guard != held_until;
             *guard = held_until;
+            changed
+        };
+        if changed {
+            self.changed.notify_waiters();
         }
-        self.changed.notify_waiters();
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &crate::view::ReplicationView::empty().with_feed_gate(self.view(None)),
+            "ReplicaFeedGate::publish",
+        );
+    }
+
+    /// This gate's contribution to the invariant projection.
+    ///
+    /// `barrier_budget` is passed in rather than read: the ceiling on a hold is
+    /// `frogdb_cluster::HANDOFF_BARRIER_MS`, and this crate does not depend on
+    /// that one. A caller that knows the budget supplies it; the gate itself is
+    /// published to and never told.
+    ///
+    /// The held answer and the remaining hold are sampled separately on
+    /// purpose — see `INV-GATE-1`.
+    pub fn view(&self, barrier_budget: Option<Duration>) -> crate::view::FeedGateView {
+        let now = clock::now();
+        crate::view::FeedGateView {
+            is_held: self.is_held(),
+            hold_remaining: self
+                .hold_deadline()
+                .map(|deadline| deadline.saturating_duration_since(now)),
+            barrier_budget,
+        }
     }
 
     /// The deadline of the hold in force right now, or `None` when the feed is

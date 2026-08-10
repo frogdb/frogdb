@@ -387,6 +387,58 @@ impl PrimaryReplicationHandler {
     /// disarm exists to fix: a persisted new identity with an armed checkpoint
     /// from the deposed primary still waiting to be installed on the next boot.
     pub fn begin_primary_stint(&self) -> std::io::Result<(u64, ReplicationState)> {
+        let outcome = self.begin_primary_stint_inner();
+        // The whole-node view, and the only seam that can assemble one: the
+        // promotion witness exists nowhere else, because the id this node
+        // headed before the mint is not recoverable from the state after it.
+        // The failed path is checked too — a rollback that half-restored the
+        // identity is exactly what `INV-REPLID-1`/`-3` are for.
+        #[cfg(any(test, debug_assertions))]
+        {
+            let mut view = self.view();
+            if let Ok((boundary, _, previous_id)) = &outcome {
+                view = view.with_promotion(crate::view::PromotionWitness {
+                    previous_id: previous_id.clone(),
+                    boundary: *boundary,
+                });
+            }
+            crate::invariants::debug_assert_view_clean(
+                &view,
+                "PrimaryReplicationHandler::begin_primary_stint",
+            );
+        }
+        outcome.map(|(boundary, snapshot, _)| (boundary, snapshot))
+    }
+
+    /// Everything this node can say about its replication state at once — the
+    /// widest [`crate::view::ReplicationView`] assembled anywhere in the crate.
+    ///
+    /// The role is left unset: this type serves a primary stint but does not
+    /// own the role flag (`RoleManager` does), and guessing it here would put a
+    /// claim in the projection that nothing measured.
+    pub fn view(&self) -> crate::view::ReplicationView {
+        let mut view = self
+            .offsets
+            .view()
+            .with_backlog(self.replay.backlog_view())
+            .with_feed_gate(self.feed_gate.view(None));
+        // The coordinator samples the identity with `try_read`; the promotion
+        // path calls in while holding the write lock, and a debug-only
+        // projection must never deadlock a node.
+        if view.state.is_none()
+            && let Some(state) = self.state.try_read()
+        {
+            view = view.with_state(state.clone());
+        }
+        view
+    }
+
+    /// The promotion itself. Split out so [`Self::begin_primary_stint`] owns
+    /// the single exit the invariant hook needs — the rollback arm below
+    /// returns early, and inlining it would let a half-applied promotion skip
+    /// the check. Returns the replication id this node headed *before* the
+    /// mint, which is what the promotion witness is built from.
+    fn begin_primary_stint_inner(&self) -> std::io::Result<(u64, ReplicationState, String)> {
         // First, and before anything is minted: the node no longer follows the
         // history it inherited, so an inherited staged checkpoint must never be
         // re-installed under it (see [`crate::discard_staged_full_sync`]). If it
@@ -399,9 +451,10 @@ impl PrimaryReplicationHandler {
         // replica. Holding a lock across file IO is deliberate here — it is one
         // small write, taken once per role change, and the alternative is a
         // window where the node advertises an identity it does not have.
-        let snapshot = {
+        let (snapshot, previous_id) = {
             let mut state = self.state.write();
             let previous = state.clone();
+            let previous_id = previous.replication_id.clone();
             state.new_replication_id(boundary);
             // Monotone bump, spelled as a `max` rather than a compare-and-assign:
             // the persisted offset may never move back, and the two forms of the
@@ -418,7 +471,7 @@ impl PrimaryReplicationHandler {
                 );
                 return Err(e);
             }
-            snapshot
+            (snapshot, previous_id)
         };
         self.replay.reset_backlog();
         self.replay.arm_backlog_floor(boundary);
@@ -428,7 +481,7 @@ impl PrimaryReplicationHandler {
             boundary,
             "Primary stint started: minted replication id and armed backlog"
         );
-        Ok((boundary, snapshot))
+        Ok((boundary, snapshot, previous_id))
     }
 
     /// End a primary stint: close the backlog window and drop every downstream
@@ -457,6 +510,11 @@ impl PrimaryReplicationHandler {
         tracing::info!(
             disconnected,
             "Primary stint ended: backlog cleared and downstream replicas disconnected"
+        );
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &self.view(),
+            "PrimaryReplicationHandler::end_primary_stint",
         );
         disconnected
     }

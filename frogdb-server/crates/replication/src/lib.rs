@@ -36,6 +36,7 @@ pub mod feed_gate;
 pub mod frame;
 pub mod fullsync;
 pub mod identity;
+pub mod invariants;
 pub mod net_bytes;
 pub mod offset_coordinator;
 pub mod primary;
@@ -46,6 +47,7 @@ pub mod state;
 pub mod sync_counters;
 pub mod tracker;
 pub mod version_compat;
+pub mod view;
 pub mod wait_coordinator;
 
 pub use apply::{

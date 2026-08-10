@@ -588,11 +588,44 @@ impl ReplicaSession {
         }
     }
 
+    /// This session's row in the invariant projection.
+    ///
+    /// `announced_id` is `None` — *unknown* — until the replica sends
+    /// `REPLCONF listening-port`, never the placeholder `0`: two unannounced
+    /// sessions are no evidence of the same replica, and `INV-SESSION-2` must
+    /// not treat them as one.
+    pub fn view(&self) -> crate::view::ReplicaView {
+        let listening_port = self.listening_port();
+        crate::view::ReplicaView {
+            id: self.id,
+            addr: self.address(),
+            announced_id: (listening_port != 0).then(|| (self.address().ip(), listening_port)),
+            phase: self.phase(),
+            acked: self.acked_offset(),
+            resume_floor: self.resume_offset(),
+            last_ack_age: clock::now().saturating_duration_since(self.last_ack_time()),
+        }
+    }
+
     fn set_phase(&self, phase: Phase) {
         let mut inner = self.inner.write();
         let old = inner.phase;
         inner.phase = phase;
         drop(inner);
+        // The widest view reachable from a session: itself. The registry-wide
+        // and offset-relative entries declare fields a session cannot see and
+        // are skipped here — `INV-SESSION-1` is the claim this seam forces.
+        #[cfg(any(test, debug_assertions))]
+        crate::invariants::debug_assert_view_clean(
+            &crate::view::ReplicationView::empty()
+                .with_replicas(vec![self.view()], None)
+                .with_phase_change(crate::view::PhaseChange {
+                    replica_id: self.id,
+                    from: old,
+                    to: phase,
+                }),
+            "ReplicaSession::set_phase",
+        );
         // Equivalent-mutant note: this guard suppresses a duplicate debug line
         // and nothing else — both readings leave identical session state, and
         // the phase written above is the same either way — so no assertion
