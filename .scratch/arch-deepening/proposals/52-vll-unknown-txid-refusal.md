@@ -23,15 +23,16 @@ executor should honor it the way the broadcast gather already honors the identic
 | `frogdb-server/crates/core/src/shard/types.rs` | 1498 | `PartialResult` (L757–800), incl. the `ShardError` variant + its "a `ShardError` is fatal: the coordinator must surface it" doc (L790–799); `impl Default for PartialResult` (L812–820) whose own doc says *"the live call site is the VLL dequeue-miss empty reply (`vll.rs`)"*; `as_shard_error` (L843–848); `into_keyed_results` (L854–859). |
 | `frogdb-server/crates/core/src/shard/dispatch_core.rs` | 535 | `scatter_error_reply` (L193–225) — the existing error-shaping helper; unusable on the miss path because it needs the op and keys, which a miss does not have. |
 | `frogdb-server/crates/core/src/shard/worker.rs` | 1034 | `recover_from_panic` (L875–905): the metric+log+`Response` pattern this proposal copies (`ShardPanicsIsolated::inc` at L882–886). |
-| `frogdb-server/crates/core/src/shard/panic_guard.rs` | 564 | `RecordingRecorder` (L294–315) and FM-VLL-005's forcing test (tag L483, fn L495–563) — the working template for a `frogdb-core` forcing test that asserts a reply shape **and** a counter. |
-| `frogdb-server/crates/vll/src/shard.rs` | 1159 | `enqueue_lock_request` (L137–183, `ShardBusy`/`QueueFull` refusals at L145–151 / L158–164); `dequeue_for_execution` (L226–238) — returns `Option<DequeuedOp<O>>`; `abort` (L264–279), whose *own* unknown-txid miss is legitimate (see Problem §3). **Not edited by the recommended shape.** |
+| `frogdb-server/crates/core/src/shard/panic_guard.rs` | 564 | `RecordingRecorder` (L296–315, doc L294–295) and FM-VLL-005's forcing test (tag L483, fn L495–563) — the working template for a `frogdb-core` forcing test that asserts a reply shape **and** a counter. Note the recorder lives in this file's *own* `#[cfg(test)] mod tests`, so it is **not visible** from `vll.rs`'s tests (see test 1). |
+| `frogdb-server/crates/vll/src/shard.rs` | 1159 | `enqueue_lock_request` (L137–183, `ShardBusy`/`QueueFull` refusals at L145–151 / L158–164; `lock_table.declare` at **L166**, released again on the enqueue-`Err` branch **L169–171**); `dequeue_for_execution` (L226–238) — returns `Option<DequeuedOp<O>>`; `ensure_initialized` (L103–114) — lazily fills `tx_queue`/`lock_table` and **never resets either to `None`**; `abort` (L264–278), whose *own* unknown-txid miss is early-returned at **L268–270** (see Problem §3 and Risks). **Not edited by the recommended shape.** |
+| `frogdb-server/crates/vll/src/queue.rs` | 139 | `TransactionQueue`. There is **no sweeper, no TTL, no capacity eviction**: the only removal is `dequeue` → `pending.remove(&txid)` (**L122–123**), called from `dequeue_for_execution` and `abort`. A queued entry cannot vanish underneath an execute. |
 | `frogdb-server/crates/vll/src/coordinator.rs` | 886 | `scatter` (L208–310): phase 2 failure aborts all participants (L250–265), phase 3 dispatches execute (L268–290), phase 4 gathers replies (L292–306) and then records `status="success"` (L308). |
-| `frogdb-server/crates/server/src/vll_adapter.rs` | 173 | `send_execute` (L117–131) — the only production sender of `VllMsg::VllExecute`. |
-| `frogdb-server/crates/server/src/scatter/executor.rs` | 194 | **Second half of the fix.** The reply fold at **L125–129** calls `into_keyed_results()` unconditionally, which returns an empty vec for `ShardError` — so a fatal reply is dropped here. `scatter_error_to_response` (L141–193) is sibling 46's territory. |
-| `frogdb-server/crates/server/src/scatter/broadcast.rs` | 1275 | `FatalReply` trait (L68–73) + `impl FatalReply for PartialResult` (L75–79) — the seam that already says "a fatal per-shard reply aborts the gather instead of folding into a truncated success (issue #15 item 4)". The VLL executor is the one gather that does not cross it. |
-| `frogdb-server/crates/server/src/scatter/strategies.rs` | 393 | The merges that swallow the empty reply: `MGetStrategy::merge` (L55–72, `unwrap_or(Response::null())` at L68) and `merge_sum_integers` (L153–166). |
+| `frogdb-server/crates/server/src/vll_adapter.rs` | 173 | `send_execute` (L117–131) — the only production sender of `VllMsg::VllExecute`, and a **bare `send` with no chaos hooks**: every turmoil injection point (shard-unavailable, injected shard error, per-shard delay, inter-send delay) lives in `send_lock_request` (**L74–95**). Nothing in the test fabric can drop, duplicate or reorder an execute today. |
+| `frogdb-server/crates/server/src/scatter/executor.rs` | 194 | **Second half of the fix.** The reply fold at **L125–129** calls `into_keyed_results()` unconditionally, which returns an empty vec for `ShardError` — so a fatal reply is dropped here. `warn!` is already in scope (`use tracing::warn`, **L27**). `scatter_error_to_response` (L141–193) is sibling 46's territory. |
+| `frogdb-server/crates/server/src/scatter/broadcast.rs` | 1275 | `FatalReply` trait (L68–73) + `impl FatalReply for PartialResult` (L75–79), whose body is `self.as_shard_error().cloned()` (**L76–78**) — it returns an **owned** `Option<Response>`, which is what makes step 3's `if let Some(err) = partial.fatal_error()` typecheck: the borrow of `partial` ends before `partial` is moved into `into_keyed_results()`. The seam already says "a fatal per-shard reply aborts the gather instead of folding into a truncated success (issue #15 item 4)". The VLL executor is the one gather that does not cross it. |
+| `frogdb-server/crates/server/src/scatter/strategies.rs` | 393 | `partition_keys` (**L12–27**) buckets keys into a `BTreeMap<usize, Vec<Bytes>>` keyed by shard id, so a scatter has **at most one participant per shard** — the structural reason a duplicated execute cannot arise inside one scatter. The merges that swallow the empty reply: `MGetStrategy::merge` (L55–72, `unwrap_or(Response::null())` at L68) and `merge_sum_integers` (L153–166). All six strategies (MGet L35, MSet L85, Del L170, Exists L204, Touch L238, Unlink L272) partition through it, i.e. all six are keyed. |
 | `frogdb-server/crates/types/src/metrics/definitions.rs` | 545 | Where the new counter is declared (`ShardPanicsIsolated` at L147–152 is the shape to copy). |
-| `scripts/continuation-lock-gate.py` | 458 | `EXEMPT["VllMsg::VllExecute"]` (L110–118) — the C3 exemption whose *reason string* is literally *"`dequeue_for_execution` returns nothing"*, pinned to the forcing test `vll_execute_cannot_mutate_a_held_key_under_a_foreign_continuation_lock` in `vll.rs`. |
+| `scripts/continuation-lock-gate.py` | 458 | `EXEMPT["VllMsg::VllExecute"]` (L110–118) — the C3 exemption whose *reason string* is literally *"`dequeue_for_execution` returns nothing"*, pinned to the forcing test `vll_execute_cannot_mutate_a_held_key_under_a_foreign_continuation_lock` (L116) in `vll.rs` (L117). Rule 6 (**L385–398**) enforces only that the named fn exists in the named file — it regex-matches `fn <name>(` and **never parses the reason string**. |
 | `.scratch/hardening/specs/vll-failure-modes.md` | 109 | LOCKED spec. This proposal **appends** `FM-VLL-006` after L109 and edits no existing line (see Risks for the one optional exception). |
 
 ## Problem (concrete verified evidence)
@@ -73,6 +74,8 @@ The VLL scatter path predates the rule and never joined it.
 `scatter/executor.rs:125-129`:
 
 ```rust
+let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
+    HashMap::with_capacity(outcome.responses.len());
 for (shard_id, partial) in outcome.responses {
     shard_results.insert(shard_id, partial.into_keyed_results().into_iter().collect());
 }
@@ -81,27 +84,64 @@ for (shard_id, partial) in outcome.responses {
 `into_keyed_results()` returns `Vec::new()` for every non-`Keyed` variant (`types.rs:854-859`), so a
 `ShardError` reply is silently converted into "this shard returned nothing". Verified: the VLL
 executor never calls `as_shard_error()`/`fatal_error()`, while `ScatterGather::run` does
-(`broadcast.rs:60-79`). **This is not a live bug today** — the only producer of `ShardError` is
-`scatter_error_reply`'s keyless branch (`dispatch_core.rs:220`), and every VLL scatter op is keyed
-(MGET/MSET/DEL/EXISTS/TOUCH/UNLINK are the entire strategy set, `strategies.rs`), so `keys` is never
-empty on that path. It is, however, the reason a fix that only changes the shard would be invisible.
+(`broadcast.rs:60-79`).
+
+**This is not a live bug today**, and the census is tighter than "no VLL op is keyless":
+`PartialResult::shard_error` is constructed in exactly **two** places repo-wide —
+`dispatch_core.rs:220` (production, the keyless branch of `scatter_error_reply`) and
+`broadcast.rs:1024` (a broadcast unit test). Every VLL scatter op is keyed — all six strategies
+partition through `partition_keys` (`strategies.rs:12-27`) — so `keys.is_empty()` is false on that
+path and the only production producer never fires for a VLL scatter. Symmetrically, every *consumer*
+of `as_shard_error()` outside `broadcast.rs` sits on the `ScatterRequest` broadcast path
+(`connection/scatter.rs:165` and `:262`, `connection/search/{index_mgmt.rs:96,:126, helpers.rs:63,
+synonyms.rs:75, explain.rs:38}`) — not one of them is the VLL executor. So the fatal reply shape is
+fully wired *except* through this one gather. That is precisely why a fix that only changed the
+shard would be invisible.
 
 ### 3. `execute` and `abort` are not symmetric, and only one of them may miss silently
 
-`abort(txid)`'s unknown-txid early return (`shard.rs:264-270`) is **correct and load-bearing**: when a
-shard refuses a lock request with `ShardBusy` (FM-VLL-001) the coordinator still aborts every
-participant by real shard id (`coordinator.rs:250-254`), so the refusing shard legitimately receives
-an abort for a txid it never queued. Abort is idempotent by design.
+`abort(txid)`'s unknown-txid early return (`shard.rs:268-270`) is **correct and load-bearing for the
+case the coordinator actually produces**: when a shard refuses a lock request with `ShardBusy`
+(FM-VLL-001) the coordinator still aborts every participant by real shard id
+(`coordinator.rs:250-254`), so the refusing shard legitimately receives an abort for a txid it never
+queued, and there is nothing to release. Abort is idempotent for that shape by design.
 
-`execute` has no such legitimate miss. Verified caller census: `VllMsg::VllExecute` is constructed in
-exactly two places — `server/src/vll_adapter.rs:123` (production) and
+That is a narrower claim than "abort's silent miss is always benign", and the narrower claim is the
+true one. The early return at `shard.rs:268-270` happens **before** `lock_table.release(&op.keys,
+txid)` at `:271-273`, and `enqueue_lock_request` declares the lock intent at `:166` *before* the
+queue insert. A txid whose intent was declared but whose queue entry is gone would leak that intent
+permanently — nothing else sweeps the lock table. The only path there is a panic between `:166` and
+`:169`: the `Err` branch at `:169-171` releases explicitly, and `recover_from_panic`
+(`worker.rs:869-871`) deliberately does *not* touch lock-table state ("the VLL entry of a dequeued op
+is released by its own guard, which knows which op it was"). So: no row is owed here **and no proof
+is claimed** that abort never needs one. FM-VLL-006 rules on execute only; the declared-intent-leak
+shape is named here so a future reader does not read this proposal as having cleared abort.
+
+`execute` has no legitimate miss at all. Verified caller census: `VllMsg::VllExecute` is constructed
+in exactly two places — `server/src/vll_adapter.rs:123` (production) and
 `shard-harness/src/sink.rs:65` (the harness sink) — both driven by `VllCoordinator::scatter` phase 3,
 which sends execute **only** after every participant answered `Ready` (L246-266), **once** per shard
 (L278-290), and never to a shard it has aborted (L268-274, and `abort_shards(&shard_ids[idx..])` at
-L285 covers exactly the not-yet-executed suffix). So today a miss means one of: a duplicated execute,
-an execute for an aborted txid, a txid mismatch between coordinator and shard, or a message
-reordering. **Every one of those is a protocol violation, and the shard's answer to all of them is
-"success, no data."**
+L285 covers exactly the not-yet-executed suffix). Four independent facts close the remaining doors:
+
+- **One participant per shard.** `partition_keys` buckets into a `BTreeMap<usize, Vec<Bytes>>`
+  (`strategies.rs:12-27`), so a single scatter cannot enumerate the same shard twice and phase 3
+  cannot double-send by construction.
+- **The queue entry cannot expire.** `TransactionQueue` has no sweeper, no TTL and no eviction: the
+  only removal is `dequeue` → `pending.remove(&txid)` (`queue.rs:122-123`), reached from
+  `dequeue_for_execution` and `abort` alone. Between `Ready` and execute, the entry simply stays.
+- **The queue itself cannot disappear.** `dequeue_for_execution`'s *other* miss branch is the
+  `self.tx_queue.as_mut()?` at `shard.rs:227`. `tx_queue` is lazily set in `ensure_initialized`
+  (`shard.rs:103-114`) and **never reset to `None`**; the one config field that reads like a runtime
+  toggle, `enable_vll` (`types.rs:743`), is read **nowhere** in the repo. A shard that has ever
+  enqueued anything has a queue forever.
+- **The transport cannot corrupt the ordering under test.** `send_execute` (`vll_adapter.rs:117-131`)
+  is a bare channel `send`; all chaos injection lives in `send_lock_request` (L74-95). Not even
+  turmoil can drop, delay or duplicate an execute today.
+
+So a miss means one of: a duplicated execute, an execute for an aborted txid, a txid mismatch
+between coordinator and shard, or a message reordering. **Every one of those is a protocol
+violation, and the shard's answer to all of them is "success, no data."**
 
 That is why this is `LATENT` rather than `LIVE`: the arm is unreachable in production today. Its cost
 is that it converts *any* future defect that reaches it into silent data loss, and that it removes
@@ -162,24 +202,33 @@ counter VllUnheldExecute("frogdb_vll_unheld_execute_total") {
 ```
 
 3. **`server/src/scatter/executor.rs:125-129`** — cross the seam that already exists. `FatalReply`
-   is `pub` inside the private `broadcast` module, so the sibling module can use it directly; no
-   new interface is introduced:
+   is `pub` inside the private `broadcast` module, so the sibling module can `use` it directly; no
+   new interface is introduced. Two facts make this a mechanical edit: `fatal_error()` returns an
+   **owned** `Option<Response>` (`broadcast.rs:76-78` is `self.as_shard_error().cloned()`), so the
+   borrow of `partial` ends before `partial` is moved into `into_keyed_results()`; and `warn!` is
+   already imported (`executor.rs:27`).
 
 ```rust
 use super::broadcast::FatalReply;
 …
-let mut shard_results = HashMap::with_capacity(outcome.responses.len());
+let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
+    HashMap::with_capacity(outcome.responses.len());
 for (shard_id, partial) in outcome.responses {
     if let Some(err) = partial.fatal_error() {
         warn!(conn_id = self.conn_id, txid, shard_id, "fatal shard reply aborted the scatter");
-        return err;
+        return Err(err);
     }
     shard_results.insert(shard_id, partial.into_keyed_results().into_iter().collect());
 }
+Ok(shard_results)
 ```
 
-   Pull the loop out as `fn fold_shard_replies(..) -> Result<HashMap<..>, Response>` so it is unit
-   testable without a live shard (see the forcing-test sketch).
+   The sketch is written in its **extracted** form: pull the loop out as
+   `fn fold_shard_replies(responses: ..) -> Result<HashMap<usize, HashMap<Bytes, Response>>, Response>`
+   so it is unit testable without a live shard (see the forcing-test sketch), and have `execute` do
+   `let shard_results = match fold_shard_replies(outcome.responses) { Ok(r) => r, Err(err) => return err };`.
+   Inlined instead, the two `return` forms become `return err;` and the trailing `Ok(..)` disappears —
+   but then test 2 needs a live coordinator, so the extracted form is the recommendation.
 
 4. **`impl Default for PartialResult` (`types.rs:812-820`) loses its only call site** — verified: a
    repo-wide search for `PartialResult::default()` returns exactly one hit, `vll.rs:46`. **Delete
@@ -229,15 +278,54 @@ half of the spec that begins at the `---` on L97. Verbatim:
 | Bug refs | none |
 ```
 
-Row schema verified against `scripts/failure-modes.py:114-122` (all seven `REQUIRED_FIELDS` present)
-and the numbering is sequential, so the script's per-area gap warning stays quiet.
+Row schema verified against `scripts/failure-modes.py`: all seven `REQUIRED_FIELDS` are present
+(`Trigger`, `Observable`, `NOT observable`, `Invariant`, `Outcome variant`, `Forced by`, `Bug refs`),
+the numbering is sequential so the per-area gap warning stays quiet, both forcing crates
+(`frogdb-core`, `frogdb-server`) are in `NEXTEST_CRATES`, the `// FM-VLL-006` tag placement
+immediately above `#[tokio::test]` / `#[test]` satisfies the script's `PREAMBLE_RE`, and the row is
+appended at EOF so it collides with no existing line.
+
+**Ruling — `FM-VLL-006` owns the second-dequeue observable (binding on sibling 45).** The `Trigger`
+above deliberately covers *"or an earlier `VllExecute` for the same txid already dequeued it"*.
+Sibling 45's phase-1 `Option`-slot design needs an answer for a second dequeue while one is
+outstanding and rules it *"return `None` + `debug_assert!` — observably identical to today's
+unknown-txid path … so it needs no new spec row; note the choice in FM-VLL-005's Invariant"*
+(`45:281-286`). That reasoning is sound **only while the unknown-txid path answers with empty
+success**, which is exactly the observable this proposal destroys — and 45 itself notes the refusal
+lands in the same arm it owns (`45:486`). There is no git conflict; the collision is one of
+spec ownership. Since 52 lands before 45 (see the ordering table), the ruling is:
+
+- `FM-VLL-006` is the row for *both* miss shapes — never-enqueued and already-dequeued. Its
+  `Observable` is the typed refusal, and 45's second dequeue inherits it unchanged.
+- **45 must drop the FM-VLL-005-`Invariant` note** it planned and instead cross-reference
+  `FM-VLL-006` from wherever it documents the `Option`-slot choice. FM-VLL-005 is the panic-isolation
+  row; hanging a dequeue-arity decision off it was only ever a convenience, and after this proposal
+  it would also be inaccurate.
+- 45's `debug_assert!` is unaffected and still wanted: it fires in tests before the refusal is ever
+  observed in production.
 
 ### Forcing-test sketch (red first, then green)
 
 **Test 1 — `frogdb-core`, in `core/src/shard/vll.rs`'s tests module** (next to the code it pins).
 `test_worker()` (L119-135) currently hardcodes `NoopMetricsRecorder`; add a
 `test_worker_with(recorder)` variant and keep `test_worker()` delegating to it, mirroring
-`panic_guard.rs`'s `worker_with` + `RecordingRecorder` (L294-315).
+`panic_guard.rs`'s `worker_with` + `RecordingRecorder`.
+
+**One prerequisite the sketch depends on: `RecordingRecorder` is not reachable from `vll.rs`.** It is
+declared inside `panic_guard.rs`'s own `#[cfg(test)] mod tests` (L296-315, doc at L294-295), so it is
+private to that module — `vll.rs`'s test module (L102) cannot name it. Two acceptable resolutions,
+both small; pick one at implementation time:
+
+- **(i) Duplicate it** — ~20 lines of `MetricsRecorder` impl over a `Mutex<HashMap<String, u64>>` in
+  `vll.rs`'s test module. Zero blast radius, one more copy of a trivial recorder.
+- **(ii) Hoist it** to a shared `frogdb-core` test-support module (e.g. `shard/test_support.rs`,
+  `#[cfg(test)]`, `pub(crate) struct RecordingRecorder`) and have both `panic_guard.rs` and `vll.rs`
+  use it. One extra small hunk in a **new file no sibling owns**, plus a one-line `mod` declaration
+  and the deletion of the original — no round-38 proposal touches either site.
+
+**(ii) is the recommendation** (the third caller is already foreseeable: any future counter forcing
+test in this crate), but (i) is a legitimate way to keep the diff inside the two files the proposal
+already claims.
 
 ```rust
 // FM-VLL-006
@@ -245,6 +333,7 @@ and the numbering is sequential, so the script's per-area gap warning stays quie
 async fn vll_execute_for_an_unheld_transaction_is_refused_not_silently_empty() {
     let recorder = Arc::new(RecordingRecorder::default());
     let mut worker = test_worker_with(recorder.clone());
+    let key = Bytes::from_static(b"k");
 
     // No lock request was ever enqueued for 4242 on this shard.
     let (tx, rx) = oneshot::channel();
@@ -331,9 +420,21 @@ scenario is still worth adding; it just cannot be the row's witness.
 
 | Proposal | Overlap with 52 | Required order |
 | --- | --- | --- |
-| **51** txn-slot-vll-state-small | **None** under Shape A — 52 touches no file in `frogdb-vll`. 51 keeps `dequeue_for_execution`'s signature and semantics identical (it only removes the `Option` unwrap at L227). 51 owns `vll-failure-modes.md:46`; 52 appends after L109. 51's own sibling table already records "None" from its side. | **51 first** (it is the round's designated first lander), then 52 — but they are commutative. |
-| **45** vll-key-ownership-diagnostics | **CONFLICT (same function).** 45 variant (a) edits `core/src/shard/vll.rs:72` (drop the `&op.keys` argument); 52 rewrites L45–48 of the same function. A few lines apart, disjoint hunks. 45 variant (b) restructures `handle_vll_execute` around `run_dequeued`, which **swallows the `else` arm entirely** — under (b) the two must be one change. 45's table records this and names variant (a) the safe default; accepted and restated from this side. Spec: 45 owns L20–23, :69, :105–106; 52 owns only the appended row. | **52 before 45** under variant (a). Under variant (b): merge them, or defer (b) to a follow-up issue (45's own recommendation). |
-| **46** vll-acquire-error-unify | **Adjacent, disjoint.** Both edit `scatter/executor.rs`: 46 owns `scatter_error_to_response` (L141–193), 52 owns the reply fold (L125–129). No shared line. 46 unifies the **acquisition** error surface (`ScatterError`/`ContinuationError` → `VllAcquireError::to_response`); `FM-VLL-006` reports on the **result** channel, so no unification is implied and no coordinator error enum changes. Spec: 46 owns the preamble (L14–18, L26–30) and FM-VLL-001–004's `Observable`/`Outcome variant` fields; 52's row is append-only after L109. | Either order. If 46 lands first, re-check that `ERR VLL execute for an unheld transaction` still reads consistently with whatever prefix convention 46 settles on. |
+| **51** txn-slot-vll-state-small | **None** under Shape A — 52 touches no file in `frogdb-vll`. 51 keeps `dequeue_for_execution`'s signature and semantics identical (it only removes the `Option` unwrap at L227). 51 owns `vll-failure-modes.md:46`; 52 appends after L109. 51's own sibling table already records "None" from its side. **One correction owed to 51** — its cell for 52 (`51:502`) ends *"Both need the `frogdb-vll` re-gate; independent otherwise."* That is **false under Shape A**: 52 changes no line of `frogdb-vll`, owes no `just mutants-diff frogdb-vll`, and `FM-VLL-006` contributes **nothing** to the `frogdb-vll` 0.90 gate (landing step 3 below). 51 owes the re-gate; 52 does not. 52's reading governs — a scheduler reading 51 must not budget a mutation run for this proposal. | **51 first** (it is the round's designated first lander), then 52 — but they are commutative. |
+| **45** vll-key-ownership-diagnostics | **CONFLICT (same function).** 45 variant (a) edits `core/src/shard/vll.rs:72` (drop the `&op.keys` argument); 52 rewrites L45–48 of the same function. A few lines apart, disjoint hunks. 45 variant (b) restructures `handle_vll_execute` around `run_dequeued`, which **swallows the `else` arm entirely** — under (b) the two must be one change. 45's table records this and names variant (a) the safe default; accepted and restated from this side. Spec: 45 owns L20–23, :69, :105–106; 52 owns only the appended row. **Second collision, spec-ownership not textual (see the ruling under the FM-VLL-006 row):** 45's `Option`-slot second-dequeue answer (`45:281-286`) is justified as *"observably identical to today's unknown-txid path"* and parked in FM-VLL-005's `Invariant`. 52 destroys that observable, and `FM-VLL-006`'s `Trigger` already claims the case. **Ruling: `FM-VLL-006` owns the second-dequeue observable; 45 drops its FM-VLL-005-`Invariant` note and cross-references `FM-VLL-006` instead.** 45's `debug_assert!` stands. | **52 before 45** under variant (a) — which the spec ruling above also requires, since 45 rebases its note onto 52's row. Under variant (b): merge them, or defer (b) to a follow-up issue (45's own recommendation). |
+| **46** vll-acquire-error-unify | **Adjacent, disjoint.** Both edit `scatter/executor.rs`: 46 owns `scatter_error_to_response` (L141–193), 52 owns the reply fold (L125–129). No shared line. 46 unifies the **acquisition** error surface (`ScatterError`/`ContinuationError` → `VllAcquireError::to_response`); `FM-VLL-006` reports on the **result** channel, so no unification is implied and no coordinator error enum changes. Spec: 46 owns the preamble (L14–18, L26–30) and FM-VLL-001–004's `Observable`/`Outcome variant` fields; 52's row is append-only after L109. **Correction owed to 46:** its boundary cell for this proposal (`46:607-609`) credits 52 with *"`core/src/shard/vll.rs::handle_vll_execute` and appends a new `FM-VLL-006`. No code overlap"* — stale. 52 also edits `scatter/executor.rs:125-129`, a file 46 edits at L141–193. The edits are still disjoint (verified: 46's region begins at the `fn scatter_error_to_response` signature on L141; 52's ends at L129), so the conclusion "merges in either order" survives — but the cell should record the shared file so the graph pass does not treat `executor.rs` as single-owner. **52's read is the correct one.** | Either order. If 46 lands first, re-check that `ERR VLL execute for an unheld transaction` still reads consistently with whatever prefix convention 46 settles on. Do not land the two `executor.rs` hunks simultaneously — sequence them. |
+
+**Round-level ordering contradiction — flagged, not resolved here (45 ↔ 46).** The two siblings rule
+oppositely on the 46-vs-51 edge: 46 says *"Recommended order: **51 → 46 → 45**"* (`46:587`), 45 says
+*"**Recommended order:** 46 → 51 (TX12) → 52 → 45"* (`45:488`). Both cannot hold. **52 is unaffected
+either way** — it is commutative with 51 (no shared file), commutative with 46 (disjoint regions of
+one file), and strictly before 45 under both rulings — so this proposal takes no position and leaves
+the edge to the scheduler / consistency sweep. Two notes for whoever resolves it: (i) 46's argument
+is that 51's `vll-failure-modes.md:46` edit must precede 46's `:47`/`:68` edits in the same rows,
+which is a concrete markdown-conflict argument; 45's is *"46 is first purely because its spec diff is
+smallest"*, explicitly not load-bearing — so the evidence leans 51 → 46. (ii) `45:488`'s
+*"Only the last three edges are load-bearing"* should read **"last two"**: its chain `46 → 51 → 52 →
+45` has exactly three edges, and the sentence's own next clause disclaims the first one.
 
 **Locked-area landing steps:**
 
@@ -354,11 +455,14 @@ scenario is still worth adding; it just cannot be the row's witness.
    nothing to dequeue (FM-VLL-006)"*. **That line belongs to 45's block** (45 rewrites L20–23
    wholesale). Recommendation: skip the edit — the row establishes itself, exactly as FM-VLL-005
    does — and if a reviewer wants it, sequence it after 45.
-5. **Do not rename `vll_execute_cannot_mutate_a_held_key_under_a_foreign_continuation_lock`.**
-   `scripts/continuation-lock-gate.py:116` pins the name and the file (`vll.rs`); `just lint-gates`
-   runs on every commit. Tightening its assertions and prose is fine; its EXEMPT reason string
-   (L112–115) should also gain "…and the drain path refuses the miss rather than answering empty",
-   which is a `scripts/` edit in the same commit.
+5. **Do not rename or move `vll_execute_cannot_mutate_a_held_key_under_a_foreign_continuation_lock`.**
+   That half is load-bearing: `scripts/continuation-lock-gate.py:116-117` pins the fn name *and* the
+   file (`vll.rs`), rule 6 (L385-398) re-reads the file and regex-matches `fn <name>(`, and
+   `just lint-gates` runs on every commit. The **reason string is not checked** — rule 6 parses only
+   the fn name and path, and the existing wording *"`dequeue_for_execution` returns nothing"* stays
+   literally true after this change (what changes is the *answer* to that, not the return). So
+   extending the reason (L112–115) with "…and the drain path refuses the miss rather than answering
+   empty" is **recommended for accuracy; the gate does not enforce it.**
 
 **Other risks:**
 
@@ -389,17 +493,20 @@ scenario is still worth adding; it just cannot be the row's witness.
 ## Effort estimate
 
 **S.** One `else` arm (~10 lines), one metric definition, one extracted fold plus a `fatal_error()`
-check in the executor, one `Default` impl deleted, two new forcing tests, one existing test tightened
-and one gate reason string extended, one appended spec row, one `just docs-gen`. No `frogdb-vll` line
-changes and therefore no mutation re-gate; `just lint-failure-modes` and `just lint-gates` are the
-gates that matter.
+check in the executor, one `Default` impl deleted, two new forcing tests, one `RecordingRecorder`
+made reachable from `vll.rs` (duplicate or hoist — see test 1), one existing test tightened, one
+appended spec row, one `just docs-gen`, plus an optional-but-recommended gate reason-string
+extension. **No `frogdb-vll` line changes and therefore no mutation re-gate** (this is the point 51's
+cell at `51:502` gets wrong); `just lint-failure-modes` and `just lint-gates` are the gates that
+matter.
 
 ### Independently-landable prerequisite
 
 **The executor's `FatalReply` check (step 3) can land on its own, ahead of everything else, with no
-spec row.** It is a pure no-op today — verified that no VLL scatter op is keyless, so
-`scatter_error_reply` never produces `ShardError` on that path — and it touches neither a locked
-crate nor the spec. Landing it first buys two things: the `FatalReply` invariant becomes true as its
+spec row.** It is a pure no-op today — `PartialResult::shard_error` has exactly two construction
+sites repo-wide (`dispatch_core.rs:220`, `broadcast.rs:1024` in a test), and the production one is
+the keyless branch of `scatter_error_reply`, which no VLL scatter op can reach because all six
+strategies partition through `partition_keys` — and it touches neither a locked crate nor the spec. Landing it first buys two things: the `FatalReply` invariant becomes true as its
 doc already claims, and the shard-side arm in step 1 then lands as a self-contained change whose
 effect is immediately visible end to end. It edits `scatter/executor.rs:125-129` only, so it does not
 collide with 46 (which owns L141–193 of the same file) — sequence the two rather than landing them
