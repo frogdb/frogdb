@@ -48,7 +48,8 @@ under a concurrent mutants run.
 
 - [x] Root cause identified and closed at a seam; the divergent trace event named
 - [x] `same_seed_same_run` hardened to run under synthetic CPU pressure and still pass
-- [x] `just mutants-diff` triaged on any touched locked crate
+- [ ] `just mutants-diff` triaged on any touched locked crate — **not run**, see
+      [Push discipline](#push-discipline) below
 
 ## Blocked by
 
@@ -113,6 +114,29 @@ This is a deterministic substitute for the "burn CPU in the harness" the issue a
 a stronger one: it does not depend on the machine's core count or on how much of the load the
 scheduler actually delivers to the sim thread, and it reproduces the failure on an idle
 laptop. The test was additionally verified 10/10 under eight competing busy loops.
+
+### Verification
+
+- `test_cluster_scheduler_same_seed_same_run` (now the stretched replay): PASS, and 10/10 PASS
+  with eight `yes > /dev/null` busy loops competing for the machine.
+- `test_cluster_scheduler_regression_seeds`: PASS — every muzzled `EXPECTED-FAILURE:issue-20`
+  seed still reproduces its failure, so no muzzle silently went green under the new clock.
+- `test_cluster_scheduler_smoke_sweep`: PASS. `just cluster-seeds 25`: PASS.
+- No new failing seeds. Seeds 234–263 fail on exactly `{234, 250}` both at this branch and at
+  the pre-fix baseline `1b8acd44` — same set, same `XNODE-SLOT-1` signature, i.e.
+  [issue 20](../open/), untouched by this change.
+- `just lint-failure-modes`, `just lint-gates` (via the pre-commit hook, `clock-seam.py`
+  included) and `just scratch-check`: all green.
+- New unit test `frogdb_types::clock::tests::elapsed_tracks_the_paused_clock_not_the_os_clock`
+  pins the seam's own behaviour.
+
+### Push discipline
+
+`just mutants-diff` has **not** been run. `frogdb-cluster` and `frogdb-cluster-runtime` are
+untouched, but the seam swap does reach four other locked crates — `frogdb-replication`,
+`frogdb-replication-runtime`, `frogdb-persistence`, `frogdb-txn` (10 files, 21 lines, every one
+a mechanical `X.elapsed()` -> `clock::elapsed(X)`). Run `just mutants-diff` on those four before
+this branch is pushed.
 
 ### Not fixed here
 
