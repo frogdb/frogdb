@@ -4,7 +4,7 @@ Status: needs-triage
 
 ## Parent
 
-Found by [issue 08](08-stateright-promotion-model.md)'s stateright promotion model
+Found by [issue 08](../done/08-stateright-promotion-model.md)'s stateright promotion model
 (`frogdb-server/crates/replication/src/model/promotion/`), filed under the campaign's rule that a
 model counterexample is pinned and filed rather than fixed inline.
 [PRD](../../PRD.md) §3 W3.
