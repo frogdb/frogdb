@@ -136,8 +136,7 @@ impl SnapshotStats {
     /// How long the in-flight save has been running, or `None` when none is.
     /// Reported as Redis' `rdb_current_bgsave_time_sec` (`-1` when idle).
     pub fn current_save_elapsed(&self) -> Option<Duration> {
-        self.current_started_at
-            .map(|started| clock::elapsed(started))
+        self.current_started_at.map(clock::elapsed)
     }
 }
 
