@@ -145,13 +145,14 @@ filter = "test(model::tests::handoff_model_full) | test(model::failover::tests::
 slow-timeout = { period = "60s" }
 test-group = "model-check"
 
-# `frogdb-replication`'s feed-gate model (opt-in via `just replication-model-check`;
-# see frogdb-server/crates/replication/src/model/) is the same shape against the
-# replica-feed hold, and shares the group for the same reason: two of these
-# enumerating millions of states at once would swap rather than finish, and they
-# are as likely to be launched alongside the cluster models as alone.
+# `frogdb-replication`'s models (opt-in via `just replication-model-check`; see
+# frogdb-server/crates/replication/src/model/) are the same shape against the
+# replica-feed hold and the promotion composite, and share the group for the
+# same reason: two of these enumerating millions of states at once would swap
+# rather than finish, and they are as likely to be launched alongside the
+# cluster models as alone.
 [[profile.default.overrides]]
-filter = "test(model::feed_gate::tests::feed_gate_model_full)"
+filter = "test(model::feed_gate::tests::feed_gate_model_full) | test(model::promotion::tests::promotion_model_full)"
 slow-timeout = { period = "60s" }
 test-group = "model-check"
 
@@ -163,7 +164,7 @@ test-group = "model-check"
 # them headroom rather than shrinking the depth bound, which is what the model
 # is for.
 [[profile.default.overrides]]
-filter = "test(model::tests::handoff_model_smoke) | test(model::failover::tests::failover_model_smoke)"
+filter = "test(model::tests::handoff_model_smoke) | test(model::failover::tests::failover_model_smoke) | test(model::promotion::tests::promotion_model_smoke)"
 slow-timeout = { period = "30s", terminate-after = 3 }
 
 # HyperLogLog cardinality tests add tens of thousands of elements over the

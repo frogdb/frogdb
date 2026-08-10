@@ -1,17 +1,21 @@
 """Nightly stateright model-checking workflow definition (replication).
 
 The replication-correctness campaign's W3 wave
-(`.scratch/replication-correctness/PRD.md` §3 W3, issue 09) added an
-explicit-state model of the slot-handoff replica-feed hold (FM-CLUSTER-097) that
-drives the *production* decision functions in
-`frogdb-server/crates/replication/src/feed_gate.rs` — `decide_feed_hold_until`,
-`decide_publish`, `decide_hold` — through every interleaving of arming,
-overlapping, releasing, lapsing, waiting and shipping inside a small scope.
+(`.scratch/replication-correctness/PRD.md` §3 W3, issues 08 and 09) added
+explicit-state models in `frogdb-server/crates/replication/src/model/` that
+drive *production* decision functions: the slot-handoff replica-feed hold
+(FM-CLUSTER-097, via `decide_feed_hold_until` / `decide_publish` /
+`decide_hold`) and the promotion / resume composite (via `plan_primary_stint`,
+`PartialSyncReplay::handle_partial_sync_request`, `select_psync_arm`).
 
 Tiering follows the cluster models' ruling: per-commit runs get the bounded
-smoke config (~0.1 s, in the default suite), and the real exploration budgets run
+smoke configs (in the default suite), and the real exploration budgets run
 nightly. This workflow is that nightly tier, driving the `#[ignore]`d full-scope
 tests via `just replication-model-check` — the same budget a laptop can run.
+
+Separate from `cluster-model-nightly.yml` rather than folded into it: the two
+crates' models are budgeted and floored independently, and one job running both
+would make either crate's scope widening extend the other's failure surface.
 """
 
 from workflow_gen.helpers import (
@@ -57,12 +61,12 @@ def replication_model_nightly_workflow() -> Workflow:
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
-            # Both full configs enumerate their whole reachable space in well
-            # under a minute on a laptop (the numbers are recorded in the
+            # Every full config enumerates its whole reachable space in well
+            # under a minute on a laptop (the numbers are recorded in each
             # model's file header and floored by the tests themselves). The
             # ceiling is a safety net for a scope widened later, not the
             # expected runtime.
-            timeout_minutes=60,
+            timeout_minutes=90,
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
@@ -70,7 +74,7 @@ def replication_model_nightly_workflow() -> Workflow:
                 libclang_step(),
                 cargo_cache_step(shared_key="replication-model-nightly"),
                 run_step(
-                    name="Model-check the replica-feed hold",
+                    name="Model-check the replication composites",
                     run=script("""\
                         just replication-model-check
                     """),

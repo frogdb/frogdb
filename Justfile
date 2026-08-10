@@ -192,19 +192,20 @@ model-check PATTERN='(handoff|failover)_model_full':
 
 # Run `frogdb-replication`'s stateright models at their full exploration budget (CI nightly
 # tier, not part of `just test`). Sibling of `model-check` above, which stays pointed at
-# `frogdb-cluster`: the two crates' models are separate budgets and are as likely to be run
-# one at a time as together, so widening one recipe to cover both would make every run pay
-# for the other crate's build.
+# `frogdb-cluster`: the two crates' models are budgeted, floored and scheduled
+# independently, and a single recipe that compiled both would make the cheap one pay for
+# the expensive one on every invocation.
 #
-# The default suite carries only the bounded smoke config (20k states, ~0.1s); this runs the
-# `#[ignore]`d full scopes recorded in the model's file header — the overlapping-barriers
-# depth config and the session-churn breadth config, ~4M and ~2.6M states.
+# The default suite carries only the bounded smoke configs; this runs the `#[ignore]`d
+# full scopes recorded in each model's file header (feed_gate ~4M/~2.6M states,
+# promotion ~8M/~6.2M states). The `model-check` nextest group pins them one at a time;
+# each is a saturating parallel BFS.
 #
-# Release profile, same reasoning as `model-check`: the models drive the production decision
-# functions once per explored transition, so a debug build spends most of the run in
-# unoptimized checker plumbing. PATTERN narrows to one config, e.g.
+# Release profile, same reasoning as `model-check`: the models drive the production
+# decision functions once per explored transition, so a debug build spends most of the
+# run in unoptimized checker plumbing. PATTERN narrows to one model or config, e.g.
 # `just replication-model-check feed_gate_model_full_churn`.
-replication-model-check PATTERN='feed_gate_model_full':
+replication-model-check PATTERN='(feed_gate|promotion)_model_full':
     {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-replication --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
 
 # Run the seed-driven cluster fault-scheduler sweep (frogdb-server
