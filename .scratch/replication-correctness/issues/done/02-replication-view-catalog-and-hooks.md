@@ -83,6 +83,74 @@ rather than fixed here.
       no third bucket (exit criterion 2)
 - [x] `just mutants-diff frogdb-replication` and `just lint-failure-modes` triaged before push
 
+## Resolution (2026-08-10)
+
+Two new modules in `frogdb-replication`: `view.rs` (the projection, its three transition
+witnesses and the `ViewField` enum) and `invariants.rs` (the sixteen entries, `check_hard`,
+`check_all` and the `debug_assert_view_clean` hook). Vocabulary is issue 01's
+`frogdb_types::catalog`, imported and re-exported, never redefined.
+
+**Skipping, not failing.** Every entry declares `requires: &[ViewField]`; `check_catalog` skips
+entries whose inputs are absent. Each seam builds the widest view it can reach, so a session-only
+seam is not read as claiming the offsets are zero. `INV-FENCE-1` and `INV-ROLE-1` are the honest
+cost — only a caller holding the quorum checker or the role manager fills their inputs — written
+into the `view` module docs rather than left to be rediscovered.
+
+**Two documented exceptions, each citing its ruling** (asserted as a whole list by
+`every_documented_exception_names_its_ruling`, so a third one cannot appear unnoticed):
+
+- `INV-ROLE-1` → `.scratch/testing-improvements/issues/done/48-chained-replication-contract.md`
+  (the chained-replication non-guarantee, as the issue predicted).
+- `INV-OFFSET-2` → issue 16 (below). Not predicted: the catalog's first run found it.
+
+**Nested seams.** The rule the crate already applied to `shift_replication_id` now holds
+everywhere: a hooked seam that calls another hooked seam takes an unhooked `*_inner`, so each
+hook is uniquely forcible and names the right seam. That took one new split this round —
+`OffsetCoordinator::settle_at_applied_inner`, called by `begin_primary_stint`, which is the only
+place a whole-node view (and therefore `INV-REPLID-2`) is checkable at all.
+
+**Three seams carry a hook but no forcing test**, documented at the tests rather than left
+unexplained: `ReplicationRingBuffer::reset` and `ReplicaFeedGate::publish` leave a state every
+entry accepts by construction, and `PartialSyncReplay::handle_partial_sync_request` only ever
+sees a grant whose two bounds were proven on the way in. Each note says what future change the
+hook would catch.
+
+### Defects the catalog found
+
+Filed, not fixed here (§7), each pinned by a muzzled `#[ignore]` witness so the fix has a test
+waiting:
+
+- **Issue 16** (`issues/open/16-…`) — `offset_at_save` can sit above the live head: both
+  reconcile paths raise it with a `max` and `reset_to` never lowers it, so a node that follows a
+  shorter history keeps the higher save point on disk, re-seeds `live` from it on restart, and
+  arms a failover window above data it does not hold. An existing test asserts today's behaviour
+  deliberately, which makes this a ruling rather than a bug — hence the exception tier.
+  Witness: `save_point_follows_a_backwards_full_resync` (`replica/offset.rs`).
+- **Issue 17** (`issues/open/17-…`) — the three replica-side wire paths (`psync`,
+  `receive_snapshot`, `receive_checkpoint`) adopt a peer-supplied replication id without
+  validating it, while the disk path validates. A malformed id is unmatchable, so it costs
+  permanent full resyncs and can make the node unbootable through `validate()`.
+  Witness: `a_continue_carrying_a_malformed_id_is_refused` (`replica/connection.rs`).
+  Fixture ids that were not 40-hex are now real ones, which is how the defect surfaced.
+
+`INV-OFFSET-4` was narrowed at the code instead of filed: a live head of 0 is a full resync in
+flight, where the window deliberately stands over the keyspace this node still holds until the
+payload lands (FM-REPLICATION-001). `INV-SESSION-2` (spec GAP-5) stays HARD — nothing in either
+suite trips it.
+
+### Evidence
+
+- `just test frogdb-replication`: 462/462, 2 skipped (the two muzzled witnesses).
+- `just test frogdb-server`: 2001/2002 with zero invariant violations; the one failure
+  (`integration_pubsub::test_ssubscribe_client_receives_sunsubscribe_on_slot_migration`) is
+  unrelated to replication and passes in isolation under the hooks.
+- `just lint` (workspace clippy, `--all-targets`) and `just lint-failure-modes` green.
+- `just mutants-diff frogdb-replication` triaged (see the commit series).
+
+The new `INV-*` ids are deliberately **not** cited in
+`.scratch/hardening/specs/replication-failure-modes.md` yet: `lint-failure-modes` resolves
+invariant citations against the cluster catalog only, so spec integration waits for issue 14.
+
 ## Blocked by
 
 - Issue 01 (`.scratch/replication-correctness/issues/`) — the `Violation`/`Citation`/`Tier`

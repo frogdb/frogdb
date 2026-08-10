@@ -286,10 +286,13 @@ mod tests {
         }
     }
 
+    /// What [`recording_confirm`] records into: every `(slot, seq)` proposed.
+    type ConfirmLog = Arc<Mutex<Vec<(u16, u64)>>>;
+
     /// A confirm sink recording every `(slot, seq)` it was asked to propose.
     fn recording_confirm() -> (
         impl Fn(u16, u64) -> std::future::Ready<()> + Send + Sync + 'static,
-        Arc<Mutex<Vec<(u16, u64)>>>,
+        ConfirmLog,
     ) {
         let log = Arc::new(Mutex::new(Vec::new()));
         let sink = log.clone();
