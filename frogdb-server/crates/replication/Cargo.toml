@@ -32,3 +32,7 @@ frogdb-persistence = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 serde_json.workspace = true
 proptest.workspace = true
+# Explicit-state model checking of the promotion/resume composite (`src/model`).
+# Dev-only: the model drives production decision functions, it is not part of
+# the shipped crate.
+stateright.workspace = true
