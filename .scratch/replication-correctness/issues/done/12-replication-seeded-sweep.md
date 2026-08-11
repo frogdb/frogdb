@@ -60,7 +60,8 @@ turmoil has no disk model. This arm consumes that machinery; it does not duplica
 - [x] Quiesce runs `DEBUG REPLICATION CHECK` on every surviving node plus XREPL-1, XREPL-2 and
       XREPL-3
 - [x] `just replication-seeds SEEDS='500'` is laptop-runnable with the budget in one place, and the
-      nightly is generated as `replication_nightly.py` (`just workflow-gen --check` green)
+      nightly is generated as `replication_seeds_nightly.py` (`just workflow-gen --check` green —
+      the plain `replication_nightly.py` name is issue 04's proptest tier, see the Resolution)
 - [x] No regression-seed file or `EXPECTED-FAILURE` muzzle is committed while cluster issue 23 is
       open, and the hold is stated where the next reader will see it (recipe or module docs)
 
@@ -159,14 +160,18 @@ wobble there would read as a determinism failure.
 
 ### Evidence
 
-- 500 seeds: 7 red before the fixes, 0 after, with 2 seeds counted at issue 22's
-  named gap and 4 covered by issue 21's.
-- 31/31 in the default scheduler tier (`just concurrency-turmoil
-  replication_scheduler`), including the smoke sweep and the determinism replay.
+- 500 seeds: 7 red before the fixes, 0 after, in 240s. Seeds 225 and 340 stop at
+  issue 21's named panic gap and are counted and named on stderr; the seeds that
+  forced issue 24 (81, 122, 171, 211) are covered by its gap. Both counts are
+  printed by a *passing* run, so nextest captures them unless the run fails —
+  `--success-output immediate` shows them.
+- 32/32 in the default scheduler tier (`just concurrency-turmoil
+  replication_scheduler`), including the smoke sweep, the determinism replay and
+  the seed-204 skew pin.
 - `just workflow-gen --check` green.
 
 Nothing in `frogdb-replication` / `frogdb-replication-runtime` src was touched,
-so no mutation re-baseline was owed here; issues 21 and 22 carry that obligation
+so no mutation re-baseline was owed here; issues 21 and 24 carry that obligation
 when they land.
 
 ## Blocked by
