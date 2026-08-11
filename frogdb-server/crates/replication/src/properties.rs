@@ -900,7 +900,7 @@ fn known_defect(node: &LinkNode, action: &LinkAction) -> Option<&'static str> {
                 return None;
             }
             (node.resolve_offset(offset) > node.live())
-                .then_some("issue 20: an ACK above the live head is admitted unclamped")
+                .then_some("issue 21: an ACK above the live head is admitted unclamped")
         }
         // Issue 21: nothing dedupes sessions by announced identity. A replica
         // that reconnects before this node has noticed the old link is gone
@@ -922,7 +922,7 @@ fn known_defect(node: &LinkNode, action: &LinkAction) -> Option<&'static str> {
                 .rev()
                 .skip(1)
                 .any(|session| session.phase() == Phase::Streaming)
-                .then_some("issue 21: a reconnect streams beside the session it replaces")
+                .then_some("issue 22: a reconnect streams beside the session it replaces")
         }
         _ => None,
     }
@@ -1319,10 +1319,10 @@ mod tests {
     // forbidden from emitting and asserts the catalog entry it violates; a fix
     // turns the witness red, which is the point.
 
-    /// `.scratch/replication-correctness/issues/open/20-ack-above-live-head.md`
+    /// `.scratch/replication-correctness/issues/open/21-ack-above-live-head.md`
     #[test]
     #[should_panic(expected = "INV-OFFSET-3")]
-    fn pinned_issue_20_an_ack_above_the_live_head_is_admitted() {
+    fn pinned_issue_21_an_ack_above_the_live_head_is_admitted() {
         let mut node = LinkNode::fresh(ChainPolicy::Off);
         node.apply(&LinkAction::Attach {
             slot: 0,
@@ -1345,10 +1345,10 @@ mod tests {
         });
     }
 
-    /// `.scratch/replication-correctness/issues/open/21-duplicate-streaming-identity.md`
+    /// `.scratch/replication-correctness/issues/open/22-duplicate-streaming-identity.md`
     #[test]
     #[should_panic(expected = "INV-SESSION-2")]
-    fn pinned_issue_21_a_reconnect_streams_beside_the_session_it_replaces() {
+    fn pinned_issue_22_a_reconnect_streams_beside_the_session_it_replaces() {
         let mut node = LinkNode::fresh(ChainPolicy::Off);
         node.apply(&LinkAction::Attach {
             slot: 0,
@@ -1420,7 +1420,7 @@ mod tests {
                 }
             )
             .is_some(),
-            "the pinned issue-20 shape must be muzzled"
+            "the pinned issue-21 shape must be muzzled"
         );
         // An overshooting ack against an *empty* slot is a rejection, not a
         // defect, so it stays in the property.
@@ -1463,7 +1463,7 @@ mod tests {
         });
         assert!(
             known_defect(&node, &first_psync).is_some(),
-            "the pinned issue-21 shape must be muzzled"
+            "the pinned issue-22 shape must be muzzled"
         );
         // Retire the predecessor and the same reconnect is legal again.
         node.apply(&LinkAction::Detach {

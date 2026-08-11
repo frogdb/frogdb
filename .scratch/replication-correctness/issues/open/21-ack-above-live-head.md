@@ -13,7 +13,7 @@ generator counterexample is pinned and filed rather than fixed inline.
 
 Property R1 (`r1_every_action_leaves_the_catalog_clean`) reaches a node whose registry credits a
 streaming replica with an offset the primary never wrote. The forcing sequence is
-`pinned_issue_20_an_ack_above_the_live_head_is_admitted` in
+`pinned_issue_21_an_ack_above_the_live_head_is_admitted` in
 `frogdb-server/crates/replication/src/properties.rs`: attach a replica, take it to `Streaming`
 through the real PSYNC ladder, write once, then deliver a `REPLCONF ACK` naming `live + 65`.
 
@@ -75,7 +75,7 @@ crate's spec-first rule.
 ## Pin
 
 `frogdb-server/crates/replication/src/properties.rs`:
-`pinned_issue_20_an_ack_above_the_live_head_is_admitted`
+`pinned_issue_21_an_ack_above_the_live_head_is_admitted`
 (`#[should_panic(expected = "INV-OFFSET-3")]`).
 
 The generator is muzzled for exactly the resolved shape "the ack would exceed the live head on a

@@ -13,7 +13,7 @@ generator counterexample is pinned and filed rather than fixed inline.
 
 Property R1 (`r1_every_action_leaves_the_catalog_clean`) reaches a registry holding **two**
 sessions for one announced replica identity, both in `Phase::Streaming`. The forcing sequence is
-`pinned_issue_21_a_reconnect_streams_beside_the_session_it_replaces` in
+`pinned_issue_22_a_reconnect_streams_beside_the_session_it_replaces` in
 `frogdb-server/crates/replication/src/properties.rs`:
 
 1. A replica attaches, announces `REPLCONF listening-port 6480`, and reaches `Streaming`.
@@ -48,7 +48,7 @@ sequence, `ingest_replica_ack`. In release the duplicate simply persists:
 - `WAIT` counts both sessions toward its replica quorum
   (`WaitCoordinator` counts acked sessions, not identities), so `WAIT 2 0` can be satisfied by one
   physical replica acking on its live session while the corpse's last ack is still on the books.
-  This is the same class of unbacked durability claim as [issue 20](20-ack-above-live-head.md),
+  This is the same class of unbacked durability claim as [issue 21](21-ack-above-live-head.md),
   reached a different way.
 - `count_good_replicas` / the lag disconnect machinery both operate per session, so the corpse also
   suppresses nothing and is disconnected on its own schedule.
@@ -80,7 +80,7 @@ crate's spec-first rule.
 ## Pin
 
 `frogdb-server/crates/replication/src/properties.rs`:
-`pinned_issue_21_a_reconnect_streams_beside_the_session_it_replaces`
+`pinned_issue_22_a_reconnect_streams_beside_the_session_it_replaces`
 (`#[should_panic(expected = "INV-SESSION-2")]`).
 
 The generator is muzzled for exactly the resolved shape "this PSYNC would take a second *announced*

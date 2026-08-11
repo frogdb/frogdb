@@ -91,9 +91,9 @@ on the write path) is unreachable from this harness and correctly carries no muz
 **Two new real defects found and filed**, both muzzled on the resolved effect (not a coarse
 shape) with a `#[should_panic]` pin apiece and a shared near-miss scope test:
 
-- [issue 20](../open/20-ack-above-live-head.md) — an ACK above the live head is admitted
+- [issue 21](../open/21-ack-above-live-head.md) — an ACK above the live head is admitted
   unclamped (`INV-OFFSET-3`)
-- [issue 21](../open/21-duplicate-streaming-identity.md) — a reconnect streams beside the session
+- [issue 22](../open/22-duplicate-streaming-identity.md) — a reconnect streams beside the session
   it replaces (`INV-SESSION-2`)
 
 Known defects 16, 17 and 18 need no muzzle: 16 requires an induced persist failure (and a frozen
