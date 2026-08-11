@@ -788,6 +788,14 @@ pub struct History {
     /// changed. Used to scope the offset-monotonicity claim, which a full resync
     /// onto a shorter history legitimately breaks.
     pub churn: Vec<u64>,
+    /// Nodes the schedule SIGKILLed and restarted at some point in the run.
+    ///
+    /// Read by the [`check_cross_node`] named gap for
+    /// [replication-correctness issue 21](../../../../../.scratch/replication-correctness/issues/open/21-a-restart-keeps-the-replication-id-it-lost-the-history-for.md):
+    /// a restarted node reboots with the replication id it had before the crash
+    /// but without the dataset, so replicas legitimately observe themselves
+    /// ahead of it on that id until they resync.
+    pub restarted: BTreeSet<usize>,
 }
 
 /// Rounds within this distance *after* a churn event are excluded from the
@@ -917,6 +925,18 @@ pub fn check_cross_node(history: &History) -> Vec<Violation> {
                 continue;
             };
             if view.offset <= primary.offset {
+                continue;
+            }
+            // Named gap — replication-correctness issue 21. `replication_state.json`
+            // lives in the data dir and is reloaded on every boot, dataset
+            // persistence or not, so a SIGKILLed primary comes back advertising
+            // the replication id it headed before the crash from a zero offset:
+            // the id outlives the history it names. Every replica that has not
+            // resynced yet is then trivially "ahead" of it on that id. Exempt
+            // exactly that signature — the schedule restarted this node and the
+            // primary is back at 0 — and nothing wider: a live primary that a
+            // replica has genuinely overtaken still fails here.
+            if primary.offset == 0 && history.restarted.contains(&primary.observer) {
                 continue;
             }
             violations.push(Violation {
@@ -1193,7 +1213,19 @@ fn run_seed_inner(seed: u64, real_step_stretch: Duration) -> (RunOutcome, SyncCo
     step_with_faults(&mut sim, &schedule, &shared, real_step_stretch);
     drop(dirs);
 
-    let state = std::mem::take(&mut *shared.lock().expect("shared"));
+    let mut state = std::mem::take(&mut *shared.lock().expect("shared"));
+    // Which nodes the schedule SIGKILLed, resolved the same way the step loop
+    // resolved them, so `LEADER` maps to the same host the faults were applied
+    // to. `check_cross_node`'s issue-21 gap keys off this.
+    state.history.restarted = schedule
+        .resolve(BOOT_PRIMARY)
+        .faults
+        .iter()
+        .filter_map(|f| match f.kind {
+            FaultKind::CrashRestart { node } => Some(node),
+            _ => None,
+        })
+        .collect();
 
     let mut violations = state.violations;
     violations.extend(check_cross_node(&state.history));
@@ -1220,6 +1252,22 @@ fn run_seed_inner(seed: u64, real_step_stretch: Duration) -> (RunOutcome, SyncCo
         eprintln!("--- seed {seed} fingerprint ---");
         for line in &fingerprint {
             eprintln!("{line}");
+        }
+        // Per-round node views, trace-only: they are the raw material for every
+        // XREPL-2 verdict, but they stay out of the fingerprint because a
+        // reconnect-count wobble in them would read as a determinism failure.
+        for round in &state.history.rounds {
+            for v in &round.views {
+                eprintln!(
+                    "  view round={} node={} role={} replid={} offset={} slaves={}",
+                    round.seq,
+                    v.observer,
+                    if v.is_primary { "master" } else { "slave" },
+                    v.replid,
+                    v.offset,
+                    v.connected_slaves,
+                );
+            }
         }
         eprintln!("--- end seed {seed} ---");
     }
@@ -2208,6 +2256,43 @@ fn test_xrepl_2_catches_a_replica_ahead_of_its_primary() {
         vec!["XREPL-2"]
     );
     assert!(found[0].detail.contains("not a prefix"), "{found:?}");
+}
+
+/// The named gap for replication-correctness issue 21, pinned both ways: a
+/// primary the schedule restarted, back at offset 0 under the id it headed
+/// before the crash, is exempt — a live primary a replica has genuinely
+/// overtaken is not, even when that same node was restarted earlier in the run.
+#[test]
+fn test_xrepl_2_exempts_only_a_restarted_primary_that_is_back_at_zero() {
+    let rebooted = History {
+        rounds: vec![Round {
+            seq: 3,
+            views: vec![view(0, true, "A", 0, 0), view(1, false, "A", 240, 0)],
+        }],
+        restarted: BTreeSet::from([0]),
+        ..History::default()
+    };
+    assert!(
+        check_cross_node(&rebooted).is_empty(),
+        "a rebooted primary at offset 0 is issue 21, not a fresh finding"
+    );
+
+    let live_again = History {
+        rounds: vec![Round {
+            seq: 3,
+            views: vec![view(0, true, "A", 12, 1), view(1, false, "A", 240, 0)],
+        }],
+        restarted: BTreeSet::from([0]),
+        ..History::default()
+    };
+    assert_eq!(
+        check_cross_node(&live_again)
+            .iter()
+            .map(|v| v.id)
+            .collect::<Vec<_>>(),
+        vec!["XREPL-2"],
+        "the gap must not widen to any primary that was ever restarted"
+    );
 }
 
 /// A replica still on an older replication id counts a *different* stream, so
