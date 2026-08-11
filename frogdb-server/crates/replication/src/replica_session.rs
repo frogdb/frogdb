@@ -2923,7 +2923,7 @@ mod tests {
         );
         let repl_id = handler.state.read().replication_id.clone();
 
-        let (client, server) = tokio::io::duplex(64);
+        let (mut client, server) = tokio::io::duplex(64);
         let session = tracker.register_replica(addr());
         let session_id = session.id();
         let expected_checkpoint = dir.path().join(format!("fullsync_{}", session_id));
@@ -2944,6 +2944,26 @@ mod tests {
                     .await
             }
         });
+
+        // Read the grant line first, then wait for the checkpoint to actually
+        // exist on disk. Dropping the client before the cut would fail the sync
+        // in the pre-checkpoint drain, there would be no directory to leak, and
+        // the assertion below would hold no matter what the exit path does —
+        // which is how a mutant that deletes `clean_checkpoint_dir` outright
+        // survived this test.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        let cut = tokio::time::timeout(Duration::from_secs(5), async {
+            while !expected_checkpoint.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            cut.is_ok() && expected_checkpoint.exists(),
+            "the test must reach a real checkpoint, else it asserts nothing: {}",
+            expected_checkpoint.display()
+        );
 
         // Drop the client so the checkpoint stream's writes start to fail
         // partway through. With a 64-byte duplex buffer, the writer blocks
