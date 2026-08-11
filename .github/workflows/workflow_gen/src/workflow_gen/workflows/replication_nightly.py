@@ -5,8 +5,13 @@ The replication-correctness campaign's W2 wave
 proptest generator in `frogdb-server/crates/replication/src/properties.rs` that
 folds link actions -- writes, acks, attach/detach, PSYNC grants, promotions,
 feed-gate barriers, restarts -- through a *real* replication node and asserts
-the `frogdb-replication` invariant catalog after every one of them (property
-R1).
+the `frogdb-replication` invariant catalog after every one of them (properties
+R1-R5).
+
+Issue 05 added the second harness, in
+`frogdb-server/crates/replication-runtime/src/properties.rs`: the same shape
+against the self-fence checker, which lives in the other crate (property R6).
+`just replication-proptest` selects both, so this job's budget covers both.
 
 Tiering follows the cluster property harness's ruling: per-PR coverage of the
 same properties runs inline in `test.yml` as part of the ordinary
@@ -58,7 +63,7 @@ DEFAULT_CASES = "200000"
 def _cases_input() -> CommentedMap:
     inp = CommentedMap()
     inp["description"] = (
-        f"proptest cases per property (default {DEFAULT_CASES}; the dev-loop budget is ~96)"
+        f"proptest cases per property (default {DEFAULT_CASES}; the dev-loop budget is 96-512)"
     )
     inp["required"] = False
     inp["default"] = SQ(DEFAULT_CASES)
@@ -80,17 +85,21 @@ def replication_nightly_workflow() -> Workflow:
     w.job(
         "replication-proptest",
         Job(
-            name="Nightly Replication Link Property Sweep",
+            name="Nightly Replication Property Sweep",
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
-            # Every case stands up a real node on a real temp directory, so this
-            # is slower per case than a pure state-machine harness: a 30k-case
-            # run measured ~290 cases/s in a debug build on an M-series laptop,
-            # putting the default budget near a quarter of an hour. The ceiling
-            # covers a much colder runner and leaves room for a dispatch that
-            # raises `cases`.
-            timeout_minutes=90,
+            # Every case stands up a real node on a real temp directory, so
+            # this is far slower per case than a pure state-machine harness.
+            # Measured on an M-series laptop, debug, all six properties running
+            # concurrently at 20k cases: R6 53s, R5 89s, R1 537s, R3 542s, R4
+            # 803s, R2 843s -- the wall clock is R2's ~42ms/case, so the 200k
+            # default projects to ~2.5h rather than the ~15min issue 04's
+            # single-property 30k measurement suggested. The ceiling is sized
+            # off that projection with room for a colder runner: this is a
+            # change-gated nightly on a free runner, so wall clock is cheaper
+            # than shrinking the budget.
+            timeout_minutes=240,
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),

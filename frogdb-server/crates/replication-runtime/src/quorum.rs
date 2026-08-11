@@ -14,6 +14,7 @@ use frogdb_core::command::QuorumChecker;
 use frogdb_core::metrics::WriteFenceReporter;
 use frogdb_core::{ReplicationTrackerImpl, ack_is_fresh};
 use frogdb_replication::ReplicaDeparture;
+use frogdb_replication::view::FenceView;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -129,6 +130,22 @@ impl ReplicationQuorumChecker {
     /// (which would fence the fresh primary before it has ever had a replica).
     pub fn reset_arming(&self) {
         self.armed.store(false, Ordering::Relaxed);
+    }
+
+    /// This checker's contribution to the invariant projection.
+    ///
+    /// `INV-FENCE-1` and `INV-SESSION-3` are both claims about the arming latch
+    /// held against the session registry, and neither is evaluable without it —
+    /// `frogdb-replication` owns the catalog but not the checker, so before
+    /// this seam existed the two entries were skipped everywhere. Read-only:
+    /// three loads, no arming, no disarming, so capturing the projection can
+    /// never be the thing that changes the decision it describes.
+    pub fn view(&self) -> FenceView {
+        FenceView {
+            self_fence_enabled: self.self_fence_enabled(),
+            armed: self.is_armed(),
+            freshness_window: self.freshness_timeout(),
+        }
     }
 
     /// Count streaming replicas whose last ACK is within the freshness timeout.

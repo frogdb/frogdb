@@ -208,20 +208,21 @@ model-check PATTERN='(handoff|failover)_model_full':
 replication-model-check PATTERN='(feed_gate|promotion)_model_full':
     {{dyld-env}} {{rocksdb-env}} cargo nextest run --release -p frogdb-replication --run-ignored all -E 'test(/{{PATTERN}}/)' --no-capture
 
-# Run the replication link property harness (frogdb-replication `properties` module,
-# replication-correctness issue 04) at a raised proptest budget. The default suite runs the
-# same tests at a small case count so the dev loop stays sub-second; this is the boosted
-# pass, and the `replication-nightly` workflow calls exactly this recipe so the budget lives
-# in one place. CASES sets PROPTEST_CASES; the harness falls back to its own default if it is
-# unset, unparseable or zero, so a typo cannot silently reduce the run to nothing. The
-# `replication-proptest` nextest profile lifts the default profile's hard kill for these tests
-# only — at this budget R1 runs for minutes on purpose.
+# Run the replication property harnesses at a raised proptest budget: the link harness
+# (frogdb-replication `properties`, R1-R5) and the self-fence harness
+# (frogdb-replication-runtime `properties`, R6) — replication-correctness issues 04 and 05.
+# The default suite runs the same tests at a small case count so the dev loop stays
+# sub-second; this is the boosted pass, and the `replication-nightly` workflow calls exactly
+# this recipe so the budget lives in one place. CASES sets PROPTEST_CASES; the harnesses fall
+# back to their own defaults if it is unset, unparseable or zero, so a typo cannot silently
+# reduce the run to nothing. The `replication-proptest` nextest profile lifts the default
+# profile's hard kill for these tests only — at this budget R1 runs for minutes on purpose.
 #
 # Debug profile, unlike the model checks: R1's oracle is `debug_assert_view_clean`, which the
 # production seams compile out under `debug_assertions = off`. A release run would exercise
 # the actions and check nothing at the seams.
 replication-proptest CASES='200000':
-    {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run --profile replication-proptest -p frogdb-replication -E 'test(/properties/)'
+    {{dyld-env}} {{rocksdb-env}} PROPTEST_CASES={{CASES}} cargo nextest run --profile replication-proptest -p frogdb-replication -p frogdb-replication-runtime -E 'test(/properties/)'
 
 # Run the seed-driven cluster fault-scheduler sweep (frogdb-server
 # `simulation::scheduler`, cluster-correctness issue 09). One u64 seed derives a whole
@@ -976,10 +977,10 @@ clean-stale:
     @du -sh target 2>/dev/null || true
     # Remove stale librocksdb-sys from-source build dirs (1.7GB+ each), keeping the newest
     @for dir in $(ls -dt target/debug/build/librocksdb-sys-*/ 2>/dev/null | tail -n +2); do \
-        size=$$(du -sm "$$dir" | cut -f1); \
-        if [ "$$size" -gt 100 ]; then \
-            echo "Removing stale rocksdb build: $$dir ($${size}MB)"; \
-            rm -rf "$$dir"; \
+        size=$(du -sm "$dir" | cut -f1); \
+        if [ "$size" -gt 100 ]; then \
+            echo "Removing stale rocksdb build: $dir (${size}MB)"; \
+            rm -rf "$dir"; \
         fi; \
     done
     # Sweep stale dep artifacts (not touched in 7 days)

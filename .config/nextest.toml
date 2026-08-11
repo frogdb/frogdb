@@ -121,13 +121,23 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 filter = "package(frogdb-cluster) & test(properties::)"
 slow-timeout = { period = "120s" }
 
-# The replication link property harness (`frogdb-replication` `properties`
-# module, issue 04). Same shape as the cluster one above: at the default case
-# budget R1 finishes in under a second, but each case builds a real node on a
-# real temp directory, so keep a hard kill at 4 x 30s rather than the default
-# 3 x 5s.
+# The replication property harnesses: the link one (`frogdb-replication`
+# `properties`, issue 04) and the self-fence one
+# (`frogdb-replication-runtime` `properties`, issue 05 R6). Same shape as the
+# cluster one above: at the default case budget they finish in under a second,
+# but each link case builds a real node on a real temp directory, so keep a
+# hard kill at 4 x 30s rather than the default 3 x 5s.
+#
+# Two filters rather than one prefix match: `package()` is an exact name match,
+# so `package(frogdb-replication)` does *not* cover
+# `frogdb-replication-runtime`, and a prefix glob would silently pick up any
+# future `frogdb-replication-*` crate.
 [[profile.default.overrides]]
 filter = "package(frogdb-replication) & test(properties::)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+filter = "package(frogdb-replication-runtime) & test(properties::)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 
 # The boosted pass over the same properties, selected by `just
@@ -141,6 +151,10 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 
 [[profile.replication-proptest.overrides]]
 filter = "package(frogdb-replication) & test(properties::)"
+slow-timeout = { period = "120s" }
+
+[[profile.replication-proptest.overrides]]
+filter = "package(frogdb-replication-runtime) & test(properties::)"
 slow-timeout = { period = "120s" }
 
 # The cluster fault-scheduler sweep, selected by `just cluster-seeds` (and therefore by
