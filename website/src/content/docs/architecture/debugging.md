@@ -46,6 +46,7 @@ FrogDB-specific subcommands, useful for diagnosing the shard/VLL machinery:
 | `EXPIRE-BACKDATE <key> <ms>` | Rewrite a key's TTL to `<ms>` in the past so it is already expired, with no wall-clock wait — deterministic, instant TTL elapse for tests (notably turmoil sims on a virtual clock). Rewrites only the deadline; the next read/sweep performs the actual expiry. Errors on a missing key or a key with no TTL |
 | `KEYSIZES-HIST-ASSERT`, `ALLOCSIZE-SLOTS-ASSERT` | Contributor/test assertion helpers |
 | `CLUSTER CHECK` | Run the cluster invariant catalog (`frogdb-cluster`'s `invariants` module) against this node's live replicated state and return every violation found, empty array when clean. Always compiled (Jepsen runs release binaries) and read-only. Errors with "cluster support disabled" outside cluster mode |
+| `REPLICATION CHECK` | Run the replication invariant catalog (`frogdb-replication`'s `invariants` module) against a view assembled from this node's live replication state — offsets, backlog window, replica sessions, apply gate, feed gate, self-fence and role — and return every violation found, empty array when clean. Same shape as `CLUSTER CHECK` (always compiled, read-only, `{id, detail}` maps), but it answers on **every** role including standalone: a node with no replicas still has offsets, replication ids and a backlog window that can go wrong |
 
 `DEBUG SLEEP` is gated behind the `server.enable-debug-command` config; when
 disabled it returns
