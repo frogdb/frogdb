@@ -51,11 +51,13 @@ use tempfile::TempDir;
 use frogdb_types::clock;
 
 use crate::feed_gate::ReplicaFeedGate;
+use crate::frame::ReplicationFrame;
 use crate::identity::ReplicationIdentity;
 use crate::invariants;
+use crate::offset_coordinator::OffsetCoordinator;
 use crate::primary::PrimaryReplicationHandler;
 use crate::primary::replay::ReplayDecision;
-use crate::replica::offset::{AppliedOffset, ReplicaApplyStint};
+use crate::replica::offset::{AppliedOffset, Claim, ReplicaApplyStint, ReplicaOffset};
 use crate::replica_session::{
     Phase, ReplicaAnnouncement, ReplicaCapabilities, ReplicaDeparture, ReplicaSession,
 };
@@ -65,7 +67,9 @@ use crate::state::{
 };
 use crate::sync_counters::SyncOutcome;
 use crate::tracker::ReplicationTrackerImpl;
-use crate::view::{ReplicationView, RoleView};
+use crate::view::{
+    ApplyGateView, BacklogView, ContinueGrant, OffsetTriple, PhaseChange, ReplicationView, RoleView,
+};
 use crate::{BacklogConfig, LagThresholdConfig};
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1096,732 @@ fn arb_link_sequence_with(
 }
 
 // ---------------------------------------------------------------------------
+// Snapshots
+//
+// R2 and R4 both compare two runs of the same actions. A raw `ReplicationView`
+// cannot be compared across runs: a promotion mints a *random* replication id,
+// and three fields are wall-clock samples. A `Snapshot` is the view with the
+// entropy interned to first-appearance symbols and the clock reads dropped —
+// what is left is exactly the part of the node two identical runs must agree
+// on.
+// ---------------------------------------------------------------------------
+
+/// Length of a replication id, as `generate_replication_id` mints it.
+const ID_LEN: usize = 40;
+
+/// Maps the random replication ids a run mints onto `#0`, `#1`, ... in the
+/// order they are first seen, so two runs that mint different ids in the same
+/// order compare equal.
+#[derive(Default)]
+struct Interner {
+    ids: Vec<String>,
+}
+
+impl Interner {
+    fn symbol(&mut self, id: &str) -> String {
+        let index = match self.ids.iter().position(|known| known == id) {
+            Some(index) => index,
+            None => {
+                self.ids.push(id.to_string());
+                self.ids.len() - 1
+            }
+        };
+        format!("#{index}")
+    }
+
+    /// The same substitution over rendered text, for the view fields whose
+    /// types carry ids inside them.
+    fn canon(&mut self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while !rest.is_empty() {
+            // The longest run of hex digits at the cursor. Taking the *maximal*
+            // run is what stops a 41-hex-digit token being read as an id.
+            let run = rest
+                .char_indices()
+                .find(|(_, ch)| !ch.is_ascii_hexdigit())
+                .map_or(rest.len(), |(index, _)| index);
+            if run == ID_LEN {
+                let symbol = self.symbol(&rest[..run]);
+                out.push_str(&symbol);
+            } else if run > 0 {
+                out.push_str(&rest[..run]);
+            } else {
+                let mut chars = rest.chars();
+                let ch = chars.next().expect("the remainder is non-empty");
+                out.push(ch);
+                rest = chars.as_str();
+                continue;
+            }
+            rest = &rest[run..];
+        }
+        out
+    }
+}
+
+/// The persisted identity, with the minted ids interned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StateSnapshot {
+    replication_id: String,
+    secondary_id: Option<String>,
+    offset_at_save: u64,
+    secondary_offset: i64,
+    active_version: Option<String>,
+    master_host: Option<String>,
+    master_port: Option<u16>,
+}
+
+impl StateSnapshot {
+    fn of(state: &ReplicationState, interner: &mut Interner) -> Self {
+        Self {
+            replication_id: interner.symbol(&state.replication_id),
+            secondary_id: state.secondary_id.as_deref().map(|id| interner.symbol(id)),
+            offset_at_save: state.offset_at_save,
+            secondary_offset: state.secondary_offset,
+            active_version: state.active_version.clone(),
+            master_host: state.master_host.clone(),
+            master_port: state.master_port,
+        }
+    }
+}
+
+/// One registered session, minus its ACK age.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionSnapshot {
+    id: u64,
+    addr: SocketAddr,
+    announced_id: Option<(IpAddr, u16)>,
+    phase: Phase,
+    acked: u64,
+    resume_floor: u64,
+    // `ReplicaView::last_ack_age` is sampled from the wall clock at capture
+    // time, so it differs between two runs of the same actions by however long
+    // the first run took. Dropping it is what makes R4 a statement about the
+    // decisions rather than about the machine.
+}
+
+/// A node's whole projection, comparable across runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Snapshot {
+    state: Option<StateSnapshot>,
+    offsets: Option<OffsetTriple>,
+    apply_gate: Option<ApplyGateView>,
+    backlog: Option<BacklogView>,
+    replicas: Option<Vec<SessionSnapshot>>,
+    departure: Option<ReplicaDeparture>,
+    /// `FeedGateView::hold_remaining` counts down against the wall clock; only
+    /// whether the barrier is up, and the budget it is measured against, are
+    /// decisions.
+    feed_held: Option<bool>,
+    barrier_budget: Option<Duration>,
+    fence: Option<crate::view::FenceView>,
+    role: Option<RoleView>,
+    promotion: Option<String>,
+    grant: Option<ContinueGrant>,
+    phase_change: Option<PhaseChange>,
+}
+
+impl Snapshot {
+    fn of(view: &ReplicationView, interner: &mut Interner) -> Self {
+        // Destructured rather than field-accessed so a new view field is a
+        // compile error here instead of a silently uncompared value.
+        let ReplicationView {
+            state,
+            offsets,
+            apply_gate,
+            backlog,
+            replicas,
+            departure,
+            feed_gate,
+            fence,
+            role,
+            promotion,
+            grant,
+            phase_change,
+        } = view;
+        Self {
+            state: state
+                .as_ref()
+                .map(|state| StateSnapshot::of(state, interner)),
+            offsets: *offsets,
+            apply_gate: *apply_gate,
+            backlog: *backlog,
+            replicas: replicas.as_ref().map(|replicas| {
+                replicas
+                    .iter()
+                    .map(|replica| SessionSnapshot {
+                        id: replica.id,
+                        addr: replica.addr,
+                        announced_id: replica.announced_id,
+                        phase: replica.phase,
+                        acked: replica.acked,
+                        resume_floor: replica.resume_floor,
+                    })
+                    .collect()
+            }),
+            departure: *departure,
+            feed_held: feed_gate.map(|gate| gate.is_held),
+            barrier_budget: feed_gate.and_then(|gate| gate.barrier_budget),
+            fence: *fence,
+            role: role.clone(),
+            // Carries the pre-mint and post-mint ids, so it goes through the
+            // interner as rendered text.
+            promotion: promotion
+                .as_ref()
+                .map(|witness| interner.canon(&format!("{witness:?}"))),
+            grant: *grant,
+            phase_change: *phase_change,
+        }
+    }
+}
+
+/// One step of a run: what the node said about the action, and where the action
+/// left it.
+type Step2 = (Outcome, Snapshot);
+
+/// Drive a fresh node through `actions`, snapshotting after each one.
+fn replay_snapshots(actions: &[LinkAction]) -> Vec<Step2> {
+    let mut node = LinkNode::fresh(ChainPolicy::Off);
+    let mut interner = Interner::default();
+    actions
+        .iter()
+        .map(|action| {
+            let outcome = node.apply(action);
+            (outcome, Snapshot::of(&node.view(), &mut interner))
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// R2 — the two persistence vehicles
+// ---------------------------------------------------------------------------
+
+/// The two ways this node's replication identity crosses a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Vehicle {
+    /// `ReplicationState::save` -> `ReplicationState::load_or_create`: the
+    /// state file, written at every save point.
+    StateFile,
+    /// `read_staged_replication_metadata` -> `apply_staged_metadata`: the
+    /// trailer a full-sync checkpoint carries, adopted when the snapshot is
+    /// installed.
+    StagedMetadata,
+}
+
+/// What a round trip carried across.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Carried {
+    /// Everything. The node is the one it was, so the rest of the run is
+    /// comparable with an uninterrupted one.
+    Whole,
+    /// Everything except the failover window, which the staged vehicle clears
+    /// on purpose: adopting a checkpoint means adopting the primary's history
+    /// wholesale, and any window this node carried described a stream it no
+    /// longer holds (`ReplicationState::apply_staged_metadata`). The node is a
+    /// different one from here on and the suffix is not compared.
+    WholeExceptTheFailoverWindow,
+}
+
+/// Round-trip this node's persisted state through `vehicle` and install the
+/// result, asserting the vehicle is lossless on the way.
+///
+/// The trip runs against a scratch directory, never the node's own: writing the
+/// node's state file would leave residue a later `RestoreState` in the same run
+/// would read, which is a change to the run rather than a round trip inside it.
+fn round_trip(node: &LinkNode, vehicle: Vehicle) -> Result<Carried, String> {
+    let scratch = tempfile::tempdir().map_err(|err| format!("scratch dir: {err}"))?;
+    let before = node.handler.state();
+    match vehicle {
+        Vehicle::StateFile => {
+            let path = state_path(scratch.path());
+            before.save(&path).map_err(|err| format!("save: {err}"))?;
+            let after =
+                ReplicationState::load_or_create(&path).map_err(|err| format!("load: {err}"))?;
+            if after != before {
+                return Err(format!(
+                    "the state file dropped something across a save point:\n  before: \
+                     {before:?}\n  after:  {after:?}"
+                ));
+            }
+            *node.handler.shared_state().write() = after;
+            Ok(Carried::Whole)
+        }
+        Vehicle::StagedMetadata => {
+            // The trailer a checkpoint carries describes the identity and the
+            // save-point offset of the state that cut it.
+            let staged = StagedReplicationMetadata {
+                replication_id: before.replication_id.clone(),
+                replication_offset: before.offset_at_save,
+                checksum: None,
+            };
+            let path = ReplicationState::staged_metadata_path(scratch.path());
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&staged).map_err(|err| format!("serialize: {err}"))?,
+            )
+            .map_err(|err| format!("stage: {err}"))?;
+            let read = read_staged_replication_metadata(scratch.path())
+                .map_err(|err| format!("read staged: {err}"))?
+                .ok_or_else(|| "the vehicle refused a trailer it had just written".to_string())?;
+            consume_staged_replication_metadata(scratch.path());
+            let mut after = before.clone();
+            after.apply_staged_metadata(&read);
+
+            // The one difference the vehicle is *allowed* to have, stated
+            // exactly: the failover window goes, and nothing else does.
+            let expected = ReplicationState {
+                secondary_id: None,
+                secondary_offset: -1,
+                ..before.clone()
+            };
+            if after != expected {
+                return Err(format!(
+                    "the staged vehicle dropped more than the failover window:\n  before:   \
+                     {before:?}\n  expected: {expected:?}\n  after:    {after:?}"
+                ));
+            }
+            let carried = if before.secondary_id.is_none() && before.secondary_offset == -1 {
+                Carried::Whole
+            } else {
+                Carried::WholeExceptTheFailoverWindow
+            };
+            *node.handler.shared_state().write() = after;
+            Ok(carried)
+        }
+    }
+}
+
+/// A run of `actions` with a `vehicle` round trip spliced in before action
+/// `split` (or after the last action when `split == actions.len()`).
+struct Interrupted {
+    steps: Vec<Step2>,
+    carried: Carried,
+}
+
+fn replay_with_round_trip(
+    actions: &[LinkAction],
+    split: usize,
+    vehicle: Vehicle,
+) -> Result<Interrupted, String> {
+    let mut node = LinkNode::fresh(ChainPolicy::Off);
+    let mut interner = Interner::default();
+    let mut steps = Vec::with_capacity(actions.len());
+    let mut carried = Carried::Whole;
+    for (index, action) in actions.iter().enumerate() {
+        if index == split {
+            carried = round_trip(&node, vehicle)?;
+        }
+        let outcome = node.apply(action);
+        steps.push((outcome, Snapshot::of(&node.view(), &mut interner)));
+    }
+    if split >= actions.len() {
+        carried = round_trip(&node, vehicle)?;
+    }
+    Ok(Interrupted { steps, carried })
+}
+
+// ---------------------------------------------------------------------------
+// R3 — the PSYNC decision
+// ---------------------------------------------------------------------------
+
+/// The replication id a probe asks with. The last four are shapes no
+/// well-behaved replica sends, which is the point: the decision is total over
+/// the wire, not over the ids this node happens to mint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeId {
+    Current,
+    Secondary,
+    Foreign,
+    Unknown,
+    Empty,
+    Uppercase,
+    TooShort,
+    TooLong,
+    NotHex,
+}
+
+/// The offset a probe asks from, including the ones outside every window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeOffset {
+    Zero,
+    Live,
+    JustBelowLive,
+    JustAboveLive,
+    Half,
+    AtFloor,
+    JustBelowFloor,
+    Max,
+}
+
+/// One `PSYNC <id> <offset>` put to the decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PsyncProbe {
+    id: ProbeId,
+    offset: ProbeOffset,
+}
+
+fn arb_psync_probe() -> impl Strategy<Value = PsyncProbe> {
+    let ids = [
+        ProbeId::Current,
+        ProbeId::Secondary,
+        ProbeId::Foreign,
+        ProbeId::Unknown,
+        ProbeId::Empty,
+        ProbeId::Uppercase,
+        ProbeId::TooShort,
+        ProbeId::TooLong,
+        ProbeId::NotHex,
+    ];
+    let offsets = [
+        ProbeOffset::Zero,
+        ProbeOffset::Live,
+        ProbeOffset::JustBelowLive,
+        ProbeOffset::JustAboveLive,
+        ProbeOffset::Half,
+        ProbeOffset::AtFloor,
+        ProbeOffset::JustBelowFloor,
+        ProbeOffset::Max,
+    ];
+    (0..ids.len(), 0..offsets.len()).prop_map(move |(id, offset)| PsyncProbe {
+        id: ids[id],
+        offset: offsets[offset],
+    })
+}
+
+impl LinkNode {
+    fn probe_id(&self, id: ProbeId) -> String {
+        match id {
+            ProbeId::Current => self.handler.replication_id(),
+            ProbeId::Secondary => self
+                .handler
+                .state()
+                .secondary_id
+                .unwrap_or_else(|| self.handler.replication_id()),
+            ProbeId::Foreign => FOREIGN_REPLICATION_ID.to_string(),
+            ProbeId::Unknown => "?".to_string(),
+            ProbeId::Empty => String::new(),
+            ProbeId::Uppercase => self.handler.replication_id().to_uppercase(),
+            ProbeId::TooShort => self.handler.replication_id()[..ID_LEN - 1].to_string(),
+            ProbeId::TooLong => format!("{}0", self.handler.replication_id()),
+            ProbeId::NotHex => "z".repeat(ID_LEN),
+        }
+    }
+
+    fn probe_offset(&self, offset: ProbeOffset) -> u64 {
+        let live = self.live();
+        let floor = self.handler.replay.backlog_start();
+        match offset {
+            ProbeOffset::Zero => 0,
+            ProbeOffset::Live => live,
+            ProbeOffset::JustBelowLive => live.saturating_sub(1),
+            ProbeOffset::JustAboveLive => live.saturating_add(1),
+            ProbeOffset::Half => live / 2,
+            ProbeOffset::AtFloor => floor.unwrap_or(live),
+            ProbeOffset::JustBelowFloor => floor.unwrap_or(live).saturating_sub(1),
+            ProbeOffset::Max => u64::MAX,
+        }
+    }
+}
+
+/// Everything a `+CONTINUE` must be true of, checked against the ring it was
+/// cut from. Returns the first thing that is not.
+///
+/// `FM-REPLICATION-013/014/015` are the three scenarios this states once: a
+/// grant names `(replay_from, resume_offset]`, that range is inside the armed
+/// window, and the frames handed over cover it with no hole.
+fn grant_is_sound(
+    grant: &crate::primary::replay::ReplayGrant,
+    req_offset: u64,
+    current_offset: u64,
+    floor: Option<u64>,
+) -> Result<(), String> {
+    if grant.replay_from != req_offset {
+        return Err(format!(
+            "the grant resumes from {} but the replica asked from {req_offset}",
+            grant.replay_from
+        ));
+    }
+    if grant.resume_offset != current_offset {
+        return Err(format!(
+            "the grant lands at {} but the live head is {current_offset}",
+            grant.resume_offset
+        ));
+    }
+    if grant.replay_from > grant.resume_offset {
+        return Err(format!(
+            "the grant names a range that runs backwards: ({}, {}]",
+            grant.replay_from, grant.resume_offset
+        ));
+    }
+    match floor {
+        None => {
+            return Err("a grant was made with no backlog window armed".to_string());
+        }
+        Some(floor) if floor > grant.replay_from => {
+            return Err(format!(
+                "the grant resumes from {} but the window floor is {floor}",
+                grant.replay_from
+            ));
+        }
+        Some(_) => {}
+    }
+    // The frames cover `(replay_from, resume_offset]` with no hole: each one
+    // begins exactly where the previous ended, the first begins at or before
+    // the resume point, and the last ends at the head.
+    let mut cursor = grant.replay_from;
+    for (index, (end, _shard, payload)) in grant.frames.iter().enumerate() {
+        let len = payload.len() as u64;
+        let begin = end.checked_sub(len).ok_or_else(|| {
+            format!("frame {index} ends at {end} but carries {len} bytes, so it begins below zero")
+        })?;
+        if index == 0 {
+            if begin > cursor {
+                return Err(format!(
+                    "frame 0 begins at {begin}, leaving a hole above the resume point {cursor}"
+                ));
+            }
+        } else if begin != cursor {
+            return Err(format!(
+                "frame {index} begins at {begin} but frame {} ended at {cursor}",
+                index - 1
+            ));
+        }
+        if *end > grant.resume_offset {
+            return Err(format!(
+                "frame {index} ends at {end}, above the resume offset {}",
+                grant.resume_offset
+            ));
+        }
+        cursor = *end;
+    }
+    if let Some((end, _, _)) = grant.frames.last()
+        && *end != grant.resume_offset
+    {
+        return Err(format!(
+            "the replay stops at {end} but the grant promises {}",
+            grant.resume_offset
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// R5 — offset conservation
+// ---------------------------------------------------------------------------
+
+/// One move against the offset pair. Each is a real production door: the
+/// primary's advance gate, the replica's frame ingest, and the five gate
+/// operations the applier drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GateAction {
+    /// `OffsetCoordinator::advance` — this node's own write.
+    Advance { bytes: u8 },
+    /// `ReplicaOffset::frame_advance` — a frame arrives from upstream.
+    Receive { bytes: u8 },
+    /// `ReplicaApplyStint::claim` for the oldest received-but-unclaimed frame.
+    Claim { epoch: EpochRef },
+    /// `ReplicaApplyStint::land`.
+    Land,
+    /// `AppliedOffset::freeze` — a promotion takes the gate.
+    Freeze,
+    /// `ReplicaApplyStint::admit_divergence`.
+    AdmitDivergence { epoch: EpochRef },
+    /// `AppliedOffset::retire_replica_applies` — a newer stream takes over.
+    Retire,
+    /// A fresh stream: `begin_replica_stint` plus the `ReplicaOffset` built
+    /// over it, which is how production opens one.
+    BeginStint,
+    /// `ReplicaOffset::reset_to` — a full resync adopts a snapshot position.
+    Resync { above: bool, delta: u8 },
+}
+
+fn arb_gate_action() -> impl Strategy<Value = GateAction> {
+    prop_oneof![
+        6 => any::<u8>().prop_map(|bytes| GateAction::Advance { bytes }),
+        10 => any::<u8>().prop_map(|bytes| GateAction::Receive { bytes }),
+        12 => prop_oneof![Just(EpochRef::Current), Just(EpochRef::Stale)]
+            .prop_map(|epoch| GateAction::Claim { epoch }),
+        8 => Just(GateAction::Land),
+        2 => Just(GateAction::Freeze),
+        2 => prop_oneof![Just(EpochRef::Current), Just(EpochRef::Stale)]
+            .prop_map(|epoch| GateAction::AdmitDivergence { epoch }),
+        2 => Just(GateAction::Retire),
+        3 => Just(GateAction::BeginStint),
+        3 => (any::<bool>(), any::<u8>())
+            .prop_map(|(above, delta)| GateAction::Resync { above, delta }),
+    ]
+}
+
+/// A real offset pair with both doors open on it, plus the ledger the
+/// conservation claim is stated against.
+///
+/// The ledger is arithmetic over the *verdicts the production code returned* —
+/// how many bytes each call reported admitting — not a re-implementation of
+/// when it admits them. That is what keeps this a property and not a shadow
+/// model: the harness never predicts a `Claim`, it only adds up the ones that
+/// came back `Granted`.
+struct GateHarness {
+    identity: ReplicationIdentity,
+    offset: ReplicaOffset,
+    applied: AppliedOffset,
+    stint: ReplicaApplyStint,
+    coordinator: OffsetCoordinator,
+    /// Frame sizes received but not yet claimed, oldest first.
+    pending: std::collections::VecDeque<u64>,
+    /// The position both heads were last rebased to (0, or the last accepted
+    /// resync).
+    seed: u64,
+    /// Bytes the live head was moved by since `seed`.
+    received: u64,
+    /// Bytes the applied head was moved by since `seed`.
+    admitted: u64,
+    /// The applied head at the last `land()`, which is what `landed` must hold.
+    landed: u64,
+}
+
+impl GateHarness {
+    fn fresh() -> Self {
+        let tracker = ReplicationTrackerImpl::new_arc();
+        let identity = ReplicationIdentity::adopting(ReplicationState::new(), &tracker);
+        let coordinator = OffsetCoordinator::new(tracker, &identity);
+        let applied = identity.applied();
+        let stint = applied.begin_replica_stint();
+        let offset = ReplicaOffset::new(identity.state(), identity.live(), applied.clone());
+        Self {
+            identity,
+            offset,
+            applied,
+            stint,
+            coordinator,
+            pending: std::collections::VecDeque::new(),
+            seed: 0,
+            received: 0,
+            admitted: 0,
+            landed: 0,
+        }
+    }
+
+    fn apply(&mut self, action: GateAction) {
+        match action {
+            GateAction::Advance { bytes } => {
+                // A zero-byte write is not a write: the advance unit is the
+                // payload, and every real command has one.
+                let n = u64::from(bytes) + 1;
+                self.coordinator
+                    .advance(&Bytes::from(vec![b'w'; n as usize]));
+                self.received += n;
+                self.admitted += n;
+                // The primary path lands what it advances (`advance_by` moves
+                // the landed head with it).
+                self.landed = self.landed.max(self.seed + self.admitted);
+            }
+            GateAction::Receive { bytes } => {
+                let n = u64::from(bytes) + 1;
+                let frame = ReplicationFrame::new(0, Bytes::from(vec![b'f'; n as usize]));
+                self.offset.frame_advance(&frame);
+                self.received += n;
+                self.pending.push_back(n);
+            }
+            GateAction::Claim { epoch } => {
+                let Some(bytes) = self.pending.front().copied() else {
+                    return;
+                };
+                let live_epoch = self.stint.epoch();
+                let named = match epoch {
+                    EpochRef::Current => live_epoch,
+                    EpochRef::Stale => live_epoch.wrapping_add(1),
+                };
+                if self.stint.claim(named, bytes) == Claim::Granted {
+                    self.pending.pop_front();
+                    self.admitted += bytes;
+                }
+            }
+            GateAction::Land => {
+                self.stint.land();
+                self.landed = self.landed.max(self.seed + self.admitted);
+            }
+            GateAction::Freeze => {
+                self.applied.freeze();
+            }
+            GateAction::AdmitDivergence { epoch } => {
+                let live_epoch = self.stint.epoch();
+                let named = match epoch {
+                    EpochRef::Current => live_epoch,
+                    EpochRef::Stale => live_epoch.wrapping_add(1),
+                };
+                self.stint.admit_divergence(named);
+            }
+            GateAction::Retire => {
+                self.applied.retire_replica_applies();
+            }
+            GateAction::BeginStint => {
+                self.stint = self.applied.begin_replica_stint();
+                self.offset = ReplicaOffset::new(
+                    self.identity.state(),
+                    self.identity.live(),
+                    self.applied.clone(),
+                );
+                // Frames decoded under the previous stream are void.
+                self.pending.clear();
+            }
+            GateAction::Resync { above, delta } => {
+                let here = self.seed + self.admitted;
+                let target = if above {
+                    here.saturating_add(u64::from(delta))
+                } else {
+                    here.saturating_sub(u64::from(delta))
+                };
+                if self.offset.reset_to(target) {
+                    // Both heads adopted the snapshot's position, so the ledger
+                    // rebases on it.
+                    self.seed = target;
+                    self.received = 0;
+                    self.admitted = 0;
+                    self.landed = target;
+                    self.pending.clear();
+                }
+            }
+        }
+    }
+
+    /// What conservation says the heads must read.
+    fn audit(&self) -> Result<(), String> {
+        let view = self.offset.view();
+        let triple = view
+            .offsets
+            .ok_or("the replica offset published no triple")?;
+        let live = triple
+            .live
+            .ok_or("the replica offset published no live head")?;
+        if live != self.seed + self.received {
+            return Err(format!(
+                "live is {live} but {} bytes were admitted above the seed {}",
+                self.received, self.seed
+            ));
+        }
+        if triple.applied != self.seed + self.admitted {
+            return Err(format!(
+                "applied is {} but {} bytes were claimed above the seed {}",
+                triple.applied, self.admitted, self.seed
+            ));
+        }
+        if triple.landed != self.landed {
+            return Err(format!(
+                "landed is {} but the last land reported {}",
+                triple.landed, self.landed
+            ));
+        }
+        if !(triple.landed <= triple.applied && triple.applied <= live) {
+            return Err(format!(
+                "the triple is out of order: landed {} applied {} live {live}",
+                triple.landed, triple.applied
+            ));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // R1
 // ---------------------------------------------------------------------------
 
@@ -1118,6 +1848,156 @@ proptest! {
                 violations.len(),
                 invariants::render(&violations),
             );
+        }
+    }
+
+    /// **R2.** A save point is transparent: the node's persisted state survives
+    /// a round trip through either vehicle, and the run continues exactly as if
+    /// the trip had not happened.
+    ///
+    /// The trip is spliced in at a generated point of a generated run, so
+    /// "at any point" is literal rather than a handful of hand-picked moments.
+    /// The two vehicles are held to the same claim with one stated difference:
+    /// the staged trailer clears the failover window on purpose, so a state
+    /// that carries one is not comparable past the trip — everything else about
+    /// it still is, and `round_trip` asserts that.
+    #[test]
+    fn r2_a_save_point_round_trip_is_transparent(
+        actions in arb_link_sequence(SEQUENCE_LEN),
+        at in any::<proptest::sample::Index>(),
+    ) {
+        let split = at.index(actions.len() + 1);
+        let baseline = replay_snapshots(&actions);
+        for vehicle in [Vehicle::StateFile, Vehicle::StagedMetadata] {
+            let run = replay_with_round_trip(&actions, split, vehicle)
+                .map_err(|err| TestCaseError::fail(format!("{vehicle:?} at {split}: {err}")))?;
+            prop_assert_eq!(
+                run.steps.len(),
+                baseline.len(),
+                "{:?} at {} changed how far the run got",
+                vehicle,
+                split,
+            );
+            if run.carried == Carried::WholeExceptTheFailoverWindow {
+                continue;
+            }
+            for (index, (after, before)) in run.steps.iter().zip(baseline.iter()).enumerate() {
+                prop_assert_eq!(
+                    after,
+                    before,
+                    "{:?} at {} changed action {}",
+                    vehicle,
+                    split,
+                    index,
+                );
+            }
+        }
+    }
+
+    /// **R3.** The PSYNC decision is total. It answers every `(id, offset)` a
+    /// wire can carry with exactly one `ReplayDecision` and no panic, and every
+    /// `+CONTINUE` it grants names a range that is inside the armed window and
+    /// covered by the frames handed over with no hole.
+    ///
+    /// Probing after *every* action means the ring the decision is cut from is
+    /// itself arbitrary: empty, armed-but-empty, full, evicted, reset by a
+    /// promotion, or closed by the TTL.
+    #[test]
+    fn r3_every_psync_request_yields_one_sound_decision(
+        actions in arb_link_sequence(SEQUENCE_LEN),
+        probes in proptest::collection::vec(arb_psync_probe(), 1..4),
+    ) {
+        let mut node = LinkNode::fresh(ChainPolicy::Off);
+        for (index, action) in actions.iter().enumerate() {
+            node.apply(action);
+            for probe in &probes {
+                let requested_id = node.probe_id(probe.id);
+                let req_offset = node.probe_offset(probe.offset);
+                let current = node.live();
+                let state = node.handler.state();
+                let floor = node.handler.replay.backlog_start();
+                let decision = node.handler.replay.handle_partial_sync_request(
+                    &state,
+                    &requested_id,
+                    req_offset,
+                    current,
+                );
+                // A pure decision: asked twice over an unchanged ring it gives
+                // the same answer. This is the purity half of R4, stated where
+                // the decision lives.
+                let again = node.handler.replay.handle_partial_sync_request(
+                    &state,
+                    &requested_id,
+                    req_offset,
+                    current,
+                );
+                prop_assert_eq!(
+                    std::mem::discriminant(&decision),
+                    std::mem::discriminant(&again),
+                    "action {} probe {:?} answered two different ways",
+                    index,
+                    probe,
+                );
+                if let ReplayDecision::Continue(grant) = &decision {
+                    prop_assert!(
+                        grant_is_sound(grant, req_offset, current, floor).is_ok(),
+                        "action {} probe {:?} granted an unsound +CONTINUE: {}",
+                        index,
+                        probe,
+                        grant_is_sound(grant, req_offset, current, floor).unwrap_err(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// **R4.** The same actions drive two fresh nodes to the same place, step
+    /// for step — the decision at every action and the whole projection after
+    /// it.
+    ///
+    /// The comparison is over a `Snapshot`, which drops the two things that are
+    /// *supposed* to differ between two runs: the ids a promotion mints (kept,
+    /// but interned to first-appearance symbols, so their identity relations
+    /// are still compared) and the wall-clock samples. Anything else that
+    /// differs is a decision that read something it should not have — the
+    /// cluster issue 23 shape.
+    #[test]
+    fn r4_the_same_actions_reach_the_same_node(
+        actions in arb_link_sequence(SEQUENCE_LEN),
+    ) {
+        let first = replay_snapshots(&actions);
+        let second = replay_snapshots(&actions);
+        prop_assert_eq!(first.len(), second.len());
+        for (index, (left, right)) in first.iter().zip(second.iter()).enumerate() {
+            prop_assert_eq!(
+                left,
+                right,
+                "two runs of the same actions disagree at action {} ({:?})",
+                index,
+                actions[index],
+            );
+        }
+    }
+
+    /// **R5.** Offsets are conserved. The live head is the seed plus every byte
+    /// admitted through an advance door; the applied head is the seed plus
+    /// every byte a claim came back `Granted` for; the landed head is what the
+    /// last `land()` reported; and `landed <= applied <= live` holds after
+    /// every one of them, under arbitrary interleavings of `claim`, `land`,
+    /// `freeze`, `admit_divergence`, `retire_replica_applies` and a resync.
+    #[test]
+    fn r5_the_offset_triple_is_conserved(
+        actions in proptest::collection::vec(arb_gate_action(), 1..64),
+    ) {
+        let mut harness = GateHarness::fresh();
+        prop_assert!(harness.audit().is_ok(), "a fresh pair is already out: {:?}", harness.audit());
+        for (index, action) in actions.iter().enumerate() {
+            harness.apply(*action);
+            if let Err(err) = harness.audit() {
+                return Err(TestCaseError::fail(format!(
+                    "action {index} ({action:?}) broke conservation: {err}"
+                )));
+            }
         }
     }
 }

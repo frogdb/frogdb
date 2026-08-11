@@ -14,3 +14,8 @@ frogdb-replication.workspace = true
 bytes.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# The self-fence admission property (`src/properties.rs`). Dev-only: it drives
+# the production checker, it is not part of the shipped crate.
+proptest.workspace = true
