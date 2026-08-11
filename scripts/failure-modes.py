@@ -17,11 +17,12 @@ directions, so neither can drift:
 `Forced by | MISSING` is an error: a failure mode nobody forces is a gap, and
 the campaign closes gaps by writing the test, not by lowering the spec.
 
-A third, smaller direction: the cluster area's rows cite invariant-catalog
-entries by id (`INV-REF-1`, in the optional `Catalog` field or in prose), and
-the catalog is Rust. Any `INV-<something>` a spec mentions must be defined in
-`frogdb-server/crates/cluster/src/invariants.rs`, so a renamed or deleted entry
-cannot leave the spec pointing at nothing.
+A third, smaller direction: a spec's rows cite invariant-catalog entries by id
+(`INV-REF-1`, in the optional `Catalog` field or in prose), and the catalogs are
+Rust. Any `INV-<something>` a spec mentions must be defined in *that area's*
+catalog (`INVARIANT_CATALOGS` below), so neither a renamed or deleted entry nor
+a citation borrowed from another area's vocabulary can leave the spec pointing
+at nothing.
 
 The one exception is a mode that is real but needs machinery the campaign has
 not built yet (disk-full injection, a torn-file harness). Those may write
@@ -48,8 +49,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SPEC_DIR = REPO / ".scratch/hardening/specs"
 SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
-# The cluster invariant catalog: the vocabulary of `INV-*` ids a spec may cite.
-INVARIANTS_RS = REPO / "frogdb-server/crates/cluster/src/invariants.rs"
+# The invariant catalogs, one per area: the vocabulary of `INV-*` ids that
+# area's spec may cite. Keyed by the `FM-<AREA>-NNN` prefix, which is also the
+# spec filename's stem upper-cased.
+#
+# Per-area rather than one shared vocabulary because an invariant is a claim
+# about *one* area's state projection: `INV-HANDOFF-1` is a statement about
+# cluster topology and means nothing to a replication row, so a replication row
+# citing it is a mistake the lint has to be able to name. An area with no entry
+# here has no catalog yet, and any `INV-*` its spec cites is an error until one
+# lands. A dict, not a framework: the persistence and txn ports are one line.
+INVARIANT_CATALOGS = {
+    "CLUSTER": REPO / "frogdb-server/crates/cluster/src/invariants.rs",
+    "REPLICATION": REPO / "frogdb-server/crates/replication/src/invariants.rs",
+}
 
 # Crates whose tests a failure-mode row may name. `cargo nextest list` over
 # these compiles their test binaries: seconds warm for frogdb-txn/frogdb-vll/
@@ -124,6 +137,18 @@ REQUIRED_FIELDS = (
 # What may sit between a tag comment and the `fn` it annotates: the rest of the
 # item's comment/attribute block, nothing else.
 PREAMBLE_RE = re.compile(r"^\s*(//|#!?\[|$)")
+
+
+def rel(path: Path) -> str:
+    """`path` relative to the repo root, or as given when it is outside it.
+
+    Only the fixture test drives this script with paths outside the repo; the
+    fallback keeps its messages readable instead of raising.
+    """
+    try:
+        return str(path.relative_to(REPO))
+    except ValueError:
+        return str(path)
 
 
 @dataclass
@@ -278,7 +303,7 @@ def load_catalog_ids(path: Path, errors: list[str]) -> set[str]:
     spec is checked against.
     """
     if not path.is_file():
-        errors.append(f"invariant catalog missing: {path.relative_to(REPO)}")
+        errors.append(f"invariant catalog missing: {rel(path)}")
         return set()
 
     ids: set[str] = set()
@@ -295,33 +320,77 @@ def load_catalog_ids(path: Path, errors: list[str]) -> set[str]:
 
     if not ids:
         errors.append(
-            f"{path.relative_to(REPO)}: no `INV-*` ids found in `CATALOG` — either the "
+            f"{rel(path)}: no `INV-*` ids found in `CATALOG` — either the "
             'static was renamed or its entries no longer spell `id: "INV-…"`, and '
             "either way the vocabulary check below would pass vacuously"
         )
     return ids
 
 
-def check_invariant_vocabulary(spec_dir: Path, catalog_ids: set[str], errors: list[str]) -> int:
-    """Fail on an `INV-*` id a spec cites and the catalog does not define.
+@dataclass(frozen=True)
+class Catalog:
+    """One area's invariant vocabulary, and where it came from."""
 
-    A dangling citation is always a bug — a renamed or deleted entry — so this
-    is an error rather than a warning: the cross-reference the `Catalog` field
-    promises is only worth reading if it cannot rot silently. The unused
-    direction is not checked; an entry the spec never cites is fine (see
-    `INV-SLOT-1`, which generalizes no row on purpose).
+    area: str
+    path: Path
+    ids: frozenset[str]
+
+
+def load_catalogs(paths: dict[str, Path], errors: list[str]) -> dict[str, Catalog]:
+    """Every registered area's catalog, keyed by area."""
+    return {
+        area: Catalog(area, path, frozenset(load_catalog_ids(path, errors)))
+        for area, path in sorted(paths.items())
+    }
+
+
+def check_invariant_vocabulary(
+    spec_dir: Path, catalogs: dict[str, Catalog], errors: list[str]
+) -> dict[str, int]:
+    """Fail on an `INV-*` id a spec cites and its own area's catalog does not define.
+
+    Two ways to get this wrong, both errors:
+
+      dangling     the id exists nowhere — a renamed or deleted entry. The
+                   cross-reference the `Catalog` field promises is only worth
+                   reading if it cannot rot silently.
+      cross-area   the id exists, but in another area's catalog. An invariant
+                   is a pure function of one area's state projection, so a
+                   replication row citing `INV-HANDOFF-1` is claiming something
+                   nothing checks; the message names the owning area so the
+                   fix is obvious.
+
+    The unused direction is not checked; an entry no row cites is fine (see
+    `INV-SLOT-1` and `INV-GATE-1`, which generalize no row in their own area's
+    spec on purpose).
+
+    Returns the citation count per area, for the summary line.
     """
-    references = 0
+    counts: dict[str, int] = {}
+    owners = {ref: cat for _, cat in sorted(catalogs.items()) for ref in cat.ids}
     for spec in sorted(spec_dir.glob("*-failure-modes.md")):
+        area = spec.name.removesuffix("-failure-modes.md").upper()
+        own = catalogs.get(area)
         for lineno, line in enumerate(spec.read_text().splitlines(), start=1):
             for ref in INV_REF_RE.findall(line):
-                references += 1
-                if ref not in catalog_ids:
+                counts[area] = counts.get(area, 0) + 1
+                if own is not None and ref in own.ids:
+                    continue
+                where = f"{rel(spec)}:{lineno}: cites `{ref}`, which"
+                owner = owners.get(ref)
+                if owner is not None:
                     errors.append(
-                        f"{spec.relative_to(REPO)}:{lineno}: cites `{ref}`, which "
-                        f"{INVARIANTS_RS.relative_to(REPO)} does not define"
+                        f"{where} belongs to the {owner.area} catalog ({rel(owner.path)}) — a "
+                        f"row may only cite invariants over its own area's state"
                     )
-    return references
+                elif own is None:
+                    errors.append(
+                        f"{where} cannot be resolved: the {area} area has no invariant "
+                        "catalog registered in `INVARIANT_CATALOGS` (scripts/failure-modes.py)"
+                    )
+                else:
+                    errors.append(f"{where} {rel(own.path)} does not define")
+    return counts
 
 
 def cargo_env() -> dict[str, str]:
@@ -521,8 +590,8 @@ def main() -> None:
 
     errors: list[str] = []
     modes = parse_specs(args.spec_dir, errors)
-    catalog_ids = load_catalog_ids(INVARIANTS_RS, errors)
-    invariant_refs = check_invariant_vocabulary(args.spec_dir, catalog_ids, errors)
+    catalogs = load_catalogs(INVARIANT_CATALOGS, errors)
+    citations = check_invariant_vocabulary(args.spec_dir, catalogs, errors)
     tags = scan_tags(SOURCE_ROOTS, errors)
     test_paths = load_test_paths(args.nextest_output)
     errors += check(modes, tags, test_paths)
@@ -535,10 +604,14 @@ def main() -> None:
 
     references = sum(len(mode.tests) for mode in modes)
     areas = sorted({mode.area for mode in modes})
+    breakdown = ", ".join(
+        f"{area} {citations.get(area, 0)}/{len(cat.ids)}" for area, cat in sorted(catalogs.items())
+    )
     print(
         f"OK: {len(modes)} failure modes ({', '.join(areas)}), "
         f"{references} test references, {len(tags)} tags, "
-        f"{invariant_refs} invariant citations over {len(catalog_ids)} catalog entries"
+        f"{sum(citations.values())} invariant citations over "
+        f"{sum(len(cat.ids) for cat in catalogs.values())} catalog entries ({breakdown})"
     )
 
 
