@@ -5,7 +5,7 @@ Status: needs-triage
 ## Parent
 
 [PRD](../../PRD.md) §3 W2. Found by property R6
-([issue 05](05-properties-r2-r6.md)) on its first run — the second state the new
+([issue 05](../done/05-properties-r2-r6.md)) on its first run — the second state the new
 `(replica set, departure code)` projection rejected, after the one
 [issue 19](19-self-fence-arms-only-on-the-write-path.md) already covers.
 
@@ -36,7 +36,7 @@ node is a replica.
 
 Two consequences.
 
-**The surface.** `DEBUG REPLICATION CHECK` ([issue 03](03-debug-replication-check.md)) on any
+**The surface.** `DEBUG REPLICATION CHECK` ([issue 03](../done/03-debug-replication-check.md)) on any
 demoted node whose replica link was lost reports `INV-SESSION-3` and `INV-FENCE-1`, and
 `check_hard` would fail a quiesce there. Same shape as issue 19's cosmetic half, different
 cause: there the latch was never installed, here it was installed and then withdrawn.

@@ -89,13 +89,17 @@ def replication_nightly_workflow() -> Workflow:
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
-            # Every case stands up a real node on a real temp directory, so this
-            # is slower per case than a pure state-machine harness: a 30k-case
-            # run measured ~290 cases/s in a debug build on an M-series laptop,
-            # putting the default budget near a quarter of an hour. The ceiling
-            # covers a much colder runner and leaves room for a dispatch that
-            # raises `cases`.
-            timeout_minutes=90,
+            # Every case stands up a real node on a real temp directory, so
+            # this is far slower per case than a pure state-machine harness.
+            # Measured on an M-series laptop, debug, all six properties running
+            # concurrently at 20k cases: R6 53s, R5 89s, R1 537s, R3 542s, R4
+            # 803s, R2 843s -- the wall clock is R2's ~42ms/case, so the 200k
+            # default projects to ~2.5h rather than the ~15min issue 04's
+            # single-property 30k measurement suggested. The ceiling is sized
+            # off that projection with room for a colder runner: this is a
+            # change-gated nightly on a free runner, so wall clock is cheaper
+            # than shrinking the budget.
+            timeout_minutes=240,
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_NEXTEST),
