@@ -35,4 +35,9 @@ has L2a && run L2a-repl just test frogdb-replication
 has L2b && run L2b-repl-runtime just test frogdb-replication-runtime
 has L4 && run L4-seeded-smoke just concurrency-turmoil replication_scheduler
 has L6 && run L6-integration just test frogdb-server replication
+# The escalation tier: a wider seed block than the seven-seed smoke, for a
+# defect the smoke misses. SEEDS overrides the count.
+has L4big && run L4-seeded-"${SEEDS:-500}" just replication-seeds "${SEEDS:-500}"
+# The full model-checking budget (release build, ignored by default).
+has L3big && run L3-model-full just replication-model-check
 echo "ALL DONE $LABEL"
