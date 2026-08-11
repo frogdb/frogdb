@@ -35,6 +35,10 @@ pub mod export;
 pub mod install;
 pub mod quorum;
 
+/// Stateful property generation over the self-fence checker (issue 05, R6).
+/// Test-only: the harness drives production seams, it ships nothing.
+#[cfg(test)]
+mod properties;
 #[cfg(test)]
 mod test_shards;
 
