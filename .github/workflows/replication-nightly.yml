@@ -1,0 +1,80 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: .github/workflows/workflow_gen/
+# Regenerate with: just workflow-gen
+# =============================================================================
+
+name: Replication Correctness Nightly
+'on':
+  schedule:
+  - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      cases:
+        description: proptest cases per property (default 200000; the dev-loop budget is ~96)
+        required: false
+        default: '200000'
+        type: string
+jobs:
+  gate:
+    name: Change Gate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+    steps:
+    - id: gate
+      name: Check for new commits since last successful run
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT_NAME: ${{ github.event_name }}
+        CURRENT_SHA: ${{ github.sha }}
+        WORKFLOW_FILE: replication-nightly.yml
+      run: |
+        set -uo pipefail
+        if [ "${EVENT_NAME}" != "schedule" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Not a scheduled run (event: ${EVENT_NAME}); proceeding."
+          exit 0
+        fi
+        last_sha=$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow "${WORKFLOW_FILE}" \
+          --status success --limit 1 --json headSha --jq '.[0].headSha // empty')
+        if [ -z "${last_sha}" ]; then
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "No previous successful run found; proceeding."
+        elif [ "${last_sha}" = "${CURRENT_SHA}" ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "No new commits since last successful run (${last_sha}); skipping."
+        else
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
+        fi
+  replication-proptest:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    name: Nightly Replication Link Property Sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just cargo:cargo-nextest
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: replication-nightly
+    - name: Run the replication property sweep at the nightly case budget
+      run: |
+        just replication-proptest "${{ github.event.inputs.cases || '200000' }}"
