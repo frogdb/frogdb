@@ -942,10 +942,10 @@ clean-stale:
     @du -sh target 2>/dev/null || true
     # Remove stale librocksdb-sys from-source build dirs (1.7GB+ each), keeping the newest
     @for dir in $(ls -dt target/debug/build/librocksdb-sys-*/ 2>/dev/null | tail -n +2); do \
-        size=$$(du -sm "$$dir" | cut -f1); \
-        if [ "$$size" -gt 100 ]; then \
-            echo "Removing stale rocksdb build: $$dir ($${size}MB)"; \
-            rm -rf "$$dir"; \
+        size=$(du -sm "$dir" | cut -f1); \
+        if [ "$size" -gt 100 ]; then \
+            echo "Removing stale rocksdb build: $dir (${size}MB)"; \
+            rm -rf "$dir"; \
         fi; \
     done
     # Sweep stale dep artifacts (not touched in 7 days)
