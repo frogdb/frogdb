@@ -915,7 +915,7 @@ not acked. The cost is latency under a mixed write load, not correctness.
 | NOT observable | **A count returned across a role change.** It would describe acknowledgments on a replication stream the node no longer heads: the client reads "2 replicas have my write" about a history that a new primary has already forked away from, which is exactly the false-durability claim `WAIT` exists to prevent — including the degenerate case where quorum and the fence become ready in the same poll, which an unbiased `select!` would resolve to `Reached` roughly half the time. **A wait parked forever on a demoted node** — the shape that appears when the role fence is subscribed *after* the role check: the demotion publishes the replica flag first and bumps the fence second, so a subscriber created in between sees neither, and the client hangs until it disconnects while every other `WAIT` on the node is refused. **A stale fence releasing a fresh wait**: a `watch` sender reset to a sentinel, or a boolean flag instead of a counter, makes a node that was demoted-and-repromoted release the next stint's waits immediately with a spurious error. |
 | Invariant | The fence is a `tokio::sync::watch::Sender<u64>` **counter**, not a flag — a node can be demoted, promoted and demoted again while one wait is parked, and a subscriber only ever needs "did it change since I started", which a counter answers and a boolean does not. `RoleFence` is taken by the caller *before* it concludes the node is still a primary (`blocking.rs`: `role_fence()` then a second `is_replica` read), so one of the two observations must see a racing demotion; the ordering requirement is documented at `RoleFence` itself. `fence_role_change()` is called from `PrimaryReplicationHandler::end_primary_stint`, next to the downstream `disconnect_all_replicas` it belongs with, so the release and the teardown cannot drift apart. In `wait_for_replicas` the fence is a `select!` arm in *both* the deadline and the no-deadline shapes, producing `WaitVerdict::RoleChanged(count)`; the count travels with the verdict for observability but the caller is required to discard it and reply with the error — which is why `RoleChanged` is a distinct variant rather than a `TimedOut` with a flag. Both `select!`s are `biased;` with the fence arm listed first, so an exact tie is not left to `tokio::select!`'s (unseeded, and therefore also non-reproducible under `turmoil`) random tie-break — determinism-audit R7/A53. A dropped sender resolves the fence too: the coordinator that owned the stream is gone. |
 | Outcome variant | `WaitVerdict::RoleChanged`; `-UNBLOCKED ... (master -> replica?)` |
-| Forced by | `role_change_releases_a_wait_parked_forever`, `role_change_releases_a_wait_with_a_deadline`, `a_fence_from_an_earlier_stint_does_not_release_a_later_wait`, `a_demotion_racing_the_role_check_still_releases_the_wait`, `a_tie_between_quorum_and_role_change_favors_role_changed_no_deadline`, `a_tie_between_quorum_and_role_change_favors_role_changed_with_deadline`, `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion`, `test_wait_rejected_on_cluster_replica`, `test_wait_is_served_by_a_promoted_cluster_primary`, `test_failover_chain_survivor_reattaches_to_promoted_node`, `test_cluster_wait_unblocked_across_failover` |
+| Forced by | `role_change_releases_a_wait_parked_forever`, `role_change_releases_a_wait_with_a_deadline`, `a_fence_from_an_earlier_stint_does_not_release_a_later_wait`, `a_demotion_racing_the_role_check_still_releases_the_wait`, `a_tie_between_quorum_and_role_change_favors_role_changed_no_deadline`, `a_tie_between_quorum_and_role_change_favors_role_changed_with_deadline`, `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`, `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion`, `test_wait_rejected_on_cluster_replica`, `test_wait_is_served_by_a_promoted_cluster_primary`, `test_failover_chain_survivor_reattaches_to_promoted_node`, `test_cluster_wait_unblocked_across_failover` |
 | Bug refs | `.scratch/replication-cluster-rework/wait-cluster-mode.md` §5.1 R4/R7 and §7 (the `-UNBLOCKED` wording and the fence-before-role-check ordering are both recorded decisions) |
 
 ---
@@ -1277,14 +1277,23 @@ from the old session's exit handler, so the overlap window is real and untested)
 `integration_replication.rs` — one replica, killed and restarted in a loop, with `WAIT 5 200` polled
 throughout, asserting the returned count is always `<= connected_slaves` parsed from the same `INFO`.
 
-**GAP-6 — the `-UNBLOCKED` release on demotion is not tested for the `MULTI`/deny-blocking path or for `CLIENT UNBLOCK` racing the fence.**
-`frogdb-server/crates/server/src/connection/blocking.rs:285-305`. The `select!` is `biased` toward
-the wait future, so a `CLIENT UNBLOCK ERROR` that lands in the same poll as a demotion loses and the
-client gets `-UNBLOCKED ... (master -> replica?)` rather than the CLIENT UNBLOCK message. That is
-defensible (the role change is the more important fact) but it is a contract nobody pins.
-*Test that should exist:*
-`wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races` in
-`wait_coordinator.rs` or `integration_replication.rs`.
+**GAP-6 — CLOSED** by `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`,
+named in FM-REPLICATION-040's `Forced by`. The race the gap describes — a `CLIENT UNBLOCK ERROR`
+landing in the same poll as the demotion, where the `biased;` ordering makes the role change win and
+the client gets `-UNBLOCKED ... (master -> replica?)` rather than the CLIENT UNBLOCK message — is now
+a contract rather than an accident of arm order. Pinning it needed the same treatment `reconcile_ack`
+got: the `select!` moved out of `ConnectionHandler::handle_wait_command` into the free function
+`resolve_wait_race` (`frogdb-server/crates/server/src/connection/blocking.rs`), which takes the wait
+future, an `UnblockSignal` and a count closure, so a test can present *both* arms ready in one poll —
+an interleaving a live socket reaches only by luck. The test asserts the reply is the role-change
+error and that the acked count is never even computed (the closure panics if called), and its
+siblings pin the other three corners: a reached quorum also beats a same-poll unblock, ERROR mode
+still releases a genuinely parked wait, and TIMEOUT mode still answers with the count. The mock
+unblock source is shared with the blocking-command coordinator's tests
+(`blocking/coordinator.rs::test_support`), so both races read the CLIENT UNBLOCK edge through one
+seam. The `MULTI`/deny-blocking half of the gap was already covered: WAIT inside `MULTI`/Lua returns
+the live count immediately and never blocks, so there is no parked wait for a
+demotion to release (FM-REPLICATION-037).
 
 **GAP-7 — CLOSED.** `write_fence_reason`'s only test,
 `write_fence_reason_is_reported_only_while_fenced`

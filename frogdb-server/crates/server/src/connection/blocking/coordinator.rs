@@ -111,24 +111,28 @@ impl BlockingWaitCoordinator {
     }
 }
 
+/// Test-only [`UnblockSignal`] source, shared with the WAIT race in the parent
+/// module: both races read the CLIENT UNBLOCK edge through the same seam, so
+/// they are pinned against the same mock rather than two that could drift.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::future::Future;
-    use std::time::Duration;
 
-    use super::*;
+    use frogdb_core::UnblockMode;
+
+    use super::UnblockSignal;
 
     /// Mock unblock source. Fires `mode` once on the first poll if `Some`,
     /// otherwise pends forever (the connection is not being CLIENT UNBLOCKed).
-    struct MockUnblock {
+    pub(crate) struct MockUnblock {
         mode: Option<UnblockMode>,
     }
 
     impl MockUnblock {
-        fn never() -> Self {
+        pub(crate) fn never() -> Self {
             Self { mode: None }
         }
-        fn fires(mode: UnblockMode) -> Self {
+        pub(crate) fn fires(mode: UnblockMode) -> Self {
             Self { mode: Some(mode) }
         }
     }
@@ -144,6 +148,14 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::test_support::MockUnblock;
+    use super::*;
 
     // FM-BLOCKING-001
     #[tokio::test]

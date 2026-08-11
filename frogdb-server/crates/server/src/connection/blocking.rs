@@ -278,31 +278,12 @@ impl ConnectionHandler {
 
         // Race the coordinator (which owns the single timeout authority via its
         // internal deadline) against CLIENT UNBLOCK.
-        let wait_fut =
-            wait.wait_for_replicas(fence, target, num_replicas, deadline, primary.as_ref());
-        tokio::pin!(wait_fut);
-
-        let response = tokio::select! {
-            biased;
-            verdict = &mut wait_fut => match verdict {
-                // A demotion tore down the stream this wait was parked on.
-                // Redis replies with an error from `disconnectAllBlockedClients`
-                // rather than a count, because the count would describe a
-                // history the node no longer heads.
-                crate::replication::WaitVerdict::RoleChanged(_) => {
-                    Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR)
-                }
-                other => Response::Integer(other.count() as i64),
-            },
-            mode = self.client_handle.unblocked() => match mode {
-                Some(UnblockMode::Error) => {
-                    Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
-                }
-                // TIMEOUT mode (and a closed signal channel) reply like a
-                // timed-out WAIT: the count acked so far.
-                _ => Response::Integer(wait.count_acked(target) as i64),
-            },
-        };
+        let response = resolve_wait_race(
+            wait.wait_for_replicas(fence, target, num_replicas, deadline, primary.as_ref()),
+            &mut self.client_handle,
+            || wait.count_acked(target),
+        )
+        .await;
 
         self.admin
             .client_registry
@@ -310,6 +291,58 @@ impl ConnectionHandler {
         self.admin.client_registry.reset_unblock(self.state.id);
 
         response
+    }
+}
+
+/// Decide the WAIT reply from the two-way race between the replication wait
+/// (quorum / deadline / role fence, all resolved inside `wait_fut`) and CLIENT
+/// UNBLOCK.
+///
+/// Split out of [`ConnectionHandler::handle_wait_command`] for the reason
+/// [`reconcile_ack`] is split out of `reconcile_unregister`: as a free function
+/// over two futures and a closure it is unit-testable with both arms ready in
+/// the *same* poll, which is the only way to pin a tie-break that a live socket
+/// can only hit by luck.
+///
+/// The `biased;` ordering is the contract: a `CLIENT UNBLOCK` landing in the
+/// same poll as a role change loses, and the client is told the role changed.
+/// The role change is the more important fact — a `-UNBLOCKED ... via CLIENT
+/// UNBLOCK` reply would let the caller believe the node it was waiting on is
+/// still the primary it thought it was — and, as the second tie-break in this
+/// race (`wait_for_replicas`'s own fence-vs-quorum `select!` is the first,
+/// FM-REPLICATION-040), it must not be left to `tokio::select!`'s unseeded
+/// random choice.
+///
+/// `count_acked` is called only on the CLIENT UNBLOCK TIMEOUT path, where the
+/// reply is the count acked so far; it is a closure so the wait future keeps
+/// exclusive use of the coordinator until the race is decided.
+async fn resolve_wait_race(
+    wait_fut: impl std::future::Future<Output = crate::replication::WaitVerdict>,
+    unblock: &mut impl coordinator::UnblockSignal,
+    count_acked: impl FnOnce() -> u32,
+) -> Response {
+    tokio::pin!(wait_fut);
+
+    tokio::select! {
+        biased;
+        verdict = &mut wait_fut => match verdict {
+            // A demotion tore down the stream this wait was parked on.
+            // Redis replies with an error from `disconnectAllBlockedClients`
+            // rather than a count, because the count would describe a
+            // history the node no longer heads.
+            crate::replication::WaitVerdict::RoleChanged(_) => {
+                Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR)
+            }
+            other => Response::Integer(other.count() as i64),
+        },
+        mode = unblock.unblocked() => match mode {
+            Some(UnblockMode::Error) => {
+                Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
+            }
+            // TIMEOUT mode (and a closed signal channel) reply like a
+            // timed-out WAIT: the count acked so far.
+            _ => Response::Integer(count_acked() as i64),
+        },
     }
 }
 
@@ -332,6 +365,98 @@ async fn reconcile_ack(
         // being delivered to nobody.
         Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
         Ok(UnregisterAck::Unregistered) | Err(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod wait_race_tests {
+    use std::future::{pending, ready};
+
+    use frogdb_core::UnblockMode;
+
+    use super::coordinator::test_support::MockUnblock;
+    use super::*;
+    use crate::commands::replication::WAIT_ROLE_CHANGED_ERR;
+    use crate::replication::WaitVerdict;
+
+    fn error_text(resp: Response) -> String {
+        match resp {
+            Response::Error(msg) => String::from_utf8(msg.to_vec()).expect("utf8 error text"),
+            other => panic!("expected an error reply, got {other:?}"),
+        }
+    }
+
+    /// FM-REPLICATION-040
+    ///
+    /// The demotion release and a `CLIENT UNBLOCK ERROR` are ready in the *same*
+    /// poll — the interleaving a live socket can only hit by luck, and the one
+    /// the `biased;` ordering exists for. The client must be told the node
+    /// stopped being a primary: `-UNBLOCKED ... via CLIENT UNBLOCK` would name a
+    /// cause that is true but not the one that matters, leaving the caller
+    /// believing the node it waited on still heads the history it waited for.
+    /// The count must not even be computed, so `count_acked` panics if reached.
+    #[tokio::test]
+    async fn wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races() {
+        let mut unblock = MockUnblock::fires(UnblockMode::Error);
+        let resp = resolve_wait_race(ready(WaitVerdict::RoleChanged(2)), &mut unblock, || {
+            unreachable!("a role change must not consult the acked count")
+        })
+        .await;
+        assert_eq!(
+            error_text(resp),
+            WAIT_ROLE_CHANGED_ERR,
+            "a role change and a CLIENT UNBLOCK in the same poll must resolve to the role change"
+        );
+    }
+
+    /// A quorum reached in the same poll as a `CLIENT UNBLOCK` is the other half
+    /// of the same tie-break: the wait already has its true answer, so replying
+    /// `-UNBLOCKED` would discard a satisfied WAIT the client is entitled to.
+    #[tokio::test]
+    async fn a_reached_quorum_beats_a_client_unblock_in_the_same_poll() {
+        let mut unblock = MockUnblock::fires(UnblockMode::Error);
+        let resp = resolve_wait_race(ready(WaitVerdict::Reached(3)), &mut unblock, || {
+            unreachable!("a decided wait must not consult the acked count")
+        })
+        .await;
+        assert!(matches!(resp, Response::Integer(3)));
+    }
+
+    /// With the wait genuinely parked, `CLIENT UNBLOCK ERROR` is the escape
+    /// hatch for `WAIT ... 0` and must still win — the bias is a tie-break, not
+    /// a veto.
+    #[tokio::test]
+    async fn client_unblock_error_releases_a_parked_wait() {
+        let mut unblock = MockUnblock::fires(UnblockMode::Error);
+        let resp = resolve_wait_race(pending::<WaitVerdict>(), &mut unblock, || {
+            unreachable!("ERROR mode replies with the error, not a count")
+        })
+        .await;
+        assert_eq!(
+            error_text(resp),
+            "UNBLOCKED client unblocked via CLIENT UNBLOCK"
+        );
+    }
+
+    /// TIMEOUT mode replies like a timed-out WAIT: the count acked so far, read
+    /// at release time rather than captured when the wait was registered.
+    #[tokio::test]
+    async fn client_unblock_timeout_mode_reports_the_acked_count() {
+        let mut unblock = MockUnblock::fires(UnblockMode::Timeout);
+        let resp = resolve_wait_race(pending::<WaitVerdict>(), &mut unblock, || 4).await;
+        assert!(matches!(resp, Response::Integer(4)));
+    }
+
+    /// A wait that resolves on its own with nobody unblocking it is the ordinary
+    /// path, and answers with the verdict's count.
+    #[tokio::test]
+    async fn a_timed_out_wait_answers_with_its_own_count() {
+        let mut unblock = MockUnblock::never();
+        let resp = resolve_wait_race(ready(WaitVerdict::TimedOut(1)), &mut unblock, || {
+            unreachable!("the verdict already carries the count")
+        })
+        .await;
+        assert!(matches!(resp, Response::Integer(1)));
     }
 }
 
