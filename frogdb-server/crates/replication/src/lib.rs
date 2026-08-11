@@ -46,6 +46,7 @@ pub mod primary;
 mod properties;
 pub mod replica;
 pub mod replica_session;
+pub mod session_machine;
 pub mod split_brain_log;
 pub mod state;
 pub mod sync_counters;
