@@ -1280,7 +1280,17 @@ fn spawn_scheduled_hosts(
 
     for (idx, host) in REPLICATION_HOSTS.iter().enumerate() {
         let host = host.to_string();
-        let path = dirs[idx].path().to_path_buf();
+        // One level down inside the node's own tempdir, never the tempdir
+        // itself: a full sync stages its payload in a `checkpoint_ready`
+        // directory that is a *sibling* of the data dir
+        // (`persistence::rocks::staged::STAGED_CHECKPOINT_DIR`), so a data dir
+        // sitting directly in `$TMPDIR` makes every node in every concurrently
+        // running seed stage into one shared path. That is what the sweep's
+        // first run hit: "staged checkpoint ... is incomplete (missing CURRENT
+        // manifest)" plus cross-run keyspace bleed. Same reason
+        // `test-harness`'s `create_temp_dir` nests.
+        let path = dirs[idx].path().join("data");
+        std::fs::create_dir_all(&path).expect("replication node data dir");
         sim.host(host.clone(), move || {
             let path = path.clone();
             let host = host.clone();
