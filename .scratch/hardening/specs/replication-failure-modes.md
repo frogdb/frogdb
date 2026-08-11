@@ -104,9 +104,10 @@ A row carries a `Catalog` field when an entry generalizes the guarantee the row 
 deleting the code the row names would make that entry fire. The cross-reference runs both ways —
 each entry's `check_*` function names the rows it generalizes — and `just lint-failure-modes`
 checks that every `INV-*` id this spec cites is defined in the **replication** catalog. The check
-is per-area (`INVARIANT_CATALOGS`), so citing a cluster entry here is an error rather than a pass:
-an invariant is a claim about one area's state projection, and `INV-HANDOFF-1` says nothing about
-this one.
+is per-area (`INVARIANT_CATALOGS`), so citing one of the cluster catalog's entries here is an error
+rather than a pass — an invariant is a claim about one area's state projection, and a claim about
+the slot map says nothing about this one. (Naming a cluster id in this paragraph would itself fail
+the lint, which is how the rule was checked.)
 
 Two entries are deliberately not cited by any row above:
 
