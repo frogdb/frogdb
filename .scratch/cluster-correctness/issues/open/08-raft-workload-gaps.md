@@ -133,6 +133,7 @@ noted above) at current HEAD.
 | 3 | `raft-chaos` | PASS (2:23) | `valid? true` (key-routing checker, durability+value-correctness); worker crashes on `CLUSTERDOWN` during quorum-loss windows correctly recorded `:info`/indeterminate, not counted as failures; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 | 4 | `list-append-raft` | PASS (2:49) | Elle strict-serializable checker, `valid? true`, 0 anomalies; `cluster-invariants` 2 sweeps, 0 violations. First run crashed 100% of ops with a harness bug (see below), fixed and rerun clean: 869,626 `:ok` txns, 0 `:unexpected`. |
 | 5 | `migration-recovery` | PASS (0:59) | `valid? true` (leader recovered after Raft-leader kill mid-migration, no data loss, migration resolvable); 346 `:ok` ops, 0 failed ops; `cluster-invariants` 2 sweeps, 0 violations. |
+| 6 | `concurrent-migration` | PASS (0:39) | `valid? true` (all slots owned, no data loss across 4 parallel migrations); 460 `:ok` ops, 31 `:fail` (expected migration-window rejections), 0 `:unexpected`; `cluster-invariants` 2 sweeps, 0 violations. |
 
 **Harness bug found and fixed (not a product defect):** the first `list-append-raft` attempt
 crashed every op with `IllegalArgumentException: Don't know how to create ISeq from:
