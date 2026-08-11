@@ -1,14 +1,23 @@
 # Proposal 86 — RESP3 egress: two protocols, two write paths, and a byte count that is re-derived instead of measured
 
-Round 38 · lane: protocol / net / core · candidates **PN9** (LIVE) + **PN8** (latent) · effort **M**
-(the codec fold) + **S–M** (the ingress half, separable) · **no locked crate edited** · **zero `FM-`
-tags in any edited file** · **two seam lints in scope, both cleared by construction**
+Round 38 · lane: protocol / net / core · candidates **PN9** (LIVE) + **PN8** (half LIVE) · effort
+**M** (the codec fold) + **S–M** (the ingress half, separable) · **no locked crate edited** · **zero
+`FM-` tags in ten of the eleven edited files; the eleventh (`client_registry/mod.rs`, H2's one-line
+doc fix) carries ten, all in its `#[cfg(test)]` region, none in the edited region** (§Spec
+clearance) · **two seam lints in scope, both cleared by construction**
+
+**Rev 2** — revised after adversarial review (verdict **CONFIRMED with amendments**). All three LIVE
+claims — reply reordering, `obl` structurally zero, the syscall quantification — survived
+independent re-derivation, as did the fold design, the alternative rejections, the 80-first ordering
+and the hotfix set. What changed is **stated numbers and stated reasons**, not design. See
+§Revision ledger for applied / refuted.
 
 **Verified at HEAD `55de0d326600a6d3d3befa7d931bfdf479de1800`** (worktree `arch-round-38-99`,
 branch `main`). Proposal 80 was authored against `54baa2bb`; every commit since has been
 `.scratch/`-only — `git diff --name-only 54baa2bb..HEAD | grep -v '^\.scratch/'` is **empty**, so
 every source line number in 80, 84 and this document refers to the same unchanged tree. Every cite
-below was re-derived against the working tree; none is inherited from the lane brief.
+below was re-derived against the working tree; none is inherited from the lane brief. Rev 2's
+amendments were re-derived a second time, against the tree as it stands at revision time.
 
 ## Corrections to the lane brief
 
@@ -18,9 +27,9 @@ below was re-derived against the working tree; none is inherited from the lane b
 | 80's note: "`:143-144` therefore reports a cumulative-looking `encoded_len` that is in fact per-frame" | **The byte accounting is correct today.** Both RESP3 arms leave `resp3_buf` empty (`:91` clears before encoding, `:146` clears after writing), so `:143`'s `encoded_len` *is* the per-frame length and `add_bytes_sent` is exact. The `:136` comment is **vestigial**, not a live mis-count. Recorded so the hotfix is filed as what it is — a doc fix — rather than as a stats bug that does not exist. |
 | PN8: "`estimate_resp2_frame_size` … the doc names an upper-crate fn it can't see" | Confirmed (`response.rs:199` → `connection/util.rs:130`, a `pub(crate)` fn in a crate *above* `frogdb-protocol`). But the doc's *argument* is also **moot**: `narrow_to_resp2_outbound` measures the frame returned by `to_resp2_frame`, which has **already** been sanitized (`response.rs:277`, `:292`), so length-preservation contributes nothing to the accounting's exactness. Two defects in one sentence, not one. |
 | PN8 solution sketch: "`WireResponse::encoded_len(ProtocolVersion)` next to the encoder + property test `encoded_len == encode().len()`" | **Declined as the primary, with reasons** (§Proposed change, alternative B). `encoded_len` is a *second* implementation of the encoder that a property test then pins against the first. The fold makes the number **measurable** at the one place the bytes are produced, which removes both the duplicate and the need for the test that guards it. The property-test design is still given in §Testability, because it is the right pin if `encoded_len` is ever wanted for a *pre-flight* size check (no such caller exists today). |
-| PN8 rated "latent" | **Half of it is LIVE.** `estimate_command_size` (`util.rs:149`) feeds the **byte rate limiter** (`connection.rs:403`, `transaction.rs:160-165`), not just stats, and it over-charges inline (telnet-style) commands by **2.3×** (§Problem 6). |
+| PN8 rated "latent" | **Half of it is LIVE.** `estimate_command_size` (`util.rs:149`) feeds the **byte rate limiter** (`connection.rs:403`, `transaction.rs:160-165`), not just stats, and it over-charges inline (telnet-style) commands by **2.3×** (§Problem 6). Bounded: `check_rate_limit` returns `None` before ever reading `cmd_bytes` unless the connection is authenticated **and** that user carries an ACL rate limit (`guards.rs:149-150`, two `?`s), so the live population is ACL-rate-limited users sending inline commands. Real, narrow, and the ceiling on the claim. |
 | PN9 framed as a throughput/syscall problem | It is that — **1 write syscall per reply vs 1 per ≤8 KiB, measured** (§Problem 2) — **and it is also a live reply-ordering defect.** A pipelined `GET k` + `HELLO 3` batch delivers the HELLO reply *ahead of* the GET reply, because the RESP3 arm writes straight to the socket while the RESP2 reply is still sitting in the sink's write buffer (§Problem 1). This is the same defect class proposal 49 closed for the RESP2 null-array, still open across the protocol switch. |
-| 84's §"vs 66/67": "67's subject is `util.rs`'s other content (`estimate_resp2_frame_size` `:130`, `estimate_command_size` `:149` — candidate PN8 …)" | **Mis-attributed.** Proposal 67 contains **zero** references to `connection/util.rs` (`grep -n 'util.rs\|estimate_' 67-server-small-dedups.md` → no output). PN8 is **this** proposal. 84's conclusion (adjacent regions, either order) is right; the owner name is wrong. |
+| 84 **rev 1**'s §"vs 66/67": "67's subject is `util.rs`'s other content (`estimate_resp2_frame_size` `:130`, `estimate_command_size` `:149` — candidate PN8 …)" | **Was mis-attributed; now fixed upstream.** Proposal 67 contains **zero** references to `connection/util.rs` (`grep -n 'util.rs\|estimate_' 67-server-small-dedups.md` → no output). PN8 is **this** proposal. 84's conclusion (adjacent regions, either order) was right; the owner name was wrong. **84 rev 2 has since re-attributed PN8 to 86** in its own §"vs proposal 86 (PN8 + PN9, RESP3 egress codec) — correcting rev 1's attribution", which cites this row. Recorded as resolved, not outstanding. |
 
 Three findings the brief did not name, all verified at HEAD: the RESP2→RESP3 **reply reordering**
 (§Problem 1), `obl` in `CLIENT LIST`/`CLIENT INFO` being **structurally zero** and feeding client
@@ -72,11 +81,11 @@ Line counts at `ddc4b184`.
 |---|---:|---|
 | `frogdb-server/crates/server/src/connection/frame_io.rs` | 283 (199 code + 84 tests, 2 `#[test]`) | **Primary.** Owns `narrow_to_resp2_outbound` `:19-28`, `send_response`/`send_wire_response` `:63-106`, `feed_response`/`feed_wire_response` `:108-150`, `flush_responses` `:153-160`. **~88 lines become ~40.** |
 | `frogdb-server/crates/server/src/connection/codec.rs` | 1024 | **Primary.** Gains `Outbound` + `impl Encoder<Outbound>`; loses `Encoder<BytesFrame>` `:72-78` and `Encoder<BorrowedFrame>` `:94-100` (H3). `RESP2_NULL_ARRAY` `:49` and `Resp2Outbound` `:51-64` fold into the new item. |
-| `frogdb-server/crates/server/src/connection/util.rs` | 503 | `estimate_resp2_frame_size` `:128-146` **deleted** (17 lines). `estimate_command_size` `:148-163` deleted by the separable ingress half (item C). |
+| `frogdb-server/crates/server/src/connection/util.rs` | 503 | `estimate_resp2_frame_size` **deleted**: doc `:128-129` + body `:130-146` = **19 lines** (the "17-line shadow encoder" cited elsewhere in this document is the **body** `:130-146`; both numbers are correct for what they name and are now distinguished). `estimate_command_size` `:148-163` deleted by the separable ingress half (item C). |
 | `frogdb-server/crates/server/src/connection.rs` | 922 | Three contacts: the `resp3_buf` field `:208-209` and its init `:313` (**deleted**), and the `pub(crate) use util::{…}` re-export `:98`. |
 | `frogdb-server/crates/server/src/connection/lifecycle.rs` | 749 | `compute_client_memory` `:235-299`; the one-line `output_buf_len` fix at `:256-257` (**H2**). |
 | `frogdb-server/crates/protocol/src/response.rs` | 1770 | **Doc-only edits**: `sanitize_error_message`'s cross-crate claim `:195-199` (H4) and the two `NullArray` notes `:267-273`, `:323-332` that name `Resp2Outbound`. **Neither encoder body is touched.** |
-| `frogdb-server/crates/core/src/client_registry/mod.rs` | 1926 | `ClientMemoryUsage::output_buf_len` doc `:323` (false; H2) and `total()` `:344-352`. |
+| `frogdb-server/crates/core/src/client_registry/mod.rs` | 1926 | `ClientMemoryUsage::output_buf_len` doc `:323` (false; H2) and `total()` `:344-352`. **The one edited file carrying `FM-` text** — 13 occurrences, of which 10 are enforced tags in the `#[cfg(test)]` region `:1401-:1565` and 3 are prose citations in doc comments (`:268`, `:272`, `:543`). None is in or near an edited region; see §Spec clearance. |
 | `frogdb-server/crates/core/src/client_registry/info.rs` | 181 | Read-only evidence: `obl=` is `output_buf_len` (`:83`, `:98`). |
 | `frogdb-server/crates/server/tests/resp3.rs` | 926 | Gains the RESP3 sibling of `test_pipelined_null_array_preserves_reply_order_resp2` `:649-684`, and the `HELLO 3`-mid-pipeline forcing test (§Testability). |
 | `frogdb-server/crates/protocol/src/command.rs` | 104 | **Item C only.** `ParsedCommand` `:13-18` gains a wire-length field via a new constructor (`new` `:22-24` keeps its arity — see §Item C). |
@@ -86,7 +95,9 @@ Line counts at `ddc4b184`.
 Read-only evidence, not edited: `tokio-util-0.7.18/src/codec/framed_impl.rs:261-303` (the sink's
 flush policy), `frogdb-server/crates/server/src/tls.rs:26-117` (`MaybeTlsStream`),
 `frogdb-server/crates/cluster/src/encoding_golden.rs` (359 lines — Raft/serde only, §Clearance),
-`scripts/error-sanitize.py`, `Justfile:329` (`lint-gates`), `Justfile:1128-1156`, `Justfile:1249-1281`.
+`scripts/error-sanitize.py`, `Justfile:329` (`lint-gates`), `Justfile:1128-1156`, `Justfile:1249-1269`
+(the `lint-format-float` recipe; `:1270` is blank and `:1271+` begins the `lint-clock-seam` comment
+block), `scripts/failure-modes.py:64-77` (`NEXTEST_CRATES`), `:98` (the tag-vs-prose regex).
 
 ## Problem
 
@@ -115,11 +126,15 @@ the sink into the socket (`:145`). Nothing reconciles the two orderings.
    socket immediately.
 5. `flush_responses()` at `connection.rs:690` then writes the GET reply.
 
-Observable result: a client that pipelines `GET k` and `HELLO 3` in one segment reads the HELLO map
-**first** and the GET bulk string second. A pooled client attributes the map to `GET` and is
-desynchronized for the life of the connection. The reverse order (`HELLO 3` then `GET k`) is fine,
-and so is any batch that does not cross the protocol boundary — which is exactly why this has
-survived: the switch is usually the *first* thing a client sends.
+Observable result: a client that pipelines `GET k` and `HELLO 3` in one segment, **and whose GET
+reply is under the 8 KiB backpressure boundary so it is still sitting in the sink buffer** (step 2 —
+a larger reply would have forced a `poll_ready` flush and the two orderings would coincide by
+accident), reads the HELLO map **first** and the GET bulk string second. A pooled client attributes
+the map to `GET` and is desynchronized for the life of the connection. The reverse order (`HELLO 3`
+then `GET k`) is fine, and so is any batch that does not cross the protocol boundary — which is
+exactly why this has survived: the switch is usually the *first* thing a client sends. The
+precondition is stated because it is the forcing test's setup, not because it narrows the defect:
+small replies are the common case, and the forcing test in §Testability uses a two-byte value.
 
 This is the same defect class as the null-array reordering proposal 49 fixed
 (`frame_io.rs:213-218` records that history, and `resp3.rs:642-684` pins the fix). That fix moved
@@ -153,7 +168,9 @@ arms drive the *same* `Framed`, differing only in feed-vs-`write_all`):
 Byte totals are identical in every row; only the call count differs. The workspace pins
 `tokio-util` **0.7.18** (`Cargo.lock:5457-5459`); the harness resolved 0.7.19. The measured shape
 matches 0.7.18's source exactly (`INITIAL_CAPACITY = 8 * 1024` at `framed_impl.rs:25`,
-`backpressure_boundary` initialised from it at `:61`/`:91`): 10 000 × 5 B = 50 000 B ÷ 8192 = 6
+`backpressure_boundary` initialised from it at `:61` — the `backpressure_boundary: INITIAL_CAPACITY`
+assignment inside `impl Default for WriteFrame` `:57-64` — and again at `:91`, the same assignment
+inside `impl From<BytesMut> for WriteFrame` `:82-94`; both are re-verified in rev 2): 10 000 × 5 B = 50 000 B ÷ 8192 = 6
 boundary flushes + 1 final = 7. The numbers are therefore reported as *derived from 0.7.18's source
 and confirmed on 0.7.19*, not as a 0.7.18 measurement.
 
@@ -333,7 +350,10 @@ type and one `Encoder`; its **implementation** absorbs the per-version branch th
 /// One reply, plus the protocol version the connection speaks at the moment it
 /// is queued. The version rides with the item so the codec holds no protocol
 /// state of its own — `ConnectionState::protocol_version` stays the single
-/// authority (`auth_conn_command.rs:55-57` is its only production setter).
+/// authority. It has exactly two production writers, `set_protocol_version`
+/// (`auth_conn_command.rs:55-57`, HELLO) and `ConnectionState::reset`
+/// (`state.rs:1085`, RESET → Resp2); carrying the version on the item means
+/// neither has a second copy to keep in sync.
 pub struct Outbound {
     pub version: ProtocolVersion,
     pub response: WireResponse,
@@ -413,8 +433,11 @@ the frame types they use.
 **Leverage.** One `impl` closes: an ordering defect (§1), an N-syscall amplification (§2), an
 unmeasurable stats path (§3), a structurally-zero observability field (§4), an untestable egress arm
 (§5), and two dead impls (§7). Nothing else in the connection layer changes shape: `feed_response`,
-`send_response` and `flush_responses` keep their signatures, so all **17** call sites in
-`connection.rs` are untouched.
+`send_response` and `flush_responses` keep their signatures, so all **15** call sites in
+`connection.rs` are untouched — `feed_response` ×10 (`:335`, `:395`, `:409`, `:552`, `:668`, `:719`,
+`:731`, `:764`, `:776`, `:807`), `send_response` ×1 (`:633`), `flush_responses` ×4 (`:690`, `:737`,
+`:781`, `:815`). (Rev 1 said 17: a `git grep` count that also caught the two **prose mentions** in
+the doc comment at `:324-325`. The no-signature-change claim is unaffected; only the number was.)
 
 **Locality.** The question *"what bytes does this reply put on the wire, and how many?"* is today
 answered by reading `frame_io.rs`, `codec.rs`, `util.rs` (a different module) and `response.rs` (a
@@ -569,12 +592,37 @@ signal of any future run rather than the score.
 `new`'s arity (§Item C). If any `frogdb-txn` file is nonetheless touched at implementation time,
 `just mutants-diff frogdb-txn` is required before pushing.
 
-**FM tags:** `git grep 'FM-'` over `connection.rs`, `connection/frame_io.rs`, `connection/util.rs`,
-`connection/codec.rs` and `protocol/src/response.rs` returns **zero** hits. No failure-mode row is
-forced by, or references, any edited region, so `just lint-failure-modes` is unaffected. Do **not**
-add an id-only `// FM-…` comment in `frogdb-protocol`: the crate is absent from `NEXTEST_CRATES` in
-`scripts/failure-modes.py`, so a tag there would be unenforceable (this constraint is inherited from
-proposal 80's verification and re-checked here).
+**FM tags — restated over the *full* edited-file set.** Rev 1 ran `git grep 'FM-'` over five files
+(`connection.rs`, `connection/frame_io.rs`, `connection/util.rs`, `connection/codec.rs`,
+`protocol/src/response.rs`) and generalised the zero-hit result to "any edited file". **That
+generalisation is false**: §Files involved names eleven, and the sixth — `client_registry/mod.rs`,
+H2's doc-fix target — carries `FM-` text. The sweep, re-run over all eleven:
+
+| File | `FM-` occurrences | Enforced tags |
+|---|---:|---|
+| `connection.rs`, `connection/frame_io.rs`, `connection/util.rs`, `connection/codec.rs`, `connection/lifecycle.rs`, `connection/transaction.rs`, `connection/auth_conn_command.rs`, `protocol/src/response.rs`, `protocol/src/command.rs`, `core/src/client_registry/info.rs`, `server/tests/resp3.rs` | **0** | none |
+| `core/src/client_registry/mod.rs` | **13** | **10** — `FM-CLUSTER-082` `:1401`, `:1451`, `:1477`, `:1565`; `FM-CLUSTER-079` `:1416`, `:1434`; `FM-CLUSTER-097` `:1499`, `:1516`, `:1530`, `:1546` — each an id-only comment directly above a `#[test]`. The other 3 (`:268`, `:272`, `:543`) are **prose citations inside doc comments**, which `scripts/failure-modes.py:98`'s `FM_TAG_LINE_RE` deliberately does not treat as tags. |
+
+The file is also **named in a LOCKED spec**: `.scratch/hardening/specs/cluster-failure-modes.md:46`
+lists `core/src/client_registry/mod.rs` (with `server/src/connection/{pause_gate,lifecycle}.rs`) as
+the slot-scoped-pause row group's home. `frogdb-core` **is** in `NEXTEST_CRATES`
+(`scripts/failure-modes.py:64-77`), so those ten tags are live and enforced.
+
+**Practical hazard: nil, and stated as a bound rather than an absence.** H2's edit is one doc line
+on a struct field at `:323`. The nearest enforced tag is `:1401` — **1 078 lines away**, in the
+`#[cfg(test)]` module; the nearest `FM-` text of any kind is the prose citation at `:272`, 51 lines
+away and untouched. No tag is added, removed, moved or re-pointed, and no `#[test]` function is
+renamed, so no spec↔test pair changes. The correct claim is therefore not "zero tags" but **"no
+edited region contains or is adjacent to a tag, and no tagged test is touched."**
+
+**Requirement, not an assurance:** the H2 commit must run `just lint-failure-modes` (it is part of
+`just lint`, so a full lint run satisfies it). This is cheap and is the only thing that converts the
+argument above into a check. `frogdb-core` is not a gated crate, so no `mutants-gate` threshold
+applies; `just mutants-diff` is not required for a doc-only line.
+
+Do **not** add an id-only `// FM-…` comment in `frogdb-protocol`: the crate is absent from
+`NEXTEST_CRATES`, so a tag there would be unenforceable (this constraint is inherited from proposal
+80's verification and re-checked here).
 
 ## Seam-lint clearance
 
@@ -607,7 +655,7 @@ All fourteen gates in `lint-gates` (`Justfile:329`) were read and applied to thi
 
 | Gate | Why it cannot fire |
 |---|---|
-| `lint-format-float` (`Justfile:1249-1281`) | Pins exactly **one** `fn format_float`, at `protocol/src/format.rs`. This proposal adds **no** float rendering: the only float path is `response.rs:286`'s existing `format_float(d)` inside `to_resp2_frame`, which is **not edited**, and the RESP3 side delegates to `redis-protocol`'s own `f64` encoder as it does today (`resp3.rs:686-724` documents that division). Count stays at 1. |
+| `lint-format-float` (`Justfile:1249-1269`) | Pins exactly **one** `fn format_float`, at `protocol/src/format.rs`. This proposal adds **no** float rendering: the only float path is `response.rs:286`'s existing `format_float(d)` inside `to_resp2_frame`, which is **not edited**, and the RESP3 side delegates to `redis-protocol`'s own `f64` encoder as it does today (`resp3.rs:686-724` documents that division). Count stays at 1. |
 | `lint-info-seam` (`:423-441`) | Three named files: `commands/info.rs`, `connection/scatter.rs`, `connection/info_handler.rs`. None edited. |
 | `lint-redirect-seam` (`:449-479`) | Greps `Response::error("CROSSSLOT` / `Response::error((format!()?"(MOVED\|ASK) `. No such construction is added or moved. |
 | `lint-failover-atomicity` (`:1166-1196`) | `ClusterCommand` writes in `cluster-runtime`/`connection/cluster.rs`. Not edited. |
@@ -619,7 +667,7 @@ All fourteen gates in `lint-gates` (`Justfile:329`) were read and applied to thi
 | `lint-keyspace-notify-routing` (`:1051-1067`) | Scans `core/src/shard`. |
 | `lint-script-gate` (`:1080-…`) | Scans the scripting module for `block_in_place` / `extract_keys_from_command`. |
 | `lint-continuation-lock` (`:1312-1314`) | Count-pinned arms of the 11 shard `*Msg` enums. No shard message enum is edited. |
-| `lint-failure-modes` (`:293`) | Zero `FM-` tags in every edited file (§Spec clearance). |
+| `lint-failure-modes` (`:293`) | No edited **region** contains or abuts an `FM-` tag, and no tagged test is touched — `client_registry/mod.rs` does carry ten tags, all in `#[cfg(test)]` 1 078 lines from H2's one doc line (§Spec clearance). **Run it on the H2 commit anyway.** |
 
 **Golden tests — nothing re-pins.** The only golden-encoding suite in the tree is
 `frogdb-cluster/src/encoding_golden.rs` (359 lines), which pins **`serde_json` encodings of
@@ -628,21 +676,57 @@ All fourteen gates in `lint-gates` (`Justfile:329`) were read and applied to thi
 has no contact with the RESP wire format. `UPDATE_GOLDEN=1` is not needed.
 
 What *does* pin RESP wire bytes is `frogdb-server/crates/server/tests/resp3.rs` — the null-array
-byte tests (`:596`, `:610`), the pipelined-order test (`:649`) and eight non-finite-double byte
-tests (`:775-926`). **All of them must stay green unchanged**, and all of them are single-command
-round trips (`send_raw_command` `:759` writes one command and reads once), so reply-coalescing
-cannot move their bytes: each command is its own read-loop iteration with its own flush at
-`connection.rs:690`.
+byte tests (`:596`, `:610`), the pipelined-order test (`:649`) and the double-format block at
+`:774-926`, which holds **nine** `#[tokio::test]` functions, eight of them wire-byte pins (the
+ninth, `test_zincrby_resp3_nan_result_is_rejected_not_wired` `:808`, asserts a NaN **rejection**,
+not wire bytes). **All of them must stay green unchanged.** Rev 1 cleared them with one blanket
+reason ("all single-command round trips"); that reason is wrong for two of them, and the clearance
+is now given per shape:
+
+- **The `send_raw_command` tests** (`:759` writes one command and reads once) — the double block and
+  `:596` — genuinely are single-command round trips: each command is its own read-loop iteration
+  with its own flush at `connection.rs:690`, so coalescing has nothing to coalesce.
+- **`test_null_array_wire_bytes_resp3` (`:610`)** drives a raw `TcpStream`, but as **two** read-loop
+  iterations, not one: `HELLO 3` is written and its reply read (`:617-625`) *before* `LPOP` is
+  written and its reply read (`:629-637`). One flush each. The fold cannot merge across a read the
+  test performs itself.
+- **`test_pipelined_null_array_preserves_reply_order_resp2` (`:649-684`)** is **not** a
+  single-command round trip — it writes **three** commands in one segment (`:661-668`) and
+  `read_exact`s the concatenation (`:671-676`). It stays green for a different and stronger reason:
+  it is a **RESP2** connection, so all three replies are *already* coalesced through the sink today,
+  and what it asserts is byte **order**, not flush boundaries. The fold changes neither. It is in
+  fact the closest existing evidence *for* the change — the property it pins on RESP2 is exactly the
+  property §Testability test 3 adds for RESP3.
 
 ## Behaviour changes
 
 1. **RESP3 replies are buffered until the batch flush** instead of being written per reply. Every
-   feed site is already followed by a `flush_responses()` on every path — `connection.rs:690` (the
-   command loop, including the `QUIT` and PSYNC-handoff breaks, which set `should_break` and fall
-   through the flush at `:690-697`), `:737` (pub/sub), `:781` (invalidation), `:815` (MONITOR) —
-   so no reply is lost. **This is the invariant to re-verify at review time**, because after the
-   change a future `break` that skips the flush would silently drop replies. The mitigating fact:
-   RESP2 has had exactly this property since forever, so the change makes both protocols share one
+   feed site is followed by a `flush_responses()` on every **success** path — `connection.rs:690`
+   (the command loop, including the `QUIT` and PSYNC-handoff breaks, which set `should_break` and
+   fall through the flush at `:690-697`), `:737` (pub/sub), `:781` (invalidation), `:815`
+   (MONITOR) — so no reply is lost while feeds succeed.
+
+   **Rev 1 stated this as an absolute ("on every path"). It is not.** Three `break`s reach the loop
+   exit with a feed already performed and **no** intervening flush, all of them on a feed **error**:
+
+   | Site | Shape |
+   |---|---|
+   | `connection.rs:719-722` | pub/sub first-feed error → `break` at `:721`, before the flush at `:737` |
+   | `:764-767` | invalidation first-feed error → `break` at `:766`, before the flush at `:781` |
+   | `:804-814` | MONITOR: N events fed successfully in the loop at `:805-811`; one fails, sets `write_err`, and `if write_err { break; }` at `:812-813` exits **before** the flush at `:815` |
+
+   The third is worth naming twice: it is **literally the shape** this item warns a future commit
+   might introduce — feed N, then `break` past the flush — and it already exists. Today it is
+   harmless on both protocols (RESP2's bytes were never going to be flushed by a torn-down
+   connection either); **after the fold its RESP3 consequence changes from "already written" to
+   "dropped"**. Practically near-unreachable: all three fire only when a socket write has already
+   failed, which tears the connection down in the next breath, so there is no client left to read
+   the dropped bytes. Recorded because the review must re-verify the *class*, and this is the
+   class's only existing instance.
+
+   **This is the invariant to re-verify at review time**, because after the change a future `break`
+   that skips the flush on a *success* path would silently drop replies. The mitigating fact: RESP2
+   has had exactly this property since forever, so the change makes both protocols share one
    already-audited invariant instead of maintaining two.
 2. **Reply ordering across a mid-batch `HELLO 3` is fixed** (§Problem 1). This is a wire-visible
    change and the point of the proposal; it is pinned by test 2 in §Testability.
@@ -703,13 +787,23 @@ is wrong — see §Corrections. The `:136`/`:146` contradiction is real; the mis
 ### vs proposal 84 — `BlockingOp`/`Direction` dedupe (PN6) — same file, adjacent regions
 
 84 deletes `connection/util.rs:74-126` (`convert_blocking_op`, `convert_direction`). 86 deletes
-`:128-146` and — under item C — `:148-163`. **Adjacent, non-overlapping, and the ranges do not
-share a three-line diff context** (84's last line `:126` and 86's first `:128` are separated by the
-blank line and doc comment at `:127-129`, which is 86's). Git will merge these cleanly in either
-order; if a conflict does surface it is a one-hunk resolution. 84's own ruling ("same file, adjacent
-regions, no overlap … either order") is correct — only its attribution of PN8 to proposal 67 is
-wrong (§Corrections). If both land, `util.rs` drops ~90 lines and keeps `raft_op_to_command`
-(`:165-…`), which neither proposal touches. **No ordering constraint.**
+`:128-146` (doc `:128-129` + body `:130-146`) and — under item C — `:148-163`. **Adjacent and
+non-overlapping.**
+
+**Rev 1's diff-context sub-claim was wrong and is withdrawn.** It said the two ranges "do not share
+a three-line diff context", reasoning that "the blank line and doc comment at `:127-129`" separate
+them. In fact **`:127` is a single blank line** — `:128-129` is the doc comment and is *part of*
+86's deletion, not separation from it. One unchanged line between two deleted ranges means the
+hunks' three-line contexts **do** overlap and `git diff` renders them as one region. The
+**conclusion is unchanged and now rests on the right fact**: the *changed* ranges are non-adjacent
+(separated by an unchanged line) and both sides are pure deletions, so git merges them cleanly; at
+worst it is a **one-hunk resolution**.
+
+84 **rev 2 reached the same conclusion independently** and records it in its §"vs proposal 86
+(PN8 + PN9, RESP3 egress codec) — correcting rev 1's attribution", which also re-attributes PN8 from
+67 to this proposal (§Corrections). Cited by section rather than line number, because both documents
+are under revision and line cites between them drift. If both land, `util.rs` drops ~90 lines and
+keeps `raft_op_to_command` (`:165-…`), which neither proposal touches. **No ordering constraint.**
 
 ### vs proposal 70 — ACL registry consult — same file, far apart
 
@@ -721,7 +815,9 @@ at `:163`. ~87 lines apart. **No contact.**
 78 adds a frame→`Response` mapper to `response.rs` and lists it as a "candidate home"; its
 `response.rs` cites are `:274` and `:770`, both read-only. 86's `response.rs` edits are **doc-only**
 at `:195-199`, `:267-273`, `:323-332`. 78 also owns `server/tests/resp3.rs`'s `Resp2Client`
-(`:31-56`) and the raw-byte helpers (`:729`, `:742`, `:759`); **86 adds two new `#[tokio::test]`
+(`:31-56`) and the raw-byte helpers — `encode_resp_command` `:729`, `connect_resp3_raw` `:742`,
+`send_raw_command` `:759`, all three cited at their `fn` line (the preceding lines are their doc
+comments, re-verified in rev 2); **86 adds two new `#[tokio::test]`
 functions to the same file** (§Testability tests 2 and 3) built on those helpers. That is an
 append-at-end contact, not a rewrite. **No ordering constraint; coordinate at land time on
 `resp3.rs`.** 78 does not touch `connection.rs`, `frame_io.rs`, `codec.rs` or TLS plumbing — the
@@ -736,10 +832,12 @@ over 78 returns nothing, and its files table names no `server/src/` file except 
 
 ### vs proposal 81 — core dead seams — one forward reference, no write contact
 
-81:557 proposes folding `frogdb-types` copies and deleting "the hand converter in
-`server/connection/util.rs`" — that is 84's `convert_blocking_op`/`convert_direction` (`:74-126`),
-not 86's range. 81's file set is otherwise `core/src/shard/*` + `server/src/acceptor.rs`.
-**No overlap.**
+81's §"vs future proposal 84 (PN6, `BlockingOp`/`Direction` dedupe)" proposes folding
+`frogdb-types` copies and deleting "the hand converter in `server/connection/util.rs`" — that is
+84's `convert_blocking_op`/`convert_direction` (`:74-126`), not 86's range. 81's file set is
+otherwise `core/src/shard/*` + `server/src/acceptor.rs`. **No overlap.** (Rev 1 cited this as
+`81:557`; 81 has since been revised and the passage now sits at `:639`. Cited by section name here
+for the same reason as the 84 cross-reference above.)
 
 ### vs proposal 68 — EXEC framing datum — read-only citations
 
@@ -760,6 +858,17 @@ fixes nor worsens it.
   reaching `:862`, so nothing is lost. After the change, RESP3 replies also live in that buffer, so
   the flush-before-`into_inner` ordering becomes load-bearing for both protocols. It is already
   correct; it now needs a comment saying why.
+
+  **Audited exhaustively in rev 2, and the conclusion holds: the fold adds no data-loss path here.**
+  `pending_psync_handoff` has exactly two writers, `connection.rs:655` (first-command arm `:654-657`)
+  and `:680` (drain-loop arm `:679-683`). Both set `should_break` and **fall through** to the flush
+  at `:690`; neither `break`s past it. The one remaining reader is `:835`
+  (`pending_psync_handoff.take()`), which runs after the loop. Crucially, the three flush-skipping
+  `break`s catalogued in §Behaviour changes 1 (`:721`, `:766`, `:813`) live in **other `select!`
+  arms** — pub/sub, invalidation, MONITOR — none of which can produce a `FrameAction::Handoff`, so
+  none can reach `:862` with a handoff pending *and* unflushed bytes. The requested comment at
+  `:862` still stands: it documents an ordering that is currently load-bearing by accident of
+  layout.
 - **`bytes_encoded` overflow.** `u64` counting bytes on one connection. Not a real risk; stated so
   the reviewer does not have to ask.
 - **`Encoder<Outbound>` and `Decoder` on the same struct.** `FrogDbResp2` already implements both;
@@ -770,11 +879,12 @@ fixes nor worsens it.
 ## Effort
 
 **M** for the codec fold (items 1–2). One 88-line region of `frame_io.rs` becomes ~40; one item type
-and one `Encoder` impl added to `codec.rs` and two deleted; 17 lines deleted from `util.rs`; two
-lines deleted from `connection.rs`; one line changed in `lifecycle.rs`; doc-only in `response.rs`.
+and one `Encoder` impl added to `codec.rs` and two deleted; 19 lines deleted from `util.rs` (doc
+`:128-129` + 17-line body `:130-146`); two lines deleted from `connection.rs`; one line changed in
+`lifecycle.rs`; doc-only in `response.rs`.
 The two forcing tests (§Testability 1–2) are the real work and should be written first. Bounded by
-the fact that **no caller signature changes** — all 17 `feed_response`/`send_response`/
-`flush_responses` sites in `connection.rs` are untouched.
+the fact that **no caller signature changes** — all **15** `feed_response`/`send_response`/
+`flush_responses` sites in `connection.rs` are untouched (enumerated in §Leverage).
 
 **S–M** for item C (ingress), separable and landable later: it changes `Decoder::Item` plumbing
 through `try_next_frame` and two read sites.
@@ -850,8 +960,70 @@ parked**, per the standing policy that security findings are filed, not fixed, i
 leading `\r\n` pairs before any framing (`codec.rs:113-118`, *"Redis silently ignores these"*).
 Those bytes never become a `ParsedCommand`, so `estimate_command_size` never sees them and neither
 the byte quota (`connection.rs:379-380`, `:403`) nor the command-count quota is charged. A client can
-therefore consume server read bandwidth and read-buffer work at **zero quota cost**. Severity
-depends on whether any other limiter covers raw read volume on a connection — **not audited here**.
-Direction matters: this is an **under**-charge (unlike §Problem 6's over-charge, which fails safe).
-**No fix is proposed.** Item C is justified independently, on accuracy grounds; that it would
-incidentally charge decoder-consumed bytes is noted as a property, not offered as the remediation.
+therefore consume server read bandwidth and read-buffer work at **zero quota cost**. Direction
+matters: this is an **under**-charge (unlike §Problem 6's over-charge, which fails safe).
+
+**Rev 2 closes rev 1's hedge, and it resolves against mitigation existing.** Rev 1 said severity
+"depends on whether any other limiter covers raw read volume on a connection — not audited here".
+It has now been audited, and the answer is **no such limiter exists in the server sources**.
+`frogdb-server/crates/protocol/src/limits.rs` defines `PROTO_MAX_BULK_LEN` (`:21`, a per-bulk-string
+ceiling), `PROTO_MAX_MULTIBULK_LEN` (`:26`, a per-array element count) and `MAX_INTERNAL_FRAME_LEN`
+(`:43`, an internal-transport ceiling). Redis's `PROTO_MAX_QUERYBUF_LEN` — the accumulated-request
+cap, the only one of the family that would bound read *volume* — appears in the tree **exactly
+once, inside a doc comment** (`limits.rs:35`, describing where `MAX_INTERNAL_FRAME_LEN`'s number
+came from). There is no constant, no config key and no check.
+
+**Severity is nonetheless bounded, and the bound is the reason this stays classification-only.**
+The drain at `codec.rs:115-118` is `src.split_to(2); continue;` — it **consumes** two bytes per
+iteration and re-enters the loop, so the read buffer does not accumulate and `query_buf_size`
+(`lifecycle.rs:236`, `framed.read_buffer().len()`) stays flat under the flood. There is no unbounded
+allocation and no memory-exhaustion path; the cost is **CPU and network bandwidth only**, i.e. a
+generic connection-level flood that any transport-layer limit already covers, charged against no
+quota. That is a real gap in the quota's *completeness*, not a resource-exhaustion vector.
+
+**No fix is proposed** — standing policy is that security findings in proposals are filed, not
+fixed. Item C is justified independently, on accuracy grounds; that it would incidentally charge
+decoder-consumed bytes is noted as a property, not offered as the remediation.
+
+## Revision ledger
+
+**Rev 2**, after adversarial review (verdict **CONFIRMED with amendments**: 5 blocking, 7
+non-blocking). Every finding was re-derived against the tree before being applied; two are refuted
+below with evidence. **No design element changed** — the fold, the alternative rejections (A/B/C),
+the 80-first ordering, the five hotfixes, and all three LIVE claims stand exactly as written in
+rev 1.
+
+### Applied
+
+| # | Was | Now | Where |
+|---|---|---|---|
+| B1 | Header + §Spec clearance: "zero `FM-` tags in any edited file", generalised from a five-file grep | Full eleven-file sweep tabulated; `client_registry/mod.rs` carries 13 occurrences (10 enforced tags, all `#[cfg(test)]` `:1401-:1565`; 3 doc-comment prose citations). File named in the LOCKED cluster spec `:46`; `frogdb-core` is in `NEXTEST_CRATES`. Claim restated as "no edited region contains or abuts a tag, and no tagged test is touched", plus a **requirement** to run `just lint-failure-modes` on the H2 commit | header, §Files involved, §Spec clearance, §Seam-lint table |
+| B2 | §Behaviour changes 1: "Every feed site is already followed by a `flush_responses()` on **every path**" | Softened to every **success** path, with the three flush-skipping error `break`s tabulated: `:721` (pub/sub first feed), `:766` (invalidation first feed), `:804-814` (MONITOR feed-N-then-`break`). The third is literally the shape the item warns a future commit might introduce; post-fold its RESP3 consequence changes from "already written" to "dropped". Near-unreachable — all three follow a failed socket write | §Behaviour changes 1 |
+| B3 | "all **17** call sites in `connection.rs`" | **15**, enumerated: `feed_response` ×10, `send_response` ×1, `flush_responses` ×4. The 17 came from a grep that also counted two prose mentions in the doc comment at `:324-325`. No-signature-change claim unaffected | §Leverage, §Effort |
+| B4 | Golden-test clearance: one blanket reason, "all of them are single-command round trips" | Per-shape clearance. `test_pipelined_null_array_preserves_reply_order_resp2` `:649-684` writes **three** commands in one segment (`:661-668`) + `read_exact` (`:671-676`) — it clears because it is a **RESP2** connection (already fully coalesced today) asserting byte **order**, not flush boundaries. `test_null_array_wire_bytes_resp3` `:610` clears because it is **two** read-loop iterations (HELLO→read at `:617-625`, LPOP→read at `:629-637`), one flush each | §Spec/Golden clearance |
+| B5 | §vs 84: "the ranges do not share a three-line diff context … separated by the blank line and doc comment at `:127-129`" | Withdrawn. `:127` is a **single blank line**; `:128-129` is the doc comment and is part of **86's** deletion. Contexts **do** overlap. Conclusion unchanged on the right fact: changed ranges non-adjacent, both pure deletions → clean merge, at worst a one-hunk resolution. 84 rev 2 reached this independently | §vs 84 |
+| N2 | Drafted `Outbound` doc: `auth_conn_command.rs:55-57` is "its only production setter" — contradicted by this proposal's own §Alternatives (A) | Two production writers named: `set_protocol_version` (`auth_conn_command.rs:55-57`, HELLO) and `ConnectionState::reset` (`state.rs:1085` → `Resp2`). Strengthens (A)'s rejection | §Proposed change |
+| N3 | "eight non-finite-double byte tests (`:775-926`)" | **Nine** `#[tokio::test]` fns at `:774-926`, eight of them wire-byte pins; `:808` (`test_zincrby_resp3_nan_result_is_rejected_not_wired`) asserts a rejection, not wire bytes | §Golden clearance |
+| N5 | `81:557` and 84's PN8 mis-attribution cited by line | Both re-cited **by section name**, because sibling proposals are under revision and line cites drift (81's passage moved `:557` → `:639`; 84 rev 2 now owns its own §vs 86 re-attribution). §Corrections row marked resolved-upstream | §Corrections, §vs 84, §vs 81 |
+| N6 | `lint-format-float` at `Justfile:1249-1281` | `:1249-1269`; `:1270` is blank and `:1271+` opens the `lint-clock-seam` comment block | §Files involved, §Seam-lint table |
+| N7 | Files table: `estimate_resp2_frame_size` `:128-146` "**deleted** (17 lines)" — two incompatible numbers on one row | `:128-146` is **19** lines (doc `:128-129` + body `:130-146`); the "17-line shadow encoder" cited elsewhere is the **body**. Both numbers kept, now distinguished | §Files involved, §Effort |
+| S-a | Reply-reordering Observable-result stated without its precondition | Adds the "**GET reply under the 8 KiB backpressure boundary**" clause (step 2 already implied it), with a note that this is the forcing test's setup, not a narrowing of the defect | §Problem 1 |
+| S-b | PN8 rated "half LIVE" without a population bound | `check_rate_limit` returns `None` before reading `cmd_bytes` unless the connection is authenticated **and** the user carries an ACL rate limit (`guards.rs:149-150`, two `?`s) — the live population is ACL-rate-limited users sending inline commands | §Corrections |
+| S-c | PSYNC-handoff risk asserted correct without an audit | The review's `into_inner()` audit cited and confirmed: `pending_psync_handoff` has two writers (`:655`, `:680`), both set `should_break` and fall through the `:690` flush; the B2 `break`s are in other `select!` arms and cannot carry a handoff. **No new data-loss path.** The requested comment at `:862` stays | §Other risks |
+| SEC | "Severity depends on whether any other limiter covers raw read volume — **not audited here**" | Audited; resolves **against** mitigation. No `PROTO_MAX_QUERYBUF_LEN`-style read-volume limiter exists in server src — the name appears once, in a doc comment (`limits.rs:35`). Severity bounded to **CPU/bandwidth**: the drain at `codec.rs:115-118` consumes 2 bytes per iteration, so nothing accumulates and `query_buf_size` stays flat. Still classification-only, no fix proposed | §Security classification |
+
+### Refuted, with evidence
+
+| # | Review finding | Evidence |
+|---|---|---|
+| N1 | "`backpressure_boundary` initialised at `framed_impl.rs:59` (Default) and `:91`, **not** `:61`" | `:61` is correct. In `tokio-util` 0.7.18, `impl Default for WriteFrame` spans `:57-64` and the literal `backpressure_boundary: INITIAL_CAPACITY,` assignment is at **`:61`** (`:59` is the `Self {` line, `:60` is the `buffer:` field). The second site, `:91`, is the same assignment inside `impl From<BytesMut> for WriteFrame` `:82-94` — which the review got right. Rev 1's `:61`/`:91` pair pointed at the two assignments; the text now also names the two impls, so the cite cannot be misread as pointing at a struct literal |
+| N4 | "78-inherited helper cites off by one — `encode_resp_command` `:728`, `connect_resp3_raw` `:741`" | Both rev-1 cites are correct at the `fn` line: `resp3.rs:729` is `fn encode_resp_command(args: &[&str]) -> Vec<u8> {` and `:742` is `async fn connect_resp3_raw(server: &TestServer) -> TcpStream {`. `:728` and `:741` are the closing lines of their **doc comments** (`:726-728`, `:739-741`). `send_raw_command` `:759` the review already agreed with. The text now says explicitly that all three are `fn`-line cites, so the same finding cannot recur |
+
+### Unchanged and re-affirmed
+
+The three LIVE claims (RESP3-overtakes-RESP2 reply reordering; `obl` structurally zero and feeding
+eviction; 1-write-per-reply vs 1-per-8-KiB), the fold's seam/adapter/depth argument, the rejection
+of (A) codec-held version, (B) `encoded_len` + property test, and (C) write-buffer-delta, the
+**80-first** ordering ruling — whose load-bearing reason, the zero-separation textual conflict at
+`frame_io.rs:55-65` between 80's H4 doc rewrite and 86's `send_response` body rewrite, is real —
+and hotfixes **H1–H5** as scoped.
