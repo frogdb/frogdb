@@ -974,7 +974,7 @@ fn action_for(node: &LinkNode, step: Step) -> LinkAction {
         Variant::Attach => LinkAction::Attach {
             slot: pick(&free),
             // Silent is the rarer real shape: most replicas announce.
-            announce: if step.a % 4 == 0 {
+            announce: if step.a.is_multiple_of(4) {
                 Announce::Silent
             } else {
                 Announce::Port

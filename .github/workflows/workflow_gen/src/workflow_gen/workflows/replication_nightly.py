@@ -85,10 +85,11 @@ def replication_nightly_workflow() -> Workflow:
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
             # Every case stands up a real node on a real temp directory, so this
-            # is slower per case than a pure state-machine harness: ~120 cases/s
-            # in a debug build locally, which puts the default budget around
-            # half an hour. The ceiling covers a colder runner and leaves room
-            # for a dispatch that raises `cases`.
+            # is slower per case than a pure state-machine harness: a 30k-case
+            # run measured ~290 cases/s in a debug build on an M-series laptop,
+            # putting the default budget near a quarter of an hour. The ceiling
+            # covers a much colder runner and leaves room for a dispatch that
+            # raises `cases`.
             timeout_minutes=90,
             steps=[
                 checkout_step(),
