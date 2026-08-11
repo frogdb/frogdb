@@ -1071,6 +1071,21 @@ mod tests {
     /// so deleting the catalog entry takes this test down with it.
     #[test]
     fn no_step_of_the_table_moves_a_phase_backwards_or_leaves_the_terminal() {
+        // The check has to be able to fail, or the sweep below is vacuous: a
+        // deleted `INV-SESSION-1` would otherwise make this test pass by saying
+        // nothing. This is the assertion that takes it down with the catalog.
+        assert!(
+            !crate::invariants::check_hard(&ReplicationView::empty().with_phase_change(
+                PhaseChange {
+                    replica_id: 1,
+                    from: Phase::Streaming,
+                    to: Phase::Connecting,
+                }
+            ))
+            .is_empty(),
+            "the catalog must still report a backwards phase move"
+        );
+
         for view in every_view() {
             for event in every_event() {
                 let to = step(&view, &event).phase;
