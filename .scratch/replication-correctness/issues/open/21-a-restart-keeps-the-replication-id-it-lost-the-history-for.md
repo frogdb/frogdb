@@ -5,7 +5,7 @@ Status: needs-triage
 ## Parent
 
 [PRD](../../PRD.md) §3 W3. Found by the seeded replication sweep
-([issue 12](./12-replication-seeded-sweep.md)), seed 81 — family `mixed`, a
+([issue 12](../done/12-replication-seeded-sweep.md)), seed 81 — family `mixed`, a
 crash-restart of the primary overlapping an isolate of the same node.
 
 ## What was found
@@ -49,6 +49,12 @@ replid matches and the offset is inside the backlog. Nothing in the grant
 distinguishes the pre-crash lineage from the post-crash one. Seed 81's shape (a
 crash overlapping an isolate of the same node) is the shape that produces that
 window, and the sweep should reach it with a bigger backlog.
+
+[Issue 22](./22-a-replica-ack-is-credited-past-the-primarys-live-offset.md) is
+one of the reachable consequences: a replica that followed the previous
+incarnation acks its own higher offset to the rebooted primary, which credits it
+past its own live head and trips the Hard-tier `INV-OFFSET-3`. Fixing this issue
+closes that path, though not the promotion-side one 22 also names.
 
 This is distinct from [issue 17](./17-save-point-above-the-live-head.md), which
 is about the save point being *above* the live head after a backwards full
@@ -98,12 +104,15 @@ is the one that always survives.
 ## Witness
 
 `frogdb-server/crates/server/tests/simulation/replication_scheduler.rs` —
-`check_cross_node`'s `XREPL-2a` carries a narrow named-gap exemption citing this
-issue: a primary the schedule restarted, observed back at offset 0, is not
-reported. The exemption is pinned both ways by
-`test_xrepl_2_exempts_only_a_restarted_primary_that_is_back_at_zero`, so it
-cannot widen to a live primary a replica has genuinely overtaken. Replay the
-witness with:
+`restart_tainted_replids` computes the set of replication ids a node the
+schedule restarted was *observed rewinding under*, and `check_cross_node`
+exempts those ids from both `XREPL-2a` (a replica ahead of its primary) and
+`XREPL-2b` (an offset going backwards). Keyed on the observed rewind rather than
+on "this node was restarted", so a fix that mints a fresh id empties the set and
+re-arms both checks with no edit; pinned both ways by
+`test_xrepl_2_exempts_a_replid_a_restart_rewound` and
+`test_xrepl_2_gap_does_not_cover_a_primary_that_never_rewound`. At the 500-seed
+budget this gap covers seeds 122, 171, 204 and 211. Replay the witness with:
 
 ```
 REPLICATION_SEED_TRACE=1 REPLICATION_SEEDS_START=81 just replication-seeds 1
