@@ -24,4 +24,5 @@ src/workflow_gen/workflows/regression_nightly.py
 src/workflow_gen/workflows/release.py
 src/workflow_gen/workflows/release_please.py
 src/workflow_gen/workflows/replication_model_nightly.py
+src/workflow_gen/workflows/replication_nightly.py
 src/workflow_gen/workflows/test.py
