@@ -78,15 +78,28 @@
                    (car/exec))
         ;; Last element of the pipeline is the EXEC result vector
         exec-results (last pipeline)]
-    (when (nil? exec-results)
-      (throw+ {:type :txn-aborted}))
-    ;; Map EXEC results back to txn format
-    (mapv (fn [[f k v] result]
-            (case f
-              :r      [:r k (parse-list result)]
-              :append [:append k v]))
-          txn
-          exec-results)))
+    (cond
+      (nil? exec-results)
+      (throw+ {:type :txn-aborted})
+
+      ;; Carmine doesn't throw on a pipelined error reply — it returns the
+      ;; exception inline as the offending element's value. If EXEC itself
+      ;; errored (e.g. -CLUSTERDOWN during a quorum-loss window, or a MOVED
+      ;; redirect), exec-results IS that ExceptionInfo rather than a results
+      ;; vector. Re-throw it so callers' existing redirect/clusterdown
+      ;; handling (is-redirect-error?) can classify it, instead of letting it
+      ;; reach mapv as a bogus "collection".
+      (instance? Throwable exec-results)
+      (throw exec-results)
+
+      :else
+      ;; Map EXEC results back to txn format
+      (mapv (fn [[f k v] result]
+              (case f
+                :r      [:r k (parse-list result)]
+                :append [:append k v]))
+            txn
+            exec-results))))
 
 ;; ===========================================================================
 ;; Single-Node Client
