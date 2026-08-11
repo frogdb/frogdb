@@ -1717,7 +1717,7 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
         let mut settled = None;
         for _ in 0..POLL_STEPS {
             if let Some(v) = converged_value(*key).await
-                && accepted.iter().any(|a| *a == v)
+                && accepted.contains(&v)
             {
                 settled = Some(v);
                 break;
@@ -1903,11 +1903,36 @@ async fn sync_counts() -> SyncCounts {
 }
 
 /// Sample `INFO replication` from every host.
+///
+/// A round is not an atomic snapshot: each node costs a connect and a command,
+/// and the primary keeps producing offsets in between — replication pings alone
+/// advance `master_repl_offset`. So a replica read *after* the primary can
+/// honestly report an offset above the primary's already-stale sample, which is
+/// indistinguishable from the real defect `XREPL-2a` looks for. Sampling the
+/// primary a second time, after every other node, removes the ambiguity in the
+/// only direction that matters: its offset is then read strictly later than
+/// every replica's, so it bounds them, and any remaining excess is the replica
+/// holding a history the primary never produced.
+///
+/// The re-read replaces the first sample rather than being maxed with it, so a
+/// primary that rewinds mid-round is still reported rewound.
 async fn observe_round(seq: u64) -> Round {
     let mut views = Vec::new();
     for idx in 0..NODE_COUNT {
         if let Some(view) = observe_node(idx).await {
             views.push(view);
+        }
+    }
+    let primaries: Vec<usize> = views
+        .iter()
+        .filter(|v| v.is_primary)
+        .map(|v| v.observer)
+        .collect();
+    for idx in primaries {
+        if let Some(fresh) = observe_node(idx).await
+            && let Some(slot) = views.iter_mut().find(|v| v.observer == idx)
+        {
+            *slot = fresh;
         }
     }
     Round { seq, views }
@@ -2866,6 +2891,21 @@ fn test_replication_scheduler_same_seed_same_run() {
     let b = run_seed_stretched(seed, REPLAY_REAL_STRETCH);
     assert_fingerprints_equal(seed, &a.fingerprint, &b.fingerprint);
 }
+
+/// Seed 204 read a replica 66 offsets *ahead of its primary* and called it
+/// `XREPL-2a`, because [`observe_round`] sampled the primary first and the
+/// replica three connects later. The gap was sampling skew, not a lost prefix.
+/// Pinned here rather than left to the nightly budget: the ordering rule in
+/// `observe_round` is invisible at the call site, and a round that samples the
+/// primary early again fails this in the default suite instead of a month later.
+#[test]
+fn test_sampling_skew_does_not_read_as_a_replica_ahead_of_its_primary() {
+    let outcome = run_seed(SAMPLING_SKEW_SEED);
+    assert_clean(SAMPLING_SKEW_SEED, &outcome);
+}
+
+/// See [`test_sampling_skew_does_not_read_as_a_replica_ahead_of_its_primary`].
+const SAMPLING_SKEW_SEED: u64 = 204;
 
 /// The default-suite smoke sweep: one seed per fault family, so the arm cannot
 /// rot between nightly sweeps.

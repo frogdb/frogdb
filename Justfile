@@ -252,6 +252,11 @@ cluster-seeds SEEDS='500':
 # closes — a muzzle is a claim about reproducibility, and that claim is not currently
 # safe to make. Until then a failing nightly seed is triaged by hand.
 #
+# Named gaps are a different thing and are allowed: they key on the *signature* of an
+# already-filed defect, never on a seed, so they cannot hide a seed that fails some other
+# way. A run that reaches one prints "N of M seeds stopped at a known gap — <issue>" on
+# stderr and stays green; the count going up is worth a look, a new signature is a finding.
+#
 # Seeds are split across REPLICATION_SEEDS_JOBS worker threads inside the one test (each
 # turmoil sim is single-threaded and self-contained); REPLICATION_SEEDS_START shifts the
 # range when you want a fresh block rather than a re-run of the same one. Replay one seed
