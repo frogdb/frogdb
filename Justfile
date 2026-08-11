@@ -229,6 +229,36 @@ replication-model-check PATTERN='(feed_gate|promotion)_model_full':
 cluster-seeds SEEDS='500':
     {{dyld-env}} {{rocksdb-env}} CLUSTER_SEEDS={{SEEDS}} cargo nextest run --profile cluster-seeds -p frogdb-server --features turmoil --run-ignored all -E 'test(simulation::scheduler::test_cluster_scheduler_seed_sweep)'
 
+# Run the seeded replication DST sweep (`simulation::replication_scheduler`, the
+# replication arm of the same scheduler — see `cluster-seeds` above for the shared half).
+#
+# Each seed derives a whole primary-and-two-replicas run: which fault family, which
+# partial-sync boundary the reconnect lands on, which full-sync payload shape the primary
+# ships, where the link dies inside a sync, whether the self-fence and
+# `min-replicas-to-write` are armed, and the client workload. At quiesce every surviving
+# node is asked `DEBUG REPLICATION CHECK` (the invariant catalog, issue 02) and the run
+# history is checked for XREPL-1 (no acked write missing from a promoted node), XREPL-2 (a
+# replica's applied history is a prefix of the primary's) and XREPL-3 (WAIT never answered
+# past connected_slaves — spec GAP-5 at level 4).
+#
+# SEEDS is the whole budget, in one place, exactly as for `cluster-seeds`: the
+# `replication-nightly` workflow calls this recipe rather than duplicating a count. A
+# seven-seed smoke sweep — one per fault family — runs in the default suite so the arm
+# cannot rot between nightlies.
+#
+# There is deliberately NO replication regression-seed file yet: PRD
+# .scratch/replication-correctness §8 D9 holds it, and every EXPECTED-FAILURE muzzle with
+# it, until cluster-correctness issue 23 (same-seed fingerprints diverge under host load)
+# closes — a muzzle is a claim about reproducibility, and that claim is not currently
+# safe to make. Until then a failing nightly seed is triaged by hand.
+#
+# Seeds are split across REPLICATION_SEEDS_JOBS worker threads inside the one test (each
+# turmoil sim is single-threaded and self-contained); REPLICATION_SEEDS_START shifts the
+# range when you want a fresh block rather than a re-run of the same one. Replay one seed
+# with its whole fingerprint via REPLICATION_SEED_TRACE=1.
+replication-seeds SEEDS='500':
+    {{dyld-env}} {{rocksdb-env}} REPLICATION_SEEDS={{SEEDS}} cargo nextest run --profile replication-seeds -p frogdb-server --features turmoil --run-ignored all -E 'test(simulation::replication_scheduler::test_replication_scheduler_seed_sweep)'
+
 # Run the full test suite (unit + integration + concurrency + simulation)
 test-all: test concurrency
 

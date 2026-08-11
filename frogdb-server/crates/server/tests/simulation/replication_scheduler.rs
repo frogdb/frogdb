@@ -572,6 +572,11 @@ fn derive_faults(family: Family, rng: &mut StdRng) -> Vec<FaultEpisode> {
     prune_concurrent_crashes(faults)
 }
 
+/// Ops that must fit after a promotion: the longest `demote_gap`, one repoint
+/// per surviving node, and one slot for the workload to exercise the new
+/// primary.
+const MAX_PROMOTION_TAIL: usize = 3 + (NODE_COUNT - 1) + 1;
+
 /// Workload derivation. Every family writes, reads and samples; promotions only
 /// appear where they mean something.
 fn derive_ops(family: Family, toggles: &Toggles, count: usize, rng: &mut StdRng) -> Vec<Op> {
@@ -580,14 +585,42 @@ fn derive_ops(family: Family, toggles: &Toggles, count: usize, rng: &mut StdRng)
     // One promotion per run, placed in the middle third so there is a stream to
     // interrupt before it and a settling window after it. A second promotion
     // would only re-test the first with less time to converge.
-    let promote_at = if promotes && count >= 6 {
-        Some(count / 3 + rng.random_range(0..(count / 3).max(1)))
+    //
+    // `MAX_PROMOTION_TAIL` slots have to remain after it for the repointing
+    // below plus at least one write against the new primary, so the placement is
+    // clamped rather than merely drawn — a promotion whose demotes fell off the
+    // end of the run would leave the topology split at quiesce.
+    let promote_at = if promotes && count > MAX_PROMOTION_TAIL {
+        let latest = count - MAX_PROMOTION_TAIL - 1;
+        Some((count / 3 + rng.random_range(0..(count / 3).max(1))).min(latest))
     } else {
         None
     };
     let promote_node = some_replica(rng);
-    // How long after the promotion the ex-primary is pointed at the new one.
+    // How long after the promotion the surviving nodes are pointed at the new
+    // primary.
     let demote_gap = rng.random_range(1..=3usize);
+
+    // *Every* other node is repointed, not only the ex-primary. Leaving the
+    // sibling replica attached to the demoted ex-primary would build a chain
+    // (sibling -> ex-primary -> new primary), and chained replication is a
+    // `Tier::DocumentedException` in the catalog (INV-ROLE-1, testing-
+    // improvements issue 48) — so the run would be measuring a known gap
+    // instead of the promotion this family is about. A real failover controller
+    // repoints the whole fleet, and so does this schedule: ex-primary first,
+    // because it is the node with writes to discard.
+    let demote_nodes: Vec<usize> = (0..NODE_COUNT)
+        .filter(|&n| n != promote_node)
+        .map(|n| if n == BOOT_PRIMARY { (0, n) } else { (1, n) })
+        .collect::<BTreeSet<(usize, usize)>>()
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect();
+    let demote_at = |i: usize| -> Option<usize> {
+        let p = promote_at?;
+        let offset = i.checked_sub(p + demote_gap)?;
+        demote_nodes.get(offset).copied()
+    };
 
     let mut ops = Vec::with_capacity(count);
     for i in 0..count {
@@ -595,8 +628,8 @@ fn derive_ops(family: Family, toggles: &Toggles, count: usize, rng: &mut StdRng)
             ops.push(Op::Promote { node: promote_node });
             continue;
         }
-        if promote_at.map(|p| p + demote_gap) == Some(i) {
-            ops.push(Op::Demote { node: BOOT_PRIMARY });
+        if let Some(node) = demote_at(i) {
+            ops.push(Op::Demote { node });
             continue;
         }
         // Every third step samples every node's replication view, so the
@@ -824,35 +857,66 @@ impl History {
 pub fn check_cross_node(history: &History) -> Vec<Violation> {
     let mut violations = Vec::new();
 
-    // --- XREPL-1: the promoted node holds every write it had confirmed -------
+    // --- XREPL-1: a promotion never rolls an acked write back ----------------
+    //
+    // Not "the promoted node still reads back exactly this value": the workload
+    // keeps writing after the promotion, so the newest value for the key is
+    // routinely a *later* one, and demanding equality would report a violation
+    // for a correctly-applied stream. The claim is that the promoted node's
+    // value is not *older* than the write every replica had confirmed — i.e.
+    // the write was not lost, whether by nil or by rollback to a predecessor.
     for rb in &history.promoted_readbacks {
-        if rb.got.as_deref() == Some(rb.expected.as_str()) {
-            continue;
+        let order: Vec<&str> = history
+            .writes
+            .iter()
+            .filter(|w| w.key == rb.key)
+            .map(|w| w.value.as_str())
+            .collect();
+        let expected_pos = order.iter().position(|v| *v == rb.expected);
+        let detail = match rb.got.as_deref() {
+            None => Some("<nil>: the key is absent entirely".to_string()),
+            Some(got) => match (order.iter().position(|v| *v == got), expected_pos) {
+                (None, _) => Some(format!("{got:?}, a value no client ever wrote to that key")),
+                (Some(got_pos), Some(exp_pos)) if got_pos < exp_pos => Some(format!(
+                    "{got:?}, which the client wrote {} write(s) *earlier* — the promotion \
+                     rolled the key back",
+                    exp_pos - got_pos
+                )),
+                _ => None,
+            },
+        };
+        if let Some(detail) = detail {
+            violations.push(Violation {
+                id: "XREPL-1",
+                detail: format!(
+                    "node {} was promoted, but the acked write {}={} that every replica had \
+                     confirmed before the promotion reads back as {detail}",
+                    rb.node, KEYS[rb.key], rb.expected,
+                ),
+            });
         }
-        violations.push(Violation {
-            id: "XREPL-1",
-            detail: format!(
-                "node {} was promoted, but the acked write {}={} that every replica had \
-                 confirmed before the promotion reads back as {:?} on it",
-                rb.node,
-                KEYS[rb.key],
-                rb.expected,
-                rb.got.as_deref().unwrap_or("<nil>"),
-            ),
-        });
     }
 
-    // --- XREPL-2a: no replica is ahead of the primary on the same history ----
+    // --- XREPL-2a: no replica is ahead of its primary on the same history ----
     //
-    // Same replid only. A replica still following an older lineage is not
-    // "ahead" of anything the current primary produced; its offset counts a
-    // different stream.
+    // Matched by replid rather than by "the primary of the round": mid-promotion
+    // a round legitimately sees two masters — the newly promoted node and the
+    // ex-primary not yet demoted toward it — and a replica is only comparable
+    // with the one whose stream it is actually applying. A replica on an older
+    // lineage counts a different stream and is not "ahead" of anything.
     for round in &history.rounds {
-        let Some(primary) = round.views.iter().find(|v| v.is_primary) else {
-            continue;
-        };
         for view in &round.views {
-            if view.is_primary || view.replid != primary.replid || view.offset <= primary.offset {
+            if view.is_primary {
+                continue;
+            }
+            let Some(primary) = round
+                .views
+                .iter()
+                .find(|p| p.is_primary && p.replid == view.replid)
+            else {
+                continue;
+            };
+            if view.offset <= primary.offset {
                 continue;
             }
             violations.push(Violation {
@@ -1726,7 +1790,7 @@ async fn debug_replication_check(node: usize) -> std::io::Result<Vec<Violation>>
 /// `test_replication_smoke_seeds_cover_every_family` asserts the coverage and
 /// prints the replacement list, so a change to the derivation that shifts family
 /// assignment fails loudly instead of quietly narrowing coverage.
-const SMOKE_SEEDS: [u64; 7] = [1, 2, 3, 4, 5, 6, 7];
+const SMOKE_SEEDS: [u64; 7] = [1, 2, 3, 5, 7, 16, 17];
 
 #[test]
 fn test_replication_derivation_is_pure() {
@@ -1776,7 +1840,7 @@ fn test_replication_smoke_seeds_cover_every_family() {
         .collect();
     assert!(
         missing.is_empty(),
-        "SMOKE_SEEDS no longer cover {missing:?}; set SMOKE_SEED_TABLE to {suggestion:?}"
+        "SMOKE_SEEDS no longer cover {missing:?}; set it to {suggestion:?}"
     );
 }
 
@@ -1908,6 +1972,8 @@ fn test_promotion_schedules_one_promotion_followed_by_a_demote() {
             promotes[0], BOOT_PRIMARY,
             "seed {seed}: promoting the boot primary is a no-op"
         );
+        // Every node but the promoted one is repointed, ex-primary first, so the
+        // topology after the promotion is a star and never a chain.
         let demotes: Vec<usize> = s
             .ops
             .iter()
@@ -1916,7 +1982,19 @@ fn test_promotion_schedules_one_promotion_followed_by_a_demote() {
                 _ => None,
             })
             .collect();
-        assert_eq!(demotes, vec![BOOT_PRIMARY], "seed {seed}");
+        let mut expected: Vec<usize> = (0..NODE_COUNT).filter(|n| *n != promotes[0]).collect();
+        expected.sort_by_key(|n| (*n != BOOT_PRIMARY, *n));
+        assert_eq!(demotes, expected, "seed {seed}");
+        // And the whole promotion tail fits inside the run.
+        let last_demote = s
+            .ops
+            .iter()
+            .rposition(|op| matches!(op, Op::Demote { .. }))
+            .expect("a demote");
+        assert!(
+            last_demote < s.ops.len() - 1,
+            "seed {seed}: the run ends on a repoint, leaving no op against the new primary"
+        );
         seen += 1;
     }
     assert!(seen > 20, "only {seen} promotion seeds in 500");
@@ -1956,33 +2034,66 @@ fn test_cross_node_accepts_a_clean_history() {
 
 #[test]
 fn test_xrepl_1_catches_a_confirmed_write_missing_from_the_promoted_node() {
-    let history = History {
+    // alpha was written v1, then v7, then v9.
+    let writes = || {
+        vec![
+            acked(1, 0, "v1", 2),
+            acked(2, 0, "v7", 2),
+            acked(3, 0, "v9", 2),
+        ]
+    };
+    let readback = |got: Option<&str>| History {
+        writes: writes(),
         promoted_readbacks: vec![PromotedReadback {
             node: 1,
             key: 0,
             expected: "v7".to_string(),
-            got: None,
+            got: got.map(str::to_string),
         }],
         ..History::default()
     };
-    let found = check_cross_node(&history);
+
+    // Gone entirely.
+    let found = check_cross_node(&readback(None));
     assert_eq!(
         found.iter().map(|v| v.id).collect::<Vec<_>>(),
         vec!["XREPL-1"]
     );
     assert!(found[0].detail.contains("alpha"), "{found:?}");
+    assert!(found[0].detail.contains("<nil>"), "{found:?}");
 
-    // The same readback with the right value is not a violation.
-    let ok = History {
+    // Rolled back to the value the confirmed write replaced.
+    let rolled = check_cross_node(&readback(Some("v1")));
+    assert_eq!(
+        rolled.iter().map(|v| v.id).collect::<Vec<_>>(),
+        vec!["XREPL-1"]
+    );
+    assert!(rolled[0].detail.contains("earlier"), "{rolled:?}");
+
+    // The confirmed value itself is fine.
+    assert!(check_cross_node(&readback(Some("v7"))).is_empty());
+}
+
+/// The workload keeps writing after a promotion, so the promoted node holding a
+/// *later* value for the key is the expected steady state, not a lost write.
+/// Demanding equality here would make every promotion seed red.
+#[test]
+fn test_xrepl_1_accepts_a_write_that_was_legitimately_overwritten() {
+    let history = History {
+        writes: vec![acked(1, 0, "v7", 2), acked(2, 0, "v9", 2)],
         promoted_readbacks: vec![PromotedReadback {
             node: 1,
             key: 0,
             expected: "v7".to_string(),
-            got: Some("v7".to_string()),
+            got: Some("v9".to_string()),
         }],
         ..History::default()
     };
-    assert!(check_cross_node(&ok).is_empty());
+    assert!(
+        check_cross_node(&history).is_empty(),
+        "{:?}",
+        check_cross_node(&history)
+    );
 }
 
 /// A write only the primary held is not promised to survive a promotion, so

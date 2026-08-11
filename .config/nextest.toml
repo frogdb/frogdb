@@ -84,6 +84,19 @@ filter = "test(simulation::scheduler::)"
 slow-timeout = { period = "30s", terminate-after = 4 }
 test-group = "cluster"
 
+# The replication arm of the same scheduler (`simulation::replication_scheduler`,
+# replication-correctness issue 12). Its default-suite entry points replay whole
+# 3-node primary/replica sims back-to-back — a seven-seed smoke sweep (one per
+# fault family) and a determinism double-run whose second half is deliberately
+# slowed in real time — so they need the same headroom as the cluster arm, and
+# the same concurrency cap for the same reason: each seed brings up three real
+# servers. The sweep proper is `#[ignore]`d out of this tier; see the
+# `replication-seeds` profile.
+[[profile.default.overrides]]
+filter = "test(simulation::replication_scheduler::)"
+slow-timeout = { period = "60s", terminate-after = 4 }
+test-group = "cluster"
+
 # The cluster state-machine property harness (`frogdb-cluster` `properties`
 # module). At the default case budget the whole module finishes in well under a
 # second. Keep a hard kill — unlike the nightly seed sweep this test also runs
@@ -117,6 +130,16 @@ slow-timeout = { period = "120s" }
 
 [[profile.cluster-seeds.overrides]]
 filter = "test(simulation::scheduler::test_cluster_scheduler_seed_sweep)"
+slow-timeout = { period = "120s" }
+
+# The replication fault-scheduler sweep, selected by `just replication-seeds` (and
+# therefore by the nightly workflow, which is exactly that recipe). Same rule as
+# `cluster-seeds`: the runtime is whatever SEEDS the caller asked for, so mark it slow
+# and never force-terminate it — the real bound is the CI job's `timeout-minutes`.
+[profile.replication-seeds]
+
+[[profile.replication-seeds.overrides]]
+filter = "test(simulation::replication_scheduler::test_replication_scheduler_seed_sweep)"
 slow-timeout = { period = "120s" }
 
 # The nightly generated-workload seed sweep (opt-in via `just concurrency-nightly`;
