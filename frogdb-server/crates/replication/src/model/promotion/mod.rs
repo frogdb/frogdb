@@ -28,9 +28,10 @@
 //!   [`PartialSyncReplay::handle_partial_sync_request`], and the *frames it
 //!   grants* are what the model delivers, so a backlog that cannot cover the
 //!   range it just promised shows up as a hole rather than as an assumption;
-//! * the wire — the grant is rendered exactly as `replica_session.rs` renders
-//!   it (`+CONTINUE <replid>` / `+FULLRESYNC <replid> <offset>`) and parsed
-//!   back by the replica's [`select_psync_arm`], with the request line built by
+//! * the wire — the grant is rendered by [`HandshakeReply::line`], the same
+//!   renderer the primary writes to the socket (`+CONTINUE <replid>` /
+//!   `+FULLRESYNC <replid> <offset>`), and parsed back by the replica's
+//!   [`select_psync_arm`], with the request line built by
 //!   [`psync_request_args`], so the arm the replica takes is selected by
 //!   production code over a production-rendered line;
 //! * every state mutation on a node goes through a `ReplicationState` method
@@ -118,6 +119,7 @@ use stateright::{Model, Property};
 
 use crate::primary::{BacklogConfig, PartialSyncReplay, ReplayDecision, plan_primary_stint};
 use crate::replica::psync::{PsyncArm, psync_request_args, select_psync_arm};
+use crate::session_machine::HandshakeReply;
 use crate::state::{ReplicationState, StagedReplicationMetadata};
 
 pub(crate) mod replay;
@@ -605,16 +607,20 @@ impl Model for Promotion {
                     req_offset.max(0) as u64,
                     head,
                 );
-                // Rendered exactly as `replica_session.rs` renders it, and
-                // selected by the replica's own parser.
+                // Rendered by the production renderer the primary writes to
+                // the socket, and selected by the replica's own parser — so the
+                // model exercises the same two halves the wire does rather than
+                // a transcription of them.
                 let line = match &decision {
-                    ReplayDecision::Continue(_) => {
-                        format!("+CONTINUE {}", sys.nodes[p].state.replication_id)
-                    }
-                    ReplayDecision::FullResync(_) => {
-                        format!("+FULLRESYNC {} {}", sys.nodes[p].state.replication_id, head)
-                    }
-                };
+                    ReplayDecision::Continue(_) => HandshakeReply::Continue {
+                        replication_id: sys.nodes[p].state.replication_id.clone(),
+                    },
+                    ReplayDecision::FullResync(_) => HandshakeReply::FullResync {
+                        replication_id: sys.nodes[p].state.replication_id.clone(),
+                        offset: head,
+                    },
+                }
+                .line();
                 match select_psync_arm(&line) {
                     Err(_) => sys.arm_undecidable = true,
                     Ok(PsyncArm::Continue { granted_id }) => {

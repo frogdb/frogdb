@@ -733,7 +733,7 @@ impl PrimaryReplicationHandler {
         // backlog eviction check the window primitive cannot make) — plus the
         // backlog tail to replay. The live stream head is read here from the
         // offset coordinator (the position advanced by `broadcast_command`); the
-        // FULLRESYNC offset captured later in `handle_full` keys off the same
+        // FULLRESYNC offset captured later by the session keys off the same
         // live value, so a granted partial and a granted full both correspond to
         // the data the replica will receive. `PSYNC ? -1` folds into the
         // `InitialSync` arm.

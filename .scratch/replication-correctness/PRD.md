@@ -159,7 +159,7 @@ handful, and naming them precisely is most of W1's design:
 | `OffsetCoordinator::{advance, settle_at_applied, ingest_replica_ack, seed_replica_position}` | `offset_coordinator.rs:108/160/197/210` | the primary's single advance gate and the two ack ingest paths |
 | `ReplicaOffset::{frame_advance, reset_to}` / `AppliedOffset::{advance_by, freeze, retire_replica_applies}` | `replica/offset.rs:482/514/128/302/215` | the replica's received/applied/landed triple |
 | `ReplicationRingBuffer::{push, arm_start, reset}` | `primary/ring_buffer.rs:169/111/128` | append + eviction + floor arm — the only writers of the two-cell ring |
-| `ReplicaSession::set_phase` | `replica_session.rs:591` | the sole `Phase` writer |
+| `ReplicaSession::commit_phase` | `replica_session.rs` | the sole `Phase` writer, now fed by `session_machine::step` |
 | `ReplicationTrackerImpl::{register_announced_replica, unregister_replica, record_streaming_departure}` | `tracker.rs:183/200/215` | registry add/remove and the departure latch |
 | `ReplicaFeedGate::publish` | `feed_gate.rs:75` | the only writer; called from `core/src/client_registry/mod.rs:979` |
 | `ReplicaConnection::set_state` | `replica/connection.rs:159` | the only `ConnectionState` writer, publishes `link_up` in the same step |

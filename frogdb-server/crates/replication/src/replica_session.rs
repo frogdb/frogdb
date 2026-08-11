@@ -2,9 +2,15 @@
 //!
 //! A `ReplicaSession` owns the entire lifecycle of one replica connection on
 //! the primary side: from initial registration through optional FULLRESYNC to
-//! live WAL streaming, and finally disconnect. The session drives its own
-//! state transitions and runs cleanup in a single exit handler regardless of
-//! which `?`-propagated error or task termination caused exit.
+//! live WAL streaming, and finally disconnect.
+//!
+//! This module is the **I/O half** of that lifecycle. Where the session goes
+//! next is [`crate::session_machine`]'s: a pure
+//! `step(view, event) -> Transition { phase, effects }` over the phases below.
+//! [`ReplicaSession::run`] stands up a `SessionDriver`, which publishes the
+//! phase each transition names and performs its effects in order — the socket,
+//! the filesystem, the tracker and the spawned read/write tasks live here and
+//! the decisions do not.
 //!
 //! # Phases
 //!
@@ -14,9 +20,11 @@
 //!     └────────── partial sync (CONTINUE) ───────────────────────┘
 //! ```
 //!
-//! The `Phase::Disconnecting` terminal is reached from any prior phase when
-//! `run()` returns. The exit handler then unregisters the session, cleans up
-//! any checkpoint directory, and logs the disconnect.
+//! `Phase::Disconnecting` is reached from any prior phase, and is terminal by
+//! construction — no arm of the transition table leaves it. Its effects
+//! unregister the session, clean up any checkpoint directory it staged, and log
+//! the disconnect, and they run regardless of which `?`-propagated error or
+//! task termination ended the sync.
 
 use frogdb_types::clock;
 use std::collections::VecDeque;
