@@ -542,6 +542,13 @@ impl Server {
                 primary_replication_handler: self.primary_replication_handler.clone(),
                 replication_state: info_replication_state.clone(),
                 quorum_checker: quorum_checker.clone(),
+                // `DEBUG REPLICATION CHECK`'s two out-of-crate view groups.
+                // Both are wired on every role and in every mode — the
+                // command answers everywhere, so a group that went missing in
+                // standalone would silently stop evaluating `INV-FENCE-1` /
+                // `INV-ROLE-1` exactly where nothing else checks them.
+                replication_self_fence: self.replication_self_fence.clone(),
+                role_controller: Some(Arc::new(self.role_manager_handle.clone())),
                 pubsub_forwarder: pubsub_forwarder.clone(),
             },
             observability: ObservabilityDeps {

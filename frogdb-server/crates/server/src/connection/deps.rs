@@ -123,6 +123,26 @@ pub struct ClusterDeps {
     /// Optional quorum checker for self-fencing (write rejection on quorum loss).
     pub quorum_checker: Option<Arc<dyn QuorumChecker>>,
 
+    /// The replication self-fence checker, **un-erased**, for
+    /// `DEBUG REPLICATION CHECK`.
+    ///
+    /// The same object [`Self::quorum_checker`] holds in cluster mode, but a
+    /// `dyn QuorumChecker` answers only `has_quorum()`; the catalog's
+    /// `INV-FENCE-1` needs the arming latch and the two live settings behind
+    /// it, which only the concrete type exposes. Kept as a second handle for
+    /// the same reason `ConfigManager` keeps one — erasing a type and then
+    /// needing it back is not worth widening a core trait that every other
+    /// checker would have to answer for.
+    pub replication_self_fence: Option<Arc<frogdb_replication_runtime::ReplicationQuorumChecker>>,
+
+    /// This node's live role, for `DEBUG REPLICATION CHECK`'s `RoleView`.
+    ///
+    /// [`Self::is_replica`] (on [`ConnectionConfig`]) answers *whether* this
+    /// node follows someone; the catalog's `INV-ROLE-1` reports *who*, and
+    /// `primary_target()` is the single source of truth `ROLE` and INFO
+    /// already read.
+    pub role_controller: Option<Arc<dyn frogdb_core::RoleController>>,
+
     /// Optional pub/sub forwarder for cross-node message delivery.
     pub pubsub_forwarder: Option<Arc<ClusterPubSubForwarder>>,
 }
@@ -156,6 +176,8 @@ impl ClusterDeps {
             primary_replication_handler,
             replication_state,
             quorum_checker: None,
+            replication_self_fence: None,
+            role_controller: None,
             pubsub_forwarder: None,
         }
     }

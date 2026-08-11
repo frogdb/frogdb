@@ -223,9 +223,22 @@ impl ConnectionCommand for DebugConnCommand {
                 }
                 b"CLUSTER" => {
                     if args.len() > 1 && args[1].eq_ignore_ascii_case(b"CHECK") {
-                        format_cluster_check_response(debug.cluster_check())
+                        format_check_response(
+                            debug.cluster_check(),
+                            "ERR This instance has cluster support disabled",
+                        )
                     } else {
                         Response::error("ERR Unknown DEBUG CLUSTER subcommand. Use CHECK.")
+                    }
+                }
+                b"REPLICATION" => {
+                    if args.len() > 1 && args[1].eq_ignore_ascii_case(b"CHECK") {
+                        format_check_response(
+                            debug.replication_check(),
+                            "ERR This instance has replication support disabled",
+                        )
+                    } else {
+                        Response::error("ERR Unknown DEBUG REPLICATION subcommand. Use CHECK.")
                     }
                 }
                 b"PAUSE-SLOT" => debug_pause_slot(client_registry, args),
@@ -301,6 +314,9 @@ fn debug_help() -> Response {
         "    Backdate a key's TTL <ms> into the past so it is already expired (test support).",
         "DEBUG CLUSTER CHECK",
         "    Run the cluster invariant catalog against live state; empty array = clean.",
+        "DEBUG REPLICATION CHECK",
+        "    Run the replication invariant catalog against live state (every role, including",
+        "    standalone); empty array = clean.",
         "DEBUG PAUSE-SLOT <slot> <timeout-ms> [WRITE|ALL]",
         "    Arm a slot-scoped pause (0 ms disarms it) as the migration barrier does (test support).",
         "DEBUG PUBSUB LIMITS",
@@ -816,15 +832,22 @@ fn format_expiry_index_check_response(
     Response::Map(shards)
 }
 
-/// Format `DEBUG CLUSTER CHECK` — a RESP array of `{id, detail}` maps, one per
-/// catalog violation of every tier, empty when the state is clean. `None`
-/// (standalone mode, no `ClusterState` to check) becomes the same "cluster
-/// support disabled" error every other cluster-only DEBUG/CLUSTER surface
-/// returns — never a silently-empty array, which would read as "clean"
-/// instead of "not applicable".
-fn format_cluster_check_response(violations: Option<Vec<frogdb_core::Violation>>) -> Response {
+/// Format an invariant-catalog check (`DEBUG CLUSTER CHECK`,
+/// `DEBUG REPLICATION CHECK`) — a RESP array of `{id, detail}` maps, one per
+/// catalog violation of every tier, empty when the state is clean.
+///
+/// `None` means the catalog is not applicable to this node, and becomes
+/// `not_applicable` — never a silently-empty array, which would read as
+/// "clean". The two catalogs reach that case very differently, which is why
+/// the wording is the caller's: the cluster catalog has nothing to check in
+/// standalone mode, while the replication catalog answers in *every* mode and
+/// only goes absent on a build with no replication seams wired at all.
+fn format_check_response(
+    violations: Option<Vec<frogdb_core::Violation>>,
+    not_applicable: &'static str,
+) -> Response {
     match violations {
-        None => Response::error("ERR This instance has cluster support disabled"),
+        None => Response::error(not_applicable),
         Some(violations) => Response::Array(
             violations
                 .into_iter()
@@ -1129,6 +1152,7 @@ mod tests {
     struct StubDebug {
         enabled: bool,
         cluster_check: Option<Vec<frogdb_core::Violation>>,
+        replication_check: Option<Vec<frogdb_core::Violation>>,
     }
 
     impl StubDebug {
@@ -1136,6 +1160,7 @@ mod tests {
             Self {
                 enabled,
                 cluster_check: Some(Vec::new()),
+                replication_check: Some(Vec::new()),
             }
         }
 
@@ -1144,6 +1169,14 @@ mod tests {
             cluster_check: Option<Vec<frogdb_core::Violation>>,
         ) -> Self {
             self.cluster_check = cluster_check;
+            self
+        }
+
+        fn with_replication_check(
+            mut self,
+            replication_check: Option<Vec<frogdb_core::Violation>>,
+        ) -> Self {
+            self.replication_check = replication_check;
             self
         }
     }
@@ -1215,6 +1248,9 @@ mod tests {
         }
         fn cluster_check(&self) -> Option<Vec<frogdb_core::Violation>> {
             self.cluster_check.clone()
+        }
+        fn replication_check(&self) -> Option<Vec<frogdb_core::Violation>> {
+            self.replication_check.clone()
         }
     }
 
@@ -1347,6 +1383,78 @@ mod tests {
             ),
             other => panic!("expected error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn replication_check_reports_an_empty_array_when_clean() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("REPLICATION"), arg("CHECK")],
+            )
+            .await;
+        assert_eq!(resp, Response::Array(vec![]), "got {resp:?}");
+    }
+
+    #[tokio::test]
+    async fn replication_check_reports_violations_as_id_detail_maps() {
+        let stub =
+            StubDebug::new(true).with_replication_check(Some(vec![frogdb_core::Violation {
+                id: "INV-OFFSET-1",
+                detail: "landed 9 runs ahead of applied 7".to_string(),
+            }]));
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("REPLICATION"), arg("CHECK")],
+            )
+            .await;
+        assert_eq!(
+            resp,
+            Response::Array(vec![Response::Map(vec![
+                (Response::bulk("id"), Response::bulk("INV-OFFSET-1")),
+                (
+                    Response::bulk("detail"),
+                    Response::bulk("landed 9 runs ahead of applied 7")
+                ),
+            ])]),
+            "got {resp:?}"
+        );
+    }
+
+    /// The absent case is "no replication seams wired at all", never
+    /// "standalone" — but when it does happen it must not answer with an empty
+    /// array, which reads as clean.
+    #[tokio::test]
+    async fn replication_check_reports_replication_disabled_error_when_unwired() {
+        let stub = StubDebug::new(true).with_replication_check(None);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(
+                &mut fx.ctx(Some(&stub)),
+                &[arg("REPLICATION"), arg("CHECK")],
+            )
+            .await;
+        match resp {
+            Response::Error(e) => assert!(
+                String::from_utf8_lossy(&e).contains("replication support disabled"),
+                "got {e:?}"
+            ),
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn replication_unknown_subcommand_errors() {
+        let stub = StubDebug::new(true);
+        let fx = super::tests_fixture::Deps::new();
+        let resp = DebugConnCommand
+            .execute(&mut fx.ctx(Some(&stub)), &[arg("REPLICATION"), arg("NOPE")])
+            .await;
+        assert!(matches!(resp, Response::Error(_)), "got {resp:?}");
     }
 
     #[tokio::test]

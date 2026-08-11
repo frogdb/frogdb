@@ -612,6 +612,34 @@ pub trait DebugProvider: Send + Sync {
     /// round-trip, no mutation — so it stays cheap enough to run at every
     /// Jepsen nemesis quiesce point in a release build.
     fn cluster_check(&self) -> Option<Vec<crate::Violation>>;
+
+    /// DEBUG REPLICATION CHECK — evaluate the replication invariant catalog
+    /// (`frogdb_replication::invariants`) against a complete
+    /// `ReplicationView` assembled from this node's live replication state,
+    /// every tier, exactly as [`Self::cluster_check`] does for the cluster
+    /// catalog.
+    ///
+    /// One deliberate difference from its cluster twin, and the reason it is
+    /// spelled out here: **it answers in every mode.** `DEBUG CLUSTER CHECK`
+    /// errors in standalone because there is no `ClusterState` to check and an
+    /// empty array would misread as "clean". Replication has no such
+    /// not-applicable case — a node with no replication link still has a
+    /// replication id, an offset triple and a persisted state that can be
+    /// wrong — so standalone, primary and replica all get a real answer.
+    /// `None` therefore means only that this node was built with no
+    /// replication seams wired at all (never true of a running server), and
+    /// the executor turns it into a "replication support disabled" error
+    /// rather than a silently-empty array.
+    ///
+    /// This is one of the two places that assemble a *complete* view: the
+    /// groups the replication crate cannot reach on its own (the self-fence
+    /// quorum checker, this node's role) are filled here, so `INV-FENCE-1` and
+    /// `INV-ROLE-1` are actually evaluated at this surface even though the
+    /// in-crate hooks usually skip them. A plain state read — no shard
+    /// round-trip, no mutation, no lock held across the check — so it stays
+    /// cheap enough to run at every Jepsen nemesis quiesce point in a release
+    /// build.
+    fn replication_check(&self) -> Option<Vec<crate::Violation>>;
 }
 
 /// The connection-local MONITOR machinery, abstracted so the connection-command
@@ -1097,6 +1125,9 @@ mod tests {
             unimplemented!()
         }
         fn cluster_check(&self) -> Option<Vec<crate::Violation>> {
+            unimplemented!()
+        }
+        fn replication_check(&self) -> Option<Vec<crate::Violation>> {
             unimplemented!()
         }
     }

@@ -10,6 +10,8 @@
 //! logic is identical to the pre-migration `handle_debug_*` helpers, so every
 //! subcommand's wire output is byte-for-byte unchanged.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use frogdb_core::shard::{
     ExpiryIndexCheckInfo, LockTableInfo, MemoryCheckInfo, VllQueueInfo, WaitQueueInfo,
@@ -19,6 +21,7 @@ use frogdb_core::{BoxFuture, DebugProvider, KeysizeHistograms};
 use frogdb_protocol::Response;
 
 use crate::connection::ConnectionHandler;
+use crate::replication::PrimaryReplicationHandler;
 
 impl DebugProvider for ConnectionHandler {
     fn debug_command_enabled(&self) -> bool {
@@ -370,5 +373,79 @@ impl DebugProvider for ConnectionHandler {
             .cluster_state
             .as_ref()
             .map(|cs| cs.check_invariants())
+    }
+
+    /// DEBUG REPLICATION CHECK — run the replication invariant catalog against
+    /// a complete [`ReplicationView`].
+    ///
+    /// Answers in every mode (see the trait doc): the `None` here is "this
+    /// build wired no replication seams", which a running server never is —
+    /// `init_replication` constructs the primary handler on every role,
+    /// standalone included, precisely so a promotion has live seams.
+    ///
+    /// Like its cluster twin this awaits nothing: every group is a plain read
+    /// of an atomic, a lock or a small collection, and no lock is held while
+    /// the catalog runs.
+    fn replication_check(&self) -> Option<Vec<frogdb_core::Violation>> {
+        let handler = self.cluster.primary_replication_handler.as_ref()?;
+        Some(frogdb_replication::invariants::check_all(
+            &self.replication_view(handler),
+        ))
+    }
+}
+
+impl ConnectionHandler {
+    /// The widest [`ReplicationView`] this node can produce: the primary
+    /// handler's own capture plus the three groups it cannot reach.
+    ///
+    /// Split out of [`DebugProvider::replication_check`] so the assembly is
+    /// testable without a live catalog run, and so each fill can say why it is
+    /// here.
+    fn replication_view(
+        &self,
+        handler: &Arc<PrimaryReplicationHandler>,
+    ) -> frogdb_replication::view::ReplicationView {
+        let mut view = handler.view();
+        // The handler samples the identity with `try_read` because it is also
+        // called from the promotion path, which holds the write lock. This
+        // surface has no such caller, and an identity-less view would silently
+        // skip every `INV-REPLID-*` claim — the ones an operator asked for.
+        if view.state.is_none()
+            && let Some(shared) = self.cluster.replication_state.as_ref()
+        {
+            view = view.with_state(shared.read().clone());
+        }
+        // The gate is already in `handler.view()`, but with no budget: the
+        // replication crate does not depend on `frogdb-cluster` and so is
+        // never told the ceiling. Re-filled here, where the constant is
+        // visible, so `INV-GATE-1`'s over-budget half is actually evaluated.
+        view = view.with_feed_gate(handler.feed_gate().view(Some(
+            std::time::Duration::from_millis(frogdb_core::HANDOFF_BARRIER_MS),
+        )));
+        if let Some(fence) = self.cluster.replication_self_fence.as_ref() {
+            view = view.with_fence(frogdb_replication::view::FenceView {
+                self_fence_enabled: fence.self_fence_enabled(),
+                armed: fence.is_armed(),
+                freshness_window: fence.freshness_timeout(),
+            });
+        }
+        view.with_role(self.role_view())
+    }
+
+    /// This node's role as the catalog reads it. The upstream address comes
+    /// from the same `RoleController` that `ROLE` and INFO's `master_host`
+    /// read, so a violation names the primary those surfaces name.
+    fn role_view(&self) -> frogdb_replication::view::RoleView {
+        if self.is_replica.load(std::sync::atomic::Ordering::Acquire) {
+            frogdb_replication::view::RoleView::Replica {
+                upstream: self
+                    .cluster
+                    .role_controller
+                    .as_ref()
+                    .and_then(|c| c.primary_target()),
+            }
+        } else {
+            frogdb_replication::view::RoleView::Primary
+        }
     }
 }
