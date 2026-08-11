@@ -4875,11 +4875,20 @@ mod scheduler;
 /// The arm-agnostic half of the fault scheduler (issue 11): seed derivation,
 /// fingerprint rendering, the regression list with its self-expiring muzzle,
 /// and generic fault application. `scheduler` is the cluster *arm* over this
-/// module; a replication arm is meant to be a sibling.
+/// module; `replication_scheduler` is the replication one.
 mod schedule;
+
+/// The replication arm of the fault scheduler (replication-correctness issue
+/// 12): a primary and two replicas, no Raft, over the same seed derivation the
+/// cluster arm uses.
+mod replication_scheduler;
 
 /// The three cluster hostnames used by every cluster sim in this section.
 const CLUSTER_HOSTS: [&str; 3] = ["cluster-n1", "cluster-n2", "cluster-n3"];
+
+/// The scheduled replication topology's hostnames: index 0 boots as the primary
+/// and the rest as its replicas.
+const REPLICATION_HOSTS: [&str; 3] = ["repl-p", "repl-r1", "repl-r2"];
 
 /// A parsed `MOVED`/`ASK` redirect: `(is_ask, target client address)`.
 fn parse_redirect(err: &str) -> Option<(bool, std::net::SocketAddr)> {

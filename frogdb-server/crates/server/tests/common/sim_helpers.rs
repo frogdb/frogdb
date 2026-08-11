@@ -340,6 +340,142 @@ pub async fn real_frogdb_replica(
     Ok(())
 }
 
+/// One node of a scheduled **replication** topology: a primary or a replica of
+/// one, with the knobs the seeded replication arm draws per run
+/// (`simulation/replication_scheduler.rs`, replication-correctness issue 12).
+///
+/// [`real_frogdb_primary`] and [`real_frogdb_replica`] are the fixed-config
+/// forms the scripted sims use; this is the same two roles with the handful of
+/// settings a schedule varies spelled out, so the arm never has to hand-roll a
+/// `Config`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplicationNodeParams {
+    /// Data-plane shard count.
+    pub num_shards: usize,
+    /// `None` boots this node as a primary; `Some(ip)` as a replica of that
+    /// address (resolve it with `turmoil::lookup` inside the host closure).
+    pub primary_ip: Option<std::net::IpAddr>,
+    /// Enable RocksDB data-plane persistence.
+    ///
+    /// This is the switch that picks the **full-sync payload shape**: with a
+    /// RocksDB store the primary stages a checkpoint and ships
+    /// `FROGDB_CHECKPOINT`; without one it serializes its live keyspace and
+    /// ships `FROGDB_SNAPSHOT` (`replica_session::run_full_sync`). Both shapes
+    /// have to be reachable for `FullSyncInterrupt` to mean anything.
+    pub persistence: bool,
+    /// Entry cap on the replication backlog — the ring a `+CONTINUE` replays
+    /// from, and so the knob that decides which side of the partial-sync
+    /// boundary a reconnect lands on.
+    pub backlog_size: usize,
+    /// `min-replicas-to-write`: writes are refused below this many good
+    /// replicas.
+    pub min_replicas_to_write: u32,
+    /// ACK-freshness window `min_replicas_to_write` counts inside
+    /// (`min-replicas-max-lag-ms`).
+    pub min_replicas_timeout_ms: u64,
+    /// Reject writes once no streaming replica is fresh
+    /// (`self-fence-on-replica-loss`).
+    pub self_fence_on_replica_loss: bool,
+    /// Freshness window the self-fence measures against.
+    pub replica_freshness_timeout_ms: u64,
+    /// Seconds without an ACK before the primary proactively disconnects a
+    /// lagging replica. 0 disables it.
+    pub replication_lag_threshold_secs: u64,
+}
+
+impl Default for ReplicationNodeParams {
+    /// A primary with the shipped defaults: no persistence (so a full sync
+    /// ships the live dataset), a backlog wide enough that nothing this arm
+    /// writes evicts a resume point, and neither the fence nor
+    /// `min-replicas-to-write` engaged.
+    fn default() -> Self {
+        Self {
+            num_shards: 1,
+            primary_ip: None,
+            persistence: false,
+            backlog_size: 8192,
+            min_replicas_to_write: 0,
+            min_replicas_timeout_ms: 10_000,
+            self_fence_on_replica_loss: false,
+            replica_freshness_timeout_ms: 10_000,
+            replication_lag_threshold_secs: 0,
+        }
+    }
+}
+
+/// Start one node of a scheduled replication topology inside turmoil.
+///
+/// `data_dir` must be unique per simulated host: the replication state file
+/// lives there, and so does RocksDB when [`ReplicationNodeParams::persistence`]
+/// is set.
+pub async fn real_frogdb_replication_node(
+    params: ReplicationNodeParams,
+    data_dir: std::path::PathBuf,
+) -> Result<(), BoxError> {
+    let ReplicationNodeParams {
+        num_shards,
+        primary_ip,
+        persistence,
+        backlog_size,
+        min_replicas_to_write,
+        min_replicas_timeout_ms,
+        self_fence_on_replica_loss,
+        replica_freshness_timeout_ms,
+        replication_lag_threshold_secs,
+    } = params;
+
+    let (role, primary_host) = match primary_ip {
+        Some(ip) => ("replica", ip.to_string()),
+        None => ("primary", String::new()),
+    };
+
+    let config = Config {
+        server: ServerConfig {
+            bind: "0.0.0.0".to_string(),
+            port: SERVER_PORT,
+            num_shards,
+            allow_cross_slot_standalone: true,
+            scatter_gather_timeout_ms: 5000,
+            ..Default::default()
+        },
+        persistence: PersistenceConfig {
+            enabled: persistence,
+            data_dir,
+            ..Default::default()
+        },
+        replication: frogdb_server::config::ReplicationConfigSection {
+            role: role.to_string(),
+            primary_host,
+            primary_port: SERVER_PORT,
+            backlog_size,
+            min_replicas_to_write,
+            min_replicas_timeout_ms,
+            self_fence_on_replica_loss,
+            replica_freshness_timeout_ms,
+            replication_lag_threshold_secs,
+            ..Default::default()
+        },
+        http: HttpConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        metrics: MetricsConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let server = Server::new(
+        config,
+        frogdb_server::runtime_config::LogReloadHandle::noop(),
+    )
+    .await?;
+    server.run_until(std::future::pending::<()>()).await?;
+
+    Ok(())
+}
+
 /// Start a real FrogDB server as one node of a multi-node Raft cluster inside
 /// turmoil.
 ///
