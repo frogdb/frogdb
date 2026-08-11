@@ -901,7 +901,7 @@ not acked. The cost is latency under a mixed write load, not correctness.
 | Invariant | One projection: `ReplicationTrackerImpl::get_streaming_replicas()` filters the registry to `Phase::Streaming` and snapshots each session, and `count_acked`, `count_good_replicas`, `min_acked_offset` and ROLE's replica listing are all derived from it — "which replicas count and what have they acknowledged" has exactly one definition. The registry is `RwLock<HashMap<u64, Arc<ReplicaSession>>>` keyed by a monotonically allocated id, so iteration yields one entry per live session by construction; a reconnect gets a **new** id and the old session removes itself through its own exit handler (`unregister_replica`), which is why double-counting is a data-structure property rather than a check. Per-replica monotonicity is `ReplicaSession::record_ack`: it stores only when `sequence > prev`, returns whether it advanced, and always refreshes `last_ack_time` (any ACK proves liveness, even on an idle primary) — so a stale or duplicate ACK is liveness-only and cannot move a count. **The wire ACK is the only writer of `acked_offset`.** Where a replica *resumed* is the primary's own bookkeeping and lives in a second monotonic atomic, `resume_offset`, written only by `seed_resume_position`: the two are different facts (what the primary sent vs. what the replica applied and said so) and folding them into one field is what let the sender's optimism answer a durability question (issue 28). Only the byte-lag measure reads them together, as `stream_position() = max(acked_offset, resume_offset)` — "how far behind the stream is this link", where a resume genuinely closes the gap — while `count_acked`, `min_acked_offset`, `INFO`'s `slaveN:offset=` and `ROLE`'s replica offset read `acked_offset` alone, which is exactly Redis's `repl_ack_off` (moved only by `replconfCommand`'s ACK branch, and the only thing `replicationCountAcksByOffset` compares). Seeding therefore notifies no waiter — it cannot change a count, so a notification would only spin the wait loop — but it still refreshes `last_ack_time`, because the lag *clock* must restart where streaming restarted (FM-REPLICATION-043). Waking is `broadcast::Sender<(u64, u64)>` (capacity 1024): `wait_for_acks` re-reads `count_acked` before every `recv`, treats `Lagged` as "continue" (the count is re-derived from the registry, never accumulated from the messages) and `Closed` as "return the current count", so no notification is load-bearing. Cluster containment is free: a node's PSYNC replicas *are* its own shard's replica set (Raft carries metadata only, ADR-0001), so there is no cluster branch to get wrong. |
 | Catalog | `INV-SESSION-2`, `INV-OFFSET-3` — distinctness is what makes the count a set. Two live sessions for one announced identity would count a single follower twice (GAP-5), and no session may be credited past the live head or before it streamed. |
 | Outcome variant | n/a (surfaces as `WAIT`'s integer and as `INFO replication`'s `connected_slaves`) |
-| Forced by | `acks_below_the_target_do_not_count`, `a_replica_that_attaches_mid_wait_can_satisfy_the_quorum`, `a_replica_that_detaches_mid_wait_stops_counting`, `record_ack_is_monotonic_and_refreshes_liveness`, `test_get_streaming_replicas`, `test_record_ack`, `test_wait_for_acks_immediate`, `test_wait_for_acks_with_timeout`, `a_resume_seed_never_moves_the_wire_acked_offset`, `seed_resume_position_advances_only_strictly_forward`, `wait_does_not_count_a_seeded_position_that_was_never_acked`, `a_resume_seed_does_not_wake_a_blocked_wait`, `min_acked_offset_ignores_a_resume_seed`, `seed_replica_position_does_not_satisfy_wait`, `test_min_acked_offset`, `test_wait_with_disconnected_replica`, `test_wait_returns_correct_count_with_partial_ack`, `test_wait_multiple_replicas`, `test_wait_in_cluster_counts_shard_replicas`, `test_wait_does_not_count_other_shards_replicas`, `test_wait_ignores_slot_migration_target` |
+| Forced by | `acks_below_the_target_do_not_count`, `a_replica_that_attaches_mid_wait_can_satisfy_the_quorum`, `a_replica_that_detaches_mid_wait_stops_counting`, `record_ack_is_monotonic_and_refreshes_liveness`, `test_get_streaming_replicas`, `test_record_ack`, `test_wait_for_acks_immediate`, `test_wait_for_acks_with_timeout`, `a_resume_seed_never_moves_the_wire_acked_offset`, `seed_resume_position_advances_only_strictly_forward`, `wait_does_not_count_a_seeded_position_that_was_never_acked`, `a_resume_seed_does_not_wake_a_blocked_wait`, `min_acked_offset_ignores_a_resume_seed`, `seed_replica_position_does_not_satisfy_wait`, `test_min_acked_offset`, `test_wait_with_disconnected_replica`, `test_wait_returns_correct_count_with_partial_ack`, `test_wait_multiple_replicas`, `test_wait_never_exceeds_connected_slaves`, `test_wait_in_cluster_counts_shard_replicas`, `test_wait_does_not_count_other_shards_replicas`, `test_wait_ignores_slot_migration_target` |
 | Bug refs | `.scratch/replication-cluster-rework/wait-cluster-mode.md` §4.0 Q3/Q5 (per-node, per-shard counting; no server-side fan-out); `.scratch/testing-improvements-round2/issues/76` (what an ACK means, the other half of this count — FM-REPLICATION-008) |
 
 ---
@@ -1267,15 +1267,22 @@ or by exposing the ms field directly).
 
 </details>
 
-**GAP-5 — no test asserts that `WAIT` can never return more than the number of connected replicas.**
-`frogdb-server/crates/replication/src/tracker.rs:146-153` + `210-215`. Every existing test asserts a
-specific expected count with a known-stable replica set; none asserts the *bound* across a reconnect,
-which is where a double-count would come from (a session lingering in `Streaming` while its
-replacement registers under a new id — the registry is a `HashMap`, but `unregister_replica` runs
-from the old session's exit handler, so the overlap window is real and untested).
-*Test that should exist:* `test_wait_never_exceeds_connected_slaves` in
-`integration_replication.rs` — one replica, killed and restarted in a loop, with `WAIT 5 200` polled
-throughout, asserting the returned count is always `<= connected_slaves` parsed from the same `INFO`.
+**GAP-5 — CLOSED** by `INV-SESSION-2` and `test_wait_never_exceeds_connected_slaves`, both named in
+FM-REPLICATION-039. The gap was that every existing test asserts a specific expected count against a
+known-stable replica set, and none asserts the *bound* across a reconnect — where a double-count
+would come from (a session lingering in `Streaming` while its replacement registers under a new id;
+the registry is a `HashMap`, but `unregister_replica` runs from the old session's exit handler, so
+the overlap window is real). It is now covered from both directions. `INV-SESSION-2`
+(`frogdb-server/crates/replication/src/invariants.rs`) is the universal half: at most one live
+session per announced identity, checked over the whole `ReplicationView` at every seam that takes
+one, so the overlap cannot exist unobserved anywhere rather than only where a test looks.
+`test_wait_never_exceeds_connected_slaves` (`integration_replication.rs`) is the end-to-end half:
+`WAIT 5 200` through eight rounds of link churn — `REPLICAOF NO ONE` then `REPLICAOF` back at the
+same primary, so the replica re-announces the *same* identity from the same port rather than
+arriving as a new follower — asserting the returned count never exceeds `connected_slaves` sampled
+either side of the call, and that the set reconverges afterwards so a bound held by simply losing
+the replica does not pass. The seeded-sweep cross-check `XREPL-3` will add a third witness over
+generated schedules when its issue lands; the bound does not depend on it.
 
 **GAP-6 — CLOSED** by `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`,
 named in FM-REPLICATION-040's `Forced by`. The race the gap describes — a `CLIENT UNBLOCK ERROR`

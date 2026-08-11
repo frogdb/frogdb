@@ -3495,6 +3495,88 @@ async fn test_wait_multiple_replicas() {
     primary.shutdown().await;
 }
 
+// FM-REPLICATION-039
+/// The *bound*, not a count: `WAIT` may never answer with more replicas than
+/// the primary itself says are connected (spec GAP-5).
+///
+/// Every other WAIT test asserts a specific expected number against a stable
+/// replica set, which is exactly the shape that cannot catch a double count.
+/// The double count comes from a reconnect: the replacement session registers
+/// while the old one is still `Streaming`, because `unregister_replica` runs
+/// from the departing session's own exit handler and not from the arrival.
+/// Both sessions then describe *one* follower, and a count derived from
+/// anything but a keyed registry would credit the write twice.
+///
+/// The churn is `REPLICAOF NO ONE` immediately followed by `REPLICAOF` back at
+/// the same primary: the replica re-announces the same identity from the same
+/// listening port, which is what makes the two sessions look like one
+/// follower. Restarting the process instead would bind a fresh port and count
+/// as a different replica, missing the window entirely.
+///
+/// The assertion is deliberately one-sided. Any count in `0..=connected` is
+/// legitimate mid-churn — a link that has dropped answers 0 — so the test
+/// asserts only that `WAIT` never exceeds what `INFO` reports, sampling
+/// `connected_slaves` on both sides of the call so a replica arriving or
+/// leaving *during* the WAIT cannot make a correct answer look wrong. It then
+/// asserts the set reconverges, so a run that bounded the count by losing the
+/// replica outright is not silently accepted.
+#[tokio::test]
+async fn test_wait_never_exceeds_connected_slaves() {
+    let primary = TestServer::start_primary().await;
+    let replica = TestServer::start_replica(&primary).await;
+    assert_eq!(
+        wait_connected_slaves(&primary, 1, Duration::from_secs(30)).await,
+        Some(1),
+        "the replica must reach the streaming phase before the churn starts"
+    );
+
+    let primary_port = primary.port().to_string();
+
+    for round in 0..8 {
+        assert_ok(&primary.send("SET", &[&format!("churn{round}"), "v"]).await);
+
+        // Sample the projection either side of the call: the set can legally
+        // change while WAIT is parked, and the bound must hold against the
+        // widest set the call could have seen.
+        let before = connected_slaves(&primary).await.unwrap_or(0);
+        let acked = parse_integer(&primary.send("WAIT", &["5", "200"]).await).unwrap_or(0);
+        let after = connected_slaves(&primary).await.unwrap_or(0);
+
+        assert!(
+            acked <= before.max(after),
+            "round {round}: WAIT returned {acked} with connected_slaves {before} -> {after}"
+        );
+        assert!(
+            acked <= 1,
+            "round {round}: only one replica exists, so no reconnect may make WAIT answer {acked}"
+        );
+
+        // Re-announce the same identity, overlapping the departing session with
+        // its replacement in the primary's registry.
+        assert_ok(&replica.send("REPLICAOF", &["NO", "ONE"]).await);
+        assert_ok(
+            &replica
+                .send("REPLICAOF", &["127.0.0.1", &primary_port])
+                .await,
+        );
+    }
+
+    assert_eq!(
+        wait_connected_slaves(&primary, 1, Duration::from_secs(30)).await,
+        Some(1),
+        "the replica must reattach after the churn — a bound held by losing the replica is no bound"
+    );
+    assert_ok(&primary.send("SET", &["churn-final", "v"]).await);
+    assert_eq!(
+        wait_for_acks(&primary, 1, Duration::from_secs(30)).await,
+        1,
+        "the reattached replica must ack again, and still count exactly once"
+    );
+
+    replica.shutdown().await;
+    primary.shutdown().await;
+}
+
 // FM-REPLICATION-037
 /// Tests that WAIT 1 0 on a primary blocks (Redis: timeout 0 = no deadline)
 /// until externally released.
