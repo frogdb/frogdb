@@ -10,7 +10,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::flag_value_named;
+use super::utils::{flag_value_named, safe_capacity};
 
 /// BF.RESERVE - Create a new bloom filter.
 ///
@@ -622,10 +622,20 @@ impl Command for BfLoadchunk {
         let num_layers = u32::from_le_bytes(data[13..17].try_into().unwrap()) as usize;
 
         let mut offset = 17;
-        let mut layers = Vec::with_capacity(num_layers);
+
+        // `num_layers` is client-controlled. Every layer carries at least 28 bytes of
+        // header (k + count + capacity + bits_len), so a count larger than the payload
+        // could possibly hold is a lie — reject it before it reaches an allocation.
+        if num_layers > (data.len() - offset) / 28 {
+            return Err(CommandError::InvalidArgument {
+                message: "Data truncated".to_string(),
+            });
+        }
+
+        let mut layers = Vec::with_capacity(safe_capacity(num_layers, 28, data.len() - offset));
 
         for _ in 0..num_layers {
-            if offset + 28 > data.len() {
+            if data.len() - offset < 28 {
                 return Err(CommandError::InvalidArgument {
                     message: "Data truncated".to_string(),
                 });
@@ -644,8 +654,11 @@ impl Command for BfLoadchunk {
                 u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap()) as usize;
             offset += 8;
 
+            // `bits_len` is client-controlled: compare against the bytes that remain
+            // rather than adding to `offset`, which would overflow for a declared
+            // length near `usize::MAX` and wrap the guard open.
             let bytes_needed = bits_len.div_ceil(8);
-            if offset + bytes_needed > data.len() {
+            if bytes_needed > data.len() - offset {
                 return Err(CommandError::InvalidArgument {
                     message: "Data truncated at bits".to_string(),
                 });
@@ -753,6 +766,159 @@ mod flag_value_pin_tests {
         assert_eq!(
             err_of(BfInsert, &["k", "EXPANSION", "abc"]),
             "Invalid expansion"
+        );
+    }
+}
+
+#[cfg(test)]
+mod loadchunk_hardening_tests {
+    //! BF.LOADCHUNK decodes a payload the client fully controls. Every declared
+    //! length must be validated against the bytes actually present *before* it
+    //! reaches an allocation, or one small command becomes a remote OOM.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    /// A 17-byte BF.LOADCHUNK header with a caller-chosen layer count.
+    fn header(num_layers: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0.01f64.to_le_bytes());
+        data.extend_from_slice(&2u32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&num_layers.to_le_bytes());
+        data
+    }
+
+    fn loadchunk_err(data: Vec<u8>) -> String {
+        let mut c = ctx();
+        let args = vec![
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"0"),
+            Bytes::from(data),
+        ];
+        match BfLoadchunk.execute(&mut c, &args) {
+            Err(CommandError::InvalidArgument { message }) => message,
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    /// A layer count of `u32::MAX` against an empty layer region must be rejected
+    /// on the count itself. Before the bound existed this reached
+    /// `Vec::with_capacity(u32::MAX)` — hundreds of gigabytes of `BloomLayer`
+    /// from a single command.
+    #[test]
+    fn absurd_layer_count_is_rejected_before_allocating() {
+        assert_eq!(loadchunk_err(header(u32::MAX)), "Data truncated");
+    }
+
+    /// The bound is against the layer region, not merely "nonzero payload": a
+    /// count of 1,000,000 with one layer's worth of bytes is still a lie.
+    #[test]
+    fn layer_count_is_bounded_by_remaining_bytes() {
+        let mut data = header(1_000_000);
+        data.extend_from_slice(&[0u8; 28]);
+        assert_eq!(loadchunk_err(data), "Data truncated");
+    }
+
+    /// A count that the layer region *can* hold is admitted by the bound and
+    /// then fails on the per-layer read — the bound must not be the only check.
+    #[test]
+    fn believable_layer_count_still_validated_per_layer() {
+        let mut data = header(1);
+        data.extend_from_slice(&7u32.to_le_bytes()); // k
+        data.extend_from_slice(&0u64.to_le_bytes()); // count
+        data.extend_from_slice(&100u64.to_le_bytes()); // capacity
+        data.extend_from_slice(&64u64.to_le_bytes()); // bits_len, but no bits follow
+        assert_eq!(loadchunk_err(data), "Data truncated at bits");
+    }
+
+    /// `bits_len` near `u64::MAX` makes `offset + bits_len.div_ceil(8)` wrap on a
+    /// 32-bit target and is a huge allocation everywhere; the guard compares
+    /// against the remaining bytes instead of adding to the offset.
+    #[test]
+    fn absurd_bits_len_is_rejected() {
+        let mut data = header(1);
+        data.extend_from_slice(&7u32.to_le_bytes());
+        data.extend_from_slice(&0u64.to_le_bytes());
+        data.extend_from_slice(&100u64.to_le_bytes());
+        data.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(loadchunk_err(data), "Data truncated at bits");
+    }
+
+    /// The hardening must not cost a real dump its round trip: SCANDUMP output
+    /// fed back through LOADCHUNK reproduces a filter with the same membership.
+    #[test]
+    fn scandump_loadchunk_round_trip_preserves_membership() {
+        let mut c = ctx();
+
+        BfReserve
+            .execute(
+                &mut c,
+                &[
+                    Bytes::from_static(b"src"),
+                    Bytes::from_static(b"0.01"),
+                    Bytes::from_static(b"100"),
+                ],
+            )
+            .unwrap();
+        for item in [&b"alpha"[..], b"beta", b"gamma"] {
+            BfAdd
+                .execute(
+                    &mut c,
+                    &[Bytes::from_static(b"src"), Bytes::copy_from_slice(item)],
+                )
+                .unwrap();
+        }
+
+        let dump = BfScandump
+            .execute(
+                &mut c,
+                &[Bytes::from_static(b"src"), Bytes::from_static(b"0")],
+            )
+            .unwrap();
+        let chunk = match dump {
+            Response::Array(items) => match &items[1] {
+                Response::Bulk(Some(b)) => b.clone(),
+                other => panic!("expected bulk chunk, got {other:?}"),
+            },
+            other => panic!("expected array reply, got {other:?}"),
+        };
+
+        BfLoadchunk
+            .execute(
+                &mut c,
+                &[Bytes::from_static(b"dst"), Bytes::from_static(b"0"), chunk],
+            )
+            .unwrap();
+
+        for item in [&b"alpha"[..], b"beta", b"gamma"] {
+            assert_eq!(
+                BfExists
+                    .execute(
+                        &mut c,
+                        &[Bytes::from_static(b"dst"), Bytes::copy_from_slice(item)],
+                    )
+                    .unwrap(),
+                Response::Integer(1),
+                "restored filter lost a member"
+            );
+        }
+        assert_eq!(
+            BfExists
+                .execute(
+                    &mut c,
+                    &[Bytes::from_static(b"dst"), Bytes::from_static(b"absent")],
+                )
+                .unwrap(),
+            Response::Integer(0),
+            "restored filter gained a member"
         );
     }
 }

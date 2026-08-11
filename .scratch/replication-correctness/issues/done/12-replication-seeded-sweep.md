@@ -91,10 +91,14 @@ Three check layers, all reported as `Violation`:
 `just replication-seeds SEEDS='500'` holds the budget; the per-PR default suite
 runs a seven-seed smoke sweep (one per family, asserting both a `+CONTINUE` and
 a resync were actually realized, so a silent loss of coverage fails) plus a
-same-seed determinism double-run. Nightly is generated from
-`workflow_gen/workflows/replication_nightly.py` at 04:11 UTC, clear of the
-cluster nightly, passing no seed count so the recipe default stays the single
-source (`just workflow-gen --check` green).
+same-seed determinism double-run, plus seed 204 as a regression pin for the
+sampling-skew fix below. Nightly is generated from
+`workflow_gen/workflows/replication_seeds_nightly.py` into
+`replication-seeds-nightly.yml` at 04:11 UTC, clear of the cluster nightly,
+passing no seed count so the recipe default stays the single source (`just
+workflow-gen --check` green). Named `-seeds-` rather than plain
+`replication-nightly.yml` because issue 04's proptest tier claimed that name on
+main while this was in flight; the two are budgeted and gated separately.
 
 **§8 D9 held.** No `replication-regression-seeds.txt` and no `EXPECTED-FAILURE`
 seed muzzle is committed;
@@ -105,7 +109,7 @@ hide a seed that fails another way.
 
 ### What the sweep found
 
-One harness defect and three product findings, at 500 seeds in 345s (4 jobs).
+Three harness defects and two product findings, at 500 seeds in 345s (4 jobs).
 
 - **Harness, fixed:** every node's data dir was a bare `tempfile::tempdir()`,
   and a full sync stages into `checkpoint_ready` as a *sibling* of the data dir
@@ -119,19 +123,32 @@ One harness defect and three product findings, at 500 seeds in 345s (4 jobs).
   promoted three ops later — reported correct behaviour as acked-write loss.
   `History::settleable_values` now floors the claim at the newest write that
   must have survived and accepts anything after it.
-- **Product, filed as issue 21:** a restart keeps the replication id whose
+- **Harness, fixed:** an observation round is not an atomic snapshot — each node
+  costs a connect and an `INFO`, and the primary keeps producing offsets in
+  between, replication pings included. Seed 204 read the primary first and a
+  replica three connects later, 66 offsets further on, and called the difference
+  a lost prefix. `observe_round` now re-reads the primary after every other node,
+  so its offset is sampled strictly later than every replica's and bounds them;
+  the re-read replaces rather than maxes with the first sample, so a primary that
+  rewinds mid-round is still reported rewound. Pinned by
+  `test_sampling_skew_does_not_read_as_a_replica_ahead_of_its_primary`.
+- **Product, filed as issue 24:** a restart keeps the replication id whose
   history it lost. `replication_state.json` is recovered role-gated, not
   persistence-gated, so a SIGKILLed node returns on its old id at offset 0 and
   every follower is trivially ahead of it; on resync it drags them down with it.
-  Seeds 81, 122, 171, 204, 211. Muzzled by `restart_tainted_replids`, keyed on
-  an *observed* rewind under an id a restarted node held, so a fix empties the
-  set and re-arms `XREPL-2a`/`XREPL-2b` with no edit.
-- **Product, filed as issue 22:** the Hard-tier `INV-OFFSET-3` fires — "replica
-  2 acked 307 past live 278" — when a replica's `REPLCONF ACK` is credited above
-  the primary's live head. Seeds 225 and 340. Reachable both from issue 21 and,
-  independently, from a promotion settling at applied below what a replica
-  received. Muzzled by `known_panic_gap` on that one signature; gapped seeds are
-  counted and named on stderr rather than skipped silently.
+  Seeds 81, 122, 171, 211. Muzzled by `restart_tainted_replids`, keyed on an
+  *observed* rewind under an id a restarted node held, so a fix empties the set
+  and re-arms `XREPL-2a`/`XREPL-2b` with no edit.
+- **Product, a second witness for issue 21:** the Hard-tier `INV-OFFSET-3`
+  fires — "replica 2 acked 307 past live 278" — when a replica's `REPLCONF ACK`
+  is credited above the primary's live head. Seeds 225 and 340. Filed from
+  issue 04's proptest while this sweep was in flight; the sweep reaches the same
+  shape from real servers over the simulated network, and adds the reachability
+  path the generator cannot see — a promotion settling at *applied* below what a
+  replica already received, with no restart involved, which bears on the
+  reject-and-disconnect option. Recorded in issue 21 rather than re-filed.
+  Muzzled by `known_panic_gap` on that one signature; gapped seeds are counted
+  and named on stderr rather than skipped silently.
 
 Diagnosing the panicking seeds needed two affordances that stayed: a chained
 panic hook keeping the first message per worker thread (a task panic otherwise

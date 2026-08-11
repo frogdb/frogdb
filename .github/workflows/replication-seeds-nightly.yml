@@ -5,16 +5,15 @@
 # Regenerate with: just workflow-gen
 # =============================================================================
 
-name: Replication Correctness Nightly
+name: Replication Seeded Sweep Nightly
 'on':
   schedule:
-  - cron: '17 5 * * *'
+  - cron: '11 4 * * *'
   workflow_dispatch:
     inputs:
-      cases:
-        description: proptest cases per property (default 200000; the dev-loop budget is ~96)
+      seeds:
+        description: fault-scheduler seeds to sweep (blank = the replication-seeds recipe's own default; the per-PR suite runs a seven-seed smoke sweep)
         required: false
-        default: '200000'
         type: string
 jobs:
   gate:
@@ -31,7 +30,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         EVENT_NAME: ${{ github.event_name }}
         CURRENT_SHA: ${{ github.sha }}
-        WORKFLOW_FILE: replication-nightly.yml
+        WORKFLOW_FILE: replication-seeds-nightly.yml
       run: |
         set -uo pipefail
         if [ "${EVENT_NAME}" != "schedule" ]; then
@@ -51,12 +50,12 @@ jobs:
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "New commits since last successful run (${last_sha} -> ${CURRENT_SHA}); proceeding."
         fi
-  replication-proptest:
+  replication-seeds:
     needs: gate
     if: needs.gate.outputs.skip != 'true'
-    name: Nightly Replication Link Property Sweep
+    name: Nightly Replication Fault-Scheduler Seed Sweep
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
     - name: Checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -74,7 +73,8 @@ jobs:
     - name: Cache Rust build artifacts
       uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
       with:
-        shared-key: replication-nightly
-    - name: Run the replication property sweep at the nightly case budget
+        shared-key: replication-nightly-seeds
+    - name: Run the replication fault-scheduler sweep at the nightly seed budget
       run: |
-        just replication-proptest "${{ github.event.inputs.cases || '200000' }}"
+        seeds="${{ github.event.inputs.seeds }}"
+        just replication-seeds ${seeds:+"$seeds"}

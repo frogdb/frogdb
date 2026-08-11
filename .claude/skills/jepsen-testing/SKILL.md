@@ -126,6 +126,18 @@ testing/jepsen/frogdb/store/
 - Compares `:expected` (sum of all successful `:add` operations) vs `:actual` (final read)
 - Mismatch means lost or duplicate increments
 
+**Invariant sweep** — present on every multi-node run, under `:cluster-invariants` (raft
+topology, `DEBUG CLUSTER CHECK`) or `:replication-invariants` (replication topology,
+`DEBUG REPLICATION CHECK`). The harness calls the server's own invariant catalog on every
+node at nemesis quiesce and after the final reads (`invariant.clj`):
+- `:sweeps-run` — completed sweeps (2 on a normal run: quiesce + final)
+- `:violating-sweeps` / `:violation-ids` — sweeps that saw a gating violation, and the
+  catalog ids seen; any of these makes the run invalid
+- `:details` — per-sweep `{node -> [{:id :detail}]}` for the violating sweeps
+- `:connectivity-errors` — nodes the sweep could not reach; reported, never gating
+- `:known-violation-ids` / `:known-issues` — ids allowlisted against an open issue in the
+  surface's `:known` map; reported, never gating (delete the entry when the issue closes)
+
 **Stats checker** (always present):
 - `:ok-count`, `:fail-count`, `:info-count` — operation outcome counts
 - High `:info-count` usually means timeouts, not real failures

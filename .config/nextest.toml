@@ -121,6 +121,28 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 filter = "package(frogdb-cluster) & test(properties::)"
 slow-timeout = { period = "120s" }
 
+# The replication link property harness (`frogdb-replication` `properties`
+# module, issue 04). Same shape as the cluster one above: at the default case
+# budget R1 finishes in under a second, but each case builds a real node on a
+# real temp directory, so keep a hard kill at 4 x 30s rather than the default
+# 3 x 5s.
+[[profile.default.overrides]]
+filter = "package(frogdb-replication) & test(properties::)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# The boosted pass over the same properties, selected by `just
+# replication-proptest` (and therefore by the nightly workflow, which is exactly
+# that recipe). At 200k cases R1 runs for minutes on purpose, well past the
+# default profile's hard kill — which is the right budget for a dev-loop run and
+# the wrong one here. The real bound is the nightly job's `timeout-minutes`, the
+# same rule `cluster-proptest` follows. Everything else inherits the default
+# profile unchanged.
+[profile.replication-proptest]
+
+[[profile.replication-proptest.overrides]]
+filter = "package(frogdb-replication) & test(properties::)"
+slow-timeout = { period = "120s" }
+
 # The cluster fault-scheduler sweep, selected by `just cluster-seeds` (and therefore by
 # the nightly workflow, which is exactly that recipe). How long it runs is the caller's
 # SEEDS budget, so — like `seed_sweep_nightly` — mark it slow and never force-terminate

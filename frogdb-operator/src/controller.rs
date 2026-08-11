@@ -349,17 +349,64 @@ fn condition(type_: &str, status: &str, reason: &str, message: &str) -> FrogDBCo
     FrogDBCondition {
         type_: type_.to_string(),
         status: status.to_string(),
-        last_transition_time: Some(chrono_now()),
+        last_transition_time: Some(now_rfc3339()),
         reason: Some(reason.to_string()),
         message: Some(message.to_string()),
     }
 }
 
-fn chrono_now() -> String {
-    // ISO 8601 format without chrono dependency
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    format!("{}Z", now)
+/// Current time in the format Kubernetes uses for `metav1.Time`: RFC 3339, UTC,
+/// second precision (`2026-08-10T12:34:56Z`).
+fn now_rfc3339() -> String {
+    // `jiff` is `k8s-openapi`'s own timestamp crate, re-exported; this matches the
+    // format its `meta::v1::Time` serializes to.
+    let now = k8s_openapi::jiff::Timestamp::now();
+    k8s_openapi::jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", now)
+        .expect("static strtime format is valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::jiff::Timestamp;
+
+    /// A Kubernetes client parses `lastTransitionTime` as `metav1.Time`, so the
+    /// emitted string has to be RFC 3339 — not a bare Unix second count.
+    #[test]
+    fn now_rfc3339_is_rfc3339() {
+        let ts = now_rfc3339();
+
+        let parsed: Timestamp = ts
+            .parse()
+            .unwrap_or_else(|e| panic!("{ts:?} is not an RFC 3339 timestamp: {e}"));
+
+        // Second precision, UTC, `Z` suffix — exactly what `metav1.Time` round-trips.
+        let reformatted =
+            k8s_openapi::jiff::fmt::strtime::format("%Y-%m-%dT%H:%M:%SZ", parsed).unwrap();
+        assert_eq!(reformatted, ts);
+    }
+
+    #[test]
+    fn now_rfc3339_deserializes_as_k8s_time() {
+        let ts = now_rfc3339();
+        let json = serde_json::Value::String(ts.clone());
+
+        let time: Time = serde_json::from_value(json)
+            .unwrap_or_else(|e| panic!("{ts:?} is not accepted as metav1.Time: {e}"));
+
+        assert_eq!(serde_json::to_value(&time).unwrap(), serde_json::json!(ts));
+    }
+
+    #[test]
+    fn condition_last_transition_time_is_rfc3339() {
+        let c = condition("Available", "True", "Ready", "all replicas ready");
+        let ts = c
+            .last_transition_time
+            .expect("condition carries a transition time");
+
+        serde_json::from_value::<Time>(serde_json::Value::String(ts.clone()))
+            .unwrap_or_else(|e| panic!("{ts:?} is not accepted as metav1.Time: {e}"));
+    }
 }

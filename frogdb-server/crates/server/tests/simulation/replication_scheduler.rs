@@ -791,7 +791,7 @@ pub struct History {
     /// Nodes the schedule SIGKILLed and restarted at some point in the run.
     ///
     /// Read by the [`check_cross_node`] named gap for
-    /// [replication-correctness issue 21](../../../../../.scratch/replication-correctness/issues/open/21-a-restart-keeps-the-replication-id-it-lost-the-history-for.md):
+    /// [replication-correctness issue 24](../../../../../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md):
     /// a restarted node reboots with the replication id it had before the crash
     /// but without the dataset, so replicas legitimately observe themselves
     /// ahead of it on that id until they resync.
@@ -897,7 +897,7 @@ impl History {
 ///
 /// Replication ids a crash-restart put back into circulation heading a
 /// **shorter** history than the id already named — the observable signature of
-/// [replication-correctness issue 21](../../../../../.scratch/replication-correctness/issues/open/21-a-restart-keeps-the-replication-id-it-lost-the-history-for.md).
+/// [replication-correctness issue 24](../../../../../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md).
 /// `replication_state.json` lives in the data dir and is reloaded on every boot
 /// whether or not a dataset came back with it, so a SIGKILLed node returns
 /// advertising the id it headed before the crash with its offset reset to the
@@ -906,7 +906,7 @@ impl History {
 /// not resynced yet, as being ahead of its primary.
 ///
 /// Keyed on the **observed rewind**, not on "this node was restarted at some
-/// point": a restart that mints a fresh id (what issue 21 asks for) taints
+/// point": a restart that mints a fresh id (what issue 24 asks for) taints
 /// nothing, so the day it is fixed this set is empty and both `XREPL-2a` and
 /// `XREPL-2b` re-arm on their own with no edit here.
 fn restart_tainted_replids(history: &History) -> BTreeSet<String> {
@@ -996,7 +996,7 @@ pub fn check_cross_node(history: &History) -> Vec<Violation> {
             if view.offset <= primary.offset {
                 continue;
             }
-            // Named gap — replication-correctness issue 21, via
+            // Named gap — replication-correctness issue 24, via
             // [`restart_tainted_replids`]: this id was seen rewinding on a node
             // the schedule restarted, so the id outlived the history it names
             // and every replica still on it is trivially "ahead" of the new
@@ -1033,7 +1033,7 @@ pub fn check_cross_node(history: &History) -> Vec<Violation> {
             continue;
         }
         for view in &round.views {
-            // Same named gap as `XREPL-2a` — replication-correctness issue 21.
+            // Same named gap as `XREPL-2a` — replication-correctness issue 24.
             // A rewound-and-reissued id drags every follower back with it on the
             // next resync, so the rewind shows up on nodes the schedule never
             // touched; the exemption is on the *id*, which is where the defect
@@ -2382,7 +2382,7 @@ fn test_xrepl_2_catches_a_replica_ahead_of_its_primary() {
     assert!(found[0].detail.contains("not a prefix"), "{found:?}");
 }
 
-/// The named gap for replication-correctness issue 21, pinned on the side that
+/// The named gap for replication-correctness issue 24, pinned on the side that
 /// makes it a gap: an id a restarted node was *observed* rewinding under is
 /// exempt, in both the "replica ahead of its primary" and the "offset went
 /// backwards" shapes, and on every node that id reaches — not only the one the
@@ -2415,7 +2415,7 @@ fn test_xrepl_2_exempts_a_replid_a_restart_rewound() {
     };
     assert!(
         check_cross_node(&rewound).is_empty(),
-        "the whole shadow of issue 21 is one gap: {:?}",
+        "the whole shadow of issue 24 is one gap: {:?}",
         check_cross_node(&rewound)
     );
 }
@@ -2442,7 +2442,7 @@ fn test_xrepl_2_gap_does_not_cover_a_primary_that_never_rewound() {
         "the gap must not widen to any node that was ever restarted"
     );
 
-    // And a rewind on a node the schedule never touched is not issue 21 either.
+    // And a rewind on a node the schedule never touched is not issue 24 either.
     let untouched = History {
         rounds: vec![
             Round {
@@ -2467,7 +2467,7 @@ fn test_xrepl_2_gap_does_not_cover_a_primary_that_never_rewound() {
     );
 }
 
-/// The panic-shaped named gap for replication-correctness issue 22, pinned both
+/// The panic-shaped named gap for replication-correctness issue 21, pinned both
 /// ways: only `INV-OFFSET-3`'s acked-past-live branch is a known gap, and the
 /// generic runtime message a task panic unwinds as is not — otherwise the gap
 /// would swallow every panic the sweep can produce.
@@ -3025,19 +3025,20 @@ fn take_first_panic() -> Option<String> {
 ///
 /// One entry, as narrow as the message allows: `INV-OFFSET-3`'s
 /// acked-past-live branch, which is
-/// [replication-correctness issue 22](../../../../../.scratch/replication-correctness/issues/open/22-a-replica-ack-is-credited-past-the-primarys-live-offset.md).
+/// [replication-correctness issue 21](../../../../../.scratch/replication-correctness/issues/open/21-ack-above-live-head.md).
 /// The catalog hook that raises it is `#[cfg(any(test, debug_assertions))]`, so
 /// this is a debug-build assertion on a Hard-tier invariant rather than a
 /// release crash.
 ///
 /// This is not an `EXPECTED-FAILURE` seed muzzle — PRD §8 D9 holds those until
-/// cluster issue 23 closes. It names a *signature*, not a seed: it cannot hide a
-/// seed that fails some other way, and the day issue 22 is fixed the signature
-/// stops occurring and this function stops matching anything.
+/// the *cluster-correctness* campaign's issue 23 closes. It names a *signature*,
+/// not a seed: it cannot hide a seed that fails some other way, and the day
+/// replication issue 21 is fixed the signature stops occurring and this function
+/// stops matching anything.
 fn known_panic_gap(message: &str) -> Option<&'static str> {
     (message.contains("INV-OFFSET-3") && message.contains("acked") && message.contains("past live"))
         .then_some(
-            "replication-correctness issue 22 (a replica's REPLCONF ACK is credited past the \
+            "replication-correctness issue 21 (a replica's REPLCONF ACK is credited past the \
          primary's live offset)",
         )
 }

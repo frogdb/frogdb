@@ -14,6 +14,12 @@ use super::user::User;
 /// Container commands (like CONFIG, CLIENT) have known subcommands.
 /// Non-container commands don't accept subcommands at all.
 /// SELECT is special: any argument value is valid as a subcommand.
+///
+/// Each list below names exactly the subcommands the server's dispatcher for
+/// that container actually accepts — anything else the server answers with
+/// "unknown subcommand", so an ACL rule naming it could never match a real
+/// invocation. The lists are hand-maintained and must be re-checked against the
+/// dispatch `match` arms whenever a container gains or loses a subcommand.
 fn is_valid_subcommand(command: &str, subcommand: &str) -> bool {
     let cmd = command.to_lowercase();
     let sub = subcommand.to_lowercase();
@@ -51,24 +57,22 @@ fn is_valid_subcommand(command: &str, subcommand: &str) -> bool {
                 | "setname"
                 | "tracking"
                 | "trackinginfo"
+                | "unblock"
                 | "unpause"
                 | "setinfo"
+                | "stats"
         ),
         "cluster" => matches!(
             sub.as_str(),
             "addslots"
-                | "bumpepoch"
-                | "count-failure-reports"
                 | "countkeysinslot"
                 | "delslots"
                 | "failover"
-                | "flushslots"
                 | "forget"
                 | "getkeysinslot"
                 | "help"
                 | "info"
                 | "keyslot"
-                | "links"
                 | "meet"
                 | "myid"
                 | "nodes"
@@ -78,12 +82,11 @@ fn is_valid_subcommand(command: &str, subcommand: &str) -> bool {
                 | "set-config-epoch"
                 | "setslot"
                 | "shards"
-                | "slaves"
                 | "slots"
         ),
         "command" => matches!(
             sub.as_str(),
-            "count" | "docs" | "getkeys" | "help" | "info" | "list"
+            "count" | "docs" | "getkeys" | "getkeysandflags" | "help" | "info" | "list"
         ),
         "config" => matches!(
             sub.as_str(),
@@ -94,14 +97,17 @@ fn is_valid_subcommand(command: &str, subcommand: &str) -> bool {
             sub.as_str(),
             "delete" | "dump" | "flush" | "help" | "kill" | "list" | "load" | "restore" | "stats"
         ),
+        "hotkeys" => matches!(sub.as_str(), "get" | "reset" | "start" | "stop"),
         "latency" => matches!(
             sub.as_str(),
-            "graph" | "help" | "history" | "latest" | "reset"
+            "bands" | "doctor" | "graph" | "help" | "histogram" | "history" | "latest" | "reset"
         ),
         "memory" => matches!(
             sub.as_str(),
-            "doctor" | "help" | "malloc-stats" | "purge" | "stats" | "usage"
+            "doctor" | "help" | "malloc-size" | "purge" | "stats" | "usage"
         ),
+        // MODULE is a stub: only HELP executes, but the surface it documents is
+        // the one an ACL rule would target once modules land.
         "module" => matches!(sub.as_str(), "help" | "list" | "load" | "loadex" | "unload"),
         "object" => matches!(
             sub.as_str(),
@@ -111,9 +117,10 @@ fn is_valid_subcommand(command: &str, subcommand: &str) -> bool {
             sub.as_str(),
             "channels" | "help" | "numpat" | "numsub" | "shardchannels" | "shardnumsub"
         ),
-        "script" => matches!(sub.as_str(), "debug" | "exists" | "flush" | "help" | "load"),
+        "script" => matches!(sub.as_str(), "exists" | "flush" | "help" | "kill" | "load"),
         "select" => true, // SELECT accepts any DB number as "subcommand"
         "slowlog" => matches!(sub.as_str(), "get" | "help" | "len" | "reset"),
+        "status" => matches!(sub.as_str(), "help" | "json"),
         "xgroup" => matches!(
             sub.as_str(),
             "create" | "createconsumer" | "delconsumer" | "destroy" | "help" | "setid"
@@ -853,6 +860,91 @@ mod tests {
         // Empty command before pipe
         assert!(AclRule::parse("+|get").is_err());
         assert!(AclRule::parse("-|get").is_err());
+    }
+
+    /// Assert `+cmd|sub` and `-cmd|sub` both parse into a subcommand rule.
+    fn assert_subcommand_accepted(command: &str, subcommand: &str) {
+        let allow = AclRule::parse(&format!("+{command}|{subcommand}"));
+        assert!(
+            matches!(&allow, Ok(AclRule::AllowSubcommand { command: c, subcommand: s })
+                if c == command && s == subcommand),
+            "+{command}|{subcommand} should parse, got {allow:?}"
+        );
+        let deny = AclRule::parse(&format!("-{command}|{subcommand}"));
+        assert!(
+            matches!(&deny, Ok(AclRule::DenySubcommand { command: c, subcommand: s })
+                if c == command && s == subcommand),
+            "-{command}|{subcommand} should parse, got {deny:?}"
+        );
+    }
+
+    /// Assert `+cmd|sub` is rejected — the server dispatches no such subcommand.
+    fn assert_subcommand_rejected(command: &str, subcommand: &str) {
+        let result = AclRule::parse(&format!("+{command}|{subcommand}"));
+        assert!(
+            result.is_err(),
+            "+{command}|{subcommand} names no real subcommand and must be rejected, got {result:?}"
+        );
+    }
+
+    /// The container-subcommand table must name what the server's dispatchers
+    /// actually accept. Each case below is a spot where the table had drifted:
+    /// a real subcommand it rejected, or an invented one it waved through.
+    #[test]
+    fn test_memory_subcommands_match_dispatch() {
+        // MEMORY dispatches MALLOC-SIZE; MALLOC-STATS does not exist.
+        assert_subcommand_accepted("memory", "malloc-size");
+        assert_subcommand_rejected("memory", "malloc-stats");
+    }
+
+    #[test]
+    fn test_client_subcommands_match_dispatch() {
+        assert_subcommand_accepted("client", "unblock");
+        assert_subcommand_accepted("client", "stats");
+    }
+
+    #[test]
+    fn test_cluster_subcommands_match_dispatch() {
+        assert_subcommand_accepted("cluster", "setslot");
+        // Redis has these; FrogDB's CLUSTER dispatcher does not.
+        for sub in [
+            "bumpepoch",
+            "count-failure-reports",
+            "flushslots",
+            "links",
+            "slaves",
+        ] {
+            assert_subcommand_rejected("cluster", sub);
+        }
+    }
+
+    #[test]
+    fn test_command_subcommands_match_dispatch() {
+        assert_subcommand_accepted("command", "getkeysandflags");
+    }
+
+    #[test]
+    fn test_latency_subcommands_match_dispatch() {
+        for sub in ["bands", "doctor", "histogram"] {
+            assert_subcommand_accepted("latency", sub);
+        }
+    }
+
+    #[test]
+    fn test_script_subcommands_match_dispatch() {
+        assert_subcommand_accepted("script", "kill");
+        // SCRIPT DEBUG is not implemented by FrogDB's SCRIPT dispatcher.
+        assert_subcommand_rejected("script", "debug");
+    }
+
+    #[test]
+    fn test_frogdb_native_containers_accept_subcommands() {
+        for sub in ["start", "stop", "reset", "get"] {
+            assert_subcommand_accepted("hotkeys", sub);
+        }
+        assert_subcommand_accepted("status", "json");
+        assert_subcommand_rejected("hotkeys", "nosuchsub");
+        assert_subcommand_rejected("status", "nosuchsub");
     }
 
     #[test]

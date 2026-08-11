@@ -53,11 +53,11 @@ here names the `ShardReadyResult` the shard sends and the coordinator error it b
 | Field | Value |
 |---|---|
 | Trigger | A second continuation-lock request (cross-shard Lua / MULTI) reaches a shard that already holds one for a different transaction, or that already has one parked waiting for its queue to drain ([FM-VLL-003](#fm-vll-003--continuation-lock-requested-while-the-shard-queue-has-not-drained)). |
-| Observable | `Failed(ShardBusy)` from that shard; the client sees `-ERR lock acquisition failed: Shard busy with continuation lock`. The caller's primary work never runs. |
+| Observable | `Failed(ShardBusy)` from that shard; the client sees `-BUSY shard busy with continuation lock; retry` — the same retryable reply the scatter path gives for this condition ([FM-VLL-001](#fm-vll-001--sca-request-refused-while-a-continuation-lock-is-held)). The caller's primary work never runs. |
 | NOT observable | Two owners of the same shard; a second request queueing behind the first (two parked requests would race for the same drain); the losing caller's already-granted locks on *other* shards staying held (nothing else would ever release them); `run` being invoked after a failed acquisition. |
 | Invariant | The shard takes or parks a request only from `continuation_lock == None && pending_continuation == None` — one continuation claim per shard at a time, held or pending. Coordinator-side, every failure path drops `release_txs`, which fires the release signal for each shard that did grant; `acquire_continuation_and_run` owns the guard for the whole run, so the release happens whether the work returns or panics. |
 | Outcome variant | `ShardReadyResult::Failed(VllError::ShardBusy)` → `ContinuationError::LockFailed` |
-| Forced by | `continuation_lock_blocks_second_acquire`, `second_continuation_request_refused_while_one_is_parked`, `acquire_continuation_releases_partially_acquired_on_failure`, `acquire_continuation_and_run_skips_run_and_releases_on_failure` |
+| Forced by | `continuation_lock_blocks_second_acquire`, `second_continuation_request_refused_while_one_is_parked`, `acquire_continuation_releases_partially_acquired_on_failure`, `acquire_continuation_and_run_skips_run_and_releases_on_failure`, `continuation_lock_shard_busy_maps_to_busy_reply` |
 | Bug refs | none |
 
 ## FM-VLL-003 — continuation lock requested while the shard queue has not drained

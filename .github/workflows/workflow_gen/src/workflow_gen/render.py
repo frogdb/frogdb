@@ -21,6 +21,9 @@ from workflow_gen.workflows.replication_model_nightly import (
     replication_model_nightly_workflow,
 )
 from workflow_gen.workflows.replication_nightly import replication_nightly_workflow
+from workflow_gen.workflows.replication_seeds_nightly import (
+    replication_seeds_nightly_workflow,
+)
 from workflow_gen.workflows.test import test_workflow
 
 HEADER = """\
@@ -50,6 +53,7 @@ WORKFLOWS = {
     "cluster-model-nightly.yml": cluster_model_nightly_workflow,
     "replication-model-nightly.yml": replication_model_nightly_workflow,
     "replication-nightly.yml": replication_nightly_workflow,
+    "replication-seeds-nightly.yml": replication_seeds_nightly_workflow,
     "coverage-nightly.yml": coverage_nightly_workflow,
     "jepsen-nightly.yml": jepsen_nightly_workflow,
     "regression-nightly.yml": regression_nightly_workflow,

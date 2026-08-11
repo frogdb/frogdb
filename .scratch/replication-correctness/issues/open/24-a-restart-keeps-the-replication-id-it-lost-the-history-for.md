@@ -1,4 +1,4 @@
-# 21 — a restart keeps the replication id whose history it just lost
+# 24 — a restart keeps the replication id whose history it just lost
 
 Status: needs-triage
 
@@ -50,11 +50,14 @@ distinguishes the pre-crash lineage from the post-crash one. Seed 81's shape (a
 crash overlapping an isolate of the same node) is the shape that produces that
 window, and the sweep should reach it with a bigger backlog.
 
-[Issue 22](./22-a-replica-ack-is-credited-past-the-primarys-live-offset.md) is
-one of the reachable consequences: a replica that followed the previous
-incarnation acks its own higher offset to the rebooted primary, which credits it
-past its own live head and trips the Hard-tier `INV-OFFSET-3`. Fixing this issue
-closes that path, though not the promotion-side one 22 also names.
+[Issue 21](./21-ack-above-live-head.md) is one of the reachable consequences,
+and the sweep reaches it independently of the proptest that filed it: a replica
+that followed the previous incarnation acks its own higher offset to the
+rebooted primary, which credits it past its own live head and trips the
+Hard-tier `INV-OFFSET-3`. Fixing *this* issue closes that path into 21, but not
+21 itself — a promotion that settles at its applied offset
+(`settle_at_applied` stores the lower value into `live`) puts a replica above
+the head with no restart involved, and the ingest seam still has no ceiling.
 
 This is distinct from [issue 17](./17-save-point-above-the-live-head.md), which
 is about the save point being *above* the live head after a backwards full
@@ -112,7 +115,7 @@ on "this node was restarted", so a fix that mints a fresh id empties the set and
 re-arms both checks with no edit; pinned both ways by
 `test_xrepl_2_exempts_a_replid_a_restart_rewound` and
 `test_xrepl_2_gap_does_not_cover_a_primary_that_never_rewound`. At the 500-seed
-budget this gap covers seeds 122, 171, 204 and 211. Replay the witness with:
+budget this gap covers seeds 122, 171 and 211. Replay the witness with:
 
 ```
 REPLICATION_SEED_TRACE=1 REPLICATION_SEEDS_START=81 just replication-seeds 1

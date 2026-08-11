@@ -42,6 +42,8 @@ mod model;
 pub mod net_bytes;
 pub mod offset_coordinator;
 pub mod primary;
+#[cfg(test)]
+mod properties;
 pub mod replica;
 pub mod replica_session;
 pub mod split_brain_log;

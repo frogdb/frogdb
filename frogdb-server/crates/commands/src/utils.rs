@@ -51,43 +51,6 @@ pub fn reject_non_finite_delta(delta: f64) -> Result<(), CommandError> {
 }
 
 // ============================================================================
-// Glob Pattern Matching
-// ============================================================================
-
-/// Simple glob pattern matching (supports * and ?).
-///
-/// Used by SCAN, SSCAN, HSCAN, ZSCAN MATCH filters.
-pub fn simple_glob_match(pattern: &[u8], text: &[u8]) -> bool {
-    let mut p = 0;
-    let mut t = 0;
-    let mut star_p = None;
-    let mut star_t = None;
-
-    while t < text.len() {
-        if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == text[t]) {
-            p += 1;
-            t += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
-            star_p = Some(p);
-            star_t = Some(t);
-            p += 1;
-        } else if let Some(sp) = star_p {
-            p = sp + 1;
-            star_t = Some(star_t.unwrap() + 1);
-            t = star_t.unwrap();
-        } else {
-            return false;
-        }
-    }
-
-    while p < pattern.len() && pattern[p] == b'*' {
-        p += 1;
-    }
-
-    p == pattern.len()
-}
-
-// ============================================================================
 // Hash-based scan cursor for SSCAN/HSCAN
 // ============================================================================
 
@@ -111,6 +74,11 @@ fn scan_hash(key: &[u8]) -> u64 {
 /// The `hash_key` function extracts the bytes used for hash-based ordering from each item.
 /// The `emit` function converts an item into Response values appended to `results`.
 /// `count` is the maximum number of items to emit (not response elements).
+///
+/// `match_pattern` is a full Redis glob evaluated by the canonical
+/// [`frogdb_core::glob_match`] — the same matcher SCAN/KEYS use — so
+/// HSCAN/SSCAN/ZSCAN `MATCH` supports `[...]` classes and `\` escapes and
+/// inherits its `MAX_STAR_COUNT` cap against pathological patterns.
 pub fn hash_cursor_scan<T>(
     items: impl Iterator<Item = T>,
     cursor: u64,
@@ -145,7 +113,7 @@ pub fn hash_cursor_scan<T>(
         }
 
         if let Some(pattern) = match_pattern
-            && !simple_glob_match(pattern, hash_key(&item))
+            && !frogdb_core::glob_match(pattern, hash_key(&item))
         {
             continue;
         }
@@ -939,6 +907,30 @@ pub fn require_same_shard(keys: &[Bytes], num_shards: usize) -> Result<(), Comma
         }
     }
     Ok(())
+}
+
+// ============================================================================
+// Untrusted-Payload Utilities
+// ============================================================================
+
+/// Clamp an attacker-supplied element count to what the remaining input bytes
+/// could actually hold, for use as a `Vec::with_capacity` argument.
+///
+/// The counts embedded in `*.LOADCHUNK` payloads are client-controlled: honouring
+/// a declared count of `u32::MAX` before reading the elements turns one small
+/// command into a multi-gigabyte allocation. Capacity is a hint, so clamping it
+/// costs nothing when the payload is honest (a few reallocations at worst) and
+/// removes the amplification when it is not — the per-element reads still decide
+/// whether the payload is actually valid.
+///
+/// This is the command-side twin of the persistence layer's `safe_capacity`;
+/// both must stay in step because they decode the same wire formats.
+#[inline]
+pub fn safe_capacity(count: usize, min_element_bytes: usize, available_bytes: usize) -> usize {
+    if min_element_bytes == 0 {
+        return count;
+    }
+    count.min(available_bytes / min_element_bytes)
 }
 
 #[cfg(test)]

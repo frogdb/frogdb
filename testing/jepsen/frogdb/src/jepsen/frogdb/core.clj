@@ -209,6 +209,12 @@
         topology (cond cluster-mode? :raft
                        multi-node? :replication
                        :else :single)
+        ;; Live invariant-catalog surface for this topology, or nil when the
+        ;; topology has no catalog to sweep (single-node). One `cond` arm per
+        ;; catalog is the whole wiring — see jepsen.frogdb.invariant.
+        invariant-surface (cond cluster-mode? invariant/cluster-surface
+                                multi-node? invariant/replication-surface
+                                :else nil)
         nodes (cond
                 local? ["n1"]
                 cluster-mode? (vec (map #(str "n" (inc %)) (range cluster-node-count)))
@@ -264,8 +270,8 @@
             :ssh (when (or local? docker? multi-node? cluster-mode?)
                    {:dummy? true})
             :client (:client workload)
-            :nemesis (if cluster-mode?
-                       (invariant/wrap-nemesis (:nemesis nemesis-pkg))
+            :nemesis (if invariant-surface
+                       (invariant/wrap-nemesis invariant-surface (:nemesis nemesis-pkg))
                        (:nemesis nemesis-pkg))
             :checker (checker/compose
                        (merge
@@ -273,18 +279,21 @@
                           :stats (stats-ignoring stats-all-fail-ok-fs)
                           :exceptions (checker/unhandled-exceptions)
                           :perf (checker/perf)}
-                         ;; DEBUG CLUSTER CHECK invariant sweep (cluster-correctness
-                         ;; issue 07) — wired on every raft-topology workload by
-                         ;; default, never opt-in per workload. See
-                         ;; jepsen.frogdb.invariant's namespace docstring for the
-                         ;; quiesce/final hook design.
-                         (when cluster-mode?
-                           {:cluster-invariants (invariant/checker)})))
+                         ;; Live invariant sweep — DEBUG CLUSTER CHECK on the raft
+                         ;; topology (cluster-correctness issue 07), DEBUG
+                         ;; REPLICATION CHECK on the replication topology
+                         ;; (replication-correctness issue 13). Wired on every
+                         ;; workload of those topologies by default, never opt-in
+                         ;; per workload. See jepsen.frogdb.invariant's namespace
+                         ;; docstring for the quiesce/final hook design.
+                         (when invariant-surface
+                           {(:result-key invariant-surface)
+                            (invariant/checker invariant-surface)})))
             :generator (gen/phases
                          ;; Main test phase: mix client operations with nemesis.
-                         ;; No :cluster-check op is ever emitted here — this is
-                         ;; the active-nemesis window the checker must not touch
-                         ;; (issue 07's overhead constraint).
+                         ;; No sweep op is ever emitted here — this is the
+                         ;; active-nemesis window the checker must not touch
+                         ;; (cluster issue 07's overhead constraint).
                          (->> (:generator workload)
                               (gen/nemesis (:generator nemesis-pkg))
                               (gen/time-limit (:time-limit opts)))
@@ -295,8 +304,8 @@
                          ;; Quiesce-point invariant sweep: every nemesis package's
                          ;; :final-generator has now fully healed the cluster, so
                          ;; no fault is active by construction.
-                         (when cluster-mode?
-                           (gen/nemesis (gen/once (invariant/cluster-check-op))))
+                         (when invariant-surface
+                           (gen/nemesis (gen/once (invariant/check-op invariant-surface))))
                          ;; Final reads to verify state
                          (gen/log "Final reads...")
                          (gen/clients
@@ -305,8 +314,8 @@
                                     (gen/limit 10)
                                     (gen/stagger 0.1))))
                          ;; Final invariant sweep, after the final reads.
-                         (when cluster-mode?
-                           (gen/nemesis (gen/once (invariant/cluster-check-op)))))})))
+                         (when invariant-surface
+                           (gen/nemesis (gen/once (invariant/check-op invariant-surface)))))})))
 
 ;; ===========================================================================
 ;; CLI Options

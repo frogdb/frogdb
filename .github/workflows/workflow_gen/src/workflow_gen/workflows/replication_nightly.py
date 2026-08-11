@@ -1,21 +1,28 @@
-"""Nightly replication-correctness fault-scheduler sweep.
+"""Nightly replication correctness property sweep.
 
-The replication arm of the seeded turmoil scheduler
-(`.scratch/replication-correctness/`, issue 12): a primary and two replicas over
-the same seed derivation the cluster arm uses, where one `u64` derives the whole
-run — fault family, held and slowed links, backlog geometry, full-sync payload
-shape, and the client workload. Per-PR coverage is a seven-seed smoke sweep (one
-per fault family) plus a determinism double-run in the default suite; this tier
-sweeps the full seed budget.
+The replication-correctness campaign's W2 wave
+(`.scratch/replication-correctness/PRD.md` §3 W2, issue 04) added a stateful
+proptest generator in `frogdb-server/crates/replication/src/properties.rs` that
+folds link actions -- writes, acks, attach/detach, PSYNC grants, promotions,
+feed-gate barriers, restarts -- through a *real* replication node and asserts
+the `frogdb-replication` invariant catalog after every one of them (property
+R1).
 
-Driven through `just replication-seeds` so the budget lives in exactly one place
-(PRD §8 D1/D8) rather than being duplicated here. Its cluster sibling is
-`cluster_nightly.py`; the two are separate workflows rather than two jobs of one
-because they belong to different campaigns and a change gate for one should not
-drag the other's build along.
+Tiering follows the cluster property harness's ruling: per-PR coverage of the
+same properties runs inline in `test.yml` as part of the ordinary
+`frogdb-replication` unit tests, at a case budget sized for the dev loop
+(`DEFAULT_CASES` in that module); this tier raises it three orders of magnitude.
+The budget is passed to `just replication-proptest` rather than restated here,
+so it lives in exactly one place.
+
+Separate from `replication-model-nightly.yml` rather than folded into it: the
+model checks and the property harness are budgeted independently and fail for
+different reasons, and one job running both would let a model scope widening
+push the property sweep into a shared timeout.
 """
 
 from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.scalarstring import SingleQuotedScalarString as SQ
 
 from workflow_gen.helpers import (
     cargo_cache_step,
@@ -31,42 +38,32 @@ from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
 
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 
-# GitHub-hosted standard runner: free and unmetered on public repos. The sweep
-# shards seeds across its own worker threads, so a bigger (paid) box would only
-# shorten a run that already fits well inside the timeout.
+# GitHub-hosted standard runner: free and unmetered on public repos. proptest
+# runs one case at a time, so a bigger (paid) box buys nothing here.
 RUNS_ON = "ubuntu-latest"
 
 WORKFLOW_FILE = "replication-nightly.yml"
 
-# 04:11 UTC: off the hour (avoids the GitHub Actions cron traffic spike at :00)
-# and clear of the cluster nightly's 03:47 slot, so the two sweeps do not
-# contend for runners.
-NIGHTLY_CRON = "11 4 * * *"
+# 05:17 UTC: off the hour, and clear of every other nightly's slot (the closest
+# neighbours are `replication-model-nightly` at 04:47 and `jepsen-nightly` at
+# 05:37).
+NIGHTLY_CRON = "17 5 * * *"
+
+# proptest cases for the property sweep. Must match the `replication-proptest`
+# recipe's own default; it is repeated here only so the workflow_dispatch input
+# can show it.
+DEFAULT_CASES = "200000"
 
 
-def _seeds_input() -> CommentedMap:
+def _cases_input() -> CommentedMap:
     inp = CommentedMap()
-    # No default: left empty, the step passes no argument and the
-    # `replication-seeds` recipe's own `SEEDS` default applies. The budget lives
-    # in that one Justfile variable, and a default echoed here would be a second
-    # copy of it that nothing keeps in step.
     inp["description"] = (
-        "fault-scheduler seeds to sweep (blank = the replication-seeds recipe's "
-        "own default; the per-PR suite runs a seven-seed smoke sweep)"
+        f"proptest cases per property (default {DEFAULT_CASES}; the dev-loop budget is ~96)"
     )
     inp["required"] = False
+    inp["default"] = SQ(DEFAULT_CASES)
     inp["type"] = "string"
     return inp
-
-
-def _common_steps(*, cache_key: str) -> list:
-    return [
-        checkout_step(),
-        mise_setup_step(install_args=MISE_JUST_NEXTEST),
-        rust_toolchain_step(),
-        libclang_step(),
-        cargo_cache_step(shared_key=cache_key),
-    ]
 
 
 def replication_nightly_workflow() -> Workflow:
@@ -74,41 +71,36 @@ def replication_nightly_workflow() -> Workflow:
         name="Replication Correctness Nightly",
         on=Trigger(
             schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
-            workflow_dispatch_inputs=CommentedMap(seeds=_seeds_input()),
+            workflow_dispatch_inputs=CommentedMap(cases=_cases_input()),
         ),
     )
 
     gate = w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
 
     w.job(
-        "replication-seeds",
+        "replication-proptest",
         Job(
-            name="Nightly Replication Fault-Scheduler Seed Sweep",
+            name="Nightly Replication Link Property Sweep",
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
-            # Each seed brings up three real servers on the simulated network,
-            # drives a workload through faults to quiescence, and runs the
-            # invariant catalog on every survivor — a second or two apiece in a
-            # debug build, sharded across the runner's cores by the sweep's own
-            # worker threads. The default budget lands well inside this; the
-            # headroom is for a dispatch that raises `seeds`.
-            timeout_minutes=120,
+            # Every case stands up a real node on a real temp directory, so this
+            # is slower per case than a pure state-machine harness: a 30k-case
+            # run measured ~290 cases/s in a debug build on an M-series laptop,
+            # putting the default budget near a quarter of an hour. The ceiling
+            # covers a much colder runner and leaves room for a dispatch that
+            # raises `cases`.
+            timeout_minutes=90,
             steps=[
-                # Its own cache key, disjoint from the cluster nightly's: both
-                # build `frogdb-server`'s turmoil-featured test binary, but they
-                # run on different schedules and sharing one key would have them
-                # evict each other's entries.
-                *_common_steps(cache_key="replication-nightly-seeds"),
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                rust_toolchain_step(),
+                libclang_step(),
+                cargo_cache_step(shared_key="replication-nightly"),
                 run_step(
-                    name="Run the replication fault-scheduler sweep at the nightly seed budget",
-                    # `${seeds:+"$seeds"}` passes the argument only when the
-                    # dispatch input is non-empty, so a scheduled run (no
-                    # inputs) falls through to the recipe's default instead of
-                    # naming the budget a second time here.
-                    run=script("""\
-                        seeds="${{ github.event.inputs.seeds }}"
-                        just replication-seeds ${seeds:+"$seeds"}
+                    name="Run the replication property sweep at the nightly case budget",
+                    run=script(f"""\
+                        just replication-proptest "${{{{ github.event.inputs.cases || '{DEFAULT_CASES}' }}}}"
                     """),
                 ),
             ],
