@@ -130,6 +130,7 @@ noted above) at current HEAD.
 |---|----------|---------|-------|
 | 1 | `cross-slot-partition` | PASS (1:14) | `valid? true` all sub-checks; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 | 2 | `cross-slot-kill` | PASS (1:16) | `valid? true` all sub-checks; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
+| 3 | `raft-chaos` | PASS (2:23) | `valid? true` (key-routing checker, durability+value-correctness); worker crashes on `CLUSTERDOWN` during quorum-loss windows correctly recorded `:info`/indeterminate, not counted as failures; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 
 ### Remaining
 
