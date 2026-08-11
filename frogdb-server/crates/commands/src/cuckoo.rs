@@ -11,7 +11,7 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
-use super::utils::flag_value_named;
+use super::utils::{flag_value_named, safe_capacity};
 
 /// CF.RESERVE - Create a new cuckoo filter.
 ///
@@ -687,11 +687,20 @@ impl Command for CfLoadchunk {
         let num_layers = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
         offset += 4;
 
-        let mut layers = Vec::with_capacity(num_layers);
+        // `num_layers` is client-controlled. Every layer carries at least 25 bytes of
+        // header, so a count larger than the payload could possibly hold is a lie —
+        // reject it before it reaches an allocation.
+        if num_layers > (data.len() - offset) / 25 {
+            return Err(CommandError::InvalidArgument {
+                message: "Data truncated".to_string(),
+            });
+        }
+
+        let mut layers = Vec::with_capacity(safe_capacity(num_layers, 25, data.len() - offset));
 
         for _ in 0..num_layers {
             // num_buckets(8) + bucket_size(1) + count(8) + capacity(8) = 25
-            if offset + 25 > data.len() {
+            if data.len() - offset < 25 {
                 return Err(CommandError::InvalidArgument {
                     message: "Data truncated".to_string(),
                 });
@@ -707,16 +716,38 @@ impl Command for CfLoadchunk {
             let capacity = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
             offset += 8;
 
-            let fp_bytes = num_buckets * layer_bucket_size as usize * 2;
-            if offset + fp_bytes > data.len() {
+            // A layer that claims buckets but zero slots per bucket consumes no
+            // fingerprint bytes, so its bucket count would be unbounded by the
+            // payload length. Reject it rather than let it drive an allocation.
+            if layer_bucket_size == 0 && num_buckets > 0 {
+                return Err(CommandError::InvalidArgument {
+                    message: "Invalid bucket size in chunk".to_string(),
+                });
+            }
+
+            // Both factors are client-controlled: a raw multiply wraps in release
+            // builds and hands the truncation guard below a small product for a
+            // huge bucket count.
+            let fp_bytes = num_buckets
+                .checked_mul(layer_bucket_size as usize)
+                .and_then(|v| v.checked_mul(2))
+                .ok_or_else(|| CommandError::InvalidArgument {
+                    message: "Invalid fingerprint data size".to_string(),
+                })?;
+            if fp_bytes > data.len() - offset {
                 return Err(CommandError::InvalidArgument {
                     message: "Data truncated at fingerprints".to_string(),
                 });
             }
 
-            let mut buckets = Vec::with_capacity(num_buckets);
+            let mut buckets =
+                Vec::with_capacity(safe_capacity(num_buckets, 2, data.len() - offset));
             for _ in 0..num_buckets {
-                let mut bucket = Vec::with_capacity(layer_bucket_size as usize);
+                let mut bucket = Vec::with_capacity(safe_capacity(
+                    layer_bucket_size as usize,
+                    2,
+                    data.len() - offset,
+                ));
                 for _ in 0..layer_bucket_size {
                     let fp = u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap());
                     offset += 2;
@@ -835,5 +866,152 @@ mod flag_value_pin_tests {
             err_of(CfInsert, &["k", "CAPACITY", "abc"]),
             "Invalid capacity"
         );
+    }
+}
+
+#[cfg(test)]
+mod loadchunk_hardening_tests {
+    //! CF.LOADCHUNK decodes a payload the client fully controls. Layer counts,
+    //! bucket counts and the fingerprint-region size must all be validated
+    //! against the bytes actually present before they reach an allocation, and
+    //! the size computation must not be allowed to wrap past its own guard.
+    use super::*;
+    use frogdb_core::HashMapStore;
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    /// A 19-byte CF.LOADCHUNK header with a caller-chosen layer count.
+    fn header(num_layers: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.push(2); // bucket_size
+        data.extend_from_slice(&20u16.to_le_bytes()); // max_iterations
+        data.extend_from_slice(&1u32.to_le_bytes()); // expansion
+        data.extend_from_slice(&0u64.to_le_bytes()); // delete_count
+        data.extend_from_slice(&num_layers.to_le_bytes());
+        data
+    }
+
+    /// A 25-byte layer header with caller-chosen bucket count and bucket size.
+    fn layer_header(num_buckets: u64, bucket_size: u8) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&num_buckets.to_le_bytes());
+        data.push(bucket_size);
+        data.extend_from_slice(&0u64.to_le_bytes()); // count
+        data.extend_from_slice(&0u64.to_le_bytes()); // capacity
+        data
+    }
+
+    fn loadchunk_err(data: Vec<u8>) -> String {
+        let mut c = ctx();
+        let args = vec![
+            Bytes::from_static(b"k"),
+            Bytes::from_static(b"0"),
+            Bytes::from(data),
+        ];
+        match CfLoadchunk.execute(&mut c, &args) {
+            Err(CommandError::InvalidArgument { message }) => message,
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    /// A layer count of `u32::MAX` against an empty layer region must be rejected
+    /// on the count itself, before `Vec::with_capacity` honours it.
+    #[test]
+    fn absurd_layer_count_is_rejected_before_allocating() {
+        assert_eq!(loadchunk_err(header(u32::MAX)), "Data truncated");
+    }
+
+    /// `num_buckets * bucket_size * 2` wraps `usize` for a bucket count near
+    /// `usize::MAX / 4`: in a release build the product came out as 0, sailed
+    /// past the "is there room for the fingerprints?" guard, and then drove a
+    /// `Vec::with_capacity` of 2^62 buckets. The checked chain rejects it.
+    #[test]
+    fn wrapping_fingerprint_size_is_rejected() {
+        // 2^62 * 2 * 2 == 2^64, i.e. 0 once the multiply wraps.
+        let num_buckets = (usize::MAX / 4 + 1) as u64;
+        let mut data = header(1);
+        data.extend_from_slice(&layer_header(num_buckets, 2));
+        assert_eq!(loadchunk_err(data), "Invalid fingerprint data size");
+    }
+
+    /// A zero-slot bucket makes the fingerprint region zero bytes long whatever
+    /// the bucket count, so the length guard cannot bound the count — the layer
+    /// has to be rejected outright.
+    #[test]
+    fn zero_bucket_size_with_buckets_is_rejected() {
+        let mut data = header(1);
+        data.extend_from_slice(&layer_header(u64::MAX, 0));
+        assert_eq!(loadchunk_err(data), "Invalid bucket size in chunk");
+    }
+
+    /// A bucket count whose fingerprint region does not overflow but does not
+    /// fit either is caught by the length guard.
+    #[test]
+    fn oversized_bucket_count_is_rejected() {
+        let mut data = header(1);
+        data.extend_from_slice(&layer_header(1_000_000, 2));
+        assert_eq!(loadchunk_err(data), "Data truncated at fingerprints");
+    }
+
+    /// The hardening must not cost a real dump its round trip: SCANDUMP output
+    /// fed back through LOADCHUNK reproduces a filter with the same membership.
+    #[test]
+    fn scandump_loadchunk_round_trip_preserves_membership() {
+        let mut c = ctx();
+
+        CfReserve
+            .execute(
+                &mut c,
+                &[Bytes::from_static(b"src"), Bytes::from_static(b"100")],
+            )
+            .unwrap();
+        for item in [&b"alpha"[..], b"beta", b"gamma"] {
+            CfAdd
+                .execute(
+                    &mut c,
+                    &[Bytes::from_static(b"src"), Bytes::copy_from_slice(item)],
+                )
+                .unwrap();
+        }
+
+        let dump = CfScandump
+            .execute(
+                &mut c,
+                &[Bytes::from_static(b"src"), Bytes::from_static(b"0")],
+            )
+            .unwrap();
+        let chunk = match dump {
+            Response::Array(items) => match &items[1] {
+                Response::Bulk(Some(b)) => b.clone(),
+                other => panic!("expected bulk chunk, got {other:?}"),
+            },
+            other => panic!("expected array reply, got {other:?}"),
+        };
+
+        CfLoadchunk
+            .execute(
+                &mut c,
+                &[Bytes::from_static(b"dst"), Bytes::from_static(b"0"), chunk],
+            )
+            .unwrap();
+
+        for item in [&b"alpha"[..], b"beta", b"gamma"] {
+            assert_eq!(
+                CfExists
+                    .execute(
+                        &mut c,
+                        &[Bytes::from_static(b"dst"), Bytes::copy_from_slice(item)],
+                    )
+                    .unwrap(),
+                Response::Integer(1),
+                "restored filter lost a member"
+            );
+        }
     }
 }

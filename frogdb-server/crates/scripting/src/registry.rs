@@ -149,12 +149,18 @@ impl FunctionRegistry {
         Some((function, lib_name))
     }
 
-    /// List all libraries, optionally filtered by pattern.
+    /// List all libraries, optionally filtered by a `LIBRARYNAME` pattern.
+    ///
+    /// The pattern is a full Redis glob evaluated by the canonical
+    /// [`frogdb_types::glob_match`] — the same matcher SCAN/KEYS use — so it
+    /// supports `[...]` classes and `\` escapes, and its iterative O(nm)
+    /// algorithm cannot be driven into exponential backtracking by a hostile
+    /// pattern.
     pub fn list_libraries(&self, pattern: Option<&str>) -> Vec<&FunctionLibrary> {
         if let Some(pattern) = pattern {
             self.libraries
                 .values()
-                .filter(|lib| Self::matches_pattern(&lib.name, pattern))
+                .filter(|lib| frogdb_types::glob_match(pattern.as_bytes(), lib.name.as_bytes()))
                 .collect()
         } else {
             self.libraries.values().collect()
@@ -193,46 +199,6 @@ impl FunctionRegistry {
     /// Get the total number of libraries.
     pub fn library_count(&self) -> usize {
         self.libraries.len()
-    }
-
-    /// Simple glob-style pattern matching (supports * and ?).
-    fn matches_pattern(name: &str, pattern: &str) -> bool {
-        let pattern_chars: Vec<char> = pattern.chars().collect();
-        let name_chars: Vec<char> = name.chars().collect();
-        Self::match_pattern_recursive(&pattern_chars, &name_chars, 0, 0)
-    }
-
-    fn match_pattern_recursive(
-        pattern: &[char],
-        name: &[char],
-        mut pi: usize,
-        mut ni: usize,
-    ) -> bool {
-        while pi < pattern.len() {
-            if pattern[pi] == '*' {
-                // Try matching zero or more characters
-                pi += 1;
-                if pi >= pattern.len() {
-                    return true; // Trailing * matches everything
-                }
-                // Try each possible position
-                while ni <= name.len() {
-                    if Self::match_pattern_recursive(pattern, name, pi, ni) {
-                        return true;
-                    }
-                    ni += 1;
-                }
-                return false;
-            } else if ni >= name.len() {
-                return false;
-            } else if pattern[pi] == '?' || pattern[pi] == name[ni] {
-                pi += 1;
-                ni += 1;
-            } else {
-                return false;
-            }
-        }
-        ni >= name.len()
     }
 }
 
@@ -382,17 +348,72 @@ mod tests {
         assert_eq!(lib_suffix.len(), 2);
     }
 
+    /// `LIBRARYNAME <pattern>` matches iff the single registered library
+    /// survives the filter.
+    fn library_matches(name: &str, pattern: &str) -> bool {
+        let mut registry = FunctionRegistry::new();
+        registry
+            .load_library(create_test_library(name, &["func1"]), false)
+            .unwrap();
+        !registry.list_libraries(Some(pattern)).is_empty()
+    }
+
     #[test]
     fn test_pattern_matching() {
-        assert!(FunctionRegistry::matches_pattern("mylib", "mylib"));
-        assert!(FunctionRegistry::matches_pattern("mylib", "my*"));
-        assert!(FunctionRegistry::matches_pattern("mylib", "*lib"));
-        assert!(FunctionRegistry::matches_pattern("mylib", "*"));
-        assert!(FunctionRegistry::matches_pattern("mylib", "my???"));
-        assert!(FunctionRegistry::matches_pattern("mylib", "m?l?b"));
-        assert!(!FunctionRegistry::matches_pattern("mylib", "yourlib"));
-        assert!(!FunctionRegistry::matches_pattern("mylib", "my"));
-        assert!(!FunctionRegistry::matches_pattern("mylib", "mylibs"));
+        assert!(library_matches("mylib", "mylib"));
+        assert!(library_matches("mylib", "my*"));
+        assert!(library_matches("mylib", "*lib"));
+        assert!(library_matches("mylib", "*"));
+        assert!(library_matches("mylib", "my???"));
+        assert!(library_matches("mylib", "m?l?b"));
+        assert!(!library_matches("mylib", "yourlib"));
+        assert!(!library_matches("mylib", "my"));
+        assert!(!library_matches("mylib", "mylibs"));
+    }
+
+    /// Regression: `LIBRARYNAME` used to run a bespoke matcher that only knew
+    /// `*` and `?`. It now goes through the canonical Redis glob, so bracket
+    /// classes work here exactly as they do for SCAN/KEYS.
+    #[test]
+    fn test_pattern_matching_bracket_classes() {
+        assert!(library_matches("mylib1", "mylib[12]"));
+        assert!(library_matches("mylib2", "mylib[12]"));
+        assert!(!library_matches("mylib3", "mylib[12]"));
+
+        assert!(library_matches("mylib3", "mylib[^12]"));
+        assert!(!library_matches("mylib1", "mylib[^12]"));
+
+        assert!(library_matches("mylibc", "mylib[a-z]"));
+        assert!(!library_matches("mylib0", "mylib[a-z]"));
+    }
+
+    /// Regression: `\` is an escape in the canonical glob, so a pattern can
+    /// name a library whose name contains a wildcard character literally.
+    #[test]
+    fn test_pattern_matching_escapes() {
+        assert!(library_matches("my*lib", r"my\*lib"));
+        assert!(!library_matches("mysomethinglib", r"my\*lib"));
+        assert!(library_matches("my?lib", r"my\?lib"));
+        assert!(library_matches("my[lib", r"my\[lib"));
+    }
+
+    /// Regression: the old recursive matcher backtracked exponentially, so a
+    /// hostile `LIBRARYNAME` such as `a*a*a*...b` was a post-auth CPU bomb.
+    /// The canonical glob is iterative and caps `*` groups, so this returns
+    /// (with no match) instead of hanging.
+    #[test]
+    fn test_pattern_matching_pathological_is_bounded() {
+        // Long enough that the `*` cap (100 groups) is actually reached.
+        let name = "a".repeat(200);
+
+        // Classic exponential-backtracking trigger: many `*`-separated `a`s
+        // followed by a `b` that can never match.
+        let evil = format!("{}b", "a*".repeat(50));
+        assert!(!library_matches(&name, &evil));
+
+        // Beyond MAX_STAR_COUNT the matcher gives up rather than grinding.
+        let many_stars = "*?".repeat(500);
+        assert!(!library_matches(&name, &many_stars));
     }
 
     #[test]
