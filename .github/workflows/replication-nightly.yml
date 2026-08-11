@@ -12,7 +12,7 @@ name: Replication Correctness Nightly
   workflow_dispatch:
     inputs:
       cases:
-        description: proptest cases per property (default 200000; the dev-loop budget is ~96)
+        description: proptest cases per property (default 200000; the dev-loop budget is 96-512)
         required: false
         default: '200000'
         type: string
@@ -54,7 +54,7 @@ jobs:
   replication-proptest:
     needs: gate
     if: needs.gate.outputs.skip != 'true'
-    name: Nightly Replication Link Property Sweep
+    name: Nightly Replication Property Sweep
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

@@ -5,8 +5,13 @@ The replication-correctness campaign's W2 wave
 proptest generator in `frogdb-server/crates/replication/src/properties.rs` that
 folds link actions -- writes, acks, attach/detach, PSYNC grants, promotions,
 feed-gate barriers, restarts -- through a *real* replication node and asserts
-the `frogdb-replication` invariant catalog after every one of them (property
-R1).
+the `frogdb-replication` invariant catalog after every one of them (properties
+R1-R5).
+
+Issue 05 added the second harness, in
+`frogdb-server/crates/replication-runtime/src/properties.rs`: the same shape
+against the self-fence checker, which lives in the other crate (property R6).
+`just replication-proptest` selects both, so this job's budget covers both.
 
 Tiering follows the cluster property harness's ruling: per-PR coverage of the
 same properties runs inline in `test.yml` as part of the ordinary
@@ -58,7 +63,7 @@ DEFAULT_CASES = "200000"
 def _cases_input() -> CommentedMap:
     inp = CommentedMap()
     inp["description"] = (
-        f"proptest cases per property (default {DEFAULT_CASES}; the dev-loop budget is ~96)"
+        f"proptest cases per property (default {DEFAULT_CASES}; the dev-loop budget is 96-512)"
     )
     inp["required"] = False
     inp["default"] = SQ(DEFAULT_CASES)
@@ -80,7 +85,7 @@ def replication_nightly_workflow() -> Workflow:
     w.job(
         "replication-proptest",
         Job(
-            name="Nightly Replication Link Property Sweep",
+            name="Nightly Replication Property Sweep",
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
