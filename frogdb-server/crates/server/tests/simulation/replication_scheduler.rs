@@ -1100,6 +1100,8 @@ struct Shared {
     violations: Vec<Violation>,
     /// Final converged value per touched key, for the fingerprint.
     final_values: BTreeMap<usize, String>,
+    /// Lifetime PSYNC tallies per node, sampled at quiesce.
+    sync_counts: SyncCounts,
     /// Set once the driver has finished setup, so no fault arms against a
     /// topology whose replicas have not linked yet.
     ready: bool,
@@ -1107,10 +1109,42 @@ struct Shared {
     driver_error: Option<String>,
 }
 
+/// How each `PSYNC` in a run resolved, summed over every node: `INFO stats`'
+/// `sync_full` / `sync_partial_ok` / `sync_partial_err`.
+///
+/// The *realized* outcome of the boundary a schedule asked for. A run can size
+/// its backlog for a `+CONTINUE` and still take a full resync — the reconnect
+/// may simply have arrived later than the schedule imagined — so a claim to
+/// have covered the partial-sync boundaries has to be read off the servers'
+/// own tallies, not off the config that was meant to produce them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncCounts {
+    pub full: u64,
+    pub partial_ok: u64,
+    pub partial_err: u64,
+}
+
+impl SyncCounts {
+    /// Full syncs beyond the one each replica necessarily does at boot.
+    pub fn resyncs(&self) -> u64 {
+        self.full.saturating_sub(REPLICA_COUNT as u64)
+    }
+}
+
 /// Run one seed end to end, returning its outcome (violations included, not
 /// asserted).
 pub fn run_seed(seed: u64) -> RunOutcome {
-    run_seed_stretched(seed, Duration::ZERO)
+    run_seed_instrumented(seed, Duration::ZERO).0
+}
+
+/// [`run_seed`], also reporting how the run's `PSYNC`s actually resolved.
+///
+/// Kept off [`RunOutcome`] (which [`super::schedule`] owns and both arms share)
+/// and out of the fingerprint: the tallies are *coverage* evidence, not part of
+/// the run's identity, and folding a counter into the fingerprint would make
+/// every reconnect-count wobble read as a determinism failure.
+pub fn run_seed_instrumented(seed: u64, real_step_stretch: Duration) -> (RunOutcome, SyncCounts) {
+    run_seed_inner(seed, real_step_stretch)
 }
 
 /// [`run_seed`], with each `sim.step()` followed by `real_step_stretch` of
@@ -1124,6 +1158,10 @@ pub fn run_seed(seed: u64) -> RunOutcome {
 /// replication topology under the same stretch is the second data point D9 asks
 /// for.
 pub fn run_seed_stretched(seed: u64, real_step_stretch: Duration) -> RunOutcome {
+    run_seed_inner(seed, real_step_stretch).0
+}
+
+fn run_seed_inner(seed: u64, real_step_stretch: Duration) -> (RunOutcome, SyncCounts) {
     let schedule = Schedule::from_seed(seed);
 
     let mut sim = Builder::new()
@@ -1186,37 +1224,46 @@ pub fn run_seed_stretched(seed: u64, real_step_stretch: Duration) -> RunOutcome 
         eprintln!("--- end seed {seed} ---");
     }
 
-    RunOutcome {
-        seed,
-        fingerprint,
-        violations,
-    }
+    (
+        RunOutcome {
+            seed,
+            fingerprint,
+            violations,
+        },
+        state.sync_counts,
+    )
 }
 
 /// Run one seed and panic on any violation. The form every test uses.
 pub fn assert_seed_clean(seed: u64) -> RunOutcome {
     let outcome = run_seed(seed);
-    if !outcome.violations.is_empty() {
-        let schedule = Schedule::from_seed(seed);
-        panic!(
-            "seed {seed} (family {}) violated {} invariant(s):\n{}\n\nschedule:\n{}\n",
-            schedule.family.as_str(),
-            outcome.violations.len(),
-            outcome
-                .violations
-                .iter()
-                .map(|v| format!("  - {v}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            schedule
-                .render()
-                .iter()
-                .map(|l| format!("  {l}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-    }
+    assert_clean(seed, &outcome);
     outcome
+}
+
+/// Panic with the seed's whole schedule if `outcome` reported anything.
+fn assert_clean(seed: u64, outcome: &RunOutcome) {
+    if outcome.violations.is_empty() {
+        return;
+    }
+    let schedule = Schedule::from_seed(seed);
+    panic!(
+        "seed {seed} (family {}) violated {} invariant(s):\n{}\n\nschedule:\n{}\n",
+        schedule.family.as_str(),
+        outcome.violations.len(),
+        outcome
+            .violations
+            .iter()
+            .map(|v| format!("  - {v}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        schedule
+            .render()
+            .iter()
+            .map(|l| format!("  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
 }
 
 /// Register the primary and its replicas with the schedule's per-run knobs.
@@ -1602,14 +1649,17 @@ async fn drive(schedule: Schedule, shared: Arc<Mutex<Shared>>) -> Result<(), Dri
     }
 
     // 4. A final observation round, so the cross-node history always ends with a
-    //    post-heal sample of the settled topology.
+    //    post-heal sample of the settled topology, plus the PSYNC tallies that
+    //    say which partial-sync boundary the run actually landed on.
     round_seq += 1;
     let round = observe_round(round_seq).await;
+    let sync_counts = sync_counts().await;
     {
         let mut guard = shared.lock().expect("shared");
         guard.history.rounds.push(round);
         guard.violations = findings;
         guard.final_values = final_values;
+        guard.sync_counts = sync_counts;
     }
 
     Ok(())
@@ -1645,26 +1695,54 @@ async fn wait_sample(node: usize, seq: u64, numreplicas: u32, timeout_ms: u64) -
 async fn connected_slaves(node: usize) -> Option<u32> {
     info_replication(node)
         .await?
-        .1
         .get("connected_slaves")?
         .parse()
         .ok()
 }
 
-/// One node's `INFO replication`, as `(raw, field map)`.
-async fn info_replication(node: usize) -> Option<(String, BTreeMap<String, String>)> {
+/// One `INFO <section>` from one node, parsed into its `field: value` map.
+async fn info_section(node: usize, section: &[u8]) -> Option<BTreeMap<String, String>> {
     let ip = turmoil::lookup(REPLICATION_HOSTS[node]);
     let mut conn = RespConn::connect((ip, SERVER_PORT)).await.ok()?;
-    let RespValue::Bulk(Some(bytes)) = conn.cmd(&[b"INFO", b"replication"]).await.ok()? else {
+    let RespValue::Bulk(Some(bytes)) = conn.cmd(&[b"INFO", section]).await.ok()? else {
         return None;
     };
-    let raw = String::from_utf8_lossy(&bytes).into_owned();
-    let fields = raw
-        .lines()
-        .filter_map(|l| l.split_once(':'))
-        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-        .collect();
-    Some((raw, fields))
+    Some(
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter_map(|l| l.split_once(':'))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .collect(),
+    )
+}
+
+/// One node's `INFO replication`.
+async fn info_replication(node: usize) -> Option<BTreeMap<String, String>> {
+    info_section(node, b"replication").await
+}
+
+/// Sum every node's lifetime `PSYNC` tallies from `INFO stats`.
+///
+/// Summed rather than kept per-node because which node served a resync moves
+/// with the promotions, and the question these answer — did this run realize a
+/// `+CONTINUE`, a `+FULLRESYNC`, a refusal — is about the run, not the node.
+async fn sync_counts() -> SyncCounts {
+    let mut total = SyncCounts::default();
+    for idx in 0..NODE_COUNT {
+        let Some(fields) = info_section(idx, b"stats").await else {
+            continue;
+        };
+        let read = |name: &str| -> u64 {
+            fields
+                .get(name)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_default()
+        };
+        total.full += read("sync_full");
+        total.partial_ok += read("sync_partial_ok");
+        total.partial_err += read("sync_partial_err");
+    }
+    total
 }
 
 /// Sample `INFO replication` from every host.
@@ -1679,7 +1757,7 @@ async fn observe_round(seq: u64) -> Round {
 }
 
 async fn observe_node(idx: usize) -> Option<NodeView> {
-    let (_, fields) = info_replication(idx).await?;
+    let fields = info_replication(idx).await?;
     Some(NodeView {
         observer: idx,
         is_primary: fields.get("role").map(String::as_str) == Some("master"),
@@ -1741,7 +1819,7 @@ async fn probe_replies(key: usize) -> String {
     for idx in 0..NODE_COUNT {
         let value = exec_on(idx, &[b"GET", KEYS[key].as_bytes()]).await.render();
         let role = match info_replication(idx).await {
-            Some((_, fields)) => format!(
+            Some(fields) => format!(
                 "role={} replid={} offset={}",
                 fields.get("role").cloned().unwrap_or_default(),
                 fields
@@ -2480,11 +2558,59 @@ fn test_replication_scheduler_same_seed_same_run() {
 
 /// The default-suite smoke sweep: one seed per fault family, so the arm cannot
 /// rot between nightly sweeps.
+///
+/// It also witnesses that the partial-sync boundaries are *reached*, not merely
+/// configured. `test_replication_sweep_reaches_every_boundary_and_payload_shape`
+/// is a claim about the derivation — which backlog size a seed asks for — and a
+/// run can size its backlog for a `+CONTINUE` and still take a full resync. The
+/// tallies below are the servers' own, so they say which grant actually
+/// happened; without them "LinkDrop covers three partial-sync boundaries" would
+/// be a statement about a config field.
 #[test]
 fn test_replication_scheduler_smoke_sweep() {
+    let mut total = SyncCounts::default();
+    let mut per_seed: Vec<(u64, Family, SyncCounts)> = Vec::new();
     for seed in SMOKE_SEEDS {
-        assert_seed_clean(seed);
+        let (outcome, counts) = run_seed_instrumented(seed, Duration::ZERO);
+        assert_clean(seed, &outcome);
+        total.full += counts.full;
+        total.partial_ok += counts.partial_ok;
+        total.partial_err += counts.partial_err;
+        per_seed.push((seed, Schedule::from_seed(seed).family, counts));
     }
+
+    let report = || {
+        per_seed
+            .iter()
+            .map(|(seed, family, c)| {
+                format!(
+                    "  seed {seed} ({}): full={} partial_ok={} partial_err={}",
+                    family.as_str(),
+                    c.full,
+                    c.partial_ok,
+                    c.partial_err
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Every replica takes one full sync at boot, so `full` is only evidence of a
+    // *re*sync past that floor.
+    assert!(
+        total.resyncs() > 0,
+        "no smoke seed ever forced a full resync, so the outside-the-window \
+         partial-sync boundary and both FullSyncInterrupt payload shapes went \
+         untested:\n{}",
+        report()
+    );
+    assert!(
+        total.partial_ok > 0,
+        "no smoke seed was ever granted a +CONTINUE, so the inside-the-window \
+         partial-sync boundary went untested — either the backlog sizing no longer \
+         reaches it or every reconnect is being refused:\n{}",
+        report()
+    );
 }
 
 /// The seeded sweep (`just replication-seeds`). `#[ignore]`d so the default
