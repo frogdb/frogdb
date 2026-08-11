@@ -62,6 +62,8 @@ The `testing/jepsen/run.py` harness builds images and runs the suites (`all`, `s
 - `just jepsen-summary` — print a pass/fail summary of the latest run
 - `just jepsen-list` — list available tests and suites
 
+Beyond the history checkers, every multi-node run also sweeps the server's own live invariant catalogs. At nemesis quiesce (once every injected fault has been healed) and again after the final reads, the harness calls [`DEBUG CLUSTER CHECK`](/architecture/debugging/) on each node of a Raft-topology run and `DEBUG REPLICATION CHECK` on each node of a replication-topology run; a non-empty reply fails the run with the violating invariant ids in the analysis output. The calls never happen inside an active-fault window, so nemesis timing is undistorted.
+
 See `testing/jepsen/README.md` and the `jepsen-testing` skill for details.
 
 ## Fuzzing (cargo-fuzz)

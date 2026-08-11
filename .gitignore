@@ -69,6 +69,10 @@ testing/load/reports
 # jepsen test results
 testing/jepsen/frogdb/store
 
+# leiningen local state (`lein test` rerun list, repl history)
+testing/jepsen/frogdb/.lein-failures
+testing/jepsen/frogdb/.lein-repl-history
+
 # Code coverage profiling
 *.profraw
 *.profdata
