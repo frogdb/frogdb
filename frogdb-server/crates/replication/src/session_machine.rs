@@ -15,14 +15,16 @@
 //!
 //! # What this buys beyond testability
 //!
-//! [`step`] is the **only** writer of [`Phase`]. `ReplicaSession::set_phase` used
+//! [`step`] is the **only** decider of [`Phase`]. The session's phase writer used
 //! to be called from five places scattered across four methods, and
 //! `INV-SESSION-1` — "a session's phase only moves forward in the declared
 //! order; `Disconnecting` is terminal" — was prose at the top of
 //! `replica_session.rs` checked by nothing but the catalog's debug hook. Here it
 //! is structural: every arm of the transition table is visible in one match, the
 //! catch-all cannot leave [`Phase::Disconnecting`], and a phase that moved
-//! backwards would be a table edit rather than a missed call site.
+//! backwards would be a table edit rather than a missed call site. The writer
+//! itself (`ReplicaSession::commit_phase`) is now reachable from the driver's
+//! one commit point and from the test-only phase forcer, and nowhere else.
 //!
 //! Two orderings that used to be comments are now data:
 //!
@@ -409,9 +411,10 @@ pub fn step(view: &SessionView, event: &SessionEvent) -> Transition {
     match (view.phase, event) {
         // ── The handshake's decision goes on the wire ───────────────────────
         //
-        // The reply is written before the phase moves off `Connecting`, exactly
-        // as it was when `handle_partial` / `handle_full` wrote it ahead of
-        // their first `set_phase`.
+        // The reply is written before the phase moves off `Connecting`: the
+        // transition that answers `Begin` stays on `Connecting` and only
+        // `ReplySent` moves off it, so an observer never sees a session past
+        // `Connecting` with nothing yet on the wire.
         (Phase::Connecting, SessionEvent::Begin) => Transition::new(Phase::Connecting, begin(view)),
 
         // ── Past the reply: what the granted arm needs next ─────────────────

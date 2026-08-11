@@ -30,7 +30,7 @@
 //!
 //! The same is true one level down, for a reason that is not about crate
 //! boundaries at all: a seam builds the widest view *it* can reach.
-//! [`crate::ReplicaSession::set_phase`] owns one session and no offsets;
+//! [`crate::ReplicaSession::commit_phase`] owns one session and no offsets;
 //! [`crate::replica::offset::AppliedOffset`] owns two counters and no registry.
 //! Rather than invent zeroes for what a seam cannot see — which would report
 //! violations that are artifacts of the capture — every group is optional and
@@ -265,7 +265,7 @@ pub struct ContinueGrant {
 }
 
 /// A session phase that just moved, captured by
-/// [`crate::ReplicaSession::set_phase`].
+/// [`crate::ReplicaSession::commit_phase`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhaseChange {
     /// The session whose phase moved.
