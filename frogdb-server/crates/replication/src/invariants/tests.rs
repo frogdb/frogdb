@@ -843,8 +843,8 @@ fn the_record_streaming_departure_seam_is_hooked() {
 }
 
 #[test]
-#[should_panic(expected = "ReplicaSession::set_phase")]
-fn the_set_phase_seam_is_hooked() {
+#[should_panic(expected = "ReplicaSession::commit_phase")]
+fn the_commit_phase_seam_is_hooked() {
     let tracker = ReplicationTrackerImpl::new();
     let session = tracker.register_replica(addr(6380));
     session.force_phase_for_test(Phase::Disconnecting);

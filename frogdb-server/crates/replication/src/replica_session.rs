@@ -2,9 +2,15 @@
 //!
 //! A `ReplicaSession` owns the entire lifecycle of one replica connection on
 //! the primary side: from initial registration through optional FULLRESYNC to
-//! live WAL streaming, and finally disconnect. The session drives its own
-//! state transitions and runs cleanup in a single exit handler regardless of
-//! which `?`-propagated error or task termination caused exit.
+//! live WAL streaming, and finally disconnect.
+//!
+//! This module is the **I/O half** of that lifecycle. Where the session goes
+//! next is [`crate::session_machine`]'s: a pure
+//! `step(view, event) -> Transition { phase, effects }` over the phases below.
+//! [`ReplicaSession::run`] stands up a `SessionDriver`, which publishes the
+//! phase each transition names and performs its effects in order — the socket,
+//! the filesystem, the tracker and the spawned read/write tasks live here and
+//! the decisions do not.
 //!
 //! # Phases
 //!
@@ -14,9 +20,11 @@
 //!     └────────── partial sync (CONTINUE) ───────────────────────┘
 //! ```
 //!
-//! The `Phase::Disconnecting` terminal is reached from any prior phase when
-//! `run()` returns. The exit handler then unregisters the session, cleans up
-//! any checkpoint directory, and logs the disconnect.
+//! `Phase::Disconnecting` is reached from any prior phase, and is terminal by
+//! construction — no arm of the transition table leaves it. Its effects
+//! unregister the session, clean up any checkpoint directory it staged, and log
+//! the disconnect, and they run regardless of which `?`-propagated error or
+//! task termination ended the sync.
 
 use frogdb_types::clock;
 use std::collections::VecDeque;
@@ -40,6 +48,10 @@ use crate::fullsync::{
     calculate_bytes_checksum, calculate_file_checksum, stream_file_to_writer,
 };
 use crate::primary::{LAG_CHECK_INTERVAL, LagThresholds, PrimaryReplicationHandler};
+use crate::session_machine::{
+    BeginSync, Effect, LinkOutcome, ResumeSource, SessionEvent, SessionView, StepOutcome,
+    SyncFailure, Transition, step,
+};
 use crate::sync_counters::SyncOutcome;
 use crate::tracker::ReplicationTrackerImpl;
 
@@ -339,24 +351,9 @@ pub enum SyncKind {
     Partial { replay_from: u64 },
     /// Send a full database snapshot. The snapshot's replication offset is
     /// captured from the live tracker at checkpoint-cut time inside
-    /// [`ReplicaSession::handle_full`], not threaded in here, so it corresponds
-    /// to the data actually contained in the checkpoint.
+    /// [`SessionDriver::new`], not threaded in here, so it corresponds to the
+    /// data actually contained in the checkpoint.
     Full { replication_id: String },
-}
-
-/// Which fork of the handshake reached [`ReplicaSession::start_streaming`].
-///
-/// The streamer needs to know for exactly one reason: `sync_partial_ok` counts
-/// partial resyncs that were *served*, and the backlog extract that serves one
-/// lives in the streamer, not at the grant (see the accounting note in
-/// [`PrimaryReplicationHandler::handle_psync`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResumeSource {
-    /// Reached here from a granted `+CONTINUE`.
-    PartialGrant,
-    /// Reached here from a `+FULLRESYNC` whose payload has already been sent;
-    /// that transfer was counted as `sync_full` at the fork.
-    FullSnapshot,
 }
 
 struct SessionInner {
@@ -607,7 +604,14 @@ impl ReplicaSession {
         }
     }
 
-    fn set_phase(&self, phase: Phase) {
+    /// Publish the phase [`step`] landed on.
+    ///
+    /// The single writer of [`SessionInner::phase`], and reachable from exactly
+    /// two places: the driver's commit point (once per step) and
+    /// [`Self::force_phase_for_test`]. Where the phase moves is
+    /// [`crate::session_machine`]'s decision; this only makes it visible to
+    /// `INFO` / `ROLE` / the cluster bus.
+    fn commit_phase(&self, phase: Phase) {
         let mut inner = self.inner.write();
         let old = inner.phase;
         inner.phase = phase;
@@ -624,7 +628,7 @@ impl ReplicaSession {
                     from: old,
                     to: phase,
                 }),
-            "ReplicaSession::set_phase",
+            "ReplicaSession::commit_phase",
         );
         // Equivalent-mutant note: this guard suppresses a duplicate debug line
         // and nothing else — both readings leave identical session state, and
@@ -648,7 +652,7 @@ impl ReplicaSession {
     /// session in a particular phase without standing up the full I/O loop.
     #[doc(hidden)]
     pub fn force_phase_for_test(&self, phase: Phase) {
-        self.set_phase(phase);
+        self.commit_phase(phase);
     }
 
     /// Test-only: pretend the last ACK landed `by` ago.
@@ -667,250 +671,36 @@ impl ReplicaSession {
 
     /// Drive the session to completion.
     ///
-    /// This is the single owner of the session lifecycle. It dispatches to
-    /// [`Self::handle_partial`] or [`Self::handle_full`] based on `sync_kind`,
-    /// then enters [`Self::start_streaming`]. Regardless of where execution
-    /// exits — `?` propagation, panic, or normal completion — the exit handler
-    /// runs registry removal, checkpoint cleanup, and the disconnect log.
+    /// This is the single owner of the session lifecycle, and it owns exactly
+    /// half of it: the I/O. Where the session goes next is
+    /// [`crate::session_machine::step`]'s decision — `run` builds the plain-data
+    /// [`SessionView`], hands it the event that just happened, publishes the
+    /// phase it returns and performs the [`Effect`]s it returns, in order.
+    ///
+    /// Regardless of where the sync exits — a `?` out of any effect, or a link
+    /// that simply ended — the exit step runs: checkpoint cleanup, the departure
+    /// record, registry removal, and the disconnect log.
     pub async fn run(
         self: Arc<Self>,
         stream: BoxedStream,
         sync_kind: SyncKind,
         handler: Arc<PrimaryReplicationHandler>,
     ) -> io::Result<()> {
-        let result = self.clone().run_inner(stream, sync_kind, &handler).await;
+        let mut driver = SessionDriver::new(self.clone(), stream, sync_kind, &handler);
+        let result = driver.drive().await;
 
-        // Sampled *before* the phase moves to `Disconnecting`: only a session
-        // that actually streamed can arm the self-fence, so only one that
-        // actually streamed may report a departure that could disarm it
-        // (FM-REPLICATION-062). Read after the exit, it would be false for
-        // every session.
-        let was_streaming = self.is_streaming();
-
-        // Single exit handler — runs regardless of which `?` returned.
-        self.set_phase(Phase::Disconnecting);
-
-        // Best-effort checkpoint dir cleanup. Only set when a checkpoint was
-        // actually created, so NotFound shouldn't occur in practice.
-        let path = self.inner.read().sync_checkpoint_path.clone();
-        if let Some(p) = path
-            && let Err(e) = fs::remove_dir_all(&p).await
-        {
-            tracing::warn!(
-                checkpoint_path = %p.display(),
-                error = %e,
-                "Failed to clean up checkpoint directory"
-            );
-        }
-
-        // Recorded *before* the unregistration, and that order is load-bearing.
-        // The self-fence's disarm reads "nothing is streaming" and "the last
-        // departure was graceful" as two separate loads (FM-REPLICATION-062);
-        // between them it can only ever observe a record from an *earlier*
-        // session. Unregistering first would open a window in which this
-        // session is already gone and its own record has not landed yet, so a
-        // predecessor's graceful departure would be read as this one's and
-        // disarm the fence on a link that actually died. Recorded first, the
-        // window shows a session still registered instead — which fences.
-        // An error out of any phase is a lost link by construction.
-        if was_streaming {
-            let departure = match &result {
-                Ok(departure) => *departure,
-                Err(_) => ReplicaDeparture::Lost,
-            };
-            handler.tracker.record_streaming_departure(departure);
-        }
-
-        // Drop the session from the registry, last: leaving the registry is
-        // what tells a waiting
-        // [`PrimaryReplicationHandler::shutdown_downstream_sessions`] that this
-        // session is done with its per-sync resources, so the removal must
-        // follow the cleanup above rather than precede it.
-        handler.tracker.unregister_replica(self.id);
-
-        tracing::info!(
-            replica_id = self.id,
-            addr = %self.address,
-            "Replica disconnected"
-        );
+        // The exit step reads the phase the sync left off on — sampled by the
+        // machine *before* it publishes `Disconnecting`, because only a session
+        // that actually reached `Streaming` armed the self-fence and so only one
+        // that did may report a departure that could disarm it
+        // (FM-REPLICATION-062). An error out of any phase is a lost link.
+        let outcome = match &result {
+            Ok(departure) => LinkOutcome::Ended(*departure),
+            Err(_) => LinkOutcome::Errored,
+        };
+        driver.exit(outcome).await;
 
         result.map(|_| ())
-    }
-
-    async fn run_inner(
-        self: Arc<Self>,
-        stream: BoxedStream,
-        sync_kind: SyncKind,
-        handler: &Arc<PrimaryReplicationHandler>,
-    ) -> io::Result<ReplicaDeparture> {
-        match sync_kind {
-            SyncKind::Partial { replay_from } => {
-                self.handle_partial(stream, replay_from, handler).await
-            }
-            SyncKind::Full { replication_id } => {
-                self.handle_full(stream, replication_id, handler).await
-            }
-        }
-    }
-
-    /// Drive a partial resync (`+CONTINUE`).
-    ///
-    /// Writes the `+CONTINUE` reply, then hands off to [`Self::start_streaming`]
-    /// with `replay_from` so the backlog tail `(replay_from, current]` is
-    /// streamed *before* the live tail. The replica side already reads frames off
-    /// the same stream after `+CONTINUE` (`replica/connection.rs` →
-    /// `stream_replication`), so the replayed frames arrive exactly like live
-    /// ones — no replica-side protocol change.
-    async fn handle_partial(
-        self: Arc<Self>,
-        mut stream: BoxedStream,
-        replay_from: u64,
-        handler: &Arc<PrimaryReplicationHandler>,
-    ) -> io::Result<ReplicaDeparture> {
-        let replication_id = handler.state.read().replication_id.clone();
-        let response = format!("+CONTINUE {}\r\n", replication_id);
-        stream.write_all(response.as_bytes()).await?;
-        self.start_streaming(stream, handler, replay_from, ResumeSource::PartialGrant)
-            .await
-    }
-
-    async fn handle_full(
-        self: Arc<Self>,
-        mut stream: BoxedStream,
-        replication_id: String,
-        handler: &Arc<PrimaryReplicationHandler>,
-    ) -> io::Result<ReplicaDeparture> {
-        // Capture the live stream head from the tracker *before* cutting the
-        // checkpoint, and use this single value for both the FULLRESYNC reply
-        // and the checkpoint metadata so the granted offset and the snapshot
-        // data correspond (the critical invariant: offset must match the data
-        // the replica loads).
-        //
-        // Write ordering guarantees the safe direction. Each write's WAL entry is
-        // enqueued in the command pipeline *before* `broadcast_command` advances
-        // the tracker, and the pre-checkpoint hook below drains those queues into
-        // RocksDB, so every write counted in `snapshot_offset` is captured when
-        // the checkpoint is cut. Conversely, writes that land between this capture and
-        // the cut only *add* data to the checkpoint, raising data past the
-        // offset. The result is `offset <= data`: the checkpoint can never be
-        // missing data the offset claims to include. Capturing after the cut
-        // would invert this (offset > data) and silently lose writes — the same
-        // shutdown-ordering principle as commit 17f01c9d. This mirrors Redis,
-        // where the FULLRESYNC offset is the master_repl_offset captured at fork
-        // time and the RDB corresponds to exactly that point.
-        //
-        // The writes in `(snapshot_offset, current_at_handoff]` — those broadcast
-        // while the checkpoint is cut and streamed — are NOT in the checkpoint.
-        // They are replayed from the backlog at the streaming handoff (F1 fix):
-        // `start_streaming` subscribes to the broadcast first, then replays
-        // `(snapshot_offset, current]` before the live tail, closing the window
-        // that previously dropped those writes (the broadcast tail only carries
-        // frames sent *after* the subscribe).
-        let snapshot_offset = handler.offsets.current();
-
-        // Process-wide state that is not in the keyspace — the function-library
-        // registry — rides the stream rather than the checkpoint (see
-        // [`crate::primary::FunctionSnapshotHook`]). Emitted *after* the offset
-        // capture on purpose: `start_streaming` replays
-        // `(snapshot_offset, current]` from the backlog before the live tail, so
-        // a frame broadcast here is guaranteed to reach this replica, while a
-        // frame broadcast before the capture would fall inside the snapshot's
-        // own range and be skipped.
-        if let Some(hook) = handler.function_snapshot_hook() {
-            hook(handler);
-        }
-
-        let response = format!("+FULLRESYNC {} {}\r\n", replication_id, snapshot_offset);
-        stream.write_all(response.as_bytes()).await?;
-
-        if let Some(rocks) = handler.rocks_store.as_ref().cloned() {
-            self.set_phase(Phase::PreparingCheckpoint);
-            let checkpoint_path = handler.data_dir.join(format!("fullsync_{}", self.id));
-
-            // The checkpoint is a snapshot of what RocksDB *holds*, and a write
-            // is acknowledged as soon as it is staged in its shard's WAL
-            // flush-engine (default durability commits to RocksDB on a later
-            // size/timeout trigger). Cut without draining those engines, the
-            // checkpoint silently omits the primary's most recent writes — and
-            // for a full resync that is unrecoverable: with no replica attached
-            // when they were made, they were never broadcast, so there is no
-            // backlog tail to replay them from and the replica is missing them
-            // forever. So: drain first, cut second. Same contract the snapshot
-            // coordinator's pre-snapshot hook honours (issue 13).
-            if let Some(drain) = handler.pre_checkpoint_hook()
-                && let Err(e) = drain().await
-            {
-                // A shard that could not be drained leaves its acknowledged
-                // writes out of the checkpoint, and for a full resync that hole
-                // is permanent (nothing in the backlog replays them). Fail the
-                // sync — the replica retries `PSYNC ? -1` on its reconnect
-                // backoff — rather than shipping a dataset known to be missing
-                // writes. Same reasoning as the checkpoint failure below, and
-                // likewise nothing is staged, so there is nothing to clean up.
-                tracing::error!(error = %e, "Pre-checkpoint drain failed for FULLRESYNC");
-                return Err(io::Error::other(format!(
-                    "pre-checkpoint drain failed for FULLRESYNC: {e}"
-                )));
-            }
-
-            let path_clone = checkpoint_path.clone();
-            let result = tokio::task::spawn_blocking(move || rocks.create_checkpoint(&path_clone))
-                .await
-                .map_err(io::Error::other)?;
-
-            match result {
-                Err(e) => {
-                    // Checkpoint creation failed. There is nothing else this
-                    // node can honestly put on the wire: the replica has already
-                    // been granted `snapshot_offset`, and any payload that is
-                    // not this primary's dataset would leave it streaming deltas
-                    // onto a keyspace that never took the base snapshot (issue
-                    // 67 — that is exactly what the old minimal-RDB fallback
-                    // did). Failing the sync drops the connection, and the
-                    // replica retries `PSYNC ? -1` on its reconnect backoff.
-                    //
-                    // sync_checkpoint_path is intentionally NOT set, so the exit
-                    // handler won't try to clean a directory that doesn't exist.
-                    tracing::error!(error = %e, "Failed to create checkpoint for FULLRESYNC");
-                    return Err(io::Error::other(format!(
-                        "failed to create checkpoint for FULLRESYNC: {e}"
-                    )));
-                }
-                Ok(()) => {
-                    // Mark for cleanup *only after* successful creation.
-                    self.inner.write().sync_checkpoint_path = Some(checkpoint_path.clone());
-                    self.set_phase(Phase::StreamingCheckpoint);
-                    self.inner.write().sync_started_at = Some(clock::now());
-                    self.stream_checkpoint(
-                        &mut stream,
-                        handler,
-                        &checkpoint_path,
-                        &replication_id,
-                        snapshot_offset,
-                    )
-                    .await?;
-                }
-            }
-        } else {
-            // No RocksDB to checkpoint (`persistence.enabled = false`), which
-            // does not excuse this primary from shipping its dataset: Redis
-            // serves a diskless full sync by serializing the keyspace straight
-            // to the socket, and so does this branch (issue 67).
-            self.stream_live_dataset(&mut stream, handler, &replication_id, snapshot_offset)
-                .await?;
-        }
-
-        tracing::info!(
-            replica_id = self.id,
-            addr = %self.address,
-            offset = snapshot_offset,
-            "Completed FULLRESYNC"
-        );
-
-        // Replay any writes that landed during checkpoint creation/transfer
-        // (the F1 handoff window) from the backlog before the live tail.
-        self.start_streaming(stream, handler, snapshot_offset, ResumeSource::FullSnapshot)
-            .await
     }
 
     /// Stream checkpoint files to the replica.
@@ -1044,33 +834,23 @@ impl ReplicaSession {
     /// shards themselves are the source, so an acknowledged write is in the
     /// export by construction; there is nothing to wait for.
     ///
-    /// **`replication_offset` is captured by the caller before this runs**, which
+    /// **`replication_offset` is captured by `run` before this runs**, which
     /// keeps the `offset <= data` direction the checkpoint path relies on: writes
     /// landing during the export only add data, and `(offset, current]` is
     /// replayed from the backlog at the streaming handoff.
+    ///
+    /// The blobs arrive already exported ([`Effect::ExportLiveDataset`]) because
+    /// producing them and shipping them are two separate steps of the machine —
+    /// the export is what moves the session onto `StreamingCheckpoint`.
     async fn stream_live_dataset(
         &self,
         stream: &mut BoxedStream,
         handler: &Arc<PrimaryReplicationHandler>,
+        blobs: &[Vec<u8>],
         replication_id: &str,
         replication_offset: u64,
     ) -> io::Result<()> {
-        // No source wired means no way to read the keyspace, and a full resync
-        // with no dataset is precisely the bug: fail the sync instead.
-        let Some(source) = handler.live_snapshot_source() else {
-            return Err(io::Error::other(
-                "no live-snapshot source wired: a primary without persistence cannot serve \
-                 a FULLRESYNC",
-            ));
-        };
-
-        self.set_phase(Phase::PreparingCheckpoint);
-        let blobs = source().await?;
-
         let total_size: u64 = blobs.iter().map(|b| b.len() as u64).sum();
-        self.inner.write().sync_total_bytes = total_size;
-        self.sync_bytes_transferred.store(0, Ordering::Release);
-        self.set_phase(Phase::StreamingCheckpoint);
         self.inner.write().sync_started_at = Some(clock::now());
 
         tracing::info!(
@@ -1165,14 +945,11 @@ impl ReplicaSession {
         replay_from: u64,
         resume: ResumeSource,
     ) -> io::Result<ReplicaDeparture> {
-        self.set_phase(Phase::Streaming);
-
-        // A new streaming generation begins here, so the departure recorded by
-        // the *previous* one stops answering for the replica set
-        // (FM-REPLICATION-062). Without this, a predecessor's graceful
-        // departure would still be on record when this session's link dies,
-        // and the self-fence would read it as this replica having left cleanly.
-        handler.tracker.clear_streaming_departure();
+        // `Phase::Streaming` is already published and the previous generation's
+        // departure already cleared — both are steps of the transition that got
+        // here ([`Effect::ClearDeparture`] immediately after the phase commit),
+        // so the phase is visible before any of this tail reaches the socket,
+        // exactly as it was when this method wrote it itself.
 
         // Subscribe BEFORE reading the head / extracting the backlog so the live
         // receiver and the replayed tail cannot leave a gap (step 1 above).
@@ -1434,6 +1211,351 @@ impl ReplicaSession {
             }
         };
         Ok(departure)
+    }
+}
+
+/// What performing one [`Effect`] leaves the driver to do next.
+enum Next {
+    /// Nothing; go on to the next effect of this transition.
+    Continue,
+    /// Feed this event back into the machine.
+    Event(SessionEvent),
+    /// The link is over; `run`'s exit step takes it from here.
+    Ended(ReplicaDeparture),
+}
+
+/// The I/O half of a replica session: it performs what
+/// [`crate::session_machine::step`] decides, and reports back what happened.
+///
+/// The driver owns everything that has to survive between two effects — the
+/// socket, and the exported dataset blobs handed from
+/// [`Effect::ExportLiveDataset`] to [`Effect::SendLiveDataset`] — so the machine
+/// itself can stay memoryless over `(view, event)`.
+struct SessionDriver<'a> {
+    session: Arc<ReplicaSession>,
+    handler: &'a Arc<PrimaryReplicationHandler>,
+    /// What the handshake assigned. Fixed for the session's whole life.
+    sync: BeginSync,
+    /// `None` once [`Effect::Stream`] has taken it.
+    stream: Option<BoxedStream>,
+    /// Produced by [`Effect::ExportLiveDataset`], consumed by
+    /// [`Effect::SendLiveDataset`].
+    blobs: Option<Vec<Vec<u8>>>,
+}
+
+impl<'a> SessionDriver<'a> {
+    /// Resolve the handshake assignment and stand up the driver.
+    ///
+    /// The assignment is resolved once, here, because the two facts it needs are
+    /// reads of live shared state the machine is not allowed to touch: the
+    /// current replication id for a `+CONTINUE`, and the live stream head for a
+    /// `+FULLRESYNC`. That head is captured **before** any payload is produced
+    /// and is the single value used for the reply, the payload trailer and the
+    /// handoff replay, so the granted offset cannot name data the payload does
+    /// not contain (FM-REPLICATION-004): writes landing after this point only
+    /// *add* data, keeping the direction at `offset <= data`. Capturing it after
+    /// the cut would invert that and silently lose writes.
+    fn new(
+        session: Arc<ReplicaSession>,
+        stream: BoxedStream,
+        sync_kind: SyncKind,
+        handler: &'a Arc<PrimaryReplicationHandler>,
+    ) -> Self {
+        let sync = match sync_kind {
+            SyncKind::Partial { replay_from } => BeginSync::Partial {
+                replication_id: handler.state.read().replication_id.clone(),
+                replay_from,
+            },
+            SyncKind::Full { replication_id } => BeginSync::Full {
+                replication_id,
+                snapshot_offset: handler.offsets.current(),
+            },
+        };
+        Self {
+            session,
+            handler,
+            sync,
+            stream: Some(stream),
+            blobs: None,
+        }
+    }
+
+    /// The plain-data facts the machine reads. Every one of them is a snapshot
+    /// taken here, so `step` itself takes no lock and reads no clock.
+    fn view(&self) -> SessionView {
+        SessionView {
+            phase: self.session.phase(),
+            sync: self.sync.clone(),
+            replica_id: self.session.id,
+            data_dir: self.handler.data_dir.clone(),
+            checkpoint_source: self.handler.rocks_store.is_some(),
+            pre_checkpoint_drain: self.handler.pre_checkpoint_hook().is_some(),
+            function_snapshot: self.handler.function_snapshot_hook().is_some(),
+            live_snapshot_source: self.handler.live_snapshot_source().is_some(),
+            checkpoint_owed: self.session.inner.read().sync_checkpoint_path.is_some(),
+        }
+    }
+
+    /// Run the machine from the handshake to the end of the link.
+    ///
+    /// One pass of the loop is one transition: publish the phase, then perform
+    /// its effects in order. Exactly one effect of every non-exit transition
+    /// reports back — with the next event, or with the departure that ends the
+    /// link — so the loop needs no schedule of its own.
+    async fn drive(&mut self) -> io::Result<ReplicaDeparture> {
+        let mut event = SessionEvent::Begin;
+        loop {
+            let Transition { phase, effects } = step(&self.view(), &event);
+            self.session.commit_phase(phase);
+
+            let mut next = None;
+            for effect in effects {
+                match self.perform(effect).await? {
+                    Next::Continue => {}
+                    Next::Event(reported) => next = Some(reported),
+                    Next::Ended(departure) => return Ok(departure),
+                }
+            }
+
+            match next {
+                Some(reported) => event = reported,
+                // A transition that neither reported an event nor ended the link
+                // would spin. Only the exit transition is silent, and that one is
+                // driven by `exit` rather than from here, so this is a machine
+                // bug — surfaced as a dropped link rather than a hang.
+                None => {
+                    return Err(io::Error::other(SyncFailure::UnexpectedEvent.reason()));
+                }
+            }
+        }
+    }
+
+    /// Run the exit transition. Every one of its effects is best-effort, so
+    /// unlike [`Self::drive`] there is nothing here to propagate.
+    async fn exit(&mut self, outcome: LinkOutcome) {
+        let Transition { phase, effects } = step(&self.view(), &SessionEvent::Ended(outcome));
+        self.session.commit_phase(phase);
+        for effect in effects {
+            match effect {
+                Effect::CleanCheckpointDir => self.clean_checkpoint_dir().await,
+                Effect::RecordDeparture(departure) => {
+                    self.handler.tracker.record_streaming_departure(departure);
+                }
+                Effect::Unregister => self.handler.tracker.unregister_replica(self.session.id),
+                Effect::LogDisconnect => tracing::info!(
+                    replica_id = self.session.id,
+                    addr = %self.session.address,
+                    "Replica disconnected"
+                ),
+                // The exit transition returns these four and nothing else.
+                other => debug_assert!(false, "not an exit effect: {other:?}"),
+            }
+        }
+    }
+
+    async fn perform(&mut self, effect: Effect) -> io::Result<Next> {
+        match effect {
+            Effect::PublishFunctionSnapshot => {
+                // Process-wide state that is not in the keyspace — the
+                // function-library registry — rides the frame lane rather than
+                // the payload (see [`crate::primary::FunctionSnapshotHook`]).
+                // The machine emits this only after `run` captured
+                // `snapshot_offset`, so the frame falls inside the
+                // `(snapshot_offset, current]` window the handoff replays; one
+                // broadcast before the capture would fall inside the payload's
+                // own range and be skipped.
+                if let Some(hook) = self.handler.function_snapshot_hook() {
+                    hook(self.handler);
+                }
+                Ok(Next::Continue)
+            }
+
+            Effect::SendReply(reply) => {
+                self.stream()?.write_all(reply.render().as_bytes()).await?;
+                Ok(Next::Event(SessionEvent::ReplySent))
+            }
+
+            Effect::DrainBeforeCheckpoint => {
+                // The checkpoint is a snapshot of what RocksDB *holds*, and a
+                // write is acknowledged as soon as it is staged in its shard's
+                // WAL flush-engine (default durability commits to RocksDB on a
+                // later size/timeout trigger). Cut without draining those
+                // engines, the checkpoint silently omits the primary's most
+                // recent writes — and for a full resync that is unrecoverable:
+                // with no replica attached when they were made they were never
+                // broadcast, so there is no backlog tail to replay them from and
+                // the replica is missing them forever. So: drain first, cut
+                // second. Same contract the snapshot coordinator's pre-snapshot
+                // hook honours (issue 13).
+                let outcome = match self.handler.pre_checkpoint_hook() {
+                    Some(drain) => match drain().await {
+                        Ok(()) => StepOutcome::Ok,
+                        Err(e) => StepOutcome::Failed(e.to_string()),
+                    },
+                    // The machine only asks for a drain when the view said one
+                    // was wired; an unwiring in between is a drain that had
+                    // nothing to do.
+                    None => StepOutcome::Ok,
+                };
+                Ok(Next::Event(SessionEvent::Drained(outcome)))
+            }
+
+            Effect::CutCheckpoint { path } => {
+                let Some(rocks) = self.handler.rocks_store.as_ref().cloned() else {
+                    return Err(io::Error::other(
+                        "checkpoint source disappeared between the decision and the cut",
+                    ));
+                };
+                // A join failure is the runtime going away under the session,
+                // not a checkpoint verdict, so it leaves the machine entirely.
+                let cut = tokio::task::spawn_blocking(move || rocks.create_checkpoint(&path))
+                    .await
+                    .map_err(io::Error::other)?;
+                Ok(Next::Event(SessionEvent::CheckpointCut(match cut {
+                    Ok(()) => StepOutcome::Ok,
+                    Err(e) => StepOutcome::Failed(e.to_string()),
+                })))
+            }
+
+            Effect::OwnCheckpointDir { path } => {
+                self.session.inner.write().sync_checkpoint_path = Some(path);
+                Ok(Next::Continue)
+            }
+
+            Effect::SendCheckpoint {
+                path,
+                replication_id,
+                offset,
+            } => {
+                self.session.inner.write().sync_started_at = Some(clock::now());
+                let session = self.session.clone();
+                let handler = self.handler;
+                let stream = self
+                    .stream
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                session
+                    .stream_checkpoint(stream, handler, &path, &replication_id, offset)
+                    .await?;
+                Ok(Next::Event(SessionEvent::PayloadSent))
+            }
+
+            Effect::ExportLiveDataset => {
+                let Some(source) = self.handler.live_snapshot_source() else {
+                    return Err(io::Error::other(SyncFailure::NoLiveSnapshotSource.reason()));
+                };
+                let blobs = source().await?;
+                // Published before the phase moves on, exactly as they were when
+                // this ran inline, so `progress_percent` never reports the
+                // previous sync's totals against this one's transfer.
+                self.session.inner.write().sync_total_bytes =
+                    blobs.iter().map(|b| b.len() as u64).sum();
+                self.session
+                    .sync_bytes_transferred
+                    .store(0, Ordering::Release);
+                self.blobs = Some(blobs);
+                Ok(Next::Event(SessionEvent::DatasetExported))
+            }
+
+            Effect::SendLiveDataset {
+                replication_id,
+                offset,
+            } => {
+                let blobs = self
+                    .blobs
+                    .take()
+                    .ok_or_else(|| io::Error::other("live dataset was never exported"))?;
+                let session = self.session.clone();
+                let handler = self.handler;
+                let stream = self
+                    .stream
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                session
+                    .stream_live_dataset(stream, handler, &blobs, &replication_id, offset)
+                    .await?;
+                Ok(Next::Event(SessionEvent::PayloadSent))
+            }
+
+            Effect::LogFullResyncComplete { offset } => {
+                tracing::info!(
+                    replica_id = self.session.id,
+                    addr = %self.session.address,
+                    offset,
+                    "Completed FULLRESYNC"
+                );
+                Ok(Next::Continue)
+            }
+
+            Effect::FailSync { failure, cause } => {
+                match &cause {
+                    Some(cause) => tracing::error!(error = %cause, "{}", failure.log_message()),
+                    None => tracing::error!("{}", failure.log_message()),
+                }
+                Err(io::Error::other(match cause {
+                    Some(cause) => format!("{}: {cause}", failure.reason()),
+                    None => failure.reason().to_string(),
+                }))
+            }
+
+            Effect::ClearDeparture => {
+                // A new streaming generation begins here, so the departure
+                // recorded by the *previous* one stops answering for the replica
+                // set (FM-REPLICATION-062). Without this, a predecessor's
+                // graceful departure would still be on record when this
+                // session's link dies and the self-fence would read it as this
+                // replica having left cleanly.
+                self.handler.tracker.clear_streaming_departure();
+                Ok(Next::Continue)
+            }
+
+            Effect::Stream {
+                replay_from,
+                resume,
+            } => {
+                let stream = self
+                    .stream
+                    .take()
+                    .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                let departure = self
+                    .session
+                    .clone()
+                    .start_streaming(stream, self.handler, replay_from, resume)
+                    .await?;
+                Ok(Next::Ended(departure))
+            }
+
+            // Exit-only effects; `exit` performs these.
+            Effect::CleanCheckpointDir
+            | Effect::RecordDeparture(_)
+            | Effect::Unregister
+            | Effect::LogDisconnect => {
+                debug_assert!(false, "exit effect reached the sync loop");
+                Ok(Next::Continue)
+            }
+        }
+    }
+
+    /// The socket, while the handshake still owns it.
+    fn stream(&mut self) -> io::Result<&mut BoxedStream> {
+        self.stream
+            .as_mut()
+            .ok_or_else(|| io::Error::other("session stream already handed off"))
+    }
+
+    /// Best-effort delete of the directory this session staged. Only owed after
+    /// a cut that succeeded, so `NotFound` should not occur in practice.
+    async fn clean_checkpoint_dir(&mut self) {
+        let path = self.session.inner.read().sync_checkpoint_path.clone();
+        if let Some(p) = path
+            && let Err(e) = fs::remove_dir_all(&p).await
+        {
+            tracing::warn!(
+                checkpoint_path = %p.display(),
+                error = %e,
+                "Failed to clean up checkpoint directory"
+            );
+        }
     }
 }
 
@@ -2750,7 +2872,18 @@ mod tests {
             let session = session.clone();
             let handler = handler.clone();
             let server: BoxedStream = Box::new(server);
-            async move { session.handle_full(server, repl_id, &handler).await }
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
         });
 
         let line = read_response_line(&mut client).await;
@@ -2790,7 +2923,7 @@ mod tests {
         );
         let repl_id = handler.state.read().replication_id.clone();
 
-        let (client, server) = tokio::io::duplex(64);
+        let (mut client, server) = tokio::io::duplex(64);
         let session = tracker.register_replica(addr());
         let session_id = session.id();
         let expected_checkpoint = dir.path().join(format!("fullsync_{}", session_id));
@@ -2811,6 +2944,26 @@ mod tests {
                     .await
             }
         });
+
+        // Read the grant line first, then wait for the checkpoint to actually
+        // exist on disk. Dropping the client before the cut would fail the sync
+        // in the pre-checkpoint drain, there would be no directory to leak, and
+        // the assertion below would hold no matter what the exit path does —
+        // which is how a mutant that deletes `clean_checkpoint_dir` outright
+        // survived this test.
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        let cut = tokio::time::timeout(Duration::from_secs(5), async {
+            while !expected_checkpoint.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            cut.is_ok() && expected_checkpoint.exists(),
+            "the test must reach a real checkpoint, else it asserts nothing: {}",
+            expected_checkpoint.display()
+        );
 
         // Drop the client so the checkpoint stream's writes start to fail
         // partway through. With a 64-byte duplex buffer, the writer blocks
@@ -2839,8 +2992,9 @@ mod tests {
     /// acknowledged it, and for a full resync (nothing in the backlog to replay)
     /// the replica never sees it again.
     ///
-    /// Drives `handle_full` directly rather than `run`, so no exit handler
-    /// deletes the checkpoint directory before the assertions can read it.
+    /// Drives the sync half ([`SessionDriver::drive`]) rather than `run`, so no
+    /// exit step deletes the checkpoint directory before the assertions can read
+    /// it.
     #[tokio::test]
     async fn fullresync_cuts_the_checkpoint_after_the_pre_checkpoint_hook() {
         use std::sync::atomic::{AtomicBool, AtomicUsize};
@@ -2890,13 +3044,24 @@ mod tests {
         // A tiny duplex buffer stalls the checkpoint stream. Reading the
         // `+FULLRESYNC` line first pins the session past the reply, so dropping
         // the client afterwards fails a *checkpoint stream* write — i.e. returns
-        // `handle_full` after the cut, not before it.
+        // the sync after the cut, not before it.
         let (mut client, server) = tokio::io::duplex(64);
         let task = tokio::spawn({
             let session = session.clone();
             let handler = handler.clone();
             let server: BoxedStream = Box::new(server);
-            async move { session.handle_full(server, repl_id, &handler).await }
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
         });
         let line = read_response_line(&mut client).await;
         assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
@@ -2970,7 +3135,18 @@ mod tests {
             let session = session.clone();
             let handler = handler.clone();
             let server: BoxedStream = Box::new(server);
-            async move { session.handle_full(server, repl_id, &handler).await }
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
         });
         // The `+FULLRESYNC` line is written before the cut, so it still arrives;
         // what must not follow is a checkpoint. Dropping the client afterwards
@@ -3028,7 +3204,18 @@ mod tests {
             let session = session.clone();
             let handler = handler.clone();
             let server: BoxedStream = Box::new(server);
-            async move { session.handle_full(server, repl_id, &handler).await }
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
         });
         let line = read_response_line(&mut client).await;
         assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
