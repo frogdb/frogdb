@@ -236,6 +236,13 @@ fn backlog(view: &ReplicationView) -> crate::view::BacklogView {
 /// The half-cleared failover window: an id with no offset (or an offset with no
 /// id) makes `window_contains` answer about a history that was never recorded,
 /// so a replica gets a `+CONTINUE` into a stream that does not exist.
+///
+/// Generalizes FM-REPLICATION-013 (both `+CONTINUE` arms are `window_contains`),
+/// FM-REPLICATION-019 and FM-REPLICATION-020 (a promotion writes both halves or
+/// rolls both back), FM-REPLICATION-021 (what a reload may reconstitute),
+/// FM-REPLICATION-022 (`clear_secondary_window` clears both halves in one call)
+/// and FM-REPLICATION-023 (the `None`/`-1` pair INFO refuses to render as a
+/// window) — plus FM-REPLICATION-001, whose granted resync adopts neither half.
 fn inv_replid_1(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let has_id = state.secondary_id.is_some();
@@ -255,6 +262,10 @@ fn inv_replid_1(view: &ReplicationView) -> Vec<Violation> {
 /// Revert (b) `f6484219`: a promotion that mints a new id without recording the
 /// old one loses the only evidence that the replicas still following the old id
 /// are followers of *this* history, so every one of them full-resyncs.
+///
+/// Generalizes FM-REPLICATION-019 (the mint freezes the inherited history at the
+/// applied boundary) and FM-REPLICATION-020 (a promotion that cannot persist
+/// restores the pair it was on).
 fn inv_replid_2(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let promotion = view.promotion.as_ref().expect("entry requires Promotion");
@@ -285,6 +296,12 @@ fn inv_replid_2(view: &ReplicationView) -> Vec<Violation> {
 /// equal to its own secondary claims the same history twice and makes
 /// `window_contains` accept offsets from before the failover as if they were
 /// current.
+///
+/// Generalizes FM-REPLICATION-013 (an unknown replid always full-resyncs, which
+/// needs the two ids to be distinguishable), FM-REPLICATION-019 (the mint is
+/// distinct from the id it froze), FM-REPLICATION-021 (a reload's ids are
+/// well-formed) and FM-REPLICATION-023 (one identity per node, at every point
+/// in its life).
 fn inv_replid_3(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let mut violations = Vec::new();
@@ -321,6 +338,10 @@ fn inv_replid_3(view: &ReplicationView) -> Vec<Violation> {
 /// pair and never the head, so at those seams the chain is the pair alone. That
 /// is a narrower check, not a skipped one: the pair inversion is the half that
 /// is reachable from there.
+///
+/// Generalizes FM-REPLICATION-008: an ACK is a durability claim, and the
+/// ordering of the three heads is what makes `WAIT` count applies rather than
+/// receipts.
 fn inv_offset_1(view: &ReplicationView) -> Vec<Violation> {
     let offsets = view.offsets.expect("entry requires Offsets");
     let mut violations = Vec::new();
@@ -346,6 +367,10 @@ fn inv_offset_1(view: &ReplicationView) -> Vec<Violation> {
 
 /// A state file that claims an offset the node never reached makes recovery
 /// resume above its own data: the gap is never replayed and never noticed.
+///
+/// Cited by FM-REPLICATION-021 as the exception it is, not as a guarantee: that
+/// row's raise-only `offset_at_save` is the path that reaches this state, and
+/// the ruling on which behaviour is right is the entry's own citation.
 fn inv_offset_2(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let live = live(view);
@@ -364,6 +389,12 @@ fn inv_offset_2(view: &ReplicationView) -> Vec<Violation> {
 /// Revert (c) `90fefaf7`: seeding a replica's acked offset at registration made
 /// `WAIT` count a replica that had never acknowledged anything, so a write
 /// "confirmed by two replicas" could exist on one node.
+///
+/// Generalizes FM-REPLICATION-037 (`WAIT` never invents a number),
+/// FM-REPLICATION-039 (the count is a set of streaming replicas at or past the
+/// target), FM-REPLICATION-043 (the one registry both renderers project) and
+/// FM-REPLICATION-015 (seeding the tracker at the resume point credits nothing
+/// beyond the live head).
 fn inv_offset_3(view: &ReplicationView) -> Vec<Violation> {
     let live = live(view);
     let mut violations = Vec::new();
@@ -419,6 +450,10 @@ fn inv_offset_3(view: &ReplicationView) -> Vec<Violation> {
 /// The narrowing costs nothing: a window over a genuinely empty stream is
 /// unreachable, because a window is only ever frozen from an offset the node
 /// reached.
+///
+/// Generalizes FM-REPLICATION-019 (a promotion freezes at the applied boundary,
+/// which is at or below the live head); the skip above is FM-REPLICATION-001's
+/// in-flight resync, which is why that row cites this entry too.
 fn inv_offset_4(view: &ReplicationView) -> Vec<Violation> {
     let state = state(view);
     let live = live(view);
@@ -442,6 +477,11 @@ fn inv_offset_4(view: &ReplicationView) -> Vec<Violation> {
 /// entries are what the grant is served from. A floor below the data — or a
 /// hole between entries — means a grant this node cannot honor, and the replica
 /// resumes into a stream missing the commands in the gap.
+///
+/// Also generalizes FM-REPLICATION-009 (freeing an idle window disarms the floor
+/// with the entries), FM-REPLICATION-012 (the extraction re-reads the floor
+/// under the entries lock), FM-REPLICATION-014 (the armed floor is the only
+/// lower bound) and FM-REPLICATION-059 (the geometry both renderers report).
 fn inv_backlog_1(view: &ReplicationView) -> Vec<Violation> {
     let backlog = backlog(view);
     let mut violations = Vec::new();
@@ -482,6 +522,10 @@ fn inv_backlog_1(view: &ReplicationView) -> Vec<Violation> {
 /// FM-REPLICATION-014. A grant below the floor names data that has been
 /// evicted; a grant above the offset it replays to names data that does not
 /// exist yet. Either way the replica is told it is caught up when it is not.
+///
+/// Also generalizes FM-REPLICATION-012 (a resume evicted after the grant is
+/// abandoned, not truncated) and FM-REPLICATION-015 (a grant replays exactly
+/// `(replay_from, current]`).
 fn inv_backlog_2(view: &ReplicationView) -> Vec<Violation> {
     let backlog = backlog(view);
     let grant = view.grant.expect("entry requires Grant");
@@ -518,6 +562,10 @@ fn inv_backlog_2(view: &ReplicationView) -> Vec<Violation> {
 /// FM-REPLICATION-016/047. The caps are the whole memory bound on a primary
 /// with a slow replica; a ring that outgrows them turns a lagging follower into
 /// an OOM.
+///
+/// Also generalizes FM-REPLICATION-059: the geometry both renderers publish is
+/// this ring's, so a report that could not describe a real buffer is a
+/// violation here before it is a rendering bug there.
 fn inv_backlog_3(view: &ReplicationView) -> Vec<Violation> {
     let backlog = backlog(view);
     let mut violations = Vec::new();
@@ -552,6 +600,10 @@ fn inv_backlog_3(view: &ReplicationView) -> Vec<Violation> {
 /// ran — a second checkpoint for a session already streaming, a second
 /// registration for one already counted. `Disconnecting` is terminal because
 /// cleanup has run: anything after it operates on a session that is gone.
+///
+/// Generalizes FM-REPLICATION-060: the phases INFO renders are the ones a
+/// session actually passed through, in order, so a rendered state is never a
+/// second pass through one.
 fn inv_session_1(view: &ReplicationView) -> Vec<Violation> {
     let change = view.phase_change.expect("entry requires PhaseChange");
     let mut violations = Vec::new();
@@ -579,6 +631,11 @@ fn inv_session_1(view: &ReplicationView) -> Vec<Violation> {
 /// Spec GAP-5. Two live sessions for one replica means `WAIT` counts one
 /// follower twice, so a write acknowledged by a single node reports the quorum
 /// the operator asked for.
+///
+/// Generalizes FM-REPLICATION-039 (the count is a set of *distinct* replicas),
+/// FM-REPLICATION-043 (one registry, one entry per live session) and
+/// FM-REPLICATION-049 (the announced identity compared here is recorded at the
+/// handshake).
 fn inv_session_2(view: &ReplicationView) -> Vec<Violation> {
     let mut streaming: BTreeMap<(std::net::IpAddr, u16), Vec<u64>> = BTreeMap::new();
     for replica in replicas(view) {
@@ -608,6 +665,10 @@ fn inv_session_2(view: &ReplicationView) -> Vec<Violation> {
 /// record written for a session that never streamed makes both act on a
 /// generation that did not exist; the arming latch is the independent witness
 /// that one did, and only a graceful departure is allowed to clear it.
+///
+/// Also generalizes FM-REPLICATION-041, the other end of the same pair: the
+/// fence arms on a session that streamed and disarms only on a graceful
+/// departure.
 fn inv_session_3(view: &ReplicationView) -> Vec<Violation> {
     let fence = view.fence.expect("entry requires Fence");
     if view.departure != Some(ReplicaDeparture::Lost) || fence.armed {
@@ -626,6 +687,12 @@ fn inv_session_3(view: &ReplicationView) -> Vec<Violation> {
 /// a hold is still standing lets the feed run during the barrier — the exact
 /// window the barrier exists to close — and one that holds past the budget
 /// stalls every replica on a finalizer that already died.
+///
+/// The one entry no replication row cites: the gate lives in this crate, but
+/// the transition it guards is a cluster one, and the vocabulary check is
+/// per-area — a `Catalog` field on FM-CLUSTER-097 naming `INV-GATE-1` would be
+/// a lint error, so the cross-reference lives here instead. See the `Catalog`
+/// section of `.scratch/hardening/specs/replication-failure-modes.md`.
 fn inv_gate_1(view: &ReplicationView) -> Vec<Violation> {
     let gate = view.feed_gate.expect("entry requires FeedGate");
     let mut violations = Vec::new();
@@ -683,6 +750,10 @@ fn inv_fence_1(view: &ReplicationView) -> Vec<Violation> {
 /// it does not head: its offsets are its upstream's, so a `WAIT` against it
 /// counts acks for data the sub-replica may never receive if the middle node is
 /// itself behind. Ruled a documented non-guarantee — see the entry's citation.
+///
+/// Cited by FM-REPLICATION-022, which states the same claim point-wise for a
+/// demotion: this entry is what would state it universally, if it were a
+/// guarantee.
 fn inv_role_1(view: &ReplicationView) -> Vec<Violation> {
     let role = view.role.as_ref().expect("entry requires Role");
     let RoleView::Replica { upstream } = role else {
