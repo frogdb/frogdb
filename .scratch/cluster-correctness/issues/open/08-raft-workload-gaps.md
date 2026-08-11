@@ -131,6 +131,21 @@ noted above) at current HEAD.
 | 1 | `cross-slot-partition` | PASS (1:14) | `valid? true` all sub-checks; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 | 2 | `cross-slot-kill` | PASS (1:16) | `valid? true` all sub-checks; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 | 3 | `raft-chaos` | PASS (2:23) | `valid? true` (key-routing checker, durability+value-correctness); worker crashes on `CLUSTERDOWN` during quorum-loss windows correctly recorded `:info`/indeterminate, not counted as failures; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
+| 4 | `list-append-raft` | PASS (2:49) | Elle strict-serializable checker, `valid? true`, 0 anomalies; `cluster-invariants` 2 sweeps, 0 violations. First run crashed 100% of ops with a harness bug (see below), fixed and rerun clean: 869,626 `:ok` txns, 0 `:unexpected`. |
+
+**Harness bug found and fixed (not a product defect):** the first `list-append-raft` attempt
+crashed every op with `IllegalArgumentException: Don't know how to create ISeq from:
+clojure.lang.ExceptionInfo`. Root cause: `exec-multi-ops` in
+`testing/jepsen/frogdb/src/jepsen/frogdb/list_append.clj` only checked `(nil?
+exec-results)` before `mapv`-ing the EXEC reply into txn shape. Carmine doesn't throw on a
+pipelined per-command error — it returns the exception inline as that element's value, so
+when EXEC itself errored (CLUSTERDOWN during a quorum-loss window under the `raft-cluster`
+nemesis — the first time this workload has run against fault injection, since it has never
+had stored results before), `exec-results` was a `clojure.lang.ExceptionInfo`, not nil, and
+fell through to `mapv`, masking the real CLUSTERDOWN/MOVED underneath. Fixed by checking
+`(instance? Throwable exec-results)` and re-throwing so the existing
+`is-redirect-error?`/clusterdown handling classifies it correctly. Fix + rerun confirmed
+clean (see row 4 above).
 
 ### Remaining
 
