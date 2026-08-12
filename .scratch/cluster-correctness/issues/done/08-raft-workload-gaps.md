@@ -1,6 +1,6 @@
 # 08 — Close the raft-topology workload gaps
 
-Status: needs-triage
+Status: done
 
 ## Parent
 
@@ -15,14 +15,27 @@ result-less workloads, store results under the standard results path.
 
 ## Acceptance criteria
 
-- [ ] `split-brain` and `zombie` runnable against the raft topology from `run.py`
-- [ ] All 15 previously result-less workloads have stored, passing results (failures
+- [x] `split-brain` and `zombie` runnable against the raft topology from `run.py`
+- [x] All 15 previously result-less workloads have stored, passing results (failures
       filed as issues, not buried)
-- [ ] Issue-07 checker active in these runs once it lands (do not block on it)
+- [x] Issue-07 checker active in these runs once it lands (do not block on it)
 
 ## Blocked by
 
 None - can start immediately.
+
+## Resolution
+
+Shipped in two passes. Pass 1 (2026-08-08) ported `split-brain`/`zombie` to the raft
+topology as `split-brain-raft`/`zombie-raft`, both PASS on smoke test. Pass 2 (this sweep,
+2026-08-11) ran all 16 previously result-less raft/raft-extended workloads: 14 PASS, 2 FAIL.
+Both FAILs are the same real server-side defect (a not-yet-joined node briefly self-elects
+as an externally-reachable Raft "leader" during its `add_learner` promotion window), filed
+as [issue 25](../open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md)
+rather than buried — this issue's mandate was coverage/triage, not the product fix, so it
+closes with that defect tracked separately. One harness bug (`list-append-raft`'s
+`exec-multi-ops` mishandling a Carmine-inlined EXEC error) was found and fixed along the way.
+Full per-workload results, evidence, and the harness-fix writeup are preserved below.
 
 ## Progress
 
@@ -134,15 +147,16 @@ noted above) at current HEAD.
 | 4 | `list-append-raft` | PASS (2:49) | Elle strict-serializable checker, `valid? true`, 0 anomalies; `cluster-invariants` 2 sweeps, 0 violations. First run crashed 100% of ops with a harness bug (see below), fixed and rerun clean: 869,626 `:ok` txns, 0 `:unexpected`. |
 | 5 | `migration-recovery` | PASS (0:59) | `valid? true` (leader recovered after Raft-leader kill mid-migration, no data loss, migration resolvable); 346 `:ok` ops, 0 failed ops; `cluster-invariants` 2 sweeps, 0 violations. |
 | 6 | `concurrent-migration` | PASS (0:39) | `valid? true` (all slots owned, no data loss across 4 parallel migrations); 460 `:ok` ops, 31 `:fail` (expected migration-window rejections), 0 `:unexpected`; `cluster-invariants` 2 sweeps, 0 violations. |
-| 7 | `membership-routing` | **FAIL** (0:27-0:28, 3/3 attempts) | `Analysis invalid!` — `:start-migration` throws `ERR node 15092003070405494904 not found` immediately after a `REDIRECT -> retrying on leader n4`. Reproduced 3 times (original + 1 retry + 1 dedicated no-teardown repro), including across a full container teardown/recreate, ruling out a one-off scheduling fluke or stale docker volumes. Root-caused to a real server-side defect: a freshly-started, not-yet-joined node unconditionally self-bootstraps as a solo one-node Raft "leader" and stays externally reachable/redirectable for a ~5s window while the real cluster's `add_learner` promotion attempts fail against it. Filed as [issue 25](25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) (`needs-triage`; originally drafted as 24, renumbered — 24 was taken by origin/main's issue-23 residue landed after this worktree branched) with full timestamped log evidence from both sides (joining node and real leader) plus a live `CLUSTER MYID` cross-check confirming the "not found" node was actually n3, an original bootstrap member — not the newly-joined node. `cluster-invariants` checker itself stayed green (2 sweeps, 0 violations) since it doesn't currently probe this admission-window race — noted in issue 25 as a candidate checker gap. |
+| 7 | `membership-routing` | **FAIL** (0:27-0:28, 3/3 attempts) | `Analysis invalid!` — `:start-migration` throws `ERR node 15092003070405494904 not found` immediately after a `REDIRECT -> retrying on leader n4`. Reproduced 3 times (original + 1 retry + 1 dedicated no-teardown repro), including across a full container teardown/recreate, ruling out a one-off scheduling fluke or stale docker volumes. Root-caused to a real server-side defect: a freshly-started, not-yet-joined node unconditionally self-bootstraps as a solo one-node Raft "leader" and stays externally reachable/redirectable for a ~5s window while the real cluster's `add_learner` promotion attempts fail against it. Filed as [issue 25](../open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) (`needs-triage`; originally drafted as 24, renumbered — 24 was taken by origin/main's issue-23 residue landed after this worktree branched) with full timestamped log evidence from both sides (joining node and real leader) plus a live `CLUSTER MYID` cross-check confirming the "not found" node was actually n3, an original bootstrap member — not the newly-joined node. `cluster-invariants` checker itself stayed green (2 sweeps, 0 violations) since it doesn't currently probe this admission-window race — noted in issue 25 as a candidate checker gap. |
 | 8 | `rolling-restart` | PASS (0:57) | `valid? true`; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
-| 9 | `raft-membership` | **FAIL** (2:17) | Identical fingerprint to workload 7: `:add-node "n4"` → `:start-migration` → `REDIRECT -> retrying on leader n4` → `ERR node 15092003070405494904 not found` (n3's id again). Second independent witness of [issue 25](25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md), not re-diagnosed separately; `cluster-invariants` green (2 sweeps, 0 violations). |
+| 9 | `raft-membership` | **FAIL** (2:17) | Identical fingerprint to workload 7: `:add-node "n4"` → `:start-migration` → `REDIRECT -> retrying on leader n4` → `ERR node 15092003070405494904 not found` (n3's id again). Second independent witness of [issue 25](../open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md), not re-diagnosed separately; `cluster-invariants` green (2 sweeps, 0 violations). |
 | 10 | `cluster-membership` | PASS (2:17) | `valid? true`; `cluster-invariants` 2 sweeps, 0 violations. Uses `cluster-formation` workload under the `raft-cluster-membership` nemesis (nodes joining/leaving), not `membership-routing`'s add-node+migrate sequence, so it doesn't hit issue 25's window (no `CLUSTER SETSLOT` sent to a just-joined node). |
 | 11 | `cluster-replication` | PASS (0:33) | `valid? true`; `cluster-invariants` 2 sweeps, 0 violations, 2 connectivity errors (expected — self-driven, nemesis `none`; the workload itself `docker stop`s the slot's primary mid-run to exercise `CLUSTER FAILOVER TAKEOVER`, producing one indeterminate `Connection refused` op, which the checker correctly treats as indeterminate rather than a failure). No add-node/join involved, doesn't hit issue 25. |
 | 12 | `cluster-lag` | PASS (1:11) | `valid? true`, 599 ops, 0 fail, 0 info; lag-p99 6ms, lag-max 23ms, burst-success-rate 1.0, offsets monotone/advancing on both ends; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. Self-driven (nemesis `none`), no add-node/join, doesn't hit issue 25. |
 | 13 | `clock-skew` (raft-extended, `elle-rw-register` workload) | PASS (1:41) | `valid? true`, 810,502 txn ops, 0 fail, 0 info; Elle cycle checker clean; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors; `DEBUG CLUSTER CHECK` clean across 3 nodes. Fault-injection nemesis (clock skew), no add-node/join path, doesn't hit issue 25. |
 | 14 | `disk-failure` (raft-extended, `elle-rw-register` workload) | PASS (1:30) | `valid? true`, 852,496 txn ops, 0 fail, 0 info; Elle cycle checker clean; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors; `DEBUG CLUSTER CHECK` clean across 3 nodes. Fault-injection nemesis (disk failure), no add-node/join path, doesn't hit issue 25. |
 | 15 | `slow-network` (raft-extended, `elle-rw-register` workload) | PASS (1:25) | `valid? true`, 218,235 txn ops, 192 fail, 964 info (expected timeouts/retries under a network-slowdown nemesis — Elle checker still `valid? true`); `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors; `DEBUG CLUSTER CHECK` clean across 3 nodes. No add-node/join path, doesn't hit issue 25. |
+| 16 | `memory-pressure` (raft-extended, `elle-rw-register` workload) | PASS (1:28) | `valid? true`, 942,056 txn ops, 0 fail, 0 info; Elle cycle checker clean; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors; `DEBUG CLUSTER CHECK` clean across 3 nodes. Fault-injection nemesis (memory pressure), no add-node/join path, doesn't hit issue 25. |
 
 **Harness bug found and fixed (not a product defect):** the first `list-append-raft` attempt
 crashed every op with `IllegalArgumentException: Don't know how to create ISeq from:
@@ -158,8 +172,28 @@ fell through to `mapv`, masking the real CLUSTERDOWN/MOVED underneath. Fixed by 
 `is-redirect-error?`/clusterdown handling classifies it correctly. Fix + rerun confirmed
 clean (see row 4 above).
 
+### Sweep complete (2026-08-11)
+
+All 16 workloads (12 raft + 4 raft-extended, per the scope reconciliation above) now have
+stored results: 14 PASS, 2 FAIL. Both FAILs (`membership-routing`, `raft-membership`) share
+an identical fingerprint and were root-caused to the same real server-side defect — a
+freshly-started, not-yet-joined node briefly self-elects as an externally-reachable "leader"
+of its own solo one-node Raft group during the ~5s `add_learner` promotion window, causing a
+client redirected into that window to see `ERR node <id> not found` for nodes that predate
+it. Filed as [issue 25](../open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md)
+(`needs-triage`), not buried, and not fixed here — this pass's mandate was triage/reporting,
+not product fixes. `cluster-invariants` stayed green through every reproduction (it doesn't
+currently probe that admission window; noted as a candidate checker gap in issue 25).
+
+One harness bug was found and fixed along the way (not a product defect): `list-append-raft`'s
+`exec-multi-ops` didn't distinguish a Carmine-inlined EXEC error from a real pipelined reply —
+see the writeup above. Fixed, reran clean.
+
+Issue-07's checker (third acceptance-criteria bullet) was active throughout — `DEBUG CLUSTER
+CHECK` invariant assertions ran wherever a workload's checker calls it, across all 16 runs.
+
 ### Remaining
 
-- Issue-07's checker (third acceptance-criteria bullet) is active in these runs (issue 07 is
-  done/merged) — `DEBUG CLUSTER CHECK` invariant assertions ran wherever the workload's
-  checker calls it.
+Nothing further for this issue. The residual defect this sweep uncovered lives on in
+[issue 25](../open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md), tracked
+separately since it's a product fix, not a workload-coverage gap.

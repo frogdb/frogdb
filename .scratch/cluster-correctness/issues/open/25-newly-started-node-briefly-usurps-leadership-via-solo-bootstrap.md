@@ -4,7 +4,7 @@ Status: needs-triage
 
 ## Parent
 
-[Issue 08](08-raft-workload-gaps.md) — found while running the deferred 16-workload jepsen
+[Issue 08](../done/08-raft-workload-gaps.md) — found while running the deferred 16-workload jepsen
 sweep. `membership-routing` failed reproducibly (2/2 attempts, ~40 minutes and a full docker
 teardown/recreate apart, ruling out stale volumes or a one-off scheduling fluke).
 
