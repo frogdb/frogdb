@@ -4883,6 +4883,11 @@ mod schedule;
 /// cluster arm uses.
 mod replication_scheduler;
 
+/// The full-resync payload layer (replication-correctness issue 25): a single
+/// deterministic scenario that holds acked writes inside the shard batch window
+/// while a replica full-syncs, which no seed of the sweep above can reach.
+mod full_sync_payload;
+
 /// The three cluster hostnames used by every cluster sim in this section.
 const CLUSTER_HOSTS: [&str; 3] = ["cluster-n1", "cluster-n2", "cluster-n3"];
 

@@ -498,6 +498,66 @@ five link-machinery bugs: solicited ACK, frame epochs, ack-on-apply, backlog TTL
 "off"), `1ea25181` (a persistence-disabled primary shipping no dataset — FM-REPLICATION-001's
 originating bug).
 
+### 6.1 Retro-validation results (2026-08-11)
+
+Run under [issue 15](issues/open/15-retro-validation-gate.md). Each defect was reinstated as a
+minimal inverse patch at the current decision seam — never a literal `git revert`, because the four
+named commits long predate the restructures around them — in a throwaway tree, never committed. The
+layer stack was then run and the failures attributed. **The fix's own tests are excluded from every
+verdict**: both the FM rows' named forcing tests and any regression test that shipped in the fix
+commit itself (`git log -S` on each failing test name settles which). A defect is CAUGHT only if
+something else went red.
+
+| defect | revert | L1 catalog + `DEBUG REPLICATION CHECK` | L2 R1–R6 | L3 stateright | L4 seeded schedules | L6 integration | verdict |
+|---|---|---|---|---|---|---|---|
+| a — checkpoint cut before the shard WALs drained | `view()` stops reporting `pre_checkpoint_drain`, so `DrainBeforeCheckpoint` never runs | green | green | n/a | green at 7 seeds **and at 500** (238 s) | only the fix's own tests | **MISS** → [issue 25](issues/done/25-no-layer-sees-what-a-full-resync-payload-contains.md), closed below |
+| b — promotion minted no replid, adopted no window | `plan_primary_stint` ignores `minted_id` and shifts nothing | red (`INV-REPLID-2` via the promotion hook) | red — R1, R2, R3, R4 | red — promotion model smoke, `a_failed_promotion_strands_the_node` | red — smoke sweep aborts | red — 28 tests, incl. PSYNC2 failover and identity-across-restart | **CAUGHT**, by every layer |
+| c — `WAIT` counted a seeded resume position | `acked_offset()` folds in `resume_offset()` again | green | red — R1, R2, R3, R4 | green | green | green | **CAUGHT**, by W2 alone |
+| d-i — feed ran during an armed barrier (derivation) | `decide_feed_hold_until` returns `None` | n/a | green | red — feed-gate model smoke + all three replay cases | green | green | **CAUGHT**, by W3 alone |
+| d-ii — same defect at the consumer | the session stops awaiting `feed_gate.released()` / `is_held()` | green | green | green | green | green | **MISS** → [issue 26](issues/open/26-the-feed-gate-model-proves-a-transcription-not-the-session.md) |
+| e — FM-REPLICATION-063, drawn at gate time | `NetByteCounters::record_{output,input}` become no-ops | green | green | n/a | green | green | **MISS** → [issue 27](issues/done/27-nothing-but-its-own-tests-watches-the-replication-byte-counters.md), closed below |
+
+`n/a` above always means *structurally* out of reach, never "not bothered": `ReplicationView`
+carries offsets, ids, phases and gate state, so a defect about payload bytes (a), byte tallies (e)
+or a pure derivation the catalog never projects (d-i) cannot be stated by that layer at all.
+
+**The (e) draw.** The fifth sample is drawn, not chosen, so it cannot be a defect the layers were
+built around. The draw was fixed before any candidate was read: branch point `2a81867e`, low six
+bits (`0x7e` = 62), 0-based into FM-REPLICATION-001..064 → **FM-REPLICATION-063**. It landed on an
+observability row, which is exactly the kind of member a hand-picked fifth would have skipped.
+
+**First-pass tally: 3 of 5 defects caught (b, c, d).** §8 D4's escalation to N = 8 is **not taken**,
+and the reason is the result rather than the cost: the trigger was "≥ 4/5 caught cheaply", meaning
+the layer stack is strong enough that a wider sample is the informative next move. At 3/5 the
+informative move is the opposite one — the three misses already name three distinct structural
+blind spots (payload contents, model-versus-tree drift, observability), and eight more reverts
+would keep re-deriving the same three. The reserve list (`86a016fd`, `85fc3095`, `4ced6229`,
+`1ea25181`) stays as written for a re-run after issue 26's layer lands.
+
+**Two cross-cutting conclusions.**
+
+*What the layers see is what `ReplicationView` carries.* Every miss is a fact outside the
+projection — what a payload contains, how many bytes crossed a socket. The projection is the
+campaign's central asset and its central limit, and the only cure is a layer that reads the real
+node rather than its view. That is why both closing layers are turmoil scenarios rather than new
+invariants: the sweep is the one place the campaign already talks to real servers.
+
+*A model proves what it transcribes.* (d-i) and (d-ii) are the same defect at two placements, and
+the stateright model catches the one whose decision function it calls while missing the one whose
+control flow it copies. Whenever a model re-implements a loop rather than driving it, the copy can
+go stale silently — recorded as [issue 26](issues/open/26-the-feed-gate-model-proves-a-transcription-not-the-session.md),
+which blocks issue 15's own exit.
+
+**Layer built to close the misses.** `simulation::full_sync_payload::a_full_resync_carries_writes_still_sitting_in_the_batch_window`
+(`frogdb-server/crates/server/tests/simulation/full_sync_payload.rs`): two real servers under
+turmoil, persistence on, and a batch-flush window wider than the whole simulation, so every write
+the primary acks is still un-flushed when the replica attaches for a `PSYNC ? -1`. The drain ahead
+of the cut is then the only thing that can put those writes in the payload. This required one
+harness knob — `ReplicationNodeParams::batch_timeout_ms`, defaulted to the shipped 10 ms so the
+existing sweep is unchanged (re-verified 32/32). The same run asserts the transfer moved both
+replication byte counters, which closes (e). Both claims are proven non-vacuous by re-applying their
+inverse patches: revert (a) turns the readback red, revert (e) turns the counter assertion red.
+
 ## 7. Out of scope
 
 - **The persistence-correctness campaign** — the next port, and the owner of campaign 2's crash
