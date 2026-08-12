@@ -145,8 +145,11 @@ pre-production; no backwards compatibility is kept). The linter checks:
 - State-space completeness: every state variable mentioned in a TR pre/postcondition is
   declared in §1 of the same file (mechanical string-level check).
 
-Runs where the current lint runs: the compile-free subset in lefthook on every commit, the
-full family in `just lint` and CI.
+Coverage note (corrected during planning): today `lint-failure-modes` is reachable *only*
+through `just lint` — lefthook skips it under `CLAUDECODE=1` and CI never invokes it (the
+CI lint job runs clippy directly; `lint-gates` excludes it because it builds test
+binaries). Phase 1 preserves exactly today's coverage under the new name; wiring the spec
+lint into lefthook/CI is a deliberate separate change, not smuggled into the rename.
 
 ## §3 Quint design models
 
@@ -180,8 +183,8 @@ spec row → forcing test (or model fix, if the model was wrong).
 and seed nightlies. Bounded verification is a known limit: depth-k unless we author
 inductive invariants, which we only do if a specific model earns it.
 
-**Toolchain**: Quint CLI via npm (`quint`, currently v1.2.0) — added to `.mise.toml`
-(npm backend). Apalache is auto-downloaded by `quint verify` (JVM + Z3); the nightly runner
+**Toolchain**: Quint CLI via npm (`@informalsystems/quint`, currently 0.32.0 — the bare
+`quint` npm name is an unrelated package) — added to `.mise.toml` (npm backend). Apalache is auto-downloaded by `quint verify` (JVM + Z3); the nightly runner
 needs a JVM. Quint agent skills (`quint-lang`, `quint-modeling`) are installed
 project-scoped into `.claude/skills` (via `skills/install.sh` from `quint-co/quint` or the
 plugin marketplace) as an implementation-phase step *before* any `.qnt` is authored.
