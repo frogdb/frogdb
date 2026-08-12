@@ -381,6 +381,15 @@ pub struct ReplicationNodeParams {
     /// Seconds without an ACK before the primary proactively disconnects a
     /// lagging replica. 0 disables it.
     pub replication_lag_threshold_secs: u64,
+    /// Shard batch-flush window (`persistence.batch-timeout-ms`): how long a
+    /// write may sit in its shard's batch before the WAL flushes it to RocksDB.
+    ///
+    /// The default 10 ms closes so fast under turmoil's virtual clock that
+    /// "acked but not yet flushed" is a microsecond race no schedule can land
+    /// on. Widening it makes that a steady state instead, which is the state a
+    /// full-sync checkpoint has to drain before it cuts — see
+    /// `simulation/full_sync_payload.rs`.
+    pub batch_timeout_ms: u64,
 }
 
 impl Default for ReplicationNodeParams {
@@ -399,6 +408,7 @@ impl Default for ReplicationNodeParams {
             self_fence_on_replica_loss: false,
             replica_freshness_timeout_ms: 10_000,
             replication_lag_threshold_secs: 0,
+            batch_timeout_ms: frogdb_config::persistence::DEFAULT_BATCH_TIMEOUT_MS,
         }
     }
 }
@@ -422,6 +432,7 @@ pub async fn real_frogdb_replication_node(
         self_fence_on_replica_loss,
         replica_freshness_timeout_ms,
         replication_lag_threshold_secs,
+        batch_timeout_ms,
     } = params;
 
     let (role, primary_host) = match primary_ip {
@@ -441,6 +452,7 @@ pub async fn real_frogdb_replication_node(
         persistence: PersistenceConfig {
             enabled: persistence,
             data_dir,
+            batch_timeout_ms,
             ..Default::default()
         },
         replication: frogdb_server::config::ReplicationConfigSection {

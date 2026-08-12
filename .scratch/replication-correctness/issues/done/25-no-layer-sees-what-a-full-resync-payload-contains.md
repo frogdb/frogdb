@@ -1,10 +1,10 @@
 # 25 — no layer sees what a full-resync payload *contains*
 
-Status: needs-triage
+Status: done
 
 ## Parent
 
-Found by [issue 15](15-retro-validation-gate.md)'s retro-validation gate, revert (a). [PRD](../PRD.md)
+Found by [issue 15](../open/15-retro-validation-gate.md)'s retro-validation gate, revert (a). [PRD](../../PRD.md)
 §6 exit criterion 8, §3 W4.
 
 ## What the gate found

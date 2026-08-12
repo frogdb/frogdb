@@ -1447,6 +1447,7 @@ fn spawn_scheduled_hosts(
                     self_fence_on_replica_loss: toggles.self_fence,
                     replica_freshness_timeout_ms: 500,
                     replication_lag_threshold_secs: 1,
+                    ..Default::default()
                 };
                 if let Err(e) = real_frogdb_replication_node(params, path).await {
                     eprintln!("replication node {host} exited with error: {e}");

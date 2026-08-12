@@ -1,6 +1,6 @@
 # 15 — Retro-validation gate: the machine catches what the humans caught
 
-Status: needs-triage
+Status: ready-for-human
 
 ## Parent
 
@@ -54,19 +54,60 @@ campaign used, plus the short form in this issue.
 
 ## Acceptance criteria
 
-- [ ] All five reverts run against the full layer stack in a throwaway tree; nothing committed
+- [x] All five reverts run against the full layer stack in a throwaway tree; nothing committed
       except `.scratch` (and no leaked `proptest-regressions/` entries)
-- [ ] Catching layer(s) named per defect, with the fix's own FM forcing tests excluded from every
+- [x] Catching layer(s) named per defect, with the fix's own FM forcing tests excluded from every
       verdict
-- [ ] Incremental results recorded after each workstream lands, not only in a final pass
-- [ ] N escalated to 8 from the reserve list if the first pass is ≥4/5 cheaply, before exit is
-      declared
+- [x] Incremental results recorded after each workstream lands, not only in a final pass
+- [x] N escalated to 8 from the reserve list if the first pass is >=4/5 cheaply, before exit is
+      declared — not triggered: the first pass caught 3/5, and the reasoning for holding the
+      reserve list is recorded in [PRD](../../PRD.md) §6.1
 - [ ] Every miss filed as a gap issue against the responsible workstream and closed with a new
-      layer before exit
-- [ ] §6.1-style results table appended to the PRD with the evidence
+      layer before exit — 25 and 27 closed; **26 open, and it is what blocks this issue**
+- [x] §6.1-style results table appended to the PRD with the evidence
+
+## Results (2026-08-11)
+
+Full table, per-layer attribution and the two cross-cutting conclusions: [PRD](../../PRD.md) §6.1.
+Short form:
+
+| defect | verdict | caught by |
+|---|---|---|
+| a — checkpoint cut before the WAL drain | **MISS** | nothing but its own tests, at 7 seeds and at 500 |
+| b — promotion minted no replid | **CAUGHT** | W1, W2 (R1–R4), W3, W4, integration — every layer |
+| c — `WAIT` counted a resume seed | **CAUGHT** | W2 (R1–R4) alone |
+| d-i — feed gate, derivation | **CAUGHT** | W3 (feed-gate model smoke + all three replay cases) alone |
+| d-ii — feed gate, consumer | **MISS** | nothing; every layer green |
+| e — FM-REPLICATION-063 (drawn) | **MISS** | nothing but its own tests |
+
+Three of five caught. Misses: [25](../done/25-no-layer-sees-what-a-full-resync-payload-contains.md)
+(closed — new turmoil layer `simulation::full_sync_payload`),
+[27](../done/27-nothing-but-its-own-tests-watches-the-replication-byte-counters.md) (closed by the
+same layer), [26](26-the-feed-gate-model-proves-a-transcription-not-the-session.md) (**open** — the
+stateright models prove properties about a transcription of the session's control flow, so the
+consumer side of the feed gate has no witness but its own forcing test).
+
+Evidence commands, per revert: `just test frogdb-replication`, `just test
+frogdb-replication-runtime`, `just concurrency-turmoil replication_scheduler`, `just test
+frogdb-server replication`, and for (a) the escalation `just replication-seeds 500`. Runner and
+its per-layer logs: `.scratch/replication-correctness/gate-evidence/layerstack.sh`.
+
+Two method notes for whoever re-runs this:
+
+1. `git commit` in this repo stages fixed files through lefthook, so a commit taken while an inverse
+   patch is in the tree **commits the patch**. One did, and had to be amended out; the run that
+   followed it was contaminated and had to be re-taken. Restore the tree before every commit, and
+   verify with `git diff <base> HEAD -- frogdb-server`.
+2. Attribution needs `git log -S` on each failing test name. Several tests that fail under a revert
+   are cited as the FM row's forcing tests but were built *later*, by this campaign's own
+   workstreams — those are independent witnesses, not the fix's own regression tests, and the
+   verdict turns on the difference (defect d hangs entirely on it).
 
 ## Blocked by
 
+- [Issue 26](26-the-feed-gate-model-proves-a-transcription-not-the-session.md) — the one miss still
+  open. Exit criterion 8 is not declarable while a defect in the revert set has no witness but its
+  own forcing test.
 - Issues 01–14 (`.scratch/replication-correctness/issues/`) — the gate measures the layers they
   build. It runs incrementally as each lands, but exit criterion 8 is only decidable once the full
   stack exists.
