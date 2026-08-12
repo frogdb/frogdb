@@ -16,8 +16,14 @@ FrogDB's correctness artifacts today are all *reactive* or *derived*:
 - The stateright models, proptests, seeded turmoil sweeps, and jepsen suites explore behavior,
   but none of them *defines* what behavior is legal.
 
-Nothing states constructively: what state exists, who owns each piece, and which transitions
-are legal under which preconditions. The cost is a standing queue of design questions (24
+The closest thing to a constructive statement is the original design-spec lineage
+(`spec/*.md` from 2026-01, now living as `website/src/content/docs/architecture/*.md` —
+notably `clustering.md`, `replication.md`, and `consistency.md` with its
+`[Tested]`/`[Design intent]` tags). Those documents do describe intended state and
+transition rules, but as narrative prose: no row ids, no forcing-test links, no lint, and
+no update discipline tying them to behavior changes — so they drift silently and cannot
+settle a ruling. Nothing *lintable* states: what state exists, who owns each piece, and
+which transitions are legal under which preconditions. The cost is a standing queue of design questions (24
 pending rulings at the time of writing — parent validation, migration×failover composition,
 barrier timing, membership admission, identity×dataset lifetimes) that each had to be
 *discovered* in implementation before anyone could ask them. Two structural lessons from the
@@ -104,8 +110,10 @@ Mutation gates are untouched by the migration.
 
 ## §2 Lint
 
-`scripts/failure-modes.py` evolves into the spec linter (recipe renamed
-`just lint-spec`; `just lint-failure-modes` can alias it during transition):
+`scripts/failure-modes.py` evolves into the spec linter. The recipe is renamed
+`just lint-spec` outright — no transitional alias; every Justfile, CI, lefthook, and
+documentation reference to `lint-failure-modes` is updated in the same change (FrogDB is
+pre-production; no backwards compatibility is kept). The linter checks:
 
 - Every `TR-` row names at least one forcing test; every tagged test matches a row
   (both directions, as today for FM rows).
@@ -167,9 +175,9 @@ state is projected via `State::from_driver` and diffed against the model's expec
 
 **Risks and guards**:
 
-- *Pre-1.0 API churn*: pin 0.1.2; confine to one dev-dependency test target in
-  `frogdb-cluster`. Fallback if the API breaks: traces are ITF JSON — a hand-rolled replay
-  harness against the same `Driver` trait is a bounded rewrite.
+- *Pre-1.0 API churn*: accepted without mitigation (per ruling: don't worry about churn or
+  backwards compatibility). Adopt the current API in one dev-dependency test target in
+  `frogdb-cluster`; if upstream changes, adjust the harness then.
 - *Serde friction*: Quint sum types serialize as `{tag, value}`; the Rust mirror types need
   `#[serde(tag = "tag", content = "value")]`. Contained in the test target.
 - *Projection blindness (the structural risk)*: `State::from_driver` is a projection, and an
@@ -204,6 +212,16 @@ copies the spec files into the website content collection as a "Specifications" 
 wired into the existing docs-generation `just` recipes. No hand-edited copies; the
 generated output is refreshed by the same flow that regenerates other docs.
 
+**Relationship to the existing architecture docs.** The website already carries the
+original design-spec lineage as `architecture/*.md` (clustering, replication, consistency,
+persistence, vll, ...), and those pages make normative claims. Two authorities cannot
+coexist (the DRY documentation rule). Resolution: the generated Specifications section is
+normative; as each area's spec lands (§7 phases), that area's architecture page is
+rewritten as a narrative overview — the "why and how it fits together" reading — with its
+normative claims replaced by links to the spec rows that now own them. `consistency.md`'s
+`[Tested]`/`[Design intent]` distinction dissolves into the spec, where every row carries a
+forcing test or is an explicit hole.
+
 ## §7 Migration sequencing
 
 Phased per area, each phase leaving the tree green (lint, mutation gates, full suite):
@@ -221,6 +239,40 @@ Phased per area, each phase leaving the tree green (lint, mutation gates, full s
 Each area's absorption is mechanical where possible (FM rows move with IDs and tags
 unchanged) so `just lint-spec` stays green mid-migration; the constructive sections are the
 new writing.
+
+## §8 Spec drafting method (how the content gets defined)
+
+Per area, the constructive sections are produced in a fixed order. Three inputs with
+distinct roles: the code is ground truth for *what exists*; the settled rulings and review
+gates are ground truth for *what is legal*; and the historical design docs
+(`website/src/content/docs/architecture/*.md`, plus their pre-Raft generations retrievable
+from git history, e.g. `git show 5b23c4da^:docs/spec/CLUSTER.md`) are the record of
+*intent* — drafting agents mine them for transition rules and guarantees the code never
+made explicit, flagging any code↔doc disagreement as a ruling rather than silently siding
+with either:
+
+1. **State-space extraction** — enumerate the authoritative structs from the code
+   (e.g. `ClusterState` fields, per-node epoch, runtime flags, replication session state,
+   WAL/checkpoint records) and draft the §1 table: variable, authoritative field, writer,
+   persistence, restart survival. Drafted by agents from source; ownership and persistence
+   claims are human-reviewed — this table is the projection-completeness anchor and must
+   not be guessed.
+2. **Transition enumeration** — mechanically list every action source (each
+   `ClusterCommand` arm, each replication session event, each detector tick, each recovery
+   step) and draft one `TR-` row per action: precondition → postcondition over §1
+   variables. Inputs: the code, the existing FM rows, and the settled rulings (the
+   rule-first exercise feeds directly here).
+3. **Absorption** — move the FM rows and INV entries in unchanged and add their `TR-`
+   citations.
+4. **Gap pass** — two mechanical sweeps that turn absorption into discovery: an FM row
+   whose behavior no TR produces means a missing transition (write it); an INV no cited TR
+   preserves means a spec hole (ruling). Gaps found here are the cheap version of what
+   used to be found in production.
+5. **Quint models** — authored from the finished spec sections (the `quint-modeling`
+   skill's from-requirements flow), *not* from the code — the transcription ban applied at
+   the design layer. Counterexamples loop back as rulings → TR/FM edits.
+6. **Review gates** — the user reviews each area's state-space and transition sections
+   (the authority content); mechanical absorption gets a lighter diff review.
 
 ## Testing and CI summary
 
