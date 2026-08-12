@@ -96,10 +96,31 @@ specs/
 3. **Invariants** — the existing `INV-*` entries absorbed as predicates over §1 variables.
    Each cites the transitions that preserve it. The Rust invariant catalog (hook-checked)
    remains the runtime enforcement; the spec section is the authority it cites.
-4. **Failure modes** — the existing `FM-<AREA>-NNN` rows absorbed verbatim, IDs unchanged,
+4. **Liveness** — `LV-<AREA>-NNN` progress properties: "if X holds continuously, Y
+   eventually happens" (the issue-18 class: a missed failover must eventually be retried;
+   a migration must eventually complete or cancel; a held feed gate must eventually
+   release). TR/INV alone state only safety. LV rows are checked as temporal properties
+   (with fairness assumptions) in the Quint models that cover them, and forced at the
+   implementation level by turmoil quiesce/eventually tests — the seeded sweeps' quiesce
+   check is the existing liveness oracle, now with named rows to force.
+5. **Failure modes** — the existing `FM-<AREA>-NNN` rows absorbed verbatim, IDs unchanged,
    forcing-test tags unchanged. Each row gains one field: the `TR-` id(s) it perturbs.
-5. **Composition pointers** — links into `specs/composition.md` for interactions that leave
+6. **Composition pointers** — links into `specs/composition.md` for interactions that leave
    the area (e.g. handoff barrier × replica feed gate, checkpoint drain × `WAIT`).
+
+**Why this formalism.** TR/INV is the canonical state-machine specification form — the same
+one TLA+ and Quint use (state variables; named actions as guard → postcondition; invariants;
+temporal properties). The mapping into Quint is one-to-one: §1 variables → `var`
+declarations, TR rows → named `action` definitions, INV rows → checked invariants, LV rows →
+temporal properties, CO rows → a model importing both areas' modules. The markdown spec is
+therefore "Quint in prose plus forcing-test citations", and authoring a model from a
+finished spec section is largely mechanical. FM rows are the one part outside the
+formalism: negative-space scenario/property pairs that carry the forcing-test lint
+discipline — the bridge to the existing test infrastructure. Alternatives considered and
+rejected: Alloy (relational logic — strong on topology snapshots, wrong shape for
+protocol traces), the P language (good async state-machine fit but no verify-grade checker,
+no Rust bridge, new toolchain), Event-B-style refinement chains (heavier than the problem
+warrants).
 
 `specs/composition.md` holds cross-area interaction rules in the same TR/invariant style,
 with a `CO-NNN` id space.
@@ -116,9 +137,10 @@ documentation reference to `lint-failure-modes` is updated in the same change (F
 pre-production; no backwards compatibility is kept). The linter checks:
 
 - Every `TR-` row names at least one forcing test; every tagged test matches a row
-  (both directions, as today for FM rows).
+  (both directions, as today for FM rows). `LV-` rows likewise name their forcing
+  turmoil/eventually tests.
 - Every `INV-` entry cites existing `TR-` ids; every `FM-` row cites the `TR-` it perturbs.
-- No dangling references (`TR-`/`INV-`/`FM-`/`CO-` ids must resolve), including from
+- No dangling references (`TR-`/`INV-`/`LV-`/`FM-`/`CO-` ids must resolve), including from
   `.qnt` model headers (§3).
 - State-space completeness: every state variable mentioned in a TR pre/postcondition is
   declared in §1 of the same file (mechanical string-level check).
@@ -128,12 +150,26 @@ full family in `just lint` and CI.
 
 ## §3 Quint design models
 
-**Scope — high-risk compositions only**, not a model per area:
+**Scope — high-risk compositions first**, not a model per area:
 
 - migration × failover (the issue 15/16/17/20 class)
 - slot-handoff barrier timing (rework issue 02/03 class)
 - membership admission window (cluster issue 25 class: solo-bootstrap usurper)
 - replica feed gate (replication issue 26 class)
+
+**Admission rule for further models.** A new Quint model is added when a composition
+question or ruling arises that the example-based layers cannot settle — models earn their
+slot by a defect class, not by completeness aesthetics. This is a yield judgment, not a
+capability limit: since spec sections are Quint-shaped (§1), writing a model for a
+finished spec area is largely mechanical, so deferring loses nothing permanently. The
+initial four are where the campaigns' real defects clustered. Known reasons an area may
+*never* earn one: representation-level failure modes (persistence byte formats, CRC,
+truncation — model checking abstracts away exactly those bugs; fuzzing and the crash
+harness own them) and wall-clock quantities (Quint models time as ordering, not
+durations — right for "Complete lags the barrier", unable to check a millisecond budget).
+Visible future candidates: VLL deadlock-freedom (clean model, low marginal yield today
+given the 0.90 mutation gate and shuttle coverage) and persistence *recovery ordering*
+(earns a model if recovery rulings recur).
 
 Each `.qnt` file header cites the spec `TR-`/`INV-`/`CO-` ids it models; the linter checks
 the citations resolve. Counterexamples found by checking are triaged like defects: ruling →
