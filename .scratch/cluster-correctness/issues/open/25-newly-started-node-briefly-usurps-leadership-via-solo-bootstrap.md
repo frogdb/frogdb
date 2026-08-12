@@ -79,6 +79,17 @@ redirected to the joining node as if it were the genuine leader. It answers `-ER
 not found` for any node the client references that predates its own join, because it hasn't
 actually absorbed the real cluster's membership yet.
 
+## Second witness
+
+`raft-membership` (same `membership-routing` workload code, `raft-cluster-membership`
+nemesis) hit the identical fingerprint on its first run: `:add-node "n4"` →
+`:start-migration {:slot 7700, :dest "n4"}` → `REDIRECT -> retrying on leader n4` →
+`ERR node 15092003070405494904 not found` (same node id — n3 — as the `membership-routing`
+reproductions above). Store dir:
+`testing/jepsen/frogdb/store/frogdb-membership-routing-raft-cluster-membership-docker-cluster/20260811T204234...-0400/`.
+Not re-diagnosed separately; same root cause, recorded here as a second independent
+reproduction under a different workload/nemesis combination.
+
 ## Evidence (jepsen reproduction)
 
 `membership-routing` workload, two independent runs (2026-08-11 19:22 and 20:36, full
