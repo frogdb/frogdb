@@ -138,6 +138,7 @@ noted above) at current HEAD.
 | 8 | `rolling-restart` | PASS (0:57) | `valid? true`; `cluster-invariants` 2 sweeps, 0 violations, 0 connectivity errors. |
 | 9 | `raft-membership` | **FAIL** (2:17) | Identical fingerprint to workload 7: `:add-node "n4"` → `:start-migration` → `REDIRECT -> retrying on leader n4` → `ERR node 15092003070405494904 not found` (n3's id again). Second independent witness of [issue 25](25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md), not re-diagnosed separately; `cluster-invariants` green (2 sweeps, 0 violations). |
 | 10 | `cluster-membership` | PASS (2:17) | `valid? true`; `cluster-invariants` 2 sweeps, 0 violations. Uses `cluster-formation` workload under the `raft-cluster-membership` nemesis (nodes joining/leaving), not `membership-routing`'s add-node+migrate sequence, so it doesn't hit issue 25's window (no `CLUSTER SETSLOT` sent to a just-joined node). |
+| 11 | `cluster-replication` | PASS (0:33) | `valid? true`; `cluster-invariants` 2 sweeps, 0 violations, 2 connectivity errors (expected — self-driven, nemesis `none`; the workload itself `docker stop`s the slot's primary mid-run to exercise `CLUSTER FAILOVER TAKEOVER`, producing one indeterminate `Connection refused` op, which the checker correctly treats as indeterminate rather than a failure). No add-node/join involved, doesn't hit issue 25. |
 
 **Harness bug found and fixed (not a product defect):** the first `list-append-raft` attempt
 crashed every op with `IllegalArgumentException: Don't know how to create ISeq from:
