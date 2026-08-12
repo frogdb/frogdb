@@ -3,9 +3,9 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Regression tests for scripts/failure-modes.py's invariant-vocabulary check.
+"""Regression tests for the checks scripts/spec-lint.py cannot exercise live.
 
-Run: ./scripts/tests/test_failure_modes.py   (or `just test-failure-modes-lint`)
+Run: ./scripts/tests/test_spec_lint.py   (or `just test-spec-lint`)
 
 The rest of the lint is exercised every run against the real tree, but the
 per-area catalog check is only exercised in its *passing* direction there: a
@@ -26,12 +26,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-# failure-modes.py has hyphens, so it is not importable by name.
-_SCRIPT = Path(__file__).resolve().parent.parent / "failure-modes.py"
-_spec = importlib.util.spec_from_file_location("failure_modes", _SCRIPT)
+# spec-lint.py has hyphens, so it is not importable by name.
+_SCRIPT = Path(__file__).resolve().parent.parent / "spec-lint.py"
+_spec = importlib.util.spec_from_file_location("spec_lint", _SCRIPT)
 assert _spec and _spec.loader
 fm = importlib.util.module_from_spec(_spec)
-sys.modules["failure_modes"] = fm
+sys.modules["spec_lint"] = fm
 _spec.loader.exec_module(fm)
 
 

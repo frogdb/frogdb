@@ -49,7 +49,7 @@ human deciding) at 9 pinned names instead of 64.
    gained a gate call (that would make the exemption stale — promote it to GATE),
    and its named forcing test must still exist in the named file.
 7. **GATE_GAP entries are live.** The two known bypasses ride the named-gap
-   warn-not-fail idiom (`scripts/nested-config.py`, `scripts/failure-modes.py`):
+   warn-not-fail idiom (`scripts/nested-config.py`, `scripts/spec-lint.py`):
    they WARN while their issue link resolves to a real issue file, and the moment
    the fix lands (the arm gains a gate call) the stale entry hard-fails, forcing
    its promotion to GATE.

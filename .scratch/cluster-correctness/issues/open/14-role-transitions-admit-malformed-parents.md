@@ -58,7 +58,7 @@ detector rejects the failed node before it ever looks for candidates).
 
 - [ ] `SetRole` and `AddNode` refuse a parent that is absent or is itself a replica, with
       forcing tests in `frogdb-cluster`
-- [ ] FM rows amended; `just lint-failure-modes` green
+- [ ] FM rows amended; `just lint-spec` green
 - [ ] INV-REF-3B is HARD (or folded into INV-REF-3); the catalog has no DOCUMENTED-EXCEPTION
 - [ ] `auto_failover_ignores_a_failed_replica` still distinguishes "not a primary" from "no
       candidates"

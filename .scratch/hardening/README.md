@@ -24,7 +24,7 @@ mutation-test → fill gaps → lock**.
 ## Failure-mode specs
 
 Every `FM-<AREA>-NNN` row names the test that forces it in its `Forced by` cell, and every
-named test carries a matching `// FM-<AREA>-NNN` comment. `just lint-failure-modes` enforces
+named test carries a matching `// FM-<AREA>-NNN` comment. `just lint-spec` enforces
 both directions and runs as part of `just lint`. A spec whose header reads
 `Status: LOCKED` is a contract: behaviour changes there are spec-first — edit the row, update
 the forcing test, then change the code.

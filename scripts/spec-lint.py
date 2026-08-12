@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Enforce failure-mode spec <-> test agreement for the hardening campaign.
+"""Enforce spec <-> test agreement: every rule names the tests that force it.
 
 Every `FM-<AREA>-NNN` row in `.scratch/hardening/specs/*-failure-modes.md`
 names the test(s) that force it; every named test carries a `// FM-<AREA>-NNN`
@@ -32,8 +32,8 @@ file must exist. That form warns instead of failing, so the gap stays visible
 in every lint run without blocking the spec on machinery that does not exist.
 
 Usage:
-    failure-modes.py                          # runs `cargo nextest list`
-    failure-modes.py --nextest-output list.txt  # reuse a listing (CI)
+    spec-lint.py                          # runs `cargo nextest list`
+    spec-lint.py --nextest-output list.txt  # reuse a listing (CI)
 """
 
 from __future__ import annotations
@@ -386,7 +386,7 @@ def check_invariant_vocabulary(
                 elif own is None:
                     errors.append(
                         f"{where} cannot be resolved: the {area} area has no invariant "
-                        "catalog registered in `INVARIANT_CATALOGS` (scripts/failure-modes.py)"
+                        "catalog registered in `INVARIANT_CATALOGS` (scripts/spec-lint.py)"
                     )
                 else:
                     errors.append(f"{where} {rel(own.path)} does not define")
@@ -597,7 +597,7 @@ def main() -> None:
     errors += check(modes, tags, test_paths)
 
     if errors:
-        print("FAILURE-MODE LINT: FAIL", file=sys.stderr)
+        print("SPEC LINT: FAIL", file=sys.stderr)
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         sys.exit(1)

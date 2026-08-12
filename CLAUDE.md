@@ -203,7 +203,7 @@ Four core areas are **locked** behind failure-mode specs and mutation gates: **t
 
 - The specs (`.scratch/hardening/specs/<area>-failure-modes.md`, header `Status: LOCKED`)
   are the contract: behavior changes are **spec-first** (failure-mode row → failing test →
-  fix). `just lint-failure-modes` enforces spec↔test agreement (every `FM-<AREA>-NNN` row
+  fix). `just lint-spec` enforces spec↔test agreement (every `FM-<AREA>-NNN` row
   names its forcing tests; every tagged test matches a row) and runs in `just lint`.
 - Before pushing changes that touch a locked crate: `just mutants-diff <crate>` (push
   discipline, not a CI gate). Full runs: `just mutants <crate>` + `just mutants-gate

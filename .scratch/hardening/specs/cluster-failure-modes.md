@@ -70,10 +70,10 @@ duplicated here.
 | Invariant | The internal guarantee, named at the mechanism that provides it. |
 | Catalog | *Optional.* The invariant-catalog entries that check this row's guarantee **universally** — see below. Absent on rows nothing in the catalog generalizes. |
 | Outcome variant | The enum variant / error string the mode reports through, or `n/a`. |
-| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-CLUSTER-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
+| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-CLUSTER-NNN` tag at its definition site; `just lint-spec` enforces both directions. |
 | Bug refs | Known issues that touch this mode. |
 
-Test names are bare function names, resolved against the crate list in `scripts/failure-modes.py`
+Test names are bare function names, resolved against the crate list in `scripts/spec-lint.py`
 (`NEXTEST_CRATES`).
 
 ### The `Catalog` field
@@ -89,7 +89,7 @@ generated command sequences.
 A row carries a `Catalog` field when a catalog entry generalizes the guarantee the row states
 point-wise: deleting the code the row names would make that entry fire. The cross-reference runs
 both ways — each entry's `check_*` function names the rows it generalizes — and
-`just lint-failure-modes` checks that every `INV-*` id a spec mentions exists in the catalog.
+`just lint-spec` checks that every `INV-*` id a spec mentions exists in the catalog.
 `INV-SLOT-1` (slot keys below `CLUSTER_SLOTS`) is deliberately cited by no row: FM-CLUSTER-018
 derives the range by hashing and FM-CLUSTER-075 enforces it at the `SlotRange` parse boundary, but
 no row states it of the replicated slot map, so the entry is a backstop rather than a

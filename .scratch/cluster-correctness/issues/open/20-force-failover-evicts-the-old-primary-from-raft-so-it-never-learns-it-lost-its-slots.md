@@ -129,7 +129,7 @@ reasons other than a partition.
       from `frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt` (keeping 3
       and 72 as plain regression seeds), and all of them pass in the default suite
 - [ ] `just cluster-seeds 500` is clean
-- [ ] `just lint-failure-modes` green
+- [ ] `just lint-spec` green
 - [ ] `just mutants-diff frogdb-cluster` and `just mutants-diff frogdb-cluster-runtime` triaged
 
 ## Blocked by

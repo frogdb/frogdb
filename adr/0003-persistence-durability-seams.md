@@ -37,7 +37,7 @@ Consequences: both crates are small enough to mutation-test in one run, so the 8
 enforceable — at the Phase 2 lock `frogdb-recovery` holds 100% (28 caught, 0 missed) and
 `frogdb-persistence` 99.1% (864 caught, 8 missed) on caught / caught+missed. The failure-mode contract is
 `.scratch/hardening/specs/persistence-failure-modes.md`, enforced two-directionally by
-`just lint-failure-modes`. The costs are real and accepted: the `SnapshotFs` indirection
+`just lint-spec`. The costs are real and accepted: the `SnapshotFs` indirection
 means a new publication path must be routed through the trait or it is untested by
 construction; the recovery seam's plain-data boundary means a phase that genuinely needs a
 live component has to be split, not smuggled through `RecoveredState` (per-shard search

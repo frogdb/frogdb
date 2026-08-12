@@ -85,11 +85,11 @@ replication id/offset it carries — lives in
 | Invariant | The internal guarantee, named at the mechanism that provides it. |
 | Catalog | *Optional.* The invariant-catalog entries that check this row's guarantee **universally** — see below. Absent on rows nothing in the catalog generalizes. |
 | Outcome variant | The enum variant / metric label the mode reports through, or `n/a` for wire-level invariants with no client-visible outcome. |
-| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-REPLICATION-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
+| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-REPLICATION-NNN` tag at its definition site; `just lint-spec` enforces both directions. |
 | Bug refs | Known issues that touch this mode. |
 
 Test names are bare function names, resolved against the crate list in
-`scripts/failure-modes.py` (`NEXTEST_CRATES`).
+`scripts/spec-lint.py` (`NEXTEST_CRATES`).
 
 ### The `Catalog` field
 
@@ -102,7 +102,7 @@ a row is forced by the tests it names, an entry is forced by every test in the c
 
 A row carries a `Catalog` field when an entry generalizes the guarantee the row states point-wise:
 deleting the code the row names would make that entry fire. The cross-reference runs both ways —
-each entry's `check_*` function names the rows it generalizes — and `just lint-failure-modes`
+each entry's `check_*` function names the rows it generalizes — and `just lint-spec`
 checks that every `INV-*` id this spec cites is defined in the **replication** catalog. The check
 is per-area (`INVARIANT_CATALOGS`), so citing one of the cluster catalog's entries here is an error
 rather than a pass — an invariant is a claim about one area's state projection, and a claim about
@@ -747,7 +747,7 @@ duplicating it — the deviation table below is the short form.
 **Why one name is module-qualified.** `frame_advance_counts_payload_not_header` exists twice —
 `replication/src/offset_coordinator.rs:265` and `replication/src/replica/offset.rs:606` — asserting
 the same property on the two coordinators. This row means the former; the qualified form keeps that
-unambiguous for a reader, while `just lint-failure-modes` resolves on the leaf name either way.
+unambiguous for a reader, while `just lint-spec` resolves on the leaf name either way.
 
 ---
 
@@ -1306,7 +1306,7 @@ demotion to release (FM-REPLICATION-037).
 `write_fence_reason_is_reported_only_while_fenced`
 (`frogdb-server/crates/telemetry/src/status.rs`), was uncitable because `frogdb-telemetry` was not
 in `NEXTEST_CRATES`, leaving FM-REPLICATION-041's status-endpoint claim unforced. `frogdb-telemetry`
-and `frogdb-config` are now both eligible (`scripts/failure-modes.py`), and the test is named in
+and `frogdb-config` are now both eligible (`scripts/spec-lint.py`), and the test is named in
 FM-REPLICATION-041's `Forced by`. The second crate was added for the same reason: config
 `validate()` tests are the forcing tests for every "rejected at boot" clause, and they all live in
 `frogdb-config`.

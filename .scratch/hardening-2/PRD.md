@@ -61,7 +61,7 @@ gate (W4), plus perimeter extension over `frogdb-core` dispatch (W5).**
 
 ### B3 — Spec witnesses can assert nothing
 
-`just lint-failure-modes` enforces that a row names a test and that the test carries the row's
+`just lint-spec` enforces that a row names a test and that the test carries the row's
 tag. It cannot enforce that the test *asserts* anything about the row. The re-triage found three
 locked-spec witnesses that do not:
 
@@ -110,8 +110,8 @@ already has two working precedents, and the mechanics are copied from them rathe
 - `scripts/clock-seam.py` — every time read goes through `frogdb_types::clock::now()` /
   `clock::system_now()`, never `Instant::now()` / `SystemTime::now()`. Runs as `just
   lint-clock-seam`.
-- `scripts/failure-modes.py` — two-way spec↔test tag agreement. Runs as `just
-  lint-failure-modes`, part of `just lint`.
+- `scripts/spec-lint.py` — two-way spec↔test tag agreement. Runs as `just
+  lint-spec`, part of `just lint`.
 
 Anatomy of a rule:
 
@@ -135,7 +135,7 @@ The candidate rules, the current violation counts, and the KEEP/DROP verdicts ar
 
 The survey found **11 seam gates already shipped** (`lint-info-seam`, `lint-redirect-seam`,
 `lint-pubsub-confirmation-seam`, `lint-failover-atomicity`, `lint-metrics-chokepoint`,
-`lint-format-float`, `lint-clock-seam`, `lint-failure-modes`, `lint-no-typed-unwrap`,
+`lint-format-float`, `lint-clock-seam`, `lint-spec`, `lint-no-typed-unwrap`,
 `lint-keyspace-notify-routing`, `lint-script-gate`). Campaign 2 extends a family, it does not
 found one.
 
@@ -242,7 +242,7 @@ Copied from the shipped gates, not invented:
   before the third copy drifts.
 - **Suppression.** Two shipped idioms, no new ones. Count-pinned per-file allowlists
   (`clock-seam.py:73-134`, verified both ways at `:261-274` — a stale entry is an error and a
-  grown count is an error), and named-gap warn-not-fail (`failure-modes.py:20-26`, where
+  grown count is an error), and named-gap warn-not-fail (`spec-lint.py:20-26`, where
   `MISSING ([gap: <issue>](<link>))` warns only if the link resolves to a real issue file) for
   anything blocked on a decision. Never in-code `#[allow]`: clippy cannot express these rules, and
   an in-code hatch is invisible to review.
@@ -378,7 +378,7 @@ Four structural causes, each fixable:
 
 1. **The lint counts names.** A row is "forced" the moment someone types a test name into a table
    cell. That is the entire enforcement surface.
-2. **The escape hatch exists and was never used.** `failure-modes.py` supports
+2. **The escape hatch exists and was never used.** `spec-lint.py` supports
    `MISSING ([gap: <issue>](<link>))`, which warns instead of failing — exactly the pressure valve
    for "not forceable with today's tooling." **Zero uses across 258 rows**, and no fault-injection
    tooling-gap issue was ever filed. When admitting a gap is free but invisible, the path of least

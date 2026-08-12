@@ -8,7 +8,7 @@ Area: failure-mode specs (cluster, txn)
 
 ## Problem
 
-`just lint-failure-modes` checks that every name in a `Forced by` cell resolves to a test that
+`just lint-spec` checks that every name in a `Forced by` cell resolves to a test that
 carries the matching `// FM-<AREA>-NNN` tag. It cannot check that the test witnesses the row. Two
 rows fail that unchecked half, in opposite directions.
 
@@ -58,7 +58,7 @@ change is safe.
 
 ## Verification
 
-`just lint-failure-modes` passes after the edits (it will, both directions are additive), and the
+`just lint-spec` passes after the edits (it will, both directions are additive), and the
 W3d re-read confirms each row has at least one cited test per non-empty Observable cell.
 
 ## Comments

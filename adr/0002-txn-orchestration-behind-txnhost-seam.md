@@ -17,6 +17,6 @@ test); the crate is small enough that a full cargo-mutants run takes ~2 minutes,
 90% mutation gate is enforceable — frogdb-txn and frogdb-vll both hold 100% (caught /
 caught+missed) as of lock. The failure-mode contract is
 `.scratch/hardening/specs/txn-failure-modes.md` (+ vll), enforced two-directionally by
-`just lint-failure-modes`. The cost is the trait indirection: new transaction behavior
+`just lint-spec`. The cost is the trait indirection: new transaction behavior
 needs a seam decision (algorithm side or host side); when in doubt, plain-data signatures
 through the trait.

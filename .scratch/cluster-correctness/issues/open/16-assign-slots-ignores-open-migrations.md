@@ -68,7 +68,7 @@ ownership should fail.
 - [ ] No command sequence assigns a migrating slot to a node other than the migration's source;
       forcing test in `frogdb-cluster` (fails first), reproducing the 4-command shape above
 - [ ] The `RemoveSlots`-then-`AssignSlots` path is covered by the same ruling
-- [ ] FM row amended; `just lint-failure-modes` green
+- [ ] FM row amended; `just lint-spec` green
 - [ ] The `known_defect` muzzle entry citing this issue is deleted from
       `frogdb-server/crates/cluster/src/properties.rs`, and
       `pinned_issue_16_assign_slots_ignores_an_open_migration` with it

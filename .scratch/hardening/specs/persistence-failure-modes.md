@@ -24,11 +24,11 @@ live in [Transactions — failure modes](txn-failure-modes.md).
 | NOT observable | What must never appear in storage in this mode. This is the half mutation testing attacks. |
 | Invariant | The internal guarantee, named at the mechanism that provides it. |
 | Outcome variant | The enum variant / metric label the mode reports through, or `n/a` for storage-layer invariants with no client-visible outcome. |
-| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-PERSISTENCE-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
+| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-PERSISTENCE-NNN` tag at its definition site; `just lint-spec` enforces both directions. |
 | Bug refs | Known issues that touch this mode. |
 
 Test names are bare function names, resolved against the crate list in
-`scripts/failure-modes.py` (`NEXTEST_CRATES`).
+`scripts/spec-lint.py` (`NEXTEST_CRATES`).
 
 ---
 

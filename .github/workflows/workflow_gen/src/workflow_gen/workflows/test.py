@@ -167,7 +167,7 @@ def test_workflow() -> Workflow:
     )
 
     # The compile-free seam-lint family (agents/seam-lints.md):
-    # `just lint-gates` runs every `lint-*` gate except `lint-failure-modes`
+    # `just lint-gates` runs every `lint-*` gate except `lint-spec`
     # (builds test binaries) and the turmoil lints — grep/regex checks with no
     # compile step, so this job needs no Rust toolchain, just `just` (for the
     # recipe) and `uv` (the clock-seam gate is a PEP-723 script). Kept as its
