@@ -1,4 +1,4 @@
-# 24 — A freshly-started node's solo self-bootstrap makes it briefly (and wrongly) reachable as "the leader" while it is still joining
+# 25 — A freshly-started node's solo self-bootstrap makes it briefly (and wrongly) reachable as "the leader" while it is still joining
 
 Status: needs-triage
 
@@ -116,6 +116,18 @@ a specific container ID). The evidence quoted above is from a clean, dedicated r
 `testing/jepsen/frogdb/store/frogdb-membership-routing-docker-cluster/20260811T203638.482-0400/`)
 with containers inspected live via `docker exec`/`docker logs` immediately after, not through
 that unreliable side-capture.
+
+## Checker gap
+
+The `DEBUG CLUSTER CHECK` invariant checker (issue 07) stayed green through all three
+reproductions — `:cluster-invariants {:valid? true, :sweeps-run 2, :violating-sweeps 0,
+:connectivity-errors 0}` every time. It doesn't currently probe the admission window
+itself (a node self-reporting Raft leadership of a term the rest of the cluster doesn't
+recognize), only post-hoc topology/connectivity snapshots between sweeps, so it never
+observes the ~5s of transient bad state that produces the visible failure. Worth
+considering as a candidate addition when this is fixed: an invariant that a node
+answering as Raft leader is either the leader the rest of the cluster agrees on, or is
+not yet externally reachable/redirectable at all.
 
 ## Not a harness bug
 
