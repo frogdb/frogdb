@@ -21,7 +21,7 @@ connection observes across the shard channel; the shard-side wait queue (registr
 
 ## How to read a row
 
-Fields as in [txn-failure-modes.md](/specifications/txn/#how-to-read-a-row). `Outcome variant`
+Fields as in [txn.md](/specifications/txn/#how-to-read-a-row). `Outcome variant`
 here names the `WaitOutcome` variant the coordinator settles on, the blocking-path analogue of the
 txn spec's transaction outcome.
 

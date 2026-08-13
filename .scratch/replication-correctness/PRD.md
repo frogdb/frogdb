@@ -388,7 +388,7 @@ own it.
   becomes INV-SESSION-2 plus `XREPL-3`, and GAP-6 (`-UNBLOCKED` vs `CLIENT UNBLOCK` racing a
   demotion, `connection/blocking.rs:285-305`) is a point test no layer here reaches, so write it.
 - **The dangling-INV lint is only half generic, and this is where that gets fixed.**
-  `scripts/spec-lint.py` already globs *every* `*-failure-modes.md` for `INV-*` citations
+  `scripts/spec-lint.py` already globs *every* `specs/<area>.md` for `INV-*` citations
   (`INV_REF_RE` at :107, `check_invariant_vocabulary` at :306) — but the vocabulary it checks against
   is one hard-coded file, `INVARIANTS_RS = REPO / "frogdb-server/crates/cluster/src/invariants.rs"`
   (:52), loaded once (`load_catalog_ids`, :274). As it stands, an `INV-REPLID-2` cited in

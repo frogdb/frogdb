@@ -409,7 +409,9 @@ def test_only_the_header_block_is_scanned() -> None:
 
 def test_absent_quint_dir_is_vacuous() -> None:
     errors: list[str] = []
-    models, citations = fm.check_quint_citations(fm.SPEC_DIR / "quint", set(), {}, errors)
+    with tempfile.TemporaryDirectory() as tmp:
+        absent = Path(tmp) / "nope"
+        models, citations = fm.check_quint_citations(absent, set(), {}, errors)
     assert errors == [] and models == 0 and citations == 0, (errors, models, citations)
 
 

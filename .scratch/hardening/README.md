@@ -17,7 +17,7 @@ mutation-test → fill gaps → lock**.
 
 | path | what |
 |---|---|
-| `specs/` | failure-mode specs, one per area — the contract a locked area is measured against |
+| `../../specs/` | failure-mode specs, one per area — the contract a locked area is measured against |
 | `issues/open/`, `issues/done/` | campaign issues, incl. anything a nightly `regression-run` turns up |
 | `metrics/loop-cost.md` | warm inner-loop cost per area, recorded by `just loop-cost <area>` before and after each extraction |
 
@@ -31,12 +31,12 @@ the forcing test, then change the code.
 
 | spec | status |
 |---|---|
-| `specs/txn-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-txn` 100% vs 90% gate) |
-| `specs/vll-failure-modes.md` | LOCKED 2026-08-01 (phase 1, `frogdb-vll` 100% vs 90% gate) |
-| `specs/persistence-failure-modes.md` | LOCKED 2026-08-02 (phase 2, `frogdb-persistence` 99.1% / `frogdb-recovery` 100% vs 85% gate) |
-| `specs/replication-failure-modes.md` | LOCKED 2026-08-04 (phase 3, `frogdb-replication` 98.7% / `frogdb-replication-runtime` 100% of viable vs 85% gate) |
-| `specs/cluster-failure-modes.md` | LOCKED 2026-08-05 (phase 4, `frogdb-cluster` 99.6% / `frogdb-cluster-runtime` 99.0% vs 80% gate) |
-| `specs/blocking-failure-modes.md` | draft |
+| `../../specs/txn.md` | LOCKED 2026-08-01 (phase 1, `frogdb-txn` 100% vs 90% gate) |
+| `../../specs/vll.md` | LOCKED 2026-08-01 (phase 1, `frogdb-vll` 100% vs 90% gate) |
+| `../../specs/persistence.md` | LOCKED 2026-08-02 (phase 2, `frogdb-persistence` 99.1% / `frogdb-recovery` 100% vs 85% gate) |
+| `../../specs/replication.md` | LOCKED 2026-08-04 (phase 3, `frogdb-replication` 98.7% / `frogdb-replication-runtime` 100% of viable vs 85% gate) |
+| `../../specs/cluster.md` | LOCKED 2026-08-05 (phase 4, `frogdb-cluster` 99.6% / `frogdb-cluster-runtime` 99.0% vs 80% gate) |
+| `../../specs/blocking.md` | draft |
 
 ## Issues
 

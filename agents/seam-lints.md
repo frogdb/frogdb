@@ -80,7 +80,7 @@ and an in-code hatch is invisible to review):
   error whichever way it moved, so a new violation in an already-exempt file fails just like a new
   file would, and a fixed violation forces the entry down (or out) rather than letting it go
   stale. This is the ratchet — no separate baseline file.
-- **Named-gap warn-not-fail** (`scripts/spec-lint.py:20-26`). For an invariant that is real but
+- **Named-gap warn-not-fail** (`scripts/spec-lint.py:27-32`). For an invariant that is real but
   blocked on machinery that does not exist yet, `Forced by | MISSING ([gap: <issue>](<link>))`
   warns instead of failing, but only if `<link>` resolves to a real issue file — an unresolvable
   link still fails. This keeps the gap visible in every run without blocking the lint on work

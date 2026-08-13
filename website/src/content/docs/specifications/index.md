@@ -18,5 +18,5 @@ claim.
 | [Cluster](/specifications/cluster/) | Cluster topology, slot ownership, migration, and failover. |
 | [Persistence](/specifications/persistence/) | WAL, checkpoints, recovery, and durability acknowledgement. |
 | [Replication](/specifications/replication/) | Replication sessions, full sync, offsets, and acknowledgement. |
-| [Txn](/specifications/txn/) | MULTI/EXEC transactions, WATCH, and script atomicity. |
-| [Vll](/specifications/vll/) | Very Lightweight Locking: acquisition, continuation, and drain. |
+| [Transactions](/specifications/txn/) | MULTI/EXEC transactions, WATCH, and script atomicity. |
+| [VLL](/specifications/vll/) | Very Lightweight Locking: acquisition, continuation, and drain. |

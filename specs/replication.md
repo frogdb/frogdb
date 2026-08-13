@@ -201,7 +201,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Forced by | `receive_checkpoint_streams_the_frames_that_trailed_the_payload`, `receive_snapshot_streams_the_frames_that_trailed_the_payload`, `a_payload_with_no_trailing_frames_leaves_the_stream_empty`, `dropping_the_reader_hands_back_what_it_read_past_the_payload`, `a_fully_consumed_reader_leaves_no_residual` |
 | Bug refs | `.scratch/hardening/issues` (issue 01 — surfaced as a load-dependent `test_broadcast_lag_disconnect_and_resync` flake; the seed write was acked by neither replica because the ACK never arrived) |
 
-[`PayloadReader`]: ../../../frogdb-server/crates/replication/src/replica/payload_reader.rs
+[`PayloadReader`]: ../frogdb-server/crates/replication/src/replica/payload_reader.rs
 
 ## FM-REPLICATION-006 — owing an ACK never stops the replica reading its link
 

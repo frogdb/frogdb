@@ -37,7 +37,7 @@ generic `-ERR VLL lock acquisition failed`; the modes they distinguish are inter
 
 ## How to read a row
 
-Fields as in [txn-failure-modes.md](/specifications/txn/#how-to-read-a-row). `Outcome variant`
+Fields as in [txn.md](/specifications/txn/#how-to-read-a-row). `Outcome variant`
 here names the `ShardReadyResult` the shard sends and the coordinator error it becomes.
 
 ---

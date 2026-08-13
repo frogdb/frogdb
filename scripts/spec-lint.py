@@ -69,10 +69,10 @@ INVARIANT_CATALOGS = {
 # frogdb-recovery, ~15-25s for frogdb-server (the big `main` binary plus the
 # per-concern `cluster_*` binaries).
 # frogdb-persistence, frogdb-recovery and frogdb-core carry the storage-side
-# rows (see persistence-failure-modes.md); frogdb-replication carries the
-# full-sync wire rows (see replication-failure-modes.md); frogdb-cluster and
+# rows (see specs/persistence.md); frogdb-replication carries the full-sync
+# wire rows (see specs/replication.md); frogdb-cluster and
 # frogdb-cluster-runtime carry the topology/slot/failover rows (see
-# cluster-failure-modes.md).
+# specs/cluster.md).
 # Pass --nextest-output to reuse a listing produced by an earlier step.
 NEXTEST_CRATES = [
     "frogdb-txn",
@@ -203,7 +203,7 @@ class SpecRow:
 
 @dataclass
 class Tag:
-    """An `FM-<AREA>-NNN` comment attached to a test function."""
+    """An `FM-<AREA>-NNN` or `LV-<AREA>-NNN` comment attached to a test function."""
 
     row_id: str
     test: str
