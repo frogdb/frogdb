@@ -1889,7 +1889,7 @@ async fn test_restored_snapshot_accepts_and_replays_new_writes() {
 //     every batch in `begin_group`/`end_group` markers that ride the same FIFO
 //     channel and suppress those triggers, so the batch commits as one
 //     `WriteBatch`, specified as the write-group row of
-//     `.scratch/hardening/specs/persistence-failure-modes.md`.
+//     `specs/persistence.md`.
 //     `test_checkpoint_preserves_single_shard_multi_atomicity_*` pins the
 //     end-to-end contract; a regression that tore a single-shard transaction
 //     across the cut would be a real bug.

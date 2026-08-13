@@ -27,7 +27,7 @@ old group and applied on the *old* group's tagged shard at the next `EXEC`
 `MULTI` group split across the reconnect — the fourth acceptance criterion, pinned by its own test
 (which passes before the fix too, and is there to stop the fix from over-reaching).
 
-Spec: FM-REPLICATION-007 (`.scratch/hardening/specs/replication-failure-modes.md`). Tests:
+Spec: FM-REPLICATION-007 (`specs/replication.md`). Tests:
 `a_full_resync_discards_the_frames_queued_from_the_previous_history`,
 `a_multi_group_left_open_by_a_dropped_link_is_never_closed_by_the_next_history`,
 `a_continue_resume_still_applies_the_frames_it_left_queued` (apply.rs),

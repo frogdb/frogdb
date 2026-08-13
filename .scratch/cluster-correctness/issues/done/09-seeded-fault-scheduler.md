@@ -116,7 +116,7 @@ Two were deleted and re-expressed as named regression seeds, three had to stay:
 The three kept sims are **cited by name** outside the code and deleting them would break
 those citations, which is exactly the "keep it and say why" case:
 
-- `.scratch/hardening/specs/replication-failure-modes.md:809` and `:859` name
+- `specs/replication.md:809` and `:859` name
   `test_cluster_wait_degrades_under_partition` and
   `test_cluster_wait_unblocked_across_failover` as forcing tests. That spec is **LOCKED**,
   so its rows are a contract; retargeting them at a seed is a spec change, not a test

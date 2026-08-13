@@ -236,5 +236,5 @@ artifact: `frogdb-server/crates/server/tests/cluster_migration.rs` does drive re
 (`:1724`, `:1992`, `:2335`, `:3177`, `:4202`), but none of them asserts the *delete-after-transfer*
 failure paths the acceptance criterion names, so the finding stands with corrected evidence. The
 replication net byte-counter fixes (17b9b552, 12793b23 — hardening issue 29) touch this area's
-crate but discharge no finding here; no FM row in `.scratch/hardening/specs/` covers
+crate but discharge no finding here; no FM row in `specs/` covers
 connection/TLS/maxclients behaviour.

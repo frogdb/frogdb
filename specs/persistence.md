@@ -11,9 +11,9 @@ Scope: the shard-to-storage path — `frogdb-core/src/shard/persistence.rs` (the
 and `persist_records`), `frogdb-persistence/src/wal/` (the per-shard flush engine, its batching
 triggers and durability confirmation), and the snapshot/checkpoint machinery in
 `frogdb-persistence/src/snapshot/` plus the pre-snapshot quiesce in
-`frogdb-server/src/server/checkpoint_quiesce.rs`. Rows stop at what a *reader of storage* can
+`frogdb-server/crates/server/src/server/checkpoint_quiesce.rs`. Rows stop at what a *reader of storage* can
 observe — a restored checkpoint or a crash-recovery replay. Client-visible transaction semantics
-live in [Transactions — failure modes](txn-failure-modes.md).
+live in [Transactions — failure modes](txn.md).
 
 ## How to read a row
 
@@ -672,7 +672,7 @@ a *restart*, this one keeps it from coming back while the process is still runni
 | Invariant | Offset durability is coupled to snapshot durability by shipping the metadata *inside* the checkpoint (compare Redis' RDB aux fields), which is exactly why the install must precede this phase (FM-PERSISTENCE-027). Consumption is ordered after a successful `ReplicationState::save`: the staging file is the only durable carrier of the snapshot's offset until the state file holds it, so it is dropped only once that hand-off is complete. Re-adoption on a later boot is idempotent — the metadata describes a dataset that is already installed — so "consumed exactly once" is a liveness property (it does get consumed, on the first boot that can persist it), not a correctness one. |
 | Outcome variant | `RecoveredState::{replication, installed_staged_checkpoint}` |
 | Forced by | `staged_replication_metadata_is_adopted_and_consumed`, `staged_metadata_survives_a_failed_state_save` |
-| Bug refs | `.scratch/hardening/issues/08` (fixed — the consume was unconditional while the save was warn-only); `.scratch/testing-improvements/issues/67` (fixed — the inverse case: a persistence-disabled primary handed over a replid and offset with no dataset behind them, so there was no staged metadata to reconcile and the replica kept a stale keyspace; that primary now ships its live dataset, see [FM-REPLICATION-001](replication-failure-modes.md)) |
+| Bug refs | `.scratch/hardening/issues/08` (fixed — the consume was unconditional while the save was warn-only); `.scratch/testing-improvements/issues/67` (fixed — the inverse case: a persistence-disabled primary handed over a replid and offset with no dataset behind them, so there was no staged metadata to reconcile and the replica kept a stale keyspace; that primary now ships its live dataset, see [FM-REPLICATION-001](replication.md)) |
 
 ## FM-PERSISTENCE-040 — cluster storage that will not open refuses to start
 

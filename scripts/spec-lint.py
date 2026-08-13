@@ -4,7 +4,7 @@
 # ///
 """Enforce spec <-> test agreement: every rule names the tests that force it.
 
-Every `FM-<AREA>-NNN` row in `.scratch/hardening/specs/*-failure-modes.md`
+Every `FM-<AREA>-NNN` row in `specs/*.md`
 names the test(s) that force it; every named test carries a `// FM-<AREA>-NNN`
 comment at its definition site. This script checks that the two agree in both
 directions, so neither can drift:
@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SPEC_DIR = REPO / ".scratch/hardening/specs"
+SPEC_DIR = REPO / "specs"
 SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
 # The invariant catalogs, one per area: the vocabulary of `INV-*` ids that
 # area's spec may cite. Keyed by the `FM-<AREA>-NNN` prefix, which is also the
@@ -183,7 +183,7 @@ class Tag:
 
 def parse_spec(path: Path, errors: list[str]) -> list[FailureMode]:
     """Parse one `<area>-failure-modes.md` into its failure modes."""
-    area = path.name.removesuffix("-failure-modes.md").upper()
+    area = path.stem.upper()
     modes: list[FailureMode] = []
     current: FailureMode | None = None
 
@@ -265,9 +265,9 @@ def parse_forced_by(mode: FailureMode, errors: list[str]) -> list[str]:
 
 
 def parse_specs(spec_dir: Path, errors: list[str]) -> list[FailureMode]:
-    specs = sorted(spec_dir.glob("*-failure-modes.md"))
+    specs = sorted(spec_dir.glob("*.md"))
     if not specs:
-        errors.append(f"no *-failure-modes.md under {spec_dir.relative_to(REPO)}")
+        errors.append(f"no spec files under {rel(spec_dir)}")
         return []
 
     modes: list[FailureMode] = []
@@ -368,8 +368,8 @@ def check_invariant_vocabulary(
     """
     counts: dict[str, int] = {}
     owners = {ref: cat for _, cat in sorted(catalogs.items()) for ref in cat.ids}
-    for spec in sorted(spec_dir.glob("*-failure-modes.md")):
-        area = spec.name.removesuffix("-failure-modes.md").upper()
+    for spec in sorted(spec_dir.glob("*.md")):
+        area = spec.stem.upper()
         own = catalogs.get(area)
         for lineno, line in enumerate(spec.read_text().splitlines(), start=1):
             for ref in INV_REF_RE.findall(line):
@@ -579,7 +579,7 @@ def main() -> None:
         "--spec-dir",
         type=Path,
         default=SPEC_DIR,
-        help="directory of *-failure-modes.md specs",
+        help="directory of specs (default: specs/)",
     )
     ap.add_argument(
         "--nextest-output",

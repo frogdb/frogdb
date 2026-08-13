@@ -3,7 +3,7 @@
 Status: **RULED** — all §8 decisions ruled 2026-08-10
 Author: 2026-08-10
 Related: [cluster correctness](../cluster-correctness/PRD.md) (the pattern this ports; exit
-criterion 8 met 5/5), [replication failure-mode spec](../hardening/specs/replication-failure-modes.md)
+criterion 8 met 5/5), [replication failure-mode spec](../../specs/replication.md)
 (LOCKED, FM-REPLICATION-001..064), [hardening campaign 2](../hardening-2/PRD.md) (detection-first,
 running), [replication-cluster rework](../replication-cluster-rework/PRD.md) (promotion replid +
 WAIT cluster mode, shipped), [ADR 0004](../../adr/0004-replication-runtime-seam-boundary.md)

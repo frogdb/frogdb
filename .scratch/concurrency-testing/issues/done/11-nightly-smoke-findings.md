@@ -281,7 +281,7 @@ the capped value, so the cap was buying nothing.
 - Findings B and C remain open and are expected to keep surfacing in nightly — that is the tier
   working as designed.
 - Blocking-path failure modes are now specced in
-  `.scratch/hardening/specs/blocking-failure-modes.md` (FM-BLOCKING-001..005).
+  `specs/blocking.md` (FM-BLOCKING-001..005).
 
 ## Findings B and C — post-harness-fix re-verification (2026-08-02)
 

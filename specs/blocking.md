@@ -2,7 +2,7 @@
 
 Every way a blocking command (`BLPOP`/`BRPOP`/`BLMOVE`/`BRPOPLPUSH`/`BLMPOP`/`BZPOPMIN`/
 `BZPOPMAX`/`XREAD BLOCK`/`WAIT`) can be resolved on the connection side, one table per mode.
-Same contract as [Transactions — failure modes](txn-failure-modes.md): a mutant that survives
+Same contract as [Transactions — failure modes](txn.md): a mutant that survives
 is a row nothing forces.
 
 Scope: the **connection-side** blocking-wait path — `handle_blocking_wait` /`register_wait` /
@@ -15,7 +15,7 @@ connection observes across the shard channel; the shard-side wait queue (registr
 
 ## How to read a row
 
-Fields as in [txn-failure-modes.md](txn-failure-modes.md#how-to-read-a-row). `Outcome variant`
+Fields as in [txn-failure-modes.md](txn.md#how-to-read-a-row). `Outcome variant`
 here names the `WaitOutcome` variant the coordinator settles on, the blocking-path analogue of the
 txn spec's transaction outcome.
 

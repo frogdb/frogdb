@@ -100,4 +100,4 @@ Seam-level witnesses: `slot_barrier_publishes_and_clears_the_replica_feed_hold`,
 `overlapping_barriers_hold_the_feed_to_the_later_deadline` (`frogdb-core`), plus six
 `feed_gate::tests` cases in `frogdb-replication`.
 
-**FM row** — FM-CLUSTER-097, in `.scratch/hardening/specs/cluster-failure-modes.md`.
+**FM row** — FM-CLUSTER-097, in `specs/cluster.md`.

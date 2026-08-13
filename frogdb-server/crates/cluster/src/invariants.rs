@@ -46,7 +46,7 @@
 //!
 //! Prose, not a `// FM-…` tag: a tag is the lint's claim that the *item below
 //! it* forces that row, and these functions are catalog entries rather than
-//! forcing tests. See `.scratch/hardening/specs/cluster-failure-modes.md`,
+//! forcing tests. See `specs/cluster.md`,
 //! "The `Catalog` field".
 //!
 //! # What "clean" does not claim

@@ -72,5 +72,5 @@ match on it at all. Either the marker (or a purpose-built enumeration) must be e
 existing `TypeMarker::ALL`-driven `registry_covers_every_marker_once` /
 `every_marker_round_trips` (`persistence/src/serialization/registry.rs:542,562`), which today
 guarantee a decoder per marker but say nothing about corruption coverage. Nothing in
-`.scratch/hardening/specs/persistence-failure-modes.md` covers DUMP/RESTORE payload corruption
+`specs/persistence.md` covers DUMP/RESTORE payload corruption
 (its corruption rows are recovery-side: FM-PERSISTENCE-033/034/047).

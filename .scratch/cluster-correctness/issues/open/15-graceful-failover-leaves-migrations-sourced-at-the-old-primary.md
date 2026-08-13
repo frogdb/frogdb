@@ -38,7 +38,7 @@ it. The forced path already treats all three as the reason it prunes.
 ## What to build
 
 Spec-first: amend the failover FM row(s) in
-`.scratch/hardening/specs/cluster-failure-modes.md`, add the failing forcing test, then fix.
+`specs/cluster.md`, add the failing forcing test, then fix.
 
 Decide between the two candidate rulings and record it in the row:
 

@@ -34,7 +34,7 @@ Tier (iii) — the `replica_session.rs` restructure — is authorized by D2 but 
 this one. Keep the boundary.
 
 Locked-crate discipline applies (`frogdb-replication`, gate 0.85): every step spec-first against
-`.scratch/hardening/specs/replication-failure-modes.md`, where rows may move their file:line
+`specs/replication.md`, where rows may move their file:line
 citations but not their meaning, and `just mutants-diff` on each touched locked crate before push.
 This is a refactor, not a behavior change — no FM row's claim changes.
 

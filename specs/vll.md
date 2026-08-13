@@ -4,7 +4,7 @@ Status: LOCKED (2026-08-01) — Phase 1 mutation gate passed (frogdb-vll 100% vs
 Behavior changes to this area are spec-first; see CLAUDE.md "Locked core areas".
 
 Every way the shard-exclusive half of VLL can refuse a request, one table per mode. Same
-contract as [Transactions — failure modes](txn-failure-modes.md): a mutant that survives is a
+contract as [Transactions — failure modes](txn.md): a mutant that survives is a
 row nothing forces.
 
 Scope: the per-shard state machine and the cross-shard coordinator in
@@ -31,7 +31,7 @@ generic `-ERR VLL lock acquisition failed`; the modes they distinguish are inter
 
 ## How to read a row
 
-Fields as in [txn-failure-modes.md](txn-failure-modes.md#how-to-read-a-row). `Outcome variant`
+Fields as in [txn-failure-modes.md](txn.md#how-to-read-a-row). `Outcome variant`
 here names the `ShardReadyResult` the shard sends and the coordinator error it becomes.
 
 ---
@@ -70,7 +70,7 @@ here names the `ShardReadyResult` the shard sends and the coordinator error it b
 | Invariant | `request_continuation_lock` is not `async`: it grants when `is_drained()` (queue empty *and* no dequeued op outstanding), else stores a `PendingContinuation` carrying the caller's `ready_tx`/`release_rx` and a `deadline`. Grants happen only at that call and at the drain points, and only through `grant_continuation`, which installs the lock and the release receiver together — and installs neither if the requester has already given up (`ready_tx` closed). The deadline is served by `next_continuation_event`, the single host-loop arm that also serves the release signal. |
 | Outcome variant | `ShardReadyResult::Failed(VllError::LockTimeout)` → `ContinuationError::LockFailed` |
 | Forced by | `continuation_lock_parks_then_grants_when_the_queue_drains`, `continuation_lock_times_out_when_the_queue_never_drains`, `continuation_lock_acquires_once_queue_drains`, `continuation_lock_parks_while_a_dequeued_op_is_still_executing`, `parked_continuation_deadline_survives_cancellation`, `continuation_request_does_not_stall_the_shard_event_loop` |
-| Bug refs | [issue 02](../issues/02-continuation-drain-wait-blocks-event-loop.md) |
+| Bug refs | [issue 02](../.scratch/hardening/issues/done/02-continuation-drain-wait-blocks-event-loop.md) |
 
 > **Liveness note.** The drain wait used to run *inside* the shard's own event loop
 > (`acquire_continuation_lock` awaited from `handle_vll_continuation_lock`), and the queue only
@@ -92,7 +92,7 @@ here names the `ShardReadyResult` the shard sends and the coordinator error it b
 | Invariant | Parking raises a drain barrier: the queue can only shrink while a request is parked, so the drain terminates (each queued op either executes or is aborted by its own coordinator) or the deadline fires. The refusal shares FM-VLL-001's short-circuit, so it declares no intent and leaves nothing to clean up. |
 | Outcome variant | `ShardReadyResult::Failed(VllError::ShardBusy)` → `ScatterError::LockFailed` |
 | Forced by | `sca_lock_request_refused_while_a_continuation_request_is_parked` |
-| Bug refs | [issue 02](../issues/02-continuation-drain-wait-blocks-event-loop.md) |
+| Bug refs | [issue 02](../.scratch/hardening/issues/done/02-continuation-drain-wait-blocks-event-loop.md) |
 
 ---
 
@@ -106,4 +106,4 @@ here names the `ShardReadyResult` the shard sends and the coordinator error it b
 | Invariant | `dequeue_for_execution` and `release_after_execution` stay paired across an unwind: the panic is caught inside `handle_vll_execute` (`frogdb-server/crates/core/src/shard/vll.rs`), so the release runs on the panic path exactly as on the success path. Isolation is a structural backstop, never a licence to leave the panicking arithmetic unfixed — a non-zero counter is always a bug. |
 | Outcome variant | n/a — the locks were already granted; the failure is in execution, not acquisition. |
 | Forced by | `a_panicking_vll_op_releases_its_locks_and_the_shard_keeps_serving` |
-| Bug refs | [campaign-2 issue 07](../../hardening-2/issues/done/07-no-panic-isolation-at-the-shard-boundary.md), [round-2 issue 63](../../testing-improvements-round2/issues/done/63-ft-search-limit-0-0-panics-the-shard-worker.md) |
+| Bug refs | [campaign-2 issue 07](../.scratch/hardening-2/issues/done/07-no-panic-isolation-at-the-shard-boundary.md), [round-2 issue 63](../.scratch/testing-improvements-round2/issues/done/63-ft-search-limit-0-0-panics-the-shard-worker.md) |

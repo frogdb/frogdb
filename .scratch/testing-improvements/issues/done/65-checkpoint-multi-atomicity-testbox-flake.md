@@ -79,7 +79,7 @@ already indivisible. The count comes from `WriteRecord::wal_actions` itself, so 
 second guess at how many entries a command produces that could drift low and reopen the tear.
 
 Specified as `FM-PERSISTENCE-001` in
-[`.scratch/hardening/specs/persistence-failure-modes.md`](../../hardening/specs/persistence-failure-modes.md),
+[`specs/persistence.md`](../../../../specs/persistence.md),
 with the deliberate non-guarantees (no cross-shard atomicity, groups are not size-capped, a
 `Clear` still cuts a group) recorded there.
 

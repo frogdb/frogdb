@@ -32,7 +32,7 @@ What *is* honest: `LASTSAVE` does not advance on a failed save (pinned by
 *negative* one — a timestamp that stops moving — while the positive signal next to it says `ok`.
 
 Current behavior pinned by FM-PERSISTENCE-022 in
-`.scratch/hardening/specs/persistence-failure-modes.md`.
+`specs/persistence.md`.
 
 ## Candidate fixes
 

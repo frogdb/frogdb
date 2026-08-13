@@ -138,5 +138,5 @@ caught this — the defect is invisible in the one mode where the two notions co
 ### Spec
 
 New row **FM-PERSISTENCE-043** (the reported durable sequence counts only fsynced commits) in
-`.scratch/hardening/specs/persistence-failure-modes.md`. FM-PERSISTENCE-003 and -004 had their
+`specs/persistence.md`. FM-PERSISTENCE-003 and -004 had their
 false `sync = true` claims corrected.

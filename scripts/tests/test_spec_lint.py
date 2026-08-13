@@ -104,8 +104,8 @@ BOTH = {"CLUSTER": CLUSTER_CATALOG, "REPLICATION": REPLICATION_CATALOG}
 def test_own_area_citation_passes_and_is_counted() -> None:
     errors, counts = _check(
         {
-            "cluster-failure-modes.md": "| Catalog | `INV-HANDOFF-1`, `INV-SLOT-1` |\n",
-            "replication-failure-modes.md": "| Catalog | `INV-REPLID-1` |\n",
+            "cluster.md": "| Catalog | `INV-HANDOFF-1`, `INV-SLOT-1` |\n",
+            "replication.md": "| Catalog | `INV-REPLID-1` |\n",
         },
         BOTH,
     )
@@ -115,11 +115,11 @@ def test_own_area_citation_passes_and_is_counted() -> None:
 
 def test_dangling_citation_is_an_error() -> None:
     errors, _ = _check(
-        {"replication-failure-modes.md": "line one\n| Catalog | `INV-REPLID-9` |\n"},
+        {"replication.md": "line one\n| Catalog | `INV-REPLID-9` |\n"},
         BOTH,
     )
     assert len(errors) == 1, errors
-    assert "replication-failure-modes.md:2" in errors[0], errors
+    assert "replication.md:2" in errors[0], errors
     assert "INV-REPLID-9" in errors[0] and "does not define" in errors[0], errors
 
 
@@ -127,7 +127,7 @@ def test_cross_area_citation_is_an_error_that_names_the_owner() -> None:
     # The whole point of the per-area map: `INV-HANDOFF-1` exists, so a shared
     # vocabulary would wave this through.
     errors, _ = _check(
-        {"replication-failure-modes.md": "| Catalog | `INV-HANDOFF-1` |\n"},
+        {"replication.md": "| Catalog | `INV-HANDOFF-1` |\n"},
         BOTH,
     )
     assert len(errors) == 1, errors
@@ -140,7 +140,7 @@ def test_citation_from_an_area_with_no_catalog_is_an_error() -> None:
     # Persistence has no catalog yet; a citation there must not pass silently
     # just because nothing is registered to contradict it.
     errors, _ = _check(
-        {"persistence-failure-modes.md": "| Catalog | `INV-FSYNC-1` |\n"},
+        {"persistence.md": "| Catalog | `INV-FSYNC-1` |\n"},
         BOTH,
     )
     assert len(errors) == 1, errors
@@ -151,7 +151,7 @@ def test_prose_glob_is_not_a_citation() -> None:
     # The specs talk *about* the ids ("every `INV-*` a row cites"); that must
     # not be read as a citation of an entry named `*`.
     errors, counts = _check(
-        {"replication-failure-modes.md": "Every `INV-*` id resolves to a catalog entry.\n"},
+        {"replication.md": "Every `INV-*` id resolves to a catalog entry.\n"},
         BOTH,
     )
     assert errors == [], errors

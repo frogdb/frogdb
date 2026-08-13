@@ -71,7 +71,7 @@ want**, and it needs a ruling, not a unilateral patch:
       is written to fail loudly on a fix, not to be deleted)
 - [ ] If the behavior changes: the model's pinned `sometimes("a_failed_promotion_strands_the_node")`
       witness is replaced by the corresponding `always`/`eventually` clause
-- [ ] `FM-REPLICATION-020` in `.scratch/hardening/specs/replication-failure-modes.md` reflects the
+- [ ] `FM-REPLICATION-020` in `specs/replication.md` reflects the
       ruled behavior
 
 ## Evidence

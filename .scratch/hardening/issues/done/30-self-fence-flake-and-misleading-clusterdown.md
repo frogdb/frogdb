@@ -47,7 +47,7 @@ exactly what it was built to do; the test (and possibly the defaults) disagree w
    the fence (await freshness, not just connection) or run with the fence disabled explicitly
    — decide after 2, since the right fix depends on the intended default.
 
-Spec impact: the self-fence rows in `.scratch/hardening/specs/replication-failure-modes.md`
+Spec impact: the self-fence rows in `specs/replication.md`
 (FM-REPLICATION spec is LOCKED) must be updated first if behavior or error text changes;
 `just mutants-diff frogdb-replication-runtime` required before pushing any quorum.rs change.
 

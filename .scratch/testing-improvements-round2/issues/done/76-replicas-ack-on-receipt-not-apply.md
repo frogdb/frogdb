@@ -10,7 +10,7 @@ Area: frogdb-replication / replica streaming, `WAIT`
 ## Resolution — the ACK is now the applied head, unconditionally
 
 The contract decided (and now pinned by `FM-REPLICATION-008` in
-`.scratch/hardening/specs/replication-failure-modes.md`): **an acked offset means every frame at
+`specs/replication.md`): **an acked offset means every frame at
 or below it has been applied to its shard.** No config knob — a durability primitive that is only
 sometimes durable is worse than one that is slow, and `WAIT` is the primitive promotion safety is
 built on.

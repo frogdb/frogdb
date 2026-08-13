@@ -12,7 +12,7 @@ Area: server / scatter coordinator, VLL spec
 `ScatterExecutor::scatter_error_to_response` (`server/src/scatter/executor.rs:141-190`) is the sole
 translator from `ScatterError` to the reply a client sees for every cross-shard degradation:
 shard-unavailable, lock-failed, lock-channel-closed, lock-timeout, result-channel-closed,
-result-timeout. The VLL spec preamble (`.scratch/hardening/specs/vll-failure-modes.md:15-18`) names
+result-timeout. The VLL spec preamble (`specs/vll.md:15-18`) names
 it explicitly as where the client's reply lives.
 
 Two of the strings it emits appear **nowhere else in the tree**:

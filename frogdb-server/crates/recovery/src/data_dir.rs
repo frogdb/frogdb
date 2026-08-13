@@ -37,7 +37,7 @@
 //! and the *next* boot does not refuse the database this one just installed.
 //!
 //! Specced as FM-PERSISTENCE-048..052 in
-//! `.scratch/hardening/specs/persistence-failure-modes.md`.
+//! `specs/persistence.md`.
 
 use std::path::{Path, PathBuf};
 

@@ -36,7 +36,7 @@ down), but it is exactly the case where a silent partial artifact is most damagi
 information is free: the two `let _ =` sites already know.
 
 Current behavior pinned by FM-PERSISTENCE-020 in
-`.scratch/hardening/specs/persistence-failure-modes.md`, which carries
+`specs/persistence.md`, which carries
 `Forced by | MISSING ([gap: ...])` pointing here.
 
 ## Candidate fixes

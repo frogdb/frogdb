@@ -3,7 +3,7 @@
 Status: **DRAFT** — open decisions in §8
 Author: 2026-08-08
 Related: [campaign 2](../hardening-2/PRD.md) (detection-first hardening, running),
-[cluster failure-mode spec](../hardening/specs/cluster-failure-modes.md) (LOCKED, 97 rows at
+[cluster failure-mode spec](../../specs/cluster.md) (LOCKED, 97 rows at
 audit time, 098–102 landing with the 2026-08-08 defect fixes),
 [replication-cluster rework](../replication-cluster-rework/PRD.md) (two-phase handoff, shipped)
 

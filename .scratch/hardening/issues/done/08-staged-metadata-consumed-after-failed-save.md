@@ -40,7 +40,7 @@ as absent, an unparseable state file is regenerated — FM-PERSISTENCE-038). Onl
 leave a *plausible but wrong* offset behind.
 
 Current behavior noted in FM-PERSISTENCE-039 in
-`.scratch/hardening/specs/persistence-failure-modes.md`.
+`specs/persistence.md`.
 
 ## Candidate fixes
 

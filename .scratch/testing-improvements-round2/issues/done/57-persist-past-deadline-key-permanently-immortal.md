@@ -80,7 +80,7 @@ command-semantics tests), `.scratch/testing-improvements-round2/issues/`
 ## Resolution
 
 Confirmed as a live defect and fixed. Failure mode **FM-PERSISTENCE-044**
-(`.scratch/hardening/specs/persistence-failure-modes.md`).
+(`specs/persistence.md`).
 
 ### Root cause
 

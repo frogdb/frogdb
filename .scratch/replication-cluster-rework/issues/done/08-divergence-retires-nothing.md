@@ -54,7 +54,7 @@ Pre-fix evidence (latch wired out of `apply.rs`, everything else in place):
 `a_diverged_applier_resumes_on_the_history_a_resync_installs` timed out at 15 s (the consumer never
 stops, so the test waited forever for a stalled head).
 
-Spec: FM-REPLICATION-010 (`.scratch/hardening/specs/replication-failure-modes.md`). Tests:
+Spec: FM-REPLICATION-010 (`specs/replication.md`). Tests:
 `a_failed_apply_stops_the_history_it_happened_on`,
 `a_diverged_applier_resumes_on_the_history_a_resync_installs` (apply.rs);
 `a_diverged_history_is_refused_until_a_resync_replaces_it`,

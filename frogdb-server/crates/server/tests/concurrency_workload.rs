@@ -721,7 +721,7 @@ mod regressions {
     /// the old 30s window and the bug is invisible.
     ///
     /// The FIFO/exactly-once *product* properties this ultimately protects are
-    /// specced in `.scratch/hardening/specs/blocking-failure-modes.md`; this
+    /// specced in `specs/blocking.md`; this
     /// test is not cited there because it is turmoil-gated (see that spec's
     /// scope note).
     #[test]

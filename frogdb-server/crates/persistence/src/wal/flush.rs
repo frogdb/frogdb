@@ -324,7 +324,7 @@ impl FlushOutcomes {
     /// "Reached storage" is deliberately the *committed* sequence, not the
     /// synced one: whether committing implies fsync is the durability mode's
     /// decision (see the durability-mode rows in
-    /// `.scratch/hardening/specs/persistence-failure-modes.md`), and an operator who chose
+    /// `specs/persistence.md`), and an operator who chose
     /// `periodic`/`async` must not have every `Durability::Confirm` write fail
     /// because it demanded an fsync the mode does not perform.
     ///
@@ -454,7 +454,7 @@ impl<S: WriteSink> FlushEngine<S> {
     /// half land in a *later* committed batch, and anything reading the store
     /// in between (a `BGSAVE`/`FULLRESYNC` checkpoint cut, or recovery after a
     /// crash) observes half of it. Specified as the write-group row of
-    /// `.scratch/hardening/specs/persistence-failure-modes.md`.
+    /// `specs/persistence.md`.
     ///
     /// Groups nest (the depth counter), so a producer that opens one inside
     /// another still gets a single commit at the outermost close.

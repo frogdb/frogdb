@@ -116,7 +116,7 @@ All five named tests exist and pass: `repl_output_bytes_grow_when_a_write_is_for
 `both_info_renderers_report_zeros_after_the_repl_byte_counters_are_reset`).
 
 Spec: new row `FM-REPLICATION-063` added to
-`.scratch/hardening/specs/replication-failure-modes.md`; FM-REPLICATION-058's stats-field audit
+`specs/replication.md`; FM-REPLICATION-058's stats-field audit
 paragraph updated to say these two fields are real, resettable counters instead of "not in this row's
 position." `just lint-failure-modes` passes (247 failure modes, 1226 test references, 1226 tags).
 

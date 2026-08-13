@@ -20,7 +20,7 @@ Two spec-first behavior changes to `ClusterState::apply_command`:
    (today FM-CLUSTER-033 blesses the unguarded insert).
 
 Spec-first: amend the affected FM rows (033 and the RemoveNode non-guarantee row) in
-`.scratch/hardening/specs/cluster-failure-modes.md`, write the failing forcing tests, then
+`specs/cluster.md`, write the failing forcing tests, then
 fix. The round-2 documented non-guarantee pinning tests flip polarity rather than being
 deleted.
 

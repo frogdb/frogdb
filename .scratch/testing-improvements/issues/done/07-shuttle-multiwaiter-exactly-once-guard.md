@@ -153,5 +153,5 @@ Deviations 1 and 2 stand unchanged: the shuttle model remains a faithful model r
 literal `ShardWorker` drive, and FIFO wake order is still guarded at the turmoil level only
 (issue 11 Finding B remains open). The connection-side blocking failure modes this guard's product
 fix implements are now specced as FM-BLOCKING-001..005 in
-`.scratch/hardening/specs/blocking-failure-modes.md`, with FM-BLOCKING-005 (serve races the chosen
+`specs/blocking.md`, with FM-BLOCKING-005 (serve races the chosen
 timeout) forced by new unit tests over the extracted `reconcile_ack`.

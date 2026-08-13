@@ -356,7 +356,7 @@ regression-check:
     {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --all-targets
 
 # Gate: the specs and the tests that force them must agree, both ways.
-# Every `Forced by` test in .scratch/hardening/specs/*-failure-modes.md must
+# Every `Forced by` test in specs/*.md must
 # exist and carry a `// FM-<AREA>-NNN` tag; every tag must name a spec row.
 # Builds the listed crates' test binaries (~15-25s warm, no test execution).
 # Runs its own fixture test first: a green tree exercises the invariant

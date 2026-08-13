@@ -48,7 +48,7 @@ barrier is armed at a node that no longer owns the slot.
 ## What to build
 
 Spec-first: amend FM-CLUSTER-003 (and FM-CLUSTER-004 if the ruling covers the removal leg) in
-`.scratch/hardening/specs/cluster-failure-modes.md`, add the failing forcing test, then fix.
+`specs/cluster.md`, add the failing forcing test, then fix.
 
 Candidate rulings:
 

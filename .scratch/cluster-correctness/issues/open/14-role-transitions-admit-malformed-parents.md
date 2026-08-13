@@ -30,7 +30,7 @@ failover candidate search treats it as a candidate for a node that cannot fail o
 ## What to build
 
 Spec-first (amend the `SetRole`/`AddNode` FM rows in
-`.scratch/hardening/specs/cluster-failure-modes.md` first, then the failing forcing tests,
+`specs/cluster.md` first, then the failing forcing tests,
 then the fix):
 
 1. `SetRole` rejects a `primary_id` naming a node that is not a Primary.

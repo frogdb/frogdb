@@ -41,7 +41,7 @@ fsynced (FM-PERSISTENCE-035) because an unsynced watermark can only under-report
 snapshot is not the benign direction.
 
 Current behavior pinned by FM-PERSISTENCE-023 in
-`.scratch/hardening/specs/persistence-failure-modes.md`.
+`specs/persistence.md`.
 
 ## Candidate fixes
 

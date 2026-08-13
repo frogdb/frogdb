@@ -121,7 +121,7 @@ reasons other than a partition.
 ## Acceptance criteria
 
 - [ ] Ruling recorded; FM row added or amended in
-      `.scratch/hardening/specs/cluster-failure-modes.md` (FM-CLUSTER-040/041 neighborhood), with
+      `specs/cluster.md` (FM-CLUSTER-040/041 neighborhood), with
       its forcing test in `frogdb-cluster` / `frogdb-cluster-runtime` (fails first)
 - [ ] No client-visible window in which two nodes serve the same slot after an automatic
       failover heals
