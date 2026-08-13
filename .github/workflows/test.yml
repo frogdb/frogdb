@@ -123,7 +123,7 @@ jobs:
       run: cargo deny check --config frogdb-server/deny.toml
   seam-gates:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.python == 'true' || needs.changes.outputs.specs == 'true'
     name: Seam Lint Gates
     runs-on: ubuntu-latest
     steps:
@@ -138,6 +138,8 @@ jobs:
         experimental: 'true'
     - name: Run compile-free seam-lint gates
       run: just lint-gates
+    - name: Run spec-lint fixture suite
+      run: just test-spec-lint
   unit-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
