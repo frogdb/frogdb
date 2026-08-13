@@ -118,3 +118,7 @@ an overshoot against an empty slot) stay in the property. Fixing this issue turn
 ## Ruling (2026-08-13)
 
 **Option: clamp + count.** `ingest_replica_ack` clamps a `REPLCONF ACK` beyond the primary's live head down to the live head, incrementing a counter and logging for observability. NO disconnect — the promotion-settle path produces over-high acks innocently, and disconnecting would flap healthy replicas. Deliberate deviation from Redis (which ingests acks verbatim with no ceiling) as an improvement. New FM-REPLICATION row for the clamp. This ruling covers BOTH producing paths: restart-reuse (structurally closed by issue 24's ruling) and promotion-settle. Delete the sweep's `known_panic_gap` muzzle when fixed.
+
+## Amendment (2026-08-13)
+
+**Clamp reversed → ignore + count.** The anti-pattern review found clamping writes `min(wire, live)` into `acked_offset`, making the primary a writer of its own ack state — contradicting FM-REPLICATION-039's "wire ACK is the only writer" (the row issue 28 forced) and granting WAIT credit for bytes the replica never confirmed on this head's lineage. Amended behavior: an ack above the live head is **ignored entirely** (no `acked_offset` write) and counted via metric; the replica's next valid ack ≤ head updates normally. Raft shape: a leader never advances a follower's match index past its own log. The no-disconnect disposition stands. The FM row and forcing test target ignore-semantics, not clamp.

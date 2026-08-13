@@ -81,3 +81,7 @@ None.
 ## Ruling (2026-08-13)
 
 **Option: source-only.** `AssignSlots` on a slot with an open migration is permitted only when the assignee is the migration's source (the legal follower-seed re-assert path); any other assignee is refused. Apply the same check to `RemoveSlots`. When fixed, delete the `known_defect`/`pinned_issue_16_assign_slots_ignores_an_open_migration` muzzle in `frogdb-server/crates/cluster/src/properties.rs`.
+
+## Amendment (2026-08-13)
+
+**Source-only tightened to nobody.** The ruled source-only exception still lets the migration source `DELSLOTS` the migrating slot, orphaning the migration (slot unassigned, target importing from nobody). Amended: **all** slot-map mutation on a slot with an open migration is refused, source included. The migration protocol's own Complete/Abort are the only mutators of a migrating slot.

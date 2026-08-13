@@ -92,3 +92,10 @@ really did deregister, and an unannounced pair. Fixing this issue turns the witn
 ## Ruling (2026-08-13)
 
 **Option: kick predecessor.** A session reaching `Phase::Streaming` disconnects any other session streaming with the same announced identity (addr:port) — an immediate, explicit version of Redis's implicit newest-wins. Sessions with `listening_port == 0` (unknown identity) are NEVER deduped — INV-SESSION-2's exclusion stands. Log each kick. New FM-REPLICATION row.
+
+## Amendment (2026-08-13)
+
+Two corrections from the anti-pattern review:
+
+1. **`Superseded` disconnect outcome.** The ruled kick classified as a Graceful departure, whose record can land *after* the successor's `ClearDeparture` and silently un-fence — exactly FM-REPLICATION-062's named NOT-observable. The kick now records a new **`Superseded`** disconnect outcome that writes **no departure record at all**.
+2. **Dedup key.** (peer IP, announced port) is peer-controlled: two distinct replicas behind shared egress/NAT collide and kick-loop forever. Dedup instead on **node/replica id + cooldown**.

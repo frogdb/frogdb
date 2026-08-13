@@ -68,3 +68,7 @@ None.
 ## Ruling (2026-08-13)
 
 **Option: prune.** Any failover — graceful or forced — cancels open migrations naming the demoted node on either leg, emitting the corresponding releases. Keyed to the failover transition itself, NOT node removal (issue 20's ruling means automatic failover now demotes without removing, so removal-keyed pruning would never fire on the automatic path). The orchestrator restarts migration under the new topology. Matches Redis/Valkey semantics, where node-local migrating/importing marks do not survive a role change.
+
+## Amendment (2026-08-13)
+
+**Abort is a real rollback.** The prune ruling leaves keys already `MIGRATE`d+deleted split across source and target with no repair path — and unlike Redis (manual `redis-cli --cluster fix`), FrogDB enters that state automatically on every failover mid-rebalance. Amended: the Abort protocol **repatriates** — the target streams the keys in its importing slot back to the source before the Abort applies clean. Automatic and log-driven, no operator verb. CRDB shape: a range move either commits or rolls back fully; the keyspace never stays split.

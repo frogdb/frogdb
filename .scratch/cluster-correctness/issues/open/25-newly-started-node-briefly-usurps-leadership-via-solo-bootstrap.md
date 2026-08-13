@@ -181,3 +181,10 @@ None.
 1. Explicit bootstrap-vs-join (etcd `initial-cluster-state` shape): a node never self-elects into an externally routable leader unless explicitly configured to bootstrap a fresh deployment; a joining node defers raft init/election until MEET folds it in.
 2. Error-shape fix: learner-promotion conflicts are no longer translated into client `-REDIRECT`.
 Option 3 becomes unnecessary once (1) lands. If cheap, also add the cross-node checker invariant: a node answering as leader must be the agreed leader or unreachable.
+
+## Amendment (2026-08-13)
+
+Two additions from the review, both accepted:
+
+1. **Refuse MEET of a node with non-empty Raft state.** A node that was ever a member of another cluster carries Raft log/vote state; MEETing it in can absorb foreign state. etcd refuses exactly this — the data dir must be wiped first.
+2. **Persist bootstrap intent.** A node restarted mid-bootstrap re-decides its mode from config today; persisted intent makes the restart deterministic (no accidental re-bootstrap or mode flip).

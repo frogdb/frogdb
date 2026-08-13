@@ -103,3 +103,7 @@ None.
 - Orphaned handoffs are aborted by the level-triggered reconcile pass (issue 18's ruling): the leader proposes `Abort`. Time is only a liveness trigger to *propose*; release always flows through the log. Wall clock is not a correctness input anywhere in the handoff protocol.
 - CRDB-style epoch leases were considered and rejected: wrong tool here (still needs bounded clock skew, adds hot-path cost, and FrogDB has no per-op consensus cost to amortize).
 - Characterization tests `stale_source_admits_writes_after_ownership_moves` and `stale_source_keeps_serving_after_the_target_takes_the_slot` must flip to assert the fence.
+
+## Amendment (2026-08-13)
+
+**Feed hold bounded by bytes, not time.** The log-ordered fence stands (arm on Prepare apply, release only via Complete/Abort apply). The review found the node-wide hold and per-session `VecDeque` unbounded if Complete/Abort lags, falsifying FM-CLUSTER-097's "a feed cannot wedge". Amended: each held session's queue carries a **byte cap**; breaching it **disconnects that replica session** (it full-resyncs after the handoff resolves). Fence release stays purely log-ordered — no time-based release; liveness for orphaned handoffs is owned by issue 18's reconcile abort. The now-undefined `lease_expired` term in `admits_complete_at` is deleted.

@@ -103,3 +103,25 @@ before the affected issues dispatch. Spec-gap findings (persistence P-C1/H*, vll
 rows, failover drain) are spec-first candidates: new FM rows + forcing tests, filed as
 issues after triage. Nothing here blocks formal-spec phase 2 scaffolding, but phase-2
 models should encode the amended semantics, not the as-filed rulings.
+
+## Amendment rulings (2026-08-13)
+
+All eleven ruling amendments were settled with the user the same day and recorded in their
+issue files (`## Amendment (2026-08-13)` sections):
+
+| Ruling | Outcome |
+|--------|---------|
+| R21 | Reversed: clamp → **ignore + count** (no `acked_offset` write from an over-head ack) |
+| R22 | Accepted both: **`Superseded`** outcome (no departure record) + dedup on node id + cooldown |
+| R24 | Accepted all four: (a)+(b) replid2-shift + fresh mint on unclean restart; atomic offset pairing; issue 24 before 17; persistence constraints (quiesce-window write, mint-fresh on WAL truncation, intact-recovery definition) |
+| C17 | **Byte-cap + disconnect** bounds the feed hold; release stays log-ordered; `lease_expired` term deleted |
+| C18 | Hardening package: in-flight guard, capped exponential backoff, never abandons, stuck-failover signal |
+| C19 | Reversed: global epoch → **per-object fence** (deposed primary's role-version; FM-CLUSTER-013 interaction decisive) |
+| C15 | **Abort = rollback**: target repatriates importing-slot keys before Abort applies clean |
+| C20 | Accepted all: live-voter FORGET guard (FORCE escape), eviction fence required, dead-voter observability |
+| C14 | FM-CLUSTER-011 amended: refusal only for structural invalidity; bulk-import ordering documented |
+| C16 | Tightened: **all** slot-map mutation refused on an open-migration slot; only Complete/Abort mutate |
+| C25 | Accepted both: MEET of node with non-empty Raft state refused; bootstrap intent persisted |
+
+The spec-gap findings (P-C1 ack-durability, T-C1 script bypass, failover drain, fsyncgate,
+vll/blocking rows, …) remain open for triage into issues; they were not part of this round.

@@ -139,3 +139,11 @@ None.
 ## Ruling (2026-08-13)
 
 **Option: demote, don't remove.** Automatic failover proposes `force: false`; the demoted primary remains a Raft voter, keeps receiving entries, and applies its own demotion when the partition heals (structural reconciliation — Raft is FrogDB's gossip-equivalent channel). Failover changes roles, never membership; node removal stays an explicit operator action. Accepted liveness cost: a dead node lingers as a voter until the operator removes it. Option 2 (local eviction-fence signal) is a candidate follow-up issue for administrative eviction, not part of this fix. Delete the 9 EXPECTED-FAILURE seed muzzles; acceptance is a clean 500-seed run.
+
+## Amendment (2026-08-13)
+
+**Admin path closed.** Demote-don't-remove covered the failover path only; `CLUSTER FORGET` of a live node and a permanent `add_learner` failure still reproduced this issue's exact shape on the admin path, and demoted-never-removed voters accumulated invisibly. Three additions, all accepted:
+
+1. `CLUSTER FORGET` of a Raft-reachable voter is **refused unless the node is demoted first**; a FORCE override remains as a documented-unsafe escape hatch.
+2. The eviction fence is promoted from candidate follow-up to **required** (covers removal after permanent `add_learner` failure).
+3. **Dead-voter observability:** count surfaced in CLUSTER INFO + metric.

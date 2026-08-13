@@ -106,3 +106,12 @@ None.
 ## Ruling (2026-08-13)
 
 **Option: level-triggered.** `reconcile_topology` gains a pass that runs failover selection for EVERY failed primary still owning slots that has an eligible replica, every tick, independent of which pass wrote the FAIL flag. Idempotent by construction. Flip the characterization test `a_slot_strands_on_a_primary_the_cluster_has_failed` to an always-property (no at-rest stranded slot with an eligible replica).
+
+## Amendment (2026-08-13)
+
+**Reconcile hardening package.** Level-triggered stands; four additions from the review:
+
+1. **In-flight guard:** at most one outstanding failover proposal per failed primary (no re-propose while the previous is in the Raft pipeline).
+2. **Per-target exponential backoff with a cap** on retry rate.
+3. **Never abandons:** no `MAX_ATTEMPTS` — abandoning would reintroduce the edge-triggered dead state this issue exists to kill. Retries forever at the capped rate (Kubernetes controller shape: level-triggered + rate-limited workqueue).
+4. **Stuck-failover observability:** metric + CLUSTER INFO field once a failover has been retrying past a threshold.

@@ -71,3 +71,7 @@ None.
 ## Ruling (2026-08-13)
 
 **Confirmed as proposed.** Reject dangling/chained parent pointers at `AddNode`/`SetRole` apply time. Fold INV-REF-3B into INV-REF-3 as a HARD invariant, retiring the catalog's only DOCUMENTED-EXCEPTION. Re-point the forcing test `apply_command_catches_a_transition_that_malforms_the_topology`; the illegal-chain fixture in `auto_failover_ignores_a_failed_replica` gets a test-only unchecked constructor.
+
+## Amendment (2026-08-13)
+
+**FM-CLUSTER-011 carve-out.** The refusal ruled here contradicts FM-CLUSTER-011's "membership is never refused" as written. The row is amended: membership may be refused **only for structural invalidity** (malformed parent-pointer graph — dangling or chained), never for capacity or policy. The order-dependence trap is documented with it: any future bulk node-import must apply parent-before-child or land as one batch.

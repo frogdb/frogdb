@@ -124,3 +124,12 @@ REPLICATION_SEED_TRACE=1 REPLICATION_SEEDS_START=81 just replication-seeds 1
 ## Ruling (2026-08-13)
 
 **Option a: structural.** Replication identity + offset move INTO the checkpoint/dataset metadata (Redis RDB-aux shape) so identity cannot outlive the dataset by construction. A boot that recovers no dataset naturally mints a fresh replid (covers persistence-disabled). Subsumes option c. Closes issue 21's restart-reuse path. New FM row; remove the `restart_tainted_replids`/XREPL-2 sweep exemption (seeds 122/171/211).
+
+## Amendment (2026-08-13)
+
+The anti-pattern review found option (a) alone insufficient (R-C1 CRITICAL): a primary restarting *with* a dataset resumes `(id, offset)` below what replicas acked and re-issues those offsets under the same id → `+CONTINUE` over divergent bytes. Redis's RDB-aux path does both halves. Four additions, all accepted:
+
+1. **(b) as well as (a):** every unclean primary restart shifts the old id into `replid2` at a frozen boundary and mints a fresh primary id. (a)+(b) together are the Redis shape.
+2. **Atomic pairing:** the persisted offset must commit in the same atomic unit as the write it names. Manifest-time stamping biases the offset low → non-idempotent replay (INCR/LPUSH/APPEND applied twice).
+3. **Sequencing:** this issue lands **before** issue 17 (both relocate `offset_at_save`; neither cited the other). FM-REPLICATION-021's "same `master_replid` after reboot" Observable inverts under this ruling and is rewritten in this issue's change set. INV-OFFSET-2's "monotone within a history" is keyed `(replication_id, epoch)`.
+4. **Persistence constraints:** identity is written inside the FM-PERSISTENCE-019 quiesce window (the current post-cut sidecar write can tear the pair); a fresh id is also minted when `frogdb_wal_recovery_dropped_records_total > 0` (truncation rolled the dataset back under an unchanged identity); "recovered a dataset" means recovered it **intact** — `keys_failed == 0` under FM-PERSISTENCE-033's `continue` policy.

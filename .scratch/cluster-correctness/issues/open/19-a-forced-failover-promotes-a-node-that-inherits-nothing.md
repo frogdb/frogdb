@@ -109,3 +109,7 @@ None.
 ## Ruling (2026-08-13)
 
 **Option: epoch-fenced proposals, GLOBAL epoch (user chose global over per-node: simpler, more spurious refusals, safe under retry).** `ClusterCommand::Failover` carries the cluster-wide config epoch observed at scoring time; apply refuses the command if the current epoch has advanced. Belt retained: also refuse when the command would move nothing (old primary not a member, owns no slots, or new primary not the old's replica). Retry is provided structurally by issue 18's level-triggered reconcile — a refused proposal is re-scored on the next pass. Wire-shape change accepted (pre-production). Flip the characterization test `a_promotion_can_move_nothing`.
+
+## Amendment (2026-08-13)
+
+**Global epoch reversed → per-object fence.** The review surfaced an interaction not on the table at ruling time: FM-CLUSTER-013 makes every `MarkNodeFailed` bump the config epoch, so a global fence refuses all in-flight failovers on any topology change — one failover per reconcile tick under correlated failure, and a flapping node starves unrelated failovers indefinitely (worse under issue 18's backoff). Amended: the failover proposal carries the **deposed primary's role-version/epoch**, and apply refuses only if **that node's** state changed since observation. Parallel recovery under correlated failure; immune to flap starvation. Precedent: CRDB per-range leases, Kafka per-partition leader epoch, ZooKeeper per-znode versions. The belt (refuse no-op moves) stays.
