@@ -208,6 +208,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Bug refs | `.scratch/hardening/issues` (issue 01 — surfaced as a load-dependent `test_broadcast_lag_disconnect_and_resync` flake; the seed write was acked by neither replica because the ACK never arrived) |
 
 [`PayloadReader`]: https://github.com/frogdb/frogdb/blob/main/frogdb-server/crates/replication/src/replica/payload_reader.rs
+
 ## FM-REPLICATION-006 — owing an ACK never stops the replica reading its link
 
 | Field | Value |

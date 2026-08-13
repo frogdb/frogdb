@@ -24,13 +24,12 @@ pre-commit:
               - "Cargo.lock"
               - "rust-toolchain.toml"
               - ".cargo/**"
-            # Cold clippy + lint-spec (builds test binaries via `cargo nextest list`) run
-            # 10+ minutes — longer than the agent harness command timeout, which historically
-            # forced agents into blanket
-            # `git commit --no-verify`, skipping every hook including the fast ones. Agents
-            # are required to run `just lint` as a pre-push verification step instead,
-            # so the commit-time job is skipped for
-            # them; human commits from a terminal run it unchanged.
+            # Cold clippy + lint-spec (builds test binaries via `cargo nextest list`) run 10+
+            # minutes — longer than the agent harness command timeout, which historically
+            # forced agents into blanket `git commit --no-verify`, skipping every hook
+            # including the fast ones. Agents are required to run `just lint` as a pre-push
+            # verification step instead, so the commit-time job is skipped for them; human
+            # commits from a terminal run it unchanged.
             run: |
               if [ "${CLAUDECODE:-}" = "1" ]; then
                 echo "rust-clippy: skipped under Claude Code (agents must run 'just lint' before pushing)"

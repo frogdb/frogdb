@@ -66,7 +66,9 @@ LINK_RE = re.compile(r"\]\(([^)\s]+)((?:\s+\"[^\"]*\")?)\)")
 
 # Reference-style link definitions: `[label]: target` (optionally `"title"`),
 # line-anchored per CommonMark, with up to 3 leading spaces of indent.
-REF_LINK_RE = re.compile(r'^( {0,3})\[([^\]]+)\]:\s*(\S+)((?:\s+"[^"]*")?)\s*$', re.MULTILINE)
+REF_LINK_RE = re.compile(
+    r'^( {0,3})\[([^\]]+)\]:[ \t]*(\S+)((?:[ \t]+"[^"]*")?)[ \t]*$', re.MULTILINE
+)
 
 # ---------------------------------------------------------------------------
 # Rendering
@@ -85,7 +87,7 @@ def rewrite_link(target: str, *, spec_name: str) -> str:
         return f"/specifications/{Path(path).stem}/{fragment}"
     # Anything else is repo-relative from `specs/` and is not published.
     normalized = posixpath.normpath(posixpath.join("specs", path))
-    if normalized == ".." or normalized.startswith("../"):
+    if normalized == "." or normalized == ".." or normalized.startswith("../"):
         sys.exit(f"spec-gen: {spec_name} link target {path!r} escapes the repo root")
     return GITHUB_BLOB + normalized + fragment
 
