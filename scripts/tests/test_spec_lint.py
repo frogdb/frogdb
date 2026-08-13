@@ -288,6 +288,61 @@ def test_live_specs_have_no_dangling_references() -> None:
     assert rows == [], rows
 
 
+LIVENESS_SPEC = """\
+# Cluster
+
+## LV-CLUSTER-001 — a missed failover is eventually retried
+
+| Property | if a primary stays failed, some replica is eventually promoted |
+| Forced by | `test_missed_failover_is_retried` |
+"""
+
+LIVENESS_SPEC_UNFORCED = """\
+# Cluster
+
+## LV-CLUSTER-001 — a missed failover is eventually retried
+
+| Property | if a primary stays failed, some replica is eventually promoted |
+"""
+
+
+def test_lv_row_without_forced_by_is_an_error() -> None:
+    _, _, errors, _ = _parse({"cluster.md": LIVENESS_SPEC_UNFORCED})
+    assert len(errors) == 1, errors
+    assert "LV-CLUSTER-001 has no `Forced by` row" in errors[0], errors
+
+
+def test_lv_row_forcing_test_must_carry_its_tag() -> None:
+    _, rows, errors, _ = _parse({"cluster.md": LIVENESS_SPEC})
+    assert errors == [], errors
+    assert rows[0].tests == ["test_missed_failover_is_retried"], rows[0].tests
+
+    paths = {"cluster_failover::test_missed_failover_is_retried"}
+    untagged = fm.check([], rows, [], paths)
+    assert len(untagged) == 1, untagged
+    assert "carries no `// LV-CLUSTER-001` tag" in untagged[0], untagged
+
+    tag = fm.Tag(
+        row_id="LV-CLUSTER-001",
+        test="test_missed_failover_is_retried",
+        path=fm.REPO / "frogdb-server/crates/cluster/src/lib.rs",
+        line=1,
+    )
+    assert fm.check([], rows, [tag], paths) == []
+
+
+def test_lv_tag_naming_no_row_is_an_error() -> None:
+    tag = fm.Tag(
+        row_id="LV-CLUSTER-404",
+        test="test_orphan",
+        path=fm.REPO / "frogdb-server/crates/cluster/src/lib.rs",
+        line=1,
+    )
+    problems = fm.check([], [], [tag], {"cluster_failover::test_orphan"})
+    assert len(problems) == 1, problems
+    assert "is tagged LV-CLUSTER-404, which no spec defines" in problems[0], problems
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:

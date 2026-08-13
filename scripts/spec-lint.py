@@ -110,14 +110,14 @@ COMPOSITION_HEADING_RE = re.compile(r"^##\s+(CO-(\d+))\s*(?:[—-]\s*(.*))?$")
 SPEC_REF_RE = re.compile(r"\b(?:FM|TR|LV)-[A-Z]+-\d+\b|\bCO-\d+\b")
 # `| Field | Value |`
 ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$")
-FM_TAG_RE = re.compile(r"\bFM-([A-Z]+)-(\d+)\b")
+TAG_ID_RE = re.compile(r"\b(FM|LV)-([A-Z]+)-(\d+)\b")
 # A *tag* is a comment line that is nothing but ids — `// FM-TXN-004`,
 # `// FM-TXN-009, FM-TXN-022`, `/// FM-BLOCKING-005`. A comment that merely
 # *mentions* an id in prose ("the complement of FM-REPLICATION-018") is a
 # cross-reference, not a claim that this item forces that row, and must not be
 # linted as one: the invariants are worth citing where the code implements
 # them, and treating a citation as a tag makes the lint punish good comments.
-FM_TAG_LINE_RE = re.compile(r"^\s*//[/!]?\s*FM-[A-Z]+-\d+(?:\s*,?\s*FM-[A-Z]+-\d+)*\s*$")
+TAG_LINE_RE = re.compile(r"^\s*//[/!]?\s*(?:FM|LV)-[A-Z]+-\d+(?:\s*,?\s*(?:FM|LV)-[A-Z]+-\d+)*\s*$")
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 # `MISSING ([gap: 03-disk-full-injection.md](../issues/03-disk-full-injection.md))`
@@ -174,7 +174,7 @@ class FailureMode:
     fields: dict[str, str] = field(default_factory=dict)
 
     def where(self) -> str:
-        return f"{self.spec.relative_to(REPO)}:{self.line}"
+        return f"{rel(self.spec)}:{self.line}"
 
 
 @dataclass
@@ -198,20 +198,20 @@ class SpecRow:
     fields: dict[str, str] = field(default_factory=dict)
 
     def where(self) -> str:
-        return f"{self.spec.relative_to(REPO)}:{self.line}"
+        return f"{rel(self.spec)}:{self.line}"
 
 
 @dataclass
 class Tag:
     """An `FM-<AREA>-NNN` comment attached to a test function."""
 
-    fm_id: str
+    row_id: str
     test: str
     path: Path
     line: int
 
     def where(self) -> str:
-        return f"{self.path.relative_to(REPO)}:{self.line}"
+        return f"{rel(self.path)}:{self.line}"
 
 
 def parse_spec(path: Path, errors: list[str]) -> tuple[list[FailureMode], list[SpecRow]]:
@@ -298,11 +298,22 @@ def parse_spec(path: Path, errors: list[str]) -> tuple[list[FailureMode], list[S
                 errors.append(f"{mode.where()}: {mode.id} has no `{required}` row")
         mode.tests = parse_forced_by(mode, errors)
 
+    for row in rows:
+        if row.kind != "LV":
+            continue
+        if "Forced by" not in row.fields:
+            errors.append(
+                f"{row.where()}: {row.id} has no `Forced by` row — a liveness property "
+                "nobody forces is a gap, the same rule an FM row lives under"
+            )
+            continue
+        row.tests = parse_forced_by(row, errors)
+
     return modes, rows
 
 
-def parse_forced_by(mode: FailureMode, errors: list[str]) -> list[str]:
-    """Extract the backtick-wrapped test names from an FM's `Forced by` cell."""
+def parse_forced_by(mode: FailureMode | SpecRow, errors: list[str]) -> list[str]:
+    """Extract the backtick-wrapped test names from a row's `Forced by` cell."""
     cell = mode.fields.get("Forced by", "")
     if not cell:
         return []
@@ -585,10 +596,10 @@ def resolve(name: str, test_paths: set[str]) -> bool:
 
 
 def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:
-    """Collect every `// FM-<AREA>-NNN` tag comment and the test it annotates.
+    """Collect every `// FM-<AREA>-NNN` / `// LV-<AREA>-NNN` tag comment and the test it annotates.
 
     Only a comment line consisting *solely* of ids is a tag — see
-    [`FM_TAG_LINE_RE`]. Prose that cites an id is left alone.
+    [`TAG_LINE_RE`]. Prose that cites an id is left alone.
     """
     tags: list[Tag] = []
     for root in roots:
@@ -597,20 +608,20 @@ def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:
                 continue
             lines = path.read_text(errors="replace").splitlines()
             for index, line in enumerate(lines):
-                if not FM_TAG_LINE_RE.match(line):
+                if not TAG_LINE_RE.match(line):
                     continue
-                matches = FM_TAG_RE.findall(line)
+                matches = TAG_ID_RE.findall(line)
                 test = annotated_fn(lines, index)
                 if test is None:
                     errors.append(
-                        f"{path.relative_to(REPO)}:{index + 1}: FM tag is not attached to a "
+                        f"{rel(path)}:{index + 1}: spec tag is not attached to a "
                         "test function (only comments and attributes may follow it, then `fn`)"
                     )
                     continue
-                for area, number in matches:
+                for kind, area, number in matches:
                     tags.append(
                         Tag(
-                            fm_id=f"FM-{area}-{number}",
+                            row_id=f"{kind}-{area}-{number}",
                             test=test,
                             path=path,
                             line=index + 1,
@@ -635,40 +646,46 @@ def annotated_fn(lines: list[str], index: int) -> str | None:
     return None
 
 
-def check(modes: list[FailureMode], tags: list[Tag], test_paths: set[str]) -> list[str]:
-    """Both directions of the spec <-> test agreement."""
+def check(
+    modes: list[FailureMode],
+    rows: list[SpecRow],
+    tags: list[Tag],
+    test_paths: set[str],
+) -> list[str]:
+    """Both directions of the spec <-> test agreement, for FM and LV rows."""
     errors: list[str] = []
-    known = {mode.id: mode for mode in modes}
-    tagged: set[tuple[str, str]] = {(tag.fm_id, tag.test) for tag in tags}
+    forced: list[FailureMode | SpecRow] = [*modes, *[row for row in rows if row.kind == "LV"]]
+    known = {row.id: row for row in forced}
+    tagged: set[tuple[str, str]] = {(tag.row_id, tag.test) for tag in tags}
 
     # spec -> test
-    for mode in modes:
-        for name in mode.tests:
+    for row in forced:
+        for name in row.tests:
             if not resolve(name, test_paths):
                 errors.append(
-                    f"{mode.where()}: {mode.id} names `{name}`, which no test in "
+                    f"{row.where()}: {row.id} names `{name}`, which no test in "
                     f"{'/'.join(NEXTEST_CRATES)} matches"
                 )
                 continue
             leaf = name.rsplit("::", 1)[-1]
-            if (mode.id, leaf) not in tagged:
+            if (row.id, leaf) not in tagged:
                 errors.append(
-                    f"{mode.where()}: {mode.id} names `{name}`, but that test carries "
-                    f"no `// {mode.id}` tag at its definition site"
+                    f"{row.where()}: {row.id} names `{name}`, but that test carries "
+                    f"no `// {row.id}` tag at its definition site"
                 )
 
     # test -> spec
     for tag in tags:
-        mode = known.get(tag.fm_id)
-        if mode is None:
+        row = known.get(tag.row_id)
+        if row is None:
             errors.append(
-                f"{tag.where()}: `{tag.test}` is tagged {tag.fm_id}, which no spec defines"
+                f"{tag.where()}: `{tag.test}` is tagged {tag.row_id}, which no spec defines"
             )
             continue
-        if tag.test not in {name.rsplit("::", 1)[-1] for name in mode.tests}:
+        if tag.test not in {name.rsplit("::", 1)[-1] for name in row.tests}:
             errors.append(
-                f"{tag.where()}: `{tag.test}` is tagged {tag.fm_id}, but that FM's "
-                f"`Forced by` row does not name it ({mode.where()})"
+                f"{tag.where()}: `{tag.test}` is tagged {tag.row_id}, but that row's "
+                f"`Forced by` row does not name it ({row.where()})"
             )
 
     return errors
@@ -697,7 +714,7 @@ def main() -> None:
     spec_refs = check_spec_references(args.spec_dir, defined, errors)
     tags = scan_tags(SOURCE_ROOTS, errors)
     test_paths = load_test_paths(args.nextest_output)
-    errors += check(modes, tags, test_paths)
+    errors += check(modes, rows, tags, test_paths)
 
     if errors:
         print("SPEC LINT: FAIL", file=sys.stderr)
@@ -705,7 +722,7 @@ def main() -> None:
             print(f"  {error}", file=sys.stderr)
         sys.exit(1)
 
-    references = sum(len(mode.tests) for mode in modes)
+    references = sum(len(row.tests) for row in [*modes, *rows])
     areas = sorted({mode.area for mode in modes})
     breakdown = ", ".join(
         f"{area} {citations.get(area, 0)}/{len(cat.ids)}" for area, cat in sorted(catalogs.items())
