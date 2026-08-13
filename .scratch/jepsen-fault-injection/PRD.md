@@ -58,17 +58,37 @@ Missing commands, by value:
   compiled + admin-gated like Redis's DEBUG, or behind a build feature/config flag jepsen
   images enable? Redis ships them always-on behind DEBUG; matching that is the parity
   default, but WAL-FAIL-NEXT in a production binary is a sharper knife than Redis carries.
+
+  **Ruling (2026-08-13): always compiled, double-gated.** Injection commands (CLOCK-OFFSET,
+  DELAY-APPLY, WAL-FAIL-NEXT, SHRINK-BACKLOG) ship in the production binary behind a config
+  flag defaulting to off (Redis `enable-debug-command` shape) plus admin gating — consistent
+  with the prior check-command ruling. Jepsen certifies the shipped bytes, not a special
+  build.
 - **D2 — locked-crate discipline.** Every injection point lands inside a locked area
   (replication, cluster, persistence). Ruling needed on whether injection seams are
   spec-relevant (new failure-mode rows) or test-surface exempt (like the DEBUG check
   commands were). Mutation gates apply either way.
+
+  **Ruling (2026-08-13): exempt with guardrails.** Injection seams get NO FM rows — they are
+  forcing infrastructure, like gofail/Buggify/turmoil. Guardrails: every injector is
+  no-op-unless-armed, with the disarmed path under the mutation gates; any NEW behavior an
+  injector reveals enters the spec spec-first as normal FM rows.
 - **D3 — cross-node checker scope.** Issue 10's checker duplicates some single-node
   catalog claims at the fleet level. Rule whether it asserts only genuinely cross-node
   claims (replid agreement, offset dominance, primary uniqueness) or also re-checks
   node-local ones for defense in depth.
+
+  **Ruling (2026-08-13): cross-node-only.** The checker asserts only fleet-view claims
+  (replid agreement, replica-offset ≤ primary-head, exactly-one-primary-per-shard); no
+  node-local re-checks (drift risk against the node-local test suites).
 - **D4 — sequencing vs open campaigns.** WAL-FAIL-NEXT belongs naturally to the persistence
   campaign; DELAY-APPLY/CHANGE-REPL-ID interact with open replication rulings (16-22).
   Rule whether those issues wait on their campaign rulings or land behind them.
+
+  **Ruling (2026-08-13): proceed.** Issues 05/06/09 unblock now that the cluster/replication
+  rulings are recorded in their issue files; each nemesis asserts the ruled behavior
+  (delay-apply → replication issue 19's arm-on-Streaming; change-repl-id → replication
+  issue 18's rejection+drop). No persistence-campaign hold for 09.
 
 ## Workstreams
 

@@ -1,6 +1,6 @@
 # 17 — A stale source outlives its write barrier and re-admits writes for a slot it no longer owns
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -93,3 +93,13 @@ already bounds the "coordinator died" case that the timeout was protecting again
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Option: log-ordered fence (sharpened option 1; wall clock removed from correctness entirely).**
+- Fence arms when the source applies `PrepareSlotHandoff`; it is released ONLY by applying `Complete` or `Abort` for that `handoff_seq` (through the existing `SlotHandoffReleased` path).
+- The state machine enforces exactly-one-resolution per `handoff_seq`: first of Complete/Abort wins, the second is refused.
+- The `barrier_ms` wall-clock admission window on Complete is DROPPED — replaced by the log-ordering rule.
+- Orphaned handoffs are aborted by the level-triggered reconcile pass (issue 18's ruling): the leader proposes `Abort`. Time is only a liveness trigger to *propose*; release always flows through the log. Wall clock is not a correctness input anywhere in the handoff protocol.
+- CRDB-style epoch leases were considered and rejected: wrong tool here (still needs bounded clock skew, adds hot-path cost, and FrogDB has no per-op consensus cost to amortize).
+- Characterization tests `stale_source_admits_writes_after_ownership_moves` and `stale_source_keeps_serving_after_the_target_takes_the_slot` must flip to assert the fence.

@@ -1,6 +1,6 @@
 # 26 — the feed-gate model proves a transcription, not the session
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -64,3 +64,7 @@ The *defect* (d) is caught — (d-i) is a faithful reintroduction and the model 
 second, so the PRD's exit criterion 8 holds for that row. What this issue records is narrower and
 more durable: a layer that proves a property about a copy of the code cannot notice the copy going
 stale.
+
+## Ruling (2026-08-13)
+
+**Option 2 now + option 1 via formal-spec phase 3.** The replication seeded sweep gains a slot-handoff-barrier fault family: arm the barrier on the primary, assert no replica observes offsets past the floor until release — closing finding d-ii and unblocking issue 15 / exit criterion 8. Acceptance: reverting the gate-bypass in `replica_session.rs` must turn something red that is NOT FM-CLUSTER-097's own forcing test. Drive-the-real-code fidelity (option 1) arrives structurally as phase 3's quint-connect feed-gate model — no stateright retrofit.

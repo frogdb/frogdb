@@ -1,6 +1,6 @@
 # 20 — `REPLCONF ACK` above the live head is admitted unclamped
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -114,3 +114,7 @@ The generator is muzzled for exactly the resolved shape "the ack would exceed th
 streaming session" — `known_defect`'s first arm — and
 `the_muzzle_only_covers_the_pinned_shapes` asserts the near misses (at-head, behind-head, zero, and
 an overshoot against an empty slot) stay in the property. Fixing this issue turns the witness red.
+
+## Ruling (2026-08-13)
+
+**Option: clamp + count.** `ingest_replica_ack` clamps a `REPLCONF ACK` beyond the primary's live head down to the live head, incrementing a counter and logging for observability. NO disconnect — the promotion-settle path produces over-high acks innocently, and disconnecting would flap healthy replicas. Deliberate deviation from Redis (which ingests acks verbatim with no ceiling) as an improvement. New FM-REPLICATION row for the clamp. This ruling covers BOTH producing paths: restart-reuse (structurally closed by issue 24's ruling) and promotion-settle. Delete the sweep's `known_panic_gap` muzzle when fixed.

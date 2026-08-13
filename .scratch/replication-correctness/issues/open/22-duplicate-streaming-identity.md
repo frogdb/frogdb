@@ -1,6 +1,6 @@
 # 21 — A reconnecting replica streams beside the session it replaces
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -88,3 +88,7 @@ session to `Streaming` while an earlier one on the same identity is still there"
 `known_defect`'s second arm — and `the_muzzle_only_covers_the_pinned_shapes` asserts the near
 misses stay in the property: the first PSYNC on an identity, a reconnect after the predecessor
 really did deregister, and an unannounced pair. Fixing this issue turns the witness red.
+
+## Ruling (2026-08-13)
+
+**Option: kick predecessor.** A session reaching `Phase::Streaming` disconnects any other session streaming with the same announced identity (addr:port) — an immediate, explicit version of Redis's implicit newest-wins. Sessions with `listening_port == 0` (unknown identity) are NEVER deduped — INV-SESSION-2's exclusion stands. Log each kick. New FM-REPLICATION row.

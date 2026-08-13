@@ -111,3 +111,7 @@ Two method notes for whoever re-runs this:
 - Issues 01–14 (`.scratch/replication-correctness/issues/`) — the gate measures the layers they
   build. It runs incrementally as each lands, but exit criterion 8 is only decidable once the full
   stack exists.
+
+## Comment (2026-08-13)
+
+Issue 26 ruled: sweep gains slot-handoff-barrier fault family. This issue unblocks once that witness lands.

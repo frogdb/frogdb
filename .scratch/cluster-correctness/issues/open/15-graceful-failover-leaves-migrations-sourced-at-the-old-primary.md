@@ -1,6 +1,6 @@
 # 15 — Graceful failover leaves migrations sourced at the demoted primary (INV-MIG-1 drift)
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -64,3 +64,7 @@ argument about the handoff barrier before it can be taken.
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Option: prune.** Any failover — graceful or forced — cancels open migrations naming the demoted node on either leg, emitting the corresponding releases. Keyed to the failover transition itself, NOT node removal (issue 20's ruling means automatic failover now demotes without removing, so removal-keyed pruning would never fire on the automatic path). The orchestrator restarts migration under the new topology. Matches Redis/Valkey semantics, where node-local migrating/importing marks do not survive a role change.

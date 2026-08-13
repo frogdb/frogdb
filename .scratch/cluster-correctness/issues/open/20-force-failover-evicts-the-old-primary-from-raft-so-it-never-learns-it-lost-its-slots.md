@@ -1,6 +1,6 @@
 # 20 — A forced auto-failover evicts the old primary from Raft, so it never learns it lost its slots and keeps serving them
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -135,3 +135,7 @@ reasons other than a partition.
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Option: demote, don't remove.** Automatic failover proposes `force: false`; the demoted primary remains a Raft voter, keeps receiving entries, and applies its own demotion when the partition heals (structural reconciliation — Raft is FrogDB's gossip-equivalent channel). Failover changes roles, never membership; node removal stays an explicit operator action. Accepted liveness cost: a dead node lingers as a voter until the operator removes it. Option 2 (local eviction-fence signal) is a candidate follow-up issue for administrative eviction, not part of this fix. Delete the 9 EXPECTED-FAILURE seed muzzles; acceptance is a clean 500-seed run.

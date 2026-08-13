@@ -1,6 +1,6 @@
 # 14 — AddNode/SetRole admit malformed parent pointers (dangling and chained)
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -67,3 +67,7 @@ detector rejects the failed node before it ever looks for candidates).
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Confirmed as proposed.** Reject dangling/chained parent pointers at `AddNode`/`SetRole` apply time. Fold INV-REF-3B into INV-REF-3 as a HARD invariant, retiring the catalog's only DOCUMENTED-EXCEPTION. Re-point the forcing test `apply_command_catches_a_transition_that_malforms_the_topology`; the illegal-chain fixture in `auto_failover_ignores_a_failed_replica` gets a test-only unchecked constructor.

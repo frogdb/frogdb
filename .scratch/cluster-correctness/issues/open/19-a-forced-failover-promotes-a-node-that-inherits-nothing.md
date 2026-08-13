@@ -1,6 +1,6 @@
 # 19 — A forced failover naming a departed primary promotes its successor out of a live replication link
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -105,3 +105,7 @@ the direction if a second stale-proposal defect shows up.
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Option: epoch-fenced proposals, GLOBAL epoch (user chose global over per-node: simpler, more spurious refusals, safe under retry).** `ClusterCommand::Failover` carries the cluster-wide config epoch observed at scoring time; apply refuses the command if the current epoch has advanced. Belt retained: also refuse when the command would move nothing (old primary not a member, owns no slots, or new primary not the old's replica). Retry is provided structurally by issue 18's level-triggered reconcile — a refused proposal is re-scored on the next pass. Wire-shape change accepted (pre-production). Flip the characterization test `a_promotion_can_move_nothing`.

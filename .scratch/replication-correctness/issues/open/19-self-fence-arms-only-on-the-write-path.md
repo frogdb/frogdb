@@ -1,6 +1,6 @@
 # 19 — the self-fence arms only on the write path
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -80,3 +80,7 @@ FrogDB-specific rather than a compatibility question.
 `debug_replication_check_is_clean_on_a_primary_before_its_first_write`, `#[ignore]`d against
 this issue. Today's behaviour is pinned (deliberately) by
 `debug_replication_check_renders_a_violating_states_id_and_detail` in the same file.
+
+## Ruling (2026-08-13)
+
+**Option a: arm on Streaming transition.** The durability fence arms at the session's transition to `Phase::Streaming` (registration path), not lazily on first write. The write-path `arm_if_streaming` stays as a belt. INV-FENCE-1 stays `Tier::Hard`.

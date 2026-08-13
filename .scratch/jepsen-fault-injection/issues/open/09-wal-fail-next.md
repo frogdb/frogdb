@@ -32,3 +32,7 @@ doctrinally to the persistence campaign — sequencing per D4.
 
 - Issue 01 (`.scratch/jepsen-fault-injection/issues/`) — plumbing.
 - PRD rulings D1/D2/D4 (persistence-campaign sequencing).
+
+## Comment (2026-08-13)
+
+PRD rulings D1-D4 settled 2026-08-13 (see PRD). Remaining blocker: predecessor issues only.

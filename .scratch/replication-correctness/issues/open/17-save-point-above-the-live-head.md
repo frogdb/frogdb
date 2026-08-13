@@ -1,6 +1,6 @@
 # 17 — the persisted save point survives a move to a shorter history
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -66,3 +66,7 @@ resyncs backwards persists the lower offset. Valkey inherits this.
 
 `frogdb-server/crates/replication/src/replica/offset.rs` —
 `save_point_follows_a_backwards_full_resync`, `#[ignore]`d against this issue.
+
+## Ruling (2026-08-13)
+
+**Option a: save point follows the history.** `reset_to` and staged-checkpoint install may lower `offset_at_save` together with the heads — the monotonicity guarantee is monotone-within-a-replication-history, not across histories (Redis full-resync semantics: the dataset and its offsets are overwritten wholesale). INV-OFFSET-2 becomes `Tier::Hard` with that scoping. The test `a_promotion_persists_its_boundary_without_ever_rewinding_it` asserts cross-history monotonicity and must change.

@@ -31,3 +31,7 @@ validation): the regenerated id must go through the same validation as any adopt
 
 - Issue 01 (`.scratch/jepsen-fault-injection/issues/`) — plumbing.
 - PRD rulings D1/D2/D4 (interacts with replication-correctness issue 18's ruling).
+
+## Comment (2026-08-13)
+
+PRD rulings D1-D4 settled 2026-08-13 (see PRD). Remaining blocker: predecessor issues only.

@@ -1,6 +1,6 @@
 # 10 — `DEBUG REPLICATION VIEW` dump + cross-node jepsen checker
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -35,3 +35,7 @@ of predicates per D3 ruling (strictly-cross-node vs defense-in-depth re-checks).
 - PRD ruling D3.
 - Replication-correctness issue 03 landed the command surface pattern to mirror; no open
   blocker there.
+
+## Comment (2026-08-13)
+
+D3 ruled (cross-node-only). Unblocked.

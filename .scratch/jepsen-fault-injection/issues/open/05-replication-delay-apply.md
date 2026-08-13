@@ -30,3 +30,7 @@ windows behind replication-correctness issues 16 and 19.
 
 - Issue 01 (`.scratch/jepsen-fault-injection/issues/`) — plumbing.
 - PRD rulings D1/D2/D4 (interacts with open replication-correctness rulings 16/19).
+
+## Comment (2026-08-13)
+
+PRD rulings D1-D4 settled 2026-08-13 (see PRD). Remaining blocker: predecessor issues only.

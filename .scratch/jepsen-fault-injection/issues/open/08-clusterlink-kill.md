@@ -29,3 +29,7 @@ both) exercises the cluster failure detector and epoch machinery.
 
 - Issue 01 (`.scratch/jepsen-fault-injection/issues/`) — plumbing.
 - PRD rulings D1/D2.
+
+## Comment (2026-08-13)
+
+PRD rulings D1-D4 settled 2026-08-13 (see PRD). Remaining blocker: predecessor issues only.

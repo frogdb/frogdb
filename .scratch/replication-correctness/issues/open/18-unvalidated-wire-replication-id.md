@@ -1,6 +1,6 @@
 # 18 — a replica adopts a replication id straight off the wire, unvalidated
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -69,3 +69,7 @@ Redis validates the length and copies exactly `CONFIG_RUN_ID_SIZE` bytes
 
 `frogdb-server/crates/replication/src/replica/connection.rs` —
 `a_continue_carrying_a_malformed_id_is_refused`, `#[ignore]`d against this issue.
+
+## Ruling (2026-08-13)
+
+**Confirmed: validation at the single chokepoint.** Replid validation is wired inside `shift_replication_id`/`adopt_replication_history` — the one seam every id adoption flows through. A malformed id is rejected and the replication link dropped (reconnect retries); the old history is left untouched. INV-REPLID-3 becomes unfalsifiable by construction.

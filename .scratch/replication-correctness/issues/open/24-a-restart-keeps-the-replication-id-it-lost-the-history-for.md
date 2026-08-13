@@ -1,6 +1,6 @@
 # 24 — a restart keeps the replication id whose history it just lost
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -120,3 +120,7 @@ budget this gap covers seeds 122, 171 and 211. Replay the witness with:
 ```
 REPLICATION_SEED_TRACE=1 REPLICATION_SEEDS_START=81 just replication-seeds 1
 ```
+
+## Ruling (2026-08-13)
+
+**Option a: structural.** Replication identity + offset move INTO the checkpoint/dataset metadata (Redis RDB-aux shape) so identity cannot outlive the dataset by construction. A boot that recovers no dataset naturally mints a fresh replid (covers persistence-disabled). Subsumes option c. Closes issue 21's restart-reuse path. New FM row; remove the `restart_tainted_replids`/XREPL-2 sweep exemption (seeds 122/171/211).

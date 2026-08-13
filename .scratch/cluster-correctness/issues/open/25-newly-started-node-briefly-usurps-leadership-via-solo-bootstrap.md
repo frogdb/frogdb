@@ -1,6 +1,6 @@
 # 25 — A freshly-started node's solo self-bootstrap makes it briefly (and wrongly) reachable as "the leader" while it is still joining
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -174,3 +174,10 @@ Not yet triaged/ruled. Candidate directions:
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Options 1 AND 2 together.**
+1. Explicit bootstrap-vs-join (etcd `initial-cluster-state` shape): a node never self-elects into an externally routable leader unless explicitly configured to bootstrap a fresh deployment; a joining node defers raft init/election until MEET folds it in.
+2. Error-shape fix: learner-promotion conflicts are no longer translated into client `-REDIRECT`.
+Option 3 becomes unnecessary once (1) lands. If cheap, also add the cross-node checker invariant: a node answering as leader must be the agreed leader or unreachable.

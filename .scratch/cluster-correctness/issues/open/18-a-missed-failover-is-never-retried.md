@@ -1,6 +1,6 @@
 # 18 — A missed failover is never retried, so slots come to rest on a node the cluster has flagged FAIL
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -102,3 +102,7 @@ off the write at all, which is what makes the current control flow fragile.
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Option: level-triggered.** `reconcile_topology` gains a pass that runs failover selection for EVERY failed primary still owning slots that has an eligible replica, every tick, independent of which pass wrote the FAIL flag. Idempotent by construction. Flip the characterization test `a_slot_strands_on_a_primary_the_cluster_has_failed` to an always-property (no at-rest stranded slot with an eligible replica).

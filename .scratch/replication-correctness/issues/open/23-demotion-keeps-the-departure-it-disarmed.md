@@ -1,6 +1,6 @@
 # 23 — a demotion drops the arming latch but keeps the departure record
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -88,3 +88,7 @@ starts with no departure history, under (b) it inherits the old stint's.
 `frogdb-server/crates/replication-runtime/src/properties.rs` —
 `pinned_issue_23_a_demotion_keeps_the_departure_it_disarmed`, a `#[should_panic]` witness,
 plus the `known_defect` arm that keeps property R6 from failing on this shape.
+
+## Ruling (2026-08-13)
+
+**Option a: clear with the latch.** Demotion clears `last_streaming_departure` alongside `checker.reset_arming()` — re-promotion starts with a clean departure history, making the invariants true as written.

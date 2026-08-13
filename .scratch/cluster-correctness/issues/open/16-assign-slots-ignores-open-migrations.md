@@ -1,6 +1,6 @@
 # 16 — `AssignSlots` ignores open migrations and hands a migrating slot to a third node (INV-MIG-1)
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -77,3 +77,7 @@ ownership should fail.
 ## Blocked by
 
 None.
+
+## Ruling (2026-08-13)
+
+**Option: source-only.** `AssignSlots` on a slot with an open migration is permitted only when the assignee is the migration's source (the legal follower-seed re-assert path); any other assignee is refused. Apply the same check to `RemoveSlots`. When fixed, delete the `known_defect`/`pinned_issue_16_assign_slots_ignores_an_open_migration` muzzle in `frogdb-server/crates/cluster/src/properties.rs`.

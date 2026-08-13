@@ -1,6 +1,6 @@
 # 16 — A failed promotion strands the applied gate
 
-Status: needs-triage
+Status: ready-for-agent
 
 ## Parent
 
@@ -79,3 +79,7 @@ want**, and it needs a ruling, not a unilateral patch:
 - Model witness: `model::promotion::tests::a_failed_promotion_strands_the_node` (the `strand`
   config, `persist_failures: true`)
 - Deterministic replay: `model::promotion::replay::a_failed_promotion_leaves_the_node_unable_to_replicate`
+
+## Ruling (2026-08-13)
+
+**Option: keep freeze, make it observable.** The promotion-failure applier freeze stands (safety-first: a half-promoted node must not apply). Add a metric plus an `INFO` replication field distinguishing "promotion aborted, applier frozen" from "never pointed at a primary". The cluster reconciler already self-heals the topology around the frozen node. Option 2 (unfreeze on rollback) is revisitable later behind its own FM row. Update FM-REPLICATION-020 to state the ruled behavior.
