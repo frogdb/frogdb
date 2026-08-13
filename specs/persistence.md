@@ -15,6 +15,580 @@ triggers and durability confirmation), and the snapshot/checkpoint machinery in
 observe — a restored checkpoint or a crash-recovery replay. Client-visible transaction semantics
 live in [Transactions — failure modes](txn.md).
 
+## State space
+
+The variables the transitions below read and write. "Survives restart" means the *value* outlives
+a process restart, not just that some field with the name exists after boot — an in-memory counter
+that gets recomputed from scratch on every boot is marked No even though a same-named field exists
+post-boot.
+
+| Variable | Authoritative field | Writer(s) | Persistence | Survives restart |
+| --- | --- | --- | --- | --- |
+| `wal_seq` | `RocksWalWriter.sequence` (`AtomicU64`) | `RocksWalWriter::new` seeds it to 0 (`frogdb-persistence/src/wal/writer.rs:84`); `write_set` and its variants `fetch_add` it (`writer.rs:113,144,173,188`) | In-memory only | No — a per-shard, per-process counter seeded at 0 on every `RocksWalWriter::new` and never reseeded from RocksDB; distinct from `rocks_seq` below (two different counters that both get called "sequence" in code, never conflate them) |
+| `rocks_seq` | RocksDB's own sequence number (`DB::latest_sequence_number`) | RocksDB itself, on every write; read via `RocksStore::latest_sequence_number` (`frogdb-persistence/src/rocks/checkpoint.rs:20-22`) | On disk (RocksDB's own MANIFEST) | Yes — this, not `wal_seq`, is what a checkpoint's `snapshot_metadata.sequence_number` records (`stage_checkpoint`, `snapshot/stager.rs:151`) and what `wal_watermark` persists (`checkpoint.rs:29-31`) |
+| `committed_seq` | `FlushOutcomes.committed_seq` (`AtomicU64`) | `FlushOutcomes::record_success` (`frogdb-persistence/src/wal/flush.rs:271-280`) — a plain `store`, not `fetch_max`: the caller already holds the batch's max sequence, so there is one writer per commit and nothing to race | In-memory only | No |
+| `synced_seq` | `FlushOutcomes.synced_seq` (`AtomicU64`) | `record_success` (`flush.rs:277`, `fetch_max`, only when the commit passed `synced = true`) and `publish_synced_through` (`flush.rs:375-377`, `fetch_max`), the latter driven by `RocksStore::durable_sync`'s out-of-band tick (`rocks/mod.rs:328-347`) | In-memory only | No |
+| `highest_failed_seq` | `FlushOutcomes.highest_failed_seq` (`AtomicU64`) | `FlushOutcomes::record_failure` (`flush.rs:282-290`, `fetch_max`) | In-memory only | No |
+| `flush_failures` / `lost_ops` / `lost_bytes` / `last_error` | `FlushOutcomes`' remaining fields (`flush.rs:244-250`) | `record_failure` (`flush.rs:282-290`, `fetch_add` on the counters, the message replaces `last_error` under a `Mutex`) | In-memory only | No — reset with the process; surfaced live via `WalLagStats` (`writer.rs:283-300`) |
+| `last_flush_ok` | `FlushOutcomes.last_flush_ok` (`AtomicBool`, `frogdb-persistence/src/wal/flush.rs:248`) | both `record_success` (`frogdb-persistence/src/wal/flush.rs:279`, sets `true`) and `record_failure` (`:288`, sets `false`) — the only field either branch shares | In-memory only | No — surfaced as the `frogdb_wal_last_flush_ok` gauge (`WalLastFlushOk`, `frogdb-server/crates/types/src/metrics/definitions.rs:209`) via `WalLagStats` (`frogdb-persistence/src/wal/writer.rs:296`) → `frogdb-core/src/shard/diagnostics.rs:454-456` → aggregated (AND across shards) in `frogdb-core/src/observability/wal.rs:114` |
+| `poisoned` / `poisoned_seq` | not yet a field — ruled addition alongside `highest_failed_seq` | ruled: a durability-sync (fsync) failure, as distinct from a recoverable write-buffer failure | In-memory only (ruled) | No (ruled) — cleared only by restart or an explicit operator `RESET`, never by a later successful commit; see the poison-latch rows below |
+| `group_depth` | per-shard write-group nesting counter | `WalTarget::begin_group`/`end_group` (`frogdb-core/src/shard/persistence.rs:87,89,199,206`); the counter itself lives in `FlushEngine` (`flush.rs:400,467,474`) | In-memory only | No |
+| `wal_failure_policy` | shared `Arc<AtomicU8>` decoded via `WalFailurePolicy::from_u8` (`frogdb-persistence/src/wal/config.rs:3-45`, only `Continue`/`Rollback` exist today) | `CONFIG SET wal-failure-policy` / shard construction (`frogdb-core/src/shard/types.rs:420-431`) | Config only, not written as data | N/A — reloaded from config at boot |
+| `durability_mode` | `WalConfig.mode: DurabilityMode` (`Async` / `Periodic{interval_ms}` / `Sync`, `wal/config.rs:62-67`) | server config (`persistence.durability-mode`), `frogdb-persistence/src/wal/config.rs` | Config only | N/A |
+| `wal_watermark` | decimal `u64` in the `frogdb_wal_watermark` side-file (`rocks/wal_watermark.rs:43-52`) | `RocksStore::record_wal_watermark`, called from two independent sites (TR-PERSISTENCE-010): the `Periodic`-mode out-of-band `durable_sync` tick (`rocks/mod.rs:345`) and a `Sync`-mode commit's direct in-line call from the flush thread (`wal/flush.rs:206-208`); also on fresh open (`rocks/mod.rs:295`), and re-baselined by `wal_watermark::detect_and_reset` on an existing open (`rocks/mod.rs:294`, `wal_watermark.rs:87-126`) | On disk, best-effort (never itself fsynced — see `wal_watermark.rs:66-68`) | Yes, but may lag the true durable point — by construction it never leads it |
+| `wal_dropped_records_total` | `WalRecoveryDroppedRecords` counter (`frogdb_wal_recovery_dropped_records_total`) | `wal_watermark::detect_and_reset`, when the recovered sequence lands below the watermark (`wal_watermark.rs:92-107`) | Process metric only | No — resets with the process |
+| `WalRollbacks` | `frogdb_wal_rollbacks_total` counter (`frogdb_types::metrics::definitions::WalRollbacks`) | `WalRollbacks::inc`, on both the single-command and transaction-batch rollback paths (`frogdb-core/src/shard/execution.rs:489,664`) | Process metric only | No |
+| `snapshot_epoch` | `SnapshotScheduler.epoch` (`AtomicU64`) | `SnapshotScheduler::with_epoch`/`try_begin` (`frogdb-persistence/src/snapshot/scheduler.rs:17,34,57`) | In-memory only | No — reseeded at construction to `max(latest_metadata.epoch, highest_snapshot_epoch_on_disk)` (`RocksSnapshotCoordinator::new`) |
+| `snapshot_in_progress` / `snapshot_scheduled` | `SnapshotScheduler`'s two `AtomicBool`s | `try_begin` / `finish_and_maybe_rebegin` (`scheduler.rs:15,16,57,73`) | In-memory only | No |
+| `snapshot_metadata` | `SnapshotMetadataFile` — `epoch`, `sequence_number`, `started_at_ms`, `completed_at_ms`, `num_shards`, `size_bytes`, a `FROGDB_SNAPSHOT_COMPLETE_v1` completion marker | snapshot stager's `finalize_metadata`, `mark_complete` (`frogdb-persistence/src/snapshot/metadata.rs:52`; `snapshot/stager.rs:170-185`) | On disk, one `metadata.json` per snapshot directory, fsynced before the publish rename | Yes |
+| `max_snapshots` | `SnapshotConfig.max_snapshots: usize` (`snapshot/metadata.rs:86`, default 5) | server config (`persistence.max-snapshots` or equivalent), flows into `RocksSnapshotCoordinator`/`SnapshotStager` (`snapshot/rocks_coordinator.rs:41,94,177,230,255,265`) | Config only | N/A |
+| `save_history` | `SnapshotStats` — `last_save_time`, `last_duration`, `current_started_at`, `saves`, `failures`, `last_error` (`snapshot/mod.rs:76-105`) | `SnapshotStats::record_success`/`record_failure` (`snapshot/mod.rs:119-134`), wrapped by `SaveHistory` (below) | In-memory; `last_save_time` alone is reseeded at boot from the newest complete `snapshot_metadata` | Partial — only `last_save_time` (via `snapshot_metadata`); the counters reset |
+| `SaveHistory.failed` (the `-MISCONF` latch) | `SaveHistory.failed: AtomicBool`, mirroring `stats.last_error.is_some()` (`snapshot/mod.rs:157-164`) | the same two calls that write `save_history`: `SaveHistory::record_success` clears it, `SaveHistory::record_failure` sets it (`snapshot/mod.rs:190-203`) — one writer for both fields, so drift is structurally impossible | In-memory only | No — consumed by `ConfigManager::refuse_writes_on_save_error` (`server/src/runtime_config.rs`, ~:1088-1092), the gate [FM-PERSISTENCE-046](#fm-persistence-046--a-failed-save-refuses-client-writes-only-when-the-operator-asked-for-it) already specs |
+| `checkpoint_ready` | presence and `is_complete_db()` verdict of the `checkpoint_ready/` sibling directory | writer side: operator copy or replica full-sync download (outside this crate); reader side: `StagedCheckpoint::is_complete_db` (`frogdb-persistence/src/rocks/staged.rs:83`) | On disk (filesystem) | Yes, until an install consumes it |
+| `staged_repl_metadata` | `replication_metadata.json` inside `checkpoint_ready/` | replica full-sync writer (outside this crate) | On disk, inside `checkpoint_ready/` | Yes, until `recovery::replication::restore_state` consumes it — a role-gated call site (`frogdb-recovery/src/replication.rs:42`; the early role-gate is at `:30-32`) |
+| `backup_dir` | `<db>_backup_<unix_secs>` sibling directory(ies) | rename 1 of the install (`frogdb-persistence/src/rocks/checkpoint.rs:105-113`), named via `backup_dir_name` (`staged.rs:94`, wall-clock keyed today) | On disk | Yes, until `prune_backups` removes it (`staged.rs:104`, `checkpoint.rs:123-127`, `BACKUP_RETENTION = 1`) |
+| `database_id` | `DataDirMarker{database_id, created_at_unix_ms, layout_version}` in the `frogdb_data_dir` file | `DataDirMarker::mint` (`frogdb-persistence/src/data_dir.rs:125`); read/written by `recovery::data_dir::verify`/`stamp` (`frogdb-recovery/src/data_dir.rs:56,151`) | On disk, atomic temp-file-then-rename publish | Yes — stable across restarts and across a full resync (the marker names the directory, not its contents) |
+| `replication_state_file` | `replication_state.json` — `ReplicationState`'s persisted fields: `replication_id`, `secondary_id` (the replid2 slot), `offset_at_save`, `secondary_offset`, `active_version` (`frogdb-server/crates/replication/src/state.rs:173-210`) | `recovery::replication::restore_state` / `ReplicationState::save` (`frogdb-recovery/src/replication.rs:27`) | On disk | Yes |
+| `decode_failure_policy` | `OnDecodeFailure` (`Refuse` / `Continue`) | server config (`recovery.on-decode-failure`), read via `inputs.recovery.decode_failure_policy()` (`frogdb-recovery/src/shards.rs:106`) | Config only | N/A |
+| `recovery_stats` | `RecoveryStats` — `keys_loaded`, `keys_expired_skipped`, `keys_failed`, `warm_keys_loaded`, `warm_keys_stale`, `bytes_loaded`, `duration_ms`, `first_failure` | `recovery::shards::restore` (`frogdb-recovery/src/shards.rs:44`) | In-memory only, recomputed every boot; `keys_failed` also feeds the process metric `frogdb_recovery_keys_failed_total` (`RecoveryKeysFailed`) | No — recomputed, not carried forward |
+| `recovery_functions_failed` | not yet a counter — ruled `frogdb_recovery_functions_failed_total`, mirroring `RecoveryKeysFailed`'s pattern | ruled: `recovery::functions::restore` on a parse/read failure (`frogdb-recovery/src/functions.rs:19`) | Process metric only (ruled) | No (ruled) |
+| `num_shards` | configured shard count | server config (`server.num-shards` or equivalent); compared against `recovery_stats`' recovered shard count by the orchestrator (`frogdb-recovery/src/lib.rs:182`) | Config only | N/A |
+| `cf_layout` | the persisted column-family set (`DB::list_cf`), reconciled by `ColumnFamilyManifest::reconcile` | RocksDB itself, at CF creation | On disk (RocksDB's own manifest) | Yes |
+| `atomic_flush_enabled` | RocksDB `Options::set_atomic_flush` | options builder, `frogdb-persistence/src/rocks/mod.rs` (options construction near the `set_wal_recovery_mode` call at `:188`) | N/A — a build-time option, not persisted data | No call site sets it anywhere in `frogdb-persistence/src/` or `frogdb-core/src/` (confirmed by grep), so it stands at RocksDB's own default; a checked-in checkpoint fixture confirms the effective value is `false` (`frogdb-server/crates/server/snapshots/snapshot_00001/checkpoint/OPTIONS-000007:40`). [issue 03](../.scratch/spec-gaps/issues/open/03-enable-rocksdb-atomic-flush.md) rules it should be `true` |
+| `rocksdb_paranoid_checks` | RocksDB `Options` paranoid-checks / error-handler / auto-resume knobs | options builder, `rocks/mod.rs` | N/A | No call site sets this explicitly either; the same fixture confirms the effective (default) value is `true` (`OPTIONS-000007:52`), and no error-handler/auto-resume configuration is set either. [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) requires this posture be stated explicitly rather than left to the default — **and what FrogDB relies on instead**: today's corruption story is carried entirely by `DBRecoveryMode::PointInTime` replay stopping at the first bad record plus the `wal_watermark` drop detector (TR-PERSISTENCE-049) noticing when that stop lands short, not by paranoid-checks-driven auto-resume, which is absent |
+| `wal_recovery_mode` | RocksDB `Options::set_wal_recovery_mode` | options builder, `rocks/mod.rs:188` | N/A | Pinned to `DBRecoveryMode::PointInTime`, pinned by test |
+
+## Transitions
+
+One row per action source that changes State-space variables, numbered from `TR-PERSISTENCE-001`.
+Rows encode **ruled** semantics — where the ruling in an open issue changes what the code does
+today, the row states the ruled behavior as its postcondition, with current-code behavior kept only
+as an annotation (never a row of its own) and a `Pending` field pointing at the issue that has not
+landed yet. Ruling authority for this section: [issue 01](../.scratch/spec-gaps/issues/open/01-sync-durability-must-gate-the-ack.md),
+[issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md),
+[issue 03](../.scratch/spec-gaps/issues/open/03-enable-rocksdb-atomic-flush.md),
+[issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md),
+[issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md), and the persistence
+addendum (R4-R6) of [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md).
+
+*WAL append, by durability grade.*
+
+## TR-PERSISTENCE-001 — WAL append, FireAndForget durability
+
+| Field | Value |
+| --- | --- |
+| Precondition | a write action is staged; `rollback_mode = is_write && has_wal() && should_rollback()` is false — i.e. `wal_failure_policy = Continue`, or the shard has no WAL configured |
+| Postcondition | `wal_seq` advances by one; `committed_seq`/`synced_seq` are not waited on before the caller proceeds |
+| Source | `frogdb-core/src/shard/execution.rs:436-437` (`rollback_mode` gate, false branch); `frogdb-core/src/shard/persistence.rs:295-300` (`Durability::FireAndForget` branch of `persist_records`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-002 — WAL append, Confirm under rollback policy
+
+| Field | Value |
+| --- | --- |
+| Precondition | a write action is staged; `rollback_mode = is_write && has_wal() && should_rollback()` is true — i.e. `wal_failure_policy = Rollback` |
+| Postcondition | the caller awaits `committed_seq` reaching this action's `wal_seq` (via `flush_through`, TR-PERSISTENCE-007) before the write is acknowledged; a failure in that range rolls the in-memory write back |
+| Source | `frogdb-core/src/shard/execution.rs:436-437` (`rollback_mode` gate), `:465` (single-command `Durability::Confirm` call), `:653` (transaction-batch call); `frogdb-core/src/shard/persistence.rs:288-294` (`Durability::Confirm` branch of `persist_records`) |
+| Rulings | — |
+| Pending | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md) — `Durability::Confirm` is ruled to be renamed (see TR-PERSISTENCE-005); no semantic change to this row |
+
+## TR-PERSISTENCE-003 — WAL append, ruled: Sync durability forces Confirm regardless of policy
+
+| Field | Value |
+| --- | --- |
+| Precondition | `durability_mode = Sync` |
+| Postcondition (ruled) | `Durability::Confirm` is used whenever `should_rollback() \|\| durability_mode == Sync`, i.e. a `Sync`-mode write is staged with `Confirm` (TR-PERSISTENCE-002's wait) even under the default `Continue` policy. This row rules only which `Durability` value is chosen — `Confirm`'s own wait target is `committed_seq` (TR-PERSISTENCE-002/007), and whether a `Sync`-mode write should additionally require `synced_seq` before acknowledgment is an open sub-question of issue 05 that this row does not decide |
+| Postcondition (current code) | unchanged from TR-PERSISTENCE-001 — `durability_mode` is never consulted by `rollback_mode` (`shard/types.rs:425-431`'s `should_rollback()` checks only `wal_failure_policy`), so a `Sync`-mode write under the default `Continue` policy acks via `FireAndForget` without waiting for `committed_seq` (let alone `synced_seq`) at all |
+| Source | `frogdb-core/src/shard/types.rs:425-431`; `execution.rs:436-437`; `frogdb-core/src/shard/persistence.rs:288-300` |
+| Rulings | [issue 01](../.scratch/spec-gaps/issues/open/01-sync-durability-must-gate-the-ack.md) |
+| Pending | [issue 01](../.scratch/spec-gaps/issues/open/01-sync-durability-must-gate-the-ack.md); [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md) (open: whether `Sync` additionally binds to `synced_seq`) |
+
+## TR-PERSISTENCE-004 — WAL append, Async durability
+
+| Field | Value |
+| --- | --- |
+| Precondition | `durability_mode = Async`; `wal_failure_policy = Continue` |
+| Postcondition | wire behavior is identical to TR-PERSISTENCE-001 (same `FireAndForget` path, no wait). `Async` commits with `is_sync = false`, as `Periodic` does; unlike `Periodic`, no `durable_sync` driver is spawned for `Async` (`spawn_wal_sync_if_periodic` starts one only when `durability_mode == "periodic"`), so `synced_seq` has no driver and never advances under `Async` |
+| Source | `frogdb-persistence/src/wal/config.rs:62-67` (`DurabilityMode::Async`); `frogdb-core/src/shard/persistence.rs:295-300`; `wal/flush.rs:424` (`is_sync: matches!(mode, DurabilityMode::Sync)`); `frogdb-server/crates/server/src/server/startup.rs:88-108` (`spawn_wal_sync_if_periodic`, periodic-only gate at `:95`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-005 — Durability::Confirm renamed; synced_seq binding stated, ruled
+
+| Field | Value |
+| --- | --- |
+| Precondition | any row above that names `Durability::Confirm` |
+| Postcondition (ruled) | `Durability::Confirm` is renamed to `Committed` (implementer's choice of `Committed` vs `Synced`, rationale recorded here once landed) — the name matches what the wait actually checks (`committed_seq`, not fsync durability) so a `periodic`/`async` caller cannot misread the variant as an fsync guarantee. Separately, this row is where the spec must record which client-visible acknowledgment primitive (if any) binds to `synced_seq` rather than `committed_seq` — undecided today |
+| Postcondition (current code) | the variant is named `Durability::Confirm`; no client-visible primitive is documented as binding to `synced_seq` specifically |
+| Source | `frogdb-core/src/shard/persistence.rs` (`enum Durability`, both variants); `flush.rs:294-303` (`committed_sequence`/`durable_sequence` accessors, the two candidates this binding would choose between) |
+| Rulings | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md) |
+| Pending | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md) |
+
+*Flush and durable-sync advance.*
+
+## TR-PERSISTENCE-006 — flush commit outcome recorded
+
+| Field | Value |
+| --- | --- |
+| Precondition | the flush thread completes a commit attempt covering sequences up to `S` |
+| Postcondition | on success: `committed_seq := S` (a plain store — the flush thread is the sole writer of a successful commit's max sequence, so nothing to `fetch_max` against); if the commit passed `synced = true`, `synced_seq := max(synced_seq, S)`; `last_flush_ok := true`. On failure: `highest_failed_seq := max(highest_failed_seq, S)`, `flush_failures`/`lost_ops`/`lost_bytes` increment by the batch's counts (`fetch_add`), `last_error` is replaced, `last_flush_ok := false` |
+| Source | `frogdb-persistence/src/wal/flush.rs:271-280` (`FlushOutcomes::record_success`), `:282-290` (`FlushOutcomes::record_failure`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-007 — flush_through: the actual wait, then a synchronous check
+
+| Field | Value |
+| --- | --- |
+| Precondition | a caller (TR-PERSISTENCE-002's `Confirm` path) awaits durability for entries assigned after `after_seq` |
+| Postcondition | `RocksWalWriter::flush_through(after_seq)` captures `target_seq = wal_seq` (as of the call), sends an explicit flush to the flush thread and awaits its reply — this round trip, not `confirm_durable_through` itself, is where the caller actually waits. Once the reply arrives, `confirm_durable_through(after_seq, target_seq, flush_result)` runs as a synchronous, non-waiting check over already-published atomics: (1) propagate `flush_result` if it was `Err`; (2) fail if `highest_failed_seq > after_seq`; (3) fail if `committed_sequence() < target_seq`. All three checks read state that TR-PERSISTENCE-006 already published — no polling, no additional wait |
+| Source | `frogdb-persistence/src/wal/writer.rs:259-264` (`flush_through`, the round trip via `send_flush`/`done_rx.recv_async` at `writer.rs:266-282`); `frogdb-persistence/src/wal/flush.rs:338-367` (`FlushOutcomes::confirm_durable_through`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-008 — out-of-band durable-sync tick (Periodic mode only)
+
+| Field | Value |
+| --- | --- |
+| Precondition | the periodic sync task's interval elapses (`durability_mode = Periodic`) and `RocksStore::durable_sync`'s internal `flush()` succeeds — this driver exists only in `Periodic` mode: `spawn_wal_sync_if_periodic` starts it iff `config.durability_mode.to_lowercase() == "periodic"` (`startup.rs:95`), and outside tests the only non-test caller of `durable_sync()` in the tree is this task's loop (`wal/flush.rs:817`) — there is no `Async`-mode driver and no operator-triggered call site today |
+| Postcondition | `synced_seq` advances via `publish_synced_through` to each registered shard's `committed_sequence()` *as snapshotted before the flush ran* — never to a sequence that committed during the flush itself — and `wal_watermark` is re-recorded at the new `rocks_seq` (TR-PERSISTENCE-010 below) |
+| Source | `frogdb-persistence/src/rocks/mod.rs:328-347` (`durable_sync`, snapshot at `:329-340`, flush at `:341`, publish loop at `:342-344`); `wal/flush.rs:375-377` (`publish_synced_through` impl, `fetch_max`); `wal/flush.rs:800-817` (`spawn_periodic_sync`, its `durable_sync()` call at `:817`); `frogdb-server/crates/server/src/server/startup.rs:88-108` (`spawn_wal_sync_if_periodic`, the periodic-only gate at `:95`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-009 — durable_sync failure short-circuit
+
+| Field | Value |
+| --- | --- |
+| Precondition | `RocksStore::durable_sync` runs; its internal `self.flush()` fails |
+| Postcondition | `durable_sync` returns `Err` immediately — neither `publish_synced_through` (so `synced_seq` does not advance) nor `record_wal_watermark` (so `wal_watermark` does not advance) runs for this tick. Both variables simply stay at their prior values until a later successful tick, matching the documented invariant that `wal_watermark` "may only lag, so an unsynced write can under-report but never false-alarm" |
+| Source | `frogdb-persistence/src/rocks/mod.rs:341` (`self.flush()?`, the short-circuit) |
+| Rulings | — |
+
+## TR-PERSISTENCE-010 — wal_watermark write (durable-sync tick or Sync-mode commit)
+
+This watermark has two independent writers: `Periodic` mode's out-of-band tick
+(TR-PERSISTENCE-008), and a `Sync`-mode commit's direct write from the flush thread itself — the
+latter is not itself a "durable sync" (no `durable_sync` call is involved) and is the *only*
+watermark writer that exists when `durability_mode = Sync`, since no periodic task runs in that
+mode either (TR-PERSISTENCE-008's precondition).
+
+| Field | Value |
+| --- | --- |
+| Precondition | (a) `RocksStore::durable_sync` (TR-PERSISTENCE-008) completes its flush and publish loop successfully; **or** (b) a flush-thread commit with `sync = true` (`Sync`-mode) commits successfully |
+| Postcondition | `wal_watermark` is overwritten with `rocks_seq` as of that moment (`RocksStore::latest_sequence_number()`), via an atomic temp-write-then-rename that is deliberately never fsynced. (a) and (b) both terminate at the same write function; (b) is the direct in-line call the comment at `flush.rs:201-205` explains: "a successful `sync` commit has fsync'd the WAL through this batch's sequence … non-sync commits are not individually durable, so they must not advance it" |
+| Source | `frogdb-persistence/src/rocks/checkpoint.rs:29-34` (`record_wal_watermark`); (a) `rocks/mod.rs:345` (the call site inside `durable_sync`); (b) `wal/flush.rs:206-208` (`if result.is_ok() && sync { self.rocks.record_wal_watermark(); }`, rationale comment `:201-205`); `wal_watermark.rs:69-77` (`write`, the temp-then-rename) |
+| Rulings | — |
+
+*Write-group atomicity.*
+
+## TR-PERSISTENCE-011 — write-group open
+
+| Field | Value |
+| --- | --- |
+| Precondition | a multi-action command (e.g. a transaction) begins persisting |
+| Postcondition | `group_depth` increments by one; subsequent WAL appends in this group commit as one storage batch |
+| Source | `frogdb-core/src/shard/persistence.rs:87,199` (`WalTarget::begin_group`); `flush.rs:400,467` |
+| Rulings | — |
+
+## TR-PERSISTENCE-012 — write-group close
+
+| Field | Value |
+| --- | --- |
+| Precondition | `group_depth > 0` and the command's actions are all staged |
+| Postcondition | `group_depth` decrements by one (saturating); at zero, the batch is eligible for the next flush |
+| Source | `frogdb-core/src/shard/persistence.rs:89,206` (`WalTarget::end_group`); `flush.rs:400,474,480` |
+| Rulings | — |
+
+*Failure handling under each `wal_failure_policy` value.*
+
+## TR-PERSISTENCE-013 — WAL failure under Continue (stage-time append, or flush-thread commit)
+
+| Field | Value |
+| --- | --- |
+| Precondition | `wal_failure_policy = Continue`, and either (a) a `stage_actions` call's own WAL append fails (the flush-thread channel is gone), or (b) a flush-thread commit attempt covering sequences through `F` fails (the case issue 02's H2 addresses) |
+| Postcondition (ruled) | for case (b) only: the shard's persisted stream is prefix-truncated at `F` (everything at or after `F` is discarded from the durable record) and the shard enters `poisoned = true` (`poisoned_seq := F`, TR-PERSISTENCE-015); no write at or after `F` is ever acked as durable, restoring "recovery loss is always a suffix". Case (a) is untouched by this ruling: a dead flush thread never reaches `record_failure`, so there is no `F` for it to poison at (see the current-code annotation) |
+| Postcondition (current code) | (a) the WAL writer's `write_set`/`write_merge`/`write_clear`/`write_delete` fail only when the flush thread's channel is gone (`std::io::Error::other("WAL flush thread disconnected")`, `wal/writer.rs:122-127,153-158,177-182,196-201`) — the entry never reached the flush thread. Under `Continue` this is logged and the entry is dropped (`frogdb-core/src/shard/persistence.rs:315-319`, the `Durability::FireAndForget` branch) with no counter movement, since `record_failure` is flush-thread-only code (`flush.rs:516,566,601,665`) unreachable from this path. (b) a flush-thread commit failure moves `highest_failed_seq` and the loss-accounting counters (TR-PERSISTENCE-006's `record_failure`) — this is the actual source of the persisted-stream gap the ruling truncates; later actions in the same batch and later batches keep committing, producing a gap that TR-PERSISTENCE-016 un-latches today |
+| Source | `frogdb-core/src/shard/persistence.rs:307-323` (`stage_actions`); `frogdb-persistence/src/wal/writer.rs:105-204` (`write_set`/`write_merge`/`write_clear`/`write_delete`, the append-failure branch each shares); `flush.rs:282-290` (`FlushOutcomes::record_failure`), `:516,566,601,665` (its flush-thread-only call sites) |
+| Rulings | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) (H2 / "Suffix restoration") |
+| Pending | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) (H2 / "Suffix restoration") |
+
+## TR-PERSISTENCE-014 — stage failure under Rollback
+
+| Field | Value |
+| --- | --- |
+| Precondition | `wal_failure_policy = Rollback`; a `Confirm`-gated write's commit fails |
+| Postcondition (ruled) | if the shard is already `poisoned = true` (TR-PERSISTENCE-015), it refuses further writes (`-IOERR`/`-MISCONF`, reusing the PreChecks gate `ConfigManager::refuse_writes_on_save_error` shares with [FM-PERSISTENCE-046](#fm-persistence-046--a-failed-save-refuses-client-writes-only-when-the-operator-asked-for-it)) instead of silently resuming acks after the rollback |
+| Postcondition (current code) | `rollback_snapshot` restores the in-memory state to before the write (`frogdb-core/src/shard/rollback.rs:85-...`); `WalRollbacks` increments; the shard resumes accepting writes on the next action regardless of poison state — poison does not exist yet |
+| Source | `frogdb-core/src/shard/execution.rs:436-437,488-489,662-664` (rollback call sites and `WalRollbacks::inc`); `frogdb-core/src/shard/rollback.rs:85` (`rollback_snapshot`) |
+| Rulings | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) |
+| Pending | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) |
+
+## TR-PERSISTENCE-015 — poison latch set (ruled, new)
+
+| Field | Value |
+| --- | --- |
+| Precondition | a durability *sync* (fsync) fails, as distinct from a recoverable write-buffer failure |
+| Postcondition (ruled) | `poisoned_seq` (a new monotone field alongside `highest_failed_seq`) is set and the shard becomes `poisoned = true` |
+| Source | not yet implemented — inverts the current NOT-observable text of FM-PERSISTENCE-007 |
+| Rulings | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) (H1 / fsyncgate) |
+| Pending | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) (H1 / fsyncgate) |
+
+## TR-PERSISTENCE-016 — poison latch cleared only by restart or RESET
+
+| Field | Value |
+| --- | --- |
+| Precondition | the shard is `poisoned = true` |
+| Postcondition (ruled) | `poisoned = false` **only** on process restart or an explicit operator `RESET`; a later successful commit past the failed range never clears it |
+| Postcondition (current code) | there is no `poisoned` flag today, but the equivalent un-latching already happens to `highest_failed_seq`'s effect on confirmations: once `committed_seq > F` (the old failure's sequence), a `Confirm` for a range entirely above `F` returns `Ok` via `confirm_durable_through`'s range check (TR-PERSISTENCE-007) — the failure at `F` no longer surfaces to any caller. This row rules that behavior replaced by the latch above |
+| Source | `flush.rs:338-367` (`confirm_durable_through`'s range check, the current un-latching mechanism) |
+| Rulings | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) |
+| Pending | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) |
+
+## TR-PERSISTENCE-017 — wal-failure-policy = readonly (ruled, new)
+
+| Field | Value |
+| --- | --- |
+| Precondition | operator sets `wal_failure_policy = readonly` |
+| Postcondition (ruled) | every write is refused (reads still served) via FM-PERSISTENCE-046's PreChecks gate; no ack, no loss, no silent continuation |
+| Source | not yet implemented — `WalFailurePolicy` today has only `Continue`/`Rollback` (`wal/config.rs:3-45`) |
+| Rulings | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) (A2) |
+| Pending | [issue 02](../.scratch/spec-gaps/issues/open/02-durability-failure-taxonomy.md) (A2) |
+
+*Checkpoint and snapshot lifecycle.*
+
+## TR-PERSISTENCE-018 — snapshot scheduler: try_begin
+
+| Field | Value |
+| --- | --- |
+| Precondition | `snapshot_in_progress = false` |
+| Postcondition | `snapshot_in_progress = true`; caller receives `Some(snapshot_epoch)` and proceeds to cut a checkpoint; a concurrent caller finding `snapshot_in_progress = true` receives `None` |
+| Source | `frogdb-persistence/src/snapshot/scheduler.rs:57` (`try_begin`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-019 — snapshot scheduler: finish_and_maybe_rebegin
+
+| Field | Value |
+| --- | --- |
+| Precondition | a snapshot completes; `snapshot_scheduled` may be `true` if a request arrived mid-run |
+| Postcondition | `snapshot_in_progress = false`; if `snapshot_scheduled` was `true`, it is cleared and a fresh run begins immediately (coalesced follow-up), otherwise the scheduler goes idle |
+| Source | `scheduler.rs:73` (`finish_and_maybe_rebegin`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-020 — pre-checkpoint quiesce drain
+
+| Field | Value |
+| --- | --- |
+| Precondition | a checkpoint cut is about to begin |
+| Postcondition | every shard's WAL flush engine and search index are drained (two waves) before `create_checkpoint` runs, so the cut sees no in-flight writes |
+| Source | `frogdb-server/crates/server/src/server/checkpoint_quiesce.rs`; see FM-PERSISTENCE-019 |
+| Rulings | — |
+
+## TR-PERSISTENCE-021 — checkpoint cut
+
+| Field | Value |
+| --- | --- |
+| Precondition | quiesce (TR-PERSISTENCE-020) has completed |
+| Postcondition | a RocksDB checkpoint is created at the target path; `rocks_seq` at cut time (`stage_checkpoint`'s call to `latest_sequence_number`) becomes the checkpoint's `snapshot_metadata.sequence_number` — **not** `wal_seq`, which is a separate, unrelated per-shard counter |
+| Source | `frogdb-persistence/src/rocks/checkpoint.rs:7-19` (`create_checkpoint`), `:20-22` (`latest_sequence_number`); `snapshot/stager.rs:148-156` (`stage_checkpoint`, the call site at `:151`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-022 — snapshot publish (stager finalize + install)
+
+| Field | Value |
+| --- | --- |
+| Precondition | the checkpoint directory is fully written (TR-PERSISTENCE-021) |
+| Postcondition | `finalize_metadata` writes `snapshot_metadata` with `mark_complete` (the `FROGDB_SNAPSHOT_COMPLETE_v1` marker), fsyncs it, and renames it into place; `install` then renames the staged directory to its published name — this rename is the commit point |
+| Source | `frogdb-persistence/src/snapshot/metadata.rs:52` (`mark_complete`); `snapshot/stager.rs:170-185` (`finalize_metadata`); `stager.rs:193-197` (`install`, commit rename at `:194`); `stager.rs:89-140` (`run`, the orchestrating sequence) |
+| Rulings | — |
+
+## TR-PERSISTENCE-023 — "latest" symlink update
+
+| Field | Value |
+| --- | --- |
+| Precondition | install (TR-PERSISTENCE-022) has committed |
+| Postcondition | the `latest` symlink is repointed at the newly-published snapshot directory — best-effort, run after the commit rename, so a failure here does not un-publish an already-committed snapshot |
+| Source | `frogdb-persistence/src/snapshot/stager.rs:261-283` (`update_latest_symlink`); `stager.rs:133` (the call site inside `run`, after `install`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-024 — snapshot retention prune
+
+| Field | Value |
+| --- | --- |
+| Precondition | a new snapshot publishes and the retained count exceeds `max_snapshots` |
+| Postcondition | the oldest snapshot directory(ies) beyond `max_snapshots` are removed, best-effort — run after the commit rename and the symlink update (TR-PERSISTENCE-023), so a prune failure does not affect the just-published snapshot's availability |
+| Source | `frogdb-persistence/src/snapshot/stager.rs:216-248` (`cleanup_old_snapshots`); `stager.rs:136` (the call site); `snapshot/metadata.rs:86` (`max_snapshots` field) |
+| Rulings | — |
+
+## TR-PERSISTENCE-025 — failed BGSAVE recorded
+
+| Field | Value |
+| --- | --- |
+| Precondition | a checkpoint cut or publish fails |
+| Postcondition | `save_history.last_error` is set and `save_history.failures` increments (`SnapshotStats::record_failure`, `snapshot/mod.rs:130-134`); `snapshot_in_progress` still clears (TR-PERSISTENCE-019 runs regardless of outcome) |
+| Source | `snapshot/mod.rs:130-134` (`SnapshotStats::record_failure`), `:198-203` (`SaveHistory::record_failure`, which also sets the `-MISCONF` latch — TR-PERSISTENCE-026) |
+| Rulings | — |
+
+## TR-PERSISTENCE-026 — save-outcome latch set/clear (the `-MISCONF` mirror)
+
+| Field | Value |
+| --- | --- |
+| Precondition | a background save attempt completes, successfully or not |
+| Postcondition | `SaveHistory::record_success` clears `SaveHistory.failed`; `SaveHistory::record_failure` sets it — the same two calls that write `save_history.last_error`, so `SaveHistory.failed == save_history.last_error.is_some()` is structural rather than a convention that could drift |
+| Source | `frogdb-persistence/src/snapshot/mod.rs:190-195` (`SaveHistory::record_success`), `:198-203` (`SaveHistory::record_failure`) |
+| Rulings | — |
+
+*Staged-checkpoint install.*
+
+## TR-PERSISTENCE-027 — is_complete_db check
+
+| Field | Value |
+| --- | --- |
+| Precondition | an install of `checkpoint_ready` is requested |
+| Postcondition (ruled) | `CURRENT` is read, the MANIFEST it names is parsed, and every SST/blob file it references is confirmed present with the expected size before `checkpoint_ready` is treated as complete |
+| Postcondition (current code) | `checkpoint_ready` is treated as complete iff a file literally named `CURRENT` exists in it (`frogdb-persistence/src/rocks/staged.rs:83`) — `CURRENT`'s contents (the MANIFEST it names) and the SSTs that MANIFEST lists are never read |
+| Source | `frogdb-persistence/src/rocks/staged.rs:83` (`is_complete_db`) |
+| Rulings | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) |
+| Pending | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) |
+
+## TR-PERSISTENCE-028 — payload manifest written and verified at install (ruled, new)
+
+| Field | Value |
+| --- | --- |
+| Precondition | a snapshot publishes (TR-PERSISTENCE-022) |
+| Postcondition (ruled) | the stager writes a payload manifest (relative path, size, ideally checksum per file) into `metadata.json`; install verifies the staged tree against it when present, on top of TR-PERSISTENCE-027's MANIFEST check — proving the payload is intact, not just that the stager reported completion |
+| Source | not yet implemented |
+| Rulings | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) (item 2) |
+| Pending | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) (item 2) |
+
+## TR-PERSISTENCE-029 — install rename 1: existing db backed up
+
+| Field | Value |
+| --- | --- |
+| Precondition | `checkpoint_ready.is_complete_db()` is true; a live `<db>` directory exists |
+| Postcondition | `<db>` is renamed to `backup_dir` named `backup_dir_name(db_name, unix_secs)` (current code: wall-clock-second keyed), then the parent directory is synced |
+| Source | `frogdb-persistence/src/rocks/checkpoint.rs:105-113` (rename-1 guard, `fs.rename`, `fs.sync_dir`); `rocks/staged.rs:94` (`backup_dir_name`) |
+| Rulings | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) — ruled to become a monotone counter seeded from the highest existing suffix, not wall-clock seconds (an NTP step back, or two installs inside one second, currently corrupt the retention ordering) |
+| Pending | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) — ruled to become a monotone counter, not wall-clock seconds |
+
+## TR-PERSISTENCE-030 — install rename 2: commit point
+
+| Field | Value |
+| --- | --- |
+| Precondition | rename 1 (TR-PERSISTENCE-029) has completed and its parent directory has been synced |
+| Postcondition | `checkpoint_ready/` is renamed to `<db>` and the parent directory is synced; `checkpoint_ready` no longer exists; this rename is the install's commit point |
+| Source | `frogdb-persistence/src/rocks/checkpoint.rs:116-117` (`fs.rename`, `fs.sync_dir`); `checkpoint.rs:47-131` (`load_staged_checkpoint_with`, the full sequenced install) |
+| Rulings | — |
+
+## TR-PERSISTENCE-031 — backup prune
+
+| Field | Value |
+| --- | --- |
+| Precondition | install (TR-PERSISTENCE-030) has committed |
+| Postcondition | `prune_backups` keeps at most `BACKUP_RETENTION = 1` backup directory, best-effort (a prune failure is non-fatal) |
+| Source | `rocks/staged.rs:104` (`prune_backups`); `checkpoint.rs:123-127` (call site) |
+| Rulings | — |
+
+## TR-PERSISTENCE-032 — post-install open failure: rollback or trial-open
+
+| Field | Value |
+| --- | --- |
+| Precondition | install (TR-PERSISTENCE-030) committed; the subsequent `OpenRocks` phase fails against the newly-installed `<db>` |
+| Postcondition (ruled) | either the staged directory is trial-opened before the old `<db>` is destroyed, or a failed post-install `OpenRocks` restores `backup_dir` over `<db>` and the boot refuses with a message naming what happened |
+| Postcondition (current code) | no rollback occurs; `checkpoint_ready` has already been consumed; `backup_dir` sits unrestored next to the broken `<db>`; every subsequent boot fails identically |
+| Source | `frogdb-recovery/src/lib.rs:182` (`recover`, phase 1 then phase 2 in sequence, no error path back to the backup) |
+| Rulings | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) |
+| Pending | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) |
+
+## TR-PERSISTENCE-033 — frogctl checkpoint-verify (ruled, new)
+
+| Field | Value |
+| --- | --- |
+| Precondition | an operator runs `frogctl checkpoint-verify` against a backup or staged checkpoint, on demand |
+| Postcondition (ruled) | the same payload-manifest check TR-PERSISTENCE-028 runs at install (CURRENT/MANIFEST parse plus per-file manifest verification) runs against the named directory and reports pass/fail, without installing it |
+| Source | not yet implemented |
+| Rulings | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) (item 6, Finding A4) |
+| Pending | [issue 04](../.scratch/spec-gaps/issues/open/04-staged-checkpoint-install-verification.md) (item 6, Finding A4) |
+
+## TR-PERSISTENCE-034 — atomic_flush cross-CF consistency
+
+| Field | Value |
+| --- | --- |
+| Precondition | a crash occurs between two column families that jointly hold one logical key (e.g. a tiering demotion's warm-put and hot-delete) |
+| Postcondition (ruled) | `atomic_flush_enabled = true`; all column families flush at the same sequence point, so `PointInTime` recovery cannot leave two CFs disagreeing about one key |
+| Postcondition (current code) | `atomic_flush_enabled = false` (RocksDB's own default — no call site overrides it, confirmed by the checked-in `OPTIONS-000007:40` fixture); each CF flushes independently and `DBRecoveryMode::PointInTime` stops replay at the first CF-local inconsistency, so a recovered database can hold divergent state across CFs for the same key |
+| Source | `frogdb-persistence/src/rocks/mod.rs:188` (recovery mode set, `atomic_flush` not) |
+| Rulings | [issue 03](../.scratch/spec-gaps/issues/open/03-enable-rocksdb-atomic-flush.md) |
+| Pending | [issue 03](../.scratch/spec-gaps/issues/open/03-enable-rocksdb-atomic-flush.md) |
+
+*Recovery, in phase order.*
+
+## TR-PERSISTENCE-035 — Phase 0: VerifyDataDir
+
+| Field | Value |
+| --- | --- |
+| Precondition | boot begins; persistence is Rocks-backed |
+| Postcondition | four outcomes from `verify`: (1) marker present and readable → boot continues with the existing `database_id` (`data_dir.rs:83-91`); (2) no marker, no files → fresh init mints a new `database_id` (`:133-139`); (3) no marker, files present → refuses unless `--force-fresh-data-dir` (`:100-111`); (4) no marker, no files, but `persistence.require-existing-data` is set → refuses unless `--force-fresh-data-dir`, even though the directory is empty (`:113-122`) — an empty directory is what an unmounted volume and a genuine first boot both look like, and this fourth branch is what tells them apart when the operator has declared the deployment past its first boot |
+| Source | `frogdb-recovery/src/data_dir.rs:56-140` (`verify`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-036 — Phase 0.5: stamp (unconditional marker rewrite)
+
+| Field | Value |
+| --- | --- |
+| Precondition | verify (TR-PERSISTENCE-035) and install (TR-PERSISTENCE-037) have both run |
+| Postcondition | `database_id`'s marker file is (re)written unconditionally — install may have renamed the marker away along with the directory it replaced, so this is not write-if-absent |
+| Source | `frogdb-recovery/src/data_dir.rs:151-153` (`stamp`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-037 — Phase 1: InstallStagedCheckpoint
+
+| Field | Value |
+| --- | --- |
+| Precondition | `checkpoint_ready` may or may not be present |
+| Postcondition | if present and complete (TR-PERSISTENCE-027/028), installs it (TR-PERSISTENCE-029-031); if absent, this phase is a no-op |
+| Source | `frogdb-recovery/src/checkpoint.rs:22` (`install_staged`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-038 — Phase 2: OpenRocks
+
+| Field | Value |
+| --- | --- |
+| Precondition | phase 1 has completed (successfully or as a no-op) |
+| Postcondition | `cf_layout` is opened and reconciled against the expected shard/warm/search-meta set; `rocks_seq` becomes readable via `latest_sequence_number()` from this point on |
+| Source | `frogdb-recovery/src/shards.rs:20` (`open_rocks`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-039 — Phase 3: RestoreShards, decode-failure skip-and-count
+
+| Field | Value |
+| --- | --- |
+| Precondition | `cf_layout` is open; some keys fail to decode; `decode_failure_policy != Refuse`; at least one key decoded successfully |
+| Postcondition | `recovery_stats.keys_failed` increments per failure and is logged at ERROR; recovery continues |
+| Source | `frogdb-recovery/src/shards.rs:44` (`restore`), `:95-144` (`report_decode_failures`; the ERROR log this row asserts is at `:133`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-040 — Phase 3: RestoreShards, wholly-undecodable refusal
+
+| Field | Value |
+| --- | --- |
+| Precondition | `decode_failure_policy = Refuse`, **or** nothing at all decoded (`keys_loaded + keys_expired_skipped + warm_keys_loaded + warm_keys_stale == 0`) |
+| Postcondition | boot is refused rather than starting from an empty-looking store that may actually be entirely undecodable |
+| Source | `frogdb-recovery/src/shards.rs:106` (`decode_failure_policy() == OnDecodeFailure::Refuse` bail); the zero-decoded bail alongside it |
+| Rulings | — |
+
+## TR-PERSISTENCE-041 — Phase 4: RestoreFunctions
+
+| Field | Value |
+| --- | --- |
+| Precondition | phase 3 has completed; `functions.fdb` is unreadable or fails to parse |
+| Postcondition (ruled) | `recovery_functions_failed` (`frogdb_recovery_functions_failed_total`) increments, surfaced in `INFO` alongside the existing recovery counters (mirrors TR-PERSISTENCE-039's `keys_failed` pattern) |
+| Postcondition (current code) | the failure is downgraded to `Ok(Vec::new())` with a `warn!` log; no counter increments |
+| Source | `frogdb-recovery/src/functions.rs:19` (`restore`) |
+| Rulings | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md) |
+| Pending | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md) |
+
+## TR-PERSISTENCE-042 — Phase 5: RestoreReplicationState
+
+| Field | Value |
+| --- | --- |
+| Precondition | boot completes phase 4 and the node is primary- or replica-role (this phase is role-gated: `restore_state` early-returns fresh state without touching disk for every other role, `frogdb-recovery/src/replication.rs:30-32`) |
+| Postcondition (ruled) | a boot that did not recover a dataset intact (`recovery_stats.keys_failed > 0`, or `wal_dropped_records_total > 0`, or persistence disabled) mints a fresh replication id rather than adopting `replication_state_file`; a boot that did recover an intact dataset shifts any prior id into `secondary_id` at a frozen boundary and mints a fresh primary id (an unclean-restart case, not covered by phase 5 alone — see TR-PERSISTENCE-044's identity-write constraint) |
+| Postcondition (current code) | `replication_state_file` loads (or is freshly created) via `ReplicationState::load_or_create` for every primary/replica boot, independent of whether phase 3 recovered the dataset intact — a boot that recovered no dataset (persistence disabled, or an empty store) still adopts whatever replication id the file names |
+| Source | `frogdb-recovery/src/replication.rs:27-36` (`restore_state`, disk read at `:34-36`); `frogdb-recovery/src/lib.rs:182` (`recover`, phase 5 comment: "role-gated, not persistence-gated") |
+| Rulings | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Ruling + Amendment) |
+| Pending | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Ruling + Amendment) |
+
+## TR-PERSISTENCE-043 — Phase 5: staged replication metadata adoption
+
+| Field | Value |
+| --- | --- |
+| Precondition | `staged_repl_metadata` is present (written by a replica full-sync); the role gate above (TR-PERSISTENCE-042) already passed |
+| Postcondition | its identity is adopted unconditionally over `replication_state_file`'s own contents, saved, and the staging file is consumed only if the save succeeds (left in place otherwise, so the next boot re-adopts) |
+| Source | `frogdb-recovery/src/replication.rs:42` (`read_staged_replication_metadata`, a call site reached only after the role gate at `:30-32`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-044 — identity write location, ruled (moved inside the quiesce window)
+
+| Field | Value |
+| --- | --- |
+| Precondition | a checkpoint cut (TR-PERSISTENCE-020/021) is in progress |
+| Postcondition (ruled) | replication identity and `offset_at_save` are written inside FM-PERSISTENCE-019's quiesce window, in the same atomic unit as the write that names the offset — not as a separate post-cut sidecar write that can tear the pair |
+| Source | not yet implemented — today identity lives in the independently-timed `replication_state_file` |
+| Rulings | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Amendment, point 4) |
+| Pending | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Amendment, point 4) |
+
+## TR-PERSISTENCE-045 — replication_state.json demotion, ruled
+
+| Field | Value |
+| --- | --- |
+| Precondition | the dataset-authoritative identity scheme (TR-PERSISTENCE-042/044) is in place |
+| Postcondition (ruled) | `replication_state_file` is either retired outright or demoted to a cache keyed on `database_id` plus the recovered sequence number, ignored whenever either mismatches the opened database |
+| Source | not yet implemented |
+| Rulings | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Addendum R4) |
+| Pending | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Addendum R4) |
+
+## TR-PERSISTENCE-046 — offset validated against snapshot sequence anchor, ruled
+
+| Field | Value |
+| --- | --- |
+| Precondition | a restored `offset_at_save` is being adopted at boot |
+| Postcondition (ruled) | it is validated against `snapshot_metadata.sequence_number` from the same cut/window; a mismatch is treated as corruption, not silently adopted |
+| Source | not yet implemented |
+| Rulings | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Addendum R6) |
+| Pending | [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Addendum R6) |
+
+## TR-PERSISTENCE-047 — Phase 6: OpenClusterStorage
+
+| Field | Value |
+| --- | --- |
+| Precondition | `inputs.cluster.enabled` |
+| Postcondition | `<data_dir>/raft` is opened as `ClusterStorage`; if cluster mode is disabled this phase is a no-op |
+| Source | `frogdb-recovery/src/cluster.rs:18` (`open_storage`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-048 — orchestrator: shard-count invariant
+
+| Field | Value |
+| --- | --- |
+| Precondition | phase 3 has restored `recovery_stats` for some number of shards |
+| Postcondition | the recovered shard count must equal the configured `num_shards`, or boot refuses |
+| Source | `frogdb-recovery/src/lib.rs:182` (`recover`, shard-count mismatch check between phases 3 and 5) |
+| Rulings | — |
+
+## TR-PERSISTENCE-049 — WAL point-in-time replay and dropped-records detection
+
+| Field | Value |
+| --- | --- |
+| Precondition | `OpenRocks` (TR-PERSISTENCE-038) replays the WAL under `wal_recovery_mode = PointInTime` |
+| Postcondition | replay stops at the first corrupted/incomplete record, yielding a recovered `rocks_seq`; `wal_watermark::detect_and_reset` compares that recovered sequence against the persisted `wal_watermark` — if the recovered sequence is below the watermark, `wal_dropped_records_total` increments and a WARN is logged; `wal_watermark` is always re-baselined to the recovered sequence afterward, via the same never-fsynced write TR-PERSISTENCE-010 uses |
+| Source | `frogdb-persistence/src/rocks/wal_watermark.rs:87-126` (`detect_and_reset`, metric increment at `:95`, re-baseline write at `:122-124`); `rocks/mod.rs:293-297` (open-time call sites: `detect_and_reset` on an existing db, `wal_watermark::write` to seed on a fresh one); `mod.rs:188` (recovery mode) |
+| Rulings | — |
+
+## TR-PERSISTENCE-050 — database_id mint (fresh data directory)
+
+| Field | Value |
+| --- | --- |
+| Precondition | no marker file and no existing files (TR-PERSISTENCE-035's fresh-init branch) |
+| Postcondition | `database_id` is minted fresh (`DataDirMarker::mint`) and stamped (TR-PERSISTENCE-036) |
+| Source | `frogdb-persistence/src/data_dir.rs:125` (`mint`) |
+| Rulings | — |
+
+## TR-PERSISTENCE-051 — database_id validate (existing data directory)
+
+| Field | Value |
+| --- | --- |
+| Precondition | a marker file is present at boot |
+| Postcondition | it is read and accepted if `layout_version <= DATA_DIR_LAYOUT_VERSION`; a version from the future refuses boot; **any** marker-read error — unreadable, malformed, or a future layout version alike — refuses unless `--force-fresh-data-dir`, which bypasses all of them and adopts the directory as-is |
+| Source | `frogdb-persistence/src/data_dir.rs:76,144` (`DataDirMarkerError`, `read`); `frogdb-recovery/src/data_dir.rs:60-70` (the force-bypasses-every-read-error branch) |
+| Rulings | — |
+
+## TR-PERSISTENCE-052 — database_id first real consumer, ruled
+
+| Field | Value |
+| --- | --- |
+| Precondition | `database_id` is minted or validated (TR-PERSISTENCE-050/051) |
+| Postcondition (ruled) | `database_id` is compared against an expected value somewhere it currently is not — the R4 identity-cache key (TR-PERSISTENCE-045) is the first concrete consumer named by the current rulings |
+| Source | not yet implemented — today nothing compares `database_id` across boots (confirmed: no comparison call site exists in `frogdb-recovery/src/` or `frogdb-persistence/src/`) |
+| Rulings | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md); [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Addendum R4) |
+| Pending | [issue 05](../.scratch/spec-gaps/issues/open/05-persistence-advisory-sweep.md); [replication issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) (Addendum R4) |
+
 ## How to read a row
 
 | Field | Meaning |

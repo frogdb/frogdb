@@ -18,6 +18,8 @@ recorded the same day the reviews landed. All issues are spec-first: a row lands
 its forcing test (`just lint-spec` enforces row↔test agreement), and mutation coverage on touched
 locked crates is triaged via `just mutants-diff` before push.
 
-Issues 01-05 are the persistence findings; 06-10 are the txn/vll/blocking findings.
+Issues 01-05 are the persistence findings; 06-10 are the txn/vll/blocking findings. Issue 11
+(EXEC empty-queue fast path vs the watch set — a live FM-TXN-034 violation) was surfaced by the
+constructive-spec drafting review that followed the ruling round.
 
 Issues: [open](issues/open/) / [done](issues/done/)

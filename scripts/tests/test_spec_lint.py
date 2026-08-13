@@ -288,9 +288,11 @@ def test_live_specs_have_no_dangling_references() -> None:
     fm.check_spec_references(fm.SPEC_DIR, defined, errors)
     assert errors == [], errors
     assert len(modes) >= 279, len(modes)
-    # Nothing constructive has been written yet; the checks above are vacuous
-    # for TR/LV/CO on purpose, and this assert is what says so out loud.
-    assert rows == [], rows
+    # The constructive rewrite gave every area a TR section; each spec must
+    # keep at least the transition rows it shipped with (20 was the smallest).
+    tr_areas = {row.id.split("-")[1] for row in rows if row.id.startswith("TR-")}
+    assert tr_areas >= {"BLOCKING", "CLUSTER", "PERSISTENCE", "REPLICATION", "TXN", "VLL"}, tr_areas
+    assert len(rows) >= 190, len(rows)
 
 
 LIVENESS_SPEC = """\

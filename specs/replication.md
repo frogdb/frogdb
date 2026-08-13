@@ -75,6 +75,422 @@ Adjacent specs: the boot-time half of a full sync — installing a staged checkp
 replication id/offset it carries — lives in
 [Persistence — failure modes](persistence.md) (FM-PERSISTENCE-027, -038, -039).
 
+## State space
+
+Extracted from the structs that back this area.
+
+| Variable | Authoritative field | Writer(s) | Persistence | Survives restart |
+|---|---|---|---|---|
+| ReplicationId | `ReplicationState.replication_id` (`state.rs`) | `ReplicationState::new` (fresh mint); `shift_replication_id`/`_inner` (promotion mint, `mem::replace`s the old value into `SecondaryId`); `adopt_replication_history`/`_inner` (demotion/resync adopts upstream's); `load_or_create` (regenerate on missing/corrupt/invalid file) | `replication_state.json`, via `ReplicationState::save` (temp file + `fs::rename`, **no fsync**) | Yes today — `load_or_create` reads the file unconditionally, independent of dataset recovery. Pending, see TR-REPLICATION-021: issue 24's ruled-but-unimplemented semantics make this conditional on an *intact* dataset recovery; this row will change once that lands. |
+| SecondaryId | `ReplicationState.secondary_id: Option<String>` | `shift_replication_id_inner` (sets); `clear_secondary_window_inner` (clears to `None`); `adopt_replication_history_inner` (clears via the same call) | Same file, `serde(default)` | Yes |
+| SecondaryOffset | `ReplicationState.secondary_offset: i64` | Same three writers as SecondaryId, kept in lockstep (`shift_replication_id_inner` sets it to the boundary; `clear_secondary_window_inner` resets it to the `-1` sentinel) | Same file | Yes |
+| OffsetAtSave | `ReplicationState.offset_at_save: u64` (serde alias `replication_offset`) | `apply_staged_metadata` (`state.rs:474`, absolute set from `StagedReplicationMetadata.replication_offset` on a checkpoint install — the only non-raise-only writer; that transition is owned by the persistence area, see TR-PERSISTENCE-043, and deliberately has no row here); `OffsetCoordinator::reconcile_for_persist` (`offset_coordinator.rs:316`, raise-only `max` against the applied offset, primary side — see TR-REPLICATION-031); `ReplicaOffset::reconcile_for_persist` (`replica/offset.rs:597`, same raise-only shape, replica side); `plan_primary_stint` (`primary/promotion.rs:70`, raise-only `max` against the promotion boundary, committed via `save_snapshot(&plan.minted)` at `primary/mod.rs:646-648` — see TR-REPLICATION-008). The two `reconcile_for_persist` paths are reached through `save_state()`: the primary's (`primary/mod.rs:640-642`) is called from the periodic snapshot hook (`server/init.rs:385-387`, fired by `persistence/src/snapshot/rocks_coordinator.rs:241`) and the shutdown hook (`server/subsystems.rs:806-814`), both guarded `!is_replica`; the replica's (`replica/mod.rs:325`) has **no production caller** today — test/model harness only. | Itself the persisted field | Yes — seeds `ReplicationIdentity::adopting`'s `live.fetch_max(offset_at_save)` (raise-only) |
+| LiveOffset (received) | `ReplicationIdentity.live: Arc<AtomicU64>` (`identity.rs`) | `OffsetCoordinator::advance` (primary write path, `fetch_add`); `OffsetCoordinator::settle_at_applied_inner` (promotion boundary, `store(applied)` — a rewind); `ReplicationIdentity::adopting` (boot seed, `fetch_max(offset_at_save)`) | Not persisted directly | No — rebuilt from OffsetAtSave at boot |
+| ClaimedOffset | `AppliedOffset.applied: Arc<AtomicU64>` (`replica/offset.rs`) — the struct is also named `AppliedOffset`; this row is its `applied` field specifically, not the type | `advance_by` (primary path, ungated `fetch_add`); `claim` (replica path, gated `fetch_add` on `Claim::Granted`); `reset_pair` (full-resync install, absolute set, bumps Epoch) | Not persisted | No |
+| LandedOffset | `AppliedOffset.landed: Arc<AtomicU64>` | `advance_by` (moves with ClaimedOffset via `fetch_max`); `land` (`fetch_max(applied.load())`, called after each shard apply); `reset_pair` (the **only** path that can move it backward) | Not persisted — this is a different atomic from the primary-side AckedOffset it is eventually certified against over the wire | No |
+| ApplyGateFrozen / ApplyGateStint | `AppliedOffset.gate: Arc<Mutex<ApplyGate{frozen, stint}>>` | `freeze()` (promotion, sets `frozen=true`, returns the boundary); `begin_replica_stint()` (unfreezes, `stint += 1`); `retire_replica_applies()` (demotion, `stint += 1` **without** unfreezing) | Not persisted | No. Pending, see TR-REPLICATION-009: a promotion-persist failure (issue 16) leaves this frozen with no code path back to unfrozen short of a fresh `begin_replica_stint` — the stranded state issue 16 rules must become *observable*, not undone. |
+| Epoch | `AppliedOffset.epoch: Arc<AtomicU64>` | `reset_pair` only (every full-resync install) | Not persisted | No. Pending, see TR-REPLICATION-015: issue 24's amendment (point 3) proposes keying INV-OFFSET-2's monotonicity claim on `(ReplicationId, Epoch)`; Epoch has no persisted counterpart today, so a restart cannot distinguish "same epoch" from "different epoch" at all. |
+| DivergedEpoch | `AppliedOffset.diverged: Arc<AtomicU64>` (`NO_DIVERGENCE` sentinel, or the diverged epoch) | `admit_divergence` (latches, only if Epoch is still current); `reset_pair` (clears on fresh install) | Not persisted | No |
+| BacklogStart | `ReplicationRingBuffer.start: AtomicI64` (`UNARMED = -1`) (`primary/ring_buffer.rs`) | `arm_backlog_floor`/`arm_start` (promotion/demotion re-anchor); `reset_backlog` (back to `UNARMED`); the eviction path (raises with each dropped entry) | Not persisted | No |
+| BacklogEntries | `ReplicationRingBuffer.entries: Mutex<VecDeque<BufferedCommand>>` | `record` (push); eviction on `max_entries`/`max_bytes` | Not persisted | No |
+| SessionPhase | Per-`ReplicaSession` `Phase` (`Connecting \| PreparingCheckpoint \| StreamingCheckpoint \| Streaming \| Disconnecting`) (`replica_session.rs`) | `session_machine::step`'s returned `Transition::phase`, applied by `ReplicaSession::run`'s driver loop (monotonic; `Disconnecting` terminal by construction) | Not persisted (session-lifetime only) | No — the session itself does not survive a restart |
+| LastStreamingDeparture | `ReplicationTrackerImpl.last_streaming_departure: AtomicU8` (`0`=None/unknown, `1`=Graceful, `2`=Lost) (`tracker.rs`) | `record_streaming_departure` (the departing session's own exit handler only, via `Effect::RecordDeparture`); `clear_streaming_departure` (a new session entering `Streaming`, via `Effect::ClearDeparture`) | Not persisted | No. Pending, see TR-REPLICATION-010: issue 23's ruling adds a third writer — demotion clearing this to the `None` sentinel alongside FenceArmed's `reset_arming()` — not yet implemented. |
+| FenceArmed | `ReplicationQuorumChecker.armed: AtomicBool` (`frogdb-replication-runtime/src/quorum.rs`) | `arm_if_streaming` (write-path lazy latch — today's only arming path); `reset_arming` (demotion, clears); `disarm_if_departed_cleanly` (clears when unarmed conditions + Graceful LastStreamingDeparture hold) | Not persisted | No. Pending, see TR-REPLICATION-023: issue 19's ruling adds session-Streaming-transition arming; not yet implemented. |
+| SelfFenceEnabled | `ReplicationQuorumChecker.self_fence_enabled: AtomicBool` | `set_self_fence_enabled` (`CONFIG SET self-fence-on-replica-loss`; param registered at `params.rs:1174-1187`, TOML section `replication`, the `name` field itself carries no `replication-` prefix — see TR-REPLICATION-029) | Not persisted by `CONFIG SET` itself (atomics-only, no persist step — `runtime_config.rs:3388-3438`); persisted only by an explicit `CONFIG REWRITE`, which requires a config file (errors `"ERR The server is running without a config file"` at `runtime_config.rs:1315` if none) and writes via temp file + `sync_all()` fsync + rename (`config_persister.rs:115`) | Yes, but only after a successful `CONFIG REWRITE`; boot reads it back at `server/replication_init.rs:324-328` from `config/replication.rs:170-179`; round-trip test-pinned at `runtime_config.rs:5615-5616`/`:5638-5639` |
+| FreshnessTimeoutMs | `ReplicationQuorumChecker.freshness_timeout_ms: AtomicU64` | `set_freshness_timeout_ms` (`CONFIG SET replica-freshness-timeout-ms`; same registry shape as SelfFenceEnabled, `params.rs:1174-1187` — see TR-REPLICATION-029) | Same as SelfFenceEnabled: not persisted by `CONFIG SET`, only by `CONFIG REWRITE` (`config_persister.rs:115`, fsynced) | Same as SelfFenceEnabled: yes after `CONFIG REWRITE`, reseeded at `server/replication_init.rs:324-328` |
+| FeedGateHeldUntil | `ReplicaFeedGate.held_until: Mutex<Option<Instant>>` (`feed_gate.rs`) | `publish(held_until)`, driven by the pure `decide_publish`/`decide_feed_hold_until` over the set of armed cluster-side slot-handoff barrier deadlines | Not persisted | No |
+| IsReplica | `RoleManager.is_replica` (`frogdb-server/crates/server/src/role_manager.rs`) | `promote` (Release, set false only after `begin_primary_stint()?` returns `Ok`); `demote` (Release, set true **first**, before `end_primary_stint`) | Not persisted. `Arc<AtomicBool>` field on `RoleManager`, seeded at boot from static config (`server/init.rs:344-346`, `config.replication.is_replica()`). A runtime `REPLICAOF` never touches disk — `commands/replication.rs:99-174` calls `request_demote`/`request_promote` only, and `replication.role` is `#[param(skip)]` (`config/replication.rs:18-20`). | Mode-dependent. Standalone: **No** — a runtime `REPLICAOF` is lost across restart unless the operator hand-edits the TOML. Cluster: **Yes, re-derived** — `reconcile_self_role` (`cluster_init.rs:225-226`) compares against the persisted Raft/cluster state (`state.get_node(self_node_id).role`, `cluster/state.rs:852-864`) at boot; `REPLICAOF` is rejected outright in cluster mode (`commands/replication.rs:111-115`). |
+| PrimaryTarget | `RoleManager.primary_target: Option<SocketAddr>` | `promote` (cleared to `None` unconditionally, before the fallible `begin_primary_stint()` call — see TR-REPLICATION-011); `demote` (set to `Some(primary)`, its last step — see TR-REPLICATION-012); the constructor (`boot_target` seeds it) | Not persisted. Plain `Option<SocketAddr>` field on `RoleManager`, seeded only by the `boot_target` constructor argument, itself computed from static config at `server/replication_init.rs:206-214`; `primary-host`/`primary-port` are `#[param(skip)]` (`config/replication.rs:24-30`). | Mode-dependent, same split as IsReplica. Standalone: **No**. Cluster: **Yes, indirectly** — a demotion re-resolves the address from live cluster state (`cluster_init.rs:976-999`) and `demote()` sets it (`role_manager.rs`, immediately after the replica stream starts). |
+| ReplicaRegistry | `ReplicationTrackerImpl.replicas: RwLock<HashMap<u64, Arc<ReplicaSession>>>` (`tracker.rs`) | `register_replica`/`register_announced_replica` (insert; id via `next_replica_id.fetch_add`; unconditional today — no identity dedup); `unregister_replica` (remove) | Not persisted | No |
+| AckedOffset | `ReplicaSession.acked_offset: AtomicU64` (`replica_session.rs`) | `record_ack` (wire `REPLCONF ACK` only; monotonic, stores only when `sequence > prev`) | Not persisted | No |
+| ResumeOffset | `ReplicaSession.resume_offset: AtomicU64` | `seed_resume_position` / `OffsetCoordinator::seed_replica_position` (the primary's own bookkeeping of where a replica resumed; never a value the replica sent) | Not persisted | No |
+| RoleFenceCounter | `WaitCoordinator`'s `tokio::sync::watch::Sender<u64>` (`wait_coordinator.rs`) | `fence_role_change`, called once from `end_primary_stint` | Not persisted | No |
+
+---
+
+## Transitions
+
+One `TR-REPLICATION-NNN` per action source, numbered from 001. Pre/postconditions are stated over
+the State-space variables above. A row carries `Pending` when the ruled semantics (the issues are
+the authority) differ from what the cited `Source` does today.
+
+---
+
+## TR-REPLICATION-001 — a PSYNC resolves to a partial or full resync arm
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = Connecting; a `PSYNC <id> <offset>` line has been read |
+| Postcondition | SessionPhase = Connecting (the reply is decided but not yet sent — see TR-REPLICATION-002); the chosen `ResumeSource` is `PartialGrant` iff ReplicationId/SecondaryId+SecondaryOffset admit the requested `(id, offset)` under `window_contains`'s two-bound check, else `FullSnapshot` |
+| Source | `frogdb-replication/src/session_machine.rs:410` (`step`, `Phase::Connecting`/`SessionEvent::Begin` arm) and `:512` (`begin`); `frogdb-replication/src/replica/psync.rs:87` (`select_psync_arm`); `frogdb-replication/src/state.rs:434` (`window_contains`) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-002 — a granted partial resync starts streaming from the backlog tail
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = Connecting; the handshake reply (`+CONTINUE`) has been written to the wire (`SessionEvent::ReplySent`) after a `PartialGrant` |
+| Postcondition | SessionPhase = Streaming; LastStreamingDeparture is cleared to None for this replica generation (`Effect::ClearDeparture`); BacklogEntries from `replay_from` are queued for send; once that tail has been written to the wire, ResumeOffset for this session is seeded to the last offset actually streamed (the final tail entry's offset, or `replay_from` unchanged if the tail was empty) — not the grant point itself, which the tail may have moved well past on a busy primary |
+| Source | `frogdb-replication/src/session_machine.rs:542` (`reply_sent`); `frogdb-replication/src/replica_session.rs:941` (`start_streaming`), `:1030-1032` (the `seed_replica_position` call, after the tail loop) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-003 — a full resync cuts a checkpoint and streams it
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = PreparingCheckpoint; `SessionEvent::CheckpointCut(StepOutcome::Ok)` |
+| Postcondition | SessionPhase = StreamingCheckpoint; the session owns the checkpoint directory (`Effect::OwnCheckpointDir`) and begins sending it (`Effect::SendCheckpoint{path, replication_id: ReplicationId, offset: OffsetAtSave-equivalent snapshot offset}`) |
+| Source | `frogdb-replication/src/session_machine.rs:450` |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-004 — a full resync without a checkpoint store exports the live dataset
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = Connecting; `SessionEvent::Begin` resolves to `BeginSync::Full`, and the handler has no `rocks_store` (`live_snapshot_source` path) |
+| Postcondition | SessionPhase = PreparingCheckpoint, then on `SessionEvent::DatasetExported`: the live dataset is queued (`Effect::SendLiveDataset{replication_id: ReplicationId, offset: LiveOffset at export}`) |
+| Source | `frogdb-replication/src/session_machine.rs:465` (`DatasetExported` arm); `frogdb-replication/src/primary/mod.rs` (`live_snapshot_source` field, ~line 200) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-005 — the full-resync payload finishing streams the primary into the same generation a partial grant would
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = StreamingCheckpoint; `SessionEvent::PayloadSent` |
+| Postcondition | SessionPhase = Streaming; LastStreamingDeparture cleared to None for this generation (`Effect::ClearDeparture`); streaming begins from the offset the payload carried; ResumeOffset for this session is seeded the same way as TR-REPLICATION-002 — to the last offset actually streamed from any backlog tail replayed after the payload's offset, or to the payload's own offset unchanged if that tail was empty — not unconditionally to the payload's offset |
+| Source | `frogdb-replication/src/session_machine.rs:474`; `frogdb-replication/src/replica_session.rs:941` (`start_streaming`), `:1030-1032` (the `seed_replica_position` call) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-006 — a sync failure at any phase before Streaming fails the session without a partial reply
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase ∈ {Connecting, PreparingCheckpoint}; a `Drained`/`CheckpointCut` event carries `StepOutcome::Failed(cause)` |
+| Postcondition | SessionPhase = Disconnecting; `Effect::FailSync{failure, cause}` is emitted; no `Effect::Stream` is ever reached for this generation |
+| Source | `frogdb-replication/src/session_machine.rs:424`, `:439` |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-007 — a session ending classifies its departure before it leaves the registry
+
+| Field | Value |
+| --- | --- |
+| Precondition | any SessionPhase; `SessionEvent::Ended(outcome)` |
+| Postcondition | SessionPhase = Disconnecting (terminal); if the phase this session was on *before* the event was Streaming: LastStreamingDeparture is set (Graceful for `LinkOutcome::Ended(Graceful)`/orderly EOF/primary-initiated teardown/broadcaster closed, Lost for `LinkOutcome::Errored`/read-write errors/lag disconnect/`RecvError::Lagged`) via `Effect::RecordDeparture`, strictly before `Effect::Unregister` removes it from ReplicaRegistry; if the phase before the event was not Streaming, LastStreamingDeparture is left untouched (no record for a session that never streamed) |
+| Source | `frogdb-replication/src/session_machine.rs:492` (`Ended` arm), `:601-610` (effect ordering: `RecordDeparture` before `Unregister`) |
+| Rulings | — (already locked behavior, FM-REPLICATION-062) — this row transcribes the classification the FM row specifies; issue 23 changes what happens to LastStreamingDeparture on a subsequent *demotion*, not on this transition — see TR-REPLICATION-010 |
+
+---
+
+## TR-REPLICATION-008 — a promotion mints a fresh primary identity and freezes the inherited one at the applied boundary (success path)
+
+| Field | Value |
+| --- | --- |
+| Precondition | IsReplica = true; `begin_primary_stint()` called (from `RoleManager::promote`); `discard_staged_full_sync` succeeds |
+| Postcondition | ClaimedOffset is frozen (ApplyGateFrozen = true) at the value `settle_at_applied_inner()` returns; ReplicationId = a freshly minted id; SecondaryId = the pre-promotion ReplicationId; SecondaryOffset = the frozen boundary; OffsetAtSave is raised (`max`) to the same frozen boundary by `plan_primary_stint` (`primary/promotion.rs:70`); ReplicationId/SecondaryId/SecondaryOffset/OffsetAtSave are persisted together to `replication_state.json` via `save_snapshot(&plan.minted)` (`primary/mod.rs:646-648`) before the caller observes success; BacklogStart is re-armed at the same boundary (`arm_backlog_floor`) |
+| Source | `frogdb-replication/src/primary/mod.rs:449` (`begin_primary_stint_inner`), `:646` (`save_snapshot`); `frogdb-replication/src/primary/promotion.rs:37` (`StintPlan`), `:63` (`plan_primary_stint`), `:70` (OffsetAtSave raise); `frogdb-replication/src/state.rs:363` (`shift_replication_id`) |
+| Rulings | — (already locked behavior, FM-REPLICATION-019) |
+
+---
+
+## TR-REPLICATION-009 — a promotion that cannot persist rolls the identity back but leaves the applied gate frozen (failure path)
+
+| Field | Value |
+| --- | --- |
+| Precondition | Same as TR-REPLICATION-008 up to the point ClaimedOffset is frozen (ApplyGateFrozen = true); the subsequent `save_snapshot(&plan.minted)` fails |
+| Postcondition | ReplicationId/SecondaryId/SecondaryOffset are restored bit-for-bit to their pre-promotion values (`plan.rollback`); ApplyGateFrozen remains true (the freeze is **not** rolled back); IsReplica is left unset by `RoleManager::promote` (an `Err` return leaves the flag as it was — still a replica); no metric or `INFO` field distinguishes this state from "never pointed at a primary" today |
+| Source | `frogdb-replication/src/primary/mod.rs:449` (`begin_primary_stint_inner`, the `save_snapshot` error branch); `frogdb-server/crates/server/src/role_manager.rs:322` (`promote`, `# Failure`) |
+| Rulings | [issue 16](../.scratch/replication-correctness/issues/open/16-failed-promotion-strands-the-applied-gate.md) — ruled "keep freeze, make it observable": this postcondition's freeze is the accepted, permanent behavior; what is missing is the observability half (a level-triggered `INFO`/metric field distinguishing this state) and the two witnesses the review addendum requires (a retried `begin_primary_stint` minting from the same boundary; a cluster-mode recovery integration test) |
+| Pending | [issue 16](../.scratch/replication-correctness/issues/open/16-failed-promotion-strands-the-applied-gate.md) |
+
+---
+
+## TR-REPLICATION-010 — a demotion ends the primary stint in a fixed order
+
+| Field | Value |
+| --- | --- |
+| Precondition | IsReplica set to true (Release) by the caller, *before* this runs; `end_primary_stint()` called (from `RoleManager::demote`) |
+| Postcondition | RoleFenceCounter is bumped (`fence_role_change`, releasing any parked WAIT — see TR-REPLICATION-027); BacklogStart is reset to UNARMED (`reset_backlog`); ApplyGateStint is incremented **without** clearing ApplyGateFrozen (`retire_replica_applies`); every entry in ReplicaRegistry is disconnected (`disconnect_all_replicas`) |
+| Source | `frogdb-replication/src/primary/mod.rs:517` (`end_primary_stint`) |
+| Rulings | [issue 23](../.scratch/replication-correctness/issues/open/23-demotion-keeps-the-departure-it-disarmed.md) — ruled "clear with the latch": LastStreamingDeparture must also be reset to the `None`/unknown sentinel here (never a synthesized Graceful — the review addendum is explicit that writing Graceful would pre-disarm a re-promoted node's fence), alongside FenceArmed's `reset_arming()`. Neither `end_primary_stint` nor the surrounding `RoleManager::demote` clears LastStreamingDeparture today — the four steps above are the complete, unchanged postcondition; the fifth step this ruling adds is not yet in the code. |
+| Pending | [issue 23](../.scratch/replication-correctness/issues/open/23-demotion-keeps-the-departure-it-disarmed.md) |
+
+---
+
+## TR-REPLICATION-011 — `RoleManager::promote` orders the mint before the role flip
+
+| Field | Value |
+| --- | --- |
+| Precondition | `promote()` called |
+| Postcondition | The stream is dropped, `stop_boot_replica()` stops the boot-spawned reconnect loop (a separate teardown that lives outside `stream`), and PrimaryTarget is cleared to `None` — **unconditionally and first**, before `begin_primary_stint()` is ever attempted, and even on the no-op arm where the node was already primary; these three steps are irreversible and happen regardless of what follows. Only if IsReplica was true does `begin_primary_stint()` then run (TR-REPLICATION-008/009). On `Ok`: IsReplica = false. On `Err`: IsReplica alone is left unchanged (still true) — leaving a node flagged as a replica with PrimaryTarget already cleared and no stream, i.e. no primary to point at and no link to one (the stranded state TR-REPLICATION-009/issue 16 describes). |
+| Source | `frogdb-server/crates/server/src/role_manager.rs:322` (`promote`) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-012 — `RoleManager::demote` orders the role flip before the stint teardown
+
+| Field | Value |
+| --- | --- |
+| Precondition | any role state; `demote(primary)` called. The no-op guard is three conjuncts: IsReplica already true, PrimaryTarget already `Some(primary)` (same target), and no sync refusal latched (`sync_refusal().is_none()`); only when all three hold is the call a no-op (the stint is not ended twice). A latched sync refusal deliberately makes a same-target re-`demote` re-run the full teardown below — it is the operator's only recovery path short of a restart. |
+| Postcondition | IsReplica = true (written first, so every write-gate read after this point sees the new role before the stint teardown below completes); `end_primary_stint()` runs (TR-REPLICATION-010); the old `ReplicaStream` (if any) is dropped; `stop_boot_replica()` clears any pending boot-replica handler; FenceArmed is reset (`reset_arming`), when a self-fence checker is configured; a new replica stream toward `primary` starts; PrimaryTarget = Some(primary), written last |
+| Source | `frogdb-server/crates/server/src/role_manager.rs:362` (`demote`) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-013 — a slot-handoff barrier arming or releasing publishes a new feed-gate deadline
+
+| Field | Value |
+| --- | --- |
+| Precondition | a cluster-side barrier arms or releases, changing the set of armed deadlines `frogdb_core::PauseState::feed_hold_until` supplies (that set is not itself a tracked State-space variable here — it lives in `frogdb-core`, outside this crate's structs — but every entry in it feeds directly into FeedGateHeldUntil below) |
+| Postcondition | FeedGateHeldUntil = `decide_feed_hold_until(armed_deadlines)` (the max of the armed set, or None if empty), published via `ReplicaFeedGate::publish`; any consumer awaiting `released()` or polling `is_held()` observes the new value |
+| Source | `frogdb-replication/src/feed_gate.rs` (`decide_publish`, `decide_feed_hold_until`, `ReplicaFeedGate::publish`) |
+| Rulings | [issue 26](../.scratch/replication-correctness/issues/open/26-the-feed-gate-model-proves-a-transcription-not-the-session.md) — the derivation this row states is correct and already witnessed (the stateright model catches a reintroduced defect here in under a second). What issue 26 found is a gap in what *consumes* this value: `replica_session.rs`'s two consultation points (`feed_gate.released().await` before the backlog tail, and `while feed_gate.is_held()` in the buffering loop) can silently stop being called with no model or layer noticing except FM-CLUSTER-097's own integration test. Ruled fix (Option 2 now): a slot-handoff-barrier fault family in the replication seeded sweep, plus an interim seam lint requiring the streaming path to call both consumption points — neither is landed yet. |
+| Pending | [issue 26](../.scratch/replication-correctness/issues/open/26-the-feed-gate-model-proves-a-transcription-not-the-session.md) |
+
+---
+
+## TR-REPLICATION-014 — the frame consumer claims, applies and lands a replicated frame
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = Streaming; ApplyGateFrozen = false; ApplyGateStint matches the consumer's own stint; Epoch matches the frame's epoch; DivergedEpoch is not the current Epoch; a frame is available |
+| Postcondition | On `Claim::Granted`: ClaimedOffset advances by the frame's byte length; the shard apply runs; LandedOffset is raised to ClaimedOffset (`land()`). On `Claim::Stale` (epoch mismatch or diverged): the frame is dropped, ClaimedOffset/LandedOffset unchanged, the consumer keeps running. On `Claim::Retired` (ApplyGateFrozen or stint mismatch): the frame is dropped and the consumer stops. |
+| Source | `frogdb-replication/src/replica/offset.rs:388` (`claim`), `:420` (`land`) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-015 — a full resync installs an absolute offset pair, moving the landed offset backward
+
+| Field | Value |
+| --- | --- |
+| Precondition | ApplyGateFrozen = false; ApplyGateStint matches the caller's stint; a full resync or checkpoint install has a new `(live, offset)` pair to adopt |
+| Postcondition | LiveOffset = the installed value; ClaimedOffset = the installed value; LandedOffset = the installed value (the only transition in this table that can lower LandedOffset); Epoch is incremented; DivergedEpoch is cleared |
+| Source | `frogdb-replication/src/replica/offset.rs:268` (`reset_pair`, private — reached only through the resync install path) |
+| Rulings | [issue 17](../.scratch/replication-correctness/issues/open/17-save-point-above-the-live-head.md) — ruled "save point follows the history": `OffsetAtSave` (the *persisted* save point, a separate field from LandedOffset) must be allowed to follow a `reset_to`/staged-checkpoint install downward together with LiveOffset/ClaimedOffset/LandedOffset, rather than only ever rising. INV-OFFSET-2 becomes Hard-tier and scoped "monotone within a replication history" rather than globally monotone. Per the anti-pattern review (finding H5) and issue 24's amendment (point 3), that scoping needs `(ReplicationId, Epoch)` keying to be checkable, and issue 24 is ruled to land its identity/offset-pairing changes **before** this issue, since both relocate `OffsetAtSave` and neither issue originally cited the other. Neither ordering nor the OffsetAtSave-follows-history behavior is implemented yet. |
+| Pending | [issue 17](../.scratch/replication-correctness/issues/open/17-save-point-above-the-live-head.md), [issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) |
+
+---
+
+## TR-REPLICATION-016 — a promotion freezes the applied gate at the claimed offset, never the received offset
+
+| Field | Value |
+| --- | --- |
+| Precondition | `settle_at_applied()`/`settle_at_applied_inner()` called (the first step of TR-REPLICATION-008/009, before the fallible persist) |
+| Postcondition | ApplyGateFrozen = true; the returned boundary = ClaimedOffset at the instant of the call (never LiveOffset, which may be ahead of what the applier has actually claimed) |
+| Source | `frogdb-replication/src/offset_coordinator.rs:205` (`settle_at_applied`), `:223` (`settle_at_applied_inner`) |
+| Rulings | — (already locked behavior, FM-REPLICATION-019's Invariant cell) |
+
+---
+
+## TR-REPLICATION-017 — a demotion retires the replica applier without unfreezing it
+
+| Field | Value |
+| --- | --- |
+| Precondition | `retire_replica_applies()` called (part of TR-REPLICATION-010) |
+| Postcondition | ApplyGateStint is incremented (so any consumer holding the previous stint's claims stops at its next frame); ApplyGateFrozen is left exactly as it was — this call never clears a freeze, only ever compounds one |
+| Source | `frogdb-replication/src/replica/offset.rs:243` (`retire_replica_applies`); `frogdb-replication/src/offset_coordinator.rs:247` (the coordinator's thin wrapper) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-018 — an ACK is ingested and notifies WAIT waiters
+
+| Field | Value |
+| --- | --- |
+| Precondition | a `REPLCONF ACK <offset>` arrives from a streaming replica; `offset > AckedOffset`'s current value for that session (record_ack is a no-op otherwise, though it still refreshes the session's liveness clock) |
+| Postcondition | AckedOffset for that replica session = `offset`; WAIT waiters subscribed to the ack broadcast channel are notified |
+| Source | `frogdb-replication/src/tracker.rs:612` (`record_ack`); `frogdb-replication/src/replica_session.rs:539` (`ReplicaSession::record_ack`); `frogdb-replication/src/offset_coordinator.rs:260` (`ingest_replica_ack`, the entry point) |
+| Rulings | [issue 21](../.scratch/replication-correctness/issues/open/21-ack-above-live-head.md) — AMENDED ruling "ignore + count": today neither `ingest_replica_ack` nor `record_ack` checks the wire ack against LiveOffset at all (`record_ack` only checks monotonicity against the session's own prior AckedOffset), so a replica that acks past the primary's own live head is credited in full — inflating WAIT's count, reporting negative INFO lag, and shrinking the divergence window used elsewhere. The ruled postcondition adds a precondition clause: `offset <= LiveOffset` — an ack strictly above LiveOffset is **ignored entirely** (no AckedOffset write, the session's next valid ack still updates normally), counted via a metric, with no disconnect. The originally-ruled alternative (clamp AckedOffset to LiveOffset) was reversed by the anti-pattern review because it makes the primary a writer of AckedOffset, contradicting this same row's Source-level guarantee that only the wire ack writes it. Not implemented yet — the ceiling check itself is absent from both cited functions. |
+| Pending | [issue 21](../.scratch/replication-correctness/issues/open/21-ack-above-live-head.md) |
+
+---
+
+## TR-REPLICATION-019 — a granted `+CONTINUE` shifts the inherited id into the failover window, at a validated id
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = Connecting; a partial resync is granted (TR-REPLICATION-001, PartialGrant arm); the wire supplies `granted_id` |
+| Postcondition | if `granted_id` is well-formed (40 lowercase-hex chars): ReplicationId = `granted_id`; SecondaryId/SecondaryOffset unchanged by this call (this is the *replica*-side adoption of what the primary granted, not the primary-side promotion shift — TR-REPLICATION-008 is the mint side). If malformed: the call is rejected, ReplicationId is left untouched, the link is dropped rather than continuing under an unvalidated id. |
+| Source | `frogdb-replication/src/replica/connection.rs:309` (`psync`, `state.shift_replication_id(granted_id.clone(), resumed_at)`); `frogdb-replication/src/state.rs:497` (`is_valid_replication_id`) |
+| Rulings | [issue 18](../.scratch/replication-correctness/issues/open/18-unvalidated-wire-replication-id.md) — ruled "confirmed: validation at the single chokepoint" (already wired into `shift_replication_id`/`adopt_replication_history` as the validation point for all three wire-adoption call sites, including this one). Review addendum (finding A1): the guarantee is well-formedness only, not anti-impersonation — a malformed id cannot be adopted, but a well-formed id from an unauthenticated or unauthorized peer is not caught here; that depends on masterauth/TLS (and, in cluster mode, Raft-carried node identity). No FM row states this scope limit explicitly today. |
+| Pending | — (the validation chokepoint itself is implemented; the addendum's explicit scope note in the FM catalog is not, but this task does not touch FM rows) |
+
+---
+
+## TR-REPLICATION-020 — a received full-sync payload's trailer is adopted at the same validated chokepoint
+
+| Field | Value |
+| --- | --- |
+| Precondition | SessionPhase = Connecting; a full resync payload (live-dataset trailer or checkpoint trailer) has been received and its dataset installed; the trailer carries a `replication_id` |
+| Postcondition | if well-formed: ReplicationId = the trailer's id; SecondaryId/SecondaryOffset are cleared (`clear_secondary_window`, folded into `adopt_replication_history`) — a full resync closes any prior failover window rather than merging with it. If malformed: rejected, prior ReplicationId/SecondaryId/SecondaryOffset untouched. |
+| Source | `frogdb-replication/src/replica/connection.rs:388` (`receive_snapshot`, `.adopt_replication_history(metadata.replication_id.clone())`), `:462` (`receive_checkpoint`, same call); `frogdb-replication/src/state.rs:407` (`adopt_replication_history`), `:413` (`_inner`) |
+| Rulings | same as TR-REPLICATION-019 (issue 18) |
+
+---
+
+## TR-REPLICATION-021 — identity recovery at boot is gated on an intact dataset recovery
+
+| Field | Value |
+| --- | --- |
+| Precondition | node boot; `<data_dir>/replication_state.json` is read via `load_or_create` |
+| Postcondition | Identity recovery is gated on dataset recovery. If no dataset was restored, or the restored dataset was not recovered *intact* (`keys_failed == 0` under FM-PERSISTENCE-033's continue policy, and `frogdb_wal_recovery_dropped_records_total == 0`): (a) ReplicationId = a freshly minted id; (b) simultaneously the recovered-but-untrusted id shifts into SecondaryId at boundary 0 (the Redis RDB-aux shape, both halves together). The persisted offset commits atomically with the write it names (not stamped at manifest time, which biases it low and makes replay non-idempotent for INCR/LPUSH/APPEND). Identity is written inside the FM-PERSISTENCE-019 quiesce window. — **Not implemented.** Today, `load_or_create` sets ReplicationId/SecondaryId/SecondaryOffset/OffsetAtSave to the file's contents (or mints fresh only if the file is missing/corrupt/fails `validate()`) **regardless of whether a dataset was recovered** — a node restarted with `persistence.enabled=false`, or one whose store is empty, still adopts the prior ReplicationId even though LiveOffset seeds at 0. `replication_state.json` also still stands as an independent identity authority rather than the ruled `database_id`-keyed cache/retirement. |
+| Source | `frogdb-replication/src/state.rs:235` (`load_or_create`); `frogdb-replication/src/identity.rs:~90-98` (`adopting`, `live.fetch_max(state.offset_at_save)`) |
+| Rulings | [issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) — ruled (a) structural + AMENDED (b) as well as (a), after the anti-pattern review found (a) alone insufficient (R-C1 CRITICAL: an unclean restart *with* a dataset can still resume `(id, offset)` below what replicas already acked and re-issue those offsets under the same id, reachable into a `+CONTINUE` over divergent bytes). Cross-references (not yet folded into `specs/persistence.md` by this task): FM-PERSISTENCE-019 (quiesce window), FM-PERSISTENCE-027/-028/-033/-038/-039/-049. |
+| Pending | [issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) |
+
+---
+
+## TR-REPLICATION-022 — a replica session registers against an announced identity
+
+| Field | Value |
+| --- | --- |
+| Precondition | a session completes its handshake and announces `(addr, port)` |
+| Postcondition | if an existing streaming session already carries the same node/replica identity (not IP:port — a shared/NAT'd address must not dedupe, and `listening_port == 0` stays exempt as unknown): the predecessor session is disconnected with a `Superseded` outcome — recording **no** departure at all (neither Graceful nor Lost) for the predecessor, subject to a cooldown to prevent a kick loop. The new session then proceeds to register normally. — **Not implemented.** Today, ReplicaRegistry gains a new entry unconditionally — id minted by `next_replica_id.fetch_add` — with no check against any existing entry announcing the same identity. |
+| Source | `frogdb-replication/src/tracker.rs:173` (`register_replica`), `:183` (`register_announced_replica`) |
+| Rulings | [issue 22](../.scratch/replication-correctness/issues/open/22-duplicate-streaming-identity.md) — AMENDED ruling. Original ruling ("kick predecessor", classified as Graceful) was corrected by the anti-pattern review (finding H2): a Graceful record for the kicked predecessor can land *after* the successor's own `ClearDeparture`, silently un-fencing the primary — exactly the shape FM-REPLICATION-062's NOT-observable clause forbids. The corrected ruling adds the `Superseded` outcome (no departure record at all) and changes the dedup key from (peer IP, announced port) to node/replica id + cooldown (finding A1: an IP:port key would kick-loop forever on a shared/NAT'd address). Not implemented — today's registration path has no dedup of any kind. |
+| Pending | [issue 22](../.scratch/replication-correctness/issues/open/22-duplicate-streaming-identity.md) |
+
+---
+
+## TR-REPLICATION-023 — the self-fence latch arms
+
+| Field | Value |
+| --- | --- |
+| Precondition | a replica session's own transition into SessionPhase = Streaming (registration path) |
+| Postcondition | FenceArmed is set to true at that transition, independent of any write ever occurring. The write-path `arm_if_streaming` call (run from `has_quorum()` on every write command) stays in place as a belt-and-braces catch-up, now redundant with the new arming point rather than the sole one. — **Not implemented.** Today, arming happens exclusively from the write path: FenceArmed = true iff `tracker.has_streaming_replica()` is true at the moment a write calls `has_quorum()`. A replica that reaches Streaming but is lost before any write is served leaves FenceArmed = false forever (until some future write arms it), and the fence never engages for that loss. |
+| Source | `frogdb-replication-runtime/src/quorum.rs` (`ReplicationQuorumChecker::arm_if_streaming`, `has_quorum`) |
+| Rulings | [issue 19](../.scratch/replication-correctness/issues/open/19-self-fence-arms-only-on-the-write-path.md) — ruled "arm on Streaming transition". Not implemented — arming today happens exclusively through the write-path call cited above; nothing on the session-lifecycle path (session_machine.rs's transition into Streaming, TR-REPLICATION-002/005) touches FenceArmed. Review addendum (finding A6): FM-REPLICATION-041's existing Invariant cell already *claims* "armed is a latch set by any replica reaching Phase::Streaming" while the spec is LOCKED and mutation-gated — this row's Pending link is the tracking mechanism for that gap; the FM row's text itself is not altered by this task. |
+| Pending | [issue 19](../.scratch/replication-correctness/issues/open/19-self-fence-arms-only-on-the-write-path.md) |
+
+---
+
+## TR-REPLICATION-024 — the self-fence latch clears
+
+| Field | Value |
+| --- | --- |
+| Precondition | either: (a) `reset_arming()` called (demotion, TR-REPLICATION-012); or (b) `disarm_if_departed_cleanly()` runs and finds FenceArmed = true, no session in ReplicaRegistry with SessionPhase = Streaming, and LastStreamingDeparture = Graceful |
+| Postcondition | FenceArmed = false |
+| Source | `frogdb-replication-runtime/src/quorum.rs` (`reset_arming`, `disarm_if_departed_cleanly`); called from `frogdb-server/crates/server/src/role_manager.rs:362` (`demote`) for (a) |
+| Rulings | — (already locked behavior, FM-REPLICATION-041's Invariant cell). Note: arm (b)'s read of LastStreamingDeparture is exactly what issue 23's TR-REPLICATION-010 amendment protects — if a re-promoted node's demotion had left LastStreamingDeparture at a stale Graceful (or, worse, a synthesized one), this clear could fire on the wrong generation's record. |
+
+---
+
+## TR-REPLICATION-025 — a replica-side read is served regardless of link health
+
+| Field | Value |
+| --- | --- |
+| Precondition | a read command arrives at a replica; unconditional on this table's State-space variables — notably not gated on SessionPhase (the replica's own upstream session may be in any phase, including no session at all) or on ApplyGateFrozen (TR-REPLICATION-009's stranded state) |
+| Postcondition | a `replica-serve-stale-data yes\|no` config knob governs the answer, with Redis semantics/spelling. When `no` and the replica's upstream link is down (including the stranded-promotion state TR-REPLICATION-009 describes): the replica answers errors to data commands (INFO/auth-class commands excepted). When `yes` (the default): the read is answered from the local keyspace unconditionally. Client-side detection is `master_link_status` in INFO. — **Not implemented.** FrogDB has no `replica-serve-stale-data` config gate at all today: every read is answered from the local keyspace unconditionally, matching Redis's `yes` default but with no `no` option. |
+| Source | `frogdb-replication/src/replica/mod.rs` (the read path has no stale-gate check to cite — this is the absence the ruling fills) |
+| Rulings | [issue 28](../.scratch/replication-correctness/issues/open/28-replica-serve-stale-data-knob.md) — raised by the anti-pattern review (finding A4) against FM-REPLICATION-029's existing "deliberately no stale-read gate" Invariant text and issue 16's ruled stranded-promotion state (TR-REPLICATION-009), which is an unbounded-staleness source with no knob to bound it. Not implemented — no such config key exists yet. |
+| Pending | [issue 28](../.scratch/replication-correctness/issues/open/28-replica-serve-stale-data-knob.md) |
+
+---
+
+## TR-REPLICATION-026 — WAIT snapshots its target once and resolves via fast path, solicitation, or deadline
+
+| Field | Value |
+| --- | --- |
+| Precondition | `WAIT numreplicas timeout` on a primary (IsReplica = false) |
+| Postcondition | `target = LiveOffset` at arrival, snapshotted exactly once; if the count of ReplicaRegistry entries with SessionPhase = Streaming and AckedOffset >= target already meets `numreplicas`: returns immediately, no GETACK sent, no state changed. Otherwise: if any entry has SessionPhase = Streaming, exactly one GETACK round is solicited (TR-REPLICATION-018 is what subsequently advances AckedOffset past target for waiters); then the call blocks until quorum is reached (unblocking on the next AckedOffset write that satisfies target) or `timeout` elapses (or RoleFenceCounter changes — TR-REPLICATION-027) |
+| Source | `frogdb-replication/src/wait_coordinator.rs` (`WaitCoordinator::wait_for_replicas`, `count_acked`); `frogdb-server/crates/server/src/connection/blocking.rs:254-282` (the connection-handler orchestration: the one-time `target` snapshot, the fast-path check, the `IsReplica` gate, and the CLIENT-UNBLOCK race — this is where the "snapshotted exactly once" claim is actually enforced, not solely in `wait_coordinator.rs`) |
+| Rulings | — (already locked behavior, FM-REPLICATION-037/038/039) |
+
+---
+
+## TR-REPLICATION-027 — a role change parked under a WAIT releases it with an error, never a count
+
+| Field | Value |
+| --- | --- |
+| Precondition | a `WAIT` (TR-REPLICATION-026) is blocked (fast path did not satisfy it) on a node that then runs `end_primary_stint()` (TR-REPLICATION-010), bumping RoleFenceCounter |
+| Postcondition | the blocked WAIT resolves to `WaitVerdict::RoleChanged`, discarding whatever count had accumulated; the caller replies with the role-change error rather than an integer. An exact tie between quorum being reached and RoleFenceCounter changing on the same poll resolves to RoleChanged (the `select!` is `biased;` with the fence arm listed first, not left to an unseeded/non-reproducible-under-turmoil random tie-break). |
+| Source | `frogdb-replication/src/wait_coordinator.rs` (`fence_role_change`, the `select!` arms producing `WaitVerdict::RoleChanged`); the counter itself is RoleFenceCounter (`tokio::sync::watch::Sender<u64>`) |
+| Rulings | — (already locked behavior, FM-REPLICATION-040) |
+
+---
+
+## TR-REPLICATION-028 — a future quorum-durability write mode (roadmap)
+
+| Field | Value |
+| --- | --- |
+| Precondition | undesigned |
+| Postcondition | undesigned |
+| Source | — (no code exists for this transition) |
+| Rulings | [issue 29](../.scratch/replication-correctness/issues/open/29-replication-durability-quorum-write-mode.md) — filed as the roadmap path toward lossless *unplanned*-failover durability (a `replication-durability = quorum` mode, CRDB/etcd Raft-commit shaped), explicitly `needs-triage` and **not** ready-for-agent: quorum definition, WAIT interaction, timeout/degraded behavior, scope, and durability-sync interplay are all deferred to a future design round. This row exists only to mark the roadmap slot; it invents no mechanism the issue itself does not state. [cluster-correctness issue 26](../.scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md) — a distinct issue from the replication-correctness issue 26 that TR-REPLICATION-013 cites — is the boundary-adjacent, already-ruled mechanism for the *planned*-failover path (issue 29 cross-references it explicitly, at lines 15/27/66 of its own body); this row is only the *unplanned* path issue 29 covers. |
+| Pending | [issue 29](../.scratch/replication-correctness/issues/open/29-replication-durability-quorum-write-mode.md) |
+
+---
+
+## TR-REPLICATION-029 — a `CONFIG SET` updates the self-fence knobs directly, with no persistence step
+
+| Field | Value |
+| --- | --- |
+| Precondition | `CONFIG SET self-fence-on-replica-loss <yes\|no>` or `CONFIG SET replica-freshness-timeout-ms <ms>` is accepted by `runtime_config.rs`'s validation (param registered at `params.rs:1174-1187`, TOML section `replication`, `name` field carrying no `replication-` prefix) |
+| Postcondition | SelfFenceEnabled or FreshnessTimeoutMs (respectively) is set to the new value via `ReplicationQuorumChecker::set_self_fence_enabled`/`set_freshness_timeout_ms`; no persistence occurs as part of this call — `CONFIG SET` is atomics-only (see the State-space rows for the separate `CONFIG REWRITE` path that does persist). The same setter also runs once at boot, applying the value parsed from the static config (`runtime_config.rs:1135-1136`), before any `CONFIG SET` has run. |
+| Source | `frogdb-server/crates/server/src/runtime_config.rs:1135-1136` (boot apply), `:3146` (self-fence `CONFIG SET` arm), `:3177` (freshness `CONFIG SET` arm); `frogdb-replication-runtime/src/quorum.rs:96` (`set_self_fence_enabled`), `:116` (`set_freshness_timeout_ms`) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-030 — the primary write path advances the live offset and appends to the backlog
+
+| Field | Value |
+| --- | --- |
+| Precondition | a write command completes locally on the primary (IsReplica = false) and its RESP bytes are handed to the replication write path |
+| Postcondition | LiveOffset advances by the frame's byte length (`OffsetCoordinator::advance`, Release-ordered `fetch_add`, live bumped before claimed within the same call); ClaimedOffset advances in lockstep via `advance_by`, called from inside `advance` itself — not a second, separate path, which is exactly why "live first, then applied" is a single ordering guarantee rather than two; LandedOffset is raised to the same value in the same `advance_by` call (`fetch_max`) — on the primary the two heads never separate, which is what lets a later demotion ACK from its true landed position (TR-REPLICATION-033); the frame is recorded into BacklogEntries (`record`/`push`), first arming BacklogStart at the entry's start offset if it was still UNARMED (`fetch_max`); if the push exceeds `max_entries`/`max_bytes`, the oldest entries are evicted in a loop, each eviction raising BacklogStart to just past the evicted entry (BacklogStart only ever rises here) |
+| Source | `frogdb-replication/src/offset_coordinator.rs:108-121` (`advance`); `frogdb-replication/src/replica/offset.rs:128-134` (`advance_by`, the LandedOffset `fetch_max`); `frogdb-replication/src/primary/mod.rs:862`, `:883` (call sites); `frogdb-replication/src/primary/replay.rs:232` (`record`); `frogdb-replication/src/primary/ring_buffer.rs:204` (`push`), `:216` (`push_inner`, arm-on-first-push and the eviction loop) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-031 — `reconcile_for_persist` raises the save point toward the applied offset before it is written to disk
+
+| Field | Value |
+| --- | --- |
+| Precondition | `save_state()` runs — the periodic snapshot hook (`server/init.rs:385-387`) or the shutdown hook (`server/subsystems.rs:806-814`), both `!is_replica`-guarded. Promotion reaches `ReplicationState::save` by a different route entirely (`save_snapshot`, TR-REPLICATION-008): `save_snapshot` is a sibling of `save_state`, not a caller of it, and never touches `reconcile_for_persist` — promotion's own OffsetAtSave raise is `plan_primary_stint`'s `max` (`primary/promotion.rs:70`), a distinct writer covered by TR-REPLICATION-008, not this row. |
+| Postcondition | OffsetAtSave is raised via `max` to the caller's currently-applied offset (`reconcile_for_persist`, identical shape in both the primary and replica implementations), and the resulting `ReplicationState` is written to `replication_state.json` (`ReplicationState::save`: a fixed `.tmp` name — no pid suffix, unlike `config_persister.rs`'s `CONFIG REWRITE` path — then `fs::rename`, with **no fsync** anywhere in the call, so the write is not durable against a power loss and a concurrent save from two writers could collide on the same temp path). The raise is one-directional: a full-resync install that moves LandedOffset backward (TR-REPLICATION-015) does **not** lower OffsetAtSave to match — this is exactly the gap issue 17 rules against. |
+| Source | `frogdb-replication/src/offset_coordinator.rs:306` (`OffsetCoordinator::reconcile_for_persist`); `frogdb-replication/src/replica/offset.rs:591` (`ReplicaOffset::reconcile_for_persist`); `frogdb-replication/src/state.rs:279` (`ReplicationState::save`); `frogdb-replication/src/primary/mod.rs:640` (primary `save_state`, the only side with a production caller); `frogdb-replication/src/replica/mod.rs:325` (replica `save_state`, no production caller today) |
+| Rulings | [issue 17](../.scratch/replication-correctness/issues/open/17-save-point-above-the-live-head.md) — ruled "save point follows the history" (see TR-REPLICATION-015 for the fuller statement, including issue 24's ordering amendment). This row is the persist half of that gap: `reconcile_for_persist`'s raise-only `max` is precisely the behavior issue 17 rules must change to allow OffsetAtSave to follow a `reset_pair` install downward. Not implemented. |
+| Pending | [issue 17](../.scratch/replication-correctness/issues/open/17-save-point-above-the-live-head.md) |
+
+---
+
+## TR-REPLICATION-032 — an unrecoverable apply failure latches the diverged epoch
+
+| Field | Value |
+| --- | --- |
+| Precondition | ApplyGateStint matches the caller's own stint; a frame apply (or claim) fails in a way the applier cannot recover from at the current Epoch |
+| Postcondition | if Epoch is still the epoch the divergence was detected under: DivergedEpoch is latched to that Epoch, and waiters on the divergence notifier are woken (`notify_waiters()`) — this is what fires the streaming loop's `applied.divergence()` `select!` arm and abandons the link, rather than the divergence being discovered only on the next inter-frame check. Every subsequent `claim` at the same Epoch then resolves `Claim::Stale` (TR-REPLICATION-014). A divergence report against an already-superseded Epoch is a no-op; `reset_pair`'s Epoch bump (TR-REPLICATION-015) is what clears DivergedEpoch on the next full-resync install. |
+| Source | `frogdb-replication/src/replica/offset.rs:444` (`admit_divergence`), `:452` (`notify_waiters`); `frogdb-replication/src/apply.rs:439`, `:614` (the two production callers that decide when a divergence is admitted); `frogdb-replication/src/replica/streaming.rs:129` (the `select!` arm it wakes) |
+| Rulings | — |
+
+---
+
+## TR-REPLICATION-033 — a replica ACKs the landed offset, never the claimed or received one
+
+| Field | Value |
+| --- | --- |
+| Precondition | a replica's streaming loop is running (`stream_replication`); either the spontaneous ack-interval ticks, or a solicited-ack target is pending (a `GETACK` was seen — consumed by TR-REPLICATION-026's WAIT solicitation) |
+| Postcondition | the value sent as `REPLCONF ACK <offset>` is LandedOffset (`applied.landed()`) at the moment of sending, in both arms — never ClaimedOffset and never LiveOffset. A solicited ack additionally waits until LandedOffset reaches the solicited target before sending (`wait_until_applied`) rather than sending immediately at whatever LandedOffset already holds. This is the wire counterpart of AckedOffset's own row: the acked value is always a durability claim about applied data, never about bytes merely received or claimed. |
+| Source | `frogdb-replication/src/replica/streaming.rs:139-142` (spontaneous tick, `applied.landed()`), `:135` (solicited send), `:36` (`solicited_ack`/`wait_until_applied`), `:247` (`send_ack`) |
+| Rulings | — |
+
+---
+
 ## How to read a row
 
 | Field | Meaning |

@@ -16,6 +16,24 @@ Every way FrogDB's cluster layer can refuse, redirect, reassign, or succeed, one
 This is the reference the mutation run is measured against: a mutant that survives is a row nothing
 forces.
 
+**Clocks, stated as a principle.** Every wall-clock read in this area is judged against one rule:
+using a clock to **stop** serving is fail-closed and safe; using a clock to **admit** traffic is the
+rejected anti-pattern. A deadline that only ever *narrows* what a node will do — the self-fence
+election-timeout window (FM-CLUSTER-059) is the canonical example — degrades safely on a clock that
+runs fast, slow, or not at all: the node refuses more, never less. A deadline that *widens* what a
+node will do — the `barrier_ms` wall-clock window `CompleteSlotMigration` used to consult before
+admitting ownership to move — does the opposite: a clock skewed forward admits a transition no
+quorum agreed the source had actually quiesced for, which is exactly the acknowledged-then-orphaned
+write this area's handoff machinery exists to close (issue 17's ruling deletes that window for this
+reason). The handoff lease (FM-CLUSTER-085) is not a clean example of either shape on its own: a
+lapsed lease *narrows* one thing (`CompleteSlotMigration`/`AbortSlotHandoff` are refused once it has
+expired) while simultaneously *widening* another (a later `PrepareSlotHandoff` is admitted once the
+lease is no longer live, minting a fresh attempt) — which is exactly why issue 17's resolution of
+which bound survives has to be written down rather than inferred from "a deadline only narrows"; see
+TR-CLUSTER-013's caveat. This is also why every handoff deadline is proposer-minted data rather than
+a clock read during `apply` (FM-CLUSTER-089): the *admission* decision must be a pure function of
+replicated data, never of the applying node's own clock.
+
 Scope. The cluster area is one replicated state machine plus the seams that read it:
 
 * **Topology and membership (FM-CLUSTER-001..009, 078)** — the `ClusterCommand` arms that add,
@@ -65,6 +83,489 @@ no cluster-mode special case at all — it is keyless, counts *this node's* repl
 redirects — so it is specced once in
 [Replication — failure modes](/specifications/replication/) (FM-REPLICATION-037..043) and not
 duplicated here.
+
+## State space
+
+The projection-completeness anchor: every variable a transition can read or write. `Authoritative
+field` names the concrete struct field; `Writer(s)` names the command arm(s) or seam that mutate it;
+`Persistence` names the storage vehicle; `Survives restart` states whether the value is available
+again after a process restart (as opposed to a Raft-level "does the cluster remember it").
+Replicated fields (rows 1-20) live on `ClusterStateInner`
+(`frogdb-server/crates/cluster/src/state.rs:107-135`) and are the openraft state machine's
+`R`-generation payload: every replicated field is written only inside `apply_command`, persisted
+through the Raft log (`cluster/src/storage.rs`) and the periodic snapshot, and rebuilt on restart by
+replaying the log from the last snapshot. Node-local fields (rows 21-34) are never part of that
+payload and diverge freely node to node by design.
+
+| Variable | Authoritative field | Writer(s) | Persistence | Survives restart |
+|---|---|---|---|---|
+| Node membership | `ClusterStateInner.nodes: BTreeMap<NodeId, NodeInfo>` | `apply_command`: `AddNode`, `RemoveNode`, `Failover` (remove/re-parent), `ResetCluster` (clears to just this node, `commands.rs:832-855`; if `node_id` is not a member — a reset racing a `FORGET` — the `else` branch at `commands.rs:855-858` clears membership to *empty* instead and still returns `Ok`) | Raft log + snapshot | Yes |
+| Node role | `NodeInfo.role: NodeRole` | `apply_command`: `SetRole`, `Failover` (promote/demote), `ResetCluster` (forces this node's role to `Primary`, `commands.rs:834`) | Raft log + snapshot | Yes |
+| Node parent pointer | `NodeInfo.primary_id: Option<NodeId>` | `apply_command`: `AddNode`, `SetRole`, `Failover` (re-parent), `RemoveNode` (re-parents the departing node's children via `reparent_children`, `commands.rs:231`), `ResetCluster` (nulls this node's own parent pointer, `commands.rs:835`) | Raft log + snapshot | Yes |
+| Node's own config epoch | `NodeInfo.config_epoch: ConfigEpoch` | `apply_command`: `AddNode` (initial), `SetConfigEpoch`, `Failover` (stamp on promotion), `ResetCluster` (HARD only: reset to 0, `commands.rs:843`) | Raft log + snapshot | Yes |
+| Node FAIL flag | `NodeInfo.flags.fail: bool` | `apply_command`: `MarkNodeFailed`, `MarkNodeRecovered` | Raft log + snapshot | Yes |
+| Node PFAIL flag | `NodeInfo.flags.pfail: bool` | None in production — structurally present (`types.rs:140`) but no production writer found anywhere in `cluster`/`cluster-runtime`; only test fixtures set it directly, confirmed by the Redis-deviations table (bottom of this spec): "structurally supported, never produced." | Raft log + snapshot (if ever written) | Yes (if ever written) |
+| Node HANDSHAKE flag | `NodeInfo.flags.handshake: bool` | None in production — no production writer found in either crate | Raft log + snapshot (if ever written) | Yes (if ever written) |
+| Node NOADDR flag | `NodeInfo.flags.noaddr: bool` | None in production — no production writer found in either crate | Raft log + snapshot (if ever written) | Yes (if ever written) |
+| Node's replicated promotion priority | `NodeInfo.replica_priority: u32` | `apply_command`: `AddNode` (registration/re-registration) | Raft log + snapshot | Yes |
+| Node's advertised version | `NodeInfo.version: String` | `apply_command`: `AddNode` (registration/re-registration) | Raft log + snapshot | Yes |
+| Slot ownership | `ClusterStateInner.slot_assignment: BTreeMap<u16, NodeId>` | `apply_command`: `AssignSlots`, `RemoveSlots`, `Failover` (transfer), `CompleteSlotMigration` (move), `RemoveNode` (unassigns the departing node's slots, left unassigned rather than retargeted, `commands.rs:222-224`), `ResetCluster` (clears all, `commands.rs:821`) | Raft log + snapshot | Yes |
+| Cluster config epoch (replicated counter) | `ClusterStateInner.config_epoch: ConfigEpoch` | `apply_command`: `IncrementEpoch`, `SetConfigEpoch`, `MarkNodeFailed` (bump), `Failover` (bump), `AddNode` (via `reconcile_incoming_epoch`: an uncontested nonzero claim raises the counter to `max(counter, claimed)`, `state.rs:488-515`, invoked at `commands.rs:191`), `ResetCluster` (HARD only: reset to 0, `commands.rs:841`) | Raft log + snapshot | Yes |
+| Open migrations | `ClusterStateInner.migrations: BTreeMap<u16, SlotMigration>` | `apply_command`: `BeginSlotMigration`, `CompleteSlotMigration`/`CancelSlotMigration` (remove), `Failover` (prune naming the demoted/removed node), `RemoveNode` (`prune_migrations_naming`, `commands.rs:230`), `ResetCluster` (drains all, paying every release event the prepared handoffs owe, `commands.rs:826-829`) | Raft log + snapshot | Yes |
+| A migration's prepared handoff | `SlotMigration.handoff: Option<SlotHandoff>` | `apply_command`: `PrepareSlotHandoff` (set), `ConfirmSlotHandoffDrained` (mark drained), `AbortSlotHandoff`/`CompleteSlotMigration` (clear) | Raft log + snapshot | Yes |
+| A handoff's attempt number | `SlotHandoff.seq: u64` | `apply_command`: `PrepareSlotHandoff`, minted from `ClusterStateInner.handoff_seq` | Raft log + snapshot | Yes |
+| A handoff's deadlines | `SlotHandoff.{prepared_at_ms, barrier_ms, lease_ms}` | `apply_command`: `PrepareSlotHandoff`, values proposer-minted through the clock seam (`handoff_now_ms`) and carried as replicated data, never read at apply | Raft log + snapshot | Yes |
+| Handoff attempt counter | `ClusterStateInner.handoff_seq: u64` | `apply_command`: `PrepareSlotHandoff` (increment), `ResetCluster` (rewind to 0) | Raft log + snapshot; both restore vehicles (`from_snapshot`, `install_snapshot`) carry it (FM-CLUSTER-100) | Yes |
+| Raft-applied index | `ClusterStateInner.last_applied_log: Option<LogId<NodeId>>` | `apply()` on every entry, including one whose command errored | Raft log + snapshot | Yes |
+| Raft membership | `ClusterStateInner.last_membership` | openraft membership-change application, driven by `voter_change`'s side effects on `AddNode`/`RemoveNode`/`Failover` | Raft log + snapshot | Yes |
+| Rolling-upgrade version gate | `ClusterStateInner.active_version: Option<String>` | `apply_command`: `FinalizeUpgrade` | Raft log + snapshot (`#[serde(default)]`, absent reads as `None`/pre-versioning) | Yes |
+| This node's own id | `ClusterState.self_node_id: Arc<AtomicU64>` (node-local, **not** on `ClusterStateInner`) | `set_self_node_id`, called at boot and preserved across `from_snapshot` calls | No independent on-disk record; re-derived at every boot by `ClusterConfigSection::effective_node_id` (`frogdb-server/crates/config/src/cluster.rs:231-243`), called from `server/src/config/mod.rs:78` and re-supplied to `ClusterState::from_snapshot` rather than itself round-tripping through the snapshot | No, unless `cluster-node-id` is explicitly configured non-zero — `effective_node_id` then returns that configured value unchanged every boot. Left at the default 0, a fresh id `(timestamp << 16) \| random_bits` is minted on every boot instead. |
+| Raft vote (this node's candidacy or a grant) | RocksDB `raft_meta` CF, key `KEY_VOTE` | `save_vote` (`cluster/src/storage.rs:579`) | RocksDB, **synced** write (`MetaDurability::for_key` classifies `KEY_VOTE` synced) | Yes |
+| Raft committed index (local cache) | RocksDB `raft_meta` CF, key `KEY_COMMITTED` | `save_committed` | RocksDB, buffered/unsynced — deliberately never read back; openraft re-derives it from the leader | Not relied upon (may be stale/lost) |
+| Raft last-purged watermark | RocksDB `raft_meta` CF, key `KEY_LAST_PURGED` | `purge()` | RocksDB, buffered/unsynced | Not relied upon (losing it only costs a repeat purge) |
+| Raft log entries | RocksDB `raft_logs` CF | `append`/`truncate`/`purge` (`cluster/src/storage.rs`) | RocksDB; `append` acks a log write non-synced (still open, per FM-CLUSTER-098's note) | Yes, subject to that durability caveat |
+| Raft log reader cache | `Arc<RwLock<BTreeMap<u64, Entry>>>`, shared by the writing handle and every reader | `append` (fill), `truncate`/`purge` (invalidate over the same range, FM-CLUSTER-099) | In-memory only | No — rebuilt from `raft_logs` on next read |
+| `cluster-auto-failover` runtime flag | `ClusterRuntimeFlags.auto_failover: AtomicBool` (node-local, not replicated) | `CONFIG SET cluster-auto-failover`; constructed at boot from `ClusterConfigSection` | In-memory only | No — re-derived from config at boot (default off) |
+| `cluster-self-fence-on-quorum-loss` runtime flag | `ClusterRuntimeFlags.self_fence_on_quorum_loss: AtomicBool` (node-local) | `CONFIG SET cluster-self-fence-on-quorum-loss`; constructed at boot | In-memory only | No — re-derived from config at boot (default on) |
+| `cluster-replica-priority` runtime flag | `ClusterRuntimeFlags.replica_priority: AtomicU32` (node-local) | `CONFIG SET cluster-replica-priority`; constructed at boot | In-memory only | No — re-derived from config at boot (default 100). ⚠ review — authority is split with the replicated `NodeInfo.replica_priority` above: this node's own score always reads the live local flag, but peers score this node from the replicated field until it next re-registers (`AddNode`), a documented asymmetry (FM-CLUSTER-058) rather than a bug, flagged here because the two fields answer "what is this node's priority?" differently depending on who asks |
+| Per-peer local health | `HealthTable.health: HashMap<NodeId, NodeHealth>` (node-local, leader-only, not replicated) | `record_failure`/`record_success` from the probe loop (`failure_detector.rs`) | In-memory only | No — rebuilt from empty; every peer reads `Unknown` until re-probed, which is fail-safe under FM-CLUSTER-055's conservative-quorum rule |
+| Failure-detector tuning | `FailureDetectorConfig.{check_interval_ms, connect_timeout_ms, fail_threshold}` (node-local) | Constructed once at `FailureDetector::new`, clamped into `[MIN_*, MAX_*]` (FM-CLUSTER-102) | In-memory only | No — re-derived from config at boot |
+| Slot-scoped write barrier | `PauseState.slots: HashMap<u16, PauseEntry>` (node-local, `core/src/client_registry/mod.rs`) | `handoff_barrier.rs`'s `plan_handoff_action` (`Arm`/`Release`), driven by replicated `SlotHandoffPrepared`/`SlotHandoffReleased` events | In-memory only | No — but reconstructible in principle from the replicated migration/handoff state that drives it, since the barrier is a pure function of those events |
+| Replica-feed hold deadline | `ReplicaFeedGate` internal `Option<Instant>` (node-local, `replication/src/feed_gate.rs`), derived via `PauseState::feed_hold_until` | `ClientRegistry::publish_pause_derived_state`, called on every pause mutation | In-memory only (an `Instant`, meaningless across a restart) | No |
+| Bootstrap-vs-join intent | ⚠ review — **no such field exists in the code today.** `should_bootstrap` (`server/src/server/cluster_init.rs:386`) is *computed fresh every boot* from config (`initial_members.keys().next().copied() == Some(node_id)`), not read from or written to any persisted record. This is the gap issue 25's amendment ("persist bootstrap intent") is filed against — flagged per this section's rule against guessing ownership/persistence that isn't verifiable from code. | n/a today | n/a today |
+
+## Transitions
+
+One `## TR-CLUSTER-NNN` section per action source, enumerated mechanically from the `ClusterCommand`
+enum (`cluster/src/types.rs:295-438`), the failure detector's tick outcomes, runtime-flag mutations,
+recovery/restart steps, and the admin-command entry points that construct these commands. Where a
+2026-08-13 ruling amends a transition's semantics, the row states the **ruled/target** semantics —
+not necessarily what the code does today — and carries a `Pending` field linking the issue that
+tracks code catch-up.
+
+### Group A — Topology and membership
+
+## TR-CLUSTER-001 — `AddNode` registers a new member
+
+| Field | Value |
+|---|---|
+| Precondition | `node.id` not in State-space "Node membership"; OR `node.id` already present (re-registration, TR-CLUSTER-002). Ruled (issue 14): if `node.primary_id` is `Some(p)`, `p` must be present in "Node membership" and `Node role`(p) = `Primary`. |
+| Postcondition | "Node membership" gains `node.id` -> `NodeInfo{..}`; "Node role", "Node parent pointer", "Node's replicated promotion priority", "Node's advertised version" all set from the command's `node` fields. "Node's own config epoch" is **not** a bare copy of `node.config_epoch`: `reconcile_incoming_epoch` (`state.rs:488-515`) resolves it against the recorded state in one of three ways — a claimed epoch of 0 against a node with a recorded nonzero epoch is `Preserved` (the incoming 0 is discarded, the existing value kept); a nonzero claim **by a primary** colliding with another primary's current epoch is `Reassigned` a fresh epoch via `mint_config_epoch()` (an incoming *replica* whose claim collides is `Accepted` unchanged — `reconcile_incoming_epoch`'s own doc-comment calls this deliberate Redis parity, since only a primary's epoch arbitrates slot ownership); an uncontested nonzero claim is `Accepted` as given. The `Accepted` and `Reassigned` outcomes also raise "Cluster config epoch" to `max(counter, resolved value)` — `AddNode` is the one command that can carry an epoch the replicated counter did not itself mint, so it is the one path that can introduce (and must resolve) a collision. Ruled (issue 14): a dangling or replica-naming `primary_id` is refused (`ClusterError`) rather than admitted — no state changes on that path. |
+| Source | `cluster/src/commands.rs` (`AddNode` arm, `reconcile_incoming_epoch` call at `commands.rs:191`); `cluster/src/state.rs:488-515` (`reconcile_incoming_epoch`); ruled `primary_id` precondition not yet in code |
+| Rulings | Issue 14 |
+| Pending | [issue 14](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/14-role-transitions-admit-malformed-parents.md) |
+
+## TR-CLUSTER-002 — `AddNode` re-registration upserts, never demotes by restart
+
+| Field | Value |
+|---|---|
+| Precondition | `node.id` already present in "Node membership". |
+| Postcondition | "Node membership"(node.id)'s address/priority/version fields overwrite to the incoming values; "Node role" and "Node parent pointer" are **not** downgraded by a bare re-registration — a restarting primary that re-`AddNode`s itself does not silently become a replica. |
+| Source | `cluster/src/commands.rs` (`AddNode` arm, upsert branch); FM-CLUSTER-001 |
+| Rulings | — |
+
+## TR-CLUSTER-003 — `RemoveNode` (`CLUSTER FORGET`)
+
+| Field | Value |
+|---|---|
+| Precondition | `node_id` present in "Node membership". Ruled (issue 20, amendment): refused unless the node has already been demoted off every slot it owns and out of the primary role (i.e. is a replica or already ownerless) — a `FORCE` escape bypasses this check for the documented "the node is gone for good" operator case. |
+| Postcondition | "Node membership" loses `node_id`; "Slot ownership" entries naming it and "Open migrations" naming it are pruned in the same entry (FM-CLUSTER-002/036 helper `prune_migrations_naming`); Raft membership drops the node as a voter (TR-CLUSTER-039, `voter_change`) unless it was already not a voter. |
+| Source | `cluster/src/commands.rs` (`RemoveNode` arm); `cluster/src/network.rs` (`voter_change`, `spawn_remove_raft_voter`) |
+| Rulings | Issue 20 (amendment: eviction fence required unless `FORCE`) |
+| Pending | [issue 20](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md) |
+
+## TR-CLUSTER-004 — `SetRole` promotes/demotes a node
+
+| Field | Value |
+|---|---|
+| Precondition | `node_id` present in "Node membership". Ruled (issue 14): if `role = Replica` and `primary_id = Some(p)`, `p` must be present and `Node role`(p) = `Primary`. |
+| Postcondition | "Node role"(node_id) = `role`; "Node parent pointer"(node_id) = `primary_id`. A demotion of `self_node_id` fires exactly one `Demoted` event iff the role actually changes (FM-CLUSTER-043); re-asserting `Replica` on an already-replica node still fires `Demoted` (re-parenting must re-point the replication stream). |
+| Source | `cluster/src/commands.rs` (`SetRole` arm); `cluster/src/state.rs:518-527` (`DemotionEvent`); `cluster/src/state.rs:825-890` (`SelfRoleReconciler`, the periodic re-emission this row's demotion-event guarantee ultimately depends on) |
+| Rulings | Issue 14 |
+| Pending | [issue 14](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/14-role-transitions-admit-malformed-parents.md) |
+
+## TR-CLUSTER-005 — `CLUSTER MEET` -> `AddNode`, ruled join-safety gates
+
+| Field | Value |
+|---|---|
+| Precondition | Ruled (issue 25, amendment): the MEET'd node's local Raft state — State-space "Raft vote" and "Raft log entries" (named, not by row number, since a table edit shifts ordinals) — must be empty — a node that was ever a member of another cluster is refused, mirroring etcd's "wipe the data dir first" rule. |
+| Postcondition | On acceptance, proceeds as TR-CLUSTER-001. On refusal, no state changes and the operator is told to wipe local state first. |
+| Source | Not yet in code — the MEET handler constructs `AddNode` with no such precheck today (`server/src/server/cluster_init.rs`) |
+| Rulings | Issue 25 |
+| Pending | [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) |
+
+### Group B — Config epoch
+
+## TR-CLUSTER-006 — `IncrementEpoch`
+
+| Field | Value |
+|---|---|
+| Precondition | None (always admitted; FM-CLUSTER-010 dominance invariant — bumping is always allowed). |
+| Postcondition | "Cluster config epoch" += 1; response carries the new `ConfigEpoch`. |
+| Source | `cluster/src/commands.rs` (`IncrementEpoch` arm) |
+| Rulings | — |
+
+## TR-CLUSTER-007 — `SetConfigEpoch` (`CLUSTER SET-CONFIG-EPOCH`)
+
+| Field | Value |
+|---|---|
+| Precondition | `node_id`'s own view knows no peer, and "Node's own config epoch"(node_id) = 0 (Redis-parity bootstrap-only guard, FM-CLUSTER-076). |
+| Postcondition | "Node's own config epoch"(node_id) = `epoch` exactly (not a bump — a direct assignment). |
+| Source | `cluster/src/commands.rs` (`SetConfigEpoch` arm) |
+| Rulings | — |
+
+### Group C — Slot migration and handoff
+
+## TR-CLUSTER-008 — `AssignSlots`
+
+| Field | Value |
+|---|---|
+| Precondition | Every named slot's current owner (if any) accepts the reassignment; validate-all-then-apply. Ruled (issue 16): a slot with an entry in "Open migrations" is refused outright — no mutation-while-migrating, source-only exception dropped. |
+| Postcondition | "Slot ownership" set for every named slot to `node_id`, all-or-nothing. |
+| Source | `cluster/src/commands.rs` (`AssignSlots` arm) |
+| Rulings | Issue 16 |
+| Pending | [issue 16](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/16-assign-slots-ignores-open-migrations.md) |
+
+## TR-CLUSTER-009 — `RemoveSlots`
+
+| Field | Value |
+|---|---|
+| Precondition | Same open-migration refusal as TR-CLUSTER-008 (issue 16). |
+| Postcondition | "Slot ownership" cleared for every named slot, all-or-nothing. |
+| Source | `cluster/src/commands.rs` (`RemoveSlots` arm) |
+| Rulings | Issue 16 |
+| Pending | [issue 16](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/16-assign-slots-ignores-open-migrations.md) |
+
+## TR-CLUSTER-010 — `BeginSlotMigration` (`CLUSTER SETSLOT ... MIGRATING`/`IMPORTING`)
+
+| Field | Value |
+|---|---|
+| Precondition | `slot`'s current owner is `source_node`; no existing "Open migrations" entry for `slot` (or the same source/target — idempotent, FM-CLUSTER-031). |
+| Postcondition | "Open migrations"(slot) = `SlotMigration{source_node, target_node, handoff: None}`. |
+| Source | `cluster/src/commands.rs` (`BeginSlotMigration` arm) |
+| Rulings | — |
+
+## TR-CLUSTER-011 — `PrepareSlotHandoff`
+
+| Field | Value |
+|---|---|
+| Precondition | "Open migrations"(slot) exists with matching `source_node`/`target_node`. |
+| Postcondition | "Handoff attempt counter" += 1; "A migration's prepared handoff"(slot) = `SlotHandoff{seq: new counter value, prepared_at_ms: proposed_at_ms, barrier_ms, lease_ms, drained: false}`; emits `SlotHandoffPrepared` on every node (only the source node arms its write barrier, TR-CLUSTER-034). |
+| Source | `cluster/src/commands.rs` (`PrepareSlotHandoff` arm); `cluster/src/state.rs` (`handoff_seq` increment) |
+| Rulings | — |
+
+## TR-CLUSTER-012 — `ConfirmSlotHandoffDrained`
+
+| Field | Value |
+|---|---|
+| Precondition | "A migration's prepared handoff"(slot) exists and its `seq` equals the command's `seq` (stale acks from a superseded attempt are refused). |
+| Postcondition | `SlotHandoff.drained` = true. Does not by itself move ownership. |
+| Source | `cluster/src/commands.rs` (`ConfirmSlotHandoffDrained` arm) |
+| Rulings | — |
+
+## TR-CLUSTER-013 — `CompleteSlotMigration` (`CLUSTER SETSLOT ... NODE`)
+
+| Field | Value |
+|---|---|
+| Precondition | Ruled (issue 17): "A migration's prepared handoff"(slot) exists, its `seq` matches, and `drained` = true. The `barrier_ms` wall-clock admission window is **removed** — `Complete` is admitted purely on the log-ordered drained-and-matching-seq predicate, not on whether a proposer-minted deadline has elapsed. **Open (issue 29):** whether `lease_ms` survives unchanged as a second, separate bound on how long the *prepared record itself* lives before a later `Prepare` can supersede it (FM-CLUSTER-085) is this drafter's reading of the ruling text, not a settled fact — issue 29 flags the ruling as ambiguous on exactly this point (which of the two deadline fields governs which behavior after `barrier_ms`'s deletion). Re-confirm against issue 29's resolution before this row is implemented; do not treat the `lease_ms` reading above as authoritative until then. |
+| Postcondition | "Slot ownership"(slot) = `target_node`; "Open migrations"(slot) removed; emits `SlotMigrationCompleted` and `SlotHandoffReleased`. |
+| Source | `cluster/src/commands.rs` (`CompleteSlotMigration` arm); `cluster/src/types.rs` `SlotHandoff::admits_complete_at` (today includes `!barrier_expired`, which the ruling removes) |
+| Rulings | Issue 17; ambiguity on the `lease_ms` reading above flagged open by issue 29 |
+| Pending | [issue 17](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md), [issue 29](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/29-spec-row-edit-sweep-from-the-2026-08-13-rulings.md) (open: which of `barrier_ms`/`lease_ms` survives) |
+
+## TR-CLUSTER-014 — `AbortSlotHandoff`
+
+| Field | Value |
+|---|---|
+| Precondition | "A migration's prepared handoff"(slot) exists with matching `seq` (or the attempt is already gone — succeeds as a no-op, FM-CLUSTER-086). Ruled (issue 17): admission is log-ordered, no wall-clock window. |
+| Postcondition | "A migration's prepared handoff"(slot) = `None`; "Open migrations"(slot) unchanged (the migration itself survives); emits `SlotHandoffReleased`. |
+| Source | `cluster/src/commands.rs` (`AbortSlotHandoff` arm) |
+| Rulings | Issue 17 |
+| Pending | [issue 17](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md) |
+
+## TR-CLUSTER-015 — `CancelSlotMigration` (`CLUSTER SETSLOT ... STABLE`)
+
+| Field | Value |
+|---|---|
+| Precondition | "Open migrations"(slot) exists. Ruled (issue 15, amendment): if slot data has already been repatriated to the source in whole or in part by the abort path, that repatriation must complete *before* `Cancel`/`Abort` applies cleanly — cancellation is not just a state-machine record deletion when data has moved. |
+| Postcondition | "Open migrations"(slot) removed; "A migration's prepared handoff"(slot), if any, released (`SlotHandoffReleased`) in the same entry. |
+| Source | `cluster/src/commands.rs` (`CancelSlotMigration` arm) |
+| Rulings | Issue 15 |
+| Pending | [issue 15](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md) |
+
+## TR-CLUSTER-016 — Replica-feed hold during an armed slot barrier
+
+| Field | Value |
+|---|---|
+| Precondition | "Slot-scoped write barrier"(slot) is armed on a node that is also a replication primary. Ruled (issue 17, amendment): the hold is bounded by a byte cap on buffered frames, not solely by the barrier's wall-clock deadline — a byte-cap-exceeding hold releases the session (disconnect) rather than buffering unboundedly, since the wall-clock admission window it used to inherit its bound from is gone. |
+| Postcondition | "Replica-feed hold deadline" set to the latest deadline across armed barriers (`decide_hold`); frames withheld from the replica's stream and buffered per-session in offset order until release or the byte cap is exceeded. |
+| Source | `core/src/client_registry/mod.rs` (`PauseState::feed_hold_until`); `replication/src/feed_gate.rs` (`ReplicaFeedGate`); byte cap not yet in code |
+| Rulings | Issue 17 (amendment) |
+| Pending | [issue 17](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md) |
+
+### Group D — Failover and promotion
+
+## TR-CLUSTER-017 — Planned `CLUSTER FAILOVER` (graceful, `old_primary` healthy)
+
+| Field | Value |
+|---|---|
+| Precondition | `old_primary_id` present in "Node membership" with "Node role" = `Primary`; `new_primary_id` != `old_primary_id`, present, and a replica of `old_primary_id`. Ruled (issue 26): reuses the slot-migration handoff machinery rather than a bespoke mechanism — before proposing `Failover`, arm a slot-scoped write barrier (`SlotFence`) on every slot the old primary owns (FM-CLUSTER-079 machinery), drain in-flight writes (FM-CLUSTER-090/091 machinery), and wait for `new_primary_id`'s replication offset to reach parity with `old_primary_id`'s head. Only then propose. |
+| Postcondition | Same postcondition as TR-CLUSTER-018 with `force: false` (demote, not remove) — but reached only after the barrier/drain/parity sequence above, making the handover lossless by construction: the `SlotFence` carries the ownership token that the barrier/drain sequence arms and releases, so a delayed write from the old primary that arrives after the swap finds no live fence to accept it under its stale ownership and is rejected rather than silently applied out of order. No write acknowledged by the old primary is discarded by the resync that follows demotion. |
+| Source | `server/src/commands/cluster/admin.rs` (handler, immediate-propose today); `cluster/src/commands.rs` (`Failover` arm, `force: false` path) |
+| Rulings | Issue 26 |
+| Pending | [issue 26](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md) |
+
+## TR-CLUSTER-018 — `Failover` state-machine application (graceful, `force: false`)
+
+| Field | Value |
+|---|---|
+| Precondition | Every check in FM-CLUSTER-039/041 passes (known members, distinct nodes, old primary still a member for the graceful path). Ruled + amended (issue 19): the proposal carries `old_primary_id`'s observed "Node's own config epoch" and role (its role-version, as read by the proposer at observation time); apply additionally refuses — the *fence* — if *that node's* current "Node's own config epoch" or "Node role" has changed since observation (a per-object fence, not a global one: a change to any other node's epoch/role does not block this apply). This replaces a global epoch-CAS shape the amendment rejected as starvable under correlated failure. Separately, the *belt* (retained through the amendment, "The belt (refuse no-op moves) stays") refuses the move outright if `old_primary_id` is not a member, owns no slots, or `new_primary_id` is not `old_primary_id`'s replica — the fence catches a stale observation of a node that still matters; the belt catches a proposal that was never going to move anything. |
+| Postcondition | "Slot ownership" entries owned by `old_primary_id` -> `new_primary_id`; "Node role"(old_primary_id) = `Replica`, "Node parent pointer"(old_primary_id) = `new_primary_id`; "Node role"(new_primary_id) = `Primary`, its parent pointer cleared; siblings of `old_primary_id` re-parented to `new_primary_id`; "Cluster config epoch" += 1, stamped onto `new_primary_id`'s "Node's own config epoch"; "Open migrations" naming `old_primary_id` pruned (issue 15: on every failover naming the demoted node, not force-only) with releases emitted. |
+| Source | `cluster/src/commands.rs:393-499` (`Failover` arm, `force: false` path within it); per-object epoch/role fence not yet in code |
+| Rulings | Issue 15 (migration-cancellation scope), Issue 19 (per-object epoch/role fence, amended) |
+| Pending | [issue 15](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md), [issue 19](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md) |
+
+## TR-CLUSTER-019 — Automatic failover proposal (failure-detector-decided)
+
+| Field | Value |
+|---|---|
+| Precondition | Leader's `reconcile_topology` has latched `old_primary_id` as FAILed (TR-CLUSTER-023/024); `trigger_auto_failover` selects a successor by TR-CLUSTER-021's scoring. Ruled (issue 20): proposes `Failover{force: false}` by default — demote, not remove — routing the automatic path through the same shape as the planned path, so a partitioned-but-alive primary is not evicted from the topology by a leader that merely cannot reach it. |
+| Postcondition | Same shape as TR-CLUSTER-018, including its same fence and belt (issue 19, amended): the proposal carries `old_primary_id`'s "Node's own config epoch" and "Node role" as observed at scoring time, and apply refuses — the fence — if that node's own state has since changed, rather than fencing on the cluster-wide "Cluster config epoch" (a global fence was rejected: FM-CLUSTER-013's unconditional epoch bump on every `MarkNodeFailed` would let one flapping node starve every unrelated in-flight failover); apply also refuses outright — the belt, "refuse no-op moves," retained through the amendment — if `old_primary_id` is not a member, owns no slots, or `new_primary_id` is not `old_primary_id`'s replica. If `old_primary_id` turns out to still be a member and healthy from its own point of view, it is demoted (not removed) and self-corrects via the level-triggered reconciliation pass (issue 18) rather than requiring a separate re-add. Ruled (issue 26): the automatic path stays asynchronous-lossy — no barrier/drain/parity wait — so an acked-but-unshipped write tail may be lost; this is stated as the honest cost of async PSYNC, with the divergence log recording the window and `WAIT` as the per-write escape hatch an operator already has. |
+| Source | `cluster-runtime/src/failure_detector.rs:594-745` (`trigger_auto_failover`); per-object epoch/role fence not yet in code |
+| Rulings | Issue 19 (per-object epoch/role fence, amended), Issue 20, Issue 26 |
+| Pending | [issue 19](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md), [issue 20](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md), [issue 26](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md) |
+
+## TR-CLUSTER-020 — `CLUSTER FAILOVER FORCE`/`TAKEOVER` issued to a primary
+
+| Field | Value |
+|---|---|
+| Precondition | The receiving node's "Node role" = `Primary`. |
+| Postcondition | Ruled (issue 28): refused unconditionally with "`CLUSTER FAILOVER` can only be run on a replica" — regardless of `force`/`takeover`. The primary-absorbs-primary absorb mode (select an arbitrary peer primary by `HashMap` iteration order, evict it) is **removed**, not made deterministic. |
+| Source | `server/src/commands/cluster/admin.rs:284-308` (today: constructs `Failover{force: true}` against a `HashMap`-order-selected peer primary) |
+| Rulings | Issue 28 |
+| Pending | [issue 28](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/28-cluster-failover-refused-on-a-primary.md) |
+
+## TR-CLUSTER-021 — Failover successor selection
+
+| Field | Value |
+|---|---|
+| Precondition | Candidates = replicas of the failing primary. |
+| Postcondition | Score = `priority * 100_000 + (max_offset - replica_offset) * 1_000` (saturating); priority-0 candidates excluded outright; ties broken by lower node id; `None` if every candidate is priority-0 or the replica set is empty (failover abandoned with a warning). |
+| Source | `cluster-runtime/src/failure_detector.rs` (`compute_replica_score`, `select_failover_target`) |
+| Rulings | — |
+
+### Group E — Failure detection and runtime flags
+
+## TR-CLUSTER-022 — Probe result updates local health
+
+| Field | Value |
+|---|---|
+| Precondition | A TCP probe to a peer completes (success or failure/timeout). |
+| Postcondition | Success: "Per-peer local health"(peer).`last_seen` = now and `failure_count` = 0 always; `success_count` increments **only while the peer is latched** (`is_marked_fail`) and, once it reaches `fail_threshold`, un-latches and resets `success_count` to 0 — an already-healthy (not latched) peer's `success_count` never accumulates, so a single flap does not pre-load the un-latch counter. Failure: `failure_count` += 1, `success_count` = 0; if `failure_count` reaches `fail_threshold`, latch (`is_marked_fail` = true). |
+| Source | `cluster-runtime/src/failure_detector.rs:262-273` (`record_success`), `:280-288` (`record_failure`) |
+| Rulings | — |
+
+## TR-CLUSTER-023 — Leader reconciliation tick, level-triggered
+
+| Field | Value |
+|---|---|
+| Precondition | Leader evaluates `LocalVerdict` for every peer on every tick — this pass (`reconcile_topology`'s mark/recover half) is already level-triggered today, re-deciding from current state on every call rather than reacting to a transition. The edge-triggered defect GAP 1/issue 18 targets is downstream of this row, in `trigger_auto_failover`'s own retry loop (TR-CLUSTER-019's `Source`), not in this reconciliation pass itself. |
+| Postcondition | Ruled (issue 18, amendment): a `Failed` verdict for a node not yet FAIL-flagged proposes `MarkNodeFailed`; a `Healthy` verdict for a FAIL-flagged node proposes `MarkNodeRecovered`; an already-consistent pair (verdict matches flag) proposes nothing (FM-CLUSTER-014's anti-churn property). The retry loop this row hands off to (`trigger_auto_failover`) is bounded by an in-flight guard and backoff, never permanently abandons a failed primary (today's `MAX_ATTEMPTS = 3` give-up at `failure_detector.rs:687` is deleted), and emits observability on every attempt including the give-up case GAP 3 flags as untested today. |
+| Source | `cluster-runtime/src/failure_detector.rs:474-500` (`reconcile_topology`) |
+| Rulings | Issue 18 |
+| Pending | [issue 18](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/18-a-missed-failover-is-never-retried.md) |
+
+## TR-CLUSTER-024 — `MarkNodeFailed` application
+
+| Field | Value |
+|---|---|
+| Precondition | None enforced beyond `node_id` presence. |
+| Postcondition | "Node FAIL flag"(node_id) = true; "Cluster config epoch" += 1 (unconditional bump on every mark — cross-referenced by issue 19's amendment as the reason the epoch fence had to move to per-object, since an unconditional global bump on every mark starves a global fence under correlated failure). |
+| Source | `cluster/src/commands.rs` (`MarkNodeFailed` arm) |
+| Rulings | Issue 19 (cross-reference only — this transition's own behavior is unchanged by 19) |
+
+## TR-CLUSTER-025 — `MarkNodeRecovered` application
+
+| Field | Value |
+|---|---|
+| Precondition | None enforced beyond `node_id` presence. |
+| Postcondition | "Node FAIL flag"(node_id) = false. No epoch bump (FM-CLUSTER-014: bumping here would let a flapping peer churn the epoch once per round — the anti-churn reasoning issue 19's amendment leans on when explaining why a *global* epoch CAS was the wrong granularity). |
+| Source | `cluster/src/commands.rs` (`MarkNodeRecovered` arm) |
+| Rulings | Issue 19 (cross-reference only) |
+
+## TR-CLUSTER-026 — Write-admission self-fence check
+
+| Field | Value |
+|---|---|
+| Precondition | A keyed write reaches the write-fence gate. |
+| Postcondition | Ruled (issue 27): fences (refuses) iff this node has not heard from, or applied an entry from, a Raft leader within an election timeout — the CheckQuorum shape. TCP-probe-derived local quorum (today's `HealthTable`-based "Per-peer local health" -> `reachable_count`/quorum arithmetic, FM-CLUSTER-055/059) is **no longer admission evidence**: a wedged-but-listening peer or a same-partition peer must not count toward admitting writes. Per the preamble principle above, this is a clock used to *stop* serving (fail-closed), the opposite of the deleted `barrier_ms` admission window. |
+| Source | `cluster-runtime/src/flags.rs` (`SelfFenceGate::has_quorum`, today keyed on `HealthTable` quorum, FM-CLUSTER-055/059); election-timeout fence not yet in code |
+| Rulings | Issue 27 |
+| Pending | [issue 27](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/27-self-fence-quorum-derives-from-raft-liveness-not-tcp-probes.md) |
+
+## TR-CLUSTER-027 — Runtime flag mutation (`CONFIG SET`)
+
+| Field | Value |
+|---|---|
+| Precondition | `CONFIG SET cluster-auto-failover \| cluster-self-fence-on-quorum-loss \| cluster-replica-priority <value>`. |
+| Postcondition | The matching `ClusterRuntimeFlags` atomic is stored; effective immediately for this node (no restart, no re-publish through Raft) — priority 0 removes this node from its own candidate set in TR-CLUSTER-021 but peers keep scoring it from the stale replicated field until its next `AddNode` re-registration (documented asymmetry, FM-CLUSTER-058). |
+| Source | `cluster-runtime/src/flags.rs` |
+| Rulings | — |
+
+### Group F — Bootstrap
+
+## TR-CLUSTER-028 — Explicit fresh-deployment bootstrap
+
+| Field | Value |
+|---|---|
+| Precondition | Ruled (issue 25): a node is **explicitly configured** to bootstrap a fresh deployment (etcd `initial-cluster-state=new` shape) — not merely computed as "I'm first in `initial_members`" from ordinary join config, which is what `should_bootstrap` does today. |
+| Postcondition | `raft.initialize` runs and the node becomes an externally-routable leader of its own group; "Bootstrap-vs-join intent" persisted so a restart mid-bootstrap does not re-decide. |
+| Source | `server/src/server/cluster_init.rs:386,437-450` (today: `should_bootstrap` computed from config every boot, no persisted intent) |
+| Rulings | Issue 25 |
+| Pending | [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) |
+
+## TR-CLUSTER-029 — Joining node defers election until MEET folds it in
+
+| Field | Value |
+|---|---|
+| Precondition | Ruled (issue 25): a node **not** explicitly configured to bootstrap defers `raft.initialize`/leader election entirely until `CLUSTER MEET` from a real cluster folds it in — it must never self-elect into an externally routable "leader" of a solo one-node group in the meantime (today's defect: exactly this happens, and a learner-promotion conflict during the ~5s window it takes to resolve gets mistranslated into a client-facing `-REDIRECT` to the not-yet-real leader). |
+| Postcondition | No externally-observable leadership claim until membership is real; `has to forward request to: Some(<node>)` originating from a learner-promotion conflict is no longer translated into a `-REDIRECT` (error-shape fix, second half of the ruling). |
+| Source | `server/src/server/cluster_init.rs:437-450` (today: unconditional solo bootstrap for `member_count=1`); `cluster/src/network.rs:779` (`add_learner` retry, `MAX_ATTEMPTS=5`) |
+| Rulings | Issue 25 |
+| Pending | [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) |
+
+## TR-CLUSTER-030 — Bootstrap slot seeding
+
+| Field | Value |
+|---|---|
+| Precondition | `should_bootstrap && !initial_members.is_empty() && !cluster.all_slots_assigned()`. |
+| Postcondition | The 16384 slots are split evenly across `initial_members` and assigned via the normal `AssignSlots` mutation (TR-CLUSTER-008's postcondition, without the open-migration precondition since none exist yet). |
+| Source | `server/src/server/cluster_init.rs:530-` |
+| Rulings | — |
+
+### Group G — Recovery and restart
+
+## TR-CLUSTER-031 — Log replay on restart
+
+| Field | Value |
+|---|---|
+| Precondition | Node restarts with a persisted log tail beyond the last snapshot. |
+| Postcondition | Every `ClusterStateInner` field replayed identically to the original `apply_command` sequence (FM-CLUSTER-042/089: replay and handoff deadlines are pure functions of replicated data, never a clock read at apply, so replay is safe regardless of wall-clock skew between original apply and replay). |
+| Source | openraft's own log-replay path over `cluster/src/storage.rs`'s `raft_logs` CF |
+| Rulings | — |
+
+## TR-CLUSTER-032 — Snapshot install (`install_snapshot`)
+
+| Field | Value |
+|---|---|
+| Precondition | This node fell far enough behind that the leader ships a snapshot instead of log entries. |
+| Postcondition | `ClusterStateInner` replaced wholesale from the snapshot DTO; "Handoff attempt counter" carried through (not rewound, FM-CLUSTER-100); a role change the skipped entries would have produced is synthesized (`RoleChangeEvent`, FM-CLUSTER-045); `self_node_id` preserved across the swap (State-space row "This node's own id"). |
+| Source | `cluster/src/state.rs:791-796` (`emit_self_role_change`, the role-change synthesis called by snapshot installs); `state.rs:1066` (`install_snapshot`); `state.rs:145-170` (`from_snapshot`) |
+| Rulings | — |
+
+## TR-CLUSTER-033 — Self-role reconciliation tick
+
+| Field | Value |
+|---|---|
+| Precondition | The replicated "Node role"(self_node_id) and the data path's own believed role disagree, persisting across ticks. |
+| Postcondition | Re-emits the correct `RoleChangeEvent` every tick until agreement (`ReDriven`); reports `Agreed` once converged; reports `Detached` if the consumer (a weak sender) is gone rather than leaking a send into nothing. |
+| Source | `cluster/src/state.rs:825-890` (`SelfRoleReconciler`: `self_role`, `reconcile`, `emit`) |
+| Rulings | — |
+
+### Group H — Admin edge cases
+
+## TR-CLUSTER-034 — Handoff barrier arm/release (per-node reaction to a replicated handoff event)
+
+| Field | Value |
+|---|---|
+| Precondition | `SlotHandoffPrepared` or `SlotHandoffReleased` applies (on every node, since Raft entries apply everywhere). |
+| Postcondition | `plan_handoff_action` returns `Arm` only on the node whose id equals `source_node` for a `Prepared` event: "Slot-scoped write barrier"(slot) armed (`WRITE` mode), shard drain spawned. `Release`: barrier lifted. Every other node: `Ignore`. |
+| Source | `cluster-runtime/src/handoff_barrier.rs` (`plan_handoff_action`, the runner's recv loop) |
+| Rulings | — |
+
+## TR-CLUSTER-035 — `CLUSTER RESET SOFT`/`HARD`
+
+| Field | Value |
+|---|---|
+| Precondition | Node-issued `ResetCluster{node_id, new_node_id}`; `new_node_id: Some` selects HARD. |
+| Postcondition | Both SOFT and HARD, unconditionally: "Slot ownership" cleared entirely (`commands.rs:821`, not preserved by SOFT); "Node membership" reduced to just this node (`commands.rs:833,837`); this node's own "Node role" forced to `Primary` with "Node parent pointer" nulled (`commands.rs:834-835`, even if it was a replica); "Open migrations"/handoffs cleared, paying every release event the prepared handoffs owe (`commands.rs:826-829`); "Handoff attempt counter" rewound to 0 (the one rewind, FM-CLUSTER-086/100). HARD only, additionally: `node_id` -> `new_node_id` in "Node membership" (`commands.rs:842,844`) and "Node's own config epoch"/"Cluster config epoch" both reset to 0 (`commands.rs:841,843`). If `node_id` is not a member — a reset racing a `FORGET` — the `else` branch (`commands.rs:855-858`) leaves "Node membership" *empty* instead of self-only, and the reset still succeeds (a GAP candidate: nothing forces this branch today). |
+| Source | `cluster/src/commands.rs:816-863` (`ResetCluster` arm) |
+| Rulings | — |
+
+## TR-CLUSTER-036 — `FinalizeUpgrade`
+
+| Field | Value |
+|---|---|
+| Precondition | Proposed only after all nodes are externally verified at the target version (operator-level precondition, not state-machine-checked). |
+| Postcondition | "Rolling-upgrade version gate" = `version`, irreversibly (no command rewinds `active_version` to `None`). |
+| Source | `cluster/src/commands.rs` (`FinalizeUpgrade` arm) |
+| Rulings | — |
+
+## TR-CLUSTER-037 — Raft vote persistence
+
+| Field | Value |
+|---|---|
+| Precondition | openraft calls `save_vote` (this node's own candidacy or a grant to a peer). |
+| Postcondition | State-space "Raft vote" written **synced** to `raft_meta`/`KEY_VOTE` before `save_vote` returns `Ok` — the acknowledgement and the durability are the same event (FM-CLUSTER-098). |
+| Source | `cluster/src/storage.rs:579` (`save_vote`) |
+| Rulings | — |
+
+## TR-CLUSTER-038 — Raft log truncate/purge
+
+| Field | Value |
+|---|---|
+| Precondition | openraft issues `DeleteConflictLog{since}` (truncate) on a leadership-flap conflict, or a purge past a snapshot's watermark. |
+| Postcondition | `truncate(log_id)` removes `[log_id.index, +oo)` from both "Raft log entries" and "Raft log reader cache" (same bound, one call, FM-CLUSTER-099/103); `purge(log_id)` removes `[0, log_id.index]` inclusive and updates "Raft last-purged watermark". |
+| Source | `cluster/src/storage.rs` (`truncate`, `purge`) |
+| Rulings | — |
+
+## TR-CLUSTER-039 — Raft voter-set side effect of a membership-changing command
+
+| Field | Value |
+|---|---|
+| Precondition | A committed `ClusterCommand` changes "Node membership" or a node's voter status: `AddNode` (new member), `RemoveNode`, `Failover{force: true}` (remove path only — a graceful/demote `Failover` leaves the demoted node a voting member, FM-CLUSTER-101). |
+| Postcondition | `voter_change` maps the committed command to `AddVoters`/`RemoveVoters`/`RemoveNodes`/none, planned against the membership actually in force (`plan_voter_removal`); the last voter is never removed; a command the state machine itself refused never reaches this side effect at all. |
+| Source | `cluster/src/network.rs` (`voter_change`, `spawn_add_raft_voter`, `spawn_remove_raft_voter`); three commit sites consult it: leader-local (`connection/cluster.rs`), follower-forward (`network.rs` `ForwardedWrite` receiver), auto-failover (`cluster-runtime/src/failure_detector.rs` via the `DetectorRaft` seam) |
+| Rulings | Issue 20 (changes which `Failover` calls reach the remove-voter path, since the automatic path defaults to `force: false`) |
+
+## TR-CLUSTER-040 — `ClusterWriter::propose` on the leader
+
+| Field | Value |
+|---|---|
+| Precondition | A `ClusterCommand` proposed on the current Raft leader. |
+| Postcondition | Raft commits; the state machine's own accept/refuse verdict rides back through `ClusterResponse::{Ok, Epoch, Error}` on the *success* channel (`Proposed::Committed`) — a state-machine rejection is never reported as a transport failure (FM-CLUSTER-047). |
+| Source | `cluster/src/writer.rs` |
+| Rulings | — |
+
+## TR-CLUSTER-041 — `ClusterWriter::propose` on a follower
+
+| Field | Value |
+|---|---|
+| Precondition | A `ClusterCommand` proposed on a non-leader node. |
+| Postcondition | Forwards over the cluster bus; on success answers `Proposed::Forwarded` (the follower performs none of the leader's side effects, e.g. does not double-run `voter_change`); on failure with a known, addressable leader answers `REDIRECT <id> <addr>`; with no addressable leader, `CLUSTERDOWN No leader available` (FM-CLUSTER-048/049); any other Raft failure surfaces as `ProposeError::Raft(message)`, never laundered into a redirect (FM-CLUSTER-050). |
+| Source | `cluster/src/{writer,network}.rs` |
+| Rulings | — |
+
+## TR-CLUSTER-042 — `Failover` state-machine application (`force: true`)
+
+*Belongs topically to Group D — Failover and promotion; appended here with the next free id rather
+than renumbering TR-CLUSTER-021..041 in place.*
+
+| Field | Value |
+|---|---|
+| Precondition | `new_primary_id` present in "Node membership"; `old_primary_id` != `new_primary_id`. Unlike TR-CLUSTER-018's graceful path, today's code lets `old_primary_id` be absent from "Node membership" — the `!old_exists && !force` guard is waived when `force = true` (`commands.rs:408-412`); under issue 19's ruled belt that waiver becomes unreachable on the accept path, since an absent `old_primary_id` always fails the no-op-move check below, leaving `force: true` distinguished from `force: false` only by the removal-vs-demotion fate of a *present* old primary — making the waiver at `commands.rs:408-412` a deletion candidate once issue 19 lands. Ruled + amended (issue 19, the defect this row exists to close): apply carries the same per-object fence as TR-CLUSTER-018 when `old_primary_id` **is** present and was observed by the proposer — refuses if that node's "Node's own config epoch" or "Node role" changed since observation. When `old_primary_id` is **absent**, the fence has nothing to check against, so the belt issue 19 also specifies is what remains: apply refuses outright as a no-op move if `old_primary_id` is not a member, owns no slots, or `new_primary_id` is not `old_primary_id`'s replica — the exact case a second, redundant `FAILOVER FORCE`/`TAKEOVER` (or a race against an already-completed prior failover) produces today, where the command currently proceeds and promotes a successor that inherits nothing (issue 19's title scenario). |
+| Postcondition | Once past the fence/belt: same mutation shape as TR-CLUSTER-018 except step 3 — "Node membership" loses `old_primary_id` outright (removed, `commands.rs:442`) rather than demoted in place; no `NodeDemoted` event is emitted for it (`graceful_demotion = !force` is `false`, `commands.rs:438`); "Open migrations" naming `old_primary_id` are pruned with releases (`prune_migrations_naming`, `commands.rs:450`); `old_primary_id`'s remaining replicas (if any were still parented to it) are re-parented to `new_primary_id` (`reparent_children`, `commands.rs:459`); "Cluster config epoch" += 1, stamped onto `new_primary_id`'s "Node's own config epoch" (`commands.rs:466-469`); `NodePromoted` fires iff `new_primary_id` was a replica. Raft membership also drops `old_primary_id` as a voter in the same commit (TR-CLUSTER-039). |
+| Source | `cluster/src/commands.rs:393-499` (`Failover` arm, `force: true` path within it); `server/src/commands/cluster/admin.rs:312-347` (the replica-issued `FAILOVER FORCE`/`TAKEOVER` handler that constructs this command, `force: force \|\| takeover` at line 342); fence/belt not yet in code |
+| Rulings | Issue 19 (per-object fence + no-op belt, amended) |
+| Pending | [issue 19](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md) |
+
+Which admin path reaches this row: after issue 28's ruling lands (TR-CLUSTER-020), the
+primary-issued absorb branch of `cluster_failover` (`admin.rs:277-310`) is refused unconditionally,
+so the only surviving caller is the replica-issued branch (`admin.rs:312-347`) — a replica naming
+its own recorded primary and forcing past the health check. That branch, not the absorb branch, is
+this row's `Source`.
+
+---
 
 ## How to read a row
 
