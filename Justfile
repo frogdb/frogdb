@@ -369,6 +369,27 @@ lint-spec: test-spec-lint
 test-spec-lint:
     ./scripts/tests/test_spec_lint.py
 
+# Type-check the Quint design models (specs/quint/*.qnt)
+#
+# A no-op until the first model lands (the cluster phase): the models are the
+# design layer of the formal spec, and CI wiring arrives with them rather than
+# with this empty directory.
+quint-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    shopt -s nullglob
+    models=(specs/quint/*.qnt)
+    if [ ${#models[@]} -eq 0 ]; then
+        echo "quint-check: no models under specs/quint/ yet — nothing to type-check"
+        exit 0
+    fi
+    status=0
+    for model in "${models[@]}"; do
+        echo "quint typecheck $model"
+        quint typecheck "$model" || status=1
+    done
+    exit $status
+
 # Run frogctl's tests (excluded from the default suite during the campaign)
 frogctl-test:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogctl --features cli-tests --ignore-default-filter

@@ -40,3 +40,6 @@ ruff     = "latest"     # Python formatter/linter (invoked via uvx today; shim a
 # Prebuilt GitHub-release binaries via the ubi backend
 "ubi:mozilla/sccache" = "latest"
 "ubi:mstange/samply"  = "latest"
+
+# npm-backed CLI tools
+"npm:@informalsystems/quint" = "0.32.0"  # Quint model checker for specs/quint/*.qnt
