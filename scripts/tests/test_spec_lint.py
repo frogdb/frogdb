@@ -196,6 +196,98 @@ def test_registered_catalogs_are_real_and_nonempty() -> None:
                 assert not (catalog.ids & sibling.ids), (area, other)
 
 
+CONSTRUCTIVE_SPEC = """\
+# Cluster
+
+## TR-CLUSTER-001 — the leader assigns an unowned slot
+
+| Precondition | `owner[s]` is unset |
+| Postcondition | `owner[s] = n`, `epoch[n]` incremented |
+
+## TR-CLUSTER-002 — the leader completes a migration
+
+| Precondition | TR-CLUSTER-001 has run for `s` |
+| Postcondition | `owner[s] = target` |
+"""
+
+COMPOSITION_SPEC = """\
+# Composition
+
+## CO-001 — a handoff barrier outlives the feed gate that holds it
+
+| Areas | cluster, replication |
+"""
+
+
+def _parse(specs: dict[str, str]):
+    """(modes, rows, errors) for a synthetic spec dir."""
+    tmp, spec_dir, _ = _tree(specs, {})
+    with tmp:
+        errors: list[str] = []
+        modes, rows = fm.parse_specs(spec_dir, errors)
+        return modes, rows, errors, spec_dir
+
+
+def test_constructive_rows_are_parsed_with_their_kind() -> None:
+    _, rows, errors, _ = _parse({"cluster.md": CONSTRUCTIVE_SPEC})
+    assert errors == [], errors
+    assert [(row.id, row.kind, row.area) for row in rows] == [
+        ("TR-CLUSTER-001", "TR", "CLUSTER"),
+        ("TR-CLUSTER-002", "TR", "CLUSTER"),
+    ]
+
+
+def test_a_constructive_row_must_match_its_file_area() -> None:
+    _, _, errors, _ = _parse({"cluster.md": "## TR-REPLICATION-001 — wrong area\n"})
+    assert len(errors) == 1, errors
+    assert "does not match the file's area prefix TR-CLUSTER-" in errors[0], errors
+
+
+def test_dangling_spec_reference_is_an_error() -> None:
+    tmp, spec_dir, _ = _tree(
+        {"cluster.md": CONSTRUCTIVE_SPEC + "\nSee TR-CLUSTER-009 for the retry.\n"}, {}
+    )
+    with tmp:
+        errors: list[str] = []
+        modes, rows = fm.parse_specs(spec_dir, errors)
+        defined = {entry.id for entry in [*modes, *rows]}
+        fm.check_spec_references(spec_dir, defined, errors)
+    assert len(errors) == 1, errors
+    assert "cites `TR-CLUSTER-009`, which no spec row defines" in errors[0], errors
+
+
+def test_composition_ids_resolve_across_files() -> None:
+    tmp, spec_dir, _ = _tree(
+        {
+            "composition.md": COMPOSITION_SPEC,
+            "cluster.md": CONSTRUCTIVE_SPEC + "\nComposed in CO-001.\n",
+        },
+        {},
+    )
+    with tmp:
+        errors: list[str] = []
+        modes, rows = fm.parse_specs(spec_dir, errors)
+        defined = {entry.id for entry in [*modes, *rows]}
+        citations = fm.check_spec_references(spec_dir, defined, errors)
+    assert errors == [], errors
+    # cluster.md: the two TR headings, the TR-CLUSTER-001 precondition citation,
+    # and the CO-001 citation; composition.md: the CO-001 heading.
+    assert citations == 5, citations
+
+
+def test_live_specs_have_no_dangling_references() -> None:
+    """The real tree: 279 FM rows cross-cite heavily, and every id must resolve."""
+    errors: list[str] = []
+    modes, rows = fm.parse_specs(fm.SPEC_DIR, errors)
+    defined = {entry.id for entry in [*modes, *rows]}
+    fm.check_spec_references(fm.SPEC_DIR, defined, errors)
+    assert errors == [], errors
+    assert len(modes) >= 279, len(modes)
+    # Nothing constructive has been written yet; the checks above are vacuous
+    # for TR/LV/CO on purpose, and this assert is what says so out loud.
+    assert rows == [], rows
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
