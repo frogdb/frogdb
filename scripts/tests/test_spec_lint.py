@@ -72,7 +72,7 @@ pub static CATALOG: &[Invariant] = &[
 """
 
 
-def _tree(specs: dict[str, str], catalogs: dict[str, str]):
+def _tree(specs: dict[str, str], catalogs: dict[str, str], quint: dict[str, str] | None = None):
     """A temp spec dir plus temp catalog files, as (spec_dir, {area: path})."""
     tmp = tempfile.TemporaryDirectory()
     root = Path(tmp.name)
@@ -80,6 +80,11 @@ def _tree(specs: dict[str, str], catalogs: dict[str, str]):
     spec_dir.mkdir()
     for name, text in specs.items():
         (spec_dir / name).write_text(text)
+    if quint:
+        quint_dir = spec_dir / "quint"
+        quint_dir.mkdir()
+        for name, text in quint.items():
+            (quint_dir / name).write_text(text)
     paths = {}
     for area, text in catalogs.items():
         path = root / f"{area.lower()}-invariants.rs"
@@ -341,6 +346,71 @@ def test_lv_tag_naming_no_row_is_an_error() -> None:
     problems = fm.check([], [], [tag], {"cluster_failover::test_orphan"})
     assert len(problems) == 1, problems
     assert "is tagged LV-CLUSTER-404, which no spec defines" in problems[0], problems
+
+
+def _quint_check(specs: dict[str, str], quint: dict[str, str]) -> list[str]:
+    tmp, spec_dir, paths = _tree(specs, BOTH, quint)
+    with tmp:
+        errors: list[str] = []
+        modes, rows = fm.parse_specs(spec_dir, errors)
+        catalogs = fm.load_catalogs(paths, errors)
+        defined = {entry.id for entry in [*modes, *rows]}
+        fm.check_quint_citations(spec_dir / "quint", defined, catalogs, errors)
+        return errors
+
+
+def test_quint_header_citations_resolve() -> None:
+    errors = _quint_check(
+        {"cluster.md": CONSTRUCTIVE_SPEC},
+        {
+            "handoff.qnt": "// Models TR-CLUSTER-001, TR-CLUSTER-002 and INV-HANDOFF-1.\nmodule handoff {\n}\n"
+        },
+    )
+    assert errors == [], errors
+
+
+def test_quint_header_citing_an_unknown_row_is_an_error() -> None:
+    errors = _quint_check(
+        {"cluster.md": CONSTRUCTIVE_SPEC},
+        {"handoff.qnt": "// Models TR-CLUSTER-777.\nmodule handoff {\n}\n"},
+    )
+    assert len(errors) == 1, errors
+    assert "handoff.qnt:1" in errors[0] and "TR-CLUSTER-777" in errors[0], errors
+
+
+def test_quint_header_citing_an_unknown_invariant_is_an_error() -> None:
+    errors = _quint_check(
+        {"cluster.md": CONSTRUCTIVE_SPEC},
+        {"handoff.qnt": "// Models TR-CLUSTER-001 and INV-HANDOFF-9.\nmodule handoff {\n}\n"},
+    )
+    assert len(errors) == 1, errors
+    assert "INV-HANDOFF-9" in errors[0] and "no invariant catalog defines" in errors[0], errors
+
+
+def test_quint_model_without_citations_is_an_error() -> None:
+    errors = _quint_check(
+        {"cluster.md": CONSTRUCTIVE_SPEC},
+        {"handoff.qnt": "module handoff {\n}\n"},
+    )
+    assert len(errors) == 1, errors
+    assert "header cites no spec ids" in errors[0], errors
+
+
+def test_only_the_header_block_is_scanned() -> None:
+    # A stale id in the model *body* is not this lint's business — the body is
+    # Quint, and `quint typecheck` owns it. Only the header makes claims about
+    # the spec.
+    errors = _quint_check(
+        {"cluster.md": CONSTRUCTIVE_SPEC},
+        {"handoff.qnt": "// Models TR-CLUSTER-001.\nmodule handoff {\n  // TR-CLUSTER-777\n}\n"},
+    )
+    assert errors == [], errors
+
+
+def test_absent_quint_dir_is_vacuous() -> None:
+    errors: list[str] = []
+    models, citations = fm.check_quint_citations(fm.SPEC_DIR / "quint", set(), {}, errors)
+    assert errors == [] and models == 0 and citations == 0, (errors, models, citations)
 
 
 def main() -> int:

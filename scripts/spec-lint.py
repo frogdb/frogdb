@@ -505,6 +505,50 @@ def check_spec_references(spec_dir: Path, defined: set[str], errors: list[str]) 
     return citations
 
 
+def check_quint_citations(
+    quint_dir: Path,
+    defined: set[str],
+    catalogs: dict[str, Catalog],
+    errors: list[str],
+) -> tuple[int, int]:
+    """Every spec id a Quint model's header cites must resolve.
+
+    A model states the rows it models in its leading `//` comment block (design
+    §3). Only that block is scanned: the body is Quint, and `quint typecheck`
+    owns it. An `INV-` citation may name any registered area's catalog, because
+    a composition model spans areas by construction — the per-area rule the
+    specs live under does not apply here.
+
+    Returns (models, citations); both are zero until the first model lands.
+    """
+    models = 0
+    citations = 0
+    catalog_ids = {ref for catalog in catalogs.values() for ref in catalog.ids}
+    for path in sorted(quint_dir.glob("*.qnt")):
+        models += 1
+        cited = 0
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            if line.strip() and not line.lstrip().startswith("//"):
+                break
+            for ref in SPEC_REF_RE.findall(line):
+                cited += 1
+                if ref not in defined:
+                    errors.append(f"{rel(path)}:{lineno}: cites `{ref}`, which no spec row defines")
+            for ref in INV_REF_RE.findall(line):
+                cited += 1
+                if ref not in catalog_ids:
+                    errors.append(
+                        f"{rel(path)}:{lineno}: cites `{ref}`, which no invariant catalog defines"
+                    )
+        citations += cited
+        if cited == 0:
+            errors.append(
+                f"{rel(path)}: header cites no spec ids — a model names the "
+                "`TR-`/`INV-`/`LV-`/`CO-` rows it models in its leading comment block"
+            )
+    return models, citations
+
+
 def cargo_env() -> dict[str, str]:
     """Environment for `cargo nextest`, mirroring the Justfile's build vars."""
     env = dict(os.environ)
@@ -700,6 +744,11 @@ def main() -> None:
         help="directory of specs (default: specs/)",
     )
     ap.add_argument(
+        "--quint-dir",
+        type=Path,
+        help="directory of Quint models (default: <spec-dir>/quint)",
+    )
+    ap.add_argument(
         "--nextest-output",
         type=Path,
         help="reuse a `cargo nextest list` listing instead of running it",
@@ -712,6 +761,8 @@ def main() -> None:
     citations = check_invariant_vocabulary(args.spec_dir, catalogs, errors)
     defined = {entry.id for entry in [*modes, *rows]}
     spec_refs = check_spec_references(args.spec_dir, defined, errors)
+    quint_dir = args.quint_dir or (args.spec_dir / "quint")
+    quint_models, quint_refs = check_quint_citations(quint_dir, defined, catalogs, errors)
     tags = scan_tags(SOURCE_ROOTS, errors)
     test_paths = load_test_paths(args.nextest_output)
     errors += check(modes, rows, tags, test_paths)
@@ -734,6 +785,7 @@ def main() -> None:
         f"{sum(1 for row in rows if row.kind == 'CO')} composition rows, "
         f"{references} test references, {len(tags)} tags, "
         f"{spec_refs} spec-id citations, "
+        f"{quint_refs} quint citations over {quint_models} models, "
         f"{sum(citations.values())} invariant citations over "
         f"{sum(len(cat.ids) for cat in catalogs.values())} catalog entries ({breakdown})"
     )
