@@ -65,6 +65,7 @@ def test_workflow() -> Workflow:
                 python="${{ steps.filter.outputs.python }}",
                 workflow_gen="${{ steps.filter.outputs.workflow_gen }}",
                 website="${{ steps.filter.outputs.website }}",
+                specs="${{ steps.filter.outputs.specs }}",
                 testing="${{ steps.filter.outputs.testing }}",
             ),
             steps=[
@@ -113,6 +114,9 @@ def test_workflow() -> Workflow:
                               - 'rust-toolchain.toml'
                             website:
                               - 'website/**'
+                            specs:
+                              - 'specs/**'
+                              - 'website/scripts/spec-gen.py'
                             testing:
                               - 'testing/**'
                         """),
@@ -477,6 +481,28 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    spec_gen_check = w.job(
+        "spec-gen-check",
+        Job(
+            name="Spec Docs Generation Check",
+            runs_on=RUNS_ON,
+            needs="changes",
+            # The Specifications section under website/src/content/docs is
+            # generated from specs/*.md, so both directions must fail CI: a
+            # spec edited without `just spec-gen`, and a hand-edit of the
+            # generated pages.
+            if_="needs.changes.outputs.specs == 'true' || needs.changes.outputs.website == 'true'",
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
+                run_step(
+                    name="Check generated spec pages are up to date",
+                    run="just spec-gen-check",
+                ),
+            ],
+        ),
+    )
+
     matrix_gen_check = w.job(
         "matrix-gen-check",
         Job(
@@ -608,6 +634,7 @@ def test_workflow() -> Workflow:
                 dashboard_lint,
                 docs_gen_check,
                 compat_gen_check,
+                spec_gen_check,
                 matrix_gen_check,
                 docs_path_check,
                 workflow_gen_check,

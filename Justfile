@@ -938,7 +938,9 @@ redis-commands-vendor:
 # Generate the command compatibility matrix by joining commands.json, the
 # vendored Redis command list, and compat-exclusions.json. Must run after
 # docs-gen (commands.json) and compat-gen (compat-exclusions.json); also pulls
-# in spec-gen, so docs-dev/docs-build reach it transitively through this recipe.
+# in spec-gen, so this recipe aggregates all three generators. docs-dev/
+# docs-build also depend on spec-gen directly (belt-and-suspenders with the
+# transitive pull-in above).
 matrix-gen: docs-gen compat-gen spec-gen
     uv run website/scripts/matrix-gen.py
 
@@ -947,12 +949,12 @@ matrix-gen-check: docs-gen-check compat-gen-check spec-gen-check
     uv run website/scripts/matrix-gen.py --check
 
 # Run documentation site development server (installs deps if needed)
-docs-dev: matrix-gen
+docs-dev: matrix-gen spec-gen
     cd website && [ -d node_modules ] || bun install
     cd website && bun run dev
 
 # Build documentation site for production
-docs-build: matrix-gen
+docs-build: matrix-gen spec-gen
     cd website && bun run build
 
 # Preview production build of documentation site

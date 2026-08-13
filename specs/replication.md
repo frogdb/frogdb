@@ -616,8 +616,8 @@ full-resyncs its downstreams — safe, but not free.
 **Where the stint teardown is pinned.** Ending the primary stint — so the node stops counting a
 replication offset on a history it no longer owns, and so a demotion that arrives while the node is
 already fenced still closes the stint — belongs to
-[FM-REPLICATION-022](#fm-replication-022) and is forced there. This row covers only the *ordering*
-guarantee that the fence precedes it.
+[FM-REPLICATION-022](#fm-replication-022--a-demotion-stops-the-node-being-a-replication-source-and-adopting-a-new-history-closes-its-window)
+and is forced there. This row covers only the *ordering* guarantee that the fence precedes it.
 
 **Not covered here.** What the new link then does with the target — handshake, `+FULLRESYNC` and
 installing the payload into the live keyspace — is FM-REPLICATION-001. This row stops at the role
@@ -640,8 +640,9 @@ flip.
 **Where the mint ordering is pinned.** The rule that the replication identity exists — and the
 inbound stream is stopped — *before* the replica flag is cleared, that promotion is idempotent and
 does not re-mint, and that a node which booted primary mints nothing, is
-[FM-REPLICATION-019](#fm-replication-019) / [FM-REPLICATION-020](#fm-replication-020) and is forced
-there. This row depends on that ordering and does not restate it: what it adds is the
+[FM-REPLICATION-019](#fm-replication-019--a-promotion-mints-a-new-history-and-freezes-the-inherited-one-at-the-applied-offset) /
+[FM-REPLICATION-020](#fm-replication-020--a-promotion-that-cannot-be-persisted-adopts-nothing) and is
+forced there. This row depends on that ordering and does not restate it: what it adds is the
 *client-visible* consequence — the old primary's post-promotion writes are unreachable, and the boot
 handler cannot resurrect the link.
 
