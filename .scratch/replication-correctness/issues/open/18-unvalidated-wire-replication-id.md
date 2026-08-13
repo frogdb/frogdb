@@ -73,3 +73,14 @@ Redis validates the length and copies exactly `CONFIG_RUN_ID_SIZE` bytes
 ## Ruling (2026-08-13)
 
 **Confirmed: validation at the single chokepoint.** Replid validation is wired inside `shift_replication_id`/`adopt_replication_history` — the one seam every id adoption flows through. A malformed id is rejected and the replication link dropped (reconnect retries); the old history is left untouched. INV-REPLID-3 becomes unfalsifiable by construction.
+
+## Addendum (2026-08-13, anti-pattern review)
+
+Review finding A1: "unfalsifiable by construction" overclaims. The chokepoint check closes
+well-formedness only — it does nothing about consequence 4 above (a peer that echoes a
+valid-looking id it never owned still gets `+CONTINUE` served against a history it does not
+have). A replication id is a public identifier (it's in `INFO`, handed to every replica), not a
+capability, so provenance is out of scope for this check by construction, not by oversight.
+When implemented, the new FM row must add one sentence: id validation is *well-formedness
+only*; anti-impersonation depends on `masterauth`/TLS (and, in cluster mode, the raft-carried
+node identity), and `INV-REPLID-3` is a structural invariant, not a security property.

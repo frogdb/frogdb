@@ -92,3 +92,14 @@ plus the `known_defect` arm that keeps property R6 from failing on this shape.
 ## Ruling (2026-08-13)
 
 **Option a: clear with the latch.** Demotion clears `last_streaming_departure` alongside `checker.reset_arming()` — re-promotion starts with a clean departure history, making the invariants true as written.
+
+## Addendum (2026-08-13, anti-pattern review)
+
+Review finding A7: "clear" must write the sentinel `0`/`None` (unknown), never a synthesized
+`Graceful` departure — the tracker's `AtomicU8` treats `0`/unknown as "keep fencing", and the
+row itself calls the permissive reading "the one failure of this seam that silently un-fences a
+primary". Reading the ruling's "clean departure history" as `Some(Graceful)` would hand a
+re-promoted node a pre-disarmed fence — the opposite of the safe default. The forcing test's
+assertion must be `last_streaming_departure() == None` after demotion, not
+`Some(Graceful)`. Add a line to the FM row: a demote/re-promote cycle deliberately forgets that
+this node ever had followers, so the self-fence is not a guarantee that survives a role flap.

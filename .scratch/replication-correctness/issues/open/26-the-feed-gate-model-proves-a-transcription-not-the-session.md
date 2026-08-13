@@ -68,3 +68,15 @@ stale.
 ## Ruling (2026-08-13)
 
 **Option 2 now + option 1 via formal-spec phase 3.** The replication seeded sweep gains a slot-handoff-barrier fault family: arm the barrier on the primary, assert no replica observes offsets past the floor until release — closing finding d-ii and unblocking issue 15 / exit criterion 8. Acceptance: reverting the gate-bypass in `replica_session.rs` must turn something red that is NOT FM-CLUSTER-097's own forcing test. Drive-the-real-code fidelity (option 1) arrives structurally as phase 3's quint-connect feed-gate model — no stateright retrofit.
+
+## Addendum (2026-08-13, anti-pattern review)
+
+Review finding A5: option 2's single witness closes this instance but not the class — every
+model in the campaign transcribes some control flow, and phase 3 (the structural fix) is an
+external dependency that can slip. Add a cheap interim class-level guard alongside the sweep
+fix: a seam lint (in the compile-free `just lint-gates` family) requiring the streaming path in
+`replica_session.rs` to call `feed_gate.released()`/`feed_gate.is_held()` — generalizes to
+every other transcribed control-flow model by adding one entry per model. Also broaden the
+acceptance test: the issue names two consumption points (`released().await` before the backlog
+tail, and the `while feed_gate.is_held()` buffering loop) — require that bypassing *each*
+independently turns something red, not just the pair together.

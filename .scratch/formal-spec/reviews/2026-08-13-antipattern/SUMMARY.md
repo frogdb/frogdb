@@ -125,3 +125,28 @@ issue files (`## Amendment (2026-08-13)` sections):
 
 The spec-gap findings (P-C1 ack-durability, T-C1 script bypass, failover drain, fsyncgate,
 vll/blocking rows, …) remain open for triage into issues; they were not part of this round.
+
+## Spec-gap rulings (2026-08-13, second round)
+
+All remaining spec-gap findings were ruled with the user the same day and filed as issues
+(cluster-correctness 26–29, replication-correctness 28–29 + addenda to 16/18/19/23/24/26,
+new `spec-gaps` campaign 01–10):
+
+| Finding | Ruling | Filed as |
+|---------|--------|----------|
+| CL-H2 failover drain | Planned failover lossless (pause→drain→offset parity→swap); honest async-loss row for auto path; quorum-ack write mode filed as design issue | cluster 26 + replication 29 |
+| CL-H3 self-fence input | Raft-liveness fence (CheckQuorum shape), not TCP probes; preamble: clock-to-stop fail-closed OK, clock-to-admit anti-pattern | cluster 27 |
+| CL-H6 FAILOVER on primary | Refused (Redis parity, replica-only) | cluster 28 |
+| CL-A5 row edit-set | Tracked as checklist issue blocked on amended issues | cluster 29 |
+| P-C1 sync ack gate | `Confirm` iff sync-mode ∨ rollback; FM-002 rewrite; e2e forcing test | spec-gaps 01 |
+| P-H1/H2/A2 WAL failures | Poison latch (restart/operator clear only); prefix-truncate under `continue` restores loss-is-a-suffix; `wal-failure-policy=readonly` fail-stop | spec-gaps 02 |
+| P-H3 atomic_flush | Enabled + pinned + crash forcing test | spec-gaps 03 |
+| P-H4/A1/A4 checkpoint | MANIFEST-parse verify + payload manifest + trial-open/rollback + monotone backup key + frogctl verify | spec-gaps 04 |
+| P-A3/A5 advisories | Confirm→Committed rename, synced_seq binding, recovery counters | spec-gaps 05 |
+| T-C1 script bypass | Slot+ACL+admission enforced at shard write seam; seam lint; KNOWN-VIOLATED interim | spec-gaps 06 |
+| V-H1..H4 VLL package | Wound-wait lowest-txid; SCRIPT KILL revoke row; ambiguous-not-clock gather outcomes; panic → shard WAL restart | spec-gaps 07 |
+| B-H5/H6/H7 blocking | `-ERR shard unavailable` on shard death; demotion/migration/disconnect/WAIT rows; admission-limit row | spec-gaps 08 |
+| T-H8/A2 TOCTOU | Routing-epoch carried, refuse at apply (CRDB lease shape); post-pause watch-set re-verdict | spec-gaps 09 |
+| T/V advisories | FM-TXN-050 fold, 039→deviations, 019/021 reword, VLL-003 guard promoted, cancellation pinned | spec-gaps 10 |
+| R-A4 stale reads | **Implement `replica-serve-stale-data` knob now** (user chose stronger option over doc-only) | replication 28 |
+| R-A1/A3/A5/A6/A7, P-R4..R6 | Mechanical addenda appended to owning issues | replication 16/18/19/23/24/26 |

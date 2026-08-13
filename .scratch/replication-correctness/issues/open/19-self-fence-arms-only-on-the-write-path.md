@@ -84,3 +84,16 @@ this issue. Today's behaviour is pinned (deliberately) by
 ## Ruling (2026-08-13)
 
 **Option a: arm on Streaming transition.** The durability fence arms at the session's transition to `Phase::Streaming` (registration path), not lazily on first write. The write-path `arm_if_streaming` stays as a belt. INV-FENCE-1 stays `Tier::Hard`.
+
+## Addendum (2026-08-13, anti-pattern review)
+
+Review finding A6 (process observation): `FM-REPLICATION-041`'s Invariant already read "`armed`
+is a latch set by any replica reaching `Phase::Streaming`" while the spec was LOCKED,
+mutation-gated, and `lint-spec`-checked — but the code armed only from `has_quorum` on the
+write path. The row's claim was never actually forced; spec↔test agreement checks that every
+row names tests and every tagged test names a row, but not that the named tests exercise the
+specific clause. This issue's forcing test (arm the fence with no write served, then assert a
+subsequent loss fences) closes the immediate gap; as part of this issue, audit the catalog for
+other "state written at X" Invariant clauses in the same unforced position (asserting *where*
+state is written rather than *what* it contains) — cheap to check, and this is exactly the
+class this row fell into.

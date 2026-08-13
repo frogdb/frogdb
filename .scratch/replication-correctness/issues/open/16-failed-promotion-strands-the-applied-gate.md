@@ -83,3 +83,16 @@ want**, and it needs a ruling, not a unilateral patch:
 ## Ruling (2026-08-13)
 
 **Option: keep freeze, make it observable.** The promotion-failure applier freeze stands (safety-first: a half-promoted node must not apply). Add a metric plus an `INFO` replication field distinguishing "promotion aborted, applier frozen" from "never pointed at a primary". The cluster reconciler already self-heals the topology around the frozen node. Option 2 (unfreeze on rollback) is revisitable later behind its own FM row. Update FM-REPLICATION-020 to state the ruled behavior.
+
+## Addendum (2026-08-13, anti-pattern review)
+
+Review finding A3: the "cluster reconciler already self-heals" claim is plausible but has no
+witness — `settle_at_applied()` gets called a *second* time on an already-frozen `ApplyGate` on
+retry, and whether that's idempotent (same boundary) or a second, worse failure is unexamined.
+Add to acceptance: (i) a unit test that a retried `begin_primary_stint` after a persist failure
+mints from the *same* boundary and succeeds once the persist path recovers; (ii) a cluster-mode
+integration or turmoil case recovering a node whose promotion failed on an unwritable data dir
+once the dir becomes writable again. Also: name the new `INFO` field explicitly in
+`FM-REPLICATION-020` so `lint-spec` can hold it, and make the metric a level-triggered state
+gauge (not an edge counter) — an alert must be able to fire from a scrape taken long after the
+failed promotion.

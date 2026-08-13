@@ -133,3 +133,25 @@ The anti-pattern review found option (a) alone insufficient (R-C1 CRITICAL): a p
 2. **Atomic pairing:** the persisted offset must commit in the same atomic unit as the write it names. Manifest-time stamping biases the offset low → non-idempotent replay (INCR/LPUSH/APPEND applied twice).
 3. **Sequencing:** this issue lands **before** issue 17 (both relocate `offset_at_save`; neither cited the other). FM-REPLICATION-021's "same `master_replid` after reboot" Observable inverts under this ruling and is rewritten in this issue's change set. INV-OFFSET-2's "monotone within a history" is keyed `(replication_id, epoch)`.
 4. **Persistence constraints:** identity is written inside the FM-PERSISTENCE-019 quiesce window (the current post-cut sidecar write can tear the pair); a fresh id is also minted when `frogdb_wal_recovery_dropped_records_total > 0` (truncation rolled the dataset back under an unchanged identity); "recovered a dataset" means recovered it **intact** — `keys_failed == 0` under FM-PERSISTENCE-033's `continue` policy.
+
+## Addendum (2026-08-13, anti-pattern review)
+
+Persistence-report R4–R6 fold-in
+(`.scratch/formal-spec/reviews/2026-08-13-antipattern/spec-review-persistence.md`), scoped to
+this issue's change set:
+
+- **R4 — retire `replication_state.json` as identity authority.** Once the dataset is
+  authoritative, a second durable copy of identity with a different lifetime is how this bug
+  comes back (FM-PERSISTENCE-038 currently regenerates and writes it back). Either delete the
+  file outright, or demote it to a cache keyed on `database_id` (FM-PERSISTENCE-049) plus the
+  recovered sequence number, ignored whenever either mismatches the opened database.
+- **R5 — phase-order edits, three rows.** `FM-PERSISTENCE-027` gains a data dependency on phase
+  2 (`OpenRocks`) and phase 3 (`RestoreShards`, for the intactness verdict), not just the
+  install — extend its NOT-observable clause accordingly. `FM-PERSISTENCE-028` inverts: a
+  persistence-disabled node mints a **fresh identity every boot**, not "restores its identity."
+  `FM-PERSISTENCE-038`/`-039` restate their regeneration/precedence semantics against a
+  dataset-authoritative source.
+- **R6 — validate against the existing sequence anchor.** `SnapshotMetadataFile.sequence_number`
+  is the RocksDB sequence at the checkpoint cut; whatever carries the restored `repl_offset`
+  must be validated against it (same cut, same window) so a mismatch is detectable as
+  corruption rather than silently adopted.
