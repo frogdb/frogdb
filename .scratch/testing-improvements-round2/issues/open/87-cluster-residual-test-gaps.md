@@ -109,7 +109,7 @@ test *as T7's acceptance criterion* rather than as standalone test work.
 ### F11 — Nothing ever removes a node from the Raft voter set, and the add-voter failure path is untested
 
 - **STATUS: RESOLVED** (removal half). The source gap is fixed and pinned by **FM-CLUSTER-101**
-  (`.scratch/hardening/specs/cluster-failure-modes.md`): `voter_change` is now the single rule
+  (`specs/cluster.md`): `voter_change` is now the single rule
   mapping a committed `ClusterCommand` to its voter-set effect, consulted by both leader-side commit
   sites, and `spawn_remove_raft_voter` mirrors `spawn_add_raft_voter` (same retry schedule,
   `RemoveVoters`/`RemoveNodes` classified against the membership in force). Forced by

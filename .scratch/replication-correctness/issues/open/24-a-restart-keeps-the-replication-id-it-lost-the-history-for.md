@@ -99,7 +99,7 @@ is the one that always survives.
       with an empty dataset never grants `+CONTINUE` to a replica that followed
       its previous incarnation
 - [ ] Failure-mode row added to
-      `.scratch/hardening/specs/replication-failure-modes.md` naming its forcing
+      `specs/replication.md` naming its forcing
       test
 - [ ] The named-gap exemption in the sweep's `XREPL-2` (see below) removed, so
       the arm witnesses the fixed behaviour instead of tolerating it

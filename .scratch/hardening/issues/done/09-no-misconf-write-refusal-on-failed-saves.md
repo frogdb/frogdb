@@ -31,7 +31,7 @@ The two systems weigh this differently, and the difference is real rather than a
   backup is a much bigger hammer than it is in Redis.
 
 Recorded as a deviation in the Redis-deviations table of
-`.scratch/hardening/specs/persistence-failure-modes.md` (FM-PERSISTENCE-005 and
+`specs/persistence.md` (FM-PERSISTENCE-005 and
 FM-PERSISTENCE-022 rows).
 
 ## The decision to make

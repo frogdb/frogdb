@@ -26,7 +26,7 @@ already drifted (three gates ran on every commit but not under `just lint`).
 | `lint-metrics-chokepoint` | metrics are emitted through the typed handles `define_metrics!` generates, never a raw string-named `increment_counter`/`record_gauge`/`record_histogram` call (which re-opens registry drift and the first-caller-fixes-arity panic class) | yes |
 | `lint-format-float` | exactly one `format_float` definition exists, in `frogdb-protocol`; every other renderer re-exports it (so the reply path and the WAL/replication store path can never disagree on a float's spelling) | yes |
 | `lint-clock-seam` | server-crate non-test code reads the clock through `frogdb_types::clock` (`now()` / `system_now()`), never `std::time::Instant::now()` / `SystemTime::now()` directly, so a turmoil run's paused clock and the server's timeline never disagree | yes |
-| `lint-failure-modes` | every `Forced by` test named in a `.scratch/hardening/specs/*-failure-modes.md` row exists and carries its `// FM-<AREA>-NNN` tag, and every tag in the Rust sources names a real spec row, checked in both directions | **no** — builds the listed crates' test binaries via `cargo nextest list` |
+| `lint-spec` | every `Forced by` test named in a `specs/*.md` row exists and carries its `// FM-<AREA>-NNN` tag, and every tag in the Rust sources names a real spec row, checked in both directions | **no** — builds the listed crates' test binaries via `cargo nextest list` |
 | `lint-no-typed-unwrap` | command code (`crates/commands/src`) never hand-rolls the `WrongType` invariant — no check-then-unwrap (`as_*_mut().unwrap()` / `get_mut(...).unwrap()`) and no `.ok_or(_else)(...WrongType...)` chain; go through the typed store accessors (`StoreTypedExt`/`StoreTypedFamilyExt`) instead | yes |
 | `lint-keyspace-notify-routing` | keyspace/keyevent notifications publish through `KeyspaceNotificationCoordinator`, never `self.subscriptions.publish(...)` directly, except `dispatch_pubsub.rs` (the coordinator shard's own delivery arm) | yes |
 | `lint-script-gate` | cross-shard Lua sub-command routing stays behind `ScriptCommandGate`: no `block_in_place` outside `scripting/gate.rs`, and no second key extraction (`extract_keys_from_command`) in `lua_vm.rs` | yes |
@@ -80,7 +80,7 @@ and an in-code hatch is invisible to review):
   error whichever way it moved, so a new violation in an already-exempt file fails just like a new
   file would, and a fixed violation forces the entry down (or out) rather than letting it go
   stale. This is the ratchet — no separate baseline file.
-- **Named-gap warn-not-fail** (`scripts/failure-modes.py:20-26`). For an invariant that is real but
+- **Named-gap warn-not-fail** (`scripts/spec-lint.py:27-32`). For an invariant that is real but
   blocked on machinery that does not exist yet, `Forced by | MISSING ([gap: <issue>](<link>))`
   warns instead of failing, but only if `<link>` resolves to a real issue file — an unresolvable
   link still fails. This keeps the gap visible in every run without blocking the lint on work

@@ -14,7 +14,7 @@ Revert (e) is drawn rather than chosen, so the fifth sample cannot be a defect t
 built around. The draw was fixed before any candidate was inspected: the branch point
 `origin/main` `2a81867e`, low six bits (`0x7e` → 62), indexed 0-based into
 FM-REPLICATION-001..064 → **FM-REPLICATION-063**, "`total_net_repl_*_bytes` count bytes that
-actually crossed the wire" (`.scratch/hardening/specs/replication-failure-modes.md`; originating
+actually crossed the wire" (`specs/replication.md`; originating
 bug `.scratch/hardening/issues/done/29-net-repl-byte-counters-are-hardcoded-zero.md`, fixed by
 `17b9b552`).
 

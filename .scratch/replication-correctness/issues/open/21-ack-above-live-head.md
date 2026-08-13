@@ -69,7 +69,7 @@ so parity is not an argument either way — this is a place a deviation would be
 the project's stated goal.
 
 Whichever option is ruled, the fix needs a failure-mode row (a new `FM-REPLICATION-NNN` in
-`.scratch/hardening/specs/replication-failure-modes.md`) naming the forcing test, per the locked
+`specs/replication.md`) naming the forcing test, per the locked
 crate's spec-first rule.
 
 ## Second, independent witness: the seeded turmoil sweep

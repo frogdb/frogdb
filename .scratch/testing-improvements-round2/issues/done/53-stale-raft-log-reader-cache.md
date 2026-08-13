@@ -62,7 +62,7 @@ Nothing.
 
 ## Resolution
 
-Fixed 2026-08-08 under **FM-CLUSTER-099** (`.scratch/hardening/specs/cluster-failure-modes.md`) —
+Fixed 2026-08-08 under **FM-CLUSTER-099** (`specs/cluster.md`) —
 option 1 of "What to fix": one `Arc<RwLock<BTreeMap<u64, Entry>>>` is now shared by the writing
 handle and every reader `get_log_reader` hands out, so `invalidate_cache_range` (the only
 invalidation, reached from `truncate` and `purge`) reaches every reader by construction. Option 2

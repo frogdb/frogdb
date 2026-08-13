@@ -147,8 +147,8 @@ and `hybrid_and_knn_zero_count_return_no_hits`. RESP-level pin in
 reply and that the same connection is answered afterwards (liveness).
 
 **No failure-mode row.** The search area has no locked spec under
-`.scratch/hardening/specs/` (the campaign covered txn/vll/persistence/replication/cluster
+`specs/` (the campaign covered txn/vll/persistence/replication/cluster
 only), and inventing a new spec area was out of scope for this fix. The shard-survival
 half of the invariant is rowed as
-[FM-VLL-005](../../../hardening/specs/vll-failure-modes.md#fm-vll-005--a-granted-op-panics-while-executing),
+[FM-VLL-005](../../../../specs/vll.md#fm-vll-005--a-granted-op-panics-while-executing),
 which cites this issue as the motivating panic.

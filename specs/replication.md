@@ -37,18 +37,18 @@ Phase 3 hardening pass so that no source file in the area is unspecced. In id or
 * **Identity and promotion (019-024)** — minting a new history, freezing the inherited one at the
   applied offset, what a promotion that cannot persist must not adopt, what survives a restart,
   what a demotion closes, and the split-brain audit
-  (`frogdb-replication/src/identity.rs`, `frogdb-server/src/role_manager.rs`).
+  (`frogdb-replication/src/identity.rs`, `frogdb-server/crates/server/src/role_manager.rs`).
 * **Replica lifecycle (025-030)** — `REPLICAOF`/`REPLICAOF NO ONE`, the reconnect loop, the
   read-only refusal, serving reads while behind, and independent expiry
-  (`frogdb-replication/src/replica/mod.rs`, `frogdb-server/src/commands/replication.rs`,
-  `frogdb-server/src/connection/guards.rs`).
+  (`frogdb-replication/src/replica/mod.rs`, `frogdb-server/crates/server/src/commands/replication.rs`,
+  `frogdb-server/crates/server/src/connection/guards.rs`).
 * **Framing and codec (031-036)** — what the offset counts, whole-frame decode, the ACK grammar,
   the shard-tagged transaction group, and the checkpoint envelope's bounds
   (`frogdb-replication/src/frame.rs`, `apply.rs`, `fullsync.rs`, `offset_coordinator.rs`).
 * **WAIT and the replica registry (037-043)** — what `WAIT` may answer, when it solicits a
   `GETACK`, what the count counts, what a `WAIT` parked across a demotion returns, the two write
   fences, and the one registry `INFO`/`ROLE` render from
-  (`frogdb-replication/src/tracker.rs`, `frogdb-server/src/commands/{wait,info}.rs`).
+  (`frogdb-replication/src/tracker.rs`, `frogdb-server/crates/server/src/commands/{wait,info}.rs`).
 
 Scope, part four — rows added by closing a filed bug (044-050), each naming its issue in `Bug refs`.
 These are not a separate area; they are the rows a fix had to write because the behavior it
@@ -66,14 +66,14 @@ checkpoint installed shard-for-shard with its warm tier materialized (053).
 
 Scope, part six — the control lane (FM-REPLICATION-054..057): process-wide state that lives *beside*
 the keyspace and therefore has no shard to be tagged with. Today that is the function registry
-(`frogdb-server/src/function_store.rs`, `frogdb-core/src/scripting/functions`), carried as
+(`frogdb-server/crates/server/src/function_store.rs`, `frogdb-core/src/scripting/functions`), carried as
 `CONTROL_SHARD`-tagged frames the replica applies through `ControlApplier`
 (`frogdb-replication/src/apply.rs`), plus the full-resync hook that seeds a fresh replica
 (`frogdb-replication/src/replica_session.rs`). Rows stop at what a client of either node can call.
 
 Adjacent specs: the boot-time half of a full sync — installing a staged checkpoint and adopting the
 replication id/offset it carries — lives in
-[Persistence — failure modes](persistence-failure-modes.md) (FM-PERSISTENCE-027, -038, -039).
+[Persistence — failure modes](persistence.md) (FM-PERSISTENCE-027, -038, -039).
 
 ## How to read a row
 
@@ -85,11 +85,11 @@ replication id/offset it carries — lives in
 | Invariant | The internal guarantee, named at the mechanism that provides it. |
 | Catalog | *Optional.* The invariant-catalog entries that check this row's guarantee **universally** — see below. Absent on rows nothing in the catalog generalizes. |
 | Outcome variant | The enum variant / metric label the mode reports through, or `n/a` for wire-level invariants with no client-visible outcome. |
-| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-REPLICATION-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
+| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-REPLICATION-NNN` tag at its definition site; `just lint-spec` enforces both directions. |
 | Bug refs | Known issues that touch this mode. |
 
 Test names are bare function names, resolved against the crate list in
-`scripts/failure-modes.py` (`NEXTEST_CRATES`).
+`scripts/spec-lint.py` (`NEXTEST_CRATES`).
 
 ### The `Catalog` field
 
@@ -102,7 +102,7 @@ a row is forced by the tests it names, an entry is forced by every test in the c
 
 A row carries a `Catalog` field when an entry generalizes the guarantee the row states point-wise:
 deleting the code the row names would make that entry fire. The cross-reference runs both ways —
-each entry's `check_*` function names the rows it generalizes — and `just lint-failure-modes`
+each entry's `check_*` function names the rows it generalizes — and `just lint-spec`
 checks that every `INV-*` id this spec cites is defined in the **replication** catalog. The check
 is per-area (`INVARIANT_CATALOGS`), so citing one of the cluster catalog's entries here is an error
 rather than a pass — an invariant is a claim about one area's state projection, and a claim about
@@ -201,7 +201,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Forced by | `receive_checkpoint_streams_the_frames_that_trailed_the_payload`, `receive_snapshot_streams_the_frames_that_trailed_the_payload`, `a_payload_with_no_trailing_frames_leaves_the_stream_empty`, `dropping_the_reader_hands_back_what_it_read_past_the_payload`, `a_fully_consumed_reader_leaves_no_residual` |
 | Bug refs | `.scratch/hardening/issues` (issue 01 — surfaced as a load-dependent `test_broadcast_lag_disconnect_and_resync` flake; the seed write was acked by neither replica because the ACK never arrived) |
 
-[`PayloadReader`]: ../../../frogdb-server/crates/replication/src/replica/payload_reader.rs
+[`PayloadReader`]: ../frogdb-server/crates/replication/src/replica/payload_reader.rs
 
 ## FM-REPLICATION-006 — owing an ACK never stops the replica reading its link
 
@@ -608,7 +608,7 @@ full-resyncs its downstreams — safe, but not free.
 | Trigger | A live, writable primary is told `REPLICAOF <host> <port>` at runtime — the demoted-old-primary shape after a failover, or an operator re-pointing a replica at a different primary mid-stream. Sharpened by the node holding its own divergent keyspace and by clients writing to it concurrently with the command. |
 | Observable | The `+OK` is not a promise about the *link*, it is a promise about the *role*: by the time it returns, `ROLE` reports `slave`, `INFO replication` reports `role:slave` with `master_host`/`master_port` set to the resolved target, and every write is answered `-READONLY` ([FM-REPLICATION-028](#fm-replication-028--a-replica-refuses-every-write-command-by-flag-and-not-by-list)) — all of this before any byte of the new stream arrives, and regardless of whether the target is reachable at all. Re-issuing `REPLICAOF` against the *same* target is a no-op that does not tear down a healthy link; issuing it against a *different* target switches primaries: the old stream is dropped and the reported `master_host`/`master_port` become the new target. Bad arguments are refused with the role untouched: cluster mode answers `ERR REPLICAOF not allowed in cluster mode.`, port `0` and an unresolvable host are argument errors, and the node stays a writable primary. |
 | NOT observable | **A window in which the node reports `slave` but still accepts writes**, or reports `master` while a primary's frames are already landing in its keyspace — either one lets a client's acknowledged write be silently overwritten by the incoming stream with no error ever returned. Nor: a second `REPLICAOF` at the same target restarting a healthy stream (a gratuitous full resync); a switch to a new target leaving the *old* primary's stream still applying, so two histories interleave into one keyspace; a refused `REPLICAOF` (cluster mode, port 0, bad host) leaving the node half-demoted. |
-| Invariant | `RoleManager::demote(addr)` (`frogdb-server/src/role_manager.rs:332`) orders the teardown so the flag is the *first* thing that moves: set `is_replica` (`Release`) → end the primary stint → drop the existing `ReplicaStream` → stop the boot handler → `checker.reset_arming()`. The read path loads the same flag under `Acquire` in `run_pre_checks` (`frogdb-server/src/connection/guards.rs:275`), so a `-READONLY` is guaranteed for every command that starts after `+OK`. Idempotence is per-target: `demote` compares the recorded `SocketAddr` and returns without touching the stream when it matches, and tears down and rebuilds when it does not. Argument validation runs entirely before `controller.request_demote(addr)` (`frogdb-server/src/commands/replication.rs:62`, `:103`, `:133-148`), so a rejected command never reaches the role manager. `RealReplicaStream::Drop` (`role_manager.rs:688`) stops the handler and aborts the connection but deliberately leaves the frame consumer alive (FM-REPLICATION-007). |
+| Invariant | `RoleManager::demote(addr)` (`frogdb-server/crates/server/src/role_manager.rs:332`) orders the teardown so the flag is the *first* thing that moves: set `is_replica` (`Release`) → end the primary stint → drop the existing `ReplicaStream` → stop the boot handler → `checker.reset_arming()`. The read path loads the same flag under `Acquire` in `run_pre_checks` (`frogdb-server/crates/server/src/connection/guards.rs:275`), so a `-READONLY` is guaranteed for every command that starts after `+OK`. Idempotence is per-target: `demote` compares the recorded `SocketAddr` and returns without touching the stream when it matches, and tears down and rebuilds when it does not. Argument validation runs entirely before `controller.request_demote(addr)` (`frogdb-server/crates/server/src/commands/replication.rs:62`, `:103`, `:133-148`), so a rejected command never reaches the role manager. `RealReplicaStream::Drop` (`role_manager.rs:688`) stops the handler and aborts the connection but deliberately leaves the frame consumer alive (FM-REPLICATION-007). |
 | Outcome variant | `ROLE`/`INFO replication` `role`, `master_host`, `master_port`; `CommandError::InvalidArgument` |
 | Forced by | `test_replicaof_host_port_demotes`, `test_role_and_info_report_real_primary_after_demotion`, `demote_sets_flag_records_target_and_starts_stream`, `demote_is_idempotent_per_target_but_switches_primaries`, `demote_resets_replication_self_fence_arming` |
 | Bug refs | `.scratch/testing-improvements/issues/61` (runtime `REPLICAOF` full resync must install into the live store) |
@@ -616,8 +616,8 @@ full-resyncs its downstreams — safe, but not free.
 **Where the stint teardown is pinned.** Ending the primary stint — so the node stops counting a
 replication offset on a history it no longer owns, and so a demotion that arrives while the node is
 already fenced still closes the stint — belongs to
-[FM-REPLICATION-022](#fm-replication-022) and is forced there. This row covers only the *ordering*
-guarantee that the fence precedes it.
+[FM-REPLICATION-022](#fm-replication-022--a-demotion-stops-the-node-being-a-replication-source-and-adopting-a-new-history-closes-its-window)
+and is forced there. This row covers only the *ordering* guarantee that the fence precedes it.
 
 **Not covered here.** What the new link then does with the target — handshake, `+FULLRESYNC` and
 installing the payload into the live keyspace — is FM-REPLICATION-001. This row stops at the role
@@ -632,7 +632,7 @@ flip.
 | Trigger | `REPLICAOF NO ONE` on a node that is currently following a primary — the manual-failover path, and the same path automatic promotion drives. Sharpened by the old primary *still being alive and still writing*, and by the command being issued twice. |
 | Observable | The node becomes a writable primary: `ROLE` reports `master`, every write command that was answered `-READONLY` a moment ago now succeeds, and it serves `PSYNC` to its own downstream. Writes the old primary performs **after** the promotion never appear in the promoted node's keyspace, however long a client waits — the link is gone, not merely idle. A node that boot-configured a primary target keeps that promise across the promotion too: the reconnect loop its `--replicaof` started does not survive to re-attach. A demote/promote round trip returns the node to exactly the state it started in. |
 | NOT observable | **A promoted node still applying its old primary's frames** — split brain with no error surface: the new primary accepts client writes while the demoted one silently overwrites them, and both sides report `master`. Nor: a boot-configured replica's registered handler surviving promotion and quietly reconnecting to the old primary, so the node oscillates between roles with no command having been issued; a round trip leaving residual state that makes the second demotion behave differently from the first. |
-| Invariant | `RoleManager::promote()` (`frogdb-server/src/role_manager.rs:298`) is ordered stream-first, flag-last, and `promote()` additionally stops any registered boot-replica handler — the reconnect loop is owned by the role manager, not by the boot path, precisely so a promotion can end it. The flag is what the write path reads (`guards.rs:275`), so clearing it last means "writable" implies "no stream". |
+| Invariant | `RoleManager::promote()` (`frogdb-server/crates/server/src/role_manager.rs:298`) is ordered stream-first, flag-last, and `promote()` additionally stops any registered boot-replica handler — the reconnect loop is owned by the role manager, not by the boot path, precisely so a promotion can end it. The flag is what the write path reads (`guards.rs:275`), so clearing it last means "writable" implies "no stream". |
 | Outcome variant | `ROLE` `master`; `INFO replication` `role:master`, `master_replid` |
 | Forced by | `test_replica_of_no_one_stops_accepting_primary_writes`, `test_promoted_replica_serves_all_writes_after_promotion`, `promote_stops_registered_boot_replica_handler`, `demote_promote_round_trip` |
 | Bug refs | `.scratch/replication-cluster-rework/issues` (promotion-replid rework) |
@@ -640,8 +640,9 @@ flip.
 **Where the mint ordering is pinned.** The rule that the replication identity exists — and the
 inbound stream is stopped — *before* the replica flag is cleared, that promotion is idempotent and
 does not re-mint, and that a node which booted primary mints nothing, is
-[FM-REPLICATION-019](#fm-replication-019) / [FM-REPLICATION-020](#fm-replication-020) and is forced
-there. This row depends on that ordering and does not restate it: what it adds is the
+[FM-REPLICATION-019](#fm-replication-019--a-promotion-mints-a-new-history-and-freezes-the-inherited-one-at-the-applied-offset) /
+[FM-REPLICATION-020](#fm-replication-020--a-promotion-that-cannot-be-persisted-adopts-nothing) and is
+forced there. This row depends on that ordering and does not restate it: what it adds is the
 *client-visible* consequence — the old primary's post-promotion writes are unreachable, and the boot
 handler cannot resurrect the link.
 
@@ -672,7 +673,7 @@ and the honesty of `master_link_status`, not the timing. See the gaps list.
 | Trigger | Any client command on a node whose replica flag is set — by boot config, by runtime `REPLICAOF` ([FM-REPLICATION-025](#fm-replication-025--replicaof-host-port-fences-the-node-before-it-opens-a-stream)), or by cluster-driven demotion. Sharpened by walking the *entire* command registry rather than a hand-picked sample, and by commands added after this row was written. |
 | Observable | Every command carrying `CommandFlags::WRITE` is answered `READONLY You can't write against a read only replica.` — over 100 commands today, with no exceptions and no partial application: `SET`, `DEL`, `ZADD` and the long tail all fail identically. Everything else still works: `GET`, `PING`, `INFO`, `ROLE` and the rest of the read/admin surface are served normally. In cluster mode a write for a slot this node does not own is answered `-MOVED` rather than `-READONLY`, so a client's redirect cache is not poisoned by a role error. |
 | NOT observable | **A write command that slips through the gate** and mutates a replica's keyspace — a divergence with no error, no log and no offset movement, which the next full resync silently erases along with the client's acknowledged data. The bug shape being ruled out is specifically a *hand-maintained list* of blocked commands: any list drifts the moment a command is added, so the gate must be derived from the registry. Nor the inverse: a replica refusing reads or `INFO` (which would make it useless and would break the very tooling used to diagnose it); replica *apply* traffic being caught by the gate (that would stop replication dead — it is internal, not a client); a `-READONLY` shadowing a `-MOVED` in cluster mode. |
-| Invariant | The gate is four lines in `run_pre_checks` (`frogdb-server/src/connection/guards.rs:306-314`): `is_replica` (`Acquire`) → registry lookup → `flags().contains(CommandFlags::WRITE)` → `!write_defers_to_cluster_redirect(..)` (`guards.rs:449`). Membership is a property of the command's own registry entry, so a new write command is covered the day it is registered and cannot be forgotten. The ladder order is fixed and documented: auth → READONLY → MISCONF → CLUSTERDOWN (self-fence) → NOREPLICAS. Replica apply traffic never reaches this code at all — it runs under `REPLICA_INTERNAL_CONN_ID` with no `PreDispatchView`, so the gate is structurally inapplicable rather than conditionally skipped. |
+| Invariant | The gate is four lines in `run_pre_checks` (`frogdb-server/crates/server/src/connection/guards.rs:306-314`): `is_replica` (`Acquire`) → registry lookup → `flags().contains(CommandFlags::WRITE)` → `!write_defers_to_cluster_redirect(..)` (`guards.rs:449`). Membership is a property of the command's own registry entry, so a new write command is covered the day it is registered and cannot be forgotten. The ladder order is fixed and documented: auth → READONLY → MISCONF → CLUSTERDOWN (self-fence) → NOREPLICAS. Replica apply traffic never reaches this code at all — it runs under `REPLICA_INTERNAL_CONN_ID` with no `PreDispatchView`, so the gate is structurally inapplicable rather than conditionally skipped. |
 | Outcome variant | `-READONLY` error reply; `-MOVED` when the cluster redirect takes precedence |
 | Forced by | `test_replica_rejects_every_write_command`, `test_replica_readonly_enforcement`, `test_replica_read_only`, `test_replica_readonly_error` |
 | Bug refs | — |
@@ -747,7 +748,7 @@ duplicating it — the deviation table below is the short form.
 **Why one name is module-qualified.** `frame_advance_counts_payload_not_header` exists twice —
 `replication/src/offset_coordinator.rs:265` and `replication/src/replica/offset.rs:606` — asserting
 the same property on the two coordinators. This row means the former; the qualified form keeps that
-unambiguous for a reader, while `just lint-failure-modes` resolves on the leaf name either way.
+unambiguous for a reader, while `just lint-spec` resolves on the leaf name either way.
 
 ---
 
@@ -1306,7 +1307,7 @@ demotion to release (FM-REPLICATION-037).
 `write_fence_reason_is_reported_only_while_fenced`
 (`frogdb-server/crates/telemetry/src/status.rs`), was uncitable because `frogdb-telemetry` was not
 in `NEXTEST_CRATES`, leaving FM-REPLICATION-041's status-endpoint claim unforced. `frogdb-telemetry`
-and `frogdb-config` are now both eligible (`scripts/failure-modes.py`), and the test is named in
+and `frogdb-config` are now both eligible (`scripts/spec-lint.py`), and the test is named in
 FM-REPLICATION-041's `Forced by`. The second crate was added for the same reason: config
 `validate()` tests are the forcing tests for every "rejected at boot" clause, and they all live in
 `frogdb-config`.

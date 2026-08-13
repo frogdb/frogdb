@@ -143,7 +143,7 @@ What exists now:
 * **Test seam:** `DEBUG PAUSE-SLOT <slot> <timeout-ms> [WRITE|ALL]` (0 ms disarms).
   `CLIENT PAUSE` was deliberately **not** extended — Redis has no slot argument and the parity break
   would be visible to every client library.
-* **Spec:** `FM-CLUSTER-079..083` in `.scratch/hardening/specs/cluster-failure-modes.md`, with the
+* **Spec:** `FM-CLUSTER-079..083` in `specs/cluster.md`, with the
   "pause barrier is out of scope" line replaced by a scope bullet and a pointer back to this issue
   for the phase-2 rows.
 
@@ -245,7 +245,7 @@ retries (FM-008).
 acquires no keys, holds no state across messages, and contains no await point. It sends the ack and
 returns; the round trip *is* the drain, and taking a continuation lock would defeat its purpose.
 
-**Spec.** `FM-CLUSTER-084..092` in `.scratch/hardening/specs/cluster-failure-modes.md`. Note the
+**Spec.** `FM-CLUSTER-084..092` in `specs/cluster.md`. Note the
 namespace deviation from the brief: `FM-CLUSTER-BARRIER-NNN` is unparseable by
 `scripts/failure-modes.py` (it derives the area from the filename and matches `FM-([A-Z]+)-(\d+)`,
 so a hyphenated area matches neither the heading nor the tag regex) and the rows would have been

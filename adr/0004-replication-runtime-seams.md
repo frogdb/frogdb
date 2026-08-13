@@ -57,7 +57,7 @@ and re-point live components. `crate::replication` is now a facade that re-expor
 crates, so server call sites did not move.
 
 Consequences: the four seams are unit-testable in a crate that builds without the server test
-binary, and the failure-mode contract is `.scratch/hardening/specs/replication-failure-modes.md`,
+binary, and the failure-mode contract is `specs/replication.md`,
 which now carries FM-REPLICATION-001..053 and names these files in its own scope statement —
 including three rows (051-053) written directly against these seams, because the runtime crate's
 own tests reached almost none of them.

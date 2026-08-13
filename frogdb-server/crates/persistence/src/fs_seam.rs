@@ -20,7 +20,7 @@
 //! rename, is — with a recording fake in place of [`RealFs`].
 //!
 //! Specced as the checkpoint-publication failure mode in
-//! `.scratch/hardening/specs/persistence-failure-modes.md`.
+//! `specs/persistence.md`.
 use std::io;
 use std::path::Path;
 #[cfg(test)]

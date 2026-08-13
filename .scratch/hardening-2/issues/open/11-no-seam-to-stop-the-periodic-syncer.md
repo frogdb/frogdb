@@ -9,7 +9,7 @@ Area: core / persistence durability
 
 ## Problem
 
-[FM-PERSISTENCE-003](../../hardening/specs/persistence-failure-modes.md) names this
+[FM-PERSISTENCE-003](../../../../specs/persistence.md) names this
 NOT-observable:
 
 > Loss of a write older than the interval, i.e. an unbounded window: the periodic sync thread

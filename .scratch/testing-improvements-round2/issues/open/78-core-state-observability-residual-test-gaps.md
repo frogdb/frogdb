@@ -200,7 +200,7 @@ issue before writing the test; the finding itself stays actionable and `ready-fo
 | F15 `OutputBudget` overflow latch + wakeup no interleaving test | still-valid |
 
 Nothing in the hardening campaign touched this surface: core was not one of the four locked areas
-and no FM row in `.scratch/hardening/specs/` covers tracking, hotkeys, slowlog or the observability
+and no FM row in `specs/` covers tracking, hotkeys, slowlog or the observability
 gauges. Spot-verified on today's tree: F9's fabricated constants are still literal — `INFO` emits
 `tracking_clients` 0 at `crates/server/src/info/sections.rs:132` and `pubsub_channels` 0 at `:351`
 (line drift only from the body's cited numbers); F14's `to_flag_string`

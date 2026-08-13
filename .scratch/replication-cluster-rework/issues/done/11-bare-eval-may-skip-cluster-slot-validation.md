@@ -110,7 +110,7 @@ bare EVAL naming a key owned by another node must be MOVED, got: Integer(1)
 
 The test is left in the tree as `#[ignore]` naming this issue, so the fix has a ready-made
 regression test: delete the `#[ignore]` when the ordering is fixed. Specced as a known bug:
-FM-CLUSTER-030 in `.scratch/hardening/specs/cluster-failure-modes.md`, which cites this issue as
+FM-CLUSTER-030 in `specs/cluster.md`, which cites this issue as
 its gap (an `#[ignore]`d test is absent from `cargo nextest list`, so the failure-mode lint cannot
 resolve it as a `Forced by` witness — re-point the row at the test when the `#[ignore]` goes).
 

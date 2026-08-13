@@ -102,7 +102,7 @@ Plumbing, in dependency order:
   the same propagation seam): all pass.
 - `just test frogdb-server` (full crate) and `just lint frogdb-server` / `just lint-failure-modes`:
   see the commit history / task report for full-suite results.
-- FM-PERSISTENCE-033 row in `.scratch/hardening/specs/persistence-failure-modes.md`: "Observable"
+- FM-PERSISTENCE-033 row in `specs/persistence.md`: "Observable"
   extended to state the script surface now agrees with the connection-level one; "Forced by" lists
   the new test. FM-PERSISTENCE-022's "Bug refs" line updated to mark issue 42 fixed.
 - No spec row changes were needed in a locked crate's own sense — this is plumbing through

@@ -90,7 +90,7 @@ gated behind a new `proptest.workspace = true` dev-dependency
   `HealthTable::stale_threshold() > Duration::ZERO`.
 
 Both tagged `// FM-CLUSTER-102` and added to the FM row's `Forced by` list
-in `.scratch/hardening/specs/cluster-failure-modes.md`; `just
+in `specs/cluster.md`; `just
 lint-failure-modes` stays green.
 
 **Sibling-constructor sweep (item 4):** searched the crate for every

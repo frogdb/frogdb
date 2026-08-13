@@ -74,7 +74,7 @@ Option 1 is the shape the invariant implies, but it needs a decision on the unan
 does not compare them — so they cannot be deduped and must not be).
 
 Whichever option is ruled, the fix needs a failure-mode row (a new `FM-REPLICATION-NNN` in
-`.scratch/hardening/specs/replication-failure-modes.md`) naming the forcing test, per the locked
+`specs/replication.md`) naming the forcing test, per the locked
 crate's spec-first rule.
 
 ## Pin

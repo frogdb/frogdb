@@ -337,5 +337,5 @@ from effort 2 to 1 — if 92 lands first, both findings should be re-homed as pr
 dependency); nothing in 92 discharges them on its own. **Issue 95** (unbounded RESP nesting depth)
 owns the depth-limit defect that this issue's F4 was already promoted into issue 70 — 95 and 70
 overlap and should be reconciled by their owner, not here. The hardening campaign did not touch
-the protocol crate or `connection/codec.rs`; no FM row in `.scratch/hardening/specs/` covers RESP
+the protocol crate or `connection/codec.rs`; no FM row in `specs/` covers RESP
 decode.

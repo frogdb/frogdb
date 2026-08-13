@@ -24,7 +24,7 @@ checked by nothing; after this it is structural, with the catalog entry as the b
 **Execution discipline, ruled in D2 and not optional:**
 
 - Tiers (i) and (ii) land first (issue 07). This issue is the third step, not a merge of all three.
-- Every step is **spec-first** against `.scratch/hardening/specs/replication-failure-modes.md`:
+- Every step is **spec-first** against `specs/replication.md`:
   rows may move their file:line citations but not their meaning, and `just lint-failure-modes`
   stays green at each stage.
 - Land in reviewable stages. A 4574-LoC locked-crate file does not land as one diff — this issue

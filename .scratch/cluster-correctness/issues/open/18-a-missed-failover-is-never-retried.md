@@ -91,7 +91,7 @@ off the write at all, which is what makes the current control flow fragile.
 
 ## Acceptance criteria
 
-- [ ] FM row added for the un-retried failover; `just lint-failure-modes` green
+- [ ] FM row added for the un-retried failover; `just lint-spec` green
 - [ ] Forcing test in `frogdb-cluster-runtime` fails first
 - [ ] `model::failover::tests::a_slot_strands_on_a_primary_the_cluster_has_failed` and
       `model::failover::replay::a_missed_failover_leaves_the_slot_on_a_failed_primary` flipped to

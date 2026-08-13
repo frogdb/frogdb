@@ -243,7 +243,7 @@ impl WalTarget for ShardWorker {
 /// a `MULTI` / `EXEC` on one shard promises — durability (`Confirm`) is the
 /// orthogonal axis. A one-action batch (the hot path: a single `SET`) is already
 /// indivisible and skips the markers. Specified as the write-group row of
-/// `.scratch/hardening/specs/persistence-failure-modes.md`.
+/// `specs/persistence.md`.
 async fn persist_records(
     t: &impl WalTarget,
     records: &[WriteRecord<'_>],

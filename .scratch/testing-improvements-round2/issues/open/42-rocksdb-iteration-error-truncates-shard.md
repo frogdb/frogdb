@@ -80,7 +80,7 @@ short `keys_loaded`. Reachability is unchanged: `full_value_merge`/`partial_valu
 (`persistence/src/rocks/mod.rs:671-692`) still return `Option<Vec<u8>>` and `merge_hll_serialized`
 (`persistence/src/serialization/probabilistic.rs:570-601`) still returns `None` on an undecodable
 operand. Phase 2 locked persistence but added no FM row for iteration errors — worse,
-[FM-PERSISTENCE-033](../../../hardening/specs/persistence-failure-modes.md)'s Invariant cell asserts
+[FM-PERSISTENCE-033](../../../../specs/persistence.md)'s Invariant cell asserts
 *"Only a `RocksError` from the iteration itself propagates"*, which the code does **not** honour;
 that sentence should be corrected as part of the fix. **Correction to the body**: the `has_data`
 sub-claim (old `rocks/mod.rs:531-539`, now `rocks/mod.rs:591-600`) is wrong and always was — it

@@ -116,6 +116,17 @@ starlightSidebarTopics([
 						],
 					},
 					{
+						label: 'Specifications',
+						link: '/specifications/',
+						icon: 'i-tabler:checklist',
+						items: [
+							{
+								label: 'Specifications',
+								autogenerate: { directory: 'specifications' },
+							},
+						],
+					},
+					{
 						label: 'Architecture',
 						link: '/architecture/architecture/',
 						icon: 'i-tabler:cpu',

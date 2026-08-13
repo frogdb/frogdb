@@ -23,7 +23,7 @@
 //! its current contents.
 //!
 //! Specced as FM-PERSISTENCE-048..052 in
-//! `.scratch/hardening/specs/persistence-failure-modes.md`.
+//! `specs/persistence.md`.
 
 use std::io;
 use std::path::{Path, PathBuf};

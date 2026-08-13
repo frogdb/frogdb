@@ -102,7 +102,7 @@ figure is 63.6µs here against the 114.5µs the original throwaway harness repor
 in-process and rebuilds a one-node table, so treat the two as the same order of magnitude rather
 than a regression or an improvement.
 
-Spec: FM-CLUSTER-078 in `.scratch/hardening/specs/cluster-failure-modes.md`, forced by
+Spec: FM-CLUSTER-078 in `specs/cluster.md`, forced by
 `test_snapshot_observes_topology_applied_since_the_last_read`,
 `test_repeated_snapshots_without_mutation_share_one_allocation`,
 `test_rejected_command_leaves_snapshot_agreeing_with_state`, and

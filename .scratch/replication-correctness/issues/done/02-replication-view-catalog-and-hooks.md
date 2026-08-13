@@ -66,7 +66,7 @@ is INV-SESSION-2, and the chained-replication non-guarantee is INV-ROLE-1's like
 rather than fixed here.
 
 `frogdb-replication` is LOCKED (gate 0.85): spec-first against
-`.scratch/hardening/specs/replication-failure-modes.md`, and `just mutants-diff` before push.
+`specs/replication.md`, and `just mutants-diff` before push.
 
 ## Acceptance criteria
 
@@ -155,7 +155,7 @@ suite trips it.
   212 mutants, 160 caught, 51 unviable, 1 missed — that one.
 
 The new `INV-*` ids are deliberately **not** cited in
-`.scratch/hardening/specs/replication-failure-modes.md` yet: `lint-failure-modes` resolves
+`specs/replication.md` yet: `lint-failure-modes` resolves
 invariant citations against the cluster catalog only, so spec integration waits for issue 14.
 
 ## Blocked by

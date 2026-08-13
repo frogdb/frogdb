@@ -14,7 +14,7 @@ it. `.nested()` appears exactly once in the workspace, and that once is the bug.
 The rule is a workspace-wide ban on `.nested(`. Because the *fix* (issue 49) has
 not landed yet, a hard failure here would block every commit on unrelated work,
 so the one known site rides in the named-gap warn-not-fail idiom
-(`failure-modes.py:20-26`): it WARNS while its `[gap: <issue>](<link>)` link
+(`spec-lint.py:27-32`): it WARNS while its `[gap: <issue>](<link>)` link
 resolves to a real issue file, and the moment issue 49 removes the call the ban
 becomes hard (the site count drops to zero, the now-stale allowlist entry fails,
 and its removal leaves a plain zero-tolerance grep ban).

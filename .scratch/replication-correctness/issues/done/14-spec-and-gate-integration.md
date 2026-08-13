@@ -11,7 +11,7 @@ Status: done
 Three pieces, all cheap once the catalog is in-crate.
 
 **1. Cross-reference.** Each catalog invariant cites the FM rows it generalizes, and the rows in
-`.scratch/hardening/specs/replication-failure-modes.md` whose claim is now universally checked name
+`specs/replication.md` whose claim is now universally checked name
 the `INV-*` id. Close the spec's two live GAPs while in the file: **GAP-5** becomes INV-SESSION-2
 plus `XREPL-3` (nothing today asserts `WAIT` can never exceed `connected_slaves` across a
 reconnect, `tracker.rs:146-153`), and **GAP-6** (`-UNBLOCKED` on demotion racing `CLIENT UNBLOCK`,
@@ -83,7 +83,7 @@ explanatory paragraph naming a cluster id failed `just lint-failure-modes` until
 (`63fee819`).
 
 **Cross-reference** (`690aadfd`). 41 `Catalog` citations over 22 rows in
-`.scratch/hardening/specs/replication-failure-modes.md` (FM-REPLICATION-001, -008, -009, -012,
+`specs/replication.md` (FM-REPLICATION-001, -008, -009, -012,
 -013, -014, -015, -016, -019, -020, -021, -022, -023, -037, -039, -041, -043, -047, -049, -059,
 -060, -062), each naming the catalog entries that make the row's claim universal rather than
 point-wise, plus a `Catalog` line in "How to read a row" and a `### The Catalog field` section

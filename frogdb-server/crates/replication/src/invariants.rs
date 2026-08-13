@@ -692,7 +692,7 @@ fn inv_session_3(view: &ReplicationView) -> Vec<Violation> {
 /// the transition it guards is a cluster one, and the vocabulary check is
 /// per-area — a `Catalog` field on FM-CLUSTER-097 naming `INV-GATE-1` would be
 /// a lint error, so the cross-reference lives here instead. See the `Catalog`
-/// section of `.scratch/hardening/specs/replication-failure-modes.md`.
+/// section of `specs/replication.md`.
 fn inv_gate_1(view: &ReplicationView) -> Vec<Violation> {
     let gate = view.feed_gate.expect("entry requires FeedGate");
     let mut violations = Vec::new();

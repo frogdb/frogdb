@@ -465,5 +465,5 @@ The core command profile is default-on and the redis-regression compat suite was
 campaign exit (8e90999b, 3967de82), so these commands *are* exercised again in `just test` — but
 the unfreeze restores tests that already existed; it adds nothing that asserts the specific
 behaviours above, and every cited defect reproduces verbatim on today's tree. No FM row in
-`.scratch/hardening/specs/` covers command semantics for these types (core was not one of the four
+`specs/` covers command semantics for these types (core was not one of the four
 locked areas). F0's structural recommendation stays blocked on issue 01.

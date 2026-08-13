@@ -3,7 +3,7 @@
 Status: **DRAFT** — open decisions in §8
 Author: 2026-08-08
 Related: [campaign 2](../hardening-2/PRD.md) (detection-first hardening, running),
-[cluster failure-mode spec](../hardening/specs/cluster-failure-modes.md) (LOCKED, 97 rows at
+[cluster failure-mode spec](../../specs/cluster.md) (LOCKED, 97 rows at
 audit time, 098–102 landing with the 2026-08-08 defect fixes),
 [replication-cluster rework](../replication-cluster-rework/PRD.md) (two-phase handoff, shipped)
 
@@ -196,7 +196,7 @@ Generalize the five scripted turmoil cluster sims into one seed-driven scheduler
 ### W6 — Spec and gate integration
 
 - Cross-reference: each catalog invariant cites the FM rows it generalizes; rows whose
-  invariant is now universally checked note the invariant ID. `lint-failure-modes` gains an
+  invariant is now universally checked note the invariant ID. `lint-spec` gains an
   optional `INV-*` vocabulary check (warn on dangling references) — small, same script.
 - Mutation: re-run `just mutants` + gates for `frogdb-cluster` and `frogdb-cluster-runtime`
   on current code. Recorded scores predate rows 084–102 entirely; the catalog + property
@@ -359,7 +359,7 @@ Two cross-cutting conclusions for the campaign, beyond the per-defect scoring:
    `cluster-model-nightly` + `just model-check` run the two full configs (1.3 M and 12.2 M
    states, 8 s and 65 s release solo, ~2.5 min under parallel load), pinned one-at-a-time
    in `.config/nextest.toml` because `deep_scope()` holds ~3 GB resident. The full runs are
-   `#[ignore]`d, so `just lint-failure-modes` now lists with `--run-ignored all`.
+   `#[ignore]`d, so `just lint-spec` now lists with `--run-ignored all`.
 2. **The dirty-state ruling INV-REF-1/2/3 forces.** `RemoveNode` leaves dangling
    migrations/replica parents (documented non-guarantee, pinned by test), and
    FM-CLUSTER-033 blesses `CompleteSlotMigration`'s unguarded owner insert.

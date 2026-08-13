@@ -25,7 +25,7 @@ No offset and no replication id moves. The tick is the server's 1 Hz maintenance
 `SplitBrainBufferConfig` was renamed `BacklogConfig` — it now carries `ttl_secs` alongside the size
 knobs and is no longer only about split brain.
 
-Spec: FM-REPLICATION-009 (`.scratch/hardening/specs/replication-failure-modes.md`), outcome variant
+Spec: FM-REPLICATION-009 (`specs/replication.md`), outcome variant
 `FullResyncReason::BacklogEvicted`. Tests (all `primary/replay.rs`):
 `an_idle_backlog_is_freed_once_its_ttl_elapses`, `a_replica_reconnecting_before_the_ttl_still_resumes`,
 `a_connected_replica_never_starts_the_ttl_clock`, `a_ttl_of_zero_never_frees_the_backlog`,

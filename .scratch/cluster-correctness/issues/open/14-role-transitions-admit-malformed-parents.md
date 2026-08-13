@@ -30,7 +30,7 @@ failover candidate search treats it as a candidate for a node that cannot fail o
 ## What to build
 
 Spec-first (amend the `SetRole`/`AddNode` FM rows in
-`.scratch/hardening/specs/cluster-failure-modes.md` first, then the failing forcing tests,
+`specs/cluster.md` first, then the failing forcing tests,
 then the fix):
 
 1. `SetRole` rejects a `primary_id` naming a node that is not a Primary.
@@ -58,7 +58,7 @@ detector rejects the failed node before it ever looks for candidates).
 
 - [ ] `SetRole` and `AddNode` refuse a parent that is absent or is itself a replica, with
       forcing tests in `frogdb-cluster`
-- [ ] FM rows amended; `just lint-failure-modes` green
+- [ ] FM rows amended; `just lint-spec` green
 - [ ] INV-REF-3B is HARD (or folded into INV-REF-3); the catalog has no DOCUMENTED-EXCEPTION
 - [ ] `auto_failover_ignores_a_failed_replica` still distinguishes "not a primary" from "no
       candidates"

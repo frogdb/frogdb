@@ -38,7 +38,7 @@ it. The forced path already treats all three as the reason it prunes.
 ## What to build
 
 Spec-first: amend the failover FM row(s) in
-`.scratch/hardening/specs/cluster-failure-modes.md`, add the failing forcing test, then fix.
+`specs/cluster.md`, add the failing forcing test, then fix.
 
 Decide between the two candidate rulings and record it in the row:
 
@@ -58,7 +58,7 @@ argument about the handoff barrier before it can be taken.
 - [ ] Graceful `Failover` leaves no migration whose source or target is the demoted node in a
       state INV-MIG-1 rejects; forcing test in `frogdb-cluster` (fails first)
 - [ ] Any pruned prepared handoff emits its `SlotHandoffReleased`
-- [ ] FM row amended; `just lint-failure-modes` green
+- [ ] FM row amended; `just lint-spec` green
 - [ ] `just mutants-diff frogdb-cluster` triaged
 
 ## Blocked by

@@ -121,7 +121,7 @@ reasons other than a partition.
 ## Acceptance criteria
 
 - [ ] Ruling recorded; FM row added or amended in
-      `.scratch/hardening/specs/cluster-failure-modes.md` (FM-CLUSTER-040/041 neighborhood), with
+      `specs/cluster.md` (FM-CLUSTER-040/041 neighborhood), with
       its forcing test in `frogdb-cluster` / `frogdb-cluster-runtime` (fails first)
 - [ ] No client-visible window in which two nodes serve the same slot after an automatic
       failover heals
@@ -129,7 +129,7 @@ reasons other than a partition.
       from `frogdb-server/crates/server/tests/simulation/cluster-regression-seeds.txt` (keeping 3
       and 72 as plain regression seeds), and all of them pass in the default suite
 - [ ] `just cluster-seeds 500` is clean
-- [ ] `just lint-failure-modes` green
+- [ ] `just lint-spec` green
 - [ ] `just mutants-diff frogdb-cluster` and `just mutants-diff frogdb-cluster-runtime` triaged
 
 ## Blocked by

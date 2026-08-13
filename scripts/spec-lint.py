@@ -2,9 +2,9 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""Enforce failure-mode spec <-> test agreement for the hardening campaign.
+"""Enforce spec <-> test agreement: every rule names the tests that force it.
 
-Every `FM-<AREA>-NNN` row in `.scratch/hardening/specs/*-failure-modes.md`
+Every `FM-<AREA>-NNN` row in `specs/*.md`
 names the test(s) that force it; every named test carries a `// FM-<AREA>-NNN`
 comment at its definition site. This script checks that the two agree in both
 directions, so neither can drift:
@@ -32,8 +32,8 @@ file must exist. That form warns instead of failing, so the gap stays visible
 in every lint run without blocking the spec on machinery that does not exist.
 
 Usage:
-    failure-modes.py                          # runs `cargo nextest list`
-    failure-modes.py --nextest-output list.txt  # reuse a listing (CI)
+    spec-lint.py                          # runs `cargo nextest list`
+    spec-lint.py --nextest-output list.txt  # reuse a listing (CI)
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SPEC_DIR = REPO / ".scratch/hardening/specs"
+SPEC_DIR = REPO / "specs"
 SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
 # The invariant catalogs, one per area: the vocabulary of `INV-*` ids that
 # area's spec may cite. Keyed by the `FM-<AREA>-NNN` prefix, which is also the
@@ -69,10 +69,10 @@ INVARIANT_CATALOGS = {
 # frogdb-recovery, ~15-25s for frogdb-server (the big `main` binary plus the
 # per-concern `cluster_*` binaries).
 # frogdb-persistence, frogdb-recovery and frogdb-core carry the storage-side
-# rows (see persistence-failure-modes.md); frogdb-replication carries the
-# full-sync wire rows (see replication-failure-modes.md); frogdb-cluster and
+# rows (see specs/persistence.md); frogdb-replication carries the full-sync
+# wire rows (see specs/replication.md); frogdb-cluster and
 # frogdb-cluster-runtime carry the topology/slot/failover rows (see
-# cluster-failure-modes.md).
+# specs/cluster.md).
 # Pass --nextest-output to reuse a listing produced by an earlier step.
 NEXTEST_CRATES = [
     "frogdb-txn",
@@ -99,16 +99,28 @@ NEXTEST_FEATURE_VARIANTS = [
 
 # `## FM-TXN-001 — title`
 HEADING_RE = re.compile(r"^##\s+(FM-([A-Z]+)-(\d+))\s*(?:[—-]\s*(.*))?$")
+# `## TR-CLUSTER-014 — title` / `## LV-CLUSTER-002 — title`: the constructive
+# rows (transitions, liveness). Same heading shape as an FM row so one parser
+# walks the file; only the id space differs.
+CONSTRUCTIVE_HEADING_RE = re.compile(r"^##\s+((TR|LV)-([A-Z]+)-(\d+))\s*(?:[—-]\s*(.*))?$")
+# `## CO-007 — title`: a cross-area composition row (specs/composition.md). No
+# area segment, because a composition row is by definition not one area's.
+COMPOSITION_HEADING_RE = re.compile(r"^##\s+(CO-(\d+))\s*(?:[—-]\s*(.*))?$")
+# Any spec id a spec — or a `.qnt` model header — may cite.
+SPEC_REF_RE = re.compile(r"\b(?:FM|TR|LV)-[A-Z]+-\d+\b|\bCO-\d+\b")
 # `| Field | Value |`
 ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$")
-FM_TAG_RE = re.compile(r"\bFM-([A-Z]+)-(\d+)\b")
+# Only FM and LV ids are valid test tags: a test forces a failure mode or a
+# liveness property. TR/CO ids are deliberately excluded — a TR row carries no
+# `Forced by` field and thus no forcing-test rule for a tag to satisfy.
+TAG_ID_RE = re.compile(r"\b(FM|LV)-([A-Z]+)-(\d+)\b")
 # A *tag* is a comment line that is nothing but ids — `// FM-TXN-004`,
 # `// FM-TXN-009, FM-TXN-022`, `/// FM-BLOCKING-005`. A comment that merely
 # *mentions* an id in prose ("the complement of FM-REPLICATION-018") is a
 # cross-reference, not a claim that this item forces that row, and must not be
 # linted as one: the invariants are worth citing where the code implements
 # them, and treating a citation as a tag makes the lint punish good comments.
-FM_TAG_LINE_RE = re.compile(r"^\s*//[/!]?\s*FM-[A-Z]+-\d+(?:\s*,?\s*FM-[A-Z]+-\d+)*\s*$")
+TAG_LINE_RE = re.compile(r"^\s*//[/!]?\s*(?:FM|LV)-[A-Z]+-\d+(?:\s*,?\s*(?:FM|LV)-[A-Z]+-\d+)*\s*$")
 FN_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 # `MISSING ([gap: 03-disk-full-injection.md](../issues/03-disk-full-injection.md))`
@@ -165,39 +177,66 @@ class FailureMode:
     fields: dict[str, str] = field(default_factory=dict)
 
     def where(self) -> str:
-        return f"{self.spec.relative_to(REPO)}:{self.line}"
+        return f"{rel(self.spec)}:{self.line}"
+
+
+@dataclass
+class SpecRow:
+    """One `## TR-…` / `## LV-…` / `## CO-…` section of a spec.
+
+    FM rows keep their own type because they carry the seven required fields of
+    a failure mode. A constructive row's schema is written area by area as the
+    migration proceeds, so nothing is demanded of it here beyond a title — the
+    one exception being an LV row's `Forced by`, which carries the same
+    forcing-test discipline an FM row does.
+    """
+
+    id: str
+    kind: str  # "TR" | "LV" | "CO"
+    area: str  # the file's area; "" for a CO row
+    title: str
+    spec: Path
+    line: int
+    tests: list[str] = field(default_factory=list)
+    fields: dict[str, str] = field(default_factory=dict)
+
+    def where(self) -> str:
+        return f"{rel(self.spec)}:{self.line}"
 
 
 @dataclass
 class Tag:
-    """An `FM-<AREA>-NNN` comment attached to a test function."""
+    """An `FM-<AREA>-NNN` or `LV-<AREA>-NNN` comment attached to a test function."""
 
-    fm_id: str
+    row_id: str
     test: str
     path: Path
     line: int
 
     def where(self) -> str:
-        return f"{self.path.relative_to(REPO)}:{self.line}"
+        return f"{rel(self.path)}:{self.line}"
 
 
-def parse_spec(path: Path, errors: list[str]) -> list[FailureMode]:
-    """Parse one `<area>-failure-modes.md` into its failure modes."""
-    area = path.name.removesuffix("-failure-modes.md").upper()
+def parse_spec(path: Path, errors: list[str]) -> tuple[list[FailureMode], list[SpecRow]]:
+    """Parse one `specs/<area>.md` into its FM rows and its constructive rows."""
+    area = path.stem.upper()
     modes: list[FailureMode] = []
-    current: FailureMode | None = None
+    rows: list[SpecRow] = []
+    current: FailureMode | SpecRow | None = None
 
     for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
-        heading = HEADING_RE.match(raw.strip())
+        stripped = raw.strip()
+
+        heading = HEADING_RE.match(stripped)
         if heading:
             fm_id, fm_area, number, title = heading.groups()
             if fm_area != area:
                 errors.append(
-                    f"{path.relative_to(REPO)}:{lineno}: {fm_id} does not match the "
+                    f"{rel(path)}:{lineno}: {fm_id} does not match the "
                     f"file's area prefix FM-{area}-"
                 )
             if not title:
-                errors.append(f"{path.relative_to(REPO)}:{lineno}: {fm_id} has no title")
+                errors.append(f"{rel(path)}:{lineno}: {fm_id} has no title")
             current = FailureMode(
                 id=fm_id,
                 area=fm_area,
@@ -209,9 +248,46 @@ def parse_spec(path: Path, errors: list[str]) -> list[FailureMode]:
             modes.append(current)
             continue
 
+        constructive = CONSTRUCTIVE_HEADING_RE.match(stripped)
+        if constructive:
+            row_id, kind, row_area, _number, title = constructive.groups()
+            if row_area != area:
+                errors.append(
+                    f"{rel(path)}:{lineno}: {row_id} does not match the "
+                    f"file's area prefix {kind}-{area}-"
+                )
+            if not title:
+                errors.append(f"{rel(path)}:{lineno}: {row_id} has no title")
+            current = SpecRow(
+                id=row_id,
+                kind=kind,
+                area=row_area,
+                title=(title or "").strip(),
+                spec=path,
+                line=lineno,
+            )
+            rows.append(current)
+            continue
+
+        composition = COMPOSITION_HEADING_RE.match(stripped)
+        if composition:
+            row_id, _number, title = composition.groups()
+            if not title:
+                errors.append(f"{rel(path)}:{lineno}: {row_id} has no title")
+            current = SpecRow(
+                id=row_id,
+                kind="CO",
+                area="",
+                title=(title or "").strip(),
+                spec=path,
+                line=lineno,
+            )
+            rows.append(current)
+            continue
+
         if current is None:
             continue
-        row = ROW_RE.match(raw.strip())
+        row = ROW_RE.match(stripped)
         if not row:
             continue
         field_name, value = row.group(1), row.group(2)
@@ -225,13 +301,32 @@ def parse_spec(path: Path, errors: list[str]) -> list[FailureMode]:
                 errors.append(f"{mode.where()}: {mode.id} has no `{required}` row")
         mode.tests = parse_forced_by(mode, errors)
 
-    return modes
+    for row in rows:
+        if row.kind != "LV":
+            continue
+        if "Forced by" not in row.fields:
+            errors.append(
+                f"{row.where()}: {row.id} has no `Forced by` row — a liveness property "
+                "nobody forces is a gap, the same rule an FM row lives under"
+            )
+            continue
+        row.tests = parse_forced_by(row, errors)
+
+    return modes, rows
 
 
-def parse_forced_by(mode: FailureMode, errors: list[str]) -> list[str]:
-    """Extract the backtick-wrapped test names from an FM's `Forced by` cell."""
-    cell = mode.fields.get("Forced by", "")
-    if not cell:
+def parse_forced_by(mode: FailureMode | SpecRow, errors: list[str]) -> list[str]:
+    """Extract the backtick-wrapped test names from a row's `Forced by` cell."""
+    if "Forced by" not in mode.fields:
+        # No `Forced by` row at all: the REQUIRED_FIELDS / LV-specific checks
+        # that run before this is called already name the gap.
+        return []
+    cell = mode.fields["Forced by"]
+    if not cell.strip():
+        errors.append(
+            f"{mode.where()}: {mode.id} has an empty `Forced by` cell — name "
+            "each test in backticks, or write `MISSING (...)` if none exists yet"
+        )
         return []
     if "MISSING" in cell:
         gap = MISSING_GAP_RE.search(cell)
@@ -264,24 +359,31 @@ def parse_forced_by(mode: FailureMode, errors: list[str]) -> list[str]:
     return names
 
 
-def parse_specs(spec_dir: Path, errors: list[str]) -> list[FailureMode]:
-    specs = sorted(spec_dir.glob("*-failure-modes.md"))
+def parse_specs(spec_dir: Path, errors: list[str]) -> tuple[list[FailureMode], list[SpecRow]]:
+    specs = sorted(spec_dir.glob("*.md"))
     if not specs:
-        errors.append(f"no *-failure-modes.md under {spec_dir.relative_to(REPO)}")
-        return []
+        errors.append(f"no spec files under {rel(spec_dir)}")
+        return [], []
 
     modes: list[FailureMode] = []
+    rows: list[SpecRow] = []
     for spec in specs:
-        modes.extend(parse_spec(spec, errors))
+        spec_modes, spec_rows = parse_spec(spec, errors)
+        modes.extend(spec_modes)
+        rows.extend(spec_rows)
 
-    seen: dict[str, FailureMode] = {}
-    for mode in modes:
-        if mode.id in seen:
-            errors.append(f"{mode.where()}: {mode.id} redefined (first at {seen[mode.id].where()})")
-        seen[mode.id] = mode
+    seen: dict[str, FailureMode | SpecRow] = {}
+    for entry in [*modes, *rows]:
+        if entry.id in seen:
+            errors.append(
+                f"{entry.where()}: {entry.id} redefined (first at {seen[entry.id].where()})"
+            )
+        seen[entry.id] = entry
 
     # Numbering is sequential per area; a gap usually means a section was
-    # dropped without renumbering. Loud, but not a failure.
+    # dropped without renumbering. Loud, but not a failure. FM only — the
+    # constructive id spaces are still being written and will be gappy by
+    # construction until an area's migration finishes.
     by_area: dict[str, list[int]] = {}
     for mode in modes:
         by_area.setdefault(mode.area, []).append(mode.number)
@@ -292,7 +394,7 @@ def parse_specs(spec_dir: Path, errors: list[str]) -> list[FailureMode]:
             missing = ", ".join(f"FM-{area}-{n:03d}" for n in gaps)
             print(f"warning: gap in {area} numbering: {missing}", file=sys.stderr)
 
-    return modes
+    return modes, rows
 
 
 def load_catalog_ids(path: Path, errors: list[str]) -> set[str]:
@@ -368,8 +470,8 @@ def check_invariant_vocabulary(
     """
     counts: dict[str, int] = {}
     owners = {ref: cat for _, cat in sorted(catalogs.items()) for ref in cat.ids}
-    for spec in sorted(spec_dir.glob("*-failure-modes.md")):
-        area = spec.name.removesuffix("-failure-modes.md").upper()
+    for spec in sorted(spec_dir.glob("*.md")):
+        area = spec.stem.upper()
         own = catalogs.get(area)
         for lineno, line in enumerate(spec.read_text().splitlines(), start=1):
             for ref in INV_REF_RE.findall(line):
@@ -386,11 +488,76 @@ def check_invariant_vocabulary(
                 elif own is None:
                     errors.append(
                         f"{where} cannot be resolved: the {area} area has no invariant "
-                        "catalog registered in `INVARIANT_CATALOGS` (scripts/failure-modes.py)"
+                        "catalog registered in `INVARIANT_CATALOGS` (scripts/spec-lint.py)"
                     )
                 else:
                     errors.append(f"{where} {rel(own.path)} does not define")
     return counts
+
+
+def check_spec_references(spec_dir: Path, defined: set[str], errors: list[str]) -> int:
+    """Fail on a spec id a document cites and no row defines.
+
+    The `INV-*` vocabulary check above does this for invariants against the
+    Rust catalogs; this is the same discipline for the spec's own id spaces.
+    Live for `FM-` from day one (279 rows cross-cite across areas), vacuous for
+    `TR-`/`LV-`/`CO-` until the constructive sections land — which is when a
+    citation is most likely to rot, so the check has to exist before them.
+
+    Returns the citation count, for the summary line.
+    """
+    citations = 0
+    for spec in sorted(spec_dir.glob("*.md")):
+        for lineno, line in enumerate(spec.read_text().splitlines(), start=1):
+            for ref in SPEC_REF_RE.findall(line):
+                citations += 1
+                if ref not in defined:
+                    errors.append(f"{rel(spec)}:{lineno}: cites `{ref}`, which no spec row defines")
+    return citations
+
+
+def check_quint_citations(
+    quint_dir: Path,
+    defined: set[str],
+    catalogs: dict[str, Catalog],
+    errors: list[str],
+) -> tuple[int, int]:
+    """Every spec id a Quint model's header cites must resolve.
+
+    A model states the rows it models in its leading `//` comment block (design
+    §3). Only that block is scanned: the body is Quint, and `quint typecheck`
+    owns it. An `INV-` citation may name any registered area's catalog, because
+    a composition model spans areas by construction — the per-area rule the
+    specs live under does not apply here.
+
+    Returns (models, citations); both are zero until the first model lands.
+    """
+    models = 0
+    citations = 0
+    catalog_ids = {ref for catalog in catalogs.values() for ref in catalog.ids}
+    for path in sorted(quint_dir.glob("*.qnt")):
+        models += 1
+        cited = 0
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            if line.strip() and not line.lstrip().startswith("//"):
+                break
+            for ref in SPEC_REF_RE.findall(line):
+                cited += 1
+                if ref not in defined:
+                    errors.append(f"{rel(path)}:{lineno}: cites `{ref}`, which no spec row defines")
+            for ref in INV_REF_RE.findall(line):
+                cited += 1
+                if ref not in catalog_ids:
+                    errors.append(
+                        f"{rel(path)}:{lineno}: cites `{ref}`, which no invariant catalog defines"
+                    )
+        citations += cited
+        if cited == 0:
+            errors.append(
+                f"{rel(path)}: header cites no spec ids — a model names the "
+                "`TR-`/`INV-`/`LV-`/`CO-` rows it models in its leading comment block"
+            )
+    return models, citations
 
 
 def cargo_env() -> dict[str, str]:
@@ -484,10 +651,10 @@ def resolve(name: str, test_paths: set[str]) -> bool:
 
 
 def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:
-    """Collect every `// FM-<AREA>-NNN` tag comment and the test it annotates.
+    """Collect every `// FM-<AREA>-NNN` / `// LV-<AREA>-NNN` tag comment and the test it annotates.
 
     Only a comment line consisting *solely* of ids is a tag — see
-    [`FM_TAG_LINE_RE`]. Prose that cites an id is left alone.
+    [`TAG_LINE_RE`]. Prose that cites an id is left alone.
     """
     tags: list[Tag] = []
     for root in roots:
@@ -496,20 +663,20 @@ def scan_tags(roots: list[Path], errors: list[str]) -> list[Tag]:
                 continue
             lines = path.read_text(errors="replace").splitlines()
             for index, line in enumerate(lines):
-                if not FM_TAG_LINE_RE.match(line):
+                if not TAG_LINE_RE.match(line):
                     continue
-                matches = FM_TAG_RE.findall(line)
+                matches = TAG_ID_RE.findall(line)
                 test = annotated_fn(lines, index)
                 if test is None:
                     errors.append(
-                        f"{path.relative_to(REPO)}:{index + 1}: FM tag is not attached to a "
+                        f"{rel(path)}:{index + 1}: spec tag is not attached to a "
                         "test function (only comments and attributes may follow it, then `fn`)"
                     )
                     continue
-                for area, number in matches:
+                for kind, area, number in matches:
                     tags.append(
                         Tag(
-                            fm_id=f"FM-{area}-{number}",
+                            row_id=f"{kind}-{area}-{number}",
                             test=test,
                             path=path,
                             line=index + 1,
@@ -534,40 +701,46 @@ def annotated_fn(lines: list[str], index: int) -> str | None:
     return None
 
 
-def check(modes: list[FailureMode], tags: list[Tag], test_paths: set[str]) -> list[str]:
-    """Both directions of the spec <-> test agreement."""
+def check(
+    modes: list[FailureMode],
+    rows: list[SpecRow],
+    tags: list[Tag],
+    test_paths: set[str],
+) -> list[str]:
+    """Both directions of the spec <-> test agreement, for FM and LV rows."""
     errors: list[str] = []
-    known = {mode.id: mode for mode in modes}
-    tagged: set[tuple[str, str]] = {(tag.fm_id, tag.test) for tag in tags}
+    forced: list[FailureMode | SpecRow] = [*modes, *[row for row in rows if row.kind == "LV"]]
+    known = {row.id: row for row in forced}
+    tagged: set[tuple[str, str]] = {(tag.row_id, tag.test) for tag in tags}
 
     # spec -> test
-    for mode in modes:
-        for name in mode.tests:
+    for row in forced:
+        for name in row.tests:
             if not resolve(name, test_paths):
                 errors.append(
-                    f"{mode.where()}: {mode.id} names `{name}`, which no test in "
+                    f"{row.where()}: {row.id} names `{name}`, which no test in "
                     f"{'/'.join(NEXTEST_CRATES)} matches"
                 )
                 continue
             leaf = name.rsplit("::", 1)[-1]
-            if (mode.id, leaf) not in tagged:
+            if (row.id, leaf) not in tagged:
                 errors.append(
-                    f"{mode.where()}: {mode.id} names `{name}`, but that test carries "
-                    f"no `// {mode.id}` tag at its definition site"
+                    f"{row.where()}: {row.id} names `{name}`, but that test carries "
+                    f"no `// {row.id}` tag at its definition site"
                 )
 
     # test -> spec
     for tag in tags:
-        mode = known.get(tag.fm_id)
-        if mode is None:
+        row = known.get(tag.row_id)
+        if row is None:
             errors.append(
-                f"{tag.where()}: `{tag.test}` is tagged {tag.fm_id}, which no spec defines"
+                f"{tag.where()}: `{tag.test}` is tagged {tag.row_id}, which no spec defines"
             )
             continue
-        if tag.test not in {name.rsplit("::", 1)[-1] for name in mode.tests}:
+        if tag.test not in {name.rsplit("::", 1)[-1] for name in row.tests}:
             errors.append(
-                f"{tag.where()}: `{tag.test}` is tagged {tag.fm_id}, but that FM's "
-                f"`Forced by` row does not name it ({mode.where()})"
+                f"{tag.where()}: `{tag.test}` is tagged {tag.row_id}, but that row's "
+                f"`Forced by` row does not name it ({row.where()})"
             )
 
     return errors
@@ -579,7 +752,12 @@ def main() -> None:
         "--spec-dir",
         type=Path,
         default=SPEC_DIR,
-        help="directory of *-failure-modes.md specs",
+        help="directory of specs (default: specs/)",
+    )
+    ap.add_argument(
+        "--quint-dir",
+        type=Path,
+        help="directory of Quint models (default: <spec-dir>/quint)",
     )
     ap.add_argument(
         "--nextest-output",
@@ -589,27 +767,36 @@ def main() -> None:
     args = ap.parse_args()
 
     errors: list[str] = []
-    modes = parse_specs(args.spec_dir, errors)
+    modes, rows = parse_specs(args.spec_dir, errors)
     catalogs = load_catalogs(INVARIANT_CATALOGS, errors)
     citations = check_invariant_vocabulary(args.spec_dir, catalogs, errors)
+    defined = {entry.id for entry in [*modes, *rows]}
+    spec_refs = check_spec_references(args.spec_dir, defined, errors)
+    quint_dir = args.quint_dir or (args.spec_dir / "quint")
+    quint_models, quint_refs = check_quint_citations(quint_dir, defined, catalogs, errors)
     tags = scan_tags(SOURCE_ROOTS, errors)
     test_paths = load_test_paths(args.nextest_output)
-    errors += check(modes, tags, test_paths)
+    errors += check(modes, rows, tags, test_paths)
 
     if errors:
-        print("FAILURE-MODE LINT: FAIL", file=sys.stderr)
+        print("SPEC LINT: FAIL", file=sys.stderr)
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         sys.exit(1)
 
-    references = sum(len(mode.tests) for mode in modes)
+    references = sum(len(row.tests) for row in [*modes, *rows])
     areas = sorted({mode.area for mode in modes})
     breakdown = ", ".join(
         f"{area} {citations.get(area, 0)}/{len(cat.ids)}" for area, cat in sorted(catalogs.items())
     )
     print(
         f"OK: {len(modes)} failure modes ({', '.join(areas)}), "
+        f"{sum(1 for row in rows if row.kind == 'TR')} transitions, "
+        f"{sum(1 for row in rows if row.kind == 'LV')} liveness rows, "
+        f"{sum(1 for row in rows if row.kind == 'CO')} composition rows, "
         f"{references} test references, {len(tags)} tags, "
+        f"{spec_refs} spec-id citations, "
+        f"{quint_refs} quint citations over {quint_models} models, "
         f"{sum(citations.values())} invariant citations over "
         f"{sum(len(cat.ids) for cat in catalogs.values())} catalog entries ({breakdown})"
     )

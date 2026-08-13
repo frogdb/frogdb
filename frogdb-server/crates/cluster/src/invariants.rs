@@ -41,12 +41,12 @@
 //! - each entry's `check_*` function names, in prose, the rows it generalizes
 //!   — "deleting the code that row names makes this entry fire";
 //! - each generalized row carries a `Catalog` field naming the entry ids, and
-//!   `just lint-failure-modes` fails on an `INV-*` id the spec mentions and
+//!   `just lint-spec` fails on an `INV-*` id the spec mentions and
 //!   [`CATALOG`] does not define.
 //!
 //! Prose, not a `// FM-…` tag: a tag is the lint's claim that the *item below
 //! it* forces that row, and these functions are catalog entries rather than
-//! forcing tests. See `.scratch/hardening/specs/cluster-failure-modes.md`,
+//! forcing tests. See `specs/cluster.md`,
 //! "The `Catalog` field".
 //!
 //! # What "clean" does not claim

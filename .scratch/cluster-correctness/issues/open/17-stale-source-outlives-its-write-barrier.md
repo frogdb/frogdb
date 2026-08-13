@@ -83,7 +83,7 @@ already bounds the "coordinator died" case that the timeout was protecting again
 
 ## Acceptance criteria
 
-- [ ] FM row added for the source-apply-lag residual; `just lint-failure-modes` green
+- [ ] FM row added for the source-apply-lag residual; `just lint-spec` green
 - [ ] Forcing test in `frogdb-cluster` (or `frogdb-cluster-runtime`) fails first
 - [ ] `model::tests::stale_source_admits_writes_after_ownership_moves` and
       `model::replay::stale_source_keeps_serving_after_the_target_takes_the_slot` flipped to

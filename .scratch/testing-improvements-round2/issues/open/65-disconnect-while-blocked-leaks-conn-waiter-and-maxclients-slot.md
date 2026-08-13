@@ -80,6 +80,6 @@ All three legs reproduce on today's tree. (1) `BlockingWaitCoordinator::wait_for
 `let deadline = (timeout > 0.0).then(...)`, so `BLPOP k 0` registers a permanently uncollectable
 waiter. (3) `acceptor.rs:353` is still a bare `current_connections.fetch_sub(...)` statement
 after `handler.run().await` (`acceptor.rs:348-354`) — no guard, no `Drop`. The Phase-2/4 hardening
-did not touch this: `.scratch/hardening/specs/blocking-failure-modes.md` has no disconnect row
+did not touch this: `specs/blocking.md` has no disconnect row
 (FM-BLOCKING-004 is *response channel closed*, a different trigger), and `rg` finds no
 disconnect-while-blocked test anywhere under `frogdb-server/crates/*/tests/`.

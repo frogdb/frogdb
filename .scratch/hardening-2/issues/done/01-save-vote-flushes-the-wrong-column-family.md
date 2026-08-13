@@ -45,7 +45,7 @@ level-2 witness in the durability spec, not as the row's final evidence.
 
 ## Resolution
 
-Fixed 2026-08-08 under **FM-CLUSTER-098** (`.scratch/hardening/specs/cluster-failure-modes.md`).
+Fixed 2026-08-08 under **FM-CLUSTER-098** (`specs/cluster.md`).
 
 Durability is now a property of the metadata *key* rather than of the caller: `MetaDurability`
 (`cluster/src/storage.rs`) classifies `KEY_VOTE` as `Synced` and `KEY_COMMITTED` /

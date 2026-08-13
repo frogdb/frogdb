@@ -64,7 +64,7 @@ shapes had the bug; only checkpoint transfers are slow enough for the window to 
 ## Resolution
 
 Spec: **FM-REPLICATION-005** ("the receive→stream handoff loses no byte of the live tail") in
-`.scratch/hardening/specs/replication-failure-modes.md`.
+`specs/replication.md`.
 
 Fix: one shared mechanism instead of a per-path patch, so a third payload shape cannot forget it.
 New `frogdb-server/crates/replication/src/replica/payload_reader.rs` defines `PayloadReader`, a

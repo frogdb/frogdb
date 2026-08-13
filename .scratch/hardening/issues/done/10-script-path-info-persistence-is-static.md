@@ -24,7 +24,7 @@ shard state, not the server's admin handles — so there is nothing behind those
 A script that polls INFO to decide whether saves are healthy always reads "healthy".
 
 Recorded as a Redis deviation on the FM-PERSISTENCE-022 row of
-`.scratch/hardening/specs/persistence-failure-modes.md`, and noted in a comment above
+`specs/persistence.md`, and noted in a comment above
 `build_persistence_info`.
 
 ## Candidate fixes
@@ -107,6 +107,6 @@ off the same `SnapshotStats` value — one source of truth, not two field lists.
   flake unrelated to this change (`test_broadcast_lag_disconnect_and_resync`, already tracked as
   `.scratch/hardening/issues/done/01-broadcast-lag-resync-flake.md`; reproduced independently on
   the pre-fix commit at a similar ~20% rate, confirming it is not a regression from this change).
-- FM-PERSISTENCE-022 row in `.scratch/hardening/specs/persistence-failure-modes.md` updated:
+- FM-PERSISTENCE-022 row in `specs/persistence.md` updated:
   "NOT observable" now states the two renderers agree; "Forced by" lists the new test; "Bug refs"
   marks issue 10 fixed and cross-references issue 42.

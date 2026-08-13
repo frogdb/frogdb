@@ -69,7 +69,7 @@ None — issue 61 (live install seam) is merged and provides the installer this 
 Option 1 (diskless-style live snapshot, Redis `repl-diskless-sync` parity). A primary with
 `persistence.enabled = false` now serializes its live keyspace into the full-sync envelope, and
 the replica installs it through the issue-61 install seam. Spec:
-[FM-REPLICATION-001](../../../hardening/specs/replication-failure-modes.md) (with -002 for the
+[FM-REPLICATION-001](../../../../specs/replication.md) (with -002 for the
 shard export/install seam and -003 for the blob framing).
 
 What was built:

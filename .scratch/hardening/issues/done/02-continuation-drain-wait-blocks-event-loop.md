@@ -20,7 +20,7 @@ processes `VllExecute` messages — which it cannot do while the handler is awai
 - The drain loop only ever succeeds for an already-empty queue, so the wait buys nothing.
 
 Discovered during Phase 1d mutation gap-fill; current behavior pinned by FM-VLL-003
-(`.scratch/hardening/specs/vll-failure-modes.md`) with a liveness note.
+(`specs/vll.md`) with a liveness note.
 
 ## Candidate fixes
 

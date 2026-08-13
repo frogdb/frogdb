@@ -23,11 +23,11 @@ spec; rows here stop at what the connection observes across the shard channel.
 | NOT observable | What must never happen in this mode. This is the half mutation testing attacks. |
 | Invariant | The internal guarantee — nothing reaches the WAL, the queue is discarded, watches cleared. |
 | Outcome variant | `TransactionOutcome::<Variant>` (and its metric label), or `n/a` for queuing-time modes that never reach `execute_transaction`. |
-| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-TXN-NNN` tag at its definition site; `just lint-failure-modes` enforces both directions. |
+| Forced by | The test(s) that fail if the behavior changes. Every one carries a `// FM-TXN-NNN` tag at its definition site; `just lint-spec` enforces both directions. |
 | Bug refs | Known open issues that touch this mode. |
 
 Test names are bare function names, resolved against the crate list in
-`scripts/failure-modes.py` (`NEXTEST_CRATES`, core command profile). Tests
+`scripts/spec-lint.py` (`NEXTEST_CRATES`, core command profile). Tests
 behind `--features turmoil` or an exotic command family are deliberately not cited: they do not
 run in the profile the campaign gates on. Neither is the frozen `redis-regression` suite.
 

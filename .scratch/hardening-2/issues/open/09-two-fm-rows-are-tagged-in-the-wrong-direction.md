@@ -8,11 +8,11 @@ Area: failure-mode specs (cluster, txn)
 
 ## Problem
 
-`just lint-failure-modes` checks that every name in a `Forced by` cell resolves to a test that
+`just lint-spec` checks that every name in a `Forced by` cell resolves to a test that
 carries the matching `// FM-<AREA>-NNN` tag. It cannot check that the test witnesses the row. Two
 rows fail that unchecked half, in opposite directions.
 
-**FM-CLUSTER-059** (`.scratch/hardening/specs/cluster-failure-modes.md:849`) — "the self-fence knob
+**FM-CLUSTER-059** (`specs/cluster.md:849`) — "the self-fence knob
 is live". Its `Trigger` is:
 
 > `CONFIG SET cluster-self-fence-on-quorum-loss` and `cluster-auto-failover` on a running node with
@@ -30,7 +30,7 @@ The test that does exist and is not cited: `cluster_flag_sets_reach_the_live_fla
 distinction the row cares about: *"a test that only asserted GET would pass against a parameter that
 stores into the manager and reaches nothing."*
 
-**FM-TXN-040** (`.scratch/hardening/specs/txn-failure-modes.md:506`) — "a write transaction waits at
+**FM-TXN-040** (`specs/txn.md:506`) — "a write transaction waits at
 the pause barrier and re-validates after it". Its two cited tests (`exec_outcomes.rs:608`, `:636`)
 witness the `Invariant` cell — the validate-call counts — but nothing witnesses the `Observable`:
 
@@ -58,7 +58,7 @@ change is safe.
 
 ## Verification
 
-`just lint-failure-modes` passes after the edits (it will, both directions are additive), and the
+`just lint-spec` passes after the edits (it will, both directions are additive), and the
 W3d re-read confirms each row has at least one cited test per non-empty Observable cell.
 
 ## Comments

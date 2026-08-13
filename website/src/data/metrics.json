@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 94,
+  "count": 95,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -658,6 +658,22 @@
       "labels": [
         {
           "name": "shard",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "frogdb_shard_panics_isolated_total",
+      "type": "counter",
+      "help": "Total panics caught and isolated at the shard boundary, by isolation site. A non-zero value is always a bug: the shard survived, but a client saw `-ERR internal error` instead of an answer. Alert on the rate.",
+      "group": "shard",
+      "labels": [
+        {
+          "name": "shard",
+          "type": "string"
+        },
+        {
+          "name": "site",
           "type": "string"
         }
       ]

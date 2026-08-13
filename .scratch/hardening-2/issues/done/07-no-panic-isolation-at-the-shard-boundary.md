@@ -89,7 +89,7 @@ Three pieces of command-scoped state are reset or released on the panic path:
    this, the op's key intents survive and `executing_ops` stays incremented — which blocks
    every later request on those keys *and* any parked continuation lock forever. This is
    the load-bearing decision and is rowed as
-   [FM-VLL-005](../../../hardening/specs/vll-failure-modes.md#fm-vll-005--a-granted-op-panics-while-executing).
+   [FM-VLL-005](../../../../specs/vll.md#fm-vll-005--a-granted-op-panics-while-executing).
 2. **`Store::suppress_touch`** is cleared, or the next command inherits a foreign
    `no-touch` and silently stops updating LRU/LFU metadata.
 3. **Pending serve propagations** are dropped: a half-built propagation from a command

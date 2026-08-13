@@ -6314,7 +6314,7 @@ fn run_replication_failover(seed: u64) {
         // demoted node adopted the new replid/offset and kept its own forked
         // keyspace forever. A persistence-disabled primary now serializes its
         // live dataset into the full-sync envelope (the first row of
-        // `.scratch/hardening/specs/replication-failure-modes.md`), so the
+        // `specs/replication.md`), so the
         // failed-back node adopts the original's keyspace wholesale — the
         // split-brain writes it accepted while promoted are gone from it too,
         // and the two nodes hold the *same* keyspace, not merely the same

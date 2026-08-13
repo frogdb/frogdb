@@ -355,19 +355,40 @@ regression pattern="":
 regression-check:
     {{dyld-env}} {{rocksdb-env}} cargo check -p frogdb-redis-regression --all-targets
 
-# Gate: failure-mode specs and the tests that force them must agree, both ways.
-# Every `Forced by` test in .scratch/hardening/specs/*-failure-modes.md must
+# Gate: the specs and the tests that force them must agree, both ways.
+# Every `Forced by` test in specs/*.md must
 # exist and carry a `// FM-<AREA>-NNN` tag; every tag must name a spec row.
 # Builds the listed crates' test binaries (~15-25s warm, no test execution).
 # Runs its own fixture test first: a green tree exercises the invariant
 # vocabulary check only in the passing direction, so the failing directions
 # (dangling / cross-area `INV-*`) are pinned separately, in under a second.
-lint-failure-modes: test-failure-modes-lint
-    {{dyld-env}} {{rocksdb-env}} RUSTC_WRAPPER="" ./scripts/failure-modes.py
+lint-spec: test-spec-lint
+    {{dyld-env}} {{rocksdb-env}} RUSTC_WRAPPER="" ./scripts/spec-lint.py
 
-# Unit tests for the failure-mode lint's per-area invariant vocabulary check
-test-failure-modes-lint:
-    ./scripts/tests/test_failure_modes.py
+# Unit tests for the spec lint's fixture-pinned checks
+test-spec-lint:
+    ./scripts/tests/test_spec_lint.py
+
+# Type-check the Quint design models (specs/quint/*.qnt)
+#
+# A no-op until the first model lands (the cluster phase): the models are the
+# design layer of the formal spec, and CI wiring arrives with them rather than
+# with this empty directory.
+quint-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    shopt -s nullglob
+    models=(specs/quint/*.qnt)
+    if [ ${#models[@]} -eq 0 ]; then
+        echo "quint-check: no models under specs/quint/ yet — nothing to type-check"
+        exit 0
+    fi
+    status=0
+    for model in "${models[@]}"; do
+        echo "quint typecheck $model"
+        quint typecheck "$model" || status=1
+    done
+    exit $status
 
 # Run frogctl's tests (excluded from the default suite during the campaign)
 frogctl-test:
@@ -392,11 +413,11 @@ fmt-check crate="":
 # `lint-keyspace-notify-routing` and `lint-script-gate` ran in `lint-gates` but
 # not in `lint`, contradicting agents/seam-lints.md). One list, so `lint` is
 # always a superset of `lint-gates`.
-lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-failure-modes
+lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
-# except `lint-failure-modes` (builds test binaries) and the turmoil lints
+# except `lint-spec` (builds test binaries) and the turmoil lints
 # (compile via clippy, or exist only to police the turmoil feature). These are
 # grep/regex checks over source text, so the whole set runs in well under a
 # second (see agents/seam-lints.md) and is cheap enough to run
@@ -900,6 +921,14 @@ compat-gen:
 compat-gen-check:
     uv run website/scripts/compat-gen.py --check
 
+# Generate the website's Specifications section from specs/*.md
+spec-gen:
+    uv run website/scripts/spec-gen.py
+
+# Verify the generated specification pages are up to date (for CI)
+spec-gen-check:
+    uv run website/scripts/spec-gen.py --check
+
 # Re-vendor the upstream Redis command list (name/group/since) pinned to
 # REDIS_COMPAT_TARGET. Requires network access; not part of docs-build/CI —
 # run manually when REDIS_COMPAT_TARGET bumps.
@@ -908,21 +937,24 @@ redis-commands-vendor:
 
 # Generate the command compatibility matrix by joining commands.json, the
 # vendored Redis command list, and compat-exclusions.json. Must run after
-# both docs-gen (commands.json) and compat-gen (compat-exclusions.json).
-matrix-gen: docs-gen compat-gen
+# docs-gen (commands.json) and compat-gen (compat-exclusions.json); also pulls
+# in spec-gen, so this recipe aggregates all three generators. docs-dev/
+# docs-build also depend on spec-gen directly (belt-and-suspenders with the
+# transitive pull-in above).
+matrix-gen: docs-gen compat-gen spec-gen
     uv run website/scripts/matrix-gen.py
 
 # Verify the generated command matrix is up to date (for CI)
-matrix-gen-check: docs-gen-check compat-gen-check
+matrix-gen-check: docs-gen-check compat-gen-check spec-gen-check
     uv run website/scripts/matrix-gen.py --check
 
 # Run documentation site development server (installs deps if needed)
-docs-dev: matrix-gen
+docs-dev: matrix-gen spec-gen
     cd website && [ -d node_modules ] || bun install
     cd website && bun run dev
 
 # Build documentation site for production
-docs-build: matrix-gen
+docs-build: matrix-gen spec-gen
     cd website && bun run build
 
 # Preview production build of documentation site

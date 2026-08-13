@@ -94,7 +94,7 @@ the direction if a second stale-proposal defect shows up.
 
 ## Acceptance criteria
 
-- [ ] FM row added for the inherit-nothing failover; `just lint-failure-modes` green
+- [ ] FM row added for the inherit-nothing failover; `just lint-spec` green
 - [ ] Forcing test in `frogdb-cluster` fails first
 - [ ] `model::failover::tests::a_promotion_can_move_nothing` and
       `model::failover::replay::a_forced_failover_promotes_a_node_that_inherits_nothing` flipped to
