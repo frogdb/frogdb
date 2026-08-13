@@ -921,6 +921,14 @@ compat-gen:
 compat-gen-check:
     uv run website/scripts/compat-gen.py --check
 
+# Generate the website's Specifications section from specs/*.md
+spec-gen:
+    uv run website/scripts/spec-gen.py
+
+# Verify the generated specification pages are up to date (for CI)
+spec-gen-check:
+    uv run website/scripts/spec-gen.py --check
+
 # Re-vendor the upstream Redis command list (name/group/since) pinned to
 # REDIS_COMPAT_TARGET. Requires network access; not part of docs-build/CI —
 # run manually when REDIS_COMPAT_TARGET bumps.
@@ -930,11 +938,11 @@ redis-commands-vendor:
 # Generate the command compatibility matrix by joining commands.json, the
 # vendored Redis command list, and compat-exclusions.json. Must run after
 # both docs-gen (commands.json) and compat-gen (compat-exclusions.json).
-matrix-gen: docs-gen compat-gen
+matrix-gen: docs-gen compat-gen spec-gen
     uv run website/scripts/matrix-gen.py
 
 # Verify the generated command matrix is up to date (for CI)
-matrix-gen-check: docs-gen-check compat-gen-check
+matrix-gen-check: docs-gen-check compat-gen-check spec-gen-check
     uv run website/scripts/matrix-gen.py --check
 
 # Run documentation site development server (installs deps if needed)
