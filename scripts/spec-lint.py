@@ -110,6 +110,9 @@ COMPOSITION_HEADING_RE = re.compile(r"^##\s+(CO-(\d+))\s*(?:[—-]\s*(.*))?$")
 SPEC_REF_RE = re.compile(r"\b(?:FM|TR|LV)-[A-Z]+-\d+\b|\bCO-\d+\b")
 # `| Field | Value |`
 ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$")
+# Only FM and LV ids are valid test tags: a test forces a failure mode or a
+# liveness property. TR/CO ids are deliberately excluded — a TR row carries no
+# `Forced by` field and thus no forcing-test rule for a tag to satisfy.
 TAG_ID_RE = re.compile(r"\b(FM|LV)-([A-Z]+)-(\d+)\b")
 # A *tag* is a comment line that is nothing but ids — `// FM-TXN-004`,
 # `// FM-TXN-009, FM-TXN-022`, `/// FM-BLOCKING-005`. A comment that merely
@@ -314,8 +317,16 @@ def parse_spec(path: Path, errors: list[str]) -> tuple[list[FailureMode], list[S
 
 def parse_forced_by(mode: FailureMode | SpecRow, errors: list[str]) -> list[str]:
     """Extract the backtick-wrapped test names from a row's `Forced by` cell."""
-    cell = mode.fields.get("Forced by", "")
-    if not cell:
+    if "Forced by" not in mode.fields:
+        # No `Forced by` row at all: the REQUIRED_FIELDS / LV-specific checks
+        # that run before this is called already name the gap.
+        return []
+    cell = mode.fields["Forced by"]
+    if not cell.strip():
+        errors.append(
+            f"{mode.where()}: {mode.id} has an empty `Forced by` cell — name "
+            "each test in backticks, or write `MISSING (...)` if none exists yet"
+        )
         return []
     if "MISSING" in cell:
         gap = MISSING_GAP_RE.search(cell)

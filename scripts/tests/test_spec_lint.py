@@ -317,6 +317,27 @@ def test_lv_row_without_forced_by_is_an_error() -> None:
     assert "LV-CLUSTER-001 has no `Forced by` row" in errors[0], errors
 
 
+LIVENESS_SPEC_EMPTY_FORCED_BY = """\
+# Cluster
+
+## LV-CLUSTER-001 — a missed failover is eventually retried
+
+| Property | if a primary stays failed, some replica is eventually promoted |
+| Forced by | |
+"""
+
+
+def test_lv_row_with_empty_forced_by_cell_is_an_error() -> None:
+    """A `Forced by` row that resolves to the empty cell is present-but-empty,
+    not absent: `test_lv_row_without_forced_by_is_an_error` above pins the
+    field-missing-entirely case, and this pins the sibling that used to slip
+    through silently — an empty cell parsed to zero tests with no error."""
+    _, rows, errors, _ = _parse({"cluster.md": LIVENESS_SPEC_EMPTY_FORCED_BY})
+    assert len(errors) == 1, errors
+    assert "LV-CLUSTER-001" in errors[0] and "empty" in errors[0], errors
+    assert rows[0].tests == [], rows[0].tests
+
+
 def test_lv_row_forcing_test_must_carry_its_tag() -> None:
     _, rows, errors, _ = _parse({"cluster.md": LIVENESS_SPEC})
     assert errors == [], errors
