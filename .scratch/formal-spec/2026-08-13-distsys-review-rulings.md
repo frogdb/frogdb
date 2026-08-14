@@ -323,3 +323,23 @@ is the data dir itself. Pre-alpha: no layout compat shim. Filed as
 [spec-gaps issue 21](../spec-gaps/issues/open/21-staging-and-backup-live-inside-the-data-dir.md)
 (ready-for-agent); rides the implementation wave. Reworks the same rename machinery
 as issue 20 (MAJ-17) — coordinate; ideally one implementer takes both.
+
+## MAJ-19 — full-sync stager's publishing rename is never fsynced
+
+Ruling: **accept, file issue** (reviewer's resolution). The stager's commit rename
+into `checkpoint_ready` (`fullsync/stager.rs:~110-135`) has no `sync_file` on the
+payload and no `sync_dir` on the parent — the staged checkpoint becomes visible
+before its bytes are durable, so a power loss can leave `is_complete_db()` passing on
+names whose contents are absent, and the install writes a partial database over the
+live one. Breaks FM-PERSISTENCE-023's global bracketing rule; the persistence crate
+already implements the discipline correctly (`rocks/checkpoint.rs:110-118`) — the
+replication crate reimplemented the pattern and dropped the syncs. Fix: extract one
+shared bracketed-rename helper (fsync every file, fsync the source dir, rename,
+fsync the parent) used by both crates so they cannot drift; `RecordingFs` trace
+forcing test on the full-sync path mirroring the `stamp_with` guard; FM row citing
+the stager. Flagged as a seam-lint candidate ("every publishing rename goes through
+the helper" — the chokepoint-gate pattern). Filed as
+[replication issue 33](../replication-correctness/issues/open/33-publishing-renames-share-one-fsync-bracketed-helper.md)
+(ready-for-agent); rides the implementation wave. Coordinate with spec-gaps issue 21
+(the staging paths move inside the data dir — build the helper against the new
+layout).
