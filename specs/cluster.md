@@ -137,13 +137,14 @@ recovery/restart steps, and the admin-command entry points that construct these 
 not necessarily what the code does today — and carries a `Pending` field linking the issue that
 tracks code catch-up.
 
-Two Quint design models formalize a slice of these rows for exploration and code-conformance
-checking: [`cluster_admission.qnt`](quint/cluster_admission.qnt) covers the bootstrap/join/MEET
+Two Quint design models formalize a slice of these rows for exploration and model checking:
+[`cluster_admission.qnt`](quint/cluster_admission.qnt) covers the bootstrap/join/MEET
 admission window (TR-CLUSTER-005, 028, 029, 030, 035); [`cluster_migration_failover.qnt`](quint/cluster_migration_failover.qnt)
 covers slot migration interleaved with failover (TR-CLUSTER-003, 004, 008–019, 021, 024, 025, 034,
-042). Both models' traces are checked against production code by the quint-connect conformance
-harness in [`quint_conformance.rs`](../frogdb-server/crates/cluster/tests/quint_conformance.rs);
-tests disclosed `#[ignore]` name the owning issue rather than being evidence the row already holds.
+042). `cluster_migration_failover.qnt`'s traces are checked against production code by the
+quint-connect conformance harness in [`quint_conformance.rs`](../frogdb-server/crates/cluster/tests/quint_conformance.rs);
+the admission model is model-checked only (nightly `quint verify`, no Rust conformance harness).
+Tests disclosed `#[ignore]` name the owning issue rather than being evidence the row already holds.
 A counterexample or a conformance divergence is triaged with this spec as the arbiter: if the model
 diverges from a ruled row above it is model-wrong and the model gets fixed, otherwise it is
 code-wrong and gets filed or attached to an issue in the area's tracker with the trace as evidence.
