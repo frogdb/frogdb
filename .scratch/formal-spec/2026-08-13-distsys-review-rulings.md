@@ -239,3 +239,19 @@ nils. Filed as
 [spec-gaps issue 16](../spec-gaps/issues/open/16-deny-blocking-context-returns-op-aware-nil.md)
 (ready-for-agent); rides the implementation wave. Cross-ref spec-gaps issue 13: the
 conversion site may move in the run-loop restructure — the TR row must survive it.
+
+## MAJ-14 — CLIENT PAUSE × blocking commands unrowed; diverges from Redis
+
+Ruling: **adopt Redis semantics** (beyond the reviewer's either/or). Two ruled campaign
+principles decide it: observability accuracy (`blocked_clients` = 0 while clients sit
+parked at dispatch during a failover pause is exactly "misleading data not ok"), and
+deviations-must-be-improvements (a client asking for a 1s timeout waiting 61s is not
+one). Ruled shape: a blocking command issued during CLIENT PAUSE enters the blocked
+state and its deadline runs during the pause (Redis's "Blocking timeout following
+PAUSE should honor the timeout"); `blocked_clients`/`CLIENT LIST` reflect it; pause
+gates execution, not parking. Implementation rides issue 13's run-loop restructure
+(blocked-client-as-state makes pause-compatible parking natural). The regression
+assertion (`resp.is_none() || matches!(Bulk(None))` — forces nothing) is tightened to
+require the reply. Filed as
+[spec-gaps issue 17](../spec-gaps/issues/open/17-client-pause-honors-blocking-deadlines.md)
+(ready-for-agent, sequenced after issue 13); rides the implementation wave.
