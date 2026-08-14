@@ -447,3 +447,14 @@ Ruling: **third state `unknown`** (reviewer's resolution). Fail-open
 observability — most optimistic exactly when most confused. Row amended, metric
 gains the state, forcing test. Recorded in
 [cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
+
+## MIN-5 — no read-consistency contract stated anywhere
+
+Ruling: **row + stale-serve knob** (user chose the larger option over spec-only).
+Read-contract row (reads on fenced/partitioned nodes may be stale, no bound
+offered) PLUS a Redis-parity `serve-stale-reads` knob: `false` → fenced node
+rejects reads with a pinned error (admin/introspection exemptions enumerated),
+live-mutable per the config standard. Feature-sized, so it graduates out of the
+minors sweep to its own issue:
+[cluster issue 40](../cluster-correctness/issues/open/40-read-consistency-contract-and-serve-stale-knob.md)
+(ready-for-agent); rides the implementation wave. Cluster locked, gate 0.80.
