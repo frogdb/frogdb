@@ -457,6 +457,30 @@ quint-run:
 quint-verify-model model MAX_STEPS='6' TIMEOUT='1200':
     #!/usr/bin/env bash
     set -uo pipefail
+    # I4: `timeout` ships in GNU coreutils; macOS's BSD userland has no
+    # built-in equivalent, and Homebrew's `coreutils` installs it as
+    # `gtimeout` (to avoid clobbering anything else on PATH named `timeout`).
+    # Probe both, and hard-fail with a distinct message before running
+    # anything else in this recipe — otherwise a missing binary produces
+    # `timeout: command not found`, rc=127, which without this check reads as
+    # a formal-verification counterexample (final-review I4).
+    if command -v timeout >/dev/null 2>&1; then
+        TIMEOUT_BIN=timeout
+    elif command -v gtimeout >/dev/null 2>&1; then
+        TIMEOUT_BIN=gtimeout
+    else
+        echo "quint-verify-model: neither 'timeout' nor 'gtimeout' found on PATH — install coreutils (see Brewfile/shell.nix)" >&2
+        exit 1
+    fi
+    # Task 2 review finding N1, fail-closed (final-review minor 9): plain
+    # `[ "$x" -lt 6 ]` on a non-integer prints "integer expression expected"
+    # to stderr and returns 2 — which, under `set -uo pipefail` (no `-e`),
+    # the `if` below treated as false, so garbage input fell *through* the
+    # guard instead of being rejected by it. Reject non-digit input first.
+    if [[ ! "{{MAX_STEPS}}" =~ ^[0-9]+$ ]]; then
+        echo "quint-verify-model: MAX_STEPS must be a non-negative integer; got {{MAX_STEPS}}" >&2
+        exit 1
+    fi
     if [ "{{MAX_STEPS}}" -lt 6 ]; then
         echo "quint-verify-model: MAX_STEPS must be >= 6 (Task 2 review finding N1); got {{MAX_STEPS}}" >&2
         exit 1
@@ -466,17 +490,27 @@ quint-verify-model model MAX_STEPS='6' TIMEOUT='1200':
     summary=()
     for inv in $invariants; do
         echo "=== quint verify {{model}} --invariant=$inv --max-steps={{MAX_STEPS}} (timeout {{TIMEOUT}}s) ==="
-        timeout {{TIMEOUT}} quint verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
+        # -k 30: send SIGKILL 30s after the initial SIGTERM if Apalache's JVM
+        # ignores it — an orphaned JVM otherwise keeps contending for
+        # CPU/memory with the next invariant's run and can cascade into a
+        # second, false timeout (final-review minor 8).
+        "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} quint verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
         rc=$?
         if [ $rc -eq 124 ]; then
             echo "::warning::$inv TIMED OUT after {{TIMEOUT}}s at depth {{MAX_STEPS}} on {{model}} (inconclusive, not a violation)"
             summary+=("$inv: TIMED OUT (inconclusive)")
-        elif [ $rc -ne 0 ]; then
-            echo "::error::$inv VIOLATED on {{model}} (quint verify exited $rc)"
+        elif [ $rc -eq 1 ]; then
+            echo "::error::$inv VIOLATED on {{model}} (quint verify found a counterexample)"
             summary+=("$inv: VIOLATED")
             status=1
         else
-            summary+=("$inv: OK")
+            # Any other nonzero exit is quint/Apalache itself failing (bad
+            # invocation, crash, OOM, ...), not a verification result — kept
+            # distinguishable from VIOLATED so a tool failure doesn't read as
+            # a proven invariant violation (final-review minor 10).
+            echo "::error::$inv quint verify tool failure on {{model}} (exit $rc)"
+            summary+=("$inv: TOOL FAILURE (exit $rc)")
+            status=1
         fi
     done
     echo "=== quint-verify-model summary for {{model}} (depth {{MAX_STEPS}}) ==="
@@ -515,6 +549,16 @@ quint-verify: quint-verify-admission quint-verify-migration-failover
 # the "un-ignore me" reminder those issues' acceptance criteria ask for.
 quint-conformance-quarantine:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-cluster --run-ignored ignored-only -E 'binary(quint_conformance)'
+
+# Run the quint-connect conformance harness's live (non-#[ignore]d) named-run
+# tests — the counterpart to quint-conformance-quarantine above. Needed
+# because `just test <crate> <pattern>` filters test *names* by regex, not
+# binaries, so nothing previously ran the tests this harness actually keeps
+# green day to day (final-review minor 5 / task-3 review F10). `unit-tests`
+# in CI also covers this binary via `cargo nextest run --all`; this recipe is
+# the fast, scoped way to run just it locally.
+quint-conformance:
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-cluster -E 'binary(quint_conformance)'
 
 # Run frogctl's tests (excluded from the default suite during the campaign)
 frogctl-test:

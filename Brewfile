@@ -13,6 +13,7 @@ brew "lefthook"
 
 # Build dependencies
 brew "llvm"              # Provides libclang for bindgen (used by librocksdb-sys)
+brew "coreutils"         # GNU timeout (as `gtimeout`) for quint-verify-model; macOS has no built-in equivalent
 
 # Justfile LSP for IDE support (no mise plugin)
 brew "terror/tap/just-lsp"

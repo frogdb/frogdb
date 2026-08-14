@@ -17,6 +17,9 @@ pkgs.mkShell {
     pkg-config
     openssl
 
+    # GNU timeout for quint-verify-model (kept in sync with Brewfile's coreutils)
+    coreutils
+
     # Runtime tools for testing
     redis
 

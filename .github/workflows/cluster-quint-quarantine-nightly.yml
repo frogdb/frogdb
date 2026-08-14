@@ -1,0 +1,38 @@
+# =============================================================================
+# GENERATED FILE - DO NOT EDIT DIRECTLY
+# =============================================================================
+# Source: .github/workflows/workflow_gen/
+# Regenerate with: just workflow-gen
+# =============================================================================
+
+name: Cluster Quint Conformance Quarantine Nightly
+'on':
+  schedule:
+  - cron: '22 3 * * *'
+  workflow_dispatch: {}
+jobs:
+  cluster-quint-conformance-quarantine:
+    name: Nightly Quint Conformance Quarantine Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
+        cache: 'true'
+        experimental: 'true'
+    - name: Install Rust 1.92.0
+      uses: dtolnay/rust-toolchain@1.92.0
+    - name: Install libclang
+      run: sudo apt-get install -y libclang-dev
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+      with:
+        shared-key: cluster-nightly
+    - name: Replay the quint-connect conformance harness's quarantined traces
+      run: |
+        just quint-conformance-quarantine

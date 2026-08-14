@@ -31,6 +31,7 @@ jobs:
       workflow_gen: ${{ steps.filter.outputs.workflow_gen }}
       website: ${{ steps.filter.outputs.website }}
       specs: ${{ steps.filter.outputs.specs }}
+      quint: ${{ steps.filter.outputs.quint }}
       testing: ${{ steps.filter.outputs.testing }}
     steps:
     - name: Checkout
@@ -76,6 +77,11 @@ jobs:
           specs:
             - 'specs/**'
             - 'website/scripts/spec-gen.py'
+          quint:
+            - 'specs/**'
+            - 'Justfile'
+            - '.mise.toml'
+            - 'scripts/quint-invariants.sh'
           testing:
             - 'testing/**'
   actionlint:
@@ -142,7 +148,7 @@ jobs:
       run: just test-spec-lint
   quint:
     needs: changes
-    if: needs.changes.outputs.specs == 'true'
+    if: needs.changes.outputs.quint == 'true'
     name: Quint Typecheck & Smoke
     runs-on: ubuntu-latest
     steps:
@@ -171,7 +177,7 @@ jobs:
       uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       with:
         install: 'true'
-        install_args: just cargo:cargo-nextest
+        install_args: just cargo:cargo-nextest npm:@informalsystems/quint
         cache: 'true'
         experimental: 'true'
     - name: Install Rust 1.92.0

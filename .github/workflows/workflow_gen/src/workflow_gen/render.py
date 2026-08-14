@@ -8,6 +8,9 @@ from workflow_gen.schema import Workflow
 from workflow_gen.workflows.build import build_workflow
 from workflow_gen.workflows.cluster_model_nightly import cluster_model_nightly_workflow
 from workflow_gen.workflows.cluster_nightly import cluster_nightly_workflow
+from workflow_gen.workflows.cluster_quint_quarantine_nightly import (
+    cluster_quint_quarantine_nightly_workflow,
+)
 from workflow_gen.workflows.concurrency_nightly import concurrency_nightly_workflow
 from workflow_gen.workflows.coverage_nightly import coverage_nightly_workflow
 from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
@@ -52,6 +55,7 @@ WORKFLOWS = {
     "concurrency-nightly.yml": concurrency_nightly_workflow,
     "cluster-nightly.yml": cluster_nightly_workflow,
     "cluster-model-nightly.yml": cluster_model_nightly_workflow,
+    "cluster-quint-quarantine-nightly.yml": cluster_quint_quarantine_nightly_workflow,
     "quint-verify-nightly.yml": quint_verify_workflow,
     "replication-model-nightly.yml": replication_model_nightly_workflow,
     "replication-nightly.yml": replication_nightly_workflow,

@@ -36,6 +36,10 @@ MISE_JUST = "just"
 MISE_JUST_DENY = "just cargo:cargo-deny"
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
 MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+# `unit-tests` runs `cargo nextest run --all`, which picks up
+# frogdb-cluster's quint_conformance test binary (see that job's comment) —
+# it needs both cargo-nextest and the quint CLI quint-connect shells out to.
+MISE_JUST_NEXTEST_QUINT = "just cargo:cargo-nextest npm:@informalsystems/quint"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
@@ -67,6 +71,7 @@ def test_workflow() -> Workflow:
                 workflow_gen="${{ steps.filter.outputs.workflow_gen }}",
                 website="${{ steps.filter.outputs.website }}",
                 specs="${{ steps.filter.outputs.specs }}",
+                quint="${{ steps.filter.outputs.quint }}",
                 testing="${{ steps.filter.outputs.testing }}",
             ),
             steps=[
@@ -118,6 +123,11 @@ def test_workflow() -> Workflow:
                             specs:
                               - 'specs/**'
                               - 'website/scripts/spec-gen.py'
+                            quint:
+                              - 'specs/**'
+                              - 'Justfile'
+                              - '.mise.toml'
+                              - 'scripts/quint-invariants.sh'
                             testing:
                               - 'testing/**'
                         """),
@@ -218,15 +228,17 @@ def test_workflow() -> Workflow:
     # docstring — `quint run` defaults `--invariant` to `"true"`, i.e. no
     # check, unless told otherwise). The exhaustive/bounded Apalache tier
     # (`quint verify`) is too slow for per-PR and runs nightly instead
-    # (quint_verify.py). Gated on `specs` since specs/quint/*.qnt falls under
-    # that filter's `specs/**` glob.
+    # (quint_verify.py). Gated on the dedicated `quint` filter (specs/**, plus
+    # Justfile / .mise.toml / scripts/quint-invariants.sh — a change to any of
+    # those can break `just quint-check`/`quint-run` without touching a single
+    # .qnt file, and previously never triggered this job at all).
     quint = w.job(
         "quint",
         Job(
             name="Quint Typecheck & Smoke",
             runs_on=RUNS_ON,
             needs="changes",
-            if_="needs.changes.outputs.specs == 'true'",
+            if_="needs.changes.outputs.quint == 'true'",
             steps=[
                 checkout_step(),
                 mise_setup_step(install_args=MISE_JUST_QUINT),
@@ -248,7 +260,7 @@ def test_workflow() -> Workflow:
             if_="needs.changes.outputs.rust == 'true'",
             steps=[
                 checkout_step(),
-                mise_setup_step(install_args=MISE_JUST_NEXTEST),
+                mise_setup_step(install_args=MISE_JUST_NEXTEST_QUINT),
                 rust_toolchain_step(),
                 libclang_step(),
                 cargo_cache_step(shared_key="stable"),
