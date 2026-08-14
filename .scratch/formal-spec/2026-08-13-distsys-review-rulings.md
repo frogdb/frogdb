@@ -223,3 +223,19 @@ deviation-as-improvement. Filed as
 (ready-for-agent); rides the implementation wave. Sequence with
 [spec-gaps issue 13](../spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md)
 (same machinery — land 13's restructure first or coordinate).
+
+## MAJ-13 — deny-blocking contexts return the wrong nil shape; unrowed
+
+Ruling: **accept, file issue** (reviewer's resolution). The conversion at
+`execution.rs:623-630` collapses `Response::BlockingNeeded` to `Response::Null` (`$-1`)
+discarding the op, so `MULTI; BLPOP k 1; EXEC` returns `$-1` where Redis returns `*-1`
+— a third instance of the wrong-shape family FM-BLOCKING-002 polices, on a path the
+spec never rows. Fix is one line (`op.timeout_reply()` at the conversion site — the op
+is already in scope and the FM-BLOCKING-002 machinery exists); plus a TR row
+("a blocking command in a deny-blocking context resolves immediately with the op-aware
+nil, registers no `WaitEntry`, sets no blocked flag") and a forcing test per op family.
+The Lua path (`scripting/bindings.rs:184`) is confirmed correct — Lua flattens both
+nils. Filed as
+[spec-gaps issue 16](../spec-gaps/issues/open/16-deny-blocking-context-returns-op-aware-nil.md)
+(ready-for-agent); rides the implementation wave. Cross-ref spec-gaps issue 13: the
+conversion site may move in the run-loop restructure — the TR row must survive it.
