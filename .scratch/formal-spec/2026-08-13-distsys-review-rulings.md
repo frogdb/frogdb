@@ -391,3 +391,20 @@ not-owned-slot redirects untouched. Filed as
 [spec-gaps issue 24](../spec-gaps/issues/open/24-batched-watch-fans-out-per-shard.md)
 (ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
 Coordinate with MAJ-23 (same watch-set machinery).
+
+## MAJ-23 — `take` folds every watched shard, not every *live* one; spec's qualifier unimplemented
+
+Ruling: **code matches spec** (implement the `live_at_watch` filter). The locked
+spec states the qualifier twice (`txn.md:30`, FM-TXN-020 `:554`); the code
+destructures it away (`state.rs:285-287`), so the canonical create-if-absent CAS
+gets a spurious `-CROSSSLOT` at EXEC — client-visible, standalone included. The
+filter is safe for dead-stays-dead (FM-TXN-033 gap-4), but the ruling pins the
+dead→live hazard: with the dead watch's shard unfolded, EXEC watch verification
+must still reach it, which collides with issue 11's fast-path hole — landing the
+filter without that check would trade a spurious refusal for a missed abort.
+Sequenced: issue 11 lands first or together. Forcing tests split live vs dead
+cross-shard watches (today's two tests cannot distinguish the implementations — no
+filter mutant killable). Filed as
+[spec-gaps issue 25](../spec-gaps/issues/open/25-take-folds-only-live-watched-shards.md)
+(ready-for-agent, blocked-by issue 11); rides the implementation wave. Txn locked,
+gate 0.90. Coordinate with issue 24 (same watch-set machinery).
