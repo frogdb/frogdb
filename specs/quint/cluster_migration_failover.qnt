@@ -53,7 +53,17 @@
 //   TR-CLUSTER-015 — CancelSlotMigration, ruled + amended (issue 15): abort is a real
 //     rollback that repatriates — any data provisionally moved to the target while the
 //     handoff was drained streams back to the source before the migration record is
-//     removed.
+//     removed. The amendment's own wording ("streams ... back to the source *before*
+//     the Abort applies clean") states a real ordering, not an atomicity claim, so this
+//     model represents it as two separately-observable phases: `cancelMigration`/
+//     `abortHandoff` open a `repatriating` phase (releasing the barrier immediately but
+//     leaving the provisional-target/feed-bytes residue and, for Cancel, the migration
+//     record itself in place) and a new `completeRepatriation` action later resolves it.
+//     The amendment's closing CRDB analogy ("the keyspace never stays split") is about
+//     *slot ownership* never splitting mid-move — already true here by construction
+//     (ownership never moves before `completeMigration`; see `provisional_target`'s own
+//     declaration comment) — not a claim that the rollback itself is instantaneous, so
+//     giving the rollback an observable in-progress phase does not contradict it.
 //   TR-CLUSTER-016 — Replica-feed hold during an armed barrier, amended (issue 17):
 //     bounded by a byte cap on buffered frames, not by the deleted wall-clock deadline;
 //     breaching the cap disconnects the held session. Modeled as a single atomic
@@ -128,6 +138,10 @@
 //     cross-step claim that the cluster epoch never decreases,
 //     `inv_epoch_never_decreases`, which the catalog's single-state checks cannot
 //     state).
+//   inv_repatriating_well_formed (this model's own, not a catalog id): a slot mid the
+//     new `repatriating` phase (added this round for I13) always still shows its
+//     provisional-target residue and never a live handoff — the phase's own structural
+//     integrity, independent of `inv_abort_repatriates`'s resolved-state claim below.
 //
 // Issues (rulings + amendments this model encodes):
 //   .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md
@@ -168,6 +182,12 @@ module cluster_migration_failover {
     target: NodeId,
     // "A migration's prepared handoff".
     handoff: Option[Handoff],
+    // "This migration is mid-Cancel, awaiting repatriation" — set by `cancelMigration`
+    // when there is residue to stream back; distinguishes a cancelling-and-pending
+    // migration record (which `completeRepatriation` must remove once the stream
+    // finishes) from an abort-and-pending one (whose migration record survives
+    // Abort per TR-CLUSTER-014, so `completeRepatriation` must leave it alone).
+    cancelling: bool,
   }
 
   pure val NODES: Set[NodeId] = Set(1, 2, 3, 4)
@@ -195,6 +215,16 @@ module cluster_migration_failover {
   // time), so without this ghost field "the slot is owned by source after abort" would
   // be true by construction on every trace, real or broken.
   var provisional_target: SlotId -> Option[NodeId]
+  // "Slots whose Cancel/Abort rollback is mid-repatriation" — added this round for I13:
+  // TR-CLUSTER-015's amendment states a real ordering ("streams back to the source
+  // *before* the Abort applies clean"), so `cancelMigration`/`abortHandoff` open this
+  // phase (releasing the barrier immediately, but leaving the provisional-target/
+  // feed-bytes residue — and for Cancel, the migration record itself — in place) rather
+  // than resolving everything atomically in one step. `completeRepatriation` clears it.
+  // `inv_repatriating_well_formed` states the phase's own structural invariant;
+  // `inv_abort_repatriates` below is restated so the phase is a legal exception to its
+  // "no residue once no live handoff" claim rather than a violation of it.
+  var repatriating: Set[SlotId]
   // TR-CLUSTER-016 amendment: bytes buffered for a replica session held behind this
   // slot's armed barrier. No wall-clock field appears anywhere in this model — the
   // hold is bounded purely by this counter and HOLD_BYTE_CAP.
@@ -223,6 +253,19 @@ module cluster_migration_failover {
   // minted twice (`seqReuse`, INV-HANDOFF distinctness). Each is monotone (sticky
   // once true) — a defect anywhere in the trace stays visible for the rest of it.
   var defects: { demotion: bool, fence: bool, barrier: bool, admission: bool, seqReuse: bool }
+  // Coverage ghosts (added this round for I8/I9) — sticky like `defects`, but tracking
+  // *non-defective, interesting-scenario* reach rather than bugs, so the witnesses built
+  // on them cannot be satisfied by an unrelated cause the way
+  // `witnessGracefulFailoverPrunedMigration`/`witnessForcedFailoverDemoted` originally
+  // were (see their removal note below): `gracefulPruned` is set only inside
+  // `failoverGraceful` at the moment it *actually* prunes a migration that was open on
+  // one of the moved slots (checked independently of any guard, from the pre-state);
+  // `forcedDemotedReplica` only when `failoverForced` demotes a primary that owned at
+  // least one slot (so it cannot be satisfied by the two nodes that are already
+  // Replicas at `init`); `failoverDuringOpenMigration` (the composite migration x
+  // failover region I8/I9 asks to be genuinely explored) only when any of the three
+  // failover actions fires while the old primary had an open migration.
+  var coverage: { gracefulPruned: bool, forcedDemotedReplica: bool, failoverDuringOpenMigration: bool }
 
   // ---------------------------------------------------------------------------
   // Deliberately not modeled.
@@ -244,15 +287,17 @@ module cluster_migration_failover {
   //   separately modeled. `canAbortHandoff` requires a live, seq-matching handoff;
   //   the already-resolved case (which real code accepts idempotently) is left
   //   unmodeled rather than encoded as a vacuous no-op action.
-  // - TR-CLUSTER-015's repatriation-before-cancel *ordering*: `abortHandoff` and
-  //   `cancelMigration` repatriate (clear `provisional_target`/`feed_bytes`/
-  //   `disconnected_feed`/`armed_barriers`) in the same atomic transition as the
-  //   release itself, so no intermediate state exists where a cancel has applied but
-  //   repatriation has not yet caught up. This collapses TR-CLUSTER-015's "must
-  //   complete before Cancel/Abort applies cleanly" into a single step rather than
-  //   representing it as two separately-observable phases; a future round could add a
-  //   `repatriating: Set[SlotId]` phase variable to state the ordering as its own
-  //   reachable-and-then-resolved claim, but that is not attempted here.
+  // - Failover-triggered migration pruning (`applyFailoverCommon`, shared by
+  //   `failoverGraceful`/`failoverAuto`/`failoverForced`) stays an unconditional,
+  //   single-step prune — it is *not* routed through the new `repatriating` phase (see
+  //   TR-CLUSTER-015's header note). The amendment's repatriation language is scoped to
+  //   "the Abort protocol" (Cancel/AbortHandoff); a failover is a decisive, already-
+  //   atomic cutover of primary role and slot ownership, and no ruling text extends the
+  //   stream-back-before-applies-clean ordering to that path. Giving failover a wait-
+  //   for-repatriation phase would be a materially larger structural change than what
+  //   issue 15 actually rules on, so this model treats a failover's prune the same way
+  //   it always has: whatever provisional residue the pruned migration was carrying is
+  //   written off along with the migration record itself, not streamed back first.
   // - `inv_no_stuck_handoff` (from any reachable state with an armed barrier, some
   //   enabled action sequence releases it): this is a temporal liveness property, not
   //   a state invariant `quint run --invariant` can check in 0.32.0. Rather than
@@ -275,12 +320,9 @@ module cluster_migration_failover {
   //   owner, and `AssignSlots`/`BeginSlotMigration` can name a Replica as a target. Not
   //   flagged as a bug here — it is a possible real gap in FrogDB's command layer, but
   //   fixing it is out of this model's scope (no ruling addresses it).
-  // - Reachability bias / a weighted `step` relation, and tightening the three
-  //   near-vacuous witnesses (`witnessGracefulFailoverPrunedMigration`,
-  //   `witnessForcedFailoverDemoted`, `witnessFeedDisconnected`) into non-degenerate
-  //   claims: deferred to a later fix round (this round's scope is the Critical/
-  //   ghost-coverage findings; `quint verify`'s bounded exhaustive search is this
-  //   round's answer to thin random-sampling reach, not a rebalanced `step`).
+  // - The numeric priority/offset scoring formula behind successor selection (already
+  //   noted above under TR-CLUSTER-021) is the only remaining out-of-scope corner of
+  //   that row; `step`'s nondet biasing (added this round for I8/I9) does not touch it.
 
   // ---------------------------------------------------------------------------
   // Small pure helpers.
@@ -313,6 +355,49 @@ module cluster_migration_failover {
   // Impure (reads the `armed_barriers` state var directly) — kept separate from the
   // pure helpers above so the purity checker doesn't reject it.
   def barrierArmed(s: SlotId): bool = armed_barriers.contains(s)
+
+  // ---------------------------------------------------------------------------
+  // Nondet-biasing helpers (added this round for I8/I9/I10) — narrow the candidate set
+  // `step` samples from to state-derived "currently interesting" values when that set is
+  // nonempty, falling back to the full domain otherwise. This changes only which
+  // transitions the randomized walk is *likely* to try, never which transitions are
+  // legal — no guard or postcondition depends on these. See quint-modeling's "narrower
+  // value space with fallback" pattern.
+  // ---------------------------------------------------------------------------
+
+  // The set of nodes currently the source of an open migration — biases `step`'s shared
+  // `n1` toward a node a migration/handoff/failover action can actually act on, instead
+  // of `beginMigration`'s old ~25% (1-in-4 nodes) hit rate against `canBeginMigration`'s
+  // ownership conjunct.
+  pure def migrationSourcesOf(migs: SlotId -> Option[Migration]): Set[NodeId] =
+    SLOTS.fold(Set(), (acc, s) => match migs.get(s) {
+      | Some(m) => acc.union(Set(m.source))
+      | None => acc
+    })
+
+  // Slots with an open migration, or mid-repatriation — biases the handoff-lifecycle
+  // nondet slot pick toward a slot those actions can actually act on.
+  pure def openMigrationSlots(migs: SlotId -> Option[Migration]): Set[SlotId] =
+    SLOTS.filter(s => migs.get(s) != None)
+
+  // Current members who are a Replica of `n` — biases failover's successor pick toward
+  // a value `beltOk` can actually accept, instead of an independent 1-in-4 uniform pick.
+  pure def replicasOf(allNodes: NodeId -> NodeState, n: NodeId): Set[NodeId] =
+    NODES.filter(m => allNodes.get(m).member and allNodes.get(m).role == Replica and allNodes.get(m).parent == Some(n))
+
+  // Owners of the slots currently held in `failover_fence` — biases `step`'s shared `n1`
+  // toward the node a just-armed barrier belongs to. `armFailoverFence` is single-shot
+  // (every other action clears it — see its own comment), so firing `failoverGraceful`
+  // for the armed node requires picking that *same* `n1` on the very next step; without
+  // this bias `n1` is redrawn uniformly (or migration-source-biased) each step, making the
+  // arm-then-fire pair a near-independent double draw. Narrower-domain-with-fallback, same
+  // pattern as `migrationSourcesOf`/`replicasOf` above — legality is unaffected, since
+  // `armFailoverFence`/`failoverGraceful`'s own guards are unchanged.
+  pure def fencedOwners(fence: Set[SlotId], slotMap: SlotId -> Option[NodeId]): Set[NodeId] =
+    fence.fold(Set(), (acc, s) => match slotMap.get(s) {
+      | Some(n) => acc.union(Set(n))
+      | None => acc
+    })
 
   // ---------------------------------------------------------------------------
   // Functional logic (guards + updates), pure and unit-testable in isolation.
@@ -364,15 +449,18 @@ module cluster_migration_failover {
   }
 
   pure def applyBeginMigration(migs: SlotId -> Option[Migration], s: SlotId, source: NodeId, target: NodeId): SlotId -> Option[Migration] =
-    migs.set(s, Some({ source: source, target: target, handoff: None }))
+    migs.set(s, Some({ source: source, target: target, handoff: None, cancelling: false }))
 
   // TR-CLUSTER-011: migration exists (matching source/target is not separately
   // modeled — see "Deliberately not modeled"). No "no live handoff" precondition: the
   // ruled row text does not carry one, and requiring it made the supersede path
   // (FM-CLUSTER-085) and TR-CLUSTER-012's stale-seq refusal unreachable — see the
   // header note.
-  pure def canPrepareHandoff(migs: SlotId -> Option[Migration], s: SlotId): bool =
-    migs.get(s) != None
+  // `not(rep.contains(s))` (added this round for I13): a slot mid-repatriation is
+  // between Cancel/Abort and its resolution — re-preparing a handoff on it would
+  // resurrect a migration that is being torn down, corrupting the phase.
+  pure def canPrepareHandoff(migs: SlotId -> Option[Migration], rep: Set[SlotId], s: SlotId): bool =
+    migs.get(s) != None and not(rep.contains(s))
 
   // TR-CLUSTER-011/034: mints seq from the bumped counter, arms the barrier at the
   // source (armed_barriers keyed by slot — see the header's TR-CLUSTER-034 note). A
@@ -420,8 +508,13 @@ module cluster_migration_failover {
   // TR-CLUSTER-014, ruled (issue 17): the prepared handoff exists with matching seq;
   // log-ordered admission, no wall-clock window. (The FM-CLUSTER-086 "already gone ->
   // no-op success" branch is not separately modeled — see "Deliberately not modeled".)
-  pure def canAbortHandoff(migs: SlotId -> Option[Migration], s: SlotId, seq: int): bool =
-    match migs.get(s) {
+  // `not(rep.contains(s))` (added this round for I13, stated explicitly rather than
+  // left implicit): a slot already mid-repatriation always has `handoff == None`
+  // (both the Cancel and Abort entry points into the phase clear it), so the
+  // `Some(handoff)` match below already excludes re-entry structurally — the explicit
+  // conjunct is retained purely for readability/symmetry with `canCancel`.
+  pure def canAbortHandoff(migs: SlotId -> Option[Migration], rep: Set[SlotId], s: SlotId, seq: int): bool =
+    not(rep.contains(s)) and match migs.get(s) {
       | Some(m) => match m.handoff {
           | Some(h) => h.seq == seq
           | None => false
@@ -430,9 +523,14 @@ module cluster_migration_failover {
     }
 
   // TR-CLUSTER-015: any open migration (with or without a live handoff) may be
-  // cancelled.
-  pure def canCancel(migs: SlotId -> Option[Migration], s: SlotId): bool =
-    migs.get(s) != None
+  // cancelled. `not(rep.contains(s))` (added this round for I13): a slot already
+  // mid-repatriation cannot be re-cancelled until `completeRepatriation` resolves it.
+  pure def canCancel(migs: SlotId -> Option[Migration], rep: Set[SlotId], s: SlotId): bool =
+    migs.get(s) != None and not(rep.contains(s))
+
+  // Added this round for I13: `completeRepatriation` may resolve any slot mid-phase.
+  pure def canCompleteRepatriation(rep: Set[SlotId], s: SlotId): bool =
+    rep.contains(s)
 
   // ---------------------------------------------------------------------------
   // Actions.
@@ -458,6 +556,8 @@ module cluster_migration_failover {
     spent' = Set(),
     prev_epoch' = 0,
     defects' = { demotion: false, fence: false, barrier: false, admission: false, seqReuse: false },
+    repatriating' = Set(),
+    coverage' = { gracefulPruned: false, forcedDemotedReplica: false, failoverDuringOpenMigration: false },
   }
 
   action setRole(n: NodeId, role: RoleTag, parent: Option[NodeId]): bool = all {
@@ -476,6 +576,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   action removeNode(n: NodeId, force: bool): bool = {
@@ -500,6 +602,8 @@ module cluster_migration_failover {
       spent' = spent,
       prev_epoch' = epoch,
       defects' = defects,
+      repatriating' = repatriating.filter(s => not(prunedSlots.contains(s))),
+      coverage' = coverage,
     }
   }
 
@@ -519,6 +623,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   action removeSlot(s: SlotId): bool = all {
@@ -537,6 +643,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   action beginMigration(s: SlotId, source: NodeId, target: NodeId): bool = all {
@@ -555,6 +663,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   action prepareHandoff(s: SlotId): bool = {
@@ -562,7 +672,7 @@ module cluster_migration_failover {
     val reused = spent.contains(newSeq)
     val result = applyPrepareHandoff(migrations, armed_barriers, s, newSeq)
     all {
-      canPrepareHandoff(migrations, s),
+      canPrepareHandoff(migrations, repatriating, s),
       migrations' = result.migs,
       armed_barriers' = result.armed,
       handoff_seq' = newSeq,
@@ -577,6 +687,8 @@ module cluster_migration_failover {
       spent' = spent.union(Set(newSeq)),
       prev_epoch' = epoch,
       defects' = { ...defects, seqReuse: defects.seqReuse or reused },
+      repatriating' = repatriating,
+      coverage' = coverage,
     }
   }
 
@@ -601,6 +713,8 @@ module cluster_migration_failover {
       spent' = spent,
       prev_epoch' = epoch,
       defects' = defects,
+      repatriating' = repatriating,
+      coverage' = coverage,
     }
   }
 
@@ -625,51 +739,107 @@ module cluster_migration_failover {
       spent' = spent,
       prev_epoch' = epoch,
       defects' = { ...defects, admission: defects.admission or not(wasDrained) },
+      repatriating' = repatriating,
+      coverage' = coverage,
     }
   }
 
-  // TR-CLUSTER-014: releases only the handoff; the migration survives.
-  action abortHandoff(s: SlotId, seq: int): bool = all {
-    canAbortHandoff(migrations, s, seq),
-    migrations' = match migrations.get(s) {
-      | Some(m) => migrations.set(s, Some({ ...m, handoff: None }))
-      | None => migrations
-    },
-    armed_barriers' = armed_barriers.filter(x => x != s),
-    // Issue 15 amendment: repatriation — any data provisionally at the target streams
-    // back to the source before this applies clean.
-    provisional_target' = provisional_target.set(s, None),
-    feed_bytes' = feed_bytes.set(s, 0),
-    disconnected_feed' = disconnected_feed.filter(x => x != s),
-    nodes' = nodes,
-    slots' = slots,
-    handoff_seq' = handoff_seq,
-    epoch' = epoch,
-    node_epoch' = node_epoch,
-    failover_fence' = Set(),
-    spent' = spent,
-    prev_epoch' = epoch,
-    defects' = defects,
+  // TR-CLUSTER-014: releases only the handoff; the migration survives. Restructured
+  // this round for I13: if there is residue to repatriate (provisional-at-target,
+  // buffered feed bytes, or a disconnected-feed mark), the barrier releases immediately
+  // but the residue is left in place and the slot enters the `repatriating` phase —
+  // `completeRepatriation` later clears it. If there is nothing to repatriate, the
+  // (already-empty) residue fields are left as-is, which is observably identical to
+  // clearing them, so the no-residue case is unaffected by this round's change.
+  action abortHandoff(s: SlotId, seq: int): bool = {
+    val hasResidue = provisional_target.get(s) != None or feed_bytes.get(s) > 0 or disconnected_feed.contains(s)
+    all {
+      canAbortHandoff(migrations, repatriating, s, seq),
+      migrations' = match migrations.get(s) {
+        | Some(m) => migrations.set(s, Some({ ...m, handoff: None }))
+        | None => migrations
+      },
+      armed_barriers' = armed_barriers.filter(x => x != s),
+      // Issue 15 amendment: the write barrier (governing new incoming writes) releases
+      // immediately; the already-moved provisional data streams back separately, over
+      // the `repatriating` phase, rather than in this same step (see the header note).
+      provisional_target' = provisional_target,
+      feed_bytes' = feed_bytes,
+      disconnected_feed' = disconnected_feed,
+      nodes' = nodes,
+      slots' = slots,
+      handoff_seq' = handoff_seq,
+      epoch' = epoch,
+      node_epoch' = node_epoch,
+      failover_fence' = Set(),
+      spent' = spent,
+      prev_epoch' = epoch,
+      defects' = defects,
+      repatriating' = if (hasResidue) repatriating.union(Set(s)) else repatriating,
+      coverage' = coverage,
+    }
   }
 
-  // TR-CLUSTER-015, amended (issue 15): the whole migration (and any live handoff) is
-  // removed; repatriation is paid the same way as abortHandoff.
-  action cancelMigration(s: SlotId): bool = all {
-    canCancel(migrations, s),
-    migrations' = migrations.set(s, None),
-    armed_barriers' = armed_barriers.filter(x => x != s),
-    provisional_target' = provisional_target.set(s, None),
-    feed_bytes' = feed_bytes.set(s, 0),
-    disconnected_feed' = disconnected_feed.filter(x => x != s),
-    nodes' = nodes,
-    slots' = slots,
-    handoff_seq' = handoff_seq,
-    epoch' = epoch,
-    node_epoch' = node_epoch,
-    failover_fence' = Set(),
-    spent' = spent,
-    prev_epoch' = epoch,
-    defects' = defects,
+  // TR-CLUSTER-015, amended (issue 15): Cancel opens the `repatriating` phase the same
+  // way Abort does (added this round for I13) — if there is residue, the barrier
+  // releases immediately and the migration record is marked `cancelling: true` (handoff
+  // cleared) and kept, rather than removed, until `completeRepatriation` resolves the
+  // stream and removes it. With nothing to repatriate, the migration record is removed
+  // immediately, exactly as before this round.
+  action cancelMigration(s: SlotId): bool = {
+    val hasResidue = provisional_target.get(s) != None or feed_bytes.get(s) > 0 or disconnected_feed.contains(s)
+    all {
+      canCancel(migrations, repatriating, s),
+      migrations' = if (hasResidue)
+          match migrations.get(s) {
+            | Some(m) => migrations.set(s, Some({ ...m, handoff: None, cancelling: true }))
+            | None => migrations
+          }
+        else migrations.set(s, None),
+      armed_barriers' = armed_barriers.filter(x => x != s),
+      provisional_target' = provisional_target,
+      feed_bytes' = feed_bytes,
+      disconnected_feed' = disconnected_feed,
+      nodes' = nodes,
+      slots' = slots,
+      handoff_seq' = handoff_seq,
+      epoch' = epoch,
+      node_epoch' = node_epoch,
+      failover_fence' = Set(),
+      spent' = spent,
+      prev_epoch' = epoch,
+      defects' = defects,
+      repatriating' = if (hasResidue) repatriating.union(Set(s)) else repatriating,
+      coverage' = coverage,
+    }
+  }
+
+  // Added this round for I13: resolves a slot's `repatriating` phase once the stream
+  // back to the source has finished. For a Cancel-originated phase (`cancelling ==
+  // true`), this is where the migration record is finally removed — "the Abort applies
+  // clean," in the amendment's words. For an Abort-originated phase (migration
+  // survives, handoff already cleared), the migration record is left untouched.
+  action completeRepatriation(s: SlotId): bool = {
+    val wasCancelling = match migrations.get(s) { | Some(m) => m.cancelling | None => false }
+    all {
+      canCompleteRepatriation(repatriating, s),
+      migrations' = if (wasCancelling) migrations.set(s, None) else migrations,
+      provisional_target' = provisional_target.set(s, None),
+      feed_bytes' = feed_bytes.set(s, 0),
+      disconnected_feed' = disconnected_feed.filter(x => x != s),
+      repatriating' = repatriating.filter(x => x != s),
+      armed_barriers' = armed_barriers,
+      nodes' = nodes,
+      slots' = slots,
+      handoff_seq' = handoff_seq,
+      epoch' = epoch,
+      node_epoch' = node_epoch,
+      failover_fence' = Set(),
+      spent' = spent,
+      prev_epoch' = epoch,
+      defects' = defects,
+      coverage' = coverage,
+    }
   }
 
   // TR-CLUSTER-016 amendment: buffer `n` bytes for the held session behind slot `s`'s
@@ -700,6 +870,8 @@ module cluster_migration_failover {
       spent' = spent,
       prev_epoch' = epoch,
       defects' = defects,
+      repatriating' = repatriating,
+      coverage' = coverage,
     }
   }
 
@@ -720,6 +892,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   action markNodeRecovered(n: NodeId): bool = all {
@@ -739,6 +913,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   // TR-CLUSTER-017/026, ruled (issue 26): arm the drain/parity barrier over every slot
@@ -760,6 +936,8 @@ module cluster_migration_failover {
     spent' = spent,
     prev_epoch' = epoch,
     defects' = defects,
+    repatriating' = repatriating,
+    coverage' = coverage,
   }
 
   // The single postcondition shared by the planned (TR-CLUSTER-018), automatic
@@ -771,11 +949,11 @@ module cluster_migration_failover {
   pure def applyFailoverCommon(
     st: { nodes: NodeId -> NodeState, slots: SlotId -> Option[NodeId], migrations: SlotId -> Option[Migration],
           epoch: int, node_epoch: NodeId -> int, armed_barriers: Set[SlotId], provisional_target: SlotId -> Option[NodeId],
-          feed_bytes: SlotId -> int, disconnected_feed: Set[SlotId] },
+          feed_bytes: SlotId -> int, disconnected_feed: Set[SlotId], repatriating: Set[SlotId] },
     old: NodeId, succ: NodeId
   ): { nodes: NodeId -> NodeState, slots: SlotId -> Option[NodeId], migrations: SlotId -> Option[Migration],
        epoch: int, node_epoch: NodeId -> int, armed_barriers: Set[SlotId], provisional_target: SlotId -> Option[NodeId],
-       feed_bytes: SlotId -> int, disconnected_feed: Set[SlotId] } = {
+       feed_bytes: SlotId -> int, disconnected_feed: Set[SlotId], repatriating: Set[SlotId] } = {
     val newEpoch = st.epoch + 1
     val movedSlots = SLOTS.filter(s => st.slots.get(s) == Some(old))
     val newSlots = SLOTS.fold(st.slots, (acc, s) => if (movedSlots.contains(s)) acc.set(s, Some(succ)) else acc)
@@ -792,6 +970,11 @@ module cluster_migration_failover {
     val newProvisional = SLOTS.fold(st.provisional_target, (acc, s) => if (prunedSet.contains(s)) acc.set(s, None) else acc)
     val newFeedBytes = SLOTS.fold(st.feed_bytes, (acc, s) => if (prunedSet.contains(s)) acc.set(s, 0) else acc)
     val newDisconnected = st.disconnected_feed.filter(s => not(prunedSet.contains(s)))
+    // Failover's prune is unconditional and does not route through the `repatriating`
+    // phase (see the header's TR-CLUSTER-015 "Deliberately not modeled" note) — any
+    // pending repatriation for a slot naming `old` is written off along with the
+    // migration record itself, not left dangling.
+    val newRepatriating = st.repatriating.filter(s => not(prunedSet.contains(s)))
     {
       nodes: promoted,
       slots: newSlots,
@@ -802,6 +985,7 @@ module cluster_migration_failover {
       provisional_target: newProvisional,
       feed_bytes: newFeedBytes,
       disconnected_feed: newDisconnected,
+      repatriating: newRepatriating,
     }
   }
 
@@ -842,7 +1026,7 @@ module cluster_migration_failover {
   action failoverGraceful(old: NodeId, succ: NodeId, obsEpoch: int, obsRole: RoleTag): bool = {
     val st = { nodes: nodes, slots: slots, migrations: migrations, epoch: epoch, node_epoch: node_epoch,
                armed_barriers: armed_barriers, provisional_target: provisional_target,
-               feed_bytes: feed_bytes, disconnected_feed: disconnected_feed }
+               feed_bytes: feed_bytes, disconnected_feed: disconnected_feed, repatriating: repatriating }
     val result = applyFailoverCommon(st, old, succ)
     val movedSlots = SLOTS.filter(s => slots.get(s) == Some(old))
     val barrierHeld = movedSlots.forall(s => failover_fence.contains(s))
@@ -853,6 +1037,11 @@ module cluster_migration_failover {
       result.nodes.get(old).member,
       result.nodes.get(succ).role == Primary,
     }
+    // I8/I9 coverage ghosts: independently recomputed at the pre-state, before
+    // `applyFailoverCommon` prunes anything, so they cannot be satisfied by an
+    // unrelated cause the way the witnesses they back originally were (see the removal
+    // note on the old witnesses below).
+    val hadNamedMigration = slotsNaming(migrations, old) != Set()
     all {
       old != succ,
       beltOk(nodes, slots, old, succ),
@@ -868,6 +1057,7 @@ module cluster_migration_failover {
       provisional_target' = result.provisional_target,
       feed_bytes' = result.feed_bytes,
       disconnected_feed' = result.disconnected_feed,
+      repatriating' = result.repatriating,
       handoff_seq' = handoff_seq,
       failover_fence' = Set(),
       spent' = spent,
@@ -876,6 +1066,10 @@ module cluster_migration_failover {
         demotion: defects.demotion or not(demoted),
         fence: defects.fence or not(fenced),
         barrier: defects.barrier or not(barrierHeld),
+      },
+      coverage' = { ...coverage,
+        gracefulPruned: coverage.gracefulPruned or hadNamedMigration,
+        failoverDuringOpenMigration: coverage.failoverDuringOpenMigration or hadNamedMigration,
       },
     }
   }
@@ -887,7 +1081,7 @@ module cluster_migration_failover {
   action failoverAuto(old: NodeId, succ: NodeId, obsEpoch: int, obsRole: RoleTag): bool = {
     val st = { nodes: nodes, slots: slots, migrations: migrations, epoch: epoch, node_epoch: node_epoch,
                armed_barriers: armed_barriers, provisional_target: provisional_target,
-               feed_bytes: feed_bytes, disconnected_feed: disconnected_feed }
+               feed_bytes: feed_bytes, disconnected_feed: disconnected_feed, repatriating: repatriating }
     val result = applyFailoverCommon(st, old, succ)
     val fenced = obsEpoch == node_epoch.get(old) and obsRole == nodes.get(old).role
     val demoted = and {
@@ -896,6 +1090,7 @@ module cluster_migration_failover {
       result.nodes.get(old).member,
       result.nodes.get(succ).role == Primary,
     }
+    val hadNamedMigration = slotsNaming(migrations, old) != Set()
     all {
       old != succ,
       beltOk(nodes, slots, old, succ),
@@ -910,6 +1105,7 @@ module cluster_migration_failover {
       provisional_target' = result.provisional_target,
       feed_bytes' = result.feed_bytes,
       disconnected_feed' = result.disconnected_feed,
+      repatriating' = result.repatriating,
       handoff_seq' = handoff_seq,
       failover_fence' = Set(),
       spent' = spent,
@@ -917,6 +1113,9 @@ module cluster_migration_failover {
       defects' = { ...defects,
         demotion: defects.demotion or not(demoted),
         fence: defects.fence or not(fenced),
+      },
+      coverage' = { ...coverage,
+        failoverDuringOpenMigration: coverage.failoverDuringOpenMigration or hadNamedMigration,
       },
     }
   }
@@ -928,7 +1127,7 @@ module cluster_migration_failover {
   action failoverForced(old: NodeId, succ: NodeId, obsEpoch: int, obsRole: RoleTag): bool = {
     val st = { nodes: nodes, slots: slots, migrations: migrations, epoch: epoch, node_epoch: node_epoch,
                armed_barriers: armed_barriers, provisional_target: provisional_target,
-               feed_bytes: feed_bytes, disconnected_feed: disconnected_feed }
+               feed_bytes: feed_bytes, disconnected_feed: disconnected_feed, repatriating: repatriating }
     val result = applyFailoverCommon(st, old, succ)
     val fenced = obsEpoch == node_epoch.get(old) and obsRole == nodes.get(old).role
     val demoted = and {
@@ -937,6 +1136,7 @@ module cluster_migration_failover {
       result.nodes.get(old).member,
       result.nodes.get(succ).role == Primary,
     }
+    val hadNamedMigration = slotsNaming(migrations, old) != Set()
     all {
       old != succ,
       beltOk(nodes, slots, old, succ),
@@ -950,6 +1150,7 @@ module cluster_migration_failover {
       provisional_target' = result.provisional_target,
       feed_bytes' = result.feed_bytes,
       disconnected_feed' = result.disconnected_feed,
+      repatriating' = result.repatriating,
       handoff_seq' = handoff_seq,
       failover_fence' = Set(),
       spent' = spent,
@@ -957,6 +1158,17 @@ module cluster_migration_failover {
       defects' = { ...defects,
         demotion: defects.demotion or not(demoted),
         fence: defects.fence or not(fenced),
+      },
+      // beltOk already requires `old` to be a Primary owning >=1 slot, so this ghost is
+      // set on every successful firing — deliberately: the old witness
+      // (`witnessForcedFailoverDemoted`) was vacuous because it scanned *current* state
+      // for "any Replica exists" (satisfied by nodes 3/4's pre-existing role at init,
+      // unrelated to forced failover ever firing); this ghost is set only *inside*
+      // `failoverForced`'s own execution, so it discriminates "forced failover actually
+      // fired" from "a replica happens to exist" — a state no other action can produce.
+      coverage' = { ...coverage,
+        forcedDemotedReplica: true,
+        failoverDuringOpenMigration: coverage.failoverDuringOpenMigration or hadNamedMigration,
       },
     }
   }
@@ -966,14 +1178,58 @@ module cluster_migration_failover {
     epoch' = epoch, node_epoch' = node_epoch, armed_barriers' = armed_barriers,
     provisional_target' = provisional_target, feed_bytes' = feed_bytes, disconnected_feed' = disconnected_feed,
     failover_fence' = Set(), spent' = spent, prev_epoch' = epoch, defects' = defects,
+    repatriating' = repatriating, coverage' = coverage,
   }
 
   action step: bool = {
+    // I8/I9/I10 reachability rework: `any{}` samples every `nondet` once per step, then
+    // picks uniformly among the branches whose guard currently holds for those sampled
+    // values — so a uniform pick over the full domain starves any transition whose guard
+    // needs a *specific*, state-derived value (e.g. beginMigration's source must be the
+    // slot's actual owner; a failover successor must be a replica of the chosen primary).
+    // Below, `s`/`n1`/`n2` stay uniform (still used by actions that want a *fresh*, often
+    // migration-free, slot/node — assignSlot/removeSlot/beginMigration's target, setRole),
+    // while `handoffSlot`/`succGuess` are biased toward a state-derived "currently
+    // interesting" candidate set when nonempty, falling back to the full domain when it
+    // isn't (quint-modeling's "narrower value space with fallback" pattern — this changes
+    // only which transitions the walk is *likely* to try, never which are legal: no guard
+    // or postcondition reads these vals).
+    val openMigSources = migrationSourcesOf(migrations)
+    val openMigSlots = openMigrationSlots(migrations).union(repatriating)
+    val fenceOwners = fencedOwners(failover_fence, slots)
     nondet s = SLOTS.oneOf()
-    nondet n1 = NODES.oneOf()
+    // Fence-owner bias takes priority over migration-source bias: a just-armed barrier is
+    // single-shot and worth firing before it's clobbered, whereas an open migration stays
+    // open across many steps and doesn't need the same urgency (see `fencedOwners` above).
+    nondet n1 = (if (fenceOwners != Set()) fenceOwners else if (openMigSources != Set()) openMigSources else NODES).oneOf()
     nondet n2 = NODES.oneOf()
+    nondet handoffSlot = (if (openMigSlots != Set()) openMigSlots else SLOTS).oneOf()
+    val replicaCandidates = replicasOf(nodes, n1)
+    nondet succGuess = (if (replicaCandidates != Set()) replicaCandidates else NODES).oneOf()
     nondet roleGuess = Set(Primary, Replica).oneOf()
-    nondet epochGuess = Set(node_epoch.get(n1), node_epoch.get(n1) + 1).oneOf()
+    // Failover's `obsEpoch`/`obsRole` are the caller's *observation* of `n1`, which
+    // `fenceOk`/`fenced` then check against the true current values — a different question
+    // from `roleGuess`'s "what role should this node become" above, so splitting them from
+    // a shared guess already removes an accidental ~50%/50% double penalty. `failoverGraceful`
+    // additionally needs `barrierHeld` (a third, independent conjunct), so its natural hit
+    // rate is far lower than auto/forced's: mostly-correct-with-fallback (narrower value
+    // space, not a full guess) rather than the fully-deterministic derivation `beginSource`
+    // uses above, since a mint-once-and-forget derivation would make `fenceOk`'s guard on
+    // *this* action permanently unfalsifiable by `quint run` (an observation that is always
+    // right by construction can never make the guard the deciding conjunct — confirmed by a
+    // mutant that deleted `fenceOk` here surviving 20,000 samples before this fallback was
+    // added). `obsCorrectCoin <= 3` (75%) keeps the reachability win; `> 3` (25%) still
+    // exercises a wrong observation often enough for the guard to matter. Auto/forced keep
+    // the original 2-way guess: they have no barrier conjunct, so a fully-deterministic
+    // derivation overshot their band (58%, up from a healthy 22%) — confirmed by
+    // measurement, not assumption. The stale-observation refusal path keeps dedicated
+    // coverage either way (`failoverRefusesStaleFenceTest`), independent of this random walk.
+    nondet obsCorrectCoin = Set(1, 2, 3, 4).oneOf()
+    val obsEpochGraceful = if (obsCorrectCoin <= 3) node_epoch.get(n1) else node_epoch.get(n1) + 1
+    val obsRoleGraceful = if (obsCorrectCoin <= 3) nodes.get(n1).role
+      else (if (nodes.get(n1).role == Primary) Replica else Primary)
+    nondet obsEpochGuess = Set(node_epoch.get(n1), node_epoch.get(n1) + 1).oneOf()
+    nondet obsRoleGuess = Set(Primary, Replica).oneOf()
     nondet bytesGuess = Set(1, 2, 3, HOLD_BYTE_CAP).oneOf()
     // Sometimes replay a stale seq (one behind the current counter) instead of the
     // live one, so a supersede's now-stale handoff can actually be acted on and
@@ -981,24 +1237,30 @@ module cluster_migration_failover {
     // PrepareSlotHandoff note).
     nondet seqGuess = Set(handoff_seq, if (handoff_seq > 0) handoff_seq - 1 else 0).oneOf()
     nondet forceGuess = Set(true, false).oneOf()
+    // beginMigration's source is derived from the slot's actual owner, not guessed —
+    // `canBeginMigration`'s ownership conjunct is then always structurally satisfiable
+    // (was ~25%, 1-in-4 nodes, under the old uniform n1 guess), with no semantic change:
+    // this is exactly the value `canBeginMigration` requires source to equal.
+    val beginSource = match slots.get(s) { | Some(o) => o | None => n1 }
     any {
       setRole(n1, roleGuess, if (roleGuess == Replica) Some(n2) else None),
       removeNode(n1, forceGuess),
       assignSlot(s, n1),
       removeSlot(s),
-      beginMigration(s, n1, n2),
-      prepareHandoff(s),
-      confirmDrained(s, seqGuess),
-      completeMigration(s, seqGuess),
-      abortHandoff(s, seqGuess),
-      cancelMigration(s),
-      feedBuffer(s, bytesGuess),
+      beginMigration(s, beginSource, n2),
+      prepareHandoff(handoffSlot),
+      confirmDrained(handoffSlot, seqGuess),
+      completeMigration(handoffSlot, seqGuess),
+      abortHandoff(handoffSlot, seqGuess),
+      cancelMigration(handoffSlot),
+      completeRepatriation(handoffSlot),
+      feedBuffer(handoffSlot, bytesGuess),
       markNodeFailed(n1),
       markNodeRecovered(n1),
       armFailoverFence(n1),
-      failoverGraceful(n1, n2, epochGuess, roleGuess),
-      failoverAuto(n1, n2, epochGuess, roleGuess),
-      failoverForced(n1, n2, epochGuess, roleGuess),
+      failoverGraceful(n1, succGuess, obsEpochGraceful, obsRoleGraceful),
+      failoverAuto(n1, succGuess, obsEpochGuess, obsRoleGuess),
+      failoverForced(n1, succGuess, obsEpochGuess, obsRoleGuess),
       stutter,
     }
   }
@@ -1016,17 +1278,38 @@ module cluster_migration_failover {
       | None => false
     })
 
+  // Redesigned this round for I8/I9: the old predicate (`SLOTS.exists(s =>
+  // provisional_target.get(s) == None) and epoch > 0`) was vacuous — the first half is
+  // true for any never-migrated slot (true at `init`), and `epoch > 0` goes true after
+  // *any* `markNodeFailed`, unrelated to graceful failover pruning anything. Backed now
+  // by `coverage.gracefulPruned`, set only inside `failoverGraceful`'s own execution
+  // when it actually prunes a migration open on one of the slots it moves.
   val witnessGracefulFailoverPrunedMigration: bool =
-    SLOTS.exists(s => provisional_target.get(s) == None) and epoch > 0
+    coverage.gracefulPruned
 
+  // Redesigned this round for I8/I9: the old predicate reduced to just `epoch > 0`,
+  // since nodes 3/4 are already Replica+member at `init` — no failover needed to
+  // satisfy it. Backed now by `coverage.forcedDemotedReplica`, set only inside
+  // `failoverForced`'s own execution.
   val witnessForcedFailoverDemoted: bool =
-    NODES.exists(n => nodes.get(n).role == Replica and nodes.get(n).member and epoch > 0)
+    coverage.forcedDemotedReplica
 
   val witnessFeedDisconnected: bool =
     disconnected_feed.size() > 0
 
   val witnessNodeRemoved: bool =
     NODES.exists(n => not(nodes.get(n).member))
+
+  // Added this round for I8/I9: the composite migration x failover region the reviewer
+  // measured at 0.04-1.1% reach — any of the three failover actions firing while the
+  // old primary had an open migration naming it.
+  val witnessFailoverDuringOpenMigration: bool =
+    coverage.failoverDuringOpenMigration
+
+  // Added this round for I13: the new repatriating phase is reached (a Cancel/Abort
+  // with residue has applied but the stream-back has not yet resolved).
+  val witnessRepatriationPending: bool =
+    repatriating.size() > 0
 
   // ---------------------------------------------------------------------------
   // Invariants.
@@ -1084,19 +1367,46 @@ module cluster_migration_failover {
   // Cross-step half INV-EPOCH-1/2 cannot state: the cluster epoch never decreases.
   val inv_epoch_never_decreases: bool = epoch >= prev_epoch
 
-  // Issue 15, ruled + amended: once a slot has no live handoff (its migration was
-  // aborted/cancelled/completed, or never had one), no repatriation residue remains —
-  // no provisional-at-target ghost claim, and no armed barrier still names that slot.
-  // This is the "abort = rollback with repatriation" claim, made falsifiable by the
-  // `provisional_target` ghost field (see its declaration comment for why a plain
-  // "slot owned by source" check would be vacuous in this model's shape).
+  // Issue 15, ruled + amended: once a slot has no live handoff *and* is not mid the
+  // `repatriating` phase (its migration was aborted/cancelled/completed and any
+  // repatriation resolved, or it never had one), no residue remains — no
+  // provisional-at-target ghost claim, and no armed barrier still names that slot.
+  // Restated this round for I13: the amendment's own ordering ("streams back to the
+  // source *before* the Abort applies clean") makes a pending-repatriation state with
+  // residue still visible a legal, ruled-for intermediate — not a violation of "abort =
+  // rollback with repatriation" but the *in-progress* half of that same claim, which is
+  // why `not(repatriating.contains(s))` is now part of the precondition rather than the
+  // claim being dropped. This is still made falsifiable by the `provisional_target`
+  // ghost field (see its declaration comment for why a plain "slot owned by source"
+  // check would be vacuous in this model's shape).
   val inv_abort_repatriates: bool =
     SLOTS.forall(s => {
       val liveHandoff = match migrations.get(s) {
         | Some(m) => m.handoff != None
         | None => false
       }
-      not(liveHandoff) implies (provisional_target.get(s) == None and not(armed_barriers.contains(s)))
+      (not(liveHandoff) and not(repatriating.contains(s)))
+        implies (provisional_target.get(s) == None and not(armed_barriers.contains(s)))
+    })
+
+  // Added this round for I13: the `repatriating` phase's own structural integrity — a
+  // slot mid-phase always still shows the residue it is streaming back (so
+  // `completeRepatriation` has something real to resolve), never a live handoff (both
+  // entry points into the phase clear it, so it cannot be re-prepared/re-armed out from
+  // under the phase), and — the `None` branch below — always still has a live
+  // `Migration` record: both `cancelMigration` and `abortHandoff` only ever add a slot to
+  // `repatriating` in the same step they keep (or write) that slot's migration as
+  // `Some(...)`, so `None` while `repatriating.contains(s)` can only mean some other
+  // action clobbered the record out from under an in-flight phase — caught here rather
+  // than left as a silent gap the way a permissive `None => true` would leave it (found
+  // by mutation testing: a mutant that made `cancelMigration` clear the record
+  // unconditionally, ignoring residue, slipped past this invariant's original `None =>
+  // true` arm and past `inv_abort_repatriates` alike, since neither one asserted the
+  // record must survive while its repatriation is outstanding).
+  val inv_repatriating_well_formed: bool =
+    SLOTS.forall(s => repatriating.contains(s) implies and {
+      provisional_target.get(s) != None or feed_bytes.get(s) > 0 or disconnected_feed.contains(s),
+      match migrations.get(s) { | Some(m) => m.handoff == None | None => false },
     })
 
   // Issue 20, ruled: no failover — planned, automatic, or forced — ever leaves the old
@@ -1135,7 +1445,7 @@ module cluster_migration_failover {
   run happyMigrationTest: bool = {
     init
       .then(beginMigration(1, 1, 2))
-      .expect(migrations.get(1) == Some({ source: 1, target: 2, handoff: None }))
+      .expect(migrations.get(1) == Some({ source: 1, target: 2, handoff: None, cancelling: false }))
       .then(prepareHandoff(1))
       .expect(and {
         barrierArmed(1),
@@ -1213,7 +1523,13 @@ module cluster_migration_failover {
       })
   }
 
-  // (c) Abort mid-handoff -> repatriation, without any failover involved.
+  // (c) Abort mid-handoff -> repatriation, without any failover involved. Restructured
+  // this round for I13: `abortHandoff` no longer clears the residue in the same step —
+  // it opens the `repatriating` phase (barrier released, migration survives, residue
+  // still visible), and a separate `completeRepatriation` resolves it. This is exactly
+  // the "cancel/abort-before-repatriation" intermediate state I13 asked to be made
+  // expressible: without the intermediate `.expect()` below, this same test collapsed
+  // Abort's rollback and its repatriation into a single, unobservable step.
   run abortRepatriatesTest: bool = {
     init
       .then(beginMigration(1, 1, 2))
@@ -1222,10 +1538,74 @@ module cluster_migration_failover {
       .expect(provisional_target.get(1) == Some(2))
       .then(abortHandoff(1, 1))
       .expect(and {
+        // The intermediate, previously-unobservable state: Abort has applied (handoff
+        // released, barrier down) but repatriation has not yet caught up.
         migrations.get(1) != None,
         match migrations.get(1) { | Some(m) => m.handoff == None | None => false },
-        provisional_target.get(1) == None,
+        provisional_target.get(1) == Some(2),
         not(barrierArmed(1)),
+        repatriating.contains(1),
+      })
+      .then(completeRepatriation(1))
+      .expect(and {
+        migrations.get(1) != None,
+        provisional_target.get(1) == None,
+        not(repatriating.contains(1)),
+      })
+  }
+
+  // Added this round for I13: Cancel (not just Abort) with residue also opens the
+  // repatriating phase — cancel-before-repatriation is now a real, distinct
+  // intermediate state (the migration record survives, marked `cancelling: true`, until
+  // `completeRepatriation` actually removes it — "the Abort applies clean," in the
+  // amendment's words).
+  run cancelBeforeRepatriationTest: bool = {
+    init
+      .then(beginMigration(1, 1, 2))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .expect(provisional_target.get(1) == Some(2))
+      .then(cancelMigration(1))
+      .expect(and {
+        // Cancel has applied (barrier down) but the migration record is NOT yet
+        // removed and the residue has NOT yet streamed back — the exact intermediate
+        // state I13 asked to be expressible.
+        match migrations.get(1) { | Some(m) => m.cancelling and m.handoff == None | None => false },
+        provisional_target.get(1) == Some(2),
+        not(barrierArmed(1)),
+        repatriating.contains(1),
+      })
+      .then(completeRepatriation(1))
+      .expect(and {
+        migrations.get(1) == None,
+        provisional_target.get(1) == None,
+        not(repatriating.contains(1)),
+      })
+  }
+
+  // While pending, the phase resists re-entry: a second Cancel is refused. (`.fail()`
+  // is the terminal step of a run — see cluster_admission.qnt's tests for the same
+  // discipline — so this is its own test rather than a mid-chain step.)
+  run cancelRefusedWhileRepatriatingTest: bool = {
+    init
+      .then(beginMigration(1, 1, 2))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(cancelMigration(1))
+      .expect(repatriating.contains(1))
+      .then(cancelMigration(1).fail())
+  }
+
+  // The no-residue case is unaffected by this round's change: cancelling a migration
+  // that never reached a drained handoff removes the record immediately, exactly as
+  // before, with no repatriating phase opened at all.
+  run cancelWithoutResidueAppliesImmediatelyTest: bool = {
+    init
+      .then(beginMigration(1, 1, 2))
+      .then(cancelMigration(1))
+      .expect(and {
+        migrations.get(1) == None,
+        not(repatriating.contains(1)),
       })
   }
 
