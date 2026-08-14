@@ -476,3 +476,11 @@ unparseable — fail-stop over silent deletion of the rollback copy. Supersedes
 issue 20's step-4 sequence-name note. Graduated to
 [spec-gaps issue 27](../spec-gaps/issues/open/27-backup-naming-monotonic-counter-prune-refuses-unparseable.md);
 coordinate with issues 20/21 (shared rename machinery, in-data-dir layout).
+
+## MIN-8 — TR-BLOCKING-003's current-code cell misdescribes the client-visible shape
+
+Ruling: **correct cell now** (spec-only). Drop yields `$-1`, timeout yields
+op-aware `*-1` — "exactly as an ordinary timeout" is false and hides the
+admission-limit bug's severity. Cell states the difference and cross-refs
+issue 08's MAJ-11 amendment as the behavioral rewrite. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).

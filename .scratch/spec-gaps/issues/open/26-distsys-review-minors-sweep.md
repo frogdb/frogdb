@@ -36,6 +36,22 @@ Ruling: **full counter redesign** — graduated to
 (persisted monotonic counter naming + prune refuses unparseable entries).
 No checklist entry here; issue 27 carries the work.
 
+### MIN-8 — TR-BLOCKING-003's current-code cell misdescribes the client-visible shape
+
+Ruling: **correct cell now** (spec-only). The cell claims a dropped sender
+resolves "exactly as an ordinary timeout would (TR-BLOCKING-009)" — false:
+timeout yields `op.timeout_reply()` (`*-1` for BLPOP, `coordinator.rs:101`),
+the drop yields RESP nil `$-1` (`coordinator.rs:40`, `response.rs:285`). State
+the shape difference honestly and cross-ref
+[issue 08](08-blocking-command-rows.md)'s MAJ-11 amendment (sender-drops
+eliminated as signaling; drop then uniquely means channel death →
+`-ERR shard unavailable`) as the behavioral fix that rewrites this row. Spec
+never lies in the interim; this sentence was hiding the admission-limit bug's
+severity (observability-accuracy principle).
+
+- [ ] TR-BLOCKING-003 cell corrected ($-1 vs `*-1` stated, issue 08 cross-ref);
+      `just lint-spec` green
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
