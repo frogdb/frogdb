@@ -106,3 +106,10 @@ Ruling: **accept, bundle with CRIT-4's restructure** (one issue, one pass over t
 machinery). The restructure keeps `killed()` polled during the wait; CRIT-5-specific
 remainder is the CLIENT KILL TR row + forcing test. Same
 [spec-gaps issue 13](../spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md).
+
+## CRIT-6 — `replication_state.json`: shared temp path, two writers, no fsync
+
+Ruling: **accept, file issue** (reviewer's resolution: `stamp_with` reuse + unique temp
++ serialized writers + FM row). Filed as
+[replication issue 30](../replication-correctness/issues/open/30-replication-state-file-atomic-durable-single-writer.md)
+(ready-for-agent); rides the implementation wave.
