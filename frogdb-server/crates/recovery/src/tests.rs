@@ -237,6 +237,71 @@ fn corrupt_functions_file_is_tolerated() {
     );
 }
 
+// FM-PERSISTENCE-037
+/// The tolerance above is counted, not silent: a `functions.fdb` that will not
+/// read is one lost library in `RecoveryStats` and one increment of
+/// `frogdb_recovery_functions_failed_total`, so a `FUNCTION LIST` that came back
+/// smaller than what was saved has something to be noticed by.
+#[test]
+fn a_corrupt_functions_file_is_counted_and_exported() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    mark(&db_dir);
+    std::fs::write(db_dir.join("functions.fdb"), b"not a valid function dump").unwrap();
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let metrics = Arc::new(RecordingMetricsRecorder::default());
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        continue_policy(),
+        1,
+        metrics.clone(),
+    );
+
+    let recovered = recover(&inputs).expect("corrupt functions.fdb is not fatal");
+    assert_eq!(
+        recovered.stats.functions_failed, 1,
+        "the downgraded file must be counted once"
+    );
+    assert_eq!(
+        metrics.total("frogdb_recovery_functions_failed_total"),
+        1,
+        "the count must reach the process metric, not only the boot stats"
+    );
+}
+
+// FM-PERSISTENCE-037
+/// The counter is a *failure* signal: a boot with no `functions.fdb` at all is
+/// the ordinary fresh-boot case and must not look like a lost library.
+#[test]
+fn a_boot_with_no_functions_file_counts_no_failures() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+    mark(&db_dir);
+
+    let cfg = persistence_config(&db_dir, true);
+    let repl_cfg = replication_config("standalone");
+    let cluster_cfg = cluster_config(false);
+    let metrics = Arc::new(RecordingMetricsRecorder::default());
+    let inputs = inputs_for(
+        &cfg,
+        &repl_cfg,
+        &cluster_cfg,
+        continue_policy(),
+        1,
+        metrics.clone(),
+    );
+
+    let recovered = recover(&inputs).expect("a fresh data dir recovers");
+    assert!(recovered.functions.is_empty());
+    assert_eq!(recovered.stats.functions_failed, 0);
+    assert_eq!(metrics.total("frogdb_recovery_functions_failed_total"), 0);
+}
+
 // FM-PERSISTENCE-028
 // FM-PERSISTENCE-038
 #[test]
@@ -1260,6 +1325,10 @@ fn persisted_functions_are_restored() {
         recovered.functions,
         vec![("greetlib".to_string(), code.to_string())],
         "the stored library must survive recovery, not be silently dropped"
+    );
+    assert_eq!(
+        recovered.stats.functions_failed, 0,
+        "a library that loaded is not a lost one"
     );
 }
 

@@ -486,7 +486,7 @@ impl ShardPersistence {
     }
 
     /// Whether a write must be staged with
-    /// [`Durability::Confirm`](super::persistence::Durability::Confirm) — i.e.
+    /// [`Durability::Committed`](super::persistence::Durability::Committed) — i.e.
     /// whether the acknowledgement waits for the commit.
     ///
     /// Two orthogonal knobs, either of which is sufficient (FM-PERSISTENCE-002):

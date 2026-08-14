@@ -330,6 +330,7 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
          rdb_last_load_keys_expired:{}\r\n\
          rdb_last_load_keys_loaded:{}\r\n\
          rdb_last_load_keys_failed:{}\r\n\
+         functions_last_load_failed:{}\r\n\
          aof_enabled:0\r\n\
          aof_rewrite_in_progress:0\r\n\
          aof_rewrite_scheduled:0\r\n\
@@ -345,6 +346,7 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
         ctx.recovery_stats.keys_expired_skipped,
         ctx.recovery_stats.keys_loaded,
         ctx.recovery_stats.keys_failed,
+        ctx.recovery_stats.functions_failed,
     ));
     info
 }

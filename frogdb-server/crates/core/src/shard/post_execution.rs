@@ -195,7 +195,7 @@ pub(crate) struct RemovalPropagation {
 
 /// Whether the pipeline persists the WAL, or the caller already did so.
 ///
-/// In rollback mode the caller runs `persist(records, Durability::Confirm)`
+/// In rollback mode the caller runs `persist(records, Durability::Committed)`
 /// *before* invoking the pipeline and rolls back on failure, so the pipeline
 /// must not persist again.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

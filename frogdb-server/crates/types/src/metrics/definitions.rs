@@ -232,6 +232,16 @@ define_metrics! {
     /// Total keys skipped at startup because their stored value failed to deserialize
     counter RecoveryKeysFailed("frogdb_recovery_keys_failed_total") {}
 
+    // Raised at boot when a persisted function library does not come back:
+    // `functions.fdb` unreadable or corrupt (the whole file is downgraded to
+    // "no functions"), or a single library that fails to parse or to register.
+    // Startup tolerates all three deliberately — a stored script must not keep
+    // the keyspace offline — so, exactly as with `RecoveryKeysFailed` above,
+    // this counter is the only positive signal that `FUNCTION LIST` came back
+    // smaller than what was saved.
+    /// Total function libraries lost at startup because the file or the library failed to load
+    counter RecoveryFunctionsFailed("frogdb_recovery_functions_failed_total") {}
+
     /// Total HyperLogLog register-delta operands persisted as WAL merges
     /// (dense-HLL PFADD writes that took the merge-delta path instead of a
     /// full value Put).

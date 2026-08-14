@@ -273,6 +273,11 @@ impl InfoSection for PersistenceSection {
             .field("rdb_last_load_keys_expired", p.load_keys_expired)
             .field("rdb_last_load_keys_loaded", p.load_keys_loaded)
             .field("rdb_last_load_keys_failed", p.load_keys_failed)
+            // Same argument one layer up: a function library that did not come
+            // back is tolerated on purpose, so without a count a boot that lost
+            // one looks identical to a boot that never had it
+            // (FM-PERSISTENCE-037).
+            .field("functions_last_load_failed", p.load_functions_failed)
             .field("aof_enabled", 0)
             .field("aof_rewrite_in_progress", 0)
             .field("aof_rewrite_scheduled", 0)

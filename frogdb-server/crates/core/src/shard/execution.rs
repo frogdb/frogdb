@@ -481,7 +481,7 @@ impl ShardWorker {
                 match self
                     .persist(
                         std::slice::from_ref(&record),
-                        super::persistence::Durability::Confirm,
+                        super::persistence::Durability::Committed,
                     )
                     .await
                 {
@@ -699,7 +699,7 @@ impl ShardWorker {
                 // `continue` it is logged and accounted, and the transaction is
                 // acknowledged anyway (FM-PERSISTENCE-005).
                 match self
-                    .persist(&write_infos, super::persistence::Durability::Confirm)
+                    .persist(&write_infos, super::persistence::Durability::Committed)
                     .await
                 {
                     Ok(()) => {}

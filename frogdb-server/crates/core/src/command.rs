@@ -575,7 +575,7 @@ impl<'a> WriteRecord<'a> {
     ///
     /// The single delta-vs-full routing decision, shared by the effect path and
     /// the rollback path — both funnel through [`super::shard`] `persist`
-    /// (`Durability::FireAndForget` vs `Durability::Confirm`) — so the two can
+    /// (`Durability::FireAndForget` vs `Durability::Committed`) — so the two can
     /// never disagree on whether a dense PFADD becomes a `Merge` or a `Put`.
     pub fn wal_actions(&self) -> SmallVec<[WalAction<'_>; 2]> {
         self.handler

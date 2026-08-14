@@ -425,7 +425,7 @@ impl FlushOutcomes {
     /// synced one: whether committing implies fsync is the durability mode's
     /// decision (see the durability-mode rows in
     /// `specs/persistence.md`), and an operator who chose
-    /// `periodic`/`async` must not have every `Durability::Confirm` write fail
+    /// `periodic`/`async` must not have every `Durability::Committed` write fail
     /// because it demanded an fsync the mode does not perform.
     ///
     /// `flush_result` is the outcome of the explicit flush that drained the

@@ -6,6 +6,7 @@
 //! component the recovery seam deliberately does not touch.
 
 use anyhow::Result;
+use frogdb_types::metrics::definitions::RecoveryFunctionsFailed;
 use tracing::warn;
 
 use crate::RecoveryInputs;
@@ -16,13 +17,21 @@ use crate::RecoveryInputs;
 /// An unreadable or corrupt file is *not* a recovery failure: it is logged and
 /// treated as "no functions", matching the prior inline behavior — a corrupt
 /// function library should not block the database from starting.
-pub(crate) fn restore(inputs: &RecoveryInputs<'_>) -> Result<Vec<(String, String)>> {
+///
+/// The tolerance is counted, not silent: a downgraded file returns a failure
+/// count of `1` and increments `frogdb_recovery_functions_failed_total`, so a
+/// boot that came back with a smaller `FUNCTION LIST` is distinguishable from
+/// one that never had the libraries (FM-PERSISTENCE-037). One, not the number
+/// of libraries in the file — the file did not parse, so how many it held is
+/// exactly what is unknown.
+pub(crate) fn restore(inputs: &RecoveryInputs<'_>) -> Result<(Vec<(String, String)>, u64)> {
     let functions_path = inputs.data_dir.join("functions.fdb");
     match frogdb_core::load_from_file(&functions_path) {
-        Ok(libraries) => Ok(libraries),
+        Ok(libraries) => Ok((libraries, 0)),
         Err(e) => {
             warn!(error = %e, "Failed to load persisted functions");
-            Ok(Vec::new())
+            RecoveryFunctionsFailed::inc(inputs.metrics_recorder.as_ref());
+            Ok((Vec::new(), 1))
         }
     }
 }

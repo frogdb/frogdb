@@ -4,7 +4,7 @@
     "source": "frogdb-server/crates/telemetry/src/definitions.rs",
     "regenerate": "just docs-gen"
   },
-  "count": 95,
+  "count": 96,
   "metrics": [
     {
       "name": "frogdb_active_version",
@@ -590,6 +590,13 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "frogdb_recovery_functions_failed_total",
+      "type": "counter",
+      "help": "Total function libraries lost at startup because the file or the library failed to load",
+      "group": "recovery",
+      "labels": []
     },
     {
       "name": "frogdb_recovery_keys_failed_total",

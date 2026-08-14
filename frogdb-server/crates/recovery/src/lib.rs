@@ -210,10 +210,11 @@ pub fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryEr
             .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
         let rocks = shards::open_rocks(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::OpenRocks, e))?;
-        let (shards, stats) = shards::restore(inputs, &rocks)
+        let (shards, mut stats) = shards::restore(inputs, &rocks)
             .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreShards, e))?;
-        let functions = functions::restore(inputs)
+        let (functions, functions_failed) = functions::restore(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::RestoreFunctions, e))?;
+        stats.functions_failed = functions_failed;
         (Some(rocks), shards, functions, installed, stats)
     } else {
         info!("Persistence disabled");

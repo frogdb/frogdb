@@ -35,6 +35,16 @@ pub struct RecoveryStats {
     /// Number of keys that failed to deserialize.
     pub keys_failed: u64,
 
+    /// Number of persisted function libraries that did not come back: an
+    /// unreadable or corrupt `functions.fdb` (counted once — the file's library
+    /// count is exactly what could not be read), plus each library that parsed
+    /// or registered badly in the wiring layer.
+    ///
+    /// Recovery tolerates all three (a stored script must not keep the keyspace
+    /// offline), so without this count a boot that lost libraries looks
+    /// identical to one that never had them.
+    pub functions_failed: u64,
+
     /// Number of warm keys recovered from tiered storage.
     pub warm_keys_loaded: u64,
 

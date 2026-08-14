@@ -11,6 +11,7 @@ use frogdb_core::sync::{Arc, AtomicU64};
 use frogdb_core::{
     CommandRegistry, ExpiryIndex, HashMapStore, MetricsRecorder, ShardReceiver, ShardSender,
 };
+use frogdb_telemetry::definitions::RecoveryFunctionsFailed;
 use frogdb_telemetry::otlp::{CompositeRecorder, OtlpRecorder};
 use frogdb_telemetry::{HealthChecker, PrometheusRecorder, TaskMonitorRegistry};
 use tokio::sync::mpsc;
@@ -278,7 +279,11 @@ pub(super) async fn init_infrastructure(
     let persisted_functions = recovered.functions;
     let recovered_replication = recovered.replication;
     let recovered_raft_storage = recovered.raft_storage;
-    let recovery_stats = recovered.stats;
+    // Mutable because phase 4's failure count is completed here: recovery reads
+    // the libraries, the wiring layer below parses and registers them, and a
+    // library lost at either step counts the same to an operator reading
+    // `functions_last_load_failed` (FM-PERSISTENCE-037).
+    let mut recovery_stats = recovered.stats;
 
     // Runtime concern: spawn the periodic WAL sync task after recovery.
     let periodic_sync_handle = startup::spawn_wal_sync_if_periodic(
@@ -421,15 +426,22 @@ pub(super) async fn init_infrastructure(
         );
         let mut registry = function_registry.write().unwrap();
         for (name, code) in persisted_functions {
-            match frogdb_core::load_library(&code) {
-                Ok(library) => {
-                    if let Err(e) = registry.load_library(library, false) {
+            let failed = match frogdb_core::load_library(&code) {
+                Ok(library) => match registry.load_library(library, false) {
+                    Ok(_) => false,
+                    Err(e) => {
                         warn!(library = %name, error = %e, "Failed to load persisted function library");
+                        true
                     }
-                }
+                },
                 Err(e) => {
                     warn!(library = %name, error = %e, "Failed to parse persisted function library");
+                    true
                 }
+            };
+            if failed {
+                recovery_stats.functions_failed += 1;
+                RecoveryFunctionsFailed::inc(metrics_recorder.as_ref());
             }
         }
         info!("Persisted functions loaded");

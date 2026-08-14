@@ -643,6 +643,11 @@ pub struct PersistenceSnapshot {
     /// deserialize (`rdb_last_load_keys_failed`, a FrogDB extension). Non-zero
     /// means the keyspace came back smaller than what is on disk.
     pub load_keys_failed: u64,
+    /// Function libraries this boot lost — an unreadable `functions.fdb`, or a
+    /// library that would not parse or register (`functions_last_load_failed`,
+    /// a FrogDB extension with no Redis counterpart). Non-zero means
+    /// `FUNCTION LIST` is smaller than what was saved.
+    pub load_functions_failed: u64,
 }
 
 /// Latency-histogram handles for the Latencystats section.

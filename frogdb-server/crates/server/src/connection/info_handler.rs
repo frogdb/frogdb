@@ -194,6 +194,7 @@ impl ConnectionHandler {
             load_keys_loaded: self.admin.recovery_stats.keys_loaded,
             load_keys_expired: self.admin.recovery_stats.keys_expired_skipped,
             load_keys_failed: self.admin.recovery_stats.keys_failed,
+            load_functions_failed: self.admin.recovery_stats.functions_failed,
         };
 
         let baseline = crate::latency_test::get_global_baseline().map(|info| BaselineSnapshot {

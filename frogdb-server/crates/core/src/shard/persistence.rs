@@ -34,19 +34,25 @@ impl ShardWorker {
 // [`execute_wal_action`] performs are unit-testable without a `ShardWorker` or
 // RocksDB.
 
-/// Whether the persist bridge confirms durability after staging a command's
-/// WAL actions. The single axis of variation that used to be three functions
-/// (`persist_by_strategy`, `persist_and_confirm`, `persist_transaction_to_wal`),
-/// expressed as data the way [`WalPhase`](super::post_execution) expresses its
-/// own (proposal 03).
+/// Whether the persist bridge waits for the command's WAL actions to reach
+/// storage before returning. The single axis of variation that used to be three
+/// functions (`persist_by_strategy`, `persist_and_confirm`,
+/// `persist_transaction_to_wal`), expressed as data the way
+/// [`WalPhase`](super::post_execution) expresses its own (proposal 03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Durability {
-    /// Rollback mode: snapshot the sequence before the first write, stage every
-    /// action, then `flush_through` the snapshot so the caller can propagate a
-    /// flush failure. Confirmation fails if the flush fails *or* if a background
+    /// Snapshot the sequence before the first write, stage every action, then
+    /// `flush_through` the snapshot so the caller can propagate a flush failure.
+    /// Confirmation fails if the flush fails *or* if a background
     /// (size-threshold/timeout) flush that already carried any of these entries
     /// failed — an acked write must never outrun a swallowed flush.
-    Confirm,
+    ///
+    /// Named for what it guarantees at every durability mode: the batch reached
+    /// *storage*. Whether storage means the device is the durability mode's
+    /// business — `sync` fsyncs the commit this waits on, `periodic`/`async`
+    /// do not (FM-PERSISTENCE-043). The former name, `Confirm`, read as a
+    /// durability guarantee at every call site and only was one under `sync`.
+    Committed,
     /// Effect (hot) path: stage each action and log on error; the flush pipeline
     /// owns durability asynchronously. Never calls `flush_through`.
     FireAndForget,
@@ -286,7 +292,7 @@ async fn persist_records(
     };
 
     match durability {
-        Durability::Confirm => {
+        Durability::Committed => {
             opened?;
             staged?;
             closed?;
@@ -311,7 +317,7 @@ async fn stage_actions(
 ) -> std::io::Result<()> {
     for action in actions {
         match durability {
-            Durability::Confirm => execute_wal_action(t, action).await?,
+            Durability::Committed => execute_wal_action(t, action).await?,
             Durability::FireAndForget => {
                 let _ = execute_wal_action(t, action)
                     .await
@@ -705,7 +711,7 @@ mod tests {
         let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
 
         let t = TestTarget::new(&[]);
-        persist_records(&t, &records, Durability::Confirm)
+        persist_records(&t, &records, Durability::Committed)
             .await
             .unwrap();
 
@@ -752,7 +758,7 @@ mod tests {
         let records = [WriteRecord::new(&cmd, &a)];
 
         let t = TestTarget::flush_failing(&[]);
-        let result = persist_records(&t, &records, Durability::Confirm).await;
+        let result = persist_records(&t, &records, Durability::Committed).await;
 
         assert!(result.is_err(), "flush failure must propagate");
         assert_eq!(t.recorded(), vec![Write::Set(b"a".to_vec())]);
@@ -768,7 +774,7 @@ mod tests {
         let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
 
         let t = TestTarget::failing();
-        let result = persist_records(&t, &records, Durability::Confirm).await;
+        let result = persist_records(&t, &records, Durability::Committed).await;
 
         assert!(result.is_err(), "write failure must propagate");
         // First write failed -> `?` aborted before the second write and the flush.
@@ -787,7 +793,7 @@ mod tests {
         let a = record_args(b"a");
         let records = [WriteRecord::new(&cmd, &a)];
 
-        for durability in [Durability::Confirm, Durability::FireAndForget] {
+        for durability in [Durability::Committed, Durability::FireAndForget] {
             let t = TestTarget::no_wal();
             persist_records(&t, &records, durability).await.unwrap();
             assert!(
@@ -815,7 +821,7 @@ mod tests {
         let a = record_args(b"a");
         let records = [WriteRecord::new(&cmd, &a)];
 
-        for durability in [Durability::Confirm, Durability::FireAndForget] {
+        for durability in [Durability::Committed, Durability::FireAndForget] {
             let t = TestTarget::new(&[]);
             persist_records(&t, &records, durability).await.unwrap();
             assert_eq!(t.recorded(), vec![Write::Set(b"a".to_vec())]);
@@ -843,7 +849,7 @@ mod tests {
             WriteRecord::new(&cmd, &c),
         ];
 
-        for durability in [Durability::Confirm, Durability::FireAndForget] {
+        for durability in [Durability::Committed, Durability::FireAndForget] {
             let t = TestTarget::new(&[]);
             persist_records(&t, &records, durability).await.unwrap();
             assert_eq!(
@@ -866,7 +872,7 @@ mod tests {
         let records = [WriteRecord::new(&cmd, &a), WriteRecord::new(&cmd, &b)];
 
         let t = TestTarget::failing();
-        let result = persist_records(&t, &records, Durability::Confirm).await;
+        let result = persist_records(&t, &records, Durability::Committed).await;
 
         assert!(result.is_err(), "write failure must still propagate");
         assert_eq!(
@@ -890,7 +896,7 @@ mod tests {
 
         let t = TestTarget::group_failing();
         assert!(
-            persist_records(&t, &records, Durability::Confirm)
+            persist_records(&t, &records, Durability::Committed)
                 .await
                 .is_err(),
             "Confirm propagates a dead WAL channel"
