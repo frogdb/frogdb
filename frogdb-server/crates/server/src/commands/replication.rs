@@ -493,8 +493,11 @@ pub(crate) const WAIT_ON_REPLICA_ERR: &str = "ERR WAIT cannot be used with repli
 /// The error a WAIT parked across a demotion is released with, matching Redis's
 /// `disconnectAllBlockedClients` (`replication.c`) verbatim. A count would be a
 /// worse answer than an error: the stream it counted acks on is gone.
-pub(crate) const WAIT_ROLE_CHANGED_ERR: &str =
-    "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)";
+///
+/// The same string the shards answer their own parked waiters with on a
+/// demotion, aliased rather than repeated so the two halves of one event cannot
+/// drift apart (`specs/blocking.md` FM-BLOCKING-007, FM-BLOCKING-010).
+pub(crate) const WAIT_ROLE_CHANGED_ERR: &str = frogdb_core::ROLE_CHANGED_UNBLOCK_ERR;
 
 /// Parse and validate `WAIT <numreplicas> <timeout_ms>` arguments.
 ///

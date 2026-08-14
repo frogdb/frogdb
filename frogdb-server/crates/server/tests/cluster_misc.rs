@@ -1510,6 +1510,7 @@ async fn test_wait_ignores_slot_migration_target() {
 /// drives `RoleManager::demote` -> `end_primary_stint`, which releases the
 /// parked waits alongside the downstream disconnect. Pinned separately from the
 /// standalone case because the trigger, not the mechanism, is what differs.
+// FM-BLOCKING-010
 #[tokio::test]
 async fn test_wait_unblocked_on_cluster_demotion() {
     let mut harness = ClusterTestHarness::new();

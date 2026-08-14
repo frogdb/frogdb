@@ -537,6 +537,17 @@ pub enum BlockingMsg {
         /// already been served/GC'd (its response is in the client's channel).
         ack: oneshot::Sender<UnregisterAck>,
     },
+
+    /// Release every waiter parked on this shard: the node has stopped being a
+    /// primary.
+    ///
+    /// Fire-and-forget, and deliberately unacknowledged — the sender
+    /// (`RoleManager::demote`) is synchronous. Ordering does the work an ack
+    /// would: the message lands on the shard's serial mailbox *before* the
+    /// inbound replication stream is started, so no replicated push can reach
+    /// the shard ahead of the release and be served to a waiter that is now on a
+    /// replica. See `specs/blocking.md` FM-BLOCKING-007.
+    ReleaseAllWaiters,
 }
 
 /// Reply to [`BlockingMsg::UnregisterWait`], resolving the serve-vs-timeout race
@@ -1089,6 +1100,7 @@ impl BlockingMsg {
         match self {
             BlockingMsg::BlockWait { .. } => "BlockWait",
             BlockingMsg::UnregisterWait { .. } => "UnregisterWait",
+            BlockingMsg::ReleaseAllWaiters => "ReleaseAllWaiters",
         }
     }
 }

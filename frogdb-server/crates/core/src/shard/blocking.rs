@@ -46,15 +46,21 @@ impl ShardWorker {
             protocol_version,
         };
 
-        if let Err(e) = self.wait_queue.register(entry) {
+        if let Err(refused) = self.wait_queue.register(entry) {
             tracing::warn!(
                 shard_id = self.shard_id(),
                 conn_id = conn_id,
-                error = %e,
-                "Failed to register blocking wait"
+                error = refused.message,
+                "Refused blocking wait registration at the admission limit"
             );
-            // The response_tx was moved into entry, so we can't send an error back here.
-            // The client will timeout.
+            // The queue hands the entry back precisely so the refusal reaches
+            // the client. Dropping `response_tx` here would surface as
+            // `-ERR shard unavailable`, which is reserved for shard death
+            // (`specs/blocking.md` FM-BLOCKING-006, FM-BLOCKING-004).
+            let _ = refused
+                .entry
+                .response_tx
+                .send(Response::error(refused.message));
         } else {
             tracing::debug!(
                 shard_id = self.shard_id(),
@@ -160,6 +166,42 @@ impl ShardWorker {
             );
         }
 
+        BlockedClients::set(
+            self.observability.metrics(),
+            self.wait_queue.waiter_count() as f64,
+            &shard_label,
+        );
+    }
+
+    /// Release every parked waiter because this node is no longer a primary.
+    ///
+    /// Sent by `RoleManager::demote` through the blocked-waiter fence, ahead of
+    /// the inbound replication stream being started. A waiter served after the
+    /// demotion would be a local write on a replica, diverging its store from
+    /// the stream it is applying; a waiter left parked would sit until its own
+    /// timeout waiting for a push that can only arrive as replicated data. Both
+    /// are answered by draining the queue here — `specs/blocking.md`
+    /// FM-BLOCKING-007.
+    pub(crate) fn handle_release_all_waiters(&mut self) {
+        let drained = self.wait_queue.drain_all();
+
+        if drained.is_empty() {
+            return;
+        }
+
+        tracing::debug!(
+            shard_id = self.shard_id(),
+            count = drained.len(),
+            "Releasing blocked clients after demotion"
+        );
+
+        for entry in drained {
+            let _ = entry
+                .response_tx
+                .send(Response::error(crate::ROLE_CHANGED_UNBLOCK_ERR));
+        }
+
+        let shard_label = self.shard_id().to_string();
         BlockedClients::set(
             self.observability.metrics(),
             self.wait_queue.waiter_count() as f64,
@@ -309,20 +351,45 @@ impl ShardWorker {
 
             // Deadline fast-path. The server is the canonical timeout authority;
             // if a popped waiter's deadline has already elapsed the server has
-            // (or is about to) return a timeout nil, so skip it without
-            // consuming and try the next one. This is a cheap optimization, not
-            // the correctness backstop: a receiver can still be dropped in the
-            // window *after* this check and *before* the `send` below (the
-            // server fires precisely at the deadline). That residual race is
-            // closed by restoring the consumed data on send failure — see the
-            // `Err` arm and [`Restore`] — so no element is ever popped and
-            // delivered to nobody.
+            // (or is about to) return a timeout nil, so answer with that same
+            // op-aware nil without consuming and try the next one. This is a
+            // cheap optimization, not the correctness backstop: a receiver can
+            // still be dropped in the window *after* this check and *before* the
+            // `send` below (the server fires precisely at the deadline). That
+            // residual race is closed by restoring the consumed data on send
+            // failure — see the `Err` arm and [`Restore`] — so no element is
+            // ever popped and delivered to nobody.
+            //
+            // The reply is *sent*, never signalled by dropping `response_tx`:
+            // the coordinator reads a closed channel as shard death
+            // (`specs/blocking.md` FM-BLOCKING-004), so a dropped sender here
+            // would turn an ordinary timeout into `-ERR shard unavailable`. The
+            // send is a no-op when the coordinator's own deadline branch already
+            // fired, which is the common case.
             if entry.deadline.is_some_and(|d| d <= now) {
+                let shard_label = self.shard_id().to_string();
+                let _ = entry.response_tx.send(entry.op.timeout_reply());
+                BlockedTimeoutTotal::inc(self.observability.metrics(), &shard_label);
+                BlockedClients::set(
+                    self.observability.metrics(),
+                    self.wait_queue.waiter_count() as f64,
+                    &shard_label,
+                );
                 continue;
             }
 
             match strat.satisfy(&mut self.store, key, &entry) {
-                Satisfaction::Retry => continue,
+                // Nothing was consumed, but the waiter has already been popped
+                // out of the queue, so it must still be answered rather than
+                // dropped — see the FM-BLOCKING-004 note above. The final
+                // taxonomy of this arm (proven dead, or re-register with the
+                // original deadline) is spec-gaps issue 19; until then the
+                // op-aware nil at least keeps the shape right and the channel
+                // meaning intact.
+                Satisfaction::Retry => {
+                    let _ = entry.response_tx.send(entry.op.timeout_reply());
+                    continue;
+                }
                 Satisfaction::Reject(reply) => self.complete_blocked_waiter(entry, reply),
                 Satisfaction::Done {
                     reply,
@@ -2009,6 +2076,7 @@ mod tests {
     /// redirect seam, so an IPv6 target is bracketed
     /// (`MOVED <slot> [<v6>]:<port>`). The pre-fix inline `ip():port()` join
     /// produced the unparseable `MOVED <slot> 2001:db8::1:6379`.
+    // FM-BLOCKING-008
     #[test]
     fn slot_migrated_moved_brackets_ipv6() {
         use std::net::SocketAddr;
@@ -2035,6 +2103,7 @@ mod tests {
     }
 
     /// IPv4 targets keep the plain `host:port` rendering.
+    // FM-BLOCKING-008
     #[test]
     fn slot_migrated_moved_ipv4_plain() {
         use std::net::SocketAddr;
@@ -2062,7 +2131,7 @@ mod tests {
     /// blocked client — with `-CLUSTERDOWN`, the same rendering routing uses for
     /// "owner known, address unknown". Dropping the notice would park a
     /// zero-timeout `BLPOP` forever on a slot this node no longer serves.
-    // FM-CLUSTER-038
+    // FM-CLUSTER-038, FM-BLOCKING-008
     #[test]
     fn slot_migrated_without_a_known_target_replies_clusterdown() {
         let (mut worker, _msg_tx, _conn_tx) = build_worker();
@@ -2086,5 +2155,225 @@ mod tests {
             0,
             "the waiter is drained, not merely replied to"
         );
+    }
+
+    // ---- Drop-elimination: every shard-side resolution *sends* ------------
+
+    fn park(
+        worker: &mut ShardWorker,
+        conn_id: u64,
+        keys: Vec<Bytes>,
+        deadline: Option<Instant>,
+    ) -> oneshot::Receiver<Response> {
+        let (tx, rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(WaitEntry {
+                conn_id,
+                keys,
+                op: BlockingOp::BLPop,
+                response_tx: tx,
+                deadline,
+                protocol_version: ProtocolVersion::default(),
+            })
+            .expect("registration under test is within the queue's bounds");
+        rx
+    }
+
+    /// A registration refused by the global bound replies with that bound's own
+    /// error and parks nothing. The queue hands the entry back rather than
+    /// dropping it precisely so the refusal is not read as shard death.
+    // FM-BLOCKING-006
+    #[test]
+    fn admission_refusal_at_the_global_limit_replies_and_registers_nothing() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        // One waiter node-wide, per-key bound disabled, so the second
+        // registration can only be refused by the global bound.
+        worker.set_wait_queue_limits(0, 1);
+
+        let (tx_a, _rx_a) = oneshot::channel();
+        worker.handle_block_wait(
+            1,
+            vec![Bytes::from_static(b"ka")],
+            BlockingOp::BLPop,
+            tx_a,
+            None,
+            ProtocolVersion::default(),
+        );
+        assert_eq!(worker.wait_queue.waiter_count(), 1);
+
+        let (tx_b, mut rx_b) = oneshot::channel();
+        worker.handle_block_wait(
+            2,
+            vec![Bytes::from_static(b"kb")],
+            BlockingOp::BLPop,
+            tx_b,
+            None,
+            ProtocolVersion::default(),
+        );
+
+        assert_eq!(
+            rx_b.try_recv()
+                .expect("the refusal is sent, not signalled by dropping the sender"),
+            Response::error(crate::shard::wait_queue::MAX_BLOCKED_CONNECTIONS_ERR),
+        );
+        assert_eq!(
+            worker.wait_queue.waiter_count(),
+            1,
+            "the refused waiter is not parked"
+        );
+        assert!(!worker.wait_queue.has_waiters(&Bytes::from_static(b"kb")));
+    }
+
+    /// The per-key bound refuses with its own distinct error, and — because the
+    /// bound is checked across every requested key before any insertion — a
+    /// multi-key wait refused on its last key leaves no entry under the earlier
+    /// ones.
+    // FM-BLOCKING-006
+    #[test]
+    fn admission_refusal_at_the_per_key_limit_replies_and_registers_nothing() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        // One waiter per key, global bound disabled.
+        worker.set_wait_queue_limits(1, 0);
+
+        let hot = Bytes::from_static(b"hot");
+        let cold = Bytes::from_static(b"cold");
+        let _parked = park(&mut worker, 1, vec![hot.clone()], None);
+
+        let (tx, mut rx) = oneshot::channel();
+        worker.handle_block_wait(
+            2,
+            vec![cold.clone(), hot.clone()],
+            BlockingOp::BLPop,
+            tx,
+            None,
+            ProtocolVersion::default(),
+        );
+
+        assert_eq!(
+            rx.try_recv()
+                .expect("the refusal is sent, not signalled by dropping the sender"),
+            Response::error(crate::shard::wait_queue::MAX_WAITERS_PER_KEY_ERR),
+        );
+        assert_eq!(
+            worker.wait_queue.waiter_count(),
+            1,
+            "only the first waiter is parked"
+        );
+        assert!(
+            !worker.wait_queue.has_waiters(&cold),
+            "a refusal on a later key leaves nothing under the earlier ones"
+        );
+    }
+
+    /// Data arriving for a waiter whose deadline has already elapsed answers it
+    /// with the op-aware timeout nil and consumes nothing. Before the fix the
+    /// fast-path dropped `response_tx`, which the coordinator now reads as
+    /// `-ERR shard unavailable` — an ordinary timeout reported as shard death.
+    // FM-BLOCKING-002
+    #[test]
+    fn push_after_deadline_elapsed_replies_with_the_op_aware_nil() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"expired-waiter-key");
+        let mut rx = park(
+            &mut worker,
+            7,
+            vec![key.clone()],
+            Some(Instant::now() - std::time::Duration::from_millis(50)),
+        );
+
+        let mut list = Value::list();
+        list.as_list_mut()
+            .unwrap()
+            .push_back(Bytes::from_static(b"a"));
+        worker.store.set(key.clone(), list);
+
+        worker.try_satisfy_list_waiters(&key);
+
+        assert_eq!(
+            rx.try_recv()
+                .expect("the timeout nil is sent, not signalled by dropping the sender"),
+            Response::NullArray,
+            "BLPOP's timeout shape, and never the shard-death error"
+        );
+        assert!(
+            worker
+                .store
+                .get_hot(&key)
+                .is_some_and(|v| v.as_list().is_some_and(|l| l.len() == 1)),
+            "an expired waiter consumes nothing"
+        );
+        assert_eq!(worker.wait_queue.waiter_count(), 0);
+    }
+
+    /// Demotion drains every parked waiter with the role-change error, and the
+    /// release is one-shot: a wait registered *after* it (the shard mailbox is
+    /// serial, so ordering here is exact) stays parked.
+    // FM-BLOCKING-007
+    #[test]
+    fn demotion_release_answers_every_waiter_and_empties_the_queue() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let mut parked: Vec<oneshot::Receiver<Response>> = (0..3u64)
+            .map(|i| park(&mut worker, i, vec![Bytes::from(format!("k{i}"))], None))
+            .collect();
+        assert_eq!(worker.wait_queue.waiter_count(), 3);
+
+        worker.handle_release_all_waiters();
+
+        for (i, rx) in parked.iter_mut().enumerate() {
+            assert_eq!(
+                rx.try_recv()
+                    .unwrap_or_else(|e| panic!("waiter {i} must be answered, got {e:?}")),
+                Response::error(crate::ROLE_CHANGED_UNBLOCK_ERR),
+            );
+        }
+        assert_eq!(worker.wait_queue.waiter_count(), 0);
+        assert!(!worker.wait_queue.has_waiters(&Bytes::from_static(b"k0")));
+
+        // XREAD BLOCK is legal on a replica, so the release must not become a
+        // standing policy that drains everything registered afterwards.
+        let later = Bytes::from_static(b"after-demotion");
+        let mut after = park(&mut worker, 99, vec![later.clone()], None);
+        assert_eq!(worker.wait_queue.waiter_count(), 1);
+        assert!(
+            after.try_recv().is_err(),
+            "a wait registered after the release is not retroactively drained"
+        );
+    }
+
+    /// A disconnect unregisters the connection out of *every* key of a
+    /// multi-key wait, and a second unregister (the disconnect racing the
+    /// timeout path) reports `AlreadyServed` rather than removing twice.
+    // FM-BLOCKING-009
+    #[test]
+    fn unregister_after_disconnect_clears_every_key_of_a_multi_key_wait() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let keys: Vec<Bytes> = ["ka", "kb", "kc"].iter().map(|k| Bytes::from(*k)).collect();
+        let _rx = park(&mut worker, 9, keys.clone(), None);
+        for key in &keys {
+            assert!(worker.wait_queue.has_waiters(key));
+        }
+
+        let (ack_tx, mut ack_rx) = oneshot::channel();
+        worker.handle_unregister_wait(9, ack_tx);
+        assert!(matches!(
+            ack_rx.try_recv().expect("the ack is always sent"),
+            UnregisterAck::Unregistered
+        ));
+
+        assert_eq!(worker.wait_queue.waiter_count(), 0);
+        for key in &keys {
+            assert!(
+                !worker.wait_queue.has_waiters(key),
+                "no key keeps a dangling index entry for the gone connection"
+            );
+        }
+
+        let (ack2_tx, mut ack2_rx) = oneshot::channel();
+        worker.handle_unregister_wait(9, ack2_tx);
+        assert!(matches!(
+            ack2_rx.try_recv().expect("the ack is always sent"),
+            UnregisterAck::AlreadyServed
+        ));
     }
 }

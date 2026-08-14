@@ -1,6 +1,6 @@
 # Blocking-command rows: shard-death error, topology change, disconnect, admission limits
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

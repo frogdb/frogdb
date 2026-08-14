@@ -103,6 +103,69 @@ impl PrimaryStintTarget for crate::replication::PrimaryReplicationHandler {
     }
 }
 
+/// Releases every client parked in a blocking command, because this node has
+/// stopped being a primary.
+///
+/// A seam rather than a direct shard-sender call for two reasons: `demote()` is
+/// synchronous (it runs under the manager's mutex), so the production adapter
+/// has to be a non-blocking fan-out; and a fake here lets the ordering contract
+/// — release *before* the inbound stream starts — be asserted without a live
+/// shard. See `specs/blocking.md` FM-BLOCKING-007.
+pub trait BlockedWaiterFence: Send + Sync {
+    /// Tell every shard to answer and drop its parked waiters. Fire-and-forget.
+    fn release_all_waiters(&self);
+}
+
+/// Production [`BlockedWaiterFence`]: fans the release out to every shard
+/// mailbox.
+pub struct ShardWaiterFence {
+    shards: Arc<Vec<frogdb_core::shard::message::ShardSender>>,
+}
+
+impl ShardWaiterFence {
+    /// Fence over the node's shard senders.
+    pub fn new(shards: Arc<Vec<frogdb_core::shard::message::ShardSender>>) -> Self {
+        Self { shards }
+    }
+}
+
+impl BlockedWaiterFence for ShardWaiterFence {
+    fn release_all_waiters(&self) {
+        use frogdb_core::shard::message::BlockingMsg;
+        use tokio::sync::mpsc::error::TrySendError;
+
+        for (shard_id, sender) in self.shards.iter().enumerate() {
+            match sender.try_send(BlockingMsg::ReleaseAllWaiters) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    // The mailbox is at capacity, so finish the enqueue from a
+                    // task. Still ordered ahead of anything the inbound stream
+                    // will produce: tokio hands out mailbox permits FIFO, and
+                    // the stream this demotion is about to start has not been
+                    // created yet, let alone connected.
+                    let sender = sender.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = sender.send(BlockingMsg::ReleaseAllWaiters).await {
+                            tracing::error!(
+                                shard_id,
+                                error = %e,
+                                "Blocking-waiter release could not be delivered; clients parked \
+                                 on this shard stay blocked on a node that is now a replica"
+                            );
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::error!(
+                        shard_id,
+                        "Blocking-waiter release could not be delivered: shard mailbox closed"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Opens inbound replication streams to a primary.
 ///
 /// Injected into the [`RoleManager`] so unit tests can substitute a fake that
@@ -145,6 +208,10 @@ pub struct RoleManager {
     /// `None` only in unit tests that exercise the flag lifecycle without
     /// replication wiring — production always wires the primary handler.
     stint_target: Option<Arc<dyn PrimaryStintTarget>>,
+    /// Releases blocking waiters on demotion (see [`BlockedWaiterFence`]).
+    /// `None` only in unit tests that exercise the flag lifecycle without shard
+    /// wiring — production always wires the shard fan-out.
+    blocked_waiter_fence: Option<Arc<dyn BlockedWaiterFence>>,
 }
 
 impl RoleManager {
@@ -172,6 +239,7 @@ impl RoleManager {
             boot_replica_handler: None,
             replication_self_fence: None,
             stint_target: None,
+            blocked_waiter_fence: None,
         }
     }
 
@@ -179,6 +247,12 @@ impl RoleManager {
     /// during cluster init, with the always-constructed primary handler.
     pub fn set_stint_target(&mut self, target: Arc<dyn PrimaryStintTarget>) {
         self.stint_target = Some(target);
+    }
+
+    /// Adopt the blocking-waiter fence a Role Demotion releases through. Called
+    /// once, during cluster init.
+    pub fn set_blocked_waiter_fence(&mut self, fence: Arc<dyn BlockedWaiterFence>) {
+        self.blocked_waiter_fence = Some(fence);
     }
 
     /// Adopt the replication self-fence checker so Role Demotion can un-latch
@@ -369,6 +443,17 @@ impl RoleManager {
         }
         // Fence: flip to read-only before opening the stream.
         self.is_replica.store(true, Ordering::Release);
+        // Release every client parked in a blocking command, while this node
+        // still has a serial mailbox nothing replicated has reached. A waiter
+        // left parked here could only ever be woken by data arriving over the
+        // stream started at the bottom of this function — serving it would be a
+        // local write on a replica, diverging its store from the very history it
+        // is applying. Ordered ahead of `streamer.start` so "never served from
+        // replicated data" is a property of the sequence, not a race this node
+        // usually wins (`specs/blocking.md` FM-BLOCKING-007).
+        if let Some(fence) = &self.blocked_waiter_fence {
+            fence.release_all_waiters();
+        }
         // End the primary stint: drop the buffered history and the replicas
         // following it. Anything this node buffered describes a history it no
         // longer heads, and the stream it is about to follow may rewind its
@@ -1062,6 +1147,59 @@ mod tests {
             1,
             "re-demoting to the same primary must not disconnect replicas twice"
         );
+    }
+
+    /// Demotion releases the clients parked in blocking commands, and does so
+    /// *inside* the read-only fence and *before* the inbound stream is opened.
+    /// A waiter still parked when replicated data starts landing could only be
+    /// woken by serving it locally on a replica; one released before the fence
+    /// closed could be served as a primary write that the stream then overwrites.
+    // FM-BLOCKING-007
+    #[test]
+    fn demote_releases_every_parked_blocking_waiter() {
+        /// Records, for each release, the role flag and how many streams had
+        /// been started by then.
+        struct RecordingFence {
+            flag: Arc<AtomicBool>,
+            streamer: Arc<FakeStreamer>,
+            releases: Mutex<Vec<(bool, usize)>>,
+        }
+        impl BlockedWaiterFence for RecordingFence {
+            fn release_all_waiters(&self) {
+                self.releases.lock().unwrap().push((
+                    self.flag.load(Ordering::Acquire),
+                    self.streamer.started.lock().unwrap().len(),
+                ));
+            }
+        }
+
+        let streamer = Arc::new(FakeStreamer::default());
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut mgr = RoleManager::new(flag.clone(), streamer.clone(), None);
+        // The fence reads the streamer's own `started` log, so "no stream yet"
+        // is observed at the moment of release, not assumed from the ordering.
+        let fence = Arc::new(RecordingFence {
+            flag: flag.clone(),
+            streamer: streamer.clone(),
+            releases: Mutex::new(Vec::new()),
+        });
+        mgr.set_blocked_waiter_fence(fence.clone());
+        let a = addr("127.0.0.1:7000");
+
+        mgr.demote(a);
+
+        assert_eq!(
+            *fence.releases.lock().unwrap(),
+            vec![(true, 0)],
+            "waiters must be released exactly once, behind the replica fence and \
+             before the inbound stream is opened"
+        );
+        assert_eq!(*streamer.started.lock().unwrap(), vec![a]);
+
+        // A no-op re-demotion to the same primary releases nothing again: the
+        // queue was already drained and new waits are legal on a replica.
+        mgr.demote(a);
+        assert_eq!(fence.releases.lock().unwrap().len(), 1);
     }
 
     // FM-REPLICATION-022

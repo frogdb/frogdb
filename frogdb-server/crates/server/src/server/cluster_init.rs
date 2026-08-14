@@ -165,6 +165,11 @@ pub(super) async fn init_cluster(
     if let Some(checker) = replication_self_fence {
         role_manager.set_replication_self_fence(checker);
     }
+    // Blocking waiters parked on this node's shards must be released the moment
+    // it stops being a primary — see `specs/blocking.md` FM-BLOCKING-007.
+    role_manager.set_blocked_waiter_fence(Arc::new(crate::role_manager::ShardWaiterFence::new(
+        shard_senders.clone(),
+    )));
     // The replication half of a promotion: minting the new `master_replid`,
     // freezing the inherited one as the failover window, and arming the backlog
     // all live on the primary handler, which exists on every role.

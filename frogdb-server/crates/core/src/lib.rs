@@ -6,6 +6,18 @@
 // Re-export everything from frogdb-types so downstream crates continue working unchanged.
 pub use frogdb_types::*;
 
+/// Reply sent to every client parked in a blocking command when this node stops
+/// being a primary.
+///
+/// One string for both halves of the release: `WAIT` (which watches the role
+/// fence itself, `specs/blocking.md` FM-BLOCKING-010) and the non-`WAIT` waiters
+/// the demotion path drains off the shards (FM-BLOCKING-007). Redis reports the
+/// same event from `disconnectAllBlockedClients`, and clients match on the
+/// `UNBLOCKED` prefix, so the text is wire-compatible rather than merely
+/// descriptive.
+pub const ROLE_CHANGED_UNBLOCK_ERR: &str =
+    "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)";
+
 // Re-export frogdb-cluster as the cluster module for backward compatibility.
 pub use frogdb_cluster as cluster;
 

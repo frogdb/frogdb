@@ -395,6 +395,7 @@ mod wait_race_tests {
     /// cause that is true but not the one that matters, leaving the caller
     /// believing the node it waited on still heads the history it waited for.
     /// The count must not even be computed, so `count_acked` panics if reached.
+    // FM-BLOCKING-010
     #[tokio::test]
     async fn wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races() {
         let mut unblock = MockUnblock::fires(UnblockMode::Error);

@@ -18,6 +18,9 @@ impl ShardWorker {
             BlockingMsg::UnregisterWait { conn_id, ack } => {
                 self.handle_unregister_wait(conn_id, ack);
             }
+            BlockingMsg::ReleaseAllWaiters => {
+                self.handle_release_all_waiters();
+            }
         }
     }
 }

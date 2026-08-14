@@ -15,6 +15,15 @@ use tokio::sync::oneshot;
 // from the runtime's start, which under a paused clock is an arbitrarily different time.
 use tokio::time::Instant;
 
+/// Reply for a blocking wait whose shard died underneath it.
+///
+/// Deliberately the same vocabulary `EXEC` uses for the same underlying event
+/// (`specs/txn.md` FM-TXN-032): the shard's mailbox is gone, so nothing was or
+/// will be done. It is an *error*, not a nil, so a client can tell it apart from
+/// an ordinary timeout instead of retrying into a dead shard forever
+/// (`specs/blocking.md` FM-BLOCKING-004).
+pub const SHARD_UNAVAILABLE_ERR: &str = "ERR shard unavailable";
+
 /// Outcome of a blocking wait. Public so it can be asserted in unit tests and
 /// converted to a reply with op-aware nil shaping.
 #[derive(Debug)]
@@ -98,7 +107,12 @@ impl BlockingWaitCoordinator {
             // `cleanup_wait`'s `UnregisterAck::AlreadyServed` reconciliation.
             recv = &mut *response_rx => match recv {
                 Ok(resp) => WaitOutcome::Response(resp),
-                Err(_) => WaitOutcome::Response(Response::Null),
+                // A closed channel is shard death, and nothing else. Every
+                // shard-side resolution — satisfy, the deadline fast-path, the
+                // GC tick, admission refusal, the demotion release, the
+                // disconnect drain — *sends* its reply, so sender-drop carries
+                // no other meaning to confuse this with.
+                Err(_) => WaitOutcome::Response(Response::error(SHARD_UNAVAILABLE_ERR)),
             },
             // 2. CLIENT UNBLOCK signal fired.
             mode = unblock.unblocked() => match mode {
@@ -170,14 +184,21 @@ mod tests {
         ));
     }
 
+    /// A closed response channel means the shard is gone, and says so. Every
+    /// other shard-side resolution sends a reply, so this cannot be an ordinary
+    /// timeout — reporting it as a nil would leave a client unable to tell "no
+    /// data arrived" from "the shard serving your key died", and retrying into
+    /// it forever.
     // FM-BLOCKING-004
     #[tokio::test]
-    async fn channel_drop_yields_null_response() {
+    async fn channel_drop_yields_shard_unavailable_error() {
         let (tx, mut rx) = oneshot::channel::<Response>();
         drop(tx);
         let mut unblock = MockUnblock::never();
         let outcome = BlockingWaitCoordinator::wait_for_response(&mut rx, None, &mut unblock).await;
-        assert!(matches!(outcome, WaitOutcome::Response(Response::Null)));
+        let reply = outcome.into_response(&BlockingOp::BLPop);
+        assert_eq!(reply, Response::error(SHARD_UNAVAILABLE_ERR));
+        assert_eq!(reply, Response::error("ERR shard unavailable"));
     }
 
     // FM-BLOCKING-002

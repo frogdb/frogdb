@@ -3628,6 +3628,7 @@ async fn test_wait_zero_timeout_blocks_without_quorum() {
 /// the demotion tears down, so any number it could still produce would describe
 /// a history the node no longer heads. The release happens inside
 /// `end_primary_stint`, next to the downstream disconnect it belongs with.
+// FM-BLOCKING-010
 #[tokio::test]
 async fn test_wait_unblocked_on_demotion() {
     let config = TestServerConfig::default();

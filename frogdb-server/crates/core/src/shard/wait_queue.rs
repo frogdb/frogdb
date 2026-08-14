@@ -43,6 +43,26 @@ impl std::fmt::Debug for WaitEntry {
     }
 }
 
+/// A registration the queue refused, handed back to the caller.
+///
+/// The entry travels with the refusal because it owns the client's
+/// `response_tx`: dropping it would signal the coordinator's `Err(_)` arm,
+/// which means "the shard is gone" (`specs/blocking.md` FM-BLOCKING-004). The
+/// caller answers with `message` instead. See FM-BLOCKING-006.
+#[derive(Debug)]
+pub struct RegisterRefused {
+    /// The rejected registration, still owning its response channel.
+    pub entry: WaitEntry,
+    /// The client-visible refusal error.
+    pub message: &'static str,
+}
+
+/// Refusal text for the shard-wide blocked-connection bound.
+pub const MAX_BLOCKED_CONNECTIONS_ERR: &str = "ERR max blocked connections limit reached";
+
+/// Refusal text for the per-key waiter bound.
+pub const MAX_WAITERS_PER_KEY_ERR: &str = "ERR max waiters per key limit reached";
+
 /// Per-shard wait queue for blocked connections.
 ///
 /// Maintains FIFO ordering per key - when a key gets data, the oldest
@@ -138,21 +158,35 @@ impl ShardWaitQueue {
 
     /// Register a new waiter.
     ///
-    /// Returns Ok(()) if registered, Err with message if limits exceeded.
-    pub fn register(&mut self, entry: WaitEntry) -> Result<(), String> {
+    /// Returns `Ok(())` if registered. On refusal the entry comes back inside
+    /// [`RegisterRefused`] so the caller still owns the response channel and can
+    /// reply with the refusal error — dropping it would be indistinguishable
+    /// from shard death (`specs/blocking.md` FM-BLOCKING-006, FM-BLOCKING-004).
+    ///
+    /// Both bounds are checked over every requested key *before* any insertion,
+    /// so a refusal leaves the queue exactly as it found it — no partial
+    /// registration under the keys checked before the offending one.
+    pub fn register(&mut self, entry: WaitEntry) -> Result<(), RegisterRefused> {
         // Check global limit
         if self.max_blocked_connections > 0 && self.waiter_count >= self.max_blocked_connections {
-            return Err("ERR max blocked connections limit reached".to_string());
+            return Err(RegisterRefused {
+                entry,
+                message: MAX_BLOCKED_CONNECTIONS_ERR,
+            });
         }
 
         // Check per-key limits
         if self.max_waiters_per_key > 0 {
-            for key in &entry.keys {
-                if let Some(waiters) = self.waiters_by_key.get(key)
-                    && waiters.len() >= self.max_waiters_per_key
-                {
-                    return Err("ERR max waiters per key limit reached".to_string());
-                }
+            let over_limit = entry.keys.iter().any(|key| {
+                self.waiters_by_key
+                    .get(key)
+                    .is_some_and(|waiters| waiters.len() >= self.max_waiters_per_key)
+            });
+            if over_limit {
+                return Err(RegisterRefused {
+                    entry,
+                    message: MAX_WAITERS_PER_KEY_ERR,
+                });
             }
         }
 
@@ -392,6 +426,27 @@ impl ShardWaitQueue {
                 drained.push(entry);
             }
         }
+
+        drained
+    }
+
+    /// Drain every parked waiter, leaving an empty queue.
+    ///
+    /// Used by the demotion release (`specs/blocking.md` FM-BLOCKING-007): once
+    /// this node is a replica, no parked waiter may be served locally, so the
+    /// whole queue is handed back for the caller to answer.
+    pub fn drain_all(&mut self) -> Vec<WaitEntry> {
+        let mut drained = Vec::with_capacity(self.waiter_count);
+        for idx in 0..self.entries.len() {
+            if let Some(entry) = self.entries[idx].take() {
+                self.free_slots.push(idx);
+                drained.push(entry);
+            }
+        }
+
+        self.waiters_by_key.clear();
+        self.conn_entries.clear();
+        self.waiter_count = 0;
 
         drained
     }

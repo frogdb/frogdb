@@ -2192,6 +2192,7 @@ async fn test_e2e_migration_timeseries() {
 // ============================================================================
 
 /// Documents that blocking commands during migration should receive MOVED after completion.
+// FM-BLOCKING-008
 #[tokio::test]
 async fn test_blocking_command_during_migration_gets_moved() {
     let mut harness = ClusterTestHarness::new();

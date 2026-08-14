@@ -28,29 +28,28 @@ connection- and shard-process-lifetime state with no WAL/snapshot participation:
 | Wait-entry slab | `ShardWaitQueue.entries: Vec<Option<WaitEntry>>` + `free_slots`, `conn_entries: HashMap<u64, Vec<usize>>` (`wait_queue.rs:51-81`) | `register`/`unregister` | In-memory only | No |
 | Registration ordinal | `ShardWaitQueue.next_seq: u64` (`wait_queue.rs:67`), `seq_by_slot: Vec<u64>` (`:71`) — the exact tie-break `register` stamps on every accepted entry; per-key FIFO order (what "How to read a row" and TR-BLOCKING-001/013 depend on) is this ordinal, not insertion order into `waiters_by_key` alone | `register` only; read by the wait-queue-log diagnostic and by slot-scoped ordering | In-memory only | No |
 | Per-shard waiter count | `ShardWaitQueue.waiter_count: usize` (`wait_queue.rs:61`) | Incremented in `register`, decremented in `unregister`/pop paths | In-memory only | No |
-| Admission limits | `ShardWaitQueue.max_waiters_per_key` (`wait_queue.rs:63`), `max_blocked_connections` (`:65`); `0` disables the corresponding check, `register`'s guards at `:144` (global) and `:149` (per-key) | Production default `BlockingConfig` (`frogdb-server/crates/config/src/blocking.rs:16-24`, `DEFAULT_MAX_WAITERS_PER_KEY = 10000`, `DEFAULT_MAX_BLOCKED_CONNECTIONS = 50000`), applied once via `ShardWorker::set_wait_queue_limits` (`worker.rs:515-521`) from `server/shards.rs:193` at shard construction; `ShardWaitQueue::new()`'s `with_limits(10000, 50000)` (`wait_queue.rs:116-118`) is only the `Default`/test path, not the production wire. `#[param(skip)]` on both config fields — not `CONFIG SET`-mutable; `set_wait_queue_limits` replaces the whole queue, so it is never called again after construction. | In-memory only, config-derived | No (re-derived from config at boot) |
+| Admission limits | `ShardWaitQueue.max_waiters_per_key`, `max_blocked_connections`; `0` disables the corresponding check. `register`'s guards run *before* the entry takes a slab slot and hand the rejected `WaitEntry` back to the caller as `RegisterRefused { entry, message }`, so the refusal can be answered on the entry's own `response_tx` (FM-BLOCKING-006) instead of dropping it | Production default `BlockingConfig` (`frogdb-server/crates/config/src/blocking.rs:16-24`, `DEFAULT_MAX_WAITERS_PER_KEY = 10000`, `DEFAULT_MAX_BLOCKED_CONNECTIONS = 50000`), applied once via `ShardWorker::set_wait_queue_limits` (`worker.rs:515-521`) from `server/shards.rs:193` at shard construction; `ShardWaitQueue::new()`'s `with_limits(10000, 50000)` (`wait_queue.rs:116-118`) is only the `Default`/test path, not the production wire. `#[param(skip)]` on both config fields — not `CONFIG SET`-mutable; `set_wait_queue_limits` replaces the whole queue, so it is never called again after construction. | In-memory only, config-derived | No (re-derived from config at boot) |
 | Per-waiter deadline | `WaitEntry.deadline: Option<tokio::time::Instant>` (`wait_queue.rs:13-33`; mirrored connection-side as the `deadline` local in `handle_blocking_wait`, `connection/blocking.rs:34-48`, also `tokio::time::Instant`) | Set once at registration from the command's timeout; never mutated | In-memory only | No |
 | Timeout authority | Connection-side `BlockingWaitCoordinator::wait_for_response`'s `timeout_fut` (`connection/blocking/coordinator.rs:78-111`, the sleep at `:85-90`) is canonical/precise; shard-side `check_waiter_timeouts` (`shard/blocking.rs:182-211`, ticked every 100ms from `shard/event_loop.rs:31,83-85`) is a GC safety net only — it removes expired entries and best-effort sends `op.timeout_reply()` (a no-op if the server already replied and dropped the receiver), it never consumes store data | Server: `tokio::time::sleep_until(deadline)`; Shard: periodic `collect_expired(now)` | In-memory only | No |
-| Wake token (response channel) | `WaitEntry.response_tx: oneshot::Sender<Response>` (`wait_queue.rs:13-33`), paired with the connection's borrowed `response_rx` | Sent once by `drive_satisfaction_body` (serve, `shard/blocking.rs:341`) or by `check_waiter_timeouts` (GC, `:198`); dropped without sending on admission refusal (`shard/blocking.rs:49-57`), the deadline fast-path skip (`:320-322`), or shard teardown; borrowed-not-consumed by the connection so a raced serve stays drainable | In-memory only | No |
+| Wake token (response channel) | `WaitEntry.response_tx: oneshot::Sender<Response>` (`wait_queue.rs:13-33`), paired with the connection's borrowed `response_rx` | Always *sent on*, never dropped as a signal: `drive_satisfaction_body` (serve), `check_waiter_timeouts` (GC), the admission refusal (FM-BLOCKING-006), the deadline fast-path (TR-BLOCKING-007), the `Satisfaction::Retry` arm, the slot-migration drain (FM-BLOCKING-008) and the demotion release (FM-BLOCKING-007) each send a real reply. The only remaining drop-without-send is shard teardown, which is what makes the connection's `Err(_)` mean shard death and nothing else (FM-BLOCKING-004). Borrowed-not-consumed by the connection so a raced serve stays drainable | In-memory only | No |
 | Serve-vs-timeout reconciliation state | `UnregisterAck::{Unregistered, AlreadyServed}` (`shard/message.rs:545-554`), decided by whether `wait_queue.unregister(conn_id)` still found the entry | Computed synchronously inside `handle_unregister_wait` from the shard's serial mailbox order | In-memory only, transient (one round trip) | No |
 | WAIT quorum snapshot | `WaitCoordinator` (`replication/src/wait_coordinator.rs:114-127`): `offsets: Arc<OffsetCoordinator>` (target offset, snapshotted at WAIT call time via `target_offset()`, `:173-180`), `tracker: Arc<ReplicationTrackerImpl>` (ack counting via `count_acked`, `:182-189`) | `offsets`/`tracker` are shared, continuously-updated seams; the per-call target offset is a local snapshot, not stored state | In-memory only | No |
 | WAIT role fence | `WaitCoordinator.role_fence: tokio::sync::watch::Sender<()>` (`wait_coordinator.rs:126`), observed via `RoleFence` (`:85-106`), taken by `role_fence()` (`:159-161`) | Bumped by `RoleManager::demote` (`server/role_manager.rs:362-403`, fence flip at `:371`) → `PrimaryReplicationHandler::end_primary_stint`; subscribed *before* the replica-role check in `handle_wait_command` (`connection/blocking.rs:253-256`, ordering is load-bearing, see `wait_coordinator.rs:85-95`) | In-memory only | No |
 | Node role flag | `is_replica: Arc<AtomicBool>` (`RoleManager`, flipped `false→true` at `role_manager.rs:371` inside `demote`, before the fence's consequences propagate). Read directly (not through the fence) by `handle_wait_command`'s pre-parse rejection (`connection/blocking.rs:228`) and its post-fence re-check (`:254`) | `RoleManager::demote`/promote-equivalent path | In-memory only | No |
 | CLIENT UNBLOCK signal | `UnblockSignal` trait, prod impl on `ClientHandle` (`connection/blocking/coordinator.rs:55-65`) | Set by the `CLIENT UNBLOCK` handler on another connection; consumed once by the parked wait's `select!` (non-WAIT: `coordinator.rs:104-107`; WAIT: `resolve_wait_race`, `connection/blocking.rs:338-345`) | In-memory only | No |
 | Pending serve-propagation buffer | `ShardWorker.pending_serve_propagations: Vec<SynthesizedCommand>` (pushed at `shard/blocking.rs:359-361`) | `drive_satisfaction_body`, on every committed serve (never on a restored/rejected one); flushed to replicas by the terminal `ReplicationBroadcast` write effect, after the waking write's own broadcast | In-memory only | No |
-| Blocking metrics | `BlockedClients` (gauge, set on register/unregister/serve/restore/GC — `shard/blocking.rs:68-72,163-167,205-209,380-384`), `BlockedSatisfiedTotal` (inc on a committed serve, via `record_blocked_waiter_satisfied`), `BlockedTimeoutTotal` (inc per GC-reclaimed entry, `:201`), `BlockedMigrationMoved` (inc only for the `-MOVED` case of slot migration, not `-CLUSTERDOWN`) | The shard worker, at each corresponding transition | In-memory only (exported, not restart-durable) | No |
-| Demotion-triggered wait unblock | No authoritative field exists — `RoleManager::demote` (`server/role_manager.rs:362-403`) flips `is_replica`, ends the primary stint, and tears down the outbound stream, but never sends any shard message and never touches `ShardWaitQueue`; no `disconnectAllBlockedClients`-equivalent code path exists anywhere in `frogdb-core`/`frogdb-server`. `install_snapshot` (demoted-node store reset, `shard/dispatch_replication.rs`) likewise does not touch the wait queue. `WAIT` alone has a working mechanism (the `role_fence` row above); BLPOP/BRPOP/etc. parked waiters have no equivalent today — this is a declared gap, not an unresearched cell. | — (gap, not yet built) | — | — |
+| Blocking metrics | `BlockedClients` (gauge, set on register/unregister/serve/restore/GC/demotion-release), `BlockedSatisfiedTotal` (inc on a committed serve, via `record_blocked_waiter_satisfied`), `BlockedTimeoutTotal` (inc per GC-reclaimed entry **and** per waiter the satisfaction path's deadline fast-path replies to — the two are the same event seen by the two timeout authorities, and exactly one of them ever reaches a given waiter because the fast-path removes it from the queue), `BlockedMigrationMoved` (inc only for the `-MOVED` case of slot migration, not `-CLUSTERDOWN`) | The shard worker, at each corresponding transition | In-memory only (exported, not restart-durable) | No |
+| Demotion-triggered wait unblock | `BlockingMsg::ReleaseAllWaiters`, sent to every shard by `RoleManager::demote` (`server/role_manager.rs`) through the `BlockedWaiterFence` seam (`ShardWaiterFence`, a `try_send` fan-out over the node's `ShardSender`s) after the `is_replica` fence flip and *before* the inbound stream is opened; the shard's `handle_release_all_waiters` drains `ShardWaitQueue` whole and answers every entry with `frogdb_core::ROLE_CHANGED_UNBLOCK_ERR` (Redis `disconnectAllBlockedClients` verbatim, the same constant `WAIT`'s role-change reply uses). Ordering is the mechanism, not a race: the release is enqueued on each shard's serial mailbox before the stream that will deliver replicated writes even exists, so no replicated write can reach a waiter that the demotion was supposed to release (FM-BLOCKING-007). | `RoleManager::demote` → `ShardWaiterFence` → each shard's `handle_release_all_waiters` | In-memory only | No |
 
 ## Transitions
 
-Rows below encode two kinds of semantics, distinguished when they diverge: rows with a plain
-`Postcondition` describe what the code does today and what it is ruled to keep doing. Rows
-split into `Postcondition (ruled)` / `Postcondition (current code)` describe a point where the
-"## Ruling (2026-08-13)" section of
-[issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) — the ruling
-authority for every row in this file — settled semantics the code does not yet implement; the
-row's `Pending` field points back at that issue and a forcing test must not be written against
-the `(current code)` cell.
+Rows below encode what the code does today and what it is ruled to keep doing. Where a ruling
+settles semantics the code does not yet implement, a row splits into `Postcondition (ruled)` /
+`Postcondition (current code)`, carries a `Pending` field naming the issue that will close the
+gap, and a forcing test must not be written against the `(current code)` cell.
+[Issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) — the ruling
+authority for the admission-limit, shard-death, demotion, slot-migration, disconnect and
+`WAIT` role-change rows in this file — has landed, so no split row remains here.
 
 `Forced by` citations below follow the same bare-function-name convention as the FM rows (see
 "How to read a row"), but `just lint-spec`'s `Forced by` enforcement today covers only `FM` and
@@ -84,12 +83,10 @@ rather than naming one that doesn't force the behavior.
 | Field | Value |
 | --- | --- |
 | Precondition | The `WaitEntry` reaches the shard (TR-BLOCKING-001's precondition otherwise holds) but at registration time either the shard's total waiter count — `waiter_count`, the same field the "Per-shard waiter count" state-space row names, compared directly against the limit despite `max_blocked_connections`'s connection-count name — has already reached `max_blocked_connections` (default 50000), or, for some key in the command, that key's waiter count has already reached `max_waiters_per_key` (default 10000, `0` disables the corresponding check). |
-| Postcondition (ruled) | An error reply reaches the client stating the limit was hit (`-ERR max blocked connections limit reached` global / `-ERR max waiters per key limit reached` per-key, global checked first), returned immediately — the connection never parks. Neither the per-shard waiter count nor any per-key FIFO is mutated by a refused registration. |
-| Postcondition (current code) | `self.wait_queue.register(entry)` returns `Err(e)`; `handle_block_wait` logs the refusal at `warn` and drops `entry` — which owns `response_tx` — with **no send on it and no error propagated to the connection**. The connection is left parked in `wait_for_response`/`resolve_wait_race` with no shard-side registration at all; `response_rx` later observes `Err(_)` (the sender was dropped, not merely closed-without-send) and resolves to a bare `Response::Null` exactly as an ordinary timeout would (TR-BLOCKING-009), not the admission error the client should see. (The in-code comment at this site — "The client will timeout" — is itself inaccurate: the drop resolves `response_rx` immediately rather than waiting out the deadline; not itself a spec-observable fact, noted here because it explains why this was easy to miss.) |
-| Source | `shard/wait_queue.rs:142-156` (`register`, admission checks), defaults at `wait_queue.rs:63,65` (`max_waiters_per_key`/`max_blocked_connections` fields), `:144` (global check), `:149` (per-key check); refusal handling at `shard/blocking.rs:49-57` (`handle_block_wait`); client-observed effect at `connection/blocking/coordinator.rs:99-101` (`wait_for_response`, `Err(_)` arm) |
-| Forced by | MISSING ([issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md)) — no test exercises `max_waiters_per_key`/`max_blocked_connections` refusal at all; this is the current-code cell C1 exists to fix, tracked by the same issue as the `Pending` ruling. |
-| Rulings | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) (H7) |
-| Pending | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) |
+| Postcondition | An error reply reaches the client stating the limit was hit (`-ERR max blocked connections limit reached` global / `-ERR max waiters per key limit reached` per-key, global checked first), sent on the wait's own `response_tx` and returned immediately — the connection never parks. Neither the per-shard waiter count nor any per-key FIFO nor the slab is mutated by a refused registration. See FM-BLOCKING-006. |
+| Source | `shard/wait_queue.rs` (`register`, the two admission checks and the `RegisterRefused` hand-back), defaults at `frogdb-server/crates/config/src/blocking.rs`; refusal handling at `shard/blocking.rs` (`handle_block_wait`) |
+| Forced by | unit-level (frogdb-core, `shard/blocking.rs`): `admission_refusal_at_the_global_limit_replies_and_registers_nothing`, `admission_refusal_at_the_per_key_limit_replies_and_registers_nothing` |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H7) |
 
 ## TR-BLOCKING-004 — WAIT resolves without parking (replica rejection / quorum already met)
 
@@ -126,10 +123,10 @@ rather than naming one that doesn't force the behavior.
 | Field | Value |
 | --- | --- |
 | Precondition | Same trigger as TR-BLOCKING-006, but the popped waiter's `deadline` has already elapsed (`deadline.is_some_and(|d| d <= now)`) by the time the fast-path re-validation runs, before `strat.satisfy` is ever called. |
-| Postcondition | The loop `continue`s without calling `strat.satisfy` — no store data is consumed, so nothing needs restoring; `response_tx` is simply dropped without a send; the waiter is not re-queued. This is a cheap optimization over the deadline race, not the correctness backstop: `response_rx`'s dedicated timeout branch (TR-BLOCKING-009) or the reconciliation path (TR-BLOCKING-015) is what guarantees the client still gets a timely, correctly-shaped reply — a receiver dropped here observes the same `Err(_)`→`Response::Null` collapse as TR-BLOCKING-003 and TR-BLOCKING-014 (see the "Wake token" state-space row), which the server's own deadline-elapsed reply (already in flight or about to fire) races and normally wins first. |
-| Source | `shard/blocking.rs:320-322` (deadline fast-path check and `continue`; `:316-319` is the comment explaining the race is closed elsewhere) |
-| Forced by | unit-level (frogdb-core, `shard/blocking.rs`, not covered by this spec's `-p frogdb-server` test-resolution profile): `push_after_deadline_elapsed_does_not_consume_element` |
-| Rulings | — |
+| Postcondition | The loop `continue`s without calling `strat.satisfy` — no store data is consumed, so nothing needs restoring — and sends `entry.op.timeout_reply()` on `response_tx`, incrementing `BlockedTimeoutTotal` exactly as the GC tick (TR-BLOCKING-020) does for the same event; the waiter is not re-queued. The send is a real reply, not a drop: dropping the sender here would be indistinguishable at the coordinator from shard death, whose reply is now `-ERR shard unavailable` (FM-BLOCKING-004), and the select at `coordinator.rs` is `biased;` with `response_rx` first — so a dropped sender deterministically beats the connection's own deadline branch rather than losing a race to it. Whichever of the two lands first is a correctly-shaped timeout reply; the other is a no-op on a closed channel. |
+| Source | `shard/blocking.rs` (deadline fast-path check, `timeout_reply` send and `continue`) |
+| Forced by | unit-level (frogdb-core, `shard/blocking.rs`): `push_after_deadline_elapsed_does_not_consume_element`, `push_after_deadline_elapsed_replies_with_the_op_aware_nil` |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (MAJ-11 amendment: drop-elimination) |
 
 ## TR-BLOCKING-008 — wake-by-push: delivery send fails after consuming data (restore)
 
@@ -187,21 +184,20 @@ rather than naming one that doesn't force the behavior.
 | --- | --- |
 | Precondition | A connection with blocked-flag = `Some(shard_id, keys)` closes (any reason) before its wait resolves. |
 | Postcondition | `notify_connection_closed` sends `BlockingMsg::UnregisterWait{conn_id, ack}` and discards the ack (no client remains to hand a raced serve back to); the shard's `wait_queue.unregister(conn_id)` removes every entry for that connection from every key it was registered under; if a serve had already raced the teardown and popped data, `apply_restore` on the shard's send-failure path (TR-BLOCKING-008) makes the store whole. |
-| Source | `connection/lifecycle.rs:181-216` (`notify_connection_closed`), `shard/wait_queue.rs:214-241` (`unregister`) |
-| Forced by | MISSING — no located test drives a connection disconnect while a non-WAIT waiter is parked (the shard-side `unregister` mechanics are unit-tested via `wait_queue.rs`'s FIFO/slot tests, but not the disconnect trigger itself). |
-| Rulings | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) (confirms this path, no code gap) |
+| Source | `connection/lifecycle.rs` (`notify_connection_closed`), `shard/wait_queue.rs` (`unregister`); see FM-BLOCKING-009 |
+| Forced by | `unregister_after_disconnect_clears_every_key_of_a_multi_key_wait` |
+| Gap (current code) | The postcondition holds whenever the run loop *observes* the close, but the loop cannot observe one raised mid-wait: `handle_blocking_wait` is awaited inline inside the frame branch, so neither the socket nor `killed()` is polled while parked, and a peer that vanishes during a `BLPOP key 0` leaks its entry forever. Tracked, with its own forcing test, by [spec-gaps issue 13](../.scratch/spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md) (distsys-review CRIT-4/CRIT-5), which restructures the wait into a run-loop state. Confirmed reproducible while implementing issue 08. |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (rows the shard-side half as FM-BLOCKING-009 and forces it; the run-loop restructure stays with issue 13) |
 
 ## TR-BLOCKING-014 — shard dies while a waiter is parked
 
 | Field | Value |
 | --- | --- |
-| Precondition | A waiter that completed registration (TR-BLOCKING-001, a live `WaitEntry` exists in `ShardWaitQueue`) has its `response_tx` dropped by genuine shard-side death — shard task shutdown/panic/teardown tearing down the whole `ShardWaitQueue` — while the connection is still parked in `wait_for_response`. This precondition explicitly **excludes** three other paths that also end in the coordinator's `Err(_)`/`None`→`Response::Null` collapse but are not shard death: the admission refusal at registration, before any `WaitEntry` exists (TR-BLOCKING-003); the deadline fast-path skip, where the shard is alive and the drop is a deliberate no-consume decision (TR-BLOCKING-007); and a closed CLIENT-UNBLOCK signal channel (`unblock.unblocked()` returning `None`), which is a registry/connection-side channel failure unrelated to shard health and has no dedicated row — it collapses to the same `Response::Null` as this row via `coordinator.rs:104-106` but is not itself forcing-test-worthy as a *shard* failure mode. |
-| Postcondition (ruled) | `-ERR shard unavailable`, distinguishable from the FM-BLOCKING-002/003 nil/timeout family, matching `txn.md` FM-TXN-032's vocabulary for the same underlying event (channel closed, never accepted). Connection's blocked-flag cleared; the wait entry is gone (channel closure implies no further shard-side bookkeeping references it). |
-| Postcondition (current code) | `Response::Null` — see FM-BLOCKING-004, `Err(_)` from the borrowed receiver maps to `WaitOutcome::Response(Response::Null)`, identically to TR-BLOCKING-003's current-code cell and the closed-unblock-channel case above; all three are indistinguishable from an ordinary timeout to the client today. |
-| Source | `connection/blocking/coordinator.rs:99-101` (`wait_for_response`, `Err(_)` arm), FM-BLOCKING-004 |
-| Forced by | `channel_drop_yields_null_response` forces the `(current code)` cell only, per FM-BLOCKING-004; the `(ruled)` cell is `MISSING ([issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md))` — a forcing test must not be written against it until the ruling lands. |
-| Rulings | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) (H5) |
-| Pending | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) |
+| Precondition | A waiter that completed registration (TR-BLOCKING-001, a live `WaitEntry` exists in `ShardWaitQueue`) has its `response_tx` dropped by genuine shard-side death — shard task shutdown/panic/teardown tearing down the whole `ShardWaitQueue` — while the connection is still parked in `wait_for_response`. This is now the *only* in-shard path that drops a sender without sending: the admission refusal (FM-BLOCKING-006), the deadline fast-path (TR-BLOCKING-007) and the `Satisfaction::Retry` arm each send a real reply, which is precisely what makes `Err(_)` mean shard death and lets this row name it. One neighbouring case remains outside the row: a closed CLIENT-UNBLOCK signal channel (`unblock.unblocked()` returning `None`) is a registry/connection-side failure unrelated to shard health, still resolves to `Response::Null`, and has no dedicated row. |
+| Postcondition | `-ERR shard unavailable`, distinguishable from the FM-BLOCKING-002/003 nil/timeout family, matching `txn.md` FM-TXN-032's vocabulary for the same underlying event (channel closed, never accepted). Connection's blocked-flag cleared; the wait entry is gone (channel closure implies no further shard-side bookkeeping references it). |
+| Source | `connection/blocking/coordinator.rs` (`wait_for_response`, `Err(_)` arm), FM-BLOCKING-004 |
+| Forced by | `channel_drop_yields_shard_unavailable_error` |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H5, ordered behind the MAJ-11 drop-elimination) |
 
 ## TR-BLOCKING-015 — serve races the chosen timeout/unblock (reconciliation)
 
@@ -217,13 +213,11 @@ rather than naming one that doesn't force the behavior.
 
 | Field | Value |
 | --- | --- |
-| Precondition (ruled) | This node stops being the primary for the shard a waiter is parked on (demotion). |
-| Postcondition (ruled) | Every parked waiter on the demoted shard is unblocked (Redis `disconnectAllBlockedClients` precedent), never served from data arriving over the replication stream — serving from replicated data would be a replica-side write, diverging the replica's store from its own replication stream. |
-| Postcondition (current code) | No demotion-triggered drain of `ShardWaitQueue` exists: `RoleManager::demote` (`server/role_manager.rs:362-403`) flips `is_replica` (`Ordering::Release`, `:371`), ends the primary stint, and tears down the outbound stream, but never sends any shard message and never touches `ShardWaitQueue` — confirmed by reading the function in full, not by absence-of-match search alone. A demoted node continues applying replicated writes through the same generic post-execution hook that satisfies local waiters: `ReplicaCommandExecutor::apply_group`/`apply_single` (`replication-runtime/src/executor.rs:136-148`, pinned by test `a_single_replicated_command_executes_directly_on_its_tagged_shard`) dispatches an ordinary `CoreMsg::Execute` with no role check anywhere on the path, through `run_write_effects` (`shard/post_execution.rs:305`) to `WriteEffectKind::WaiterSatisfaction` (`:377-380`) to `satisfy_waiters_for_command` (`:701`) — a parked BLPOP can be served by a replicated LPUSH on a now-replica shard. `WAIT` alone has a working mechanism for the analogous race (TR-BLOCKING-005's fence-then-check ordering, TR-BLOCKING-011); non-WAIT parked waiters have no equivalent today. |
-| Source | `server/role_manager.rs:362-403` (`demote`, full read, no `ShardWaitQueue` reference); `replication-runtime/src/executor.rs:136-148` (`apply_group`/`apply_single`); `shard/post_execution.rs:305` (`run_write_effects`), `:377-380` (`WaiterSatisfaction` dispatch), `:701` (`satisfy_waiters_for_command`) |
-| Forced by | MISSING ([issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md)) — the `(ruled)` cell has no code to test yet; the `(current code)` cell's hazard (a demoted shard's replicated write serving a local waiter) is likewise not forced by any located test, consistent with it being an undetected gap rather than a deliberately accepted one. |
-| Rulings | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) (H6) |
-| Pending | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) |
+| Precondition | This node stops being the primary for the shard a waiter is parked on (`RoleManager::demote`, from `REPLICAOF` or a failover). |
+| Postcondition | Every parked waiter on every shard of the demoted node is released with `ROLE_CHANGED_UNBLOCK_ERR` (Redis `disconnectAllBlockedClients`), never served from data arriving over the replication stream — serving from replicated data would be a replica-side write, diverging the replica's store from its own replication stream. The release rides each shard's serial mailbox and is enqueued before the inbound stream is opened, so a replicated write cannot overtake it; the wait queue is empty and `BlockedClients` is 0 on every shard afterwards. `WAIT`'s analogue is the fence (TR-BLOCKING-017), which reports the same error text. See FM-BLOCKING-007. |
+| Source | `server/role_manager.rs` (`demote` → `BlockedWaiterFence::release_all_on_demotion`, `ShardWaiterFence`); `shard/dispatch_blocking.rs` (`BlockingMsg::ReleaseAllWaiters`); `shard/blocking.rs` (`handle_release_all_waiters`); `shard/wait_queue.rs` (`drain_all`). The hazard this closes: `ReplicaCommandExecutor::apply_group`/`apply_single` (`replication-runtime/src/executor.rs`) dispatches replicated writes as ordinary `CoreMsg::Execute` with no role check, reaching `WriteEffectKind::WaiterSatisfaction` in `shard/post_execution.rs` — so without the release a parked BLPOP could be served by a replicated LPUSH on a now-replica shard. |
+| Forced by | `demote_releases_every_parked_blocking_waiter`; unit-level (frogdb-core, `shard/blocking.rs`): `demotion_release_answers_every_waiter_and_empties_the_queue` |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6) |
 
 ## TR-BLOCKING-017 — WAIT role-change while parked
 
@@ -232,8 +226,8 @@ rather than naming one that doesn't force the behavior.
 | Precondition | This node's `role_fence` is bumped (demotion) while a `WAIT` is parked in `resolve_wait_race`, racing `unblock.unblocked()`. |
 | Postcondition | `wait_fut` yields `WaitVerdict::RoleChanged(count)` → `Response::error(WAIT_ROLE_CHANGED_ERR)`, biased ahead of a same-poll `CLIENT UNBLOCK`. The fence is subscribed before the primary-role check in `handle_wait_command`, so a demotion landing between subscribe and check is still observed (see the `RoleFence` ordering note; this is the mechanism TR-BLOCKING-016 shows has no non-WAIT counterpart). |
 | Source | `connection/blocking.rs:319-347` (`resolve_wait_race`), `:226-260` (`handle_wait_command`, fence-then-role-check ordering); `replication/src/wait_coordinator.rs:64-83` (`WaitVerdict`), `:96` (`RoleFence`) |
-| Forced by | `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`; unit-level (frogdb-replication, `wait_coordinator.rs`, not covered by this spec's `-p frogdb-server` test-resolution profile): `role_change_releases_a_wait_parked_forever`, `role_change_releases_a_wait_with_a_deadline`, `a_fence_from_an_earlier_stint_does_not_release_a_later_wait`, `a_demotion_racing_the_role_check_still_releases_the_wait`, `a_tie_between_quorum_and_role_change_favors_role_changed_no_deadline`, `a_tie_between_quorum_and_role_change_favors_role_changed_with_deadline`, `one_fence_releases_every_wait_parked_before_it`; integration (in profile): `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion` |
-| Rulings | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) (confirms this path already exists and is correct, unrowed until now) |
+| Forced by | `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`; unit-level (frogdb-replication, `wait_coordinator.rs`): `role_change_releases_a_wait_parked_forever`, `role_change_releases_a_wait_with_a_deadline`, `a_fence_from_an_earlier_stint_does_not_release_a_later_wait`, `a_demotion_racing_the_role_check_still_releases_the_wait`, `a_tie_between_quorum_and_role_change_favors_role_changed_no_deadline`, `a_tie_between_quorum_and_role_change_favors_role_changed_with_deadline`, `one_fence_releases_every_wait_parked_before_it`; integration (in profile): `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion` |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (confirms this path already exists and is correct; rowed as a failure mode by FM-BLOCKING-010) |
 
 ## TR-BLOCKING-018 — slot migrates away while a waiter is parked (non-WAIT ops)
 
@@ -242,8 +236,8 @@ rather than naming one that doesn't force the behavior.
 | Precondition | A slot containing keys a waiter is parked on migrates off this node; the cluster runtime's slot-migration-complete event reaches this shard as `ShardMessage::Cluster(ClusterMsg::SlotMigrated{slot, target_addr})`. |
 | Postcondition | Every waiter for keys in that slot is drained from the queue (never served locally from a slot this node no longer owns): if `target_addr` is known, each gets `MOVED <slot> <host>:<port>` (IPv6 bracketed); if unknown, each gets `CLUSTERDOWN Hash slot <slot> not served`. Connection's blocked-flag is cleared on receipt. A dedicated counter (`BlockedMigrationMoved`) records only the MOVED case. |
 | Source | `shard/dispatch_cluster.rs:8-10` (`ClusterMsg::SlotMigrated` dispatch to `handle_slot_migrated`); `shard/blocking.rs:118-168` (`handle_slot_migrated`); `wait_queue.rs:346-397` (`drain_waiters_for_slot`); `shard/message.rs:776-779` (`ClusterMsg::SlotMigrated` field def); confirmed matching `website/src/content/docs/architecture/blocking.md` "Cluster Mode: Slot Migration Interaction" |
-| Forced by | unit-level (frogdb-core, `shard/blocking.rs`, not covered by this spec's `-p frogdb-server` test-resolution profile): `slot_migrated_moved_brackets_ipv6`, `slot_migrated_moved_ipv4_plain`, `slot_migrated_without_a_known_target_replies_clusterdown`; integration (in profile): `test_blocking_command_during_migration_gets_moved` |
-| Rulings | [issue 08](../.scratch/spec-gaps/issues/open/08-blocking-command-rows.md) (confirms this path, no code gap) |
+| Forced by | unit-level (frogdb-core, `shard/blocking.rs`): `slot_migrated_moved_brackets_ipv6`, `slot_migrated_moved_ipv4_plain`, `slot_migrated_without_a_known_target_replies_clusterdown`; integration: `test_blocking_command_during_migration_gets_moved` |
+| Rulings | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (confirms this path, no code gap; rowed as a failure mode by FM-BLOCKING-008) |
 
 ## TR-BLOCKING-019 — stream waiter drains: NOGROUP / WRONGTYPE
 
@@ -271,11 +265,12 @@ Fields as in [txn.md](txn.md#how-to-read-a-row). `Outcome variant`
 here names the `WaitOutcome` variant the coordinator settles on, the blocking-path analogue of the
 txn spec's transaction outcome.
 
-Test names are bare function names, resolved against
-`cargo nextest list -p frogdb-txn -p frogdb-vll -p frogdb-server` (core command profile).
-That listing profile does **not** build `frogdb-core`, `frogdb-shard-harness`, or anything behind
-`--features turmoil`/`--features shuttle`, so the following genuinely load-bearing guards exist but
-are deliberately not cited in `Forced by` rows:
+Test names are bare function names, resolved against `scripts/spec-lint.py`'s
+`NEXTEST_CRATES` listing (core command profile), which covers `frogdb-core` and
+`frogdb-server` among others. That listing profile does **not** build
+`frogdb-shard-harness` or anything behind `--features turmoil`/`--features shuttle`, so the
+following genuinely load-bearing guards exist but are deliberately not cited in `Forced by`
+rows:
 
 - `frogdb-server/crates/core/tests/concurrency.rs`, module "Blocking-pop exactly-once conservation
   (serve-vs-timeout race)" — the shuttle model of the shard-side handshake, including two
@@ -305,10 +300,10 @@ are deliberately not cited in `Forced by` rows:
 |---|---|
 | Trigger | A finite blocking timeout expires with the waiter still parked: no shard delivery, no `CLIENT UNBLOCK`. |
 | Observable | The op-aware nil: a null **array** for array-returning ops (`BLPOP`, `BRPOP`, `BZPOPMIN`, `BZPOPMAX`, `XREAD BLOCK`), a null **bulk** for single-value ops (`BLMOVE`, `BRPOPLPUSH`). |
-| NOT observable | One nil shape for both op families (the wrong-shape bug `into_response` exists to fix); an element being consumed from any key; the waiter staying registered after the reply. |
-| Invariant | `WaitOutcome::Timeout` carries no data, and `into_response` re-derives the shape from the surviving `BlockingOp`, so timing out is a pure no-op against the store. |
+| NOT observable | One nil shape for both op families (the wrong-shape bug `into_response` exists to fix); an element being consumed from any key; the waiter staying registered after the reply; an error reply — a timeout is never reported as the shard-death `-ERR shard unavailable` of FM-BLOCKING-004, which is why no shard-side path may signal a timeout by dropping the response sender (TR-BLOCKING-007, TR-BLOCKING-020). |
+| Invariant | `WaitOutcome::Timeout` carries no data, and `into_response` re-derives the shape from the surviving `BlockingOp`, so timing out is a pure no-op against the store. Every shard-side resolution *sends* its reply, so the coordinator's `Err(_)` arm is reserved for FM-BLOCKING-004 alone. |
 | Outcome variant | `Timeout` |
-| Forced by | `timeout_wins_when_idle`, `timeout_reply_picks_nil_shape_per_op` |
+| Forced by | `timeout_wins_when_idle`, `timeout_reply_picks_nil_shape_per_op`, `push_after_deadline_elapsed_replies_with_the_op_aware_nil` |
 | Bug refs | none |
 
 ## FM-BLOCKING-003 — CLIENT UNBLOCK targets the parked connection
@@ -317,7 +312,7 @@ are deliberately not cited in `Forced by` rows:
 |---|---|
 | Trigger | `CLIENT UNBLOCK <id>` (or `… ERROR`) fires on a connection parked in a blocking wait, before any shard delivery or the deadline. |
 | Observable | `ERROR` mode: `-UNBLOCKED client unblocked via CLIENT UNBLOCK`. `TIMEOUT` mode: exactly the FM-BLOCKING-002 reply, op-aware nil shape and all. |
-| NOT observable | A delivered element (unblocking must never consume); a bare `Response::Null` standing in for the array-shaped nil; the unblock being swallowed while the wait had no deadline (an infinite `BLPOP 0` must still be unblockable). |
+| NOT observable | A delivered element (unblocking must never consume); a bare `Response::Null` standing in for the array-shaped nil; the shard-death `-ERR shard unavailable` of FM-BLOCKING-004 standing in for either unblock reply; the unblock being swallowed while the wait had no deadline (an infinite `BLPOP 0` must still be unblockable). |
 | Invariant | The unblock branch is a peer of the response and deadline branches in the same `select!`, so it resolves even when `deadline == None` (which parks the timeout branch on `pending()` forever). |
 | Outcome variant | `Unblocked(UnblockMode::{Error,Timeout})` |
 | Forced by | `unblock_wins_over_idle_wait`, `timeout_reply_picks_nil_shape_per_op` |
@@ -327,13 +322,13 @@ are deliberately not cited in `Forced by` rows:
 
 | Field | Value |
 |---|---|
-| Trigger | The shard drops the wait's response sender without sending — shard shutdown, or the waiter being dropped by a GC/teardown path. |
-| Observable | `Response::Null`. The connection is released, not wedged. |
-| NOT observable | The wait hanging forever on a dead channel; a panic on `RecvError`; a fabricated element. |
-| Invariant | `Err(_)` from the borrowed receiver maps to `WaitOutcome::Response(Response::Null)`, so channel closure is a terminal outcome of the race rather than an error path. |
-| Outcome variant | `Response(Response::Null)` |
-| Forced by | `channel_drop_yields_null_response` |
-| Bug refs | none |
+| Trigger | The shard drops the wait's response sender without sending — shard shutdown or worker death. Every other shard-side resolution (satisfy, timeout fast-path, GC tick, admission refusal, demotion release, disconnect drain) *sends* a reply, so a closed channel means exactly one thing: the shard serving this key is gone. |
+| Observable | `-ERR shard unavailable`. The connection is released, not wedged. |
+| NOT observable | The wait hanging forever on a dead channel; a panic on `RecvError`; a fabricated element; a nil of either shape — shard death is distinguishable from the FM-BLOCKING-002 timeout, so a client cannot mistake a dead shard for "no data arrived" and retry into it forever. Matching `txn.md` FM-TXN-032's vocabulary for the same underlying event. |
+| Invariant | `Err(_)` from the borrowed receiver maps to `WaitOutcome::Response(Response::error("ERR shard unavailable"))`. The mapping is only sound because sender-drop has been eliminated as a signaling mechanism: TR-BLOCKING-003 hands the entry back so the refusal reply can be sent, TR-BLOCKING-007 sends `timeout_reply()` on the deadline fast-path, and `Satisfaction::Retry` sends rather than drops. |
+| Outcome variant | `Response(Response::Error("ERR shard unavailable"))` |
+| Forced by | `channel_drop_yields_shard_unavailable_error` |
+| Bug refs | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H5 + MAJ-11 amendment: the three-row contradiction and the drop-elimination that had to land first) |
 
 ## FM-BLOCKING-005 — serve races the chosen timeout (pop→deliver window)
 
@@ -353,3 +348,64 @@ are deliberately not cited in `Forced by` rows:
 > this mode (the shuttle conservation model in `frogdb-server/crates/core/tests/concurrency.rs`
 > with its `#[should_panic]` witnesses, and the turmoil sweep's `check_exactly_once_delivery`) live
 > outside the listing profile above and so cannot be cited here.
+
+## FM-BLOCKING-006 — registration refused at the waiter limit
+
+| Field | Value |
+|---|---|
+| Trigger | `register_wait` reaches an admission bound: `max_blocked_connections` waiters already parked on this shard (default 50,000), or `max_waiters_per_key` already parked on one of the requested keys (default 10,000). |
+| Observable | The refusal error on this connection's own response channel — `-ERR max blocked connections limit reached` for the shard-wide bound, `-ERR max waiters per key limit reached` for the per-key bound — and the connection unparks immediately rather than waiting out its timeout. |
+| NOT observable | A refused registration that nonetheless leaves an entry in the wait queue (for the multi-key case: a partial registration under the keys checked before the offending one); the refusal arriving as `-ERR shard unavailable`, which would happen if the refusal path signalled by dropping the response sender (FM-BLOCKING-004); the bound being absent, i.e. a waiter admitted past either limit. |
+| Invariant | The bounds are checked over *all* requested keys before any insertion, and `ShardWaitQueue::register` returns the entry inside `Err(RegisterRefused { entry, message })` so the caller still owns the `response_tx` it needs to answer with. Queue length and `waiter_count` are therefore unchanged on refusal. |
+| Outcome variant | `Response(Response::Error(_))` |
+| Forced by | `admission_refusal_at_the_global_limit_replies_and_registers_nothing`, `admission_refusal_at_the_per_key_limit_replies_and_registers_nothing` |
+| Bug refs | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H7: the bound was enforced in code and rowed nowhere, so a mutant deleting it survived the gate) |
+
+## FM-BLOCKING-007 — the node is demoted while waiters are parked
+
+| Field | Value |
+|---|---|
+| Trigger | `RoleManager::demote` runs on a node with parked non-`WAIT` waiters — `REPLICAOF <host> <port>`, a cluster-driven role change, or failover-induced demotion. |
+| Observable | Every parked waiter on every shard is answered `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)` (`frogdb_core::ROLE_CHANGED_UNBLOCK_ERR`, the same text `WAIT` uses in FM-BLOCKING-010, matching Redis's `disconnectAllBlockedClients`); afterwards the wait queue is empty and `BlockedClients` is 0. |
+| NOT observable | A waiter still parked after demotion completes; a waiter served *after* demotion from an element that arrived over the replication stream — serving one is a local write on a replica, diverging its store from the stream it is applying; a timeout nil or `-ERR shard unavailable` standing in for the role-change error. |
+| Invariant | `demote` flips the replica fence, then fans `BlockingMsg::ReleaseAllWaiters` out through the `BlockedWaiterFence` seam to every shard mailbox, and only then starts the inbound replication stream. Because a shard's mailbox is serial, the release is ordered ahead of any replicated push that shard could receive, which is what makes "never served from replicated data" a fact about the ordering rather than a race the node usually wins. A mailbox already at capacity does not weaken that: the fence falls back to an awaited `send`, whose permit is handed out in FIFO order ahead of any message the not-yet-created replication stream could enqueue. |
+| Outcome variant | `Response(Response::Error(ROLE_CHANGED_UNBLOCK_ERR))` |
+| Forced by | `demote_releases_every_parked_blocking_waiter`, `demotion_release_answers_every_waiter_and_empties_the_queue` |
+| Bug refs | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.1: `WAIT` handled its own role change, non-`WAIT` waiters had no path at all) |
+
+## FM-BLOCKING-008 — the slot a waiter is parked on migrates away
+
+| Field | Value |
+|---|---|
+| Trigger | A slot holding keys this waiter is parked on finishes migrating off this node; the cluster runtime delivers `ClusterMsg::SlotMigrated { slot, target_addr }` to the shard. |
+| Observable | Every waiter for a key in that slot is answered `-MOVED <slot> <host>:<port>` when the target is known (IPv6 hosts bracketed, so the reply parses), and `-CLUSTERDOWN Hash slot <slot> not served` when it is not. `BlockedMigrationMoved` counts only the MOVED case. |
+| NOT observable | A waiter later served locally out of a slot this node no longer owns (the blocking analogue of `txn.md` FM-TXN-049); an unbracketed IPv6 `MOVED`; a waiter left parked on a departed slot until its own timeout. |
+| Invariant | `drain_waiters_for_slot` removes the entries before any reply is sent, and the redirect text is produced by the shared redirect seam rather than an inline `host:port` join. |
+| Outcome variant | `Response(Response::Error(_))` — `MOVED` / `CLUSTERDOWN` |
+| Forced by | `slot_migrated_moved_brackets_ipv6`, `slot_migrated_moved_ipv4_plain`, `slot_migrated_without_a_known_target_replies_clusterdown`, `test_blocking_command_during_migration_gets_moved` |
+| Bug refs | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.2: the path existed and was correct, but was rowed only as a transition) |
+
+## FM-BLOCKING-009 — the client disconnects while parked
+
+| Field | Value |
+|---|---|
+| Trigger | The connection is torn down while a blocking wait is registered, and the run loop observes the teardown — `notify_connection_closed` runs with the connection's blocked-flag still set. |
+| Observable | Nothing on the wire (the peer is gone). Server-side: the entry is gone from the shard's wait queue under *every* key it was registered on, the removal is acknowledged (`Unregistered` the first time, `AlreadyServed` if a serve raced it), `DEBUG WAITQUEUE` reports the queue empty again, and `BlockedClients` returns to its pre-block value. |
+| NOT observable | A leaked wait entry that outlives its connection — one that a later push would try to serve, consuming an element for a client that cannot receive it (a conservation loss, not merely a leak); an entry cleared from the first of a multi-key wait's keys but left under the rest; a second teardown reported as a fresh removal rather than `AlreadyServed`. |
+| Invariant | `notify_connection_closed` sends `BlockingMsg::UnregisterWait { conn_id }` to the shard, whose serial mailbox makes removal atomic against a concurrent push; removal iterates `entry.keys`, so multi-key waits leave no residue. |
+| Outcome variant | none — the wait is torn down, not resolved |
+| Forced by | `unregister_after_disconnect_clears_every_key_of_a_multi_key_wait` |
+| Gap (current code) | A close raised *during* the wait is not observed at all — see TR-BLOCKING-013's gap cell and [spec-gaps issue 13](../.scratch/spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md), which owns the run-loop restructure and the end-to-end forcing test. This row therefore pins the teardown itself, not the detection of it. |
+| Bug refs | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.3: `cleanup_wait` was in scope but nothing forced the shard-side unregistration) |
+
+## FM-BLOCKING-010 — `WAIT` is parked when the node's role changes
+
+| Field | Value |
+|---|---|
+| Trigger | This node's `role_fence` is bumped by a demotion while a `WAIT` is parked awaiting acks, possibly in the same poll as a `CLIENT UNBLOCK` for that connection. |
+| Observable | `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)` (`WAIT_ROLE_CHANGED_ERR`, which is `frogdb_core::ROLE_CHANGED_UNBLOCK_ERR`), taking priority over a same-poll `CLIENT UNBLOCK` and over a same-poll quorum verdict. |
+| NOT observable | An ack count reported as satisfied by a node that is no longer the primary those acks were counted against; the `WAIT` staying parked past the demotion (including `WAIT numreplicas 0`, which parks forever); a fence from an *earlier* primary stint releasing a `WAIT` parked after it. |
+| Invariant | The fence is subscribed *before* the primary-role check in `handle_wait_command`, so a demotion landing between subscribe and check is still observed; `WaitVerdict::RoleChanged` is biased ahead of the unblock and quorum branches in `resolve_wait_race`. Cross-referenced to `replication.md` FM-REPLICATION-040. |
+| Outcome variant | `Response(Response::Error(WAIT_ROLE_CHANGED_ERR))` |
+| Forced by | `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`, `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion` |
+| Bug refs | [issue 08](../.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.4: `WAIT` is in this spec's scope line but had no row) |
