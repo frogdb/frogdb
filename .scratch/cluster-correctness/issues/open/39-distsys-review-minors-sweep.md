@@ -41,6 +41,19 @@ Ruling: **accept both parts**.
 - [ ] Contradiction resolved against code; lying row fixed
 - [ ] Non-empty-membership precondition + forcing test landed
 
+### MIN-3 — TR-CLUSTER-005's MEET precondition names state the deciding node cannot observe
+
+Ruling: **check at the joiner** (etcd shape: `--initial-cluster-state existing` +
+data-dir emptiness live at the joining node, not the acceptor). The row as written
+is unenforceable — it references the *joining* node's local Raft state, which the
+deciding node cannot see. Enforcement moves to where observation lives: the
+joining node checks its own state and refuses the MEET when non-empty/already a
+member; TR-CLUSTER-005 is restated acceptor-side in terms the acceptor can
+actually observe (what the joiner presents in the MEET exchange).
+
+- [ ] Joiner-side guard + forcing test (non-empty joiner refuses MEET locally)
+- [ ] TR-CLUSTER-005 restated in acceptor-observable terms
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled

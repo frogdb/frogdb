@@ -431,3 +431,12 @@ Ruling: **accept both parts** — resolve the row contradiction against the code
 irreversible op — and records the call), and add a non-empty-membership
 precondition + forcing test for the irreversible finalize. Recorded in
 [cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
+
+## MIN-3 — TR-CLUSTER-005's MEET precondition names state the deciding node cannot observe
+
+Ruling: **check at the joiner** (etcd shape). The precondition references the
+joining node's local Raft state — unobservable at the acceptor, hence
+unenforceable as written. The joining node checks its own state and refuses the
+MEET when non-empty/already a member; TR-CLUSTER-005 restated acceptor-side in
+observable terms; forcing test at the joiner. Recorded in
+[cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
