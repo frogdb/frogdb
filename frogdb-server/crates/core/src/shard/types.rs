@@ -356,6 +356,18 @@ impl ShardEviction {
     }
 }
 
+/// Reply to a write on a shard whose WAL is poisoned under a refusing failure
+/// policy (FM-PERSISTENCE-055).
+///
+/// `MISCONF` is Redis's "the server is configured such that it cannot persist"
+/// error, which is precisely the situation: the operator asked for
+/// `rollback`/`readonly` durability and the storage can no longer supply it.
+/// The message says *restart*, not "wait": the latch is deliberately not
+/// self-clearing, because a later successful write is no evidence the lost one
+/// reached the device.
+pub(crate) const WAL_POISONED_ERROR: &str = "MISCONF FrogDB is unable to persist writes: \
+     the WAL failed and this shard is fenced. Fix storage, then restart the node.";
+
 /// WAL writer + snapshot coordinator for this shard.
 ///
 /// The shard's RocksDB handle is not stored here: it is captured by the
@@ -433,12 +445,39 @@ impl ShardPersistence {
         self.failure_policy = flag;
     }
 
-    /// Returns true if the WAL failure policy is set to Rollback.
-    pub(crate) fn should_rollback(&self) -> bool {
+    /// The live WAL failure policy.
+    fn failure_policy(&self) -> WalFailurePolicy {
         WalFailurePolicy::from_u8(
             self.failure_policy
                 .load(std::sync::atomic::Ordering::Relaxed),
-        ) == WalFailurePolicy::Rollback
+        )
+    }
+
+    /// Returns true if a failed durability confirmation undoes the write —
+    /// `rollback`, and `readonly`, which is `rollback` plus a standing refusal.
+    pub(crate) fn should_rollback(&self) -> bool {
+        self.failure_policy().rolls_back()
+    }
+
+    /// Whether this shard's WAL has lost an entry and not been reset since
+    /// (FM-PERSISTENCE-053). False when there is no WAL: nothing was promised,
+    /// so nothing was broken.
+    pub(crate) fn wal_poisoned(&self) -> bool {
+        self.wal_writer.as_ref().is_some_and(|w| w.poisoned())
+    }
+
+    /// Whether this shard must refuse writes outright (FM-PERSISTENCE-055).
+    ///
+    /// The fail-stop of `wal-failure-policy = rollback`/`readonly`: once the
+    /// WAL has lost an entry it persists nothing further, so every subsequent
+    /// write would be accepted into memory and lost on restart. Refusing before
+    /// execution is the only answer that does not silently downgrade the shard
+    /// to `continue`. `continue` itself never refuses — trading durability for
+    /// availability is exactly what it was chosen for.
+    pub(crate) fn write_refused(&self) -> bool {
+        self.has_wal()
+            && self.failure_policy().refuses_writes_when_poisoned()
+            && self.wal_poisoned()
     }
 
     /// Returns true if this shard's durability mode is `sync`.
@@ -1350,6 +1389,66 @@ mod persistence_tests {
         p.set_failure_policy(rollback);
         assert!(p.should_confirm());
         assert!(p.should_rollback());
+    }
+
+    fn persistence_with_sink(sink: crate::persistence::FakeWalSink) -> ShardPersistence {
+        ShardPersistence::new(
+            Some(Box::new(sink)),
+            Arc::new(NoopSnapshotCoordinator::new()),
+            Arc::new(std::sync::atomic::AtomicU8::new(
+                WalFailurePolicy::default().as_u8(),
+            )),
+            false,
+        )
+    }
+
+    fn policy_flag(policy: WalFailurePolicy) -> Arc<std::sync::atomic::AtomicU8> {
+        Arc::new(std::sync::atomic::AtomicU8::new(policy.as_u8()))
+    }
+
+    // FM-PERSISTENCE-055
+    /// The refusal needs *both* halves, and the shard must not invent a third.
+    /// A poisoned WAL under `continue` keeps serving writes — that policy was
+    /// chosen to trade durability for availability, and fencing it would
+    /// silently promote every user of the default to fail-stop. A healthy WAL
+    /// under `readonly` serves writes too: the fence is a consequence of a
+    /// real loss, not of the setting.
+    #[test]
+    fn a_poisoned_shard_refuses_writes_only_under_a_refusing_policy() {
+        // No WAL at all: nothing was promised, so nothing can be refused.
+        let p = persistence();
+        assert!(!p.wal_poisoned());
+        assert!(!p.write_refused());
+
+        let sink = crate::persistence::FakeWalSink::new(0);
+        let mut p = persistence_with_sink(sink);
+        assert!(!p.wal_poisoned(), "a fresh WAL is healthy");
+        assert!(!p.write_refused());
+
+        // Healthy WAL, refusing policy: still serving.
+        p.set_failure_policy(policy_flag(WalFailurePolicy::Readonly));
+        assert!(!p.write_refused(), "a healthy shard refuses nothing");
+
+        // The loss is what fences the shard.
+        let sink = crate::persistence::FakeWalSink::new(0);
+        sink.poison();
+        let mut p = persistence_with_sink(sink);
+        assert!(p.wal_poisoned());
+        assert!(
+            !p.write_refused(),
+            "`continue` acknowledges the loss and carries on — that is its whole point"
+        );
+
+        p.set_failure_policy(policy_flag(WalFailurePolicy::Rollback));
+        assert!(p.write_refused(), "rollback fails a write it cannot undo");
+
+        p.set_failure_policy(policy_flag(WalFailurePolicy::Readonly));
+        assert!(p.write_refused());
+
+        // The policy is live, so the fence lifts with it — the latch does not.
+        p.set_failure_policy(policy_flag(WalFailurePolicy::Continue));
+        assert!(!p.write_refused());
+        assert!(p.wal_poisoned());
     }
 }
 

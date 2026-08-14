@@ -1,6 +1,6 @@
 # Durability-failure taxonomy: fsyncgate latch, suffix restoration, readonly policy
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

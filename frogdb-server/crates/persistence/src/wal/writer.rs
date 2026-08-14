@@ -318,6 +318,20 @@ impl RocksWalWriter {
     pub fn shard_id(&self) -> usize {
         self.shard_id
     }
+    /// Whether this shard has lost a WAL entry and not been reset since
+    /// (FM-PERSISTENCE-053).
+    pub fn poisoned(&self) -> bool {
+        self.outcomes.poisoned()
+    }
+    /// The first lost sequence, or `0` while the shard is healthy.
+    pub fn poisoned_sequence(&self) -> u64 {
+        self.outcomes.poisoned_sequence()
+    }
+    /// Clear the poison latch. Operator action only — see
+    /// [`super::WalSink::clear_poison`].
+    pub fn clear_poison(&self) {
+        self.outcomes.clear_poison();
+    }
 }
 
 impl Drop for RocksWalWriter {
@@ -377,6 +391,12 @@ impl super::WalSink for RocksWalWriter {
     }
     fn shard_id(&self) -> usize {
         RocksWalWriter::shard_id(self)
+    }
+    fn poisoned(&self) -> bool {
+        RocksWalWriter::poisoned(self)
+    }
+    fn clear_poison(&self) {
+        RocksWalWriter::clear_poison(self);
     }
 }
 

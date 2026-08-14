@@ -537,12 +537,54 @@ mod wal_failure_policy_tests {
         }
     }
 
+    /// A read, so a fenced shard can be shown still serving them.
+    struct MockGet;
+    impl Command for MockGet {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "GET",
+                arity: Arity::Fixed(1),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                reindex: ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(match ctx.store.get(&args[0]) {
+                Some(v) => Response::bulk(v.as_string().unwrap().as_bytes().clone()),
+                None => Response::Null,
+            })
+        }
+    }
+
     /// A shard whose WAL is a fake sink that fails its first write, with the
     /// failure policy driven by the shared `ConfigManager`-style flag.
     fn worker_with_failing_wal(policy: Arc<AtomicU8>) -> ShardWorker {
+        worker_with_injected_failure(policy, FakeFailure::AtWriteIndex(0))
+    }
+
+    /// As above, with the injected failure spelled out — `PoisoningAtWriteIndex`
+    /// models a lost commit (which latches the poison) rather than a refused
+    /// enqueue (which does not).
+    fn worker_with_injected_failure(policy: Arc<AtomicU8>, failure: FakeFailure) -> ShardWorker {
         FakeWalRegistry::clear();
         let mut registry = CommandRegistry::new();
         registry.register(MockSet);
+        registry.register(MockGet);
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_conn_tx, conn_rx) = mpsc::channel(16);
         ShardWorkerBuilder::new(0, 1)
@@ -553,9 +595,16 @@ mod wal_failure_policy_tests {
             .with_metrics(Arc::new(NoopMetricsRecorder::new()))
             .with_store(HashMapStore::new())
             .with_wal_mode(WalMode::Fake)
-            .with_fake_wal_failure(FakeFailure::AtWriteIndex(0))
+            .with_fake_wal_failure(failure)
             .with_wal_failure_policy(policy)
             .build()
+    }
+
+    fn get(key: &'static str) -> ParsedCommand {
+        ParsedCommand::new(
+            Bytes::from_static(b"GET"),
+            vec![Bytes::from_static(key.as_bytes())],
+        )
     }
 
     fn set(key: &'static str, value: &'static str) -> ParsedCommand {
@@ -630,5 +679,74 @@ mod wal_failure_policy_tests {
         // is refused instead. The policy is the only difference.
         policy.store(1, Ordering::Relaxed);
         assert!(worker.persistence.should_rollback());
+    }
+
+    // FM-PERSISTENCE-055
+    #[tokio::test]
+    async fn a_poisoned_shard_under_readonly_refuses_every_later_write_and_still_reads() {
+        // `readonly` (policy 2): the lost commit rolls back *and* latches the
+        // poison, and from then on writes are refused with -MISCONF before they
+        // execute. Reads keep being served — the shard is fenced, not down.
+        let policy = Arc::new(AtomicU8::new(2));
+        let mut worker =
+            worker_with_injected_failure(policy.clone(), FakeFailure::PoisoningAtWriteIndex(0));
+        worker
+            .store
+            .set(Bytes::from_static(b"k"), Value::string("original"));
+
+        let first = worker
+            .execute_command(&set("k", "lost"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(
+            matches!(first, Response::Error(_)),
+            "the lost write is refused, got {first:?}"
+        );
+        assert!(
+            worker.persistence.wal_poisoned(),
+            "a lost commit latches the poison"
+        );
+
+        // The sink would accept this one (its write index is past the injected
+        // failure); the fence refuses it before it ever executes.
+        let second = worker
+            .execute_command(&set("k", "later"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        match second {
+            Response::Error(msg) => assert_eq!(
+                String::from_utf8_lossy(&msg),
+                crate::shard::types::WAL_POISONED_ERROR,
+                "expected the standing MISCONF refusal"
+            ),
+            other => panic!("expected an error reply, got {other:?}"),
+        }
+        let value = worker.store.get(b"k").expect("key must still exist");
+        assert_eq!(
+            value.as_string().unwrap().as_bytes().as_ref(),
+            b"original",
+            "a refused write must not reach the store"
+        );
+
+        let read = worker
+            .execute_command(&get("k"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(
+            matches!(read, Response::Bulk(Some(ref b)) if b.as_ref() == b"original"),
+            "reads are unaffected by the fence, got {read:?}"
+        );
+
+        // The policy is live in both directions: switching to `continue` lifts
+        // the refusal even though the latch itself stays set.
+        policy.store(0, Ordering::Relaxed);
+        let third = worker
+            .execute_command(&set("k", "acked"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(
+            matches!(third, Response::Simple(ref s) if s.as_ref() == b"OK"),
+            "continue mode keeps acking on a poisoned shard, got {third:?}"
+        );
+        assert!(
+            worker.persistence.wal_poisoned(),
+            "the latch survives the policy change"
+        );
     }
 }

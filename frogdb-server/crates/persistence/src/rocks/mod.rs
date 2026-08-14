@@ -186,6 +186,16 @@ impl RocksStore {
         // durable-sync watermark in [`wal_watermark`], which emits a metric + log
         // when recovery lands below the last synced sequence.
         db_opts.set_wal_recovery_mode(DBRecoveryMode::PointInTime);
+        // Pinned for the same reason as the recovery mode: it is RocksDB's
+        // default today, but the durability contract depends on it, so it is
+        // stated rather than inherited. With paranoid checks on, a background
+        // write error puts the DB into a permanent error state instead of being
+        // retried behind our back — every later write then fails loudly and the
+        // shard poisons (FM-PERSISTENCE-053) rather than resuming with a hole in
+        // its history. Auto-resume (`max_bgerror_resume_count`) is deliberately
+        // *not* enabled; it has no binding in `rocksdb 0.24`, and silent
+        // resumption is exactly what the poison latch exists to prevent.
+        db_opts.set_paranoid_checks(true);
         if let Some(bytes_per_sec) = config.compaction_rate_limit_bytes_per_sec() {
             db_opts.set_ratelimiter(bytes_per_sec, 100_000, 10);
         }

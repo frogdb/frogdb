@@ -1,6 +1,6 @@
 # Sync-durability must gate the client ack
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

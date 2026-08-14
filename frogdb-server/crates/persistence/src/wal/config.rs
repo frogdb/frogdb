@@ -1,9 +1,17 @@
 //! WAL configuration types and policies.
+
+/// What a shard does when its WAL fails (FM-PERSISTENCE-005/006/055).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WalFailurePolicy {
+    /// Availability over durability: acknowledge the write, account the loss.
     #[default]
     Continue,
+    /// Undo the write and reply `-IOERR`, then refuse further writes while the
+    /// shard is poisoned.
     Rollback,
+    /// Fail-stop: `Rollback`'s undo plus a `-MISCONF` refusal of every write,
+    /// with reads still served, until an operator resolves the failure.
+    Readonly,
 }
 
 impl WalFailurePolicy {
@@ -15,6 +23,7 @@ impl WalFailurePolicy {
         match self {
             WalFailurePolicy::Continue => 0,
             WalFailurePolicy::Rollback => 1,
+            WalFailurePolicy::Readonly => 2,
         }
     }
 
@@ -23,6 +32,7 @@ impl WalFailurePolicy {
     pub const fn from_u8(v: u8) -> Self {
         match v {
             1 => WalFailurePolicy::Rollback,
+            2 => WalFailurePolicy::Readonly,
             _ => WalFailurePolicy::Continue,
         }
     }
@@ -33,17 +43,38 @@ impl WalFailurePolicy {
         match self {
             WalFailurePolicy::Continue => "continue",
             WalFailurePolicy::Rollback => "rollback",
+            WalFailurePolicy::Readonly => "readonly",
         }
     }
 
-    /// Parse the (already-validated) config string; anything other than
-    /// `"rollback"` is `Continue`.
+    /// Parse the (already-validated) config string; anything unrecognised is
+    /// `Continue`, the default.
     pub fn from_config_str(s: &str) -> Self {
         if s.eq_ignore_ascii_case("rollback") {
             WalFailurePolicy::Rollback
+        } else if s.eq_ignore_ascii_case("readonly") {
+            WalFailurePolicy::Readonly
         } else {
             WalFailurePolicy::Continue
         }
+    }
+
+    /// Whether a failed durability confirmation undoes the write and replies
+    /// `-IOERR` (FM-PERSISTENCE-006). `readonly` is `rollback` plus the standing
+    /// refusal below — a fail-stop that acknowledged the write it could not
+    /// persist would be no fail-stop at all.
+    pub const fn rolls_back(self) -> bool {
+        matches!(
+            self,
+            WalFailurePolicy::Rollback | WalFailurePolicy::Readonly
+        )
+    }
+
+    /// Whether writes are refused outright once the shard is poisoned
+    /// (FM-PERSISTENCE-055). `continue` keeps acknowledging by design; the
+    /// other two stop, because both were chosen to avoid acking a loss.
+    pub const fn refuses_writes_when_poisoned(self) -> bool {
+        self.rolls_back()
     }
 }
 
@@ -137,7 +168,11 @@ mod tests {
     // FM-PERSISTENCE-006
     #[test]
     fn the_atomic_encoding_round_trips_and_distinguishes_the_policies() {
-        for policy in [WalFailurePolicy::Continue, WalFailurePolicy::Rollback] {
+        for policy in [
+            WalFailurePolicy::Continue,
+            WalFailurePolicy::Rollback,
+            WalFailurePolicy::Readonly,
+        ] {
             assert_eq!(WalFailurePolicy::from_u8(policy.as_u8()), policy);
             assert_eq!(WalFailurePolicy::from(u8::from(policy)), policy);
         }
@@ -158,7 +193,7 @@ mod tests {
     // FM-PERSISTENCE-006
     #[test]
     fn an_unknown_encoding_decodes_to_continue() {
-        for v in [0u8, 2, 3, 17, 255] {
+        for v in [0u8, 3, 17, 255] {
             assert_eq!(
                 WalFailurePolicy::from_u8(v),
                 WalFailurePolicy::Continue,
@@ -173,7 +208,11 @@ mod tests {
     // FM-PERSISTENCE-006
     #[test]
     fn config_strings_round_trip_and_only_rollback_selects_rollback() {
-        for policy in [WalFailurePolicy::Continue, WalFailurePolicy::Rollback] {
+        for policy in [
+            WalFailurePolicy::Continue,
+            WalFailurePolicy::Rollback,
+            WalFailurePolicy::Readonly,
+        ] {
             assert_eq!(
                 WalFailurePolicy::from_config_str(policy.as_config_str()),
                 policy
@@ -186,13 +225,45 @@ mod tests {
             WalFailurePolicy::Rollback,
             "the config parse is case-insensitive"
         );
-        for junk in ["", "continue ", "roll", "rollbacks", "1"] {
+        for junk in ["", "continue ", "roll", "rollbacks", "1", "read-only"] {
             assert_eq!(
                 WalFailurePolicy::from_config_str(junk),
                 WalFailurePolicy::Continue,
                 "{junk:?} must not select rollback"
             );
         }
+    }
+
+    /// `readonly` is a policy of its own, not an alias: it keeps `rollback`'s
+    /// undo (a fail-stop that acked the write it could not persist would be no
+    /// fail-stop) and adds the standing refusal `continue` must never grow.
+    // FM-PERSISTENCE-055
+    #[test]
+    fn readonly_is_a_distinct_policy_that_rolls_back_and_refuses() {
+        assert_ne!(
+            WalFailurePolicy::Readonly,
+            WalFailurePolicy::Rollback,
+            "readonly must not collapse into rollback"
+        );
+        assert_eq!(
+            WalFailurePolicy::from_config_str("READONLY"),
+            WalFailurePolicy::Readonly
+        );
+        assert_eq!(
+            WalFailurePolicy::from_u8(WalFailurePolicy::Readonly.as_u8()),
+            WalFailurePolicy::Readonly
+        );
+
+        assert!(WalFailurePolicy::Readonly.rolls_back());
+        assert!(WalFailurePolicy::Rollback.rolls_back());
+        assert!(!WalFailurePolicy::Continue.rolls_back());
+
+        assert!(WalFailurePolicy::Readonly.refuses_writes_when_poisoned());
+        assert!(WalFailurePolicy::Rollback.refuses_writes_when_poisoned());
+        assert!(
+            !WalFailurePolicy::Continue.refuses_writes_when_poisoned(),
+            "the default policy trades durability for availability — it never refuses"
+        );
     }
 
     /// Defaults are a durability decision, not an arbitrary constant: an

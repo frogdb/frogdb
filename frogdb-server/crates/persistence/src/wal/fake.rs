@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use frogdb_types::types::{KeyMetadata, Value};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// One recorded WAL effect, in global call order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +65,11 @@ pub enum FakeFailure {
     /// not flushes) with an injected io error — exercises the rollback /
     /// EXECABORT persist-failure branch.
     AtWriteIndex(usize),
+    /// Like [`Self::AtWriteIndex`], but the failure also latches the poison
+    /// (FM-PERSISTENCE-053): it models a *commit* that was lost rather than an
+    /// enqueue that was refused, which is the failure the fail-stop policies
+    /// react to (FM-PERSISTENCE-055).
+    PoisoningAtWriteIndex(usize),
     /// Fail every write for which the predicate (write_index, key) is true.
     Predicate(FailurePredicate),
 }
@@ -73,9 +78,16 @@ impl FakeFailure {
     fn should_fail(&self, write_index: usize, key: Option<&[u8]>) -> bool {
         match self {
             FakeFailure::None => false,
-            FakeFailure::AtWriteIndex(n) => *n == write_index,
+            FakeFailure::AtWriteIndex(n) | FakeFailure::PoisoningAtWriteIndex(n) => {
+                *n == write_index
+            }
             FakeFailure::Predicate(p) => p(write_index, key),
         }
+    }
+
+    /// Whether a failure injected by this setting also poisons the shard.
+    fn poisons(&self) -> bool {
+        matches!(self, FakeFailure::PoisoningAtWriteIndex(_))
     }
 }
 
@@ -183,6 +195,14 @@ pub struct FakeWalSink {
     write_index: AtomicUsize,
     log: FakeWalLog,
     failure: FakeFailure,
+    /// Poison latch (FM-PERSISTENCE-053), set by [`Self::poison`] and by a
+    /// [`FakeFailure::PoisoningAtWriteIndex`] injection.
+    ///
+    /// Plain injected write failures deliberately do **not** set it: such a
+    /// failure models the enqueue that never happened (TR-PERSISTENCE-013 case
+    /// (a)), which loses nothing already accepted. Poisoning is the *flush*
+    /// failure, which the fake has no equivalent of, so tests state it.
+    poisoned: AtomicBool,
 }
 
 impl FakeWalSink {
@@ -200,12 +220,18 @@ impl FakeWalSink {
             write_index: AtomicUsize::new(0),
             log: FakeWalLog::default(),
             failure,
+            poisoned: AtomicBool::new(false),
         }
     }
 
     /// Clone of the shared log handle for post-run assertions.
     pub fn log(&self) -> FakeWalLog {
         self.log.clone()
+    }
+
+    /// Latch the poison, as a lost flush would (FM-PERSISTENCE-053).
+    pub fn poison(&self) {
+        self.poisoned.store(true, Ordering::SeqCst);
     }
 
     /// Record a write effect, honoring failure injection. Returns the assigned
@@ -215,6 +241,9 @@ impl FakeWalSink {
         if self.failure.should_fail(write_index, key) {
             // The failed write "did not happen": do not record, do not advance
             // the write index (mirrors the `?`-propagated rollback path).
+            if self.failure.poisons() {
+                self.poison();
+            }
             return Err(std::io::Error::other("injected WAL failure"));
         }
         let order = self.order.fetch_add(1, Ordering::SeqCst);
@@ -288,6 +317,11 @@ impl WalSink for FakeWalSink {
     }
     async fn flush_through(&self, _after_seq: u64) -> std::io::Result<()> {
         self.record_marker(WalEffectKind::FlushThrough);
+        if self.poisoned.load(Ordering::SeqCst) {
+            // Like the real sink: a poisoned shard confirms nothing, however
+            // well later writes go (FM-PERSISTENCE-007/053).
+            return Err(std::io::Error::other("shard is poisoned"));
+        }
         Ok(())
     }
     fn sequence(&self) -> u64 {
@@ -315,6 +349,12 @@ impl WalSink for FakeWalSink {
     }
     fn shard_id(&self) -> usize {
         self.shard_id
+    }
+    fn poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::SeqCst)
+    }
+    fn clear_poison(&self) {
+        self.poisoned.store(false, Ordering::SeqCst);
     }
 }
 

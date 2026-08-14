@@ -237,10 +237,19 @@ impl WriteSink for RocksSink {
 ///   fails iff `highest_failed_seq > S` — batches are seq-ordered, so a failed
 ///   batch with max sequence above `S` must have contained at least one entry
 ///   assigned after `S`.
+/// - `poisoned_seq` is the *first* sequence this shard lost, or `0` while it is
+///   healthy. It latches once and is never moved or cleared by anything the
+///   flush thread does — see [`FlushOutcomes::latch_poison`].
 pub(super) struct FlushOutcomes {
     committed_seq: AtomicU64,
     synced_seq: AtomicU64,
     highest_failed_seq: AtomicU64,
+    /// First lost sequence (`0` = healthy). FM-PERSISTENCE-053.
+    poisoned_seq: AtomicU64,
+    /// Whether the failure that latched the poison was an fsyncing commit —
+    /// the fsyncgate case, worth telling the operator apart from a plain
+    /// staging error.
+    poison_was_sync: AtomicBool,
     flush_failures: AtomicU64,
     lost_ops: AtomicU64,
     lost_bytes: AtomicU64,
@@ -256,6 +265,8 @@ impl FlushOutcomes {
             committed_seq: AtomicU64::new(0),
             synced_seq: AtomicU64::new(0),
             highest_failed_seq: AtomicU64::new(0),
+            poisoned_seq: AtomicU64::new(0),
+            poison_was_sync: AtomicBool::new(false),
             flush_failures: AtomicU64::new(0),
             lost_ops: AtomicU64::new(0),
             lost_bytes: AtomicU64::new(0),
@@ -279,14 +290,103 @@ impl FlushOutcomes {
         self.last_flush_ok.store(true, Ordering::Release);
     }
 
-    fn record_failure(&self, max_seq: u64, lost_ops: usize, lost_bytes: usize, error: &str) {
-        self.highest_failed_seq.fetch_max(max_seq, Ordering::AcqRel);
+    /// Record a lost entry or batch spanning sequences `first_seq..=last_seq`
+    /// (equal for a single lost entry). The poison latches at `first_seq`,
+    /// because that is where the persisted stream is truncated; the failure
+    /// watermark takes `last_seq`, because that is what a confirmation compares
+    /// against. `sync` is the `sync` flag the failing commit used, so a lost
+    /// fsync can be told from a lost stage in the operator-facing message.
+    fn record_failure(
+        &self,
+        first_seq: u64,
+        last_seq: u64,
+        lost_ops: usize,
+        lost_bytes: usize,
+        error: &str,
+        sync: bool,
+    ) {
+        self.latch_poison(first_seq, sync);
+        self.highest_failed_seq
+            .fetch_max(last_seq, Ordering::AcqRel);
         self.flush_failures.fetch_add(1, Ordering::Release);
         self.lost_ops.fetch_add(lost_ops as u64, Ordering::Release);
         self.lost_bytes
             .fetch_add(lost_bytes as u64, Ordering::Release);
         self.last_flush_ok.store(false, Ordering::Release);
         *self.last_error.lock().unwrap() = Some(error.to_string());
+    }
+
+    /// Account an entry the flush engine discarded because the shard was
+    /// already poisoned (FM-PERSISTENCE-054). No flush was attempted, so this
+    /// is not a flush failure and does not overwrite the latched cause — it
+    /// only counts the loss and extends the failure watermark, so a
+    /// confirmation for the discarded entry fails like the one that poisoned
+    /// the shard.
+    fn record_discard(&self, seq: u64, lost_ops: usize, lost_bytes: usize) {
+        self.highest_failed_seq.fetch_max(seq, Ordering::AcqRel);
+        self.lost_ops.fetch_add(lost_ops as u64, Ordering::Release);
+        self.lost_bytes
+            .fetch_add(lost_bytes as u64, Ordering::Release);
+    }
+
+    /// Latch the poison at the first lost sequence (FM-PERSISTENCE-053).
+    ///
+    /// `compare_exchange` from `0`, not `fetch_max`: the latch names where the
+    /// persisted stream was truncated (FM-PERSISTENCE-054), which is the
+    /// *earliest* loss, and every later failure is a consequence of that one.
+    /// Nothing here ever clears it — only [`Self::clear_poison`] does.
+    fn latch_poison(&self, seq: u64, sync: bool) {
+        if self
+            .poisoned_seq
+            .compare_exchange(0, seq.max(1), Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.poison_was_sync.store(sync, Ordering::Release);
+        }
+    }
+
+    /// Whether this shard's WAL has lost an entry and not been reset since.
+    ///
+    /// A poisoned shard has stopped persisting: the flush engine discards what
+    /// it is handed (FM-PERSISTENCE-054) and every durability confirmation
+    /// fails, however healthy the sink has since become. "A later commit
+    /// succeeded" is not evidence the earlier one reached the device — that is
+    /// the fsyncgate lesson this latch encodes.
+    pub(super) fn poisoned(&self) -> bool {
+        self.poisoned_seq.load(Ordering::Acquire) != 0
+    }
+
+    /// The first lost sequence, or `0` while the shard is healthy.
+    pub(super) fn poisoned_sequence(&self) -> u64 {
+        self.poisoned_seq.load(Ordering::Acquire)
+    }
+
+    /// Clear the latch — the operator reset. The only other way back is a
+    /// process restart, which re-reads what is actually on disk. Deliberately
+    /// unreachable from the flush thread: no automatic path may call this.
+    pub(super) fn clear_poison(&self) {
+        self.poisoned_seq.store(0, Ordering::Release);
+        self.poison_was_sync.store(false, Ordering::Release);
+    }
+
+    /// Operator-facing description of the latched failure.
+    fn poison_error(&self) -> std::io::Error {
+        let detail = self
+            .last_error
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "unknown flush error".to_string());
+        let kind = if self.poison_was_sync.load(Ordering::Acquire) {
+            "sync"
+        } else {
+            "write"
+        };
+        std::io::Error::other(format!(
+            "WAL {kind} failed at sequence {} and this shard is poisoned; \
+             durability is not restored by later writes: {detail}",
+            self.poisoned_sequence()
+        ))
     }
 
     /// Highest sequence whose batch reached RocksDB. Says nothing about fsync —
@@ -332,9 +432,13 @@ impl FlushOutcomes {
     /// buffer. On top of it, this checks for failures of *background*
     /// (size-threshold / timeout) flushes that carried entries in the
     /// confirmed range — the failures that used to be silently swallowed.
-    /// Failures entirely before `after_seq` (other commands' entries, already
-    /// reported to their confirmers or counted as lost) do not fail this
-    /// confirmation.
+    ///
+    /// The poison latch is checked first and covers every range: while the
+    /// shard is poisoned nothing it persisted after the failure can be trusted,
+    /// and nothing is being persisted at all (FM-PERSISTENCE-053/054). The
+    /// range check behind it stays meaningful after an operator reset, where
+    /// the latch is cleared but `highest_failed_seq` still records which
+    /// sequences were lost.
     pub(super) fn confirm_durable_through(
         &self,
         after_seq: u64,
@@ -342,6 +446,12 @@ impl FlushOutcomes {
         flush_result: std::io::Result<()>,
     ) -> std::io::Result<()> {
         flush_result?;
+        // The latch first, and unconditionally: a confirmation for a range
+        // *above* the failure used to pass here, which is exactly the
+        // un-latching FM-PERSISTENCE-053 forbids.
+        if self.poisoned() {
+            return Err(self.poison_error());
+        }
         if self.highest_failed_seq.load(Ordering::Acquire) > after_seq {
             let detail = self
                 .last_error
@@ -392,6 +502,10 @@ pub(super) struct FlushEngine<S: WriteSink> {
     batch_size: usize,
     batch_ops: usize,
     batch_max_seq: u64,
+    /// Lowest sequence staged in the current batch (`0` when empty). A failed
+    /// commit loses the whole batch, so this — not `batch_max_seq` — is where
+    /// the persisted stream is truncated (FM-PERSISTENCE-054).
+    batch_min_seq: u64,
     last_flush: Instant,
     last_error_log: Option<Instant>,
     /// Number of open write groups (see [`FlushEngine::begin_group`]). While
@@ -425,6 +539,7 @@ impl<S: WriteSink> FlushEngine<S> {
             batch_size: 0,
             batch_ops: 0,
             batch_max_seq: 0,
+            batch_min_seq: 0,
             last_flush: clock::now(),
             last_error_log: None,
             group_depth: 0,
@@ -492,6 +607,28 @@ impl<S: WriteSink> FlushEngine<S> {
                 || self.since_last_flush() >= batch_timeout)
     }
 
+    /// Drop an entry handed to a poisoned shard (FM-PERSISTENCE-054).
+    ///
+    /// The first lost sequence truncates the persisted stream. Committing the
+    /// entries that follow would replace that suffix loss with a *hole*: a
+    /// recovered shard would show later writes without earlier ones, which no
+    /// caller can reason about and which FM-PERSISTENCE-003's "loss is always a
+    /// suffix" flatly denies. So the entry is accounted as lost and never
+    /// reaches the sink. Returns whether the entry was discarded.
+    fn discard_poisoned(&mut self, seq: u64, size_estimate: usize) -> bool {
+        if !self.outcomes.poisoned() {
+            return false;
+        }
+        self.outcomes.record_discard(seq, 1, size_estimate);
+        WalLostOps::inc_by(&*self.metrics, 1, &self.shard_label);
+        WalLostBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
+        trace!(
+            shard_id = self.shard_id,
+            seq, "WAL entry discarded; shard is poisoned"
+        );
+        true
+    }
+
     /// Stage one entry. A staging failure (CF handle missing — effectively
     /// unreachable) is recorded as a lost entry rather than silently skipped.
     pub(super) fn apply(&mut self, entry: WalEntry) {
@@ -505,6 +642,9 @@ impl<S: WriteSink> FlushEngine<S> {
         }
         let seq = entry.seq();
         let size_estimate = entry.size_estimate();
+        if self.discard_poisoned(seq, size_estimate) {
+            return;
+        }
         let staged = match &entry {
             WalEntry::Put { key, value, .. } => self.sink.stage_put(key, value),
             WalEntry::Delete { key, .. } => self.sink.stage_delete(key),
@@ -513,7 +653,7 @@ impl<S: WriteSink> FlushEngine<S> {
         };
         if let Err(e) = staged {
             self.outcomes
-                .record_failure(seq, 1, size_estimate, &e.to_string());
+                .record_failure(seq, seq, 1, size_estimate, &e.to_string(), false);
             self.log_failure(
                 &e,
                 1,
@@ -521,6 +661,9 @@ impl<S: WriteSink> FlushEngine<S> {
                 "WAL entry staging failed; entry dropped",
             );
             return;
+        }
+        if self.batch_ops == 0 {
+            self.batch_min_seq = seq;
         }
         self.batch_size += size_estimate;
         self.batch_ops += 1;
@@ -557,13 +700,16 @@ impl<S: WriteSink> FlushEngine<S> {
     /// / FLUSHALL) yields exactly one action, so in FrogDB a clear is always a
     /// group of its own.
     fn apply_clear(&mut self, seq: u64, size_estimate: usize) {
+        if self.discard_poisoned(seq, size_estimate) {
+            return;
+        }
         // (1) Barrier: drain all lower-seq entries to disk.
         let _ = self.flush();
 
         // (2) Stage the full-range delete over the (now fully-committed) CF.
         if let Err(e) = self.sink.stage_clear() {
             self.outcomes
-                .record_failure(seq, 1, size_estimate, &e.to_string());
+                .record_failure(seq, seq, 1, size_estimate, &e.to_string(), false);
             self.log_failure(
                 &e,
                 1,
@@ -597,8 +743,14 @@ impl<S: WriteSink> FlushEngine<S> {
                 trace!(shard_id = self.shard_id, seq, "WAL shard clear committed");
             }
             Err(e) => {
-                self.outcomes
-                    .record_failure(seq, 1, size_estimate, &e.to_string());
+                self.outcomes.record_failure(
+                    seq,
+                    seq,
+                    1,
+                    size_estimate,
+                    &e.to_string(),
+                    self.is_sync,
+                );
                 WalFlushFailures::inc(&*self.metrics, &self.shard_label);
                 WalLostOps::inc_by(&*self.metrics, 1, &self.shard_label);
                 WalLostBytes::inc_by(&*self.metrics, size_estimate as u64, &self.shard_label);
@@ -612,12 +764,29 @@ impl<S: WriteSink> FlushEngine<S> {
         }
     }
 
+    /// Commit the staged batch, then report the shard's durability state.
+    ///
+    /// A poisoned shard never reports success, however well this particular
+    /// commit went: the entries it lost are gone and the stream is truncated
+    /// behind them (FM-PERSISTENCE-053/054), so an explicit flush waiter that
+    /// saw `Ok(())` here would be told its writes are safe on the strength of
+    /// someone else's later batch. Entries staged *below* the truncation point
+    /// are still committed first — they were assigned before the loss and are
+    /// part of the surviving prefix.
+    pub(super) fn flush(&mut self) -> std::io::Result<()> {
+        let result = self.flush_staged();
+        if self.outcomes.poisoned() {
+            return Err(self.outcomes.poison_error());
+        }
+        result
+    }
+
     /// Commit the staged batch and record the outcome — success advances the
     /// committed sequence (and, when that commit fsynced, the durable one);
     /// failure records the loss (counters, highest failed
     /// sequence, rate-limited log). Returns the commit result so an explicit
     /// flush can report it to its waiter.
-    pub(super) fn flush(&mut self) -> std::io::Result<()> {
+    fn flush_staged(&mut self) -> std::io::Result<()> {
         if self.sink.staged_len() == 0 {
             return Ok(());
         }
@@ -625,10 +794,12 @@ impl<S: WriteSink> FlushEngine<S> {
         let flushed_bytes = self.batch_size;
         let flushed_ops = self.batch_ops;
         let max_seq = self.batch_max_seq;
+        let min_seq = self.batch_min_seq;
         let batch_len = self.sink.staged_len();
         self.batch_size = 0;
         self.batch_ops = 0;
         self.batch_max_seq = 0;
+        self.batch_min_seq = 0;
         // The entries leave the buffer whether or not the commit succeeds
         // (a failed batch is dropped), so pending gauges drop either way.
         self.lag
@@ -661,8 +832,14 @@ impl<S: WriteSink> FlushEngine<S> {
                 Ok(())
             }
             Err(e) => {
-                self.outcomes
-                    .record_failure(max_seq, flushed_ops, flushed_bytes, &e.to_string());
+                self.outcomes.record_failure(
+                    min_seq,
+                    max_seq,
+                    flushed_ops,
+                    flushed_bytes,
+                    &e.to_string(),
+                    self.is_sync,
+                );
                 WalFlushFailures::inc(&*self.metrics, &self.shard_label);
                 WalLostOps::inc_by(&*self.metrics, flushed_ops as u64, &self.shard_label);
                 WalLostBytes::inc_by(&*self.metrics, flushed_bytes as u64, &self.shard_label);

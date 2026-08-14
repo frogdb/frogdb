@@ -832,13 +832,16 @@ fn test_sink_disconnect_drain_error_recorded() {
     assert_eq!(wal.outcomes.committed_sequence(), 0);
 }
 
-// FM-PERSISTENCE-005
-/// Failure attribution is precise: a failure that only covered *earlier*
-/// sequences does not fail a later command's confirmation, while a
-/// confirmation spanning the failed range does fail — and recovery is honest
-/// (`last_flush_ok` returns to true, `lost_ops` never un-counts).
+// FM-PERSISTENCE-007, FM-PERSISTENCE-053
+/// A confirmation never recovers on its own. The old behaviour was "attribution
+/// is precise": a later write whose own batch committed confirmed fine, because
+/// the failure only covered lower sequences. That reasoning holds for the range
+/// and is false for the device — this is fsyncgate, where the `fsync` that
+/// reported the writeback error is the only one that ever will, and every later
+/// one returns `0` over lost data. So the first loss latches, and every
+/// confirmation on the shard fails until an operator clears it.
 #[test]
-fn test_sink_failure_attribution_and_recovery() {
+fn test_sink_failure_latches_and_confirmations_stay_failed() {
     let mut wal = TestWal::spawn(100, Duration::from_secs(60));
     wal.fail_commits.store(1, Ordering::SeqCst);
 
@@ -847,44 +850,178 @@ fn test_sink_failure_attribution_and_recovery() {
     wal.wait_until("failure to be recorded", || {
         wal.outcomes.flush_failures() == 1
     });
+    assert_eq!(wal.outcomes.poisoned_sequence(), 1);
 
-    // Command B (seq 2): commits fine now.
+    // Command B (seq 2), with a healthy sink underneath it.
     wal.put(2, b"b", 10);
 
-    // B's confirmation (entries after seq 1) succeeds: the failure covered
-    // only sequences <= 1.
-    wal.flush_through(1, 2)
-        .expect("unrelated earlier failure must not fail B's confirmation");
+    // B's confirmation names only sequences above the loss, and still fails:
+    // the shard is poisoned, so nothing on it is durable any more.
+    let err = wal
+        .flush_through(1, 2)
+        .expect_err("a poisoned shard confirms nothing, whatever range is asked");
+    assert!(err.to_string().contains("poisoned"), "{err}");
 
-    // A's confirmation (entries after seq 0) fails: seq 1 was lost.
+    // A's confirmation fails too, and reports the original cause.
     let err = wal.flush_through(0, 2).unwrap_err();
     assert!(err.to_string().contains("injected commit failure"), "{err}");
 
-    // Recovery is truthfully reported: the last flush attempt succeeded and
-    // the durable sequence advanced, but the loss remains counted forever.
-    assert!(wal.outcomes.last_flush_ok());
-    assert_eq!(wal.outcomes.committed_sequence(), 2);
-    assert_eq!(wal.outcomes.flush_failures(), 1);
-    assert_eq!(wal.outcomes.lost_ops(), 1);
+    // B never reached storage either: the poison truncated the stream at
+    // sequence 1 (FM-PERSISTENCE-054).
+    assert!(wal.committed_batches().is_empty());
+    assert_eq!(wal.outcomes.committed_sequence(), 0);
+    assert_eq!(wal.outcomes.flush_failures(), 1, "B never got a flush");
+    assert_eq!(wal.outcomes.lost_ops(), 2, "A was lost, B was discarded");
+    assert!(!wal.outcomes.last_flush_ok());
     wal.shutdown();
 }
 
-// FM-PERSISTENCE-005
+// FM-PERSISTENCE-005, FM-PERSISTENCE-054
+/// A staging failure loses its entry, and the entries behind it are discarded
+/// rather than committed: the persisted stream is truncated at the first loss,
+/// never holed. Committing seq 2 over a lost seq 1 would leave a recovered
+/// shard with the later write and not the earlier one, which is precisely the
+/// state FM-PERSISTENCE-003 promises cannot exist.
 #[test]
 fn test_sink_stage_failure_recorded_and_surfaced() {
     let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
     wal.fail_stages.store(1, Ordering::SeqCst);
 
-    wal.put(1, b"k", 10); // staging fails; entry dropped
-    wal.put(2, b"k2", 10);
+    wal.put(1, b"k", 10); // staging fails; entry dropped, shard poisoned
+    wal.put(2, b"k2", 10); // discarded: it sits behind the truncation point
     let err = wal.flush_through(0, 2).unwrap_err();
     assert!(err.to_string().contains("injected stage failure"), "{err}");
-    assert_eq!(wal.outcomes.lost_ops(), 1);
+    assert_eq!(wal.outcomes.poisoned_sequence(), 1);
+    assert_eq!(wal.outcomes.lost_ops(), 2);
 
-    // The second entry still committed.
+    assert!(
+        wal.committed_batches().is_empty(),
+        "the entry behind the loss must not commit"
+    );
+    wal.shutdown();
+}
+
+// FM-PERSISTENCE-053
+/// The latch names the truncation point, so it takes the *first* lost sequence,
+/// not the highest. A failed batch loses all of its entries, so the point is
+/// the batch's lowest sequence — a `fetch_max` here would name sequence 3 and
+/// claim two writes survived that did not.
+#[test]
+fn a_lost_batch_latches_the_poison_at_the_first_lost_sequence() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.fail_commits.store(1, Ordering::SeqCst);
+
+    wal.put(1, b"a", 10);
+    wal.put(2, b"b", 10);
+    wal.put(3, b"c", 10);
+    let err = wal.flush().expect_err("the injected commit failure");
+    assert!(err.to_string().contains("injected commit failure"), "{err}");
+
+    assert!(wal.outcomes.poisoned());
+    assert_eq!(
+        wal.outcomes.poisoned_sequence(),
+        1,
+        "the whole batch was lost, so the stream is truncated at its first entry"
+    );
+    assert_eq!(wal.outcomes.lost_ops(), 3);
+    assert_eq!(wal.outcomes.lost_bytes(), 30);
+    wal.shutdown();
+}
+
+// FM-PERSISTENCE-053
+/// The latch is one-way. A healthy sink afterwards proves nothing about the
+/// batch that was already lost, so neither a successful commit nor a fresh
+/// failure may move or drop the latch.
+#[test]
+fn a_later_success_never_unlatches_the_poison() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.fail_commits.store(1, Ordering::SeqCst);
+
+    wal.put(1, b"a", 10);
+    wal.flush().unwrap_err();
+    assert_eq!(wal.outcomes.poisoned_sequence(), 1);
+
+    // The sink is healthy from here on: `fail_commits` is exhausted.
+    wal.put(2, b"b", 10);
+    let err = wal
+        .flush()
+        .expect_err("a poisoned shard reports no successful flush");
+    assert!(err.to_string().contains("poisoned"), "{err}");
+    assert_eq!(
+        wal.outcomes.poisoned_sequence(),
+        1,
+        "the latch stays where the loss was"
+    );
+    assert!(wal.committed_batches().is_empty());
+    assert_eq!(wal.outcomes.committed_sequence(), 0);
+    assert!(!wal.outcomes.last_flush_ok());
+    wal.shutdown();
+}
+
+// FM-PERSISTENCE-053
+/// Only an operator reset (or a restart, which re-reads the disk) clears the
+/// latch — and then the shard persists again, while the counted losses stay
+/// counted. Nothing on the flush path may call `clear_poison`.
+#[test]
+fn clear_poison_is_the_only_way_back() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.fail_commits.store(1, Ordering::SeqCst);
+
+    wal.put(1, b"a", 10);
+    wal.flush().unwrap_err();
+    wal.put(2, b"b", 10); // discarded while poisoned
+    wal.flush().unwrap_err();
+
+    wal.outcomes.clear_poison();
+    assert!(!wal.outcomes.poisoned());
+    assert_eq!(wal.outcomes.poisoned_sequence(), 0);
+
+    wal.put(3, b"c", 10);
+    wal.flush_through(2, 3)
+        .expect("a cleared shard persists again");
     assert_eq!(
         wal.committed_batches(),
-        vec![vec![TestOp::Put(b"k2".to_vec(), b"v".to_vec())]]
+        vec![vec![TestOp::Put(b"c".to_vec(), b"v".to_vec())]]
+    );
+    assert_eq!(wal.outcomes.committed_sequence(), 3);
+    assert_eq!(
+        wal.outcomes.lost_ops(),
+        2,
+        "clearing the latch does not un-lose the writes"
+    );
+    wal.shutdown();
+}
+
+// FM-PERSISTENCE-054
+/// Every entry kind is discarded once the shard is poisoned — including a
+/// clear, which is a flush barrier rather than a batched entry and so takes its
+/// own path into the engine. A clear that ran here would range-delete a shard
+/// whose recovery point is already fixed behind it.
+#[test]
+fn a_poisoned_engine_discards_later_entries_instead_of_committing_them() {
+    let mut wal = TestWal::spawn(1024 * 1024, Duration::from_secs(60));
+    wal.fail_commits.store(1, Ordering::SeqCst);
+
+    wal.put(1, b"a", 10);
+    wal.flush().unwrap_err();
+
+    wal.put(2, b"b", 10);
+    wal.delete(3, b"a", 5);
+    wal.merge(4, b"h", b"delta", 7);
+    wal.clear(5, 3);
+    wal.flush().unwrap_err();
+
+    assert!(
+        wal.committed_batches().is_empty(),
+        "nothing behind the truncation point may reach the sink"
+    );
+    assert_eq!(wal.outcomes.committed_sequence(), 0);
+    assert_eq!(wal.outcomes.lost_ops(), 5);
+    assert_eq!(wal.outcomes.lost_bytes(), 10 + 10 + 5 + 7 + 3);
+    assert_eq!(
+        wal.outcomes.flush_failures(),
+        1,
+        "discards are losses, not flush attempts"
     );
     wal.shutdown();
 }
@@ -2179,6 +2316,7 @@ fn repeated_flush_failures_log_once_at_error_and_then_at_debug() {
 
     let capture = LevelCapture::default();
     let fail_commits = Arc::new(AtomicUsize::new(2));
+    let outcomes = Arc::new(FlushOutcomes::new());
     let mut engine = FlushEngine::new(
         TestSink {
             staged: Vec::new(),
@@ -2193,7 +2331,7 @@ fn repeated_flush_failures_log_once_at_error_and_then_at_debug() {
             pending_bytes: AtomicUsize::new(0),
             last_flush_timestamp_ms: AtomicU64::new(0),
         }),
-        Arc::new(FlushOutcomes::new()),
+        Arc::clone(&outcomes),
         Arc::new(NoopMetricsRecorder::new()),
     );
     let put = |seq: u64| WalEntry::Put {
@@ -2207,6 +2345,12 @@ fn repeated_flush_failures_log_once_at_error_and_then_at_debug() {
             tracing::subscriber::set_default(tracing_subscriber::registry().with(capture.clone()));
         engine.apply(put(1));
         assert!(engine.flush().is_err(), "the first commit was made to fail");
+        // The first failure poisoned the shard, which would discard the second
+        // entry before it could reach the sink (FM-PERSISTENCE-054). Clearing
+        // the latch — the operator reset — is what lets a *second* real flush
+        // failure happen inside the rate-limit window, which is what this test
+        // is about.
+        outcomes.clear_poison();
         engine.apply(put(2));
         assert!(engine.flush().is_err(), "and so was the second");
     }

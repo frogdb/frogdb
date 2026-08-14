@@ -57,12 +57,28 @@ WAL write fails after a command has already executed in memory:
 - **`continue`** — logs the failure and returns success to the client. The write stays
   visible in memory but may be lost on restart.
 - **`rollback`** — undoes the in-memory change and returns an error to the client instead.
+- **`readonly`** — `rollback`'s undo, plus a fail-stop: once the WAL has failed, the shard
+  refuses every subsequent write with
+  `-MISCONF FrogDB is unable to persist writes: ...` and keeps serving reads.
+
+### The poison latch
+
+A WAL failure is not transient. The first lost entry latches the shard as *poisoned*: the
+flush engine discards everything behind it (so what survives a restart is a prefix of
+history, never a prefix with holes), and every durability confirmation fails from then on
+— including ones whose own batch committed. A later successful `fsync` is not evidence
+that the earlier one reached the device, so the latch never clears itself. Only a restart
+clears it; under `rollback`/`readonly` the shard refuses writes until then, and under
+`continue` it keeps acknowledging writes it can no longer persist. Watch
+`wal_lost_ops`/`wal_flush_failures` in `INFO persistence`.
 
 Unlike `durability-mode`/`sync-interval-ms` above, `wal-failure-policy` is genuinely live:
 it is stored as a shared atomic that the flush thread reads on every write, so
-`CONFIG SET wal-failure-policy rollback` takes effect immediately. One caveat: `rollback`
-only catches failures raised by the flush thread itself in non-`sync` modes — document
-this as the current behavior rather than a general corruption guarantee.
+`CONFIG SET wal-failure-policy rollback` takes effect immediately — including on an
+already-poisoned shard, where switching to `continue` lifts the refusal (the latch itself
+stays). One caveat: `rollback` only catches failures raised by the flush thread itself in
+non-`sync` modes — document this as the current behavior rather than a general corruption
+guarantee.
 
 ## Snapshots
 

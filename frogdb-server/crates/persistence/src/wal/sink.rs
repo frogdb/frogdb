@@ -50,4 +50,14 @@ pub trait WalSink: Send + Sync {
     fn lag_stats(&self) -> WalLagStats;
     /// The shard this sink serves.
     fn shard_id(&self) -> usize;
+    /// Whether this shard has lost a WAL entry and not been reset since
+    /// (FM-PERSISTENCE-053). A poisoned sink persists nothing further, so the
+    /// shard reads this to decide whether to keep accepting writes
+    /// (FM-PERSISTENCE-055).
+    fn poisoned(&self) -> bool;
+    /// Clear the poison latch — the operator reset (FM-PERSISTENCE-053). The
+    /// only other way back is a restart, which re-reads what is on disk.
+    /// Nothing on an automatic path may call this: a shard that un-poisons
+    /// itself because a later flush worked is the fsyncgate bug.
+    fn clear_poison(&self);
 }

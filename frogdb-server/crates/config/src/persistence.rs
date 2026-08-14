@@ -162,7 +162,7 @@ pub const DURABILITY_MODES: &[&str] = &["async", "periodic", "sync"];
 ///
 /// Single source of truth shared by [`PersistenceConfig::validate`] and the
 /// runtime `wal-failure-policy` CONFIG SET setter, so the two cannot drift apart.
-pub const WAL_FAILURE_POLICIES: &[&str] = &["continue", "rollback"];
+pub const WAL_FAILURE_POLICIES: &[&str] = &["continue", "rollback", "readonly"];
 
 /// Valid WAL implementations accepted by the `mode` parameter.
 ///

@@ -164,6 +164,17 @@ impl ShardWorker {
             .operation_counters_mut()
             .record_op(super::counters::OpClass::from_flags(handler.flags()));
 
+        // FM-PERSISTENCE-055: a poisoned WAL under a refusing policy fences the
+        // shard. Checked here, at the single dispatch seam, rather than in the
+        // connection-level pre-checks: this is the last point every write
+        // passes through — plain commands, EXEC's queued commands, and Lua
+        // script writes alike — and it is where the poisoned WAL is visible.
+        // Executing first and refusing later would leave the write applied in
+        // memory with nothing to persist it.
+        if is_write && self.persistence.write_refused() {
+            return (Response::error(super::types::WAL_POISONED_ERROR), None);
+        }
+
         if is_write && let Err(err) = self.check_memory_for_write().await {
             return (err.to_response(), None);
         }
