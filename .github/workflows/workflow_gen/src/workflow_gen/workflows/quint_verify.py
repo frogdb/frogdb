@@ -13,21 +13,26 @@ nightlies"). Per-state SMT solve cost grows steeply with depth, so this runs
 minutes-to-hours per invariant rather than the PR lane's sub-10s budget —
 that's why it's nightly, not per-PR.
 
-MAX_STEPS is pinned at >= 6 by the Justfile's `quint-verify-model` recipe,
-which refuses a lower bound itself; nothing here overrides it. That floor is
-CARRIED REQUIREMENT N1 from the phase-2 cluster quint plan
+MAX_STEPS defaults to >= 6 by the Justfile's `quint-verify-model` recipe,
+which refuses a lower bound itself; nothing here overrides it (both jobs
+below invoke their `just quint-verify-<model>` wrapper with no arguments).
+That floor is CARRIED REQUIREMENT N1 from the phase-2 cluster quint plan
 (.superpowers/sdd/2026-08-13-phase2-cluster-quint-plan/task-2-report.md and
 progress.md): depth 3 was proven vacuous for `inv_repatriating_well_formed`
 and half of `inv_abort_repatriates` on cluster_migration_failover.qnt — both
 need 4-5 transitions before the property is even checkable. Do not shrink the
-bound to make a run finish faster; see the Justfile recipe's own docstring for
-the full rationale, including why a timed-out invariant is reported as
-inconclusive rather than silently dropped.
+bound to make a run finish faster. It is a floor, not a target: the two
+`quint-verify-<model>` wrappers pin different defaults above it (admission
+10, migration/failover 6 — see their own Justfile docstrings for why), so a
+model that can afford deeper search gets it. See the Justfile recipe's own
+docstring for the full rationale, including why a timed-out invariant is
+reported as inconclusive (a `::warning::` annotation, does not fail the job)
+while a genuine violation is reported as `::error::` and does fail it.
 
 Each model gets its own job (and its own `just quint-verify-<model>` Justfile
 target) rather than one combined sweep — the fallback the plan calls for if
 depth 6 turns out SMT-infeasible for some invariant. cluster_migration_failover.qnt
-has 12 invariants against cluster_admission.qnt's 4, so splitting means a slow
+has 13 invariants against cluster_admission.qnt's 4, so splitting means a slow
 invariant on the heavier model can't eat the lighter model's time budget (Task
 2 found depth 6 already SMT-infeasible for a single migration/failover
 invariant within a 240s budget, while the admission model verified two
@@ -94,7 +99,9 @@ def quint_verify_workflow() -> Workflow:
                 mise_setup_step(install_args=MISE_JUST_QUINT),
                 setup_java_step(),
                 run_step(
-                    name="Apalache verify: cluster_admission.qnt (all invariants, depth >= 6)",
+                    # quint-verify-admission defaults MAX_STEPS to 10, above
+                    # the N1 floor of 6 (see its Justfile docstring).
+                    name="Apalache verify: cluster_admission.qnt (all invariants, depth 10)",
                     run=script("""\
                         just quint-verify-admission
                     """),
@@ -110,13 +117,15 @@ def quint_verify_workflow() -> Workflow:
             runs_on=RUNS_ON,
             needs=gate,
             if_="needs.gate.outputs.skip != 'true'",
-            # 12 invariants at up to 1200s each is a genuine ~4h worst case —
-            # Task 2 found depth 6 already SMT-infeasible for a single
-            # invariant on this heavier model within a 240s budget, so a run
-            # where several invariants time out rather than finish fast is
-            # expected, not a bug. timeout-minutes is sized to that worst
-            # case (and to stay under the 360-minute hosted-runner cap), not
-            # to the expected runtime.
+            # 13 invariants at up to 1200s each is a genuine ~260min (~4.3h)
+            # worst case — Task 2 found depth 6 already SMT-infeasible for a
+            # single invariant on this heavier model within a 240s budget, so
+            # a run where several invariants time out rather than finish fast
+            # is expected, not a bug (each is reported as an inconclusive
+            # `::warning::`, not a job failure — see the Justfile recipe's
+            # docstring). timeout-minutes is sized to that worst case (and to
+            # stay under the 360-minute hosted-runner cap), not to the
+            # expected runtime.
             timeout_minutes=300,
             steps=[
                 checkout_step(),

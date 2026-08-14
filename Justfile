@@ -390,22 +390,19 @@ quint-check:
     done
     exit $status
 
-# Per-model invariant lists for the Quint design models. Quint has no "all
-# invariants" declaration to introspect, so these are the single source both
-# `quint-run` (sampled smoke) and `quint-verify-*` (exhaustive nightly bound)
-# key off of — keep in sync with the `val inv_*` declarations in each .qnt
-# file (specs/quint/*.qnt).
-quint-admission-invariants := "inv_no_usurper inv_single_routable_group inv_restart_deterministic inv_meet_no_absorption"
-quint-migration-failover-invariants := "inv_slot_owner_valid inv_migration_endpoints_valid inv_handoff_owned inv_handoff_seq_never_reused inv_epoch_monotone inv_epoch_never_decreases inv_abort_repatriates inv_repatriating_well_formed inv_last_failover_demoted inv_last_failover_fenced inv_graceful_failover_barriered inv_complete_requires_drained inv_feed_hold_bounded"
-
 # Smoke-test the Quint design models on every CI run (design doc
 # .scratch/formal-spec/2026-08-12-formal-state-spec-design.md §3 cadence):
 # each model's own named `quint test` suite, plus a small bounded+sampled
 # `quint run` that actually checks the model's invariants (not just
 # simulates — `quint run` defaults `--invariant` to `"true"`, i.e. no check,
-# unless told otherwise). Mirrors `quint-check`'s glob loop. Cheap enough for
-# the PR lane, unlike `quint verify` below (Apalache/SMT) — that is the
-# nightly tier.
+# unless told otherwise). Mirrors `quint-check`'s glob loop, so it stays
+# model-agnostic: a new model's invariants come from
+# scripts/quint-invariants.sh grepping the model's own `val inv_*`
+# declarations rather than a hand-maintained per-model list (task-4 review
+# finding I1 — the old hardcoded `case` silently ran a no-op invariant check
+# against any model it didn't recognize by filename). Cheap enough for the PR
+# lane, unlike `quint verify` below (Apalache/SMT) — that is the nightly
+# tier.
 quint-run:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -419,13 +416,9 @@ quint-run:
     for model in "${models[@]}"; do
         echo "quint test $model"
         quint test "$model" || status=1
-        case "$model" in
-          */cluster_admission.qnt) invariants="{{quint-admission-invariants}}" ;;
-          */cluster_migration_failover.qnt) invariants="{{quint-migration-failover-invariants}}" ;;
-          *) invariants="" ;;
-        esac
-        echo "quint run $model --max-samples=200 --max-steps=20${invariants:+ --invariants $invariants}"
-        quint run "$model" --max-samples=200 --max-steps=20 ${invariants:+--invariants $invariants} || status=1
+        invariants=$(scripts/quint-invariants.sh "$model") || { status=1; continue; }
+        echo "quint run $model --max-samples=200 --max-steps=20 --invariants $invariants"
+        quint run "$model" --max-samples=200 --max-steps=20 --invariants $invariants || status=1
     done
     exit $status
 
@@ -435,52 +428,78 @@ quint-run:
 # state and enabled transition up to MAX_STEPS, not just sampled paths; the
 # per-state SMT solve cost grows steeply with depth, so this runs
 # minutes-to-tens-of-minutes per invariant rather than the PR lane's sub-10s
-# budget — that is why it is nightly, not per-PR.
+# budget — that is why it is nightly, not per-PR. Invariants come from
+# scripts/quint-invariants.sh (see quint-run's docstring for why: a
+# hand-maintained per-model list has no gate keeping it in sync with the
+# model's actual `val inv_*` declarations).
 #
 # CARRIED REQUIREMENT (Task 2 review finding N1, binding — see
 # .superpowers/sdd/2026-08-13-phase2-cluster-quint-plan/task-2-report.md and
-# progress.md): MAX_STEPS must stay >= 6. Depth 3 was proven vacuous for
-# inv_repatriating_well_formed and half of inv_abort_repatriates on
-# cluster_migration_failover.qnt — both need 4-5 transitions before the
-# property is even checkable. Do not shrink this default to make a run
-# finish faster; a deep bound that times out is reported as inconclusive
-# (below), not silently downgraded.
+# progress.md): MAX_STEPS must stay >= 6, enforced by the guard below. Depth 3
+# was proven vacuous for inv_repatriating_well_formed and half of
+# inv_abort_repatriates on cluster_migration_failover.qnt — both need 4-5
+# transitions before the property is even checkable. Do not shrink this bound
+# to make a run finish faster. 6 is a floor, not a target — see
+# quint-verify-admission below for why that model defaults higher.
 #
-# One invariant per `quint verify` invocation, each under its own TIMEOUT:
-# a combined `--invariants` sweep reports one merged verdict, so a single
+# One invariant per `quint verify` invocation, each under its own TIMEOUT: a
+# combined `--invariants` sweep reports one merged verdict, so a single
 # SMT-infeasible conjunct would hide every other invariant's result. A
-# timed-out invariant is reported as such (inconclusive, not a violation)
-# and the loop continues; the recipe still exits nonzero so CI surfaces it.
-quint-verify-model model invariants MAX_STEPS='6' TIMEOUT='1200':
+# per-invariant summary prints at the end, and a TIMED OUT invariant is kept
+# distinguishable from a VIOLATED one in both the log and the exit code
+# (task-4 review finding I3 — folding both into one "nonzero rc fails" status
+# made an expected timeout on the heavier model and a genuine violation
+# surface as the same red job, exactly what quint-conformance-quarantine's
+# report-only design exists to avoid elsewhere in this repo): a timeout is
+# inconclusive, logged as a `::warning::` annotation, and does not fail the
+# recipe; a violation (verify found a counterexample, or exited nonzero any
+# other way) is logged as `::error::` and does fail it.
+quint-verify-model model MAX_STEPS='6' TIMEOUT='1200':
     #!/usr/bin/env bash
     set -uo pipefail
     if [ "{{MAX_STEPS}}" -lt 6 ]; then
         echo "quint-verify-model: MAX_STEPS must be >= 6 (Task 2 review finding N1); got {{MAX_STEPS}}" >&2
         exit 1
     fi
+    invariants=$(scripts/quint-invariants.sh "{{model}}") || exit 1
     status=0
-    for inv in {{invariants}}; do
+    summary=()
+    for inv in $invariants; do
         echo "=== quint verify {{model}} --invariant=$inv --max-steps={{MAX_STEPS}} (timeout {{TIMEOUT}}s) ==="
         timeout {{TIMEOUT}} quint verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
         rc=$?
         if [ $rc -eq 124 ]; then
-            echo "=== $inv: TIMED OUT after {{TIMEOUT}}s at depth {{MAX_STEPS}} (inconclusive, not a violation) ==="
-            status=1
+            echo "::warning::$inv TIMED OUT after {{TIMEOUT}}s at depth {{MAX_STEPS}} on {{model}} (inconclusive, not a violation)"
+            summary+=("$inv: TIMED OUT (inconclusive)")
         elif [ $rc -ne 0 ]; then
+            echo "::error::$inv VIOLATED on {{model}} (quint verify exited $rc)"
+            summary+=("$inv: VIOLATED")
             status=1
+        else
+            summary+=("$inv: OK")
         fi
     done
+    echo "=== quint-verify-model summary for {{model}} (depth {{MAX_STEPS}}) ==="
+    printf '  %s\n' "${summary[@]}"
     exit $status
 
 # Nightly Apalache sweep, admission model only (4 invariants — lighter than
 # the migration/failover composite below). Split into its own recipe/CI job
-# so the two models' timeout budgets don't compete.
-quint-verify-admission MAX_STEPS='6' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_admission.qnt" quint-admission-invariants MAX_STEPS TIMEOUT)
+# so the two models' timeout budgets don't compete. Defaults MAX_STEPS to 10
+# (quint verify's own default, and above the N1 floor of 6): depth 6 took
+# only 8.2s for inv_no_usurper here, so the floor was leaving cheap extra
+# search depth on the table for this model specifically (task-4 review
+# finding I2) — unlike migration/failover below, which stays pinned at the
+# floor because depth 6 there is already the expensive case.
+quint-verify-admission MAX_STEPS='10' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_admission.qnt" MAX_STEPS TIMEOUT)
 
-# Nightly Apalache sweep, migration/failover composite model (12 invariants —
+# Nightly Apalache sweep, migration/failover composite model (13 invariants —
 # the heavier of the two; see quint-verify-model's docstring for why depth
-# 6 can run long here).
-quint-verify-migration-failover MAX_STEPS='6' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_migration_failover.qnt" quint-migration-failover-invariants MAX_STEPS TIMEOUT)
+# 6 can run long here). Stays at the N1 floor of 6: Task 2 found depth 6
+# already SMT-infeasible for a single invariant on this model within a 240s
+# budget, so raising the default further (as quint-verify-admission does)
+# would only grow the expected-timeout count, not useful coverage.
+quint-verify-migration-failover MAX_STEPS='6' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_migration_failover.qnt" MAX_STEPS TIMEOUT)
 
 # Both models' nightly Apalache sweep, sequentially. CI itself runs the two
 # halves as separate jobs (quint_verify.py) so a hang in one model's sweep
