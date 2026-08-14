@@ -1,0 +1,135 @@
+"""Nightly Apalache (exhaustive, bounded) verification of the Quint design models.
+
+`quint-run` (Justfile, wired into the PR lane via workflows/test.py) drives the
+same models cheaply on every PR: `quint test` plus a sampled `quint run`.
+Sampling only visits paths its RNG happens to pick, though, so it can miss a
+violation that only shows up on a specific interleaving. `quint verify` uses
+Apalache (SMT-based bounded model checking) to explore *every* reachable state
+and enabled transition up to a step bound instead of sampling — the exhaustive
+tier the design doc calls for
+(.scratch/formal-spec/2026-08-12-formal-state-spec-design.md §3: "quint verify
+... in the nightly lane alongside the existing model-check and seed
+nightlies"). Per-state SMT solve cost grows steeply with depth, so this runs
+minutes-to-hours per invariant rather than the PR lane's sub-10s budget —
+that's why it's nightly, not per-PR.
+
+MAX_STEPS is pinned at >= 6 by the Justfile's `quint-verify-model` recipe,
+which refuses a lower bound itself; nothing here overrides it. That floor is
+CARRIED REQUIREMENT N1 from the phase-2 cluster quint plan
+(.superpowers/sdd/2026-08-13-phase2-cluster-quint-plan/task-2-report.md and
+progress.md): depth 3 was proven vacuous for `inv_repatriating_well_formed`
+and half of `inv_abort_repatriates` on cluster_migration_failover.qnt — both
+need 4-5 transitions before the property is even checkable. Do not shrink the
+bound to make a run finish faster; see the Justfile recipe's own docstring for
+the full rationale, including why a timed-out invariant is reported as
+inconclusive rather than silently dropped.
+
+Each model gets its own job (and its own `just quint-verify-<model>` Justfile
+target) rather than one combined sweep — the fallback the plan calls for if
+depth 6 turns out SMT-infeasible for some invariant. cluster_migration_failover.qnt
+has 12 invariants against cluster_admission.qnt's 4, so splitting means a slow
+invariant on the heavier model can't eat the lighter model's time budget (Task
+2 found depth 6 already SMT-infeasible for a single migration/failover
+invariant within a 240s budget, while the admission model verified two
+invariants clean at depth 6 in 10-27s each). Within a job, the Justfile
+recipe still runs one `quint verify` invocation per invariant under its own
+timeout, so one SMT-infeasible invariant is reported as a timeout rather than
+hiding the rest of that model's results.
+
+`quint verify` auto-downloads Apalache on first use, but Apalache itself needs
+a JVM already on PATH. jepsen_nightly.py gets Java through mise (temurin-21,
+pinned in .mise.toml) because that job already needs mise for Leiningen; this
+job has no other use for mise's Java plugin, so it installs the JVM directly
+via actions/setup-java instead.
+"""
+
+from workflow_gen.helpers import (
+    change_gate_job,
+    checkout_step,
+    mise_setup_step,
+    run_step,
+    script,
+    setup_java_step,
+)
+from workflow_gen.schema import Job, ScheduleTrigger, Trigger, Workflow
+
+MISE_JUST_QUINT = "just npm:@informalsystems/quint"
+
+# Free unmetered GitHub-hosted runner — same reasoning as the other nightlies
+# in this package (single-machine SMT solve, no need for anything heavier).
+RUNS_ON = "ubuntu-latest"
+
+WORKFLOW_FILE = "quint-verify-nightly.yml"
+
+# 05:05 UTC: off the hour (avoids the Actions cron spike at :00) and
+# staggered away from the other nightlies' cron times (see each module's own
+# NIGHTLY_CRON comment for the full set already in use).
+NIGHTLY_CRON = "5 5 * * *"
+
+
+def quint_verify_workflow() -> Workflow:
+    w = Workflow(
+        name="Quint Verify Nightly",
+        on=Trigger(
+            schedule=ScheduleTrigger(cron=[NIGHTLY_CRON]),
+            workflow_dispatch=True,
+        ),
+    )
+
+    gate = w.job("gate", change_gate_job(workflow_file=WORKFLOW_FILE))
+
+    w.job(
+        "verify-admission",
+        Job(
+            name="Apalache Verify: cluster_admission",
+            runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
+            # 4 invariants, up to the recipe's 1200s (20min) default TIMEOUT
+            # each in the worst case, plus setup — comfortably under the
+            # 360-minute GitHub Actions hosted-runner job cap.
+            timeout_minutes=120,
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST_QUINT),
+                setup_java_step(),
+                run_step(
+                    name="Apalache verify: cluster_admission.qnt (all invariants, depth >= 6)",
+                    run=script("""\
+                        just quint-verify-admission
+                    """),
+                ),
+            ],
+        ),
+    )
+
+    w.job(
+        "verify-migration-failover",
+        Job(
+            name="Apalache Verify: cluster_migration_failover",
+            runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
+            # 12 invariants at up to 1200s each is a genuine ~4h worst case —
+            # Task 2 found depth 6 already SMT-infeasible for a single
+            # invariant on this heavier model within a 240s budget, so a run
+            # where several invariants time out rather than finish fast is
+            # expected, not a bug. timeout-minutes is sized to that worst
+            # case (and to stay under the 360-minute hosted-runner cap), not
+            # to the expected runtime.
+            timeout_minutes=300,
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST_QUINT),
+                setup_java_step(),
+                run_step(
+                    name="Apalache verify: cluster_migration_failover.qnt (all invariants, depth >= 6)",
+                    run=script("""\
+                        just quint-verify-migration-failover
+                    """),
+                ),
+            ],
+        ),
+    )
+
+    return w

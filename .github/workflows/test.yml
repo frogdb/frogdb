@@ -140,6 +140,25 @@ jobs:
       run: just lint-gates
     - name: Run spec-lint fixture suite
       run: just test-spec-lint
+  quint:
+    needs: changes
+    if: needs.changes.outputs.specs == 'true'
+    name: Quint Typecheck & Smoke
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just npm:@informalsystems/quint
+        cache: 'true'
+        experimental: 'true'
+    - name: Typecheck Quint models
+      run: just quint-check
+    - name: 'Quint smoke: named tests + bounded invariant-checked run'
+      run: just quint-run
   unit-tests:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
@@ -514,6 +533,7 @@ jobs:
     - actionlint
     - lint
     - seam-gates
+    - quint
     - unit-tests
     - cmd-full-build
     - shuttle-tests

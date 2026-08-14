@@ -14,6 +14,7 @@ from workflow_gen.workflows.deploy_docs import deploy_docs_workflow
 from workflow_gen.workflows.fuzz import fuzz_workflow
 from workflow_gen.workflows.jepsen_nightly import jepsen_nightly_workflow
 from workflow_gen.workflows.link_check import link_check_workflow
+from workflow_gen.workflows.quint_verify import quint_verify_workflow
 from workflow_gen.workflows.regression_nightly import regression_nightly_workflow
 from workflow_gen.workflows.release import release_workflow
 from workflow_gen.workflows.release_please import release_please_workflow
@@ -51,6 +52,7 @@ WORKFLOWS = {
     "concurrency-nightly.yml": concurrency_nightly_workflow,
     "cluster-nightly.yml": cluster_nightly_workflow,
     "cluster-model-nightly.yml": cluster_model_nightly_workflow,
+    "quint-verify-nightly.yml": quint_verify_workflow,
     "replication-model-nightly.yml": replication_model_nightly_workflow,
     "replication-nightly.yml": replication_nightly_workflow,
     "replication-seeds-nightly.yml": replication_seeds_nightly_workflow,

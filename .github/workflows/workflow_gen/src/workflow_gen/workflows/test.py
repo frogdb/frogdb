@@ -35,6 +35,7 @@ RUNS_ON = "ubuntu-latest"
 MISE_JUST = "just"
 MISE_JUST_DENY = "just cargo:cargo-deny"
 MISE_JUST_NEXTEST = "just cargo:cargo-nextest"
+MISE_JUST_QUINT = "just npm:@informalsystems/quint"
 MISE_PYTHON_WORKFLOW_GEN = "python uv just"
 MISE_PYTHON_LINT = "python uv ruff"
 MISE_HELM = "helm"
@@ -205,6 +206,34 @@ def test_workflow() -> Workflow:
                 run_step(
                     name="Run spec-lint fixture suite",
                     run="just test-spec-lint",
+                ),
+            ],
+        ),
+    )
+
+    # PR-lane tier of the Quint design models' verification (design doc
+    # .scratch/formal-spec/2026-08-12-formal-state-spec-design.md §3 cadence):
+    # typecheck every model plus a cheap sampled `quint run` that actually
+    # checks each model's invariants (see the Justfile's `quint-run` recipe
+    # docstring — `quint run` defaults `--invariant` to `"true"`, i.e. no
+    # check, unless told otherwise). The exhaustive/bounded Apalache tier
+    # (`quint verify`) is too slow for per-PR and runs nightly instead
+    # (quint_verify.py). Gated on `specs` since specs/quint/*.qnt falls under
+    # that filter's `specs/**` glob.
+    quint = w.job(
+        "quint",
+        Job(
+            name="Quint Typecheck & Smoke",
+            runs_on=RUNS_ON,
+            needs="changes",
+            if_="needs.changes.outputs.specs == 'true'",
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST_QUINT),
+                run_step(name="Typecheck Quint models", run="just quint-check"),
+                run_step(
+                    name="Quint smoke: named tests + bounded invariant-checked run",
+                    run="just quint-run",
                 ),
             ],
         ),
@@ -639,6 +668,7 @@ def test_workflow() -> Workflow:
                 actionlint,
                 lint,
                 seam_gates,
+                quint,
                 unit_tests,
                 cmd_full_build,
                 shuttle_tests,

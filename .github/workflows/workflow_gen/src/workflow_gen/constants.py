@@ -39,6 +39,11 @@ UPLOAD_PAGES_ARTIFACT = (
 )
 DEPLOY_PAGES = "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"  # v5
 SETUP_GO = "actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c"  # v6
+# Not part of the mise-managed tool set (see MISE_ACTION above): used by
+# quint_verify.py, whose job needs a JVM for Apalache but nothing else mise
+# manages. jepsen_nightly.py installs Java through mise instead, since that
+# job already needs mise for Leiningen.
+SETUP_JAVA = "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"  # v5.7.0
 ACTIONLINT = "raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8"  # v2
 LYCHEE = "lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411"  # v2
 

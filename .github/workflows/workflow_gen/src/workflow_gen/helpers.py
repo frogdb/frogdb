@@ -20,6 +20,7 @@ from workflow_gen.constants import (
     RUST_CACHE,
     RUST_TOOLCHAIN_NIGHTLY,
     SETUP_BUILDX,
+    SETUP_JAVA,
     SETUP_QEMU,
     UPLOAD_ARTIFACT,
 )
@@ -181,6 +182,21 @@ def cache_step(
     if restore_keys is not None:
         w["restore-keys"] = restore_keys
     return Step(name=name, uses=CACHE_RESTORE if restore_only else CACHE, with_=w)
+
+
+def setup_java_step(*, distribution: str = "temurin", java_version: str = "21") -> Step:
+    """Install a JVM via actions/setup-java.
+
+    For jobs that need a JVM but have no other reason to invoke mise (e.g.
+    quint_verify.py's Apalache-backed `quint verify`, which auto-downloads
+    Apalache itself but needs a JVM already on PATH). Version 21 matches the
+    `temurin-21` mise pin used elsewhere (.mise.toml, jepsen_nightly.py) for
+    consistency, even though this step doesn't go through mise.
+    """
+    w = CommentedMap()
+    w["distribution"] = distribution
+    w["java-version"] = java_version
+    return Step(name="Set up JVM", uses=SETUP_JAVA, with_=w)
 
 
 def setup_qemu_step() -> Step:

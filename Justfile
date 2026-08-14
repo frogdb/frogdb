@@ -390,6 +390,104 @@ quint-check:
     done
     exit $status
 
+# Per-model invariant lists for the Quint design models. Quint has no "all
+# invariants" declaration to introspect, so these are the single source both
+# `quint-run` (sampled smoke) and `quint-verify-*` (exhaustive nightly bound)
+# key off of — keep in sync with the `val inv_*` declarations in each .qnt
+# file (specs/quint/*.qnt).
+quint-admission-invariants := "inv_no_usurper inv_single_routable_group inv_restart_deterministic inv_meet_no_absorption"
+quint-migration-failover-invariants := "inv_slot_owner_valid inv_migration_endpoints_valid inv_handoff_owned inv_handoff_seq_never_reused inv_epoch_monotone inv_epoch_never_decreases inv_abort_repatriates inv_repatriating_well_formed inv_last_failover_demoted inv_last_failover_fenced inv_graceful_failover_barriered inv_complete_requires_drained inv_feed_hold_bounded"
+
+# Smoke-test the Quint design models on every CI run (design doc
+# .scratch/formal-spec/2026-08-12-formal-state-spec-design.md §3 cadence):
+# each model's own named `quint test` suite, plus a small bounded+sampled
+# `quint run` that actually checks the model's invariants (not just
+# simulates — `quint run` defaults `--invariant` to `"true"`, i.e. no check,
+# unless told otherwise). Mirrors `quint-check`'s glob loop. Cheap enough for
+# the PR lane, unlike `quint verify` below (Apalache/SMT) — that is the
+# nightly tier.
+quint-run:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    shopt -s nullglob
+    models=(specs/quint/*.qnt)
+    if [ ${#models[@]} -eq 0 ]; then
+        echo "quint-run: no models under specs/quint/ yet — nothing to run"
+        exit 0
+    fi
+    status=0
+    for model in "${models[@]}"; do
+        echo "quint test $model"
+        quint test "$model" || status=1
+        case "$model" in
+          */cluster_admission.qnt) invariants="{{quint-admission-invariants}}" ;;
+          */cluster_migration_failover.qnt) invariants="{{quint-migration-failover-invariants}}" ;;
+          *) invariants="" ;;
+        esac
+        echo "quint run $model --max-samples=200 --max-steps=20${invariants:+ --invariants $invariants}"
+        quint run "$model" --max-samples=200 --max-steps=20 ${invariants:+--invariants $invariants} || status=1
+    done
+    exit $status
+
+# Bounded *exhaustive* model checking (Apalache) of one Quint design model —
+# the nightly tier of formal verification (`quint-run` above is the sampled
+# per-PR tier). Unlike sampling, `quint verify` explores every reachable
+# state and enabled transition up to MAX_STEPS, not just sampled paths; the
+# per-state SMT solve cost grows steeply with depth, so this runs
+# minutes-to-tens-of-minutes per invariant rather than the PR lane's sub-10s
+# budget — that is why it is nightly, not per-PR.
+#
+# CARRIED REQUIREMENT (Task 2 review finding N1, binding — see
+# .superpowers/sdd/2026-08-13-phase2-cluster-quint-plan/task-2-report.md and
+# progress.md): MAX_STEPS must stay >= 6. Depth 3 was proven vacuous for
+# inv_repatriating_well_formed and half of inv_abort_repatriates on
+# cluster_migration_failover.qnt — both need 4-5 transitions before the
+# property is even checkable. Do not shrink this default to make a run
+# finish faster; a deep bound that times out is reported as inconclusive
+# (below), not silently downgraded.
+#
+# One invariant per `quint verify` invocation, each under its own TIMEOUT:
+# a combined `--invariants` sweep reports one merged verdict, so a single
+# SMT-infeasible conjunct would hide every other invariant's result. A
+# timed-out invariant is reported as such (inconclusive, not a violation)
+# and the loop continues; the recipe still exits nonzero so CI surfaces it.
+quint-verify-model model invariants MAX_STEPS='6' TIMEOUT='1200':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    if [ "{{MAX_STEPS}}" -lt 6 ]; then
+        echo "quint-verify-model: MAX_STEPS must be >= 6 (Task 2 review finding N1); got {{MAX_STEPS}}" >&2
+        exit 1
+    fi
+    status=0
+    for inv in {{invariants}}; do
+        echo "=== quint verify {{model}} --invariant=$inv --max-steps={{MAX_STEPS}} (timeout {{TIMEOUT}}s) ==="
+        timeout {{TIMEOUT}} quint verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
+        rc=$?
+        if [ $rc -eq 124 ]; then
+            echo "=== $inv: TIMED OUT after {{TIMEOUT}}s at depth {{MAX_STEPS}} (inconclusive, not a violation) ==="
+            status=1
+        elif [ $rc -ne 0 ]; then
+            status=1
+        fi
+    done
+    exit $status
+
+# Nightly Apalache sweep, admission model only (4 invariants — lighter than
+# the migration/failover composite below). Split into its own recipe/CI job
+# so the two models' timeout budgets don't compete.
+quint-verify-admission MAX_STEPS='6' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_admission.qnt" quint-admission-invariants MAX_STEPS TIMEOUT)
+
+# Nightly Apalache sweep, migration/failover composite model (12 invariants —
+# the heavier of the two; see quint-verify-model's docstring for why depth
+# 6 can run long here).
+quint-verify-migration-failover MAX_STEPS='6' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_migration_failover.qnt" quint-migration-failover-invariants MAX_STEPS TIMEOUT)
+
+# Both models' nightly Apalache sweep, sequentially. CI itself runs the two
+# halves as separate jobs (quint_verify.py) so a hang in one model's sweep
+# doesn't eat the other's timeout headroom; this combined target exists for
+# a single local invocation.
+quint-verify: quint-verify-admission quint-verify-migration-failover
+
 # Report-only: run the quint-connect conformance harness's quarantined
 # (#[ignore]d) traces (frogdb-server/crates/cluster/tests/quint_conformance.rs).
 # Most are expected to keep failing until issues 15/17/19/20/26 and the
@@ -422,7 +520,7 @@ fmt-check crate="":
 # `lint-keyspace-notify-routing` and `lint-script-gate` ran in `lint-gates` but
 # not in `lint`, contradicting agents/seam-lints.md). One list, so `lint` is
 # always a superset of `lint-gates`.
-lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec
+lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-check
     {{dyld-env}} {{rocksdb-env}} cargo clippy {{ if crate != "" { "-p " + crate } else { "--all-targets" } }} -- -D warnings
 
 # Gate: the compile-free subset of the seam-lint family — every `lint-*` gate
