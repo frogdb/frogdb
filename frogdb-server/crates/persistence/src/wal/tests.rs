@@ -1813,12 +1813,88 @@ fn only_a_synced_rocks_sink_commit_records_the_durable_watermark() {
         "an async commit is not individually durable and must not advance the watermark"
     );
 
+    // The pre-write snapshot the fixed commit path uses: whatever is durable
+    // before this batch is issued, not whatever the global counter reads
+    // after it lands (FM-PERSISTENCE-035).
+    let pre_sync_seq = rocks.latest_sequence_number();
     sink.stage_put(b"synced", b"2").unwrap();
     sink.commit(true).unwrap();
     assert_eq!(
         crate::rocks::wal_watermark::read(rocks.path()),
-        Some(rocks.latest_sequence_number()),
-        "a synced commit records the sequence its fsync covered"
+        Some(pre_sync_seq),
+        "a synced commit records the sequence its fsync is guaranteed to have \
+         covered before the write started, not a post-hoc global read"
+    );
+    assert!(
+        rocks.latest_sequence_number() > pre_sync_seq,
+        "the synced commit's own write did advance the sequence further, \
+         confirming the watermark deliberately trails a commit's own writes"
+    );
+}
+
+// FM-PERSISTENCE-035
+/// The bug this closes: `record_wal_watermark` used to re-read the *global*
+/// sequence after its own write landed, on a `RocksStore` that many shard
+/// threads share. If another shard's write lands in the gap between one
+/// shard's fsync completing and that post-hoc read, the watermark would
+/// claim durability for data the other shard never synced. Replicating
+/// `RocksSink::commit`'s two steps by hand — snapshot, then write — lets this
+/// test place shard 1's unsynced write in exactly that gap deterministically,
+/// without depending on real thread scheduling to hit a race.
+///
+/// Pre-fix (`record_wal_watermark()` re-reading `latest_sequence_number()`
+/// after the fact instead of taking a `covered_seq` argument), this scenario
+/// makes the watermark equal shard 1's landed-but-unsynced sequence too; the
+/// fix must keep it at shard 0's pre-write snapshot instead.
+#[test]
+fn a_racing_shard_write_after_the_fsync_does_not_inflate_the_watermark() {
+    let tmp = TempDir::new().unwrap();
+    let rocks =
+        Arc::new(crate::rocks::RocksStore::open(tmp.path(), 2, &RocksConfig::default()).unwrap());
+
+    // A non-trivial baseline so the numbers below are not degenerate zeros.
+    let mut warmup = RocksSink::new(rocks.clone(), 0);
+    warmup.stage_put(b"warmup", b"0").unwrap();
+    warmup.commit(true).unwrap();
+    let baseline = rocks.latest_sequence_number();
+
+    // Shard 0's commit, decomposed by hand so shard 1's write can be
+    // interleaved at the exact point the real race sits: after the fsync,
+    // before the watermark is recorded.
+    let mut batch0 = rocksdb::WriteBatch::default();
+    rocks.batch_put(&mut batch0, 0, b"shard0", b"v").unwrap();
+    let covered_seq = rocks.latest_sequence_number();
+    assert_eq!(
+        covered_seq, baseline,
+        "nothing has written since the warmup yet"
+    );
+    let mut wo = rocksdb::WriteOptions::default();
+    wo.set_sync(true);
+    rocks.write_batch_opt(batch0, &wo).unwrap(); // shard 0's fsync completes here
+
+    // Shard 1's write lands *after* shard 0's fsync, unsynced — the race
+    // window FM-PERSISTENCE-035 describes. It is not yet durable.
+    let mut sink1 = RocksSink::new(rocks.clone(), 1);
+    sink1.stage_put(b"shard1", b"v").unwrap();
+    sink1.commit(false).unwrap();
+    let after_shard1 = rocks.latest_sequence_number();
+    assert!(
+        after_shard1 > covered_seq,
+        "shard 1's write must have landed and advanced the global sequence"
+    );
+
+    rocks.record_wal_watermark(covered_seq);
+
+    assert_eq!(
+        crate::rocks::wal_watermark::read(rocks.path()),
+        Some(covered_seq),
+        "the watermark must carry shard 0's pre-write snapshot, not a post-hoc \
+         global read — shard 1's undurable write that landed after shard 0's \
+         own fsync must not be claimed as durable"
+    );
+    assert!(
+        crate::rocks::wal_watermark::read(rocks.path()).unwrap() < after_shard1,
+        "the watermark must not have advanced past what shard 1 (unsynced) contributed"
     );
 }
 

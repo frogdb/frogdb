@@ -76,6 +76,26 @@ pub(crate) fn write(db_dir: &Path, seq: u64) -> std::io::Result<()> {
     std::fs::rename(&tmp_path, &final_path)
 }
 
+/// Persist `candidate` as the new watermark, but only if it is higher than
+/// what is already recorded — a `fetch_max`, not a blind overwrite.
+///
+/// [`RocksStore::record_wal_watermark`](super::RocksStore::record_wal_watermark)
+/// is called independently and concurrently by every shard's own sync commit
+/// plus the periodic `durable_sync` tick; each reports its own covered
+/// sequence out of order relative to the others. A lower candidate arriving
+/// after a higher one must not regress the mark — see the module docs above
+/// on why lagging, never leading, is the safe direction. A missing/unreadable
+/// current watermark (fresh database, torn file) is treated as `0` here so
+/// the candidate always wins.
+pub(crate) fn fetch_max(db_dir: &Path, candidate: u64) -> std::io::Result<()> {
+    if let Some(current) = read(db_dir)
+        && candidate <= current
+    {
+        return Ok(());
+    }
+    write(db_dir, candidate)
+}
+
 /// Compare the persisted watermark against `recovered_seq` after a WAL replay,
 /// emit the drop metric + a WARN log on a shortfall, then re-baseline the
 /// watermark to `recovered_seq` so the next open compares against reality.

@@ -20,16 +20,25 @@ impl RocksStore {
     pub fn latest_sequence_number(&self) -> u64 {
         self.db.latest_sequence_number()
     }
-    /// Persist the current RocksDB sequence number as the durable-sync WAL
-    /// watermark (see [`super::wal_watermark`]). Call this *after* a durable
-    /// sync — the sync flush path and graceful shutdown — so the recorded
-    /// sequence reflects data that survived to disk. Best-effort: a failed write
-    /// only costs a future corruption-detection, never correctness, so it is
-    /// logged at debug level and swallowed rather than propagated.
-    pub fn record_wal_watermark(&self) {
-        let seq = self.db.latest_sequence_number();
-        if let Err(e) = super::wal_watermark::write(self.db.path(), seq) {
-            tracing::debug!(seq, error = %e, "Failed to record WAL watermark");
+    /// Persist `covered_seq` as the durable-sync WAL watermark (see
+    /// [`super::wal_watermark`]) if it is higher than what is already
+    /// recorded.
+    ///
+    /// `covered_seq` must be the sequence the caller snapshotted *before*
+    /// starting the write or flush it is now reporting complete — never a
+    /// fresh `latest_sequence_number()` read taken after the fact. A concurrent
+    /// shard's still-unsynced write can land in the gap between a sync
+    /// finishing and a post-hoc read, inflating the claimed durable point past
+    /// what is actually on disk (FM-PERSISTENCE-035). A `fetch_max`, not a
+    /// blind store: independent concurrent callers (each shard's own sync
+    /// commit, and the periodic `durable_sync` tick) report out of order, and
+    /// a lower snapshot arriving after a higher one must not regress the mark.
+    /// Best-effort: a failed write only costs a future corruption-detection,
+    /// never correctness, so it is logged at debug level and swallowed rather
+    /// than propagated.
+    pub fn record_wal_watermark(&self, covered_seq: u64) {
+        if let Err(e) = super::wal_watermark::fetch_max(self.db.path(), covered_seq) {
+            tracing::debug!(covered_seq, error = %e, "Failed to record WAL watermark");
         }
     }
     pub fn path(&self) -> &Path {

@@ -1,6 +1,6 @@
 # 12: `wal_watermark` records the covered sequence, not a post-hoc global read
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

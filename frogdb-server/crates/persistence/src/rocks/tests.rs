@@ -1171,8 +1171,12 @@ fn seed_synced_wal(db_dir: &Path) -> PathBuf {
             .unwrap();
     }
     // The durable-sync watermark the production flush path maintains after an
-    // fsync'd batch. Records the full sequence so a short recovery is detectable.
-    s.record_wal_watermark();
+    // fsync'd batch. Records the full sequence so a short recovery is
+    // detectable. This is a single-writer setup with no racing shard, so
+    // reading the sequence after every write lands (rather than the
+    // pre-write snapshot the production sync path uses) is an accurate
+    // covered sequence here, not an over-claim.
+    s.record_wal_watermark(s.latest_sequence_number());
     assert_eq!(
         s.latest_sequence_number(),
         CORRUPT_TEST_RECORDS as u64,

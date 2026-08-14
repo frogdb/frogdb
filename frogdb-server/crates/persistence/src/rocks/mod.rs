@@ -350,23 +350,30 @@ impl RocksStore {
     /// prevent. Publishing after a failed flush would make
     /// the same claim, so a flush error short-circuits.
     pub fn durable_sync(&self) -> Result<(), RocksError> {
-        let pending: Vec<(Arc<dyn DurableSyncTarget>, u64)> = {
+        let (pending, covered_seq): (Vec<(Arc<dyn DurableSyncTarget>, u64)>, u64) = {
             let mut targets = self.sync_targets.lock().unwrap();
             targets.retain(|w| w.strong_count() > 0);
-            targets
+            let pending = targets
                 .iter()
                 .filter_map(|w| w.upgrade())
                 .map(|t| {
                     let seq = t.committed_sequence();
                     (t, seq)
                 })
-                .collect()
+                .collect();
+            // Same snapshot-before-flush discipline as `pending` above
+            // (FM-PERSISTENCE-035): a sequence present before `flush()` starts
+            // is guaranteed durable once it returns, regardless of what lands
+            // mid-flush on another shard. A read taken after `flush()` returns
+            // could pick up a commit that landed during the flush and was
+            // never covered by it.
+            (pending, self.db.latest_sequence_number())
         };
         self.flush()?;
         for (target, seq) in pending {
             target.publish_synced_through(seq);
         }
-        self.record_wal_watermark();
+        self.record_wal_watermark(covered_seq);
         Ok(())
     }
     /// Main-tier resolver shim; see [`RocksStore::tier_cf_handle`] for the

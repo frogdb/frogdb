@@ -183,6 +183,17 @@ impl WriteSink for RocksSink {
         let mut write_opts = WriteOptions::default();
         write_opts.set_sync(sync);
         let pending_clear = self.pending_clear_upper.take();
+        // Snapshot the global sequence *before* issuing this batch, not after
+        // (FM-PERSISTENCE-035). Whatever sequence is already present in the
+        // shared WAL file at this instant is guaranteed durable once our own
+        // fsync below (when `sync`) completes — RocksDB CFs within one `DB`
+        // share a single WAL file, so a sync flushes it wholesale up through
+        // whatever has been appended so far, regardless of which shard wrote
+        // it. A read taken *after* our write cannot make that guarantee: a
+        // concurrent shard's still-unsynced write can land in the gap between
+        // our fsync finishing and that read, inflating the claimed durable
+        // point past what is actually on disk.
+        let covered_seq = self.rocks.latest_sequence_number();
         let result = self
             .rocks
             .write_batch_opt(batch, &write_opts)
@@ -198,13 +209,12 @@ impl WriteSink for RocksSink {
             self.rocks
                 .spawn_clear_reclamation(crate::rocks::CfTier::Main, self.shard_id, upper);
         }
-        // A successful `sync` commit has fsync'd the WAL through this batch's
-        // sequence, so advance the durable-sync watermark. This is the sequence
-        // point-in-time recovery must reach; landing below it on the next open
-        // signals a corrupt mid-log record dropped committed writes. Non-sync
-        // commits are not individually durable, so they must not advance it.
+        // A successful `sync` commit has fsync'd the WAL through at least
+        // `covered_seq`, so advance the durable-sync watermark to that
+        // pre-write snapshot. Non-sync commits are not individually durable,
+        // so they must not advance it.
         if result.is_ok() && sync {
-            self.rocks.record_wal_watermark();
+            self.rocks.record_wal_watermark(covered_seq);
         }
         result
     }
