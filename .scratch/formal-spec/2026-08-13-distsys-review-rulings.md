@@ -255,3 +255,17 @@ assertion (`resp.is_none() || matches!(Bulk(None))` — forces nothing) is tight
 require the reply. Filed as
 [spec-gaps issue 17](../spec-gaps/issues/open/17-client-pause-honors-blocking-deadlines.md)
 (ready-for-agent, sequenced after issue 13); rides the implementation wave.
+
+## MAJ-15 — registration-ordinal row asserts a FIFO mechanism the code does not use
+
+Ruling: **restate the row + give the ordinal its claimed reader** (combines the
+reviewer's two halves). Per-key FIFO: the row is restated — the per-key `VecDeque`
+push order is the FIFO authority (making pop paths consult the ordinal would be churn
+for zero behavior change). Slot-scoped drain: `drain_waiters_for_slot` stops iterating
+HashMap keys and orders by the registration ordinal — `seq_by_slot` gains the real
+reader the row claims, cross-key drain becomes fair (oldest waiter first) and
+deterministic, and ordinal-mutants become killable instead of silently surviving the
+mutation gate. TR-BLOCKING-001/013 citations re-derived against the restated row.
+Filed as
+[spec-gaps issue 18](../spec-gaps/issues/open/18-slot-drain-orders-by-registration-ordinal.md)
+(ready-for-agent); rides the implementation wave.
