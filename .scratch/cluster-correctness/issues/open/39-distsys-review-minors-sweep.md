@@ -54,6 +54,16 @@ actually observe (what the joiner presents in the MEET exchange).
 - [ ] Joiner-side guard + forcing test (non-empty joiner refuses MEET locally)
 - [ ] TR-CLUSTER-005 restated in acceptor-observable terms
 
+### MIN-4 — FM-CLUSTER-073 counts unknown-owner slots as `ok`
+
+Ruling: **third state `unknown`**. Fail-open observability — the health metric is
+at its most optimistic exactly when the cluster is most confused (tension with
+FM-CLUSTER-033's own reasoning). Slots whose owner cannot be determined report
+`unknown`, never `ok`; row amended, metric gains the state, forcing test pins an
+unknown-owner slot out of the `ok` bucket. Observability-accuracy principle.
+
+- [ ] `unknown` state in row + metric; forcing test landed
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled

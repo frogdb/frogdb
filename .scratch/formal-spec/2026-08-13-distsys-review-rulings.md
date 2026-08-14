@@ -440,3 +440,10 @@ unenforceable as written. The joining node checks its own state and refuses the
 MEET when non-empty/already a member; TR-CLUSTER-005 restated acceptor-side in
 observable terms; forcing test at the joiner. Recorded in
 [cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
+
+## MIN-4 — FM-CLUSTER-073 counts unknown-owner slots as `ok`
+
+Ruling: **third state `unknown`** (reviewer's resolution). Fail-open
+observability — most optimistic exactly when most confused. Row amended, metric
+gains the state, forcing test. Recorded in
+[cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
