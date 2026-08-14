@@ -69,3 +69,10 @@ TR-BLOCKING-007 to remove the "server's reply normally wins" race claim (it is
 deterministically false — `biased;` select, `response_rx` first). Ordering dependency
 recorded as an amendment on
 [spec-gaps issue 08](../spec-gaps/issues/open/08-blocking-command-rows.md).
+
+## CRIT-1 — restarted source never re-arms its slot write barrier
+
+Ruling: **fix now** (reviewer's resolution verbatim). Filed as
+[cluster issue 32](../cluster-correctness/issues/open/32-restarted-source-never-re-arms-its-slot-write-barrier.md)
+(ready-for-agent) and dispatched immediately. Survives issue 31's redesign (finalization
+drain keeps the barrier; restart mid-drain still needs re-arm).
