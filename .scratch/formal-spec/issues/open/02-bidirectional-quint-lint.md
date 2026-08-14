@@ -40,6 +40,24 @@ named invariant exists, not that it encodes the row's semantics — mutation rev
 - [ ] Existing cluster models + their rows backfilled; `just lint-spec` green and summary line reports the new counts
 - [ ] `just lint-spec` stays quint-binary-free at commit time
 
+## Citation-accuracy findings to fold into the backfill
+
+From the phase-2 final review (`.superpowers/sdd/2026-08-13-phase2-cluster-quint-plan/final-review.md`),
+four findings about how existing citations inflate or understate coverage — relevant when this
+issue's backfill counts what the two cluster models currently cite:
+
+- [t1 m5] disclaimer-only ids (cited for context, not machine-checked) inflate the citation
+  count the same as a real `Model:`-style linkage would; the backfill should not carry them
+  forward as if they were coverage.
+- [t2 N4] `inv_migration_endpoints_valid` cites `INV-REF-2` without it appearing in the id's own
+  catalog entry — an uncited-in-the-other-direction mix worth checking once the reverse-direction
+  lint (this issue's main deliverable) exists.
+- [t2 N5] `INV-SLOT-1` is cited only to be rejected/disclaimed, not asserted — same
+  disclaimer-vs-linkage distinction as [t1 m5], different id.
+- [t2 M18] the in-module disclaimer scan window (how far a "not machine-checked" disclaimer is
+  read to apply from its citation) is informal; the backfill should make explicit which citations
+  in the two cluster models it does and doesn't cover for this reason.
+
 ## Blocked by
 
 - 01 (library extraction moves/renames definitions; land layout first so backfill doesn't churn)
