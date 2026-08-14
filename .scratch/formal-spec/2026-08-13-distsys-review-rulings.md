@@ -484,3 +484,12 @@ op-aware `*-1` — "exactly as an ordinary timeout" is false and hides the
 admission-limit bug's severity. Cell states the difference and cross-refs
 issue 08's MAJ-11 amendment as the behavioral rewrite. Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-9 — TR-BLOCKING-020 omits the `timer_sweeps` gate
+
+Ruling: **accept + forcing test**. Row cites the GC-backstop interval
+unconditionally; code gates it on `timer_sweeps` (driven runs get `DriveTick`
+instead). Precondition amended with the gate + driven-tick note; missing
+forcing test landed (driven tick → sweep observed), clearing `Forced by |
+MISSING`. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).

@@ -52,6 +52,20 @@ severity (observability-accuracy principle).
 - [ ] TR-BLOCKING-003 cell corrected ($-1 vs `*-1` stated, issue 08 cross-ref);
       `just lint-spec` green
 
+### MIN-9 — TR-BLOCKING-020 omits the `timer_sweeps` gate
+
+Ruling: **accept + forcing test**. The GC backstop is gated
+(`event_loop.rs:83`: `waiter_timeout_interval.tick(), if timer_sweeps`) and
+suppressed in driven/deterministic runs (arrives as `DriveTick` via
+`ShardWorker::set_driven_ticks`); the row cites the interval unconditionally.
+Amend the precondition with the gate + driven-tick path note, and land the
+missing forcing test — a driven run drives the tick explicitly and observes
+the sweep — clearing the row's `Forced by | MISSING`.
+
+- [ ] TR-BLOCKING-020 precondition gains `timer_sweeps` gate + driven-tick note
+- [ ] Forcing test (driven tick → sweep observed) landed; `Forced by` cites it;
+      `just lint-spec` green
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
