@@ -5,8 +5,12 @@ Status: ready-for-agent
 ## Origin
 
 Distsys-review CRIT-1 (`.scratch/formal-spec/2026-08-13-independent-distsys-review.md`),
-ruled fix-now by the user 2026-08-14
-([rulings ledger](../../../formal-spec/2026-08-13-distsys-review-rulings.md)).
+ruled by the user 2026-08-14: **spec fixed immediately, code fix with the implementation
+wave** ([rulings ledger](../../../formal-spec/2026-08-13-distsys-review-rulings.md)).
+
+**Spec half DONE 2026-08-14**: FM-CLUSTER-104 added to `specs/cluster.md` (gap-cited to
+this issue) and the `PauseState.slots` State-space row restated. Remaining scope below is
+the code half only.
 
 ## What is wrong
 
@@ -35,28 +39,23 @@ Precedent in-repo: the role view had the identical bug; issue 37 (arch-deepening
 The barrier is the same lesson, unapplied. (CRDB rebuilds leaseholder/latch state from
 replicated range state on every restart for exactly this reason.)
 
-## What to build (spec-first)
+## What to build (code half; spec rows FM-CLUSTER-104 + State-space restatement already landed)
 
-1. New FM row (spec-first: row → forcing test → fix): "the source restarts (or
-   snapshot-installs) with a handoff prepared → its barrier is armed before the node
-   admits any client write to that slot."
-2. `reconcile_slot_handoff(...)` beside `reconcile_self_role` in `cluster_init.rs`,
+1. `reconcile_slot_handoff(...)` beside `reconcile_self_role` in `cluster_init.rs`,
    driven from the restored `migrations` map, emitting the `Prepared` events the barrier
    task would have seen live.
-3. `install_snapshot` emits `Prepared`/`Released` on any handoff-state delta, the same
+2. `install_snapshot` emits `Prepared`/`Released` on any handoff-state delta, the same
    way it emits role changes.
-4. Forcing test: restart a source mid-handoff, assert a write to the migrating slot is
-   refused before any client write is admitted.
-5. Restate the `PauseState.slots` State-space row in `specs/cluster.md` — it currently
-   launders an unimplemented "reconstructible in principle" as a property.
+3. Forcing test: restart a source mid-handoff, assert a write to the migrating slot is
+   refused before any client write is admitted. Flip FM-CLUSTER-104's `Forced by` from
+   the gap citation to this test.
 
 ## Acceptance criteria
 
-- [ ] FM row added and cited; `just lint-spec` green
 - [ ] Reconcile path covers both boot restore and live `install_snapshot`
 - [ ] Forcing test fails on the pre-fix tree, passes post-fix
+- [ ] FM-CLUSTER-104 `Forced by` names the forcing test; `just lint-spec` green
 - [ ] `just mutants-diff` on touched locked crates (cluster, cluster-runtime) triaged
-- [ ] State-space row restated
 
 ## Cross-references
 

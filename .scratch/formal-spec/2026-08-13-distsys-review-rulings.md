@@ -72,7 +72,12 @@ recorded as an amendment on
 
 ## CRIT-1 — restarted source never re-arms its slot write barrier
 
-Ruling: **fix now** (reviewer's resolution verbatim). Filed as
+Ruling: **fix the spec now; code fix with the implementation wave** (clarified by the
+user after the initial "fix now"). Filed as
 [cluster issue 32](../cluster-correctness/issues/open/32-restarted-source-never-re-arms-its-slot-write-barrier.md)
-(ready-for-agent) and dispatched immediately. Survives issue 31's redesign (finalization
-drain keeps the barrier; restart mid-drain still needs re-arm).
+(ready-for-agent). Spec half landed same day: FM-CLUSTER-104 (gap-cited to issue 32 per
+the `MISSING ([gap: …])` mechanism) plus the `PauseState.slots` State-space row restated
+to stop laundering "reconstructible in principle" as a property. Code half (reconcile +
+snapshot-delta emission + forcing test) rides the ruled-issues implementation wave.
+Survives issue 31's redesign (finalization drain keeps the barrier; restart mid-drain
+still needs re-arm).
