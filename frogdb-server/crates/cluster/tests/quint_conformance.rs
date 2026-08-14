@@ -21,7 +21,7 @@
 //!   - `nodes`: `role`, `parent`, `member`, `fail`               -> `NodeProj`
 //!   - `slots`: owner                                             -> `ClusterProjection::slots`
 //!   - `migrations`: `source`, `target`, `handoff.seq`, `handoff.drained`
-//!                                                                 -> `MigrationProj`, `HandoffProj`
+//!     -> `MigrationProj`, `HandoffProj`
 //!   - `handoff_seq`, `epoch`, `node_epoch`                       -> top-level fields, read live
 //!     from `ClusterState::snapshot()` (not a driver-side shadow counter — a shadow counter
 //!     mirroring the model's own increments would defeat this exact guard by construction,
@@ -630,13 +630,15 @@ fn new_driver() -> ClusterDriver {
 // ITF trace's state at every step, exactly as for the simulation driver above.
 // Only the argument *values* fed into each replayed action are hardcoded (from
 // the spec text) rather than mechanically decoded from the trace.
+type ScriptStep = (&'static str, Box<dyn FnMut(&mut ClusterDriver)>);
+
 struct ScriptedDriver {
     inner: ClusterDriver,
-    script: std::collections::VecDeque<(&'static str, Box<dyn FnMut(&mut ClusterDriver)>)>,
+    script: std::collections::VecDeque<ScriptStep>,
 }
 
 impl ScriptedDriver {
-    fn new(script: Vec<(&'static str, Box<dyn FnMut(&mut ClusterDriver)>)>) -> Self {
+    fn new(script: Vec<ScriptStep>) -> Self {
         ScriptedDriver {
             inner: ClusterDriver::new(),
             script: script.into(),
@@ -645,10 +647,7 @@ impl ScriptedDriver {
 }
 
 /// Shorthand for one scripted `(action name, closure)` pair.
-fn step_(
-    name: &'static str,
-    f: impl FnMut(&mut ClusterDriver) + 'static,
-) -> (&'static str, Box<dyn FnMut(&mut ClusterDriver)>) {
+fn step_(name: &'static str, f: impl FnMut(&mut ClusterDriver) + 'static) -> ScriptStep {
     (name, Box::new(f))
 }
 
@@ -775,10 +774,10 @@ impl State<ScriptedDriver> for ScriptedProj {
     }
 
     fn from_spec(value: itf::Value) -> Result<Self> {
-        if let itf::Value::Record(rec) = &value {
-            if rec.is_empty() {
-                return Ok(ScriptedProj::NoSpecState);
-            }
+        if let itf::Value::Record(rec) = &value
+            && rec.is_empty()
+        {
+            return Ok(ScriptedProj::NoSpecState);
         }
         let normalized = normalize_removed_node_ghost_fields(value);
         let proj = ClusterProjection::deserialize(normalized)
