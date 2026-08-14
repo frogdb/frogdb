@@ -423,3 +423,11 @@ execution-pipeline queueing (VLL queue, parked blocking commands, pause holds) �
 eventual, not bounded. Load-measuring timing test ruled out (flake risk).
 Recorded in
 [cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
+
+## MIN-2 — TR-CLUSTER-036 vs FM-CLUSTER-008 contradict on FinalizeUpgrade version check; empty-membership finalize
+
+Ruling: **accept both parts** — resolve the row contradiction against the code
+(if the check is not state-machine-checked, implementer weighs guarding it there —
+irreversible op — and records the call), and add a non-empty-membership
+precondition + forcing test for the irreversible finalize. Recorded in
+[cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).

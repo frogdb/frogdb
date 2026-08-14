@@ -25,6 +25,22 @@ Spec-only edit.
 
 - [ ] FM-CLUSTER-037 restated; `just lint-spec` green
 
+### MIN-2 — TR-CLUSTER-036 vs FM-CLUSTER-008 contradict on FinalizeUpgrade's version check; empty-membership finalize accepted
+
+Ruling: **accept both parts**.
+
+1. Two locked rows directly contradict: TR-CLUSTER-036 says the version check is
+   "not state-machine-checked", FM-CLUSTER-008 says it is. Resolve against the
+   code — fix whichever row lies. If the check turns out NOT state-machine-checked,
+   the implementer weighs adding the guard there (irreversible op → state-machine
+   check preferable) and records the call either way.
+2. An irreversible FinalizeUpgrade is accepted on **empty membership**
+   (reachable via TR-CLUSTER-035's else branch). Add a non-empty-membership
+   precondition + forcing test (fail-stop over nonsense state).
+
+- [ ] Contradiction resolved against code; lying row fixed
+- [ ] Non-empty-membership precondition + forcing test landed
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
