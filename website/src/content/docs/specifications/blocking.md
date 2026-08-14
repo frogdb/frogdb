@@ -250,15 +250,25 @@ rather than naming one that doesn't force the behavior.
 | Forced by | unit-level (frogdb-core, `shard/blocking.rs`): `slot_migrated_moved_brackets_ipv6`, `slot_migrated_moved_ipv4_plain`, `slot_migrated_without_a_known_target_replies_clusterdown`; integration: `test_blocking_command_during_migration_gets_moved` |
 | Rulings | [issue 08](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (confirms this path, no code gap; rowed as a failure mode by FM-BLOCKING-008) |
 
-## TR-BLOCKING-019 — stream waiter drains: NOGROUP / WRONGTYPE
+## TR-BLOCKING-019 — stream waiter drain: the group is gone (`DrainNoGroup`)
 
 | Field | Value |
 | --- | --- |
-| Precondition | A parked `XREAD`/`XREADGROUP`-family waiter's key stops being satisfiable for a reason other than "no new data yet": the consumer group backing the read no longer exists (`KeyReady::DrainNoGroup`), or the key was overwritten with a non-stream type (`KeyReady::DrainWrongType`), discovered on `strat.check_key` during `drive_satisfaction_body`'s poll loop. |
-| Postcondition | Every waiter on that key sharing the failing condition is drained and replied to with the corresponding error (`NOGROUP` / `WRONGTYPE`) rather than left parked to time out; the loop returns immediately without attempting a normal serve for the remaining waiters on that key in this pass. |
-| Source | `shard/blocking.rs:271-390` (`drive_satisfaction_body`, `KeyReady::DrainNoGroup`/`DrainWrongType` arms), `:493` (`drain_stream_waiters_with_error`), `:512` (`drain_stream_waiters_wrongtype`) |
-| Forced by | unit-level (frogdb-core, `shard/blocking.rs`, not covered by this spec's `-p frogdb-server` test-resolution profile): `xreadgroup_missing_group_is_reject` forces the `DrainNoGroup` arm; the `DrainWrongType` arm (a stream key overwritten with another type) has no located forcing test — `blmove_wrong_type_dest_is_reject` (also frogdb-core, unit-level) covers a different code path (a BLMOVE destination's type, not a parked stream reader's key). |
-| Rulings | — |
+| Precondition | A parked stream waiter's key stops backing a consumer group: the key is missing, or was lazily purged as expired, when `StreamSatisfaction::check_key` runs inside `drive_satisfaction_body`'s poll loop (`KeyReady::DrainNoGroup`). |
+| Postcondition | Every **XREADGROUP** waiter on that key is drained and replied to with `NOGROUP No such consumer group '<group>' for key name '<key>'`, verbatim; the loop returns without attempting a normal serve for the rest of this pass. Plain **XREAD** waiters deliberately stay parked: a plain read needs no group, so its wait is still satisfiable — a later `XADD` recreating the key serves it (this asymmetry with TR-BLOCKING-022 is the point of splitting the two rows). |
+| Source | `shard/blocking.rs` (`drive_satisfaction_body`'s `KeyReady::DrainNoGroup` arm, `drain_stream_waiters_with_error`), `wait_queue.rs` (`pop_oldest_xreadgroup_waiter`) |
+| Forced by | unit-level (frogdb-core, `shard/blocking.rs`): `xreadgroup_missing_group_is_reject` forces the reply text; `a_deleted_stream_drains_xreadgroup_but_leaves_xread_parked` forces the asymmetry, including the later `XADD` that serves the surviving XREAD waiter. |
+| Rulings | [issue 15](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/15-wrong-type-drain-covers-plain-xread-waiters.md) (`DrainNoGroup` keeps its XREADGROUP-only scope; the old merged row claimed "every waiter … is drained", which was false for both arms) |
+
+## TR-BLOCKING-022 — stream waiter drain: the key is no longer a stream (`DrainWrongType`)
+
+| Field | Value |
+| --- | --- |
+| Precondition | A parked stream waiter's key exists but holds a non-stream value — `SET s foo` over a stream, a `RENAME` landing another type on it — when `StreamSatisfaction::check_key` runs inside `drive_satisfaction_body`'s poll loop (`KeyReady::DrainWrongType`). |
+| Postcondition | **Every** stream waiter on that key — XREAD *and* XREADGROUP — is drained and replied to with `WRONGTYPE Operation against a key holding the wrong kind of value`, verbatim; the loop returns without attempting a normal serve for the rest of this pass. A wrong-typed key makes every stream wait on it unsatisfiable, including a plain XREAD's, so leaving XREAD waiters parked created an *unleavable* blocked state: `XREAD BLOCK 0` has no deadline, and nothing re-signals the key as a stream. See [Redis deviations](#redis-deviations). |
+| Source | `shard/blocking.rs` (`drive_satisfaction_body`'s `KeyReady::DrainWrongType` arm, `drain_stream_waiters_wrongtype`), `wait_queue.rs` (`pop_oldest_stream_waiter`) |
+| Forced by | unit-level (frogdb-core, `shard/blocking.rs`): `a_wrong_typed_key_drains_plain_xread_waiters`, `a_wrong_typed_key_drains_xreadgroup_waiters` |
+| Rulings | [issue 15](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/15-wrong-type-drain-covers-plain-xread-waiters.md) (distsys-review MAJ-12, ruled accept-plus: fix the semantics, not just the row) |
 
 ## TR-BLOCKING-020 — shard-side GC tick reclaims an expired waiter
 
@@ -453,3 +463,15 @@ rows:
 | Outcome variant | `ConnectionEnded(ParkedExit::Killed)` |
 | Forced by | `client_kill_terminates_a_parked_client_and_releases_its_waiter`; unit-level: `client_kill_while_parked_ends_the_connection`, `a_kill_beats_a_simultaneous_client_unblock` |
 | Bug refs | [issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (distsys-review CRIT-5) |
+
+---
+
+## Redis deviations
+
+Deliberate, known differences from Redis 8.x blocking semantics. Each is pinned by the tests named
+in the rows above, so a change here is a visible spec edit rather than a silent drift.
+
+| Row | FrogDB | Redis | Rationale |
+|---|---|---|---|
+| TR-BLOCKING-022 | A key that stops being a stream drains **every** stream waiter on it, plain `XREAD` included, with `WRONGTYPE Operation against a key holding the wrong kind of value` | Only readgroup clients are unblocked (`unblockDeletedStreamReadgroupClients`), and with `-UNBLOCKED the stream key no longer exists`; a plain `XREAD BLOCK` client stays parked | Deviation-as-improvement: a plain `XREAD BLOCK 0` on a wrong-typed key can never be satisfied and has no deadline, so Redis's behaviour is an unleavable blocked state that only `CLIENT UNBLOCK`/`CLIENT KILL` can end. The error text stays `WRONGTYPE` — the same text the non-blocking `XREAD` on that key would produce, so a client sees one answer for one condition rather than a blocking-only error code. |
+| TR-BLOCKING-019 | A key that disappears drains XREADGROUP waiters with `NOGROUP No such consumer group '<group>' for key name '<key>'` | `-UNBLOCKED the stream key no longer exists` | Same condition, and the same reasoning as above: `NOGROUP` is what the non-blocking `XREADGROUP` against a missing key replies, so the blocking and immediate paths agree. Plain `XREAD` waiters stay parked here in both systems — a missing key is still satisfiable by a later `XADD`. |

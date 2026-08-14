@@ -551,12 +551,15 @@ impl ShardWorker {
         }
     }
 
-    /// Drain XREADGROUP waiters for a key and send NOGROUP error.
+    /// Drain XREADGROUP waiters for a key and send NOGROUP error
+    /// (`specs/blocking.md` TR-BLOCKING-019).
     ///
     /// Only XREADGROUP waiters are drained — XREAD waiters remain blocked,
     /// matching Redis behaviour where a plain XREAD client stays blocked when
     /// the stream key is deleted or expires. It will either time-out or be
-    /// woken when a new stream is created under the same key.
+    /// woken when a new stream is created under the same key. That is a real
+    /// asymmetry with the wrong-type drain, not an oversight: a missing key is
+    /// still satisfiable by a later XADD, a wrong-typed one is not.
     pub(crate) fn drain_stream_waiters_with_error(&mut self, key: &Bytes) {
         while let Some(entry) = self.wait_queue.pop_oldest_xreadgroup_waiter(key) {
             let response = match &entry.op {
@@ -571,13 +574,19 @@ impl ShardWorker {
         }
     }
 
-    /// Drain XREADGROUP waiters for a key and send WRONGTYPE error.
+    /// Drain *every* stream waiter for a key and send the WRONGTYPE error
+    /// (`specs/blocking.md` TR-BLOCKING-022).
     ///
-    /// Called when the key's type has changed (e.g., SET overwrote a stream).
-    /// Only XREADGROUP waiters are drained — XREAD waiters stay blocked (see
-    /// `drain_stream_waiters_with_error` for rationale).
+    /// Called when the key's type has changed (e.g. SET overwrote a stream).
+    /// Both XREAD and XREADGROUP waiters go: a wrong-typed key makes every
+    /// stream wait on it unsatisfiable, and a plain `XREAD BLOCK 0` has no
+    /// deadline and nothing that could ever re-signal the key as a stream, so
+    /// leaving those parked is an unleavable blocked state. This is the one
+    /// place the two drains differ — `drain_stream_waiters_with_error`'s
+    /// missing-key condition leaves plain XREAD waiters parked *because* a
+    /// later XADD still satisfies them.
     fn drain_stream_waiters_wrongtype(&mut self, key: &Bytes) {
-        while let Some(entry) = self.wait_queue.pop_oldest_xreadgroup_waiter(key) {
+        while let Some(entry) = self.wait_queue.pop_oldest_stream_waiter(key) {
             let response = Response::error(
                 "WRONGTYPE Operation against a key holding the wrong kind of value",
             );
@@ -1722,6 +1731,158 @@ mod tests {
                 .wait_queue
                 .has_waiters_for_kind(&key(MAX_BLMOVE_FANOUT_DEPTH), WaiterKind::List),
             "the waiter at the depth cap should remain blocked"
+        );
+    }
+
+    // ---- Stream drains: wrong-type vs missing-key scope (issue 15) --------
+    //
+    // The two drain arms have deliberately different scope, and the difference
+    // is the whole point of TR-BLOCKING-019 vs TR-BLOCKING-022: a *missing* key
+    // is still satisfiable by a later XADD (plain XREAD waiters stay parked), a
+    // *wrong-typed* key is not satisfiable by anything (every stream waiter is
+    // drained, XREAD included — otherwise the wait is unleavable).
+
+    /// Register a stream waiter of the given op on `key`.
+    fn park_stream_waiter(
+        worker: &mut ShardWorker,
+        key: &Bytes,
+        op: BlockingOp,
+    ) -> oneshot::Receiver<Response> {
+        let (entry, rx) = make_entry(op, vec![key.clone()]);
+        worker.wait_queue.register(entry).unwrap();
+        rx
+    }
+
+    fn xread_from_zero() -> BlockingOp {
+        BlockingOp::XRead {
+            after_ids: vec![crate::types::StreamId::new(0, 0)],
+            count: None,
+        }
+    }
+
+    fn xreadgroup_op() -> BlockingOp {
+        BlockingOp::XReadGroup {
+            group: Bytes::from_static(b"g"),
+            consumer: Bytes::from_static(b"c"),
+            noack: false,
+            count: None,
+        }
+    }
+
+    /// The forcing test for the fix: a plain `XREAD BLOCK 0` waiter on a key
+    /// that gets overwritten with another type must be drained, not left
+    /// parked. Pre-fix the drain popped only XREADGROUP waiters, so this waiter
+    /// stayed in the queue forever — no deadline, and nothing that could ever
+    /// re-signal the key as a stream.
+    #[test]
+    fn a_wrong_typed_key_drains_plain_xread_waiters() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+        worker.store.set(key.clone(), Value::stream());
+
+        let mut rx = park_stream_waiter(&mut worker, &key, xread_from_zero());
+
+        // SET overwrites the stream, then signals the stream waiters.
+        worker.store.set(key.clone(), Value::string("notastream"));
+        worker.try_satisfy_stream_waiters(&key);
+
+        match rx.try_recv().expect("the XREAD waiter must be drained") {
+            Response::Error(bytes) => assert_eq!(
+                &bytes[..],
+                b"WRONGTYPE Operation against a key holding the wrong kind of value",
+                "the drain must use the pinned WRONGTYPE text"
+            ),
+            other => panic!("expected WRONGTYPE, got {other:?}"),
+        }
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&key, WaiterKind::Stream),
+            "no stream waiter may survive a wrong-typed key"
+        );
+    }
+
+    /// The same drain still covers XREADGROUP waiters (pins the pre-existing
+    /// half of the arm, which had no forcing test at all).
+    #[test]
+    fn a_wrong_typed_key_drains_xreadgroup_waiters() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+        worker.store.set(key.clone(), Value::stream());
+
+        let mut rx = park_stream_waiter(&mut worker, &key, xreadgroup_op());
+
+        worker.store.set(key.clone(), Value::string("notastream"));
+        worker.try_satisfy_stream_waiters(&key);
+
+        match rx
+            .try_recv()
+            .expect("the XREADGROUP waiter must be drained")
+        {
+            Response::Error(bytes) => assert_eq!(
+                &bytes[..],
+                b"WRONGTYPE Operation against a key holding the wrong kind of value"
+            ),
+            other => panic!("expected WRONGTYPE, got {other:?}"),
+        }
+        assert!(
+            !worker
+                .wait_queue
+                .has_waiters_for_kind(&key, WaiterKind::Stream),
+            "no stream waiter may survive a wrong-typed key"
+        );
+    }
+
+    /// The asymmetry: a *deleted* stream drains only the XREADGROUP waiter. The
+    /// plain XREAD waiter stays parked because its wait is still satisfiable —
+    /// and a later XADD recreating the key does satisfy it.
+    #[test]
+    fn a_deleted_stream_drains_xreadgroup_but_leaves_xread_parked() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+        worker.store.set(key.clone(), Value::stream());
+
+        let mut group_rx = park_stream_waiter(&mut worker, &key, xreadgroup_op());
+        let mut read_rx = park_stream_waiter(&mut worker, &key, xread_from_zero());
+
+        worker.store.delete(&key);
+        worker.try_satisfy_stream_waiters(&key);
+
+        match group_rx
+            .try_recv()
+            .expect("the XREADGROUP waiter must be drained")
+        {
+            Response::Error(bytes) => assert!(
+                bytes.starts_with(b"NOGROUP No such consumer group 'g' for key name 'st'"),
+                "expected the pinned NOGROUP text, got {bytes:?}"
+            ),
+            other => panic!("expected NOGROUP, got {other:?}"),
+        }
+        assert!(
+            read_rx.try_recv().is_err(),
+            "a plain XREAD waiter stays parked when the key merely disappears"
+        );
+
+        // ... and the surviving waiter is served by a later XADD under the same
+        // key, which is why leaving it parked is sound.
+        let mut recreated = Value::stream();
+        recreated
+            .as_stream_mut()
+            .unwrap()
+            .add(
+                crate::types::StreamIdSpec::Explicit(crate::types::StreamId::new(1, 0)),
+                vec![(Bytes::from_static(b"f"), Bytes::from_static(b"1"))],
+            )
+            .unwrap();
+        worker.store.set(key.clone(), recreated);
+        worker.try_satisfy_stream_waiters(&key);
+
+        assert!(
+            matches!(
+                read_rx.try_recv().expect("the XREAD waiter must be served"),
+                Response::Array(_)
+            ),
+            "the surviving XREAD waiter is served by the recreating XADD"
         );
     }
 

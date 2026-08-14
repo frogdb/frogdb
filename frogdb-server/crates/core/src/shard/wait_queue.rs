@@ -579,13 +579,37 @@ impl ShardWaitQueue {
     /// Same mechanics as `pop_oldest_waiter_of_kind` but only matches
     /// `BlockingOp::XReadGroup`. XREAD waiters are left in the queue.
     pub fn pop_oldest_xreadgroup_waiter(&mut self, key: &Bytes) -> Option<WaitEntry> {
+        self.pop_oldest_stream_waiter_matching(key, |op| {
+            matches!(op, BlockingOp::XReadGroup { .. })
+        })
+    }
+
+    /// Pop the oldest stream waiter on `key`, XREAD or XREADGROUP.
+    ///
+    /// The wrong-type drain's pop (`specs/blocking.md` TR-BLOCKING-022): a key
+    /// that no longer holds a stream makes *every* stream wait on it
+    /// unsatisfiable, so unlike [`Self::pop_oldest_xreadgroup_waiter`] this one
+    /// takes plain XREAD waiters too. Same mechanics otherwise.
+    pub fn pop_oldest_stream_waiter(&mut self, key: &Bytes) -> Option<WaitEntry> {
+        self.pop_oldest_stream_waiter_matching(key, |op| {
+            matches!(op, BlockingOp::XRead { .. } | BlockingOp::XReadGroup { .. })
+        })
+    }
+
+    /// Shared body of the two stream pops: take the first entry on `key` whose
+    /// op satisfies `matches_op`, unlinking it from every index it appears in.
+    fn pop_oldest_stream_waiter_matching(
+        &mut self,
+        key: &Bytes,
+        matches_op: impl Fn(&BlockingOp) -> bool,
+    ) -> Option<WaitEntry> {
         let found_pos = {
             let waiters = self.waiters_by_key.get(key)?;
             waiters.iter().position(|&idx| {
                 self.entries
                     .get(idx)
                     .and_then(|e| e.as_ref())
-                    .map(|e| matches!(e.op, BlockingOp::XReadGroup { .. }))
+                    .map(|e| matches_op(&e.op))
                     .unwrap_or(false)
             })?
         };

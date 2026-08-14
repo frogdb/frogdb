@@ -1,6 +1,6 @@
 # 15: Wrong-type drain covers plain XREAD waiters — no unleavable blocked state
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -69,14 +69,21 @@ Fix the semantics, don't just make the row honest:
 - [Issue 08](08-blocking-command-rows.md): blocking row family; keep row vocabulary
   consistent.
 
-## Acceptance criteria
+## What landed
 
-- [ ] TR-BLOCKING-019 split; error texts pinned; `just lint-spec` green
-- [ ] Wrong-type drain pops XREAD + XREADGROUP waiters; NoGroup unchanged scope
-- [ ] Forcing tests fail pre-fix where marked, pass post-fix
-- [ ] Deviations table row landed
-
-## Blocked by
-
-None to start the spec rows; coordinate code with
-[issue 13](13-blocking-wait-becomes-a-run-loop-state.md) if in flight.
+- TR-BLOCKING-019 retitled to the `DrainNoGroup` arm only (XREADGROUP-only scope
+  stated, `NOGROUP No such consumer group '<group>' for key name '<key>'` pinned).
+- New TR-BLOCKING-022 for the `DrainWrongType` arm: drains *every* stream waiter
+  (XREAD + XREADGROUP) with `WRONGTYPE Operation against a key holding the wrong
+  kind of value` pinned.
+- `WaitQueue::pop_oldest_stream_waiter` added beside `pop_oldest_xreadgroup_waiter`
+  (both now delegate to a predicate-driven `pop_oldest_stream_waiter_matching`);
+  `drain_stream_waiters_wrongtype` loops on the wider pop.
+- New `## Redis deviations` section in `specs/blocking.md` with the behavior and
+  error-text divergences from `unblockDeletedStreamReadgroupClients` /
+  `-UNBLOCKED the stream key no longer exists`.
+- Forcing tests in `frogdb-core` (`shard::blocking::tests`):
+  `a_wrong_typed_key_drains_plain_xread_waiters` (proven failing pre-fix:
+  `the XREAD waiter must be drained: Empty`),
+  `a_wrong_typed_key_drains_xreadgroup_waiters`,
+  `a_deleted_stream_drains_xreadgroup_but_leaves_xread_parked`.
