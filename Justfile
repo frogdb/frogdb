@@ -513,7 +513,14 @@ quint-verify-model model MAX_STEPS='6' TIMEOUT='1200':
         # second, false timeout (final-review minor 8).
         "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} quint verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
         rc=$?
-        if [ $rc -eq 124 ]; then
+        if [ $rc -eq 0 ]; then
+            # `quint verify` exits 0 when it proves the invariant holds to the
+            # bounded depth. Without this arm, success fell through to the
+            # tool-failure `else` below and was reported as "TOOL FAILURE
+            # (exit 0)" with status=1 — i.e. every *successful* nightly sweep
+            # failed its own job.
+            summary+=("$inv: HOLDS to depth {{MAX_STEPS}}")
+        elif [ $rc -eq 124 ]; then
             echo "::warning::$inv TIMED OUT after {{TIMEOUT}}s at depth {{MAX_STEPS}} on {{model}} (inconclusive, not a violation)"
             summary+=("$inv: TIMED OUT (inconclusive)")
         elif [ $rc -eq 1 ]; then
