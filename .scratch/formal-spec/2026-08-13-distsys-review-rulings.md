@@ -107,6 +107,19 @@ machinery). The restructure keeps `killed()` polled during the wait; CRIT-5-spec
 remainder is the CLIENT KILL TR row + forcing test. Same
 [spec-gaps issue 13](../spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md).
 
+## CRIT-7 — cross-shard SCA admits hold-and-wait cycles
+
+Ruling: **wound-wait on the SCA path** (reviewer's suggested resolution). The user
+probed the alternative (Calvin-style atomic globally-ordered multi-shard declaration,
+incl. whether ignoring the crates' locked status changes the call — it does not: lock
+status is process cost paid equally by both options; the driver is architectural).
+Wound-wait is a local lock-table change preserving shared-nothing async scatter; the
+sequencer adds an ordering point to the multi-shard hot path. Filed as
+[spec-gaps issue 14](../spec-gaps/issues/open/14-sca-wound-wait-restores-acyclicity.md)
+(ready-for-agent); rides the implementation wave. Liveness proviso recorded in the
+issue: a wounded txn's retry keeps its original txid (age-based priority), else
+starvation. Partially moots MAJ-20's timeout-only exit for this cycle class.
+
 ## CRIT-6 — `replication_state.json`: shared temp path, two writers, no fsync
 
 Ruling: **accept, file issue** (reviewer's resolution: `stamp_with` reuse + unique temp
