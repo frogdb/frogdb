@@ -133,6 +133,23 @@ park survives cancellation). Composes with issues 22 (absolute deadline) and
 - [ ] FM-VLL-003 NOT-observable extended; `just lint-spec` green
 - [ ] Forcing test landed (abandoned park drops immediately; fails pre-fix)
 
+### MIN-14 — rate-limit tokens and the pause wait are spent before the CROSSSLOT gate
+
+Ruling: **hoist resolve pre-charge**. `target.resolve()` (`exec.rs:278-283`)
+is pure computation over already-parsed queued commands — move it above
+`try_acquire_batch` (`:150`) so a CROSSSLOT-doomed EXEC charges nothing
+(symmetry with FM-TXN-016's no-charge-on-abort). The CLIENT PAUSE wait
+(`:203-207`) stays where it is — erroring during a pause would change
+pause-visible semantics; a doomed txn waiting out the pause is harmless, and
+TR-TXN-004's Postcondition states that ordering as deliberate. Amend
+TR-TXN-004 / FM-TXN-019 ordering rows.
+
+- [ ] Resolve hoisted above the limiter charge; pause ordering unchanged
+- [ ] TR-TXN-004 Postcondition states both orderings; FM-TXN-019 amended;
+      `just lint-spec` green
+- [ ] Forcing test: CROSSSLOT EXEC leaves limiter balance untouched
+      (fails pre-fix)
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled

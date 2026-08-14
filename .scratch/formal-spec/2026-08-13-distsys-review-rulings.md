@@ -527,3 +527,16 @@ to 2 s, re-armed per retry — every-blocked-state-is-leavable family. Add
 immediately); FM-VLL-003 NOT-observable gains "barrier outliving its
 requester"; forcing test from the existing cancellation fixture. Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-14 — rate-limit tokens and the pause wait are spent before the CROSSSLOT gate
+
+Ruling: **hoist resolve pre-charge**. `target.resolve()` moves above
+`try_acquire_batch` — CROSSSLOT rejection charges nothing (symmetry with
+FM-TXN-016). Pause wait stays put (erroring during pause would change
+pause-visible semantics); TR-TXN-004's Postcondition states both orderings
+deliberate; forcing test pins the uncharged rejection. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+---
+
+**Triage complete 2026-08-14**: all findings ruled — 7 CRIT, 23 MAJ, 14 MIN.
