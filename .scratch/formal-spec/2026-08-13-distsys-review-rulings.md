@@ -343,3 +343,19 @@ the helper" — the chokepoint-gate pattern). Filed as
 (ready-for-agent); rides the implementation wave. Coordinate with spec-gaps issue 21
 (the staging paths move inside the data dir — build the helper against the new
 layout).
+
+## MAJ-20 — phase-2 lock acquisition has the `participants × timeout` accumulation the spec documents only for phase 4
+
+Ruling: **accept, file issue** (reviewer's resolution: one absolute deadline).
+Phase 2 (`coordinator.rs:247-266`) and `acquire_continuation` (`:394-409`) run a
+fresh *relative* `timeout(request.timeout, ready_rx)` per receiver — 16 shards at
+the 4 s default can burn 64 s per phase against a 4 s configured timeout, and the
+spec only admits this for phase 4. Fix is the gRPC/DistSender standard: one
+`Instant` deadline computed at `scatter` entry, `timeout_at` on every receiver in
+phases 2 and 4 and in `acquire_continuation`; `acquisition.timeout` row +
+TR-VLL-017 restated as a total request bound. Complementary to CRIT-7's wound-wait
+(cycles die proactively there; this bounds the slow-shard/overload class).
+`Instant` is monotonic request-scoped timeout mechanics, not state-bearing time —
+no-wall-clock principle not implicated. Filed as
+[spec-gaps issue 22](../spec-gaps/issues/open/22-scatter-carries-one-absolute-deadline.md)
+(ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
