@@ -1317,6 +1317,94 @@ fn wal_recovery_mode_is_pinned_to_point_in_time() {
     assert!(matches!(pinned, rocksdb::DBRecoveryMode::PointInTime));
 }
 
+// FM-PERSISTENCE-034
+/// `atomic_flush` is pinned at open, not left at RocksDB's `false` library
+/// default (spec-gaps issue 03). Unlike the recovery-mode anchor above there
+/// is no `Options` getter to assert against directly, so this reads RocksDB's
+/// own record instead: a fresh checkpoint carries an `OPTIONS-*` file RocksDB
+/// writes from the live options it opened with, which is a genuine behavioral
+/// pin against a future accidental removal, not just a compile-time anchor.
+#[test]
+fn atomic_flush_is_pinned_on() {
+    let t = TempDir::new().unwrap();
+    let s = RocksStore::open(t.path(), 1, &RocksConfig::default()).unwrap();
+    let ckpt_dir = t.path().join("checkpoint");
+    s.create_checkpoint(&ckpt_dir).unwrap();
+
+    let options_file = fs::read_dir(&ckpt_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("OPTIONS-"))
+        })
+        .expect("a checkpoint carries RocksDB's own OPTIONS-* record");
+    let contents = fs::read_to_string(&options_file).unwrap();
+    assert!(
+        contents.contains("atomic_flush=true"),
+        "atomic_flush must be pinned on; checkpoint OPTIONS recorded:\n{contents}"
+    );
+}
+
+// FM-PERSISTENCE-034
+/// A tiering demotion writes a warm copy then deletes the hot copy (`warm
+/// put`, `hot delete`). Before this fix, `RocksStore::flush()` only ever
+/// flushed the main tier — the warm tier's own memtable was never part of the
+/// store's production flush surface at all, so a demoted key's warm copy
+/// stayed WAL-dependent no matter how many `durable_sync` ticks ran. Losing
+/// that WAL (e.g. total loss, not just truncation) after a `flush()` call
+/// then drops the warm copy while the hot delete — durably flushed — sticks,
+/// so the key vanishes outright: no hot, no warm, data loss for a demotion
+/// `flush()` was supposed to have made durable.
+///
+/// `flush()` now names every CF it manages (main, warm when enabled,
+/// search-meta) in one `flush_cfs_opt` call, so the warm copy is captured
+/// right alongside the hot delete. The clearest proof `flush()` actually
+/// reaches the warm CF: the WAL segment written before the call becomes
+/// fully obsolete (RocksDB deletes it) once every CF it covers is fully on
+/// SST, which only happens once the warm tier is included too.
+#[test]
+fn flush_covers_the_warm_tier_not_just_main() {
+    let t = TempDir::new().unwrap();
+    let key = b"demoted_key";
+
+    let s = RocksStore::open_with_warm(t.path(), 1, &RocksConfig::default(), true).unwrap();
+    let mut wo = WriteOptions::default();
+    wo.set_sync(true);
+    // The key starts out hot, durably.
+    s.put_opt(0, key, b"orig", &wo).unwrap();
+
+    // The demotion pair: warm put, then hot delete. Neither call is
+    // individually synced.
+    s.put_warm(0, key, b"orig").unwrap();
+    s.delete(0, key).unwrap();
+
+    let wal_before_flush = active_wal_path(t.path());
+    s.flush().unwrap();
+    assert!(
+        !wal_before_flush.exists(),
+        "the pre-flush WAL segment should be fully obsolete after flush() — it is not, so \
+         some CF `flush()` is responsible for still depends on it (the warm tier, if the \
+         fix regressed): {wal_before_flush:?}"
+    );
+
+    drop(s); // unclean shutdown: nothing written after the flush is durable
+
+    let s2 = RocksStore::open_with_warm(t.path(), 1, &RocksConfig::default(), true).unwrap();
+    assert_eq!(
+        s2.get(0, key).unwrap(),
+        None,
+        "the hot delete must survive — it was always covered by flush()"
+    );
+    assert_eq!(
+        s2.get_warm(0, key).unwrap(),
+        Some(b"orig".to_vec()),
+        "the warm put must survive flush() too, not just the main tier's delete"
+    );
+}
+
 /// A stand-in for a WAL writer's `FlushOutcomes`: it reports a committed
 /// sequence and records whatever `durable_sync` publishes back to it.
 struct FakeSyncTarget {

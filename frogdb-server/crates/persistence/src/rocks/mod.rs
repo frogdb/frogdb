@@ -196,6 +196,20 @@ impl RocksStore {
         // *not* enabled; it has no binding in `rocksdb 0.24`, and silent
         // resumption is exactly what the poison latch exists to prevent.
         db_opts.set_paranoid_checks(true);
+        // Flush every column family atomically (`spec-gaps` issue 03,
+        // FM-PERSISTENCE-034). `shard_<n>`/`warm_<n>` hold two copies of one
+        // logical key during a tiering demotion (warm put, hot delete): without
+        // this, RocksDB can flush one CF's memtable to SST while the sibling
+        // stays WAL-only, and a `PointInTime`-truncated recovery (a mid-log WAL
+        // corruption, not an ordinary clean replay) then resurrects whichever
+        // side the truncation cut away — the already-flushed CF is immune to
+        // the truncation, the un-flushed one is not. `atomic_flush` groups
+        // every CF's flush (manual and background alike) into one consistent
+        // sequence point, closing that window. Cost: a flush now waits on the
+        // slowest CF instead of returning per-CF, a small latency increase with
+        // no functional regression (accepted per the 2026-08-13 ruling on
+        // spec-gaps issue 03).
+        db_opts.set_atomic_flush(true);
         if let Some(bytes_per_sec) = config.compaction_rate_limit_bytes_per_sec() {
             db_opts.set_ratelimiter(bytes_per_sec, 100_000, 10);
         }
@@ -587,15 +601,32 @@ impl RocksStore {
     pub fn iter_cf(&self, shard_id: usize) -> Result<RocksIterator<'_>, RocksError> {
         self.iter_tier(CfTier::Main, shard_id)
     }
+    /// Flush every column family this store manages in one call.
+    ///
+    /// This must go through `flush_cfs_opt`, not a per-CF `flush_cf` loop:
+    /// `atomic_flush` (`spec-gaps` issue 03, FM-PERSISTENCE-034) only groups
+    /// the CFs a *single* flush call names together — a loop of single-CF
+    /// calls flushes each one independently regardless of the option, leaving
+    /// exactly the cross-CF divergence window the option exists to close. A
+    /// shard's main, warm (when enabled), and search-meta CFs can all hold a
+    /// view of the same logical key, so they are named together here.
     pub fn flush(&self) -> Result<(), RocksError> {
         debug!(num_shards = self.num_shards, "RocksDB flush initiated");
+        let mut cfs = Vec::with_capacity(self.num_shards * 3);
         for sid in 0..self.num_shards {
-            let cf = self.cf_handle(sid)?;
-            self.db.flush_cf(&cf).map_err(|e| {
-                error!(shard_id = sid, error = %e, "RocksDB flush failed");
+            cfs.push(self.tier_cf_handle(CfTier::Main, sid)?);
+            if self.warm_enabled {
+                cfs.push(self.tier_cf_handle(CfTier::Warm, sid)?);
+            }
+            cfs.push(self.tier_cf_handle(CfTier::SearchMeta, sid)?);
+        }
+        let cf_refs: Vec<&StdArc<BoundColumnFamily<'_>>> = cfs.iter().collect();
+        self.db
+            .flush_cfs_opt(&cf_refs, &rocksdb::FlushOptions::default())
+            .map_err(|e| {
+                error!(error = %e, "RocksDB flush failed");
                 RocksError::from(e)
             })?;
-        }
         Ok(())
     }
     pub fn has_data(&self) -> bool {

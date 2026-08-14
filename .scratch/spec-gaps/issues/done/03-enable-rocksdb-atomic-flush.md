@@ -1,6 +1,6 @@
 # Enable RocksDB atomic_flush across column families
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
