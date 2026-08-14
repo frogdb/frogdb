@@ -115,3 +115,10 @@ None.
 2. **Per-target exponential backoff with a cap** on retry rate.
 3. **Never abandons:** no `MAX_ATTEMPTS` — abandoning would reintroduce the edge-triggered dead state this issue exists to kill. Retries forever at the capped rate (Kubernetes controller shape: level-triggered + rate-limited workqueue).
 4. **Stuck-failover observability:** metric + CLUSTER INFO field once a failover has been retrying past a threshold.
+
+## Cross-reference (2026-08-14)
+
+Issue 17's amendment references a "reconcile abort" owned by this issue that was never
+specified here. Orphaned-migration abort is now defined in
+[issue 31](31-slot-migration-redesign-source-authoritative-until-commit.md), riding this
+issue's level-triggered reconcile machinery (same FAIL-flag criterion, no wall-clock).

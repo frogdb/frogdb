@@ -107,3 +107,11 @@ None.
 ## Amendment (2026-08-13)
 
 **Feed hold bounded by bytes, not time.** The log-ordered fence stands (arm on Prepare apply, release only via Complete/Abort apply). The review found the node-wide hold and per-session `VecDeque` unbounded if Complete/Abort lags, falsifying FM-CLUSTER-097's "a feed cannot wedge". Amended: each held session's queue carries a **byte cap**; breaching it **disconnects that replica session** (it full-resyncs after the handoff resolves). Fence release stays purely log-ordered — no time-based release; liveness for orphaned handoffs is owned by issue 18's reconcile abort. The now-undefined `lease_expired` term in `admits_complete_at` is deleted.
+
+## Cross-reference (2026-08-14)
+
+The amendment above assigns orphaned-handoff liveness to "issue 18's reconcile abort" —
+issue 18 never defined one (found by distsys-review MAJ-5). That trigger is now specified
+in [issue 31](31-slot-migration-redesign-source-authoritative-until-commit.md): the
+level-triggered reconcile pass proposes `AbortSlotMigration` for any open migration whose
+counterparty carries the FAIL flag.

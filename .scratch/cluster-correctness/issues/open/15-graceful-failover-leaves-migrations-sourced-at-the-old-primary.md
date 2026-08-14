@@ -72,3 +72,13 @@ None.
 ## Amendment (2026-08-13)
 
 **Abort is a real rollback.** The prune ruling leaves keys already `MIGRATE`d+deleted split across source and target with no repair path — and unlike Redis (manual `redis-cli --cluster fix`), FrogDB enters that state automatically on every failover mid-rebalance. Amended: the Abort protocol **repatriates** — the target streams the keys in its importing slot back to the source before the Abort applies clean. Automatic and log-driven, no operator verb. CRDB shape: a range move either commits or rolls back fully; the keyspace never stays split.
+
+## Superseded pending (2026-08-14)
+
+The repatriation amendment above is superseded by
+[issue 31](31-slot-migration-redesign-source-authoritative-until-commit.md)
+(source-authoritative-until-commit migration): under that design the source never
+deletes keys before `Complete`, so abort is target-discard and there is nothing to
+repatriate. Do NOT build the repatriation machinery. The prune ruling's trigger
+(failover cancels open migrations naming the demoted node) stands; the abort it
+triggers becomes issue 31's trivial abort. Close this issue against issue 31.
