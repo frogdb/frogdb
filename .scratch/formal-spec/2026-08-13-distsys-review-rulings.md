@@ -501,3 +501,11 @@ safe — `UnregisterWait` is the cleanup path either way); error path clears the
 mirror; ordering stated in the state-space row; forcing test pins the window
 (in-window UNBLOCK returns `1`, client wakes). Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-11 — TR-PERSISTENCE-010(b)'s group-commit assumption is untested
+
+Ruling: **both — cite + test**. RocksDB's `EnterAsBatchGroupLeader` rule (sync
+follower never joins non-sync leader) makes the row true today; it is uncited
+and upgrade-fragile on the durable-ack path. Row cites the upstream rule;
+concurrent mixed-flag `PageCacheSink` test asserts the sync count. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).

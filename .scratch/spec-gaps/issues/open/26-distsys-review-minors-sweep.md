@@ -82,6 +82,21 @@ State-space "Client-registry blocked mirror" row states the ordering.
 - [ ] Forcing test: UNBLOCK inside the old window → returns `1`, client wakes
       (deterministic interleaving; fails pre-fix with `0`)
 
+### MIN-11 — TR-PERSISTENCE-010(b)'s group-commit assumption is untested
+
+Ruling: **both — cite + test**. The row's "successful `sync` commit has
+fsync'd the WAL through this batch's sequence" rests on RocksDB's group-commit
+rule for mismatched sync flags: `write_thread.cc::EnterAsBatchGroupLeader`
+(LevelDB-inherited) never lets a `sync=true` follower join a `sync=false`
+leader's group — the assumption holds today but is uncited and could drift on
+a RocksDB upgrade, on the durable-ack path. (1) Row cites the upstream rule as
+the load-bearing invariant; (2) concurrent mixed-flag `PageCacheSink` forcing
+test asserts the sync count (multi-writer coverage; regression guard).
+
+- [ ] Row cites the RocksDB `write_thread` mismatched-sync rule
+- [ ] Concurrent mixed-flag `PageCacheSink` test asserting sync count landed;
+      row's forcing tests cite it; `just lint-spec` green
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
