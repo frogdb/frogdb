@@ -101,6 +101,9 @@ the direction if a second stale-proposal defect shows up.
       assert the refusal, and `a_promotion_moves_nothing` flipped from `sometimes` to
       `always(!unjustified_promotion)`
 - [ ] `just mutants-diff` triaged on every touched locked crate
+- [ ] Un-ignore `frogdb-server/crates/cluster/tests/quint_conformance.rs`'s
+      `failover_refuses_stale_fence_test` (currently `#[ignore]`d citing this issue) once it
+      passes; `just quint-conformance-quarantine` reflects the change
 
 ## Blocked by
 

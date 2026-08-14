@@ -131,6 +131,10 @@ reasons other than a partition.
 - [ ] `just cluster-seeds 500` is clean
 - [ ] `just lint-spec` green
 - [ ] `just mutants-diff frogdb-cluster` and `just mutants-diff frogdb-cluster-runtime` triaged
+- [ ] Un-ignore `frogdb-server/crates/cluster/tests/quint_conformance.rs`'s
+      `forced_failover_demotes_test` and `remove_node_refuses_live_owner_test` (currently
+      `#[ignore]`d citing this issue) once they pass; `just quint-conformance-quarantine`
+      reflects the change
 
 ## Blocked by
 

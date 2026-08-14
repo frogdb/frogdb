@@ -75,6 +75,13 @@ lossy claim.
 - [ ] `just mutants-diff` triaged on every touched locked crate (`frogdb-cluster`,
       `frogdb-cluster-runtime`, and `frogdb-replication`/`frogdb-replication-runtime` if the
       offset-parity wait touches replication-crate code)
+- [ ] `frogdb-server/crates/cluster/tests/quint_conformance.rs`'s
+      `graceful_failover_refuses_without_barrier_test` was previously (mis)cited to this issue;
+      it is currently re-cited to issue 15 because its trace hits issue 15's INV-MIG-1 panic
+      before any barrier check would run (see issue 15's witness section). Once issue 15 lands,
+      re-run that test: if it then diverges on the missing barrier, re-cite it to this issue and
+      add it to this checklist as the un-ignore target; `just quint-conformance-quarantine`
+      reflects the change either way
 
 ## Blocked by
 

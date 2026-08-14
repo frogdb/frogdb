@@ -17,6 +17,15 @@ budget lives in exactly one place (PRD §8 D4) rather than being duplicated here
 
 The two run as independent jobs behind one change gate: they share nothing but
 the schedule, and a failure in one should not hide the other's result.
+
+A third, report-only job (`cluster-quint-conformance-quarantine`) replays the
+quint-connect conformance harness's `#[ignore]`d traces
+(`frogdb-server/crates/cluster/tests/quint_conformance.rs`) every night. Most
+are expected to keep failing until issues 15/17/19/20/26 and the ghost-field
+issue land — that is normal, `just`-triaged-by-hand nightly red, the same as
+`cluster-seeds`' known-failing-seed convention. The job exists so a quarantined
+test that starts conforming shows up as a status flip instead of staying
+silently un-noticed (see issues 15/17/19/20/26's acceptance criteria).
 """
 
 from ruamel.yaml.comments import CommentedMap
@@ -154,6 +163,29 @@ def cluster_nightly_workflow() -> Workflow:
                     run=script("""\
                         seeds="${{ github.event.inputs.seeds }}"
                         just cluster-seeds ${seeds:+"$seeds"}
+                    """),
+                ),
+            ],
+        ),
+    )
+
+    w.job(
+        "cluster-quint-conformance-quarantine",
+        Job(
+            name="Nightly Quint Conformance Quarantine Report",
+            runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
+            # Report-only: a red run here means the quarantine list is still
+            # accurate, not that the workflow is broken. See the module
+            # docstring.
+            timeout_minutes=30,
+            steps=[
+                *_common_steps(cache_key="cluster-nightly"),
+                run_step(
+                    name="Replay the quint-connect conformance harness's quarantined traces",
+                    run=script("""\
+                        just quint-conformance-quarantine
                     """),
                 ),
             ],

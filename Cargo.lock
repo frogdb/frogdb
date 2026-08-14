@@ -1725,6 +1725,7 @@ dependencies = [
  "frogdb-protocol",
  "frogdb-types",
  "futures",
+ "itf",
  "openraft",
  "parking_lot",
  "postcard",

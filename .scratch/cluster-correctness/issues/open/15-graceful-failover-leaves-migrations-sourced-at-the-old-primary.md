@@ -60,6 +60,12 @@ argument about the handoff barrier before it can be taken.
 - [ ] Any pruned prepared handoff emits its `SlotHandoffReleased`
 - [ ] FM row amended; `just lint-spec` green
 - [ ] `just mutants-diff frogdb-cluster` triaged
+- [ ] Un-ignore `frogdb-server/crates/cluster/tests/quint_conformance.rs`'s
+      `graceful_failover_before_prepare_test`, `graceful_failover_armed_not_drained_test`,
+      `graceful_failover_drained_not_complete_test`, `graceful_failover_refuses_without_barrier_test`,
+      `cancel_before_repatriation_test` and `cancel_refused_while_repatriating_test` (all currently
+      `#[ignore]`d citing this issue) once they pass; `just quint-conformance-quarantine` reflects
+      the change
 
 ## Blocked by
 
@@ -82,3 +88,34 @@ deletes keys before `Complete`, so abort is target-discard and there is nothing 
 repatriate. Do NOT build the repatriation machinery. The prune ruling's trigger
 (failover cancels open migrations naming the demoted node) stands; the abort it
 triggers becomes issue 31's trivial abort. Close this issue against issue 31.
+
+## Witness (2026-08-14, Task-3 conformance harness)
+
+The quint-connect conformance harness
+(`frogdb-server/crates/cluster/tests/quint_conformance.rs`) independently reproduces this
+issue's INV-MIG-1 panic through the validated `ClusterState::apply_local` path, not a `src/`
+unit test — confirming the defect is reachable from the crate's real public mutation surface,
+not just the `commands.rs` test module's direct `apply_command` reproduction quoted above.
+
+Command sequence (all through `apply_local`):
+
+```
+AddNode(1..=4) -> AssignSlots{1: [1,2]} -> AssignSlots{2: [3,4]}
+-> BeginSlotMigration{slot: 1, source_node: 1, target_node: 2}
+-> Failover{old_primary_id: 1, new_primary_id: 3, force: false}
+```
+
+Panics with:
+
+```
+commands.rs:108: cluster state invariants violated after apply_command:
+- INV-MIG-1: slot 1 is migrating from 1 but is owned by 3
+```
+
+This is the same panic — not a projection-comparison divergence — behind four `#[ignore]`d
+named-run tests in that file: `graceful_failover_before_prepare_test`,
+`graceful_failover_armed_not_drained_test`, `graceful_failover_drained_not_complete_test`, and
+`graceful_failover_refuses_without_barrier_test` (the last of these was previously miscited to
+issue 26 — the missing drain/offset-parity barrier — before this witness was recorded; the
+barrier can't even be reached because this HARD invariant panics first, on the graceful
+failover call itself, before any barrier check would run).

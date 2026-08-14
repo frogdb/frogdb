@@ -390,6 +390,15 @@ quint-check:
     done
     exit $status
 
+# Report-only: run the quint-connect conformance harness's quarantined
+# (#[ignore]d) traces (frogdb-server/crates/cluster/tests/quint_conformance.rs).
+# Most are expected to keep failing until issues 15/17/19/20/26 and the
+# ghost-field issue land — a failing run here is the *expected* signal, not a
+# bug in this recipe; a test flipping to pass here (and nowhere else yet) is
+# the "un-ignore me" reminder those issues' acceptance criteria ask for.
+quint-conformance-quarantine:
+    {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogdb-cluster --run-ignored ignored-only -E 'binary(quint_conformance)'
+
 # Run frogctl's tests (excluded from the default suite during the campaign)
 frogctl-test:
     {{dyld-env}} {{rocksdb-env}} cargo nextest run -p frogctl --features cli-tests --ignore-default-filter

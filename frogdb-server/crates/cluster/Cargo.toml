@@ -32,4 +32,9 @@ proptest.workspace = true
 tracing-subscriber = { workspace = true, features = ["registry"] }
 stateright.workspace = true
 quint-connect = "0.1.2"
+# quint-connect's `State::from_spec` takes an `itf::Value` — named directly so
+# `ScriptedProj`'s override (frogdb-cluster's own `.fail()`-run + ghost-field
+# handling, tests/quint_conformance.rs) can pattern-match on it. Pinned to the
+# same version quint-connect 0.1.2 already pulls in transitively.
+itf = "0.4.0"
 anyhow.workspace = true

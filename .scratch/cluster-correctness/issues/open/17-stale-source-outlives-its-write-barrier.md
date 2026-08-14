@@ -89,6 +89,9 @@ already bounds the "coordinator died" case that the timeout was protecting again
       `model::replay::stale_source_keeps_serving_after_the_target_takes_the_slot` flipped to
       assert a single writer, and `unbounded_lag_scope()` folded into the checked scopes
 - [ ] `just mutants-diff` triaged on every touched locked crate
+- [ ] Un-ignore `frogdb-server/crates/cluster/tests/quint_conformance.rs`'s
+      `prepare_supersedes_live_handoff_test` (currently `#[ignore]`d citing this issue) once it
+      passes; `just quint-conformance-quarantine` reflects the change
 
 ## Blocked by
 
