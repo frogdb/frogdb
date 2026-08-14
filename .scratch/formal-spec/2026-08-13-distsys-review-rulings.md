@@ -115,6 +115,16 @@ enforces detection < election on load and live mutation; defaults fixed. Filed a
 (ready-for-agent); rides the implementation wave. Coordinates with issue 27's
 raft-liveness detection redefinition.
 
+## MAJ-9 — no replica-validity bound; offset-unknown stays promotion-eligible
+
+Ruling: **accept, logical bound** (no wall-clock: staleness in offset-lag
+bytes/entries, never disconnection seconds). Offset-unknown candidates rank strictly
+last — promotable only when no known-offset candidate exists (availability floor
+kept); optional lag disqualifier scoped to automatic promotion (forced failover
+unaffected, issue 19 owns that path). Filed as
+[cluster issue 37](../cluster-correctness/issues/open/37-promotion-validity-bound-offset-unknown-last.md)
+(ready-for-agent); rides the implementation wave.
+
 ## MAJ-11 — biased select falsifies TR-BLOCKING-007; H5 unsound as ordered
 
 Ruling: **eliminate sender-drops as a signaling mechanism** (reviewer's resolution,
