@@ -125,6 +125,17 @@ unaffected, issue 19 owns that path). Filed as
 [cluster issue 37](../cluster-correctness/issues/open/37-promotion-validity-bound-offset-unknown-last.md)
 (ready-for-agent); rides the implementation wave.
 
+## MAJ-10 — `config_epoch` arbitrates nothing
+
+Ruling: **wire-compat honesty** (reviewer's second option). Ownership authority is
+raft consensus; `config_epoch` is wire rendering only. Amend FM-CLUSTER-010/011/012 to
+say so, add the deviations-table row, delete the dead (and wrong-direction)
+newcomer-renumber arbitration machinery. Explicitly rejected: wiring epoch into
+arbitration — a second conflict resolver beside raft, redundant when raft is healthy
+and dangerous where they'd disagree. Filed as
+[cluster issue 38](../cluster-correctness/issues/open/38-config-epoch-is-wire-compat-only.md)
+(ready-for-agent); rides the implementation wave.
+
 ## MAJ-11 — biased select falsifies TR-BLOCKING-007; H5 unsound as ordered
 
 Ruling: **eliminate sender-drops as a signaling mechanism** (reviewer's resolution,
