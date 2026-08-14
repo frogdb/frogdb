@@ -287,3 +287,22 @@ Filed as
 [spec-gaps issue 19](../spec-gaps/issues/open/19-satisfaction-retry-resolved-dead-or-reregister.md)
 (ready-for-agent); rides the implementation wave. Coordinate with spec-gaps issue 13
 (same machinery — the arms may move or vanish in the run-loop restructure).
+
+## MAJ-17 — crash between the install renames re-mints `database_id`, wedges the boot
+
+Ruling: **accept, file issue** (reviewer's resolution). Power loss between
+`install_staged`'s two renames leaves no marker and no `<db>`; the next boot's
+Phase 0 runs *before* the install, so it mints a fresh `database_id` (contradicting
+FM-PERSISTENCE-049) or bails under `require-existing-data` while a complete
+`checkpoint_ready` sits in the parent — the opposite of FM-PERSISTENCE-025's "next
+boot finishes the install cleanly". Fix per the reviewer: Phase 0 becomes
+mid-install-aware (probe `StagedCheckpoint::for_db_dir` + `<db>_backup_*` before
+concluding "empty"), `database_id` carried forward from the backup (CRDB rule:
+identity is the last thing you re-derive, never the first — same
+identity-outlives-process family as cluster issue 35 / MAJ-2), install runs before
+the `require-existing-data` gate; FM row for "crash between the two install renames"
++ crash-point forcing test. The timestamped backup name (`<db>_backup_<ts>`) is
+flagged for a sequence-based rename while touching (wall-clock in a path — cosmetic,
+not state-bearing). Filed as
+[spec-gaps issue 20](../spec-gaps/issues/open/20-mid-install-crash-recovery-preserves-database-id.md)
+(ready-for-agent); rides the implementation wave. Persistence locked, gate 0.85.
