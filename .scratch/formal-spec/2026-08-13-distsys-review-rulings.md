@@ -95,6 +95,16 @@ topology untouched; cluster-wide wipe stays achievable node-by-node. Filed as
 (ready-for-agent); rides the implementation wave. Departure uses issue 20's
 demote-don't-remove shape.
 
+## MAJ-7 — node ids: 16 bits/ms, regenerated every boot, upsert-merged collisions
+
+Ruling: **accept, file issue** (reviewer's resolution, plus no-timestamp component per
+the no-wall-clock principle and an etcd-style boot guard). Mint once ≥128 random bits,
+persist beside `database_id`, read back on boot; `AddNode` rejects conflicting ids;
+boot refuses id/data-dir mismatch. Filed as
+[cluster issue 35](../cluster-correctness/issues/open/35-node-identity-outlives-the-process.md)
+(ready-for-agent); rides the implementation wave. Retires Task 1's node-id-stability
+deferred minor; aligns with MAJ-2's replica run id family.
+
 ## MAJ-11 — biased select falsifies TR-BLOCKING-007; H5 unsound as ordered
 
 Ruling: **eliminate sender-drops as a signaling mechanism** (reviewer's resolution,
