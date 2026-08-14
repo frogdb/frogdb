@@ -493,3 +493,11 @@ instead). Precondition amended with the gate + driven-tick note; missing
 forcing test landed (driven tick → sweep observed), clearing `Forced by |
 MISSING`. Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-10 — `CLIENT UNBLOCK` is a silent no-op during the registration window
+
+Ruling: **accept**. Mirror set before the `BlockWait` send (inverted window
+safe — `UnregisterWait` is the cleanup path either way); error path clears the
+mirror; ordering stated in the state-space row; forcing test pins the window
+(in-window UNBLOCK returns `1`, client wakes). Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).

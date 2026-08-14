@@ -66,6 +66,22 @@ the sweep — clearing the row's `Forced by | MISSING`.
 - [ ] Forcing test (driven tick → sweep observed) landed; `Forced by` cites it;
       `just lint-spec` green
 
+### MIN-10 — `CLIENT UNBLOCK` is a silent no-op during the registration window
+
+Ruling: **accept**. `register_wait` (`connection/blocking.rs:99-117`) sends
+`BlockWait` to the shard *then* sets the registry mirror; `unblock`
+(`client_registry/mod.rs:729`) returns `false` unless `ClientFlags::BLOCKED` —
+so an UNBLOCK in the window replies `0` while the client is genuinely parked.
+Fix: set the mirror **before** the send (inverted window is safe:
+`UnregisterWait` is the cleanup path either way, ordered behind `BlockWait` on
+the shard channel); if registration errors after the mirror is set, clear it.
+State-space "Client-registry blocked mirror" row states the ordering.
+
+- [ ] Mirror set before `BlockWait` send; error path clears it
+- [ ] Row states the ordering; `just lint-spec` green
+- [ ] Forcing test: UNBLOCK inside the old window → returns `1`, client wakes
+      (deterministic interleaving; fails pre-fix with `0`)
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
