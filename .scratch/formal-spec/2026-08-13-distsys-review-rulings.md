@@ -105,6 +105,16 @@ boot refuses id/data-dir mismatch. Filed as
 (ready-for-agent); rides the implementation wave. Retires Task 1's node-id-stability
 deferred minor; aligns with MAJ-2's replica run id family.
 
+## MAJ-8 — no inequality between self-fence window and successor promotion
+
+Ruling: **accept, file issue**, with framing correction: the timing inequality is
+defense-in-depth — the hard backstop stays epoch fencing at write admission (no clock
+inequality survives a process stall). Named precondition + FM row; `validate()`
+enforces detection < election on load and live mutation; defaults fixed. Filed as
+[cluster issue 36](../cluster-correctness/issues/open/36-self-fence-window-precedes-successor-promotion.md)
+(ready-for-agent); rides the implementation wave. Coordinates with issue 27's
+raft-liveness detection redefinition.
+
 ## MAJ-11 — biased select falsifies TR-BLOCKING-007; H5 unsound as ordered
 
 Ruling: **eliminate sender-drops as a signaling mechanism** (reviewer's resolution,
