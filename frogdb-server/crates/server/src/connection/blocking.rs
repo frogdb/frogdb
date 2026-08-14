@@ -4,23 +4,65 @@
 //! - BLPOP, BRPOP, BLMOVE, BLMPOP, BZPOPMIN, BZPOPMAX, BZMPOP, XREAD, XREADGROUP
 //! - WAIT - Wait for replication acknowledgment
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use bytes::Bytes;
-use frogdb_core::{BlockingMsg, BlockingOp, UnblockMode, UnregisterAck, shard_for_key};
+use frogdb_core::{BlockingMsg, BlockingOp, ClientEdge, UnblockMode, UnregisterAck, shard_for_key};
 use frogdb_protocol::Response;
+use futures::StreamExt;
+use redis_protocol::error::RedisProtocolError;
+use redis_protocol::resp2::types::BytesFrame;
 use tokio::sync::oneshot;
+use tokio_util::codec::Framed;
 // Blocking deadlines live on the timer's clock, not the OS clock: they are compared
 // against `tokio::time::Instant::now()` on the shard and slept on with `sleep_until`,
 // and under a paused runtime (turmoil) the two clocks diverge immediately.
 use tokio::time::Instant;
 
-use crate::connection::ConnectionHandler;
+use crate::connection::codec::FrogDbResp2;
 use crate::connection::util::convert_blocking_op;
+use crate::connection::{ConnectionHandler, MAX_PARKED_PIPELINE_FRAMES};
+use crate::net::ConnectionStream;
 
 pub mod coordinator;
 
-use coordinator::{BlockingWaitCoordinator, WaitOutcome};
+use coordinator::{BlockingWaitCoordinator, ParkedExit, WaitOutcome};
+
+/// [`coordinator::PeerLiveness`] over a parked connection's own socket.
+///
+/// A blocked client is a *state on a still-readable connection*, not a suspended
+/// read loop (Redis/Valkey/Dragonfly all model it that way): the wait keeps
+/// reading so it can see EOF. Frames that arrive instead of EOF are pushed onto
+/// the connection's parked buffer and replayed after the wait resolves, which is
+/// what keeps a command pipelined behind `BLPOP` from overtaking it. At
+/// [`MAX_PARKED_PIPELINE_FRAMES`] the watch stops reading entirely: the buffer
+/// is held by a connection that is not making progress, so the bound is
+/// backpressure, not a policy choice. Losing EOF detection past the cap is
+/// acceptable — the deadline, `CLIENT KILL` and `CLIENT UNBLOCK` all still end
+/// the wait, and a client that pipelined 64 commands behind a blocking one is
+/// not the abandoned-socket case this exists for.
+struct SocketWatch<'a> {
+    framed: &'a mut Framed<ConnectionStream, FrogDbResp2>,
+    parked: &'a mut VecDeque<Result<BytesFrame, RedisProtocolError>>,
+}
+
+impl coordinator::PeerLiveness for SocketWatch<'_> {
+    async fn closed(&mut self) {
+        loop {
+            if self.parked.len() >= MAX_PARKED_PIPELINE_FRAMES {
+                // Stop reading; TCP backpressure applies from here.
+                std::future::pending::<()>().await;
+            }
+            // `StreamExt::next` on a `Framed` is cancel-safe: a partially read
+            // frame stays in the codec's buffer if the select drops this branch.
+            match self.framed.next().await {
+                None => return,
+                Some(item) => self.parked.push_back(item),
+            }
+        }
+    }
+}
 
 impl ConnectionHandler {
     /// Handle a blocking command wait.
@@ -56,16 +98,34 @@ impl ConnectionHandler {
             Err(resp) => return resp,
         };
 
-        // Coordinate the three-way race. The coordinator owns the decision; the
-        // server stays the canonical (precise) timeout authority. `response_rx`
-        // is borrowed (not consumed) so cleanup can still drain a value the
-        // shard sends in the pop→deliver window after a timeout is chosen.
-        let outcome = BlockingWaitCoordinator::wait_for_response(
-            &mut response_rx,
-            deadline,
-            &mut self.client_handle,
-        )
-        .await;
+        // Coordinate the race. The coordinator owns the decision; the server
+        // stays the canonical (precise) timeout authority. `response_rx` is
+        // borrowed (not consumed) so cleanup can still drain a value the shard
+        // sends in the pop→deliver window after a timeout is chosen.
+        //
+        // The socket is watched for the whole park, so a peer that vanishes
+        // mid-wait is observed rather than leaking its entry, FD and waiter
+        // budget forever (TR-BLOCKING-013); frames that arrive meanwhile are
+        // buffered, not executed, so pipelining keeps Redis's ordering.
+        let outcome = {
+            let Self {
+                framed,
+                client_handle,
+                parked_frames,
+                ..
+            } = &mut *self;
+            let mut peer = SocketWatch {
+                framed,
+                parked: parked_frames,
+            };
+            BlockingWaitCoordinator::wait_for_response(
+                &mut response_rx,
+                deadline,
+                client_handle,
+                &mut peer,
+            )
+            .await
+        };
 
         // Clean up (clears blocked state, resets unblock) and reconcile the
         // serve-vs-timeout race with the shard so a raced serve is delivered
@@ -138,6 +198,23 @@ impl ConnectionHandler {
         response_rx: &mut oneshot::Receiver<Response>,
         op: &BlockingOp,
     ) -> Response {
+        // The connection itself ended: there is no reader for any reply, and no
+        // point paying for the acknowledged unregister round trip. Close the
+        // response channel *first* so a serve still in flight fails its send and
+        // the shard restores what it popped (TR-BLOCKING-008) rather than
+        // handing an element to a socket nobody is reading; then deliberately
+        // leave the blocked-flag set so `notify_connection_closed` performs the
+        // unregistration on the way out (TR-BLOCKING-013, TR-BLOCKING-021).
+        if let WaitOutcome::ConnectionEnded(exit) = &outcome {
+            let exit = *exit;
+            response_rx.close();
+            self.admin.client_registry.reset_unblock(self.state.id);
+            self.parked_wait_exit = Some(exit);
+            // Suppressed by `process_one_command`, which sees `parked_wait_exit`
+            // and breaks before any reply is buffered.
+            return Response::Null;
+        }
+
         self.state.end_block();
         self.admin
             .client_registry
@@ -145,6 +222,8 @@ impl ConnectionHandler {
         self.admin.client_registry.reset_unblock(self.state.id);
 
         match outcome {
+            // Handled above; the compiler cannot see that from the `if let`.
+            WaitOutcome::ConnectionEnded(_) => Response::Null,
             WaitOutcome::Response(resp) => resp,
             WaitOutcome::Timeout | WaitOutcome::Unblocked(_) => {
                 match self.reconcile_unregister(target_shard, response_rx).await {
@@ -278,17 +357,41 @@ impl ConnectionHandler {
 
         // Race the coordinator (which owns the single timeout authority via its
         // internal deadline) against CLIENT UNBLOCK.
-        let response = resolve_wait_race(
-            wait.wait_for_replicas(fence, target, num_replicas, deadline, primary.as_ref()),
-            &mut self.client_handle,
-            || wait.count_acked(target),
-        )
-        .await;
+        let raced = {
+            let wait_fut =
+                wait.wait_for_replicas(fence, target, num_replicas, deadline, primary.as_ref());
+            let Self {
+                framed,
+                client_handle,
+                parked_frames,
+                ..
+            } = &mut *self;
+            let mut peer = SocketWatch {
+                framed,
+                parked: parked_frames,
+            };
+            resolve_wait_race(wait_fut, client_handle, &mut peer, || {
+                wait.count_acked(target)
+            })
+            .await
+        };
+
+        self.admin.client_registry.reset_unblock(self.state.id);
+
+        // A `WAIT` has no shard-side `WaitEntry`, so there is nothing to
+        // unregister — but the connection still has to die, and the reply still
+        // has to be suppressed (TR-BLOCKING-021).
+        let response = match raced {
+            Ok(response) => response,
+            Err(exit) => {
+                self.parked_wait_exit = Some(exit);
+                Response::Null
+            }
+        };
 
         self.admin
             .client_registry
             .update_blocked_state(self.state.id, false);
-        self.admin.client_registry.reset_unblock(self.state.id);
 
         response
     }
@@ -316,16 +419,20 @@ impl ConnectionHandler {
 /// `count_acked` is called only on the CLIENT UNBLOCK TIMEOUT path, where the
 /// reply is the count acked so far; it is a closure so the wait future keeps
 /// exclusive use of the coordinator until the race is decided.
+/// `Err(exit)` means the connection ended under the wait — the same two
+/// terminating edges the non-WAIT path handles, on the same terms: no reply, the
+/// run loop tears the connection down.
 async fn resolve_wait_race(
     wait_fut: impl std::future::Future<Output = crate::replication::WaitVerdict>,
-    unblock: &mut impl coordinator::UnblockSignal,
+    signals: &mut impl coordinator::ClientSignals,
+    peer: &mut impl coordinator::PeerLiveness,
     count_acked: impl FnOnce() -> u32,
-) -> Response {
+) -> Result<Response, ParkedExit> {
     tokio::pin!(wait_fut);
 
     tokio::select! {
         biased;
-        verdict = &mut wait_fut => match verdict {
+        verdict = &mut wait_fut => Ok(match verdict {
             // A demotion tore down the stream this wait was parked on.
             // Redis replies with an error from `disconnectAllBlockedClients`
             // rather than a count, because the count would describe a
@@ -334,15 +441,17 @@ async fn resolve_wait_race(
                 Response::error(crate::commands::replication::WAIT_ROLE_CHANGED_ERR)
             }
             other => Response::Integer(other.count() as i64),
-        },
-        mode = unblock.unblocked() => match mode {
-            Some(UnblockMode::Error) => {
-                Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK")
+        }),
+        edge = signals.next_edge() => match edge {
+            ClientEdge::Killed => Err(ParkedExit::Killed),
+            ClientEdge::Unblocked(Some(UnblockMode::Error)) => {
+                Ok(Response::error("UNBLOCKED client unblocked via CLIENT UNBLOCK"))
             }
             // TIMEOUT mode (and a closed signal channel) reply like a
             // timed-out WAIT: the count acked so far.
-            _ => Response::Integer(count_acked() as i64),
+            ClientEdge::Unblocked(_) => Ok(Response::Integer(count_acked() as i64)),
         },
+        () = peer.closed() => Err(ParkedExit::PeerGone),
     }
 }
 
@@ -374,7 +483,7 @@ mod wait_race_tests {
 
     use frogdb_core::UnblockMode;
 
-    use super::coordinator::test_support::MockUnblock;
+    use super::coordinator::test_support::{MockPeer, MockUnblock};
     use super::*;
     use crate::commands::replication::WAIT_ROLE_CHANGED_ERR;
     use crate::replication::WaitVerdict;
@@ -399,10 +508,14 @@ mod wait_race_tests {
     #[tokio::test]
     async fn wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races() {
         let mut unblock = MockUnblock::fires(UnblockMode::Error);
-        let resp = resolve_wait_race(ready(WaitVerdict::RoleChanged(2)), &mut unblock, || {
-            unreachable!("a role change must not consult the acked count")
-        })
-        .await;
+        let resp = resolve_wait_race(
+            ready(WaitVerdict::RoleChanged(2)),
+            &mut unblock,
+            &mut MockPeer::live(),
+            || unreachable!("a role change must not consult the acked count"),
+        )
+        .await
+        .expect("the connection did not end");
         assert_eq!(
             error_text(resp),
             WAIT_ROLE_CHANGED_ERR,
@@ -416,10 +529,14 @@ mod wait_race_tests {
     #[tokio::test]
     async fn a_reached_quorum_beats_a_client_unblock_in_the_same_poll() {
         let mut unblock = MockUnblock::fires(UnblockMode::Error);
-        let resp = resolve_wait_race(ready(WaitVerdict::Reached(3)), &mut unblock, || {
-            unreachable!("a decided wait must not consult the acked count")
-        })
-        .await;
+        let resp = resolve_wait_race(
+            ready(WaitVerdict::Reached(3)),
+            &mut unblock,
+            &mut MockPeer::live(),
+            || unreachable!("a decided wait must not consult the acked count"),
+        )
+        .await
+        .expect("the connection did not end");
         assert!(matches!(resp, Response::Integer(3)));
     }
 
@@ -429,10 +546,14 @@ mod wait_race_tests {
     #[tokio::test]
     async fn client_unblock_error_releases_a_parked_wait() {
         let mut unblock = MockUnblock::fires(UnblockMode::Error);
-        let resp = resolve_wait_race(pending::<WaitVerdict>(), &mut unblock, || {
-            unreachable!("ERROR mode replies with the error, not a count")
-        })
-        .await;
+        let resp = resolve_wait_race(
+            pending::<WaitVerdict>(),
+            &mut unblock,
+            &mut MockPeer::live(),
+            || unreachable!("ERROR mode replies with the error, not a count"),
+        )
+        .await
+        .expect("the connection did not end");
         assert_eq!(
             error_text(resp),
             "UNBLOCKED client unblocked via CLIENT UNBLOCK"
@@ -444,7 +565,14 @@ mod wait_race_tests {
     #[tokio::test]
     async fn client_unblock_timeout_mode_reports_the_acked_count() {
         let mut unblock = MockUnblock::fires(UnblockMode::Timeout);
-        let resp = resolve_wait_race(pending::<WaitVerdict>(), &mut unblock, || 4).await;
+        let resp = resolve_wait_race(
+            pending::<WaitVerdict>(),
+            &mut unblock,
+            &mut MockPeer::live(),
+            || 4,
+        )
+        .await
+        .expect("the connection did not end");
         assert!(matches!(resp, Response::Integer(4)));
     }
 
@@ -453,11 +581,48 @@ mod wait_race_tests {
     #[tokio::test]
     async fn a_timed_out_wait_answers_with_its_own_count() {
         let mut unblock = MockUnblock::never();
-        let resp = resolve_wait_race(ready(WaitVerdict::TimedOut(1)), &mut unblock, || {
-            unreachable!("the verdict already carries the count")
-        })
-        .await;
+        let resp = resolve_wait_race(
+            ready(WaitVerdict::TimedOut(1)),
+            &mut unblock,
+            &mut MockPeer::live(),
+            || unreachable!("the verdict already carries the count"),
+        )
+        .await
+        .expect("the connection did not end");
         assert!(matches!(resp, Response::Integer(1)));
+    }
+
+    /// `WAIT numreplicas 0` parks forever, so it is the sharpest case for the
+    /// two terminating edges: without them the connection is unreclaimable by
+    /// either the operator or the peer.
+    // TR-BLOCKING-021
+    #[tokio::test]
+    async fn client_kill_releases_a_parked_wait_without_replying() {
+        let mut unblock = MockUnblock::kills();
+        let exit = resolve_wait_race(
+            pending::<WaitVerdict>(),
+            &mut unblock,
+            &mut MockPeer::live(),
+            || unreachable!("a killed connection has no reader for a count"),
+        )
+        .await
+        .expect_err("CLIENT KILL must end the connection, not reply");
+        assert_eq!(exit, ParkedExit::Killed);
+    }
+
+    // TR-BLOCKING-013
+    #[tokio::test]
+    async fn a_peer_that_leaves_releases_a_parked_wait_without_replying() {
+        let mut unblock = MockUnblock::never();
+        let exit = resolve_wait_race(
+            pending::<WaitVerdict>(),
+            &mut unblock,
+            &mut MockPeer::gone(),
+            || unreachable!("a departed peer has no reader for a count"),
+        )
+        .await
+        .expect_err("a departed peer must end the connection, not reply");
+        assert_eq!(exit, ParkedExit::PeerGone);
     }
 }
 

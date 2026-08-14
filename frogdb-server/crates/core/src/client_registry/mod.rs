@@ -525,6 +525,69 @@ impl ClientHandle {
             }
         }
     }
+
+    /// Wait for whichever admin edge — `CLIENT KILL` or `CLIENT UNBLOCK` —
+    /// reaches this connection first.
+    ///
+    /// Both edges live on this one handle, so a caller that wants to race them
+    /// cannot borrow it twice; this method owns the race instead, splitting the
+    /// borrow across the two watch receivers internally. `biased;` puts the kill
+    /// ahead of the unblock for the same reason the connection run loop does
+    /// (`connection.rs`): a kill is rare and terminal, and must not lose a tie
+    /// to a signal the connection would survive.
+    ///
+    /// Used by the blocking-wait coordinator so a parked client stays killable
+    /// (`specs/blocking.md` TR-BLOCKING-021).
+    pub async fn killed_or_unblocked(&mut self) -> ClientEdge {
+        // A killed connection is killed for good — the flag is level-triggered
+        // on a `watch<bool>`, never cleared — so observing it here does not
+        // consume the edge the run loop's own `killed()` branch reads.
+        let Self {
+            kill_rx,
+            unblock_rx,
+            ..
+        } = self;
+
+        let killed = async {
+            loop {
+                if *kill_rx.borrow() {
+                    return;
+                }
+                if kill_rx.changed().await.is_err() {
+                    // Channel closed, treat as killed (same as `killed()`).
+                    return;
+                }
+            }
+        };
+        let unblocked = async {
+            loop {
+                if let Some(mode) = *unblock_rx.borrow() {
+                    return Some(mode);
+                }
+                if unblock_rx.changed().await.is_err() {
+                    return None;
+                }
+            }
+        };
+
+        tokio::pin!(killed, unblocked);
+        tokio::select! {
+            biased;
+            () = &mut killed => ClientEdge::Killed,
+            mode = &mut unblocked => ClientEdge::Unblocked(mode),
+        }
+    }
+}
+
+/// Which admin edge released a parked client: see
+/// [`ClientHandle::killed_or_unblocked`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientEdge {
+    /// `CLIENT KILL` targeted this connection; it is terminal.
+    Killed,
+    /// `CLIENT UNBLOCK` targeted this connection, with the requested mode.
+    /// `None` means the signal channel closed.
+    Unblocked(Option<UnblockMode>),
 }
 
 impl Drop for ClientHandle {

@@ -162,6 +162,10 @@ impl ConnectionHandler {
     /// Try to decode the next frame from the codec's internal read buffer
     /// without issuing a read syscall. Returns `None` if no complete frame
     /// is buffered.
+    ///
+    /// Frames a parked blocking wait read off the socket are drained first, in
+    /// arrival order: a command pipelined behind `BLPOP` must run *after* the
+    /// `BLPOP`, not ahead of it (`specs/blocking.md`, "Parked pipeline buffer").
     pub(super) fn try_next_frame(
         &mut self,
     ) -> Option<
@@ -173,6 +177,10 @@ impl ConnectionHandler {
         use futures::Stream;
         use std::pin::Pin;
         use std::task::{Context, Poll};
+
+        if let Some(parked) = self.parked_frames.pop_front() {
+            return Some(parked);
+        }
 
         let waker = futures::task::noop_waker();
         let mut cx = Context::from_waker(&waker);

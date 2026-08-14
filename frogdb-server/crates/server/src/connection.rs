@@ -71,6 +71,7 @@ pub use state::{
 pub use builder::{ConnectionHandlerBuilder, connection_builder, standalone_config};
 
 use frogdb_core::clock;
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,6 +84,8 @@ use frogdb_protocol::{ParsedCommand, Response, WireResponse};
 use frogdb_replication::ReplicaAnnouncement;
 use futures::StreamExt;
 use lifecycle::TrackingIo;
+use redis_protocol::error::RedisProtocolError;
+use redis_protocol::resp2::types::BytesFrame;
 use tokio_util::codec::Framed;
 use tracing::{Instrument, debug, info, trace, warn};
 
@@ -218,10 +221,36 @@ pub struct ConnectionHandler {
     /// MONITOR subscription receiver (set when MONITOR command is executed).
     monitor_rx: Option<tokio::sync::broadcast::Receiver<Arc<crate::monitor::MonitorEvent>>>,
 
+    /// Frames that arrived while a blocking wait was parked.
+    ///
+    /// A parked wait owns the socket (`specs/blocking.md`, "Parked-wait
+    /// supervision"): it must keep reading to notice the peer leaving, but the
+    /// frames it reads must *not* run ahead of the blocking command they were
+    /// pipelined behind. They are buffered here and drained by
+    /// [`Self::try_next_frame`] ahead of the socket, preserving arrival order.
+    /// Bounded by [`MAX_PARKED_PIPELINE_FRAMES`]; at the cap the watch stops
+    /// reading and TCP backpressure takes over.
+    parked_frames: VecDeque<Result<BytesFrame, RedisProtocolError>>,
+
+    /// Set when a parked blocking wait ended because the connection itself
+    /// ended (peer EOF or `CLIENT KILL`). Consumed by `process_one_command`,
+    /// which suppresses the reply and terminates the run loop, leaving the
+    /// blocked-flag set so `notify_connection_closed` unregisters the waiter
+    /// (`specs/blocking.md` TR-BLOCKING-013, TR-BLOCKING-021).
+    parked_wait_exit: Option<blocking::coordinator::ParkedExit>,
+
     /// Chaos testing configuration (turmoil simulation only).
     #[cfg(feature = "turmoil")]
     chaos_config: Arc<crate::config::ChaosConfig>,
 }
+
+/// How many frames a parked wait will buffer before it stops reading the socket.
+///
+/// Bounded because the frames are held in memory by a connection that is,
+/// by definition, not making progress. Deep enough that ordinary pipelining
+/// behind a blocking command still works; shallow enough that a client cannot
+/// use a parked wait as an unbounded server-side buffer.
+pub(crate) const MAX_PARKED_PIPELINE_FRAMES: usize = 64;
 
 /// Result of processing a single command frame.
 enum FrameAction {
@@ -309,6 +338,8 @@ impl ConnectionHandler {
                 config.memory_diag_config,
             ),
             pending_psync_handoff: None,
+            parked_frames: VecDeque::new(),
+            parked_wait_exit: None,
             replica_announcement: ReplicaAnnouncement::default(),
             resp3_buf: BytesMut::with_capacity(4096),
             per_request_spans: config.per_request_spans,
@@ -472,6 +503,22 @@ impl ConnectionHandler {
                 return FrameAction::Handoff(handoff);
             }
         };
+
+        // A blocking wait that ended because the *connection* ended (peer EOF or
+        // CLIENT KILL) has no reader for its reply. Break out before the reply
+        // is buffered, leaving the blocked-flag set so `notify_connection_closed`
+        // unregisters the waiter (`specs/blocking.md` TR-BLOCKING-013,
+        // TR-BLOCKING-021). Buffered pipelined replies from earlier commands
+        // still reach the wire: the run loop flushes before it breaks.
+        if let Some(exit) = self.parked_wait_exit.take() {
+            debug!(
+                conn_id = self.state.id,
+                addr = %self.state.addr,
+                reason = exit.reason(),
+                "terminating connection that ended while parked in a blocking command"
+            );
+            return FrameAction::Break;
+        }
 
         // Calculate elapsed time in microseconds for slowlog
         let elapsed_us = clock::elapsed(now).as_micros() as u64;

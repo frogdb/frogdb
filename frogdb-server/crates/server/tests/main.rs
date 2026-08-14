@@ -15,6 +15,8 @@ mod integration_admin_port;
 #[cfg(not(feature = "turmoil"))]
 mod integration_basic;
 #[cfg(not(feature = "turmoil"))]
+mod integration_blocking_lifecycle;
+#[cfg(not(feature = "turmoil"))]
 mod integration_client;
 #[cfg(all(not(feature = "turmoil"), feature = "cmd-cms"))]
 mod integration_cms;

@@ -60,9 +60,9 @@ pub use acl::{
     generate_password, hash_password,
 };
 pub use client_registry::{
-    ClientFlags, ClientHandle, ClientInfo, ClientMemoryUsage, ClientRegistry, ClientStats,
-    ClientStatsDelta, CommandTypeStats, ErrorStats, KillFilter, PauseMode, PauseOverview,
-    ServerCommandStats, UnblockMode, extract_error_prefix,
+    ClientEdge, ClientFlags, ClientHandle, ClientInfo, ClientMemoryUsage, ClientRegistry,
+    ClientStats, ClientStatsDelta, CommandTypeStats, ErrorStats, KillFilter, PauseMode,
+    PauseOverview, ServerCommandStats, UnblockMode, extract_error_prefix,
 };
 pub use cluster::{
     BusRpc, CLUSTER_SLOTS, ClusterBusStats, ClusterBusStatsSnapshot, ClusterCommand, ClusterConfig,

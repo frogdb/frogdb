@@ -1,6 +1,6 @@
 # 13: Blocking wait becomes a run-loop state — parked clients see EOF and CLIENT KILL
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -77,13 +77,38 @@ findings.
 - The restructure touches the connection run loop — re-run the blocking family plus
   pipeline-ordering tests (Invariant 10, connection ordering).
 
-## Acceptance criteria
+## What landed
 
-- [ ] Spec rows added/amended; `just lint-spec` green
-- [ ] Wait is a run-loop state; socket + kill polled while parked
-- [ ] Both forcing tests fail on the pre-fix tree, pass post-fix
-- [ ] Mid-wait-disconnect generator in the conservation checkers
-- [ ] Blocking + pipeline-ordering suites green
+The wait became a *supervised* state rather than a separately-scheduled run-loop
+state: `BlockingWaitCoordinator::wait_for_response` now races four inputs —
+shard response, the client-admin edge seam (`ClientSignals`, kill biased over
+unblock), peer liveness (`PeerLiveness`, production impl `SocketWatch` reading
+the parked connection's socket), and the deadline. Frames that arrive during the
+park are buffered (`ConnectionHandler.parked_frames`, capped at
+`MAX_PARKED_PIPELINE_FRAMES`) and replayed by `try_next_frame` afterwards, so a
+pipelined command still runs *after* the blocking one. On
+`WaitOutcome::ConnectionEnded` the response channel is closed first (a raced
+serve then fails and the shard restores per TR-BLOCKING-008), `end_block()` is
+deliberately skipped so `notify_connection_closed`'s blocking branch does the
+unregistration, and `parked_wait_exit` makes the run loop `Break`.
+
+Spec: TR-BLOCKING-013 rewritten (gap cell gone), new TR-BLOCKING-021 (CLIENT
+KILL vs a parked client), FM-BLOCKING-009 amended, new FM-BLOCKING-011 /
+FM-BLOCKING-012. `just lint-spec` green; website mirror regenerated.
+
+Pre-fix evidence: with the kill and peer branches neutered, the two forcing
+tests fail (`DEBUG WAITQUEUE never became empty`, `CLIENT KILL did not close a
+connection parked in BLPOP`); both pass with the branches restored.
+
+## Deferred
+
+- Mid-wait-disconnect generator in the conservation checkers. The seeded-workload
+  generator (`frogdb-testing::workload`) emits only RESP command scripts — it has
+  no primitive for abandoning a connection mid-park, so this needs a
+  workload-runner capability (script op "drop this client's socket") before a
+  generator can exist. The class is covered end-to-end by
+  `disconnect_while_parked_releases_the_waiter_and_leaves_the_push_in_the_store`
+  in the meantime.
 
 ## Blocked by
 

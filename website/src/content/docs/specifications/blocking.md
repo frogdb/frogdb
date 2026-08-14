@@ -13,8 +13,12 @@ is a row nothing forces.
 
 Scope: the **connection-side** blocking-wait path — `handle_blocking_wait` /`register_wait` /
 `cleanup_wait` / `reconcile_unregister` in
-`frogdb-server/crates/server/src/connection/blocking.rs`, and the three-way race arbitration in
-`frogdb-server/crates/server/src/connection/blocking/coordinator.rs`. Rows stop at what the
+`frogdb-server/crates/server/src/connection/blocking.rs`, and the race arbitration in
+`frogdb-server/crates/server/src/connection/blocking/coordinator.rs` over the four inputs a
+parked wait supervises: the shard's response, the client-admin edges (`CLIENT KILL`,
+`CLIENT UNBLOCK`), the peer's socket, and the deadline. Every blocked state is leavable, and
+the last two are why: without them a park is a suspended read loop that no disconnect and no
+operator command can end. Rows stop at what the
 connection observes across the shard channel; the shard-side wait queue (registration, FIFO
 `pop_oldest_*`, the acknowledged `UnregisterWait` handshake, restore-on-send-failure) lives in
 `frogdb-core` and gets its own spec.
@@ -42,7 +46,9 @@ connection- and shard-process-lifetime state with no WAL/snapshot participation:
 | WAIT quorum snapshot | `WaitCoordinator` (`replication/src/wait_coordinator.rs:114-127`): `offsets: Arc<OffsetCoordinator>` (target offset, snapshotted at WAIT call time via `target_offset()`, `:173-180`), `tracker: Arc<ReplicationTrackerImpl>` (ack counting via `count_acked`, `:182-189`) | `offsets`/`tracker` are shared, continuously-updated seams; the per-call target offset is a local snapshot, not stored state | In-memory only | No |
 | WAIT role fence | `WaitCoordinator.role_fence: tokio::sync::watch::Sender<()>` (`wait_coordinator.rs:126`), observed via `RoleFence` (`:85-106`), taken by `role_fence()` (`:159-161`) | Bumped by `RoleManager::demote` (`server/role_manager.rs:362-403`, fence flip at `:371`) → `PrimaryReplicationHandler::end_primary_stint`; subscribed *before* the replica-role check in `handle_wait_command` (`connection/blocking.rs:253-256`, ordering is load-bearing, see `wait_coordinator.rs:85-95`) | In-memory only | No |
 | Node role flag | `is_replica: Arc<AtomicBool>` (`RoleManager`, flipped `false→true` at `role_manager.rs:371` inside `demote`, before the fence's consequences propagate). Read directly (not through the fence) by `handle_wait_command`'s pre-parse rejection (`connection/blocking.rs:228`) and its post-fence re-check (`:254`) | `RoleManager::demote`/promote-equivalent path | In-memory only | No |
-| CLIENT UNBLOCK signal | `UnblockSignal` trait, prod impl on `ClientHandle` (`connection/blocking/coordinator.rs:55-65`) | Set by the `CLIENT UNBLOCK` handler on another connection; consumed once by the parked wait's `select!` (non-WAIT: `coordinator.rs:104-107`; WAIT: `resolve_wait_race`, `connection/blocking.rs:338-345`) | In-memory only | No |
+| CLIENT UNBLOCK + CLIENT KILL signals | `ClientSignals` trait yielding `ClientEdge::{Killed, Unblocked(Option<UnblockMode>)}`, prod impl on `ClientHandle` via `killed_or_unblocked` (`client_registry/mod.rs`). One seam for both edges because they are two watch receivers on the same handle, which a `select!` cannot borrow twice; the kill is biased first inside it | Set by the `CLIENT UNBLOCK` / `CLIENT KILL` handler on another connection; observed by the parked wait's `select!` (non-WAIT: `coordinator.rs` `wait_for_response`; WAIT: `resolve_wait_race`, `connection/blocking.rs`). Both are *level-triggered* watches, so a signal that lands before the first poll is still seen | In-memory only | No |
+| Parked-wait supervision | `PeerLiveness` trait, prod impl `SocketWatch` over the connection's `Framed` (`connection/blocking.rs`), used by both the non-WAIT park and `WAIT`. The parked wait, not the run loop, owns the socket for the duration of the park — this is what makes a blocked client a *supervised state on a readable connection* rather than a suspended read loop (TR-BLOCKING-013, TR-BLOCKING-021) | Polled only inside `wait_for_response`; resolves exactly once, on EOF | In-memory only | No |
+| Parked pipeline buffer | `ConnectionHandler.parked_frames: VecDeque<Result<BytesFrame, _>>`, bounded by `MAX_PARKED_PIPELINE_FRAMES` (`connection.rs`) | Pushed by `SocketWatch` for frames that arrive while a wait is parked; drained ahead of the socket by `try_next_frame` so pipelined commands run *after* the blocking command they were pipelined behind, in arrival order (Redis ordering). At the cap the watch stops reading, applying backpressure instead of growing unboundedly | In-memory only | No |
 | Pending serve-propagation buffer | `ShardWorker.pending_serve_propagations: Vec<SynthesizedCommand>` (pushed at `shard/blocking.rs:359-361`) | `drive_satisfaction_body`, on every committed serve (never on a restored/rejected one); flushed to replicas by the terminal `ReplicationBroadcast` write effect, after the waking write's own broadcast | In-memory only | No |
 | Blocking metrics | `BlockedClients` (gauge, set on register/unregister/serve/restore/GC/demotion-release), `BlockedSatisfiedTotal` (inc on a committed serve, via `record_blocked_waiter_satisfied`), `BlockedTimeoutTotal` (inc per GC-reclaimed entry **and** per waiter the satisfaction path's deadline fast-path replies to — the two are the same event seen by the two timeout authorities, and exactly one of them ever reaches a given waiter because the fast-path removes it from the queue), `BlockedMigrationMoved` (inc only for the `-MOVED` case of slot migration, not `-CLUSTERDOWN`) | The shard worker, at each corresponding transition | In-memory only (exported, not restart-durable) | No |
 | Demotion-triggered wait unblock | `BlockingMsg::ReleaseAllWaiters`, sent to every shard by `RoleManager::demote` (`server/role_manager.rs`) through the `BlockedWaiterFence` seam (`ShardWaiterFence`, a `try_send` fan-out over the node's `ShardSender`s) after the `is_replica` fence flip and *before* the inbound stream is opened; the shard's `handle_release_all_waiters` drains `ShardWaitQueue` whole and answers every entry with `frogdb_core::ROLE_CHANGED_UNBLOCK_ERR` (Redis `disconnectAllBlockedClients` verbatim, the same constant `WAIT`'s role-change reply uses). Ordering is the mechanism, not a race: the release is enqueued on each shard's serial mailbox before the stream that will deliver replicated writes even exists, so no replicated write can reach a waiter that the demotion was supposed to release (FM-BLOCKING-007). | `RoleManager::demote` → `ShardWaiterFence` → each shard's `handle_release_all_waiters` | In-memory only | No |
@@ -109,7 +115,7 @@ rather than naming one that doesn't force the behavior.
 | Field | Value |
 | --- | --- |
 | Precondition | Node is a primary at the pre-parse check (TR-BLOCKING-004's replica branch did not fire); after subscribing to `role_fence`, the post-fence role re-check also finds this node still primary (closing the demotion-race window between the two checks); the fast-path quorum check did not already satisfy `numreplicas`. |
-| Postcondition | `RoleFence` subscription held for the duration of the wait; target offset snapshotted via `target_offset()`; ack solicitation sent once to streaming replicas; client-registry blocked mirror set directly (no shard-side `WaitEntry`, unlike TR-BLOCKING-001); the WAIT is parked on `wait.wait_for_replicas(...)` raced against `unblock.unblocked()` via `resolve_wait_race`. |
+| Postcondition | `RoleFence` subscription held for the duration of the wait; target offset snapshotted via `target_offset()`; ack solicitation sent once to streaming replicas; client-registry blocked mirror set directly (no shard-side `WaitEntry`, unlike TR-BLOCKING-001); the WAIT is parked on `wait.wait_for_replicas(...)` raced against the client-signal seam (`signals.next_edge()`) and the peer's socket via `resolve_wait_race`. |
 | Source | `connection/blocking.rs:226-294` (`handle_wait_command`), `:253-256` (fence-then-role-check ordering), `:274-277` (blocked-mirror set) `:319-347` (`resolve_wait_race`); `replication/src/wait_coordinator.rs:159-161` (`role_fence`), `:173-180` (`target_offset`), `:214-256` (`wait_for_replicas`) |
 | Forced by | `test_wait_blocks_until_ack`, `test_wait_zero_timeout_blocks_until_ack`, `test_wait_zero_timeout_blocks_without_quorum`, `test_wait_inside_multi_nonzero_timeout_does_not_block` |
 | Rulings | — |
@@ -160,7 +166,7 @@ rather than naming one that doesn't force the behavior.
 | --- | --- |
 | Precondition | A registered (TR-BLOCKING-001) parked waiter's connection receives a `CLIENT UNBLOCK` targeting it, before shard delivery or deadline. |
 | Postcondition | Connection observes `WaitOutcome::Unblocked(mode)`; `UnblockMode::Timeout` → the op's ordinary timeout nil (same shape as TR-BLOCKING-009); `UnblockMode::Error` → `-UNBLOCKED client unblocked via CLIENT UNBLOCK`; connection's blocked-flag cleared; `UnregisterWait` sent and reconciled (TR-BLOCKING-015) exactly as the deadline path does — the shard-side entry does not know *why* the connection left, only that it did. See FM-BLOCKING-003. |
-| Source | `connection/blocking/coordinator.rs:30-46` (`into_response`, `Unblocked` arms), `:104-106` (`unblock.unblocked()` branch); FM-BLOCKING-003 |
+| Source | `connection/blocking/coordinator.rs:30-46` (`into_response`, `Unblocked` arms), the `ClientEdge::Unblocked` branch of `wait_for_response`; FM-BLOCKING-003 |
 | Forced by | `test_client_unblock_not_blocked` covers the not-blocked precondition only; no located test drives a genuine parked non-WAIT `CLIENT UNBLOCK` release end-to-end. |
 | Rulings | — |
 
@@ -168,7 +174,7 @@ rather than naming one that doesn't force the behavior.
 
 | Field | Value |
 | --- | --- |
-| Precondition | A parked WAIT (TR-BLOCKING-005) is resolved by `wait.wait_for_replicas(...)` rather than by `unblock.unblocked()`, in `resolve_wait_race`'s biased select. |
+| Precondition | A parked WAIT (TR-BLOCKING-005) is resolved by `wait.wait_for_replicas(...)` rather than by a `ClientEdge` from the client-signal seam, in `resolve_wait_race`'s biased select. |
 | Postcondition | `WaitVerdict::Reached(count)`/`WaitVerdict::TimedOut(count)` → `Response::Integer(count)`; client-registry blocked mirror cleared. Unlike non-WAIT ops (TR-BLOCKING-009), there is no separate shard-side GC tick or `UnregisterWait` reconciliation: `wait_for_replicas` owns both the ack count and the deadline internally. |
 | Source | `connection/blocking.rs:319-347` (`resolve_wait_race`); `replication/src/wait_coordinator.rs:214-256` (`wait_for_replicas`, internal deadline/quorum race), `:182-189` (`count_acked`) |
 | Forced by | `test_wait_blocks_until_ack`, `test_wait_zero_timeout_blocks_until_ack`, `test_wait_numreplicas_exceeds_actual_blocks_to_timeout`, `test_wait_zero_timeout_blocks_without_quorum` |
@@ -188,18 +194,17 @@ rather than naming one that doesn't force the behavior.
 
 | Field | Value |
 | --- | --- |
-| Precondition | A connection with blocked-flag = `Some(shard_id, keys)` closes (any reason) before its wait resolves. |
-| Postcondition | `notify_connection_closed` sends `BlockingMsg::UnregisterWait{conn_id, ack}` and discards the ack (no client remains to hand a raced serve back to); the shard's `wait_queue.unregister(conn_id)` removes every entry for that connection from every key it was registered under; if a serve had already raced the teardown and popped data, `apply_restore` on the shard's send-failure path (TR-BLOCKING-008) makes the store whole. |
-| Source | `connection/lifecycle.rs` (`notify_connection_closed`), `shard/wait_queue.rs` (`unregister`); see FM-BLOCKING-009 |
-| Forced by | `unregister_after_disconnect_clears_every_key_of_a_multi_key_wait` |
-| Gap (current code) | The postcondition holds whenever the run loop *observes* the close, but the loop cannot observe one raised mid-wait: `handle_blocking_wait` is awaited inline inside the frame branch, so neither the socket nor `killed()` is polled while parked, and a peer that vanishes during a `BLPOP key 0` leaks its entry forever. Tracked, with its own forcing test, by [spec-gaps issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md) (distsys-review CRIT-4/CRIT-5), which restructures the wait into a run-loop state. Confirmed reproducible while implementing issue 08. |
-| Rulings | [issue 08](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (rows the shard-side half as FM-BLOCKING-009 and forces it; the run-loop restructure stays with issue 13) |
+| Precondition | A connection with blocked-flag = `Some(shard_id, keys)` closes (any reason) before its wait resolves — including a close raised *while the wait is parked*, which the wait's own socket branch observes as EOF (see the "Parked-wait supervision" state-space row). |
+| Postcondition | The parked wait resolves as `WaitOutcome::ConnectionEnded(ParkedExit::PeerGone)`: the response channel is closed *first* (so a serve still in flight fails its send and the shard restores the popped data per TR-BLOCKING-008), the blocked-flag is deliberately left set, and the run loop terminates the connection. `notify_connection_closed` then sends `BlockingMsg::UnregisterWait{conn_id, ack}` and discards the ack (no client remains to hand a raced serve back to); the shard's `wait_queue.unregister(conn_id)` removes every entry for that connection from every key it was registered under. No reply is written — the peer is gone. |
+| Source | `connection/blocking/coordinator.rs` (`PeerLiveness`, `ParkedExit::PeerGone`), `connection/blocking.rs` (`SocketWatch`, `handle_blocking_wait`'s `ConnectionEnded` arm — the one exit that skips `end_block()` so the teardown branch below stays live), `connection/lifecycle.rs` (`notify_connection_closed`), `shard/wait_queue.rs` (`unregister`); see FM-BLOCKING-009, FM-BLOCKING-011 |
+| Forced by | `unregister_after_disconnect_clears_every_key_of_a_multi_key_wait`; unit-level (frogdb-server, `blocking/coordinator.rs`): `peer_gone_while_parked_ends_the_connection`, `response_beats_a_peer_that_left_in_the_same_poll`; integration: `disconnect_while_parked_releases_the_waiter_and_leaves_the_push_in_the_store` |
+| Rulings | [issue 08](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (rows the shard-side half as FM-BLOCKING-009 and forces it; the run-loop restructure stays with issue 13); [issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (CRIT-4: makes the postcondition reachable by supervising the socket for the whole park) |
 
 ## TR-BLOCKING-014 — shard dies while a waiter is parked
 
 | Field | Value |
 | --- | --- |
-| Precondition | A waiter that completed registration (TR-BLOCKING-001, a live `WaitEntry` exists in `ShardWaitQueue`) has its `response_tx` dropped by genuine shard-side death — shard task shutdown/panic/teardown tearing down the whole `ShardWaitQueue` — while the connection is still parked in `wait_for_response`. This is now the *only* in-shard path that drops a sender without sending: the admission refusal (FM-BLOCKING-006), the deadline fast-path (TR-BLOCKING-007) and the `Satisfaction::Retry` arm each send a real reply, which is precisely what makes `Err(_)` mean shard death and lets this row name it. One neighbouring case remains outside the row: a closed CLIENT-UNBLOCK signal channel (`unblock.unblocked()` returning `None`) is a registry/connection-side failure unrelated to shard health, still resolves to `Response::Null`, and has no dedicated row. |
+| Precondition | A waiter that completed registration (TR-BLOCKING-001, a live `WaitEntry` exists in `ShardWaitQueue`) has its `response_tx` dropped by genuine shard-side death — shard task shutdown/panic/teardown tearing down the whole `ShardWaitQueue` — while the connection is still parked in `wait_for_response`. This is now the *only* in-shard path that drops a sender without sending: the admission refusal (FM-BLOCKING-006), the deadline fast-path (TR-BLOCKING-007) and the `Satisfaction::Retry` arm each send a real reply, which is precisely what makes `Err(_)` mean shard death and lets this row name it. One neighbouring case remains outside the row: a closed CLIENT-UNBLOCK signal channel (`ClientEdge::Unblocked(None)`) is a registry/connection-side failure unrelated to shard health, still resolves to `Response::Null`, and has no dedicated row. |
 | Postcondition | `-ERR shard unavailable`, distinguishable from the FM-BLOCKING-002/003 nil/timeout family, matching `txn.md` FM-TXN-032's vocabulary for the same underlying event (channel closed, never accepted). Connection's blocked-flag cleared; the wait entry is gone (channel closure implies no further shard-side bookkeeping references it). |
 | Source | `connection/blocking/coordinator.rs` (`wait_for_response`, `Err(_)` arm), FM-BLOCKING-004 |
 | Forced by | `channel_drop_yields_shard_unavailable_error` |
@@ -229,7 +234,7 @@ rather than naming one that doesn't force the behavior.
 
 | Field | Value |
 | --- | --- |
-| Precondition | This node's `role_fence` is bumped (demotion) while a `WAIT` is parked in `resolve_wait_race`, racing `unblock.unblocked()`. |
+| Precondition | This node's `role_fence` is bumped (demotion) while a `WAIT` is parked in `resolve_wait_race`, racing the client-signal seam. |
 | Postcondition | `wait_fut` yields `WaitVerdict::RoleChanged(count)` → `Response::error(WAIT_ROLE_CHANGED_ERR)`, biased ahead of a same-poll `CLIENT UNBLOCK`. The fence is subscribed before the primary-role check in `handle_wait_command`, so a demotion landing between subscribe and check is still observed (see the `RoleFence` ordering note; this is the mechanism TR-BLOCKING-016 shows has no non-WAIT counterpart). |
 | Source | `connection/blocking.rs:319-347` (`resolve_wait_race`), `:226-260` (`handle_wait_command`, fence-then-role-check ordering); `replication/src/wait_coordinator.rs:64-83` (`WaitVerdict`), `:96` (`RoleFence`) |
 | Forced by | `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`; unit-level (frogdb-replication, `wait_coordinator.rs`): `role_change_releases_a_wait_parked_forever`, `role_change_releases_a_wait_with_a_deadline`, `a_fence_from_an_earlier_stint_does_not_release_a_later_wait`, `a_demotion_racing_the_role_check_still_releases_the_wait`, `a_tie_between_quorum_and_role_change_favors_role_changed_no_deadline`, `a_tie_between_quorum_and_role_change_favors_role_changed_with_deadline`, `one_fence_releases_every_wait_parked_before_it`; integration (in profile): `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion` |
@@ -264,6 +269,16 @@ rather than naming one that doesn't force the behavior.
 | Source | `shard/event_loop.rs:31` (100ms interval), `:83-85` (biased tick, `check_waiter_timeouts`); `shard/blocking.rs:182-211` (`check_waiter_timeouts`, `timeout_reply` send, `BlockedTimeoutTotal` increment) |
 | Forced by | MISSING — no located test isolates the shard's 100ms GC tick from the coordinator's own local deadline branch; the two are only ever observed together (whichever fires first wins the race in every timeout test above). |
 | Rulings | — |
+
+## TR-BLOCKING-021 — `CLIENT KILL` against a parked client
+
+| Field | Value |
+| --- | --- |
+| Precondition | `CLIENT KILL` (by id, addr, laddr, ...) matches a connection that is parked in a blocking wait. `kill_by_id`/the kill filter sets the connection's `kill_tx` watch only — it never forges a `CLIENT UNBLOCK`, so the kill must be observed by the wait itself. |
+| Postcondition | The parked wait resolves as `WaitOutcome::ConnectionEnded(ParkedExit::Killed)`, on the same terms as TR-BLOCKING-013's peer-EOF exit: response channel closed first (a racing serve is restored, TR-BLOCKING-008), no reply written to the killed connection, blocked-flag left set so `notify_connection_closed` unregisters the waiter and releases the global and per-key waiter budgets, and the run loop terminates the connection. `CLIENT KILL` therefore drains parked clients, which `CLIENT UNBLOCK` cannot do (it resolves the wait but leaves the connection open, TR-BLOCKING-011). The kill signal is a level-triggered watch, so it is still observed if it lands between registration and the first poll. |
+| Source | `client_registry/mod.rs` (`ClientHandle::killed_or_unblocked`, `ClientEdge`), `connection/blocking/coordinator.rs` (`ClientSignals`, kill arm, `ParkedExit::Killed`), `connection/blocking.rs` (`handle_blocking_wait`, `resolve_wait_race`); see FM-BLOCKING-012 |
+| Forced by | unit-level (frogdb-server, `blocking/coordinator.rs`): `client_kill_while_parked_ends_the_connection`, `response_beats_a_kill_in_the_same_poll`; integration: `client_kill_terminates_a_parked_client_and_releases_its_waiter` |
+| Rulings | [issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (CRIT-5: before this row the coordinator had no kill branch at all, so `CLIENT KILL` reported success and did nothing, forever) |
 
 ## How to read a row
 
@@ -321,7 +336,7 @@ rows:
 | NOT observable | A delivered element (unblocking must never consume); a bare `Response::Null` standing in for the array-shaped nil; the shard-death `-ERR shard unavailable` of FM-BLOCKING-004 standing in for either unblock reply; the unblock being swallowed while the wait had no deadline (an infinite `BLPOP 0` must still be unblockable). |
 | Invariant | The unblock branch is a peer of the response and deadline branches in the same `select!`, so it resolves even when `deadline == None` (which parks the timeout branch on `pending()` forever). |
 | Outcome variant | `Unblocked(UnblockMode::{Error,Timeout})` |
-| Forced by | `unblock_wins_over_idle_wait`, `timeout_reply_picks_nil_shape_per_op` |
+| Forced by | `unblock_wins_over_idle_wait`, `timeout_reply_picks_nil_shape_per_op`, `the_real_client_handle_reports_an_unblock_when_not_killed` |
 | Bug refs | none |
 
 ## FM-BLOCKING-004 — response channel closed without a value
@@ -395,14 +410,13 @@ rows:
 
 | Field | Value |
 |---|---|
-| Trigger | The connection is torn down while a blocking wait is registered, and the run loop observes the teardown — `notify_connection_closed` runs with the connection's blocked-flag still set. |
+| Trigger | The connection is torn down while a blocking wait is registered, so `notify_connection_closed` runs with the connection's blocked-flag still set. Both routes reach it: a close observed between commands, and a close observed *during* the park by the wait's own socket branch (TR-BLOCKING-013), whose `ConnectionEnded` exit leaves the blocked-flag set precisely so this teardown runs. |
 | Observable | Nothing on the wire (the peer is gone). Server-side: the entry is gone from the shard's wait queue under *every* key it was registered on, the removal is acknowledged (`Unregistered` the first time, `AlreadyServed` if a serve raced it), `DEBUG WAITQUEUE` reports the queue empty again, and `BlockedClients` returns to its pre-block value. |
 | NOT observable | A leaked wait entry that outlives its connection — one that a later push would try to serve, consuming an element for a client that cannot receive it (a conservation loss, not merely a leak); an entry cleared from the first of a multi-key wait's keys but left under the rest; a second teardown reported as a fresh removal rather than `AlreadyServed`. |
 | Invariant | `notify_connection_closed` sends `BlockingMsg::UnregisterWait { conn_id }` to the shard, whose serial mailbox makes removal atomic against a concurrent push; removal iterates `entry.keys`, so multi-key waits leave no residue. |
 | Outcome variant | none — the wait is torn down, not resolved |
-| Forced by | `unregister_after_disconnect_clears_every_key_of_a_multi_key_wait` |
-| Gap (current code) | A close raised *during* the wait is not observed at all — see TR-BLOCKING-013's gap cell and [spec-gaps issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md), which owns the run-loop restructure and the end-to-end forcing test. This row therefore pins the teardown itself, not the detection of it. |
-| Bug refs | [issue 08](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.3: `cleanup_wait` was in scope but nothing forced the shard-side unregistration) |
+| Forced by | `unregister_after_disconnect_clears_every_key_of_a_multi_key_wait`; end-to-end: `disconnect_while_parked_releases_the_waiter_and_leaves_the_push_in_the_store` |
+| Bug refs | [issue 08](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.3: `cleanup_wait` was in scope but nothing forced the shard-side unregistration); [issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (CRIT-4: a close raised *during* the wait was previously unobservable, so this row's trigger could not be reached from a real socket — the parked wait now watches it, and FM-BLOCKING-011 pins the conservation half) |
 
 ## FM-BLOCKING-010 — `WAIT` is parked when the node's role changes
 
@@ -415,3 +429,27 @@ rows:
 | Outcome variant | `Response(Response::Error(WAIT_ROLE_CHANGED_ERR))` |
 | Forced by | `wait_released_by_a_demotion_reports_the_role_change_even_if_client_unblock_races`, `test_wait_unblocked_on_demotion`, `test_wait_unblocked_on_cluster_demotion` |
 | Bug refs | [issue 08](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/08-blocking-command-rows.md) (H6.4: `WAIT` is in this spec's scope line but had no row) |
+
+## FM-BLOCKING-011 — a later push must survive a peer that died mid-park
+
+| Field | Value |
+|---|---|
+| Trigger | A client parks in `BLPOP k 0` and its process dies (socket EOF, no `QUIT`). Some time later another connection runs `LPUSH k v`. |
+| Observable | The push stays in the store: `LLEN k` is 1 and a subsequent `BLPOP k 0` from a live client receives `v`. The dead client's entry is gone from the wait queue (`DEBUG WAITQUEUE` empty) before the push arrives, and its global/per-key waiter budgets are back to their pre-block values. |
+| NOT observable | The element being popped and written to a dead socket — the conservation loss FM-BLOCKING-005 declares impossible, which a leaked-but-alive `response_tx` would make *undetectable* because the send succeeds into an orphaned task and the `Err(_)` restore arm (TR-BLOCKING-008) never fires. Also not observable: the waiter surviving the disconnect and being served minutes later; the FD, task, and waiter budget leaking for the life of the process. |
+| Invariant | The wait cannot outlive its socket: the parked wait polls the socket for the whole park, and its `ConnectionEnded` exit closes `response_rx` *before* the connection is torn down, so any serve that raced the teardown fails its send and is restored rather than lost. The narrow residual race — the shard's `send` landing between the coordinator's final response poll and the `close()` — delivers to a socket that is already gone, which is exactly Redis's behaviour when it serves a blocked client whose peer has died but whose EOF has not been read yet. |
+| Outcome variant | `ConnectionEnded(ParkedExit::PeerGone)` |
+| Forced by | `disconnect_while_parked_releases_the_waiter_and_leaves_the_push_in_the_store` |
+| Bug refs | [issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (distsys-review CRIT-4) |
+
+## FM-BLOCKING-012 — `CLIENT KILL` must actually terminate a parked client
+
+| Field | Value |
+|---|---|
+| Trigger | An operator drains a node: `CLIENT KILL ID <n>` targets a connection parked in `BLPOP k 0`. |
+| Observable | `+OK`/`:1` from the killing connection *and* the killed connection's socket closes; its waiter is unregistered, so `DEBUG WAITQUEUE` reports the queue empty and the waiter budgets are released. A push to `k` afterwards is not consumed by the killed client. |
+| NOT observable | `CLIENT KILL` reporting success while the parked connection stays open and registered forever — a node that cannot be drained. A killed connection receiving a reply for the wait it never finished. A kill delivered between registration and the wait's first poll being missed (the kill is a level-triggered watch, not an edge). |
+| Invariant | The kill signal and the `CLIENT UNBLOCK` signal are raced as one seam (`ClientHandle::killed_or_unblocked`, because a `select!` cannot borrow the handle twice) with the kill biased first, so a connection that is both killed and unblocked in the same poll terminates rather than replying. |
+| Outcome variant | `ConnectionEnded(ParkedExit::Killed)` |
+| Forced by | `client_kill_terminates_a_parked_client_and_releases_its_waiter`; unit-level: `client_kill_while_parked_ends_the_connection`, `a_kill_beats_a_simultaneous_client_unblock` |
+| Bug refs | [issue 13](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (distsys-review CRIT-5) |
