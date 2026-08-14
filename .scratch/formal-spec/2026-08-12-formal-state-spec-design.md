@@ -270,6 +270,12 @@ Phased per area, each phase leaving the tree green (lint, mutation gates, full s
 2. **Cluster** — starts only after the pending rulings are settled (decision 3). Write
    state space + TR rows constructively, absorb FM rows and INV text, land the first two
    Quint models (migration×failover, admission window) and the quint-connect harness.
+   **Complete**: state space + TR rows in `specs/cluster.md`; the two models
+   (`specs/quint/cluster_migration_failover.qnt`, `specs/quint/cluster_admission.qnt`); the
+   quint-connect conformance harness
+   (`frogdb-server/crates/cluster/tests/quint_conformance.rs`); and the nightly `quint verify`
+   CI lane (`.github/workflows/quint-verify-nightly.yml`, generated from
+   `.github/workflows/workflow_gen/src/workflow_gen/workflows/quint_verify.py`).
 3. **Replication** — same shape; barrier-timing and feed-gate Quint models land here.
 4. **Persistence.**
 5. **Txn + VLL.**

@@ -130,7 +130,7 @@ payload and diverge freely node to node by design.
 | `cluster-replica-priority` runtime flag | `ClusterRuntimeFlags.replica_priority: AtomicU32` (node-local) | `CONFIG SET cluster-replica-priority`; constructed at boot | In-memory only | No — re-derived from config at boot (default 100). Ruled (issue 30): the replicated `NodeInfo.replica_priority` above is the single authority for cross-node scoring, and `CONFIG SET` converges it by proposing an `AddNode` re-registration with the new value; this atomic keeps one authoritative role — the node's own immediate view, so priority 0 removes the node from its own candidate set before the Raft commit lands (FM-CLUSTER-058). Today the re-registration proposal does not exist, leaving peers on the stale replicated value until the next boot-time registration — [issue 30](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/30-config-set-replica-priority-re-registers-through-raft.md) tracks code catch-up |
 | Per-peer local health | `HealthTable.health: HashMap<NodeId, NodeHealth>` (node-local, leader-only, not replicated) | `record_failure`/`record_success` from the probe loop (`failure_detector.rs`) | In-memory only | No — rebuilt from empty; every peer reads `Unknown` until re-probed, which is fail-safe under FM-CLUSTER-055's conservative-quorum rule |
 | Failure-detector tuning | `FailureDetectorConfig.{check_interval_ms, connect_timeout_ms, fail_threshold}` (node-local) | Constructed once at `FailureDetector::new`, clamped into `[MIN_*, MAX_*]` (FM-CLUSTER-102) | In-memory only | No — re-derived from config at boot |
-| Slot-scoped write barrier | `PauseState.slots: HashMap<u16, PauseEntry>` (node-local, `core/src/client_registry/mod.rs`) | `handoff_barrier.rs`'s `plan_handoff_action` (`Arm`/`Release`), driven by replicated `SlotHandoffPrepared`/`SlotHandoffReleased` events | In-memory only | No — but reconstructible in principle from the replicated migration/handoff state that drives it, since the barrier is a pure function of those events |
+| Slot-scoped write barrier | `PauseState.slots: HashMap<u16, PauseEntry>` (node-local, `core/src/client_registry/mod.rs`) | `handoff_barrier.rs`'s `plan_handoff_action` (`Arm`/`Release`), driven by replicated `SlotHandoffPrepared`/`SlotHandoffReleased` events | In-memory only | No — and it **must be reconstructed** from the replicated `migrations` map on both restore paths (boot-time snapshot restore and live `install_snapshot`), or a restarted source serves its migrating slot unfenced (FM-CLUSTER-104). The barrier is a pure function of the replicated handoff state, but nothing in the code performs the reconstruction today — [issue 32](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/32-restarted-source-never-re-arms-its-slot-write-barrier.md) tracks code catch-up |
 | Replica-feed hold deadline | `ReplicaFeedGate` internal `Option<Instant>` (node-local, `replication/src/feed_gate.rs`), derived via `PauseState::feed_hold_until` | `ClientRegistry::publish_pause_derived_state`, called on every pause mutation | In-memory only (an `Instant`, meaningless across a restart) | No |
 | Bootstrap-vs-join intent | Ruled (issue 25): an explicit, node-local **persisted** record (etcd `initial-cluster-state` shape) written when the node first commits to bootstrapping or joining, so a restart mid-bootstrap replays the recorded decision instead of re-deriving it (TR-CLUSTER-028/029 carry the transition semantics). No such field exists in the code today — `should_bootstrap` (`server/src/server/cluster_init.rs:386`) is computed fresh every boot from config (`initial_members.keys().next().copied() == Some(node_id)`); [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) tracks code catch-up | Ruled: written once at first-boot mode decision; never rewritten by config changes | Ruled: node-local durable record (vehicle chosen at implementation); survives restart |
 
@@ -142,6 +142,17 @@ recovery/restart steps, and the admin-command entry points that construct these 
 2026-08-13 ruling amends a transition's semantics, the row states the **ruled/target** semantics —
 not necessarily what the code does today — and carries a `Pending` field linking the issue that
 tracks code catch-up.
+
+Two Quint design models formalize a slice of these rows for exploration and code-conformance
+checking: [`cluster_admission.qnt`](https://github.com/frogdb/frogdb/blob/main/specs/quint/cluster_admission.qnt) covers the bootstrap/join/MEET
+admission window (TR-CLUSTER-005, 028, 029, 030, 035); [`cluster_migration_failover.qnt`](https://github.com/frogdb/frogdb/blob/main/specs/quint/cluster_migration_failover.qnt)
+covers slot migration interleaved with failover (TR-CLUSTER-003, 004, 008–019, 021, 024, 025, 034,
+042). Both models' traces are checked against production code by the quint-connect conformance
+harness in [`quint_conformance.rs`](https://github.com/frogdb/frogdb/blob/main/frogdb-server/crates/cluster/tests/quint_conformance.rs);
+tests disclosed `#[ignore]` name the owning issue rather than being evidence the row already holds.
+A counterexample or a conformance divergence is triaged with this spec as the arbiter: if the model
+diverges from a ruled row above it is model-wrong and the model gets fixed, otherwise it is
+code-wrong and gets filed or attached to an issue in the area's tracker with the trace as evidence.
 
 ### Group A — Topology and membership
 
@@ -2007,6 +2018,26 @@ expects nothing left, and the store left one entry behind. Every FrogDB test tha
 `truncate` was written against the store's own (exclusive) reading of the contract, so the
 off-by-one was self-consistent everywhere below openraft and invisible to every layer above it —
 which is exactly the claim the issue was filed to make.
+
+## FM-CLUSTER-104 — a restored source re-arms its slot write barrier before admitting a write
+
+| Field | Value |
+|---|---|
+| Trigger | A migration source armed its barrier on `SlotHandoffPrepared`, then restarts — or is caught up via `install_snapshot` — while the replicated `migrations` map still carries the prepared handoff naming it as source. |
+| Observable | The barrier is armed again before the node admits any client write to the migrating slot. Both restore paths participate: boot-time snapshot restore replays the handoff state into the same `Arm` decisions the live event stream would have produced (the analogue of `reconcile_self_role` for the role view), and a live `install_snapshot` emits `Prepared`/`Released` on any handoff-state delta the same way it emits role changes. |
+| NOT observable | The restarted source acknowledging a write to the migrating slot with its barrier unarmed. That write is the lost-write bug: the target completes the handoff on the source's *earlier* drain confirmation, so a post-restart write lands on a node the cluster is about to rule a non-owner, and nothing in the protocol tells anyone. FM-CLUSTER-095's `SlotFence` does not close the window — the stamp and the verdict read the same unchanged `handoff_seq`, so a post-restart write validates consistently. Nor is the barrier rebuilt from anything node-local: the replicated `migrations` map is the only authority, per the state-space table above. |
+| Invariant | Ruled (issue 32, from distsys-review CRIT-1): a `reconcile_slot_handoff(...)` beside `reconcile_self_role` in `server/src/server/cluster_init.rs`, driven from the restored `migrations` map, emitting the `Prepared` events the barrier task would have seen live; `install_snapshot` (`cluster/src/state.rs`) gains the handoff analogue of `emit_self_role_change`. Today the barrier is armed exclusively from the live `SlotHandoffEvent` stream (`cluster-runtime/src/handoff_barrier.rs`, `run_slot_handoff_barrier`), `restore_from_snapshot` assigns without emitting, and boot ordering attaches the snapshot store before `enable_slot_handoff_notification()` — so the miss is guaranteed, not racy. |
+| Outcome variant | `HandoffAction::Arm` (replayed on restore) |
+| Forced by | MISSING ([gap: 32-restarted-source-never-re-arms-its-slot-write-barrier.md](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/32-restarted-source-never-re-arms-its-slot-write-barrier.md)) — the forcing test (restart a source mid-handoff, assert a write to the migrating slot is refused) lands with the reconcile fix; spec row first per the spec-first flow. |
+| Bug refs | [32-restarted-source-never-re-arms-its-slot-write-barrier.md](https://github.com/frogdb/frogdb/blob/main/.scratch/cluster-correctness/issues/open/32-restarted-source-never-re-arms-its-slot-write-barrier.md) |
+
+Found by the independent distsys review (CRIT-1,
+[2026-08-13-independent-distsys-review.md](https://github.com/frogdb/frogdb/blob/main/.scratch/formal-spec/2026-08-13-independent-distsys-review.md)):
+the role view had the identical bug and issue 37 (arch-deepening) added `reconcile_self_role` for
+it — "a role folded into a snapshot produced no log entry to replay". The barrier is the same
+lesson, unapplied; CRDB rebuilds leaseholder/latch state from replicated range state on every
+restart for exactly this reason. Survives issue 31's migration redesign unchanged: 31 keeps the
+Prepare→drain→Complete finalization, and a restart mid-drain still requires re-arming.
 
 ---
 
