@@ -205,3 +205,21 @@ Ruling: **accept, file issue** (reviewer's resolution: `stamp_with` reuse + uniq
 + serialized writers + FM row). Filed as
 [replication issue 30](../replication-correctness/issues/open/30-replication-state-file-atomic-durable-single-writer.md)
 (ready-for-agent); rides the implementation wave.
+
+## MAJ-12 — TR-BLOCKING-019 misstates the drain scope; plain XREAD waiters parked forever
+
+Ruling: **accept-plus — fix the semantics, not just the row** (goes beyond the
+reviewer's split-row honesty). A `BLOCK 0` XREAD waiter on a key that became a
+non-stream is unsatisfiable forever — nothing will ever re-signal that key as a
+stream — so leaving it parked violates the every-blocked-state-is-leavable principle
+underlying spec-gaps issue 13. Ruled shape: the wrong-type drain covers **all** stream
+waiters on the key (XREAD and XREADGROUP), replied with a pinned error;
+`DrainNoGroup` stays XREADGROUP-only (correct — plain XREAD needs no group; its wait
+remains satisfiable). TR-BLOCKING-019 splits into per-arm postconditions with error
+texts pinned; the divergence from Redis's park-forever behavior (and from its
+`-UNBLOCKED the stream key no longer exists` text) is documented as a
+deviation-as-improvement. Filed as
+[spec-gaps issue 15](../spec-gaps/issues/open/15-wrong-type-drain-covers-plain-xread-waiters.md)
+(ready-for-agent); rides the implementation wave. Sequence with
+[spec-gaps issue 13](../spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md)
+(same machinery — land 13's restructure first or coordinate).
