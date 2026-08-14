@@ -24,6 +24,18 @@ Ruling: **logical admission token** (reviewer's suggested resolution (b), option
   stale-seq completion attempt (target proposes completion with an outdated seq → rejected).
 - Note: Task 2's quint model already encodes these semantics (`drained` flag,
   seq match, `inv_complete_requires_drained`) — code converges on the model.
+- **MAJ-4 folded in** (ruled 2026-08-14): the preamble's directional clock-skew
+  argument is backwards for the applying node (forward skew at apply makes
+  `!barrier_expired` *refuse more*, not admit more; the apply-side hazard is backward
+  skew). CRIT-2's spec amendment must replace that preamble paragraph with the
+  role-split statement: proposer-forward-skew was the admission hazard (now moot under
+  the logical token); applier skew is irrelevant once the value is replicated data.
+
+## MAJ-4 — preamble's directional clock-skew argument is backwards
+
+Ruling: **fold into CRIT-2's spec work** — no separate issue. CRIT-2's amendment
+deletes wall-clock admission reasoning from this area; the requirement that it replace
+the preamble with the role-split statement is recorded on the CRIT-2 entry above.
 
 ## MAJ-1 — split-brain audit floor collapses to 0
 
