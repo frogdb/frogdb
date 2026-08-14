@@ -91,9 +91,11 @@
 //     by `beltOk`); the numeric priority/offset scoring formula is out of scope (see
 //     "Deliberately not modeled").
 //   TR-CLUSTER-024/025 — MarkNodeFailed/MarkNodeRecovered: FAIL-flag transitions,
-//     including TR-CLUSTER-024's unconditional cluster-epoch bump and TR-CLUSTER-025's
-//     no-bump anti-churn property (FM-CLUSTER-014) — the reason issue 19's amendment
-//     moved the failover fence off the cluster-wide epoch.
+//     including TR-CLUSTER-024's unconditional cluster-epoch bump — the reason issue
+//     19's amendment moved the failover fence off the cluster-wide epoch. Disclaimer:
+//     TR-CLUSTER-025's no-bump anti-churn property (FM-CLUSTER-014) is cited for
+//     context on `markNodeRecovered` below, not machine-checked — no invariant here
+//     asserts it, so a mutant that adds a spurious epoch bump on recovery survives.
 //   TR-CLUSTER-034 — Handoff barrier arm/release, modeled at the applied-state level
 //     as a `Set[SlotId]` rather than a `(NodeId, SlotId) -> Armed | Released` map: at
 //     most one migration (hence one source) can be open per slot at a time in this
@@ -899,7 +901,8 @@ module cluster_migration_failover {
   action markNodeRecovered(n: NodeId): bool = all {
     nodes.get(n).member,
     nodes' = nodes.set(n, { ...nodes.get(n), fail: false }),
-    // TR-CLUSTER-025: no epoch bump (FM-CLUSTER-014 anti-churn).
+    // TR-CLUSTER-025: no epoch bump (FM-CLUSTER-014 anti-churn) — disclaimer only,
+    // see the header note; not asserted by any invariant in this model.
     epoch' = epoch,
     slots' = slots,
     migrations' = migrations,

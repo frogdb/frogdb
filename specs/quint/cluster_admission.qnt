@@ -45,6 +45,15 @@
 // FM-CLUSTER-101 (voter-set removal) and INV-EPOCH-1/2 (config-epoch arbitration) —
 // neither the voter-set claim nor epochs enter this model.
 //
+// Assumption: `NodeId` is a stable model parameter, so `member_of: Some(selfId)` and
+// every other `member_of`/`raft_origin` comparison implicitly assumes a node's id is
+// itself stable across `restart`. The state-space row "This node's own id"
+// (cluster.md:116) says the opposite: id is re-derived at every boot
+// (`ClusterConfigSection::effective_node_id`) and only stays fixed if
+// `cluster-node-id` is explicitly configured non-zero — left at the default, a fresh
+// id is minted on every boot. This model does not represent that instability; it
+// assumes the configured-non-zero case.
+//
 // Deviations from the brief's literal field notation, both purely syntactic (Quint has
 // no built-in Option/None; see quint-lang's Basic spells section):
 //   - `Intent`'s "undecided" case is named `Undecided`, not the brief's bare `None` —

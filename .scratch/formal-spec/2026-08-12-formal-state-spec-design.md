@@ -270,7 +270,8 @@ Phased per area, each phase leaving the tree green (lint, mutation gates, full s
 2. **Cluster** — starts only after the pending rulings are settled (decision 3). Write
    state space + TR rows constructively, absorb FM rows and INV text, land the first two
    Quint models (migration×failover, admission window) and the quint-connect harness.
-   **Complete**: state space + TR rows in `specs/cluster.md`; the two models
+   **Complete**: state space + TR rows in `specs/cluster.md`, absorbing the FM rows and INV
+   text this phase's description promises; the two models
    (`specs/quint/cluster_migration_failover.qnt`, `specs/quint/cluster_admission.qnt`); the
    quint-connect conformance harness
    (`frogdb-server/crates/cluster/tests/quint_conformance.rs`); and the nightly `quint verify`
