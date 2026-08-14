@@ -49,6 +49,15 @@ Ruling: **fix the protocol** (reviewer's resolution (a), option 1).
   handshake may require the new capability outright rather than gate on it. Get the
   spec/protocol correct; do not carry a compat shim.
 
+## MAJ-3 — FM-REPLICATION-019 contradicts the State-space table on offset rewind
+
+Ruling: **accept, file issue** — the rewind is the truth (a node must never claim
+bytes it did not apply); FM-019's continuity cell is the lie. Amend FM-019, add a
+downstream-ahead-of-new-primary FM row (full resync forced) with forcing tests. Filed
+as [replication issue 32](../replication-correctness/issues/open/32-fm-019-offset-rewind-truth-reconciliation.md)
+(ready-for-agent); rides the implementation wave. Coordinate with issue 24's atomic
+replid/offset pairing.
+
 ## MAJ-5 — source write pause unfenced after `barrier_ms` deletion
 
 Ruling: **redesign, option B — source-authoritative-until-commit** (filed as
