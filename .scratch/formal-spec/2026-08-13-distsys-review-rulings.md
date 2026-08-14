@@ -269,3 +269,21 @@ mutation gate. TR-BLOCKING-001/013 citations re-derived against the restated row
 Filed as
 [spec-gaps issue 18](../spec-gaps/issues/open/18-slot-drain-orders-by-registration-ordinal.md)
 (ready-for-agent); rides the implementation wave.
+
+## MAJ-16 — `Satisfaction::Retry` silently drops a live waiter; unrowed
+
+Ruling: **accept, investigate-first** (reviewer's resolution with the reachability
+question made step 1). `Retry => continue` drops the entry with its `response_tx` —
+in a release build the two `debug_assert!(false)` arms become a silent nil for a
+client that should have stayed parked, and the documented cause ("lost a race to an
+earlier waiter") is not reachable as written (`check_key` runs immediately before
+every `satisfy` on the same serial thread). Issue step 1 settles reachability
+(targeted construction attempt + mutants evidence over `blocking.rs`). If dead:
+`unreachable!()` — fail-stop over a silent wrong answer — and the row states the
+resolution taxonomy is total without Retry. If reachable: re-register the entry
+(Redis shape — the client stays blocked), never a silent nil; row + forcing test.
+Either branch kills the `Err(_) → bare Response::Null` path (wrong-shape family).
+Filed as
+[spec-gaps issue 19](../spec-gaps/issues/open/19-satisfaction-retry-resolved-dead-or-reregister.md)
+(ready-for-agent); rides the implementation wave. Coordinate with spec-gaps issue 13
+(same machinery — the arms may move or vanish in the run-loop restructure).
