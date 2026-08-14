@@ -31,11 +31,16 @@
 //!   - `migrations.*.cancelling` — no residue/repatriation bookkeeping exists in code
 //!     (see divergences below); there is nothing to project it onto.
 //!   - `armed_barriers`, `failover_fence` — the model's explicit barrier-arm ghost
-//!     state (`armFailoverFence`); the production barrier planner
-//!     (`handoff_barrier.rs::plan_handoff_action`) lives in `frogdb-cluster-runtime`,
-//!     not `frogdb-cluster`, and is not reachable from this crate's test target. Per
-//!     the task brief: "if it lives outside the crate, project only replicated state
-//!     and note the exclusion" — noted here.
+//!     state (`armFailoverFence`). NOT unprojectable in principle: `barrierArmed(s)` is
+//!     a pure function of state this harness already carries (a live, undrained
+//!     `SlotHandoff` inside its window, via `MigrationProj`/`HandoffProj`), and
+//!     `SlotHandoff`'s window predicates live in `frogdb-cluster`'s own `types.rs`, not
+//!     `frogdb-cluster-runtime`. Excluded here as redundant with
+//!     `migrations.*.handoff` rather than as permanently unprojectable; the production
+//!     barrier *planner* (`handoff_barrier.rs::plan_handoff_action`, which acts on that
+//!     state) does live in `frogdb-cluster-runtime` and is out of this crate's reach,
+//!     but that is a reason not to drive the planner from here, not a reason the ghost
+//!     state itself has no counterpart.
 //!   - `provisional_target` — a ghost "who provisionally owns this slot" tracker with
 //!     no code counterpart (code has no provisional-ownership concept distinct from
 //!     `slot_assignment`).
@@ -166,17 +171,40 @@
 //! — so `State::from_spec` sees a genuinely empty ITF record and `ClusterProjection`'s
 //! required fields cannot deserialize from it. `ScriptedProj` (below) makes this
 //! explicit: an empty record decodes as `ScriptedProj::NoSpecState`, which compares
-//! equal to anything, and the refusal itself is asserted directly in each affected
-//! run's terminal scripted closure (`assert!(result.is_err(), ...)` against
-//! `ClusterState::apply_local`'s own return). Search this file for "Terminal `.fail()`
-//! step" to find all five.
+//! equal to anything — but (final-review I5) only when the test opted in via
+//! `ScriptedDriver::new_expecting_terminal_fail` *and* the empty record showed up on
+//! that test's last scripted step; both are tracked in thread-local cells
+//! (`EXPECTS_TERMINAL_FAIL`, `AT_FINAL_SCRIPTED_STEP`) since `from_spec` is a `State`
+//! trait static method with no driver reference of its own. An empty record anywhere
+//! else — the wrong test, or mid-trace — is treated as a real deserialize failure
+//! instead, so a model refactor that starts emitting empty projections outside this
+//! narrow idiom fails loudly rather than silently disabling state checking. The
+//! refusal itself is still asserted directly in each affected run's terminal scripted
+//! closure (`assert!(result.is_err(), ...)` against `ClusterState::apply_local`'s own
+//! return). Search this file for "Terminal `.fail()` step" to find all five.
+//!
+//! That per-step error handling only reaches the test failure message intact because
+//! of a companion fix (final-review I2): quint-connect's `replay_traces` owns the
+//! `ScriptedDriver` by value and drops it on every exit from its loop, including an
+//! ordinary early `return Err(...)` from a failed `step()`/state comparison — a
+//! non-panicking scope exit. `Drop for ScriptedDriver` used to unconditionally assert
+//! the script was exhausted, which — since the script is essentially never empty
+//! mid-replay — panicked with its own generic message on that unwind path, discarding
+//! whatever specific error `step()` or `check_state` had just produced before
+//! quint-connect's macro could ever see it. A `REPLAY_DIVERGED` thread-local, set by
+//! every one of those specific error sites (`step`'s mismatch/exhaustion branches,
+//! `ScriptedProj::from_spec`'s deserialize-failure branch, `PartialEq`'s divergence
+//! branch) before they return, now tells `Drop` to stay silent whenever something more
+//! specific already fired; it still asserts on a genuine dropped-trailing-step bug
+//! (script non-empty, nothing else flagged, `steps_applied > 0`).
 
 use frogdb_cluster::{
-    ClusterCommand, ClusterState, HANDOFF_BARRIER_MS, HANDOFF_LEASE_MS, NodeInfo, NodeRole,
-    SlotRange,
+    ClusterCommand, ClusterError, ClusterResponse, ClusterState, HANDOFF_BARRIER_MS,
+    HANDOFF_LEASE_MS, NodeInfo, NodeRole, SlotRange,
 };
 use quint_connect::{Driver, Result, State, quint_run, switch};
 use serde::Deserialize;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
@@ -248,6 +276,23 @@ fn addr(n: u64) -> SocketAddr {
 
 fn cluster_addr(n: u64) -> SocketAddr {
     format!("127.0.0.1:{}", 26379 + n).parse().unwrap()
+}
+
+// I6: every `ClusterDriver` helper below used to discard its `apply_local` result
+// with a blanket `let _ = ...`, so a code-refuses/model-proceeds divergence — the
+// most interesting failure class this harness exists to catch — surfaced only as
+// an opaque projection diff several steps later, if at all (final-review I6). None
+// of the helpers are reachable from a step any test expects to be refused: every
+// refusal-testing named run below calls `ClusterState::apply_local` directly and
+// asserts `is_err()` itself (see the module header's `.fail()`-terminated-run
+// discussion), bypassing these helpers entirely. So an `Err` surfacing here is
+// always itself the divergence worth seeing immediately, not a case to fold into
+// the projection — panic with the command name and the underlying error rather
+// than discard it.
+fn expect_applied(result: std::result::Result<ClusterResponse, ClusterError>, what: &str) {
+    if let Err(e) = result {
+        panic!("ClusterDriver::{what}: apply_local refused unexpectedly: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -323,44 +368,58 @@ impl ClusterDriver {
             QOpt::Some(p) => Some(p as u64),
             QOpt::None => None,
         };
-        let _ = self.state.apply_local(ClusterCommand::SetRole {
-            node_id: n as u64,
-            role,
-            primary_id,
-        });
+        expect_applied(
+            self.state.apply_local(ClusterCommand::SetRole {
+                node_id: n as u64,
+                role,
+                primary_id,
+            }),
+            "set_role",
+        );
     }
 
     // Diverges from the model (issue 20): code's RemoveNode has no "still owns
     // slots" guard, and no `force` field at all — both `force` values map to
     // the same unconditional command. See the module-level design note.
     fn remove_node(&mut self, n: i64, _force: bool) {
-        let _ = self
-            .state
-            .apply_local(ClusterCommand::RemoveNode { node_id: n as u64 });
+        expect_applied(
+            self.state
+                .apply_local(ClusterCommand::RemoveNode { node_id: n as u64 }),
+            "remove_node",
+        );
     }
 
     fn assign_slot(&mut self, s: i64, n: i64) {
-        let _ = self.state.apply_local(ClusterCommand::AssignSlots {
-            node_id: n as u64,
-            slots: vec![SlotRange::new(s as u16, s as u16)],
-        });
+        expect_applied(
+            self.state.apply_local(ClusterCommand::AssignSlots {
+                node_id: n as u64,
+                slots: vec![SlotRange::new(s as u16, s as u16)],
+            }),
+            "assign_slot",
+        );
     }
 
     fn remove_slot(&mut self, s: i64) {
         if let Some(owner) = self.state.get_slot_owner(s as u16) {
-            let _ = self.state.apply_local(ClusterCommand::RemoveSlots {
-                node_id: owner,
-                slots: vec![SlotRange::new(s as u16, s as u16)],
-            });
+            expect_applied(
+                self.state.apply_local(ClusterCommand::RemoveSlots {
+                    node_id: owner,
+                    slots: vec![SlotRange::new(s as u16, s as u16)],
+                }),
+                "remove_slot",
+            );
         }
     }
 
     fn begin_migration(&mut self, s: i64, source: i64, target: i64) {
-        let _ = self.state.apply_local(ClusterCommand::BeginSlotMigration {
-            slot: s as u16,
-            source_node: source as u64,
-            target_node: target as u64,
-        });
+        expect_applied(
+            self.state.apply_local(ClusterCommand::BeginSlotMigration {
+                slot: s as u16,
+                source_node: source as u64,
+                target_node: target as u64,
+            }),
+            "begin_migration",
+        );
     }
 
     // Diverges from the model (issue 17): code refuses (`HandoffNotReady`) a
@@ -371,23 +430,28 @@ impl ClusterDriver {
             return;
         };
         let now = self.tick();
-        let _ = self.state.apply_local(ClusterCommand::PrepareSlotHandoff {
-            slot: s as u16,
-            source_node: migration.source_node,
-            target_node: migration.target_node,
-            barrier_ms: HANDOFF_BARRIER_MS,
-            lease_ms: HANDOFF_LEASE_MS,
-            proposed_at_ms: now,
-        });
+        expect_applied(
+            self.state.apply_local(ClusterCommand::PrepareSlotHandoff {
+                slot: s as u16,
+                source_node: migration.source_node,
+                target_node: migration.target_node,
+                barrier_ms: HANDOFF_BARRIER_MS,
+                lease_ms: HANDOFF_LEASE_MS,
+                proposed_at_ms: now,
+            }),
+            "prepare_handoff",
+        );
     }
 
     fn confirm_drained(&mut self, s: i64, seq: i64) {
-        let _ = self
-            .state
-            .apply_local(ClusterCommand::ConfirmSlotHandoffDrained {
-                slot: s as u16,
-                seq: seq as u64,
-            });
+        expect_applied(
+            self.state
+                .apply_local(ClusterCommand::ConfirmSlotHandoffDrained {
+                    slot: s as u16,
+                    seq: seq as u64,
+                }),
+            "confirm_drained",
+        );
     }
 
     fn complete_migration(&mut self, s: i64, _seq: i64) {
@@ -395,45 +459,56 @@ impl ClusterDriver {
             return;
         };
         let now = self.tick();
-        let _ = self
-            .state
-            .apply_local(ClusterCommand::CompleteSlotMigration {
-                slot: s as u16,
-                source_node: migration.source_node,
-                target_node: migration.target_node,
-                proposed_at_ms: now,
-            });
+        expect_applied(
+            self.state
+                .apply_local(ClusterCommand::CompleteSlotMigration {
+                    slot: s as u16,
+                    source_node: migration.source_node,
+                    target_node: migration.target_node,
+                    proposed_at_ms: now,
+                }),
+            "complete_migration",
+        );
     }
 
     fn abort_handoff(&mut self, s: i64, seq: i64) {
-        let _ = self.state.apply_local(ClusterCommand::AbortSlotHandoff {
-            slot: s as u16,
-            seq: seq as u64,
-        });
+        expect_applied(
+            self.state.apply_local(ClusterCommand::AbortSlotHandoff {
+                slot: s as u16,
+                seq: seq as u64,
+            }),
+            "abort_handoff",
+        );
     }
 
     // Diverges from the model (issue 15): code removes the migration record
     // unconditionally and immediately; there is no repatriation phase, so
     // `cancelling`/`repatriating` have no code counterpart at all.
     fn cancel_migration(&mut self, s: i64) {
-        let _ = self
-            .state
-            .apply_local(ClusterCommand::CancelSlotMigration { slot: s as u16 });
+        expect_applied(
+            self.state
+                .apply_local(ClusterCommand::CancelSlotMigration { slot: s as u16 }),
+            "cancel_migration",
+        );
     }
 
     // No code counterpart: no `CompleteRepatriation` command exists (issue 15).
     fn complete_repatriation(&mut self, _s: i64) {}
 
     fn mark_node_failed(&mut self, n: i64) {
-        let _ = self
-            .state
-            .apply_local(ClusterCommand::MarkNodeFailed { node_id: n as u64 });
+        expect_applied(
+            self.state
+                .apply_local(ClusterCommand::MarkNodeFailed { node_id: n as u64 }),
+            "mark_node_failed",
+        );
     }
 
     fn mark_node_recovered(&mut self, n: i64) {
-        let _ = self
-            .state
-            .apply_local(ClusterCommand::MarkNodeRecovered { node_id: n as u64 });
+        expect_applied(
+            self.state
+                .apply_local(ClusterCommand::MarkNodeRecovered { node_id: n as u64 }),
+            "mark_node_recovered",
+        );
     }
 
     // No code counterpart: `armed_barriers`/`failover_fence` are pure ghost
@@ -449,11 +524,14 @@ impl ClusterDriver {
     // drain/offset-parity barrier (issue 26 — graceful path only in the
     // model).
     fn failover(&mut self, old: i64, succ: i64, force: bool) {
-        let _ = self.state.apply_local(ClusterCommand::Failover {
-            old_primary_id: old as u64,
-            new_primary_id: succ as u64,
-            force,
-        });
+        expect_applied(
+            self.state.apply_local(ClusterCommand::Failover {
+                old_primary_id: old as u64,
+                new_primary_id: succ as u64,
+                force,
+            }),
+            "failover",
+        );
     }
 
     // No code counterpart: no `FeedBuffer`-shaped command exists at all
@@ -632,17 +710,64 @@ fn new_driver() -> ClusterDriver {
 // the spec text) rather than mechanically decoded from the trace.
 type ScriptStep = (&'static str, Box<dyn FnMut(&mut ClusterDriver)>);
 
+// I2/I5: per-test/per-step bookkeeping `ScriptedDriver::step`, `ScriptedProj::from_spec`
+// and `impl PartialEq for ScriptedProj` cooperatively maintain, since none of those three
+// have a shared owner (`from_spec` is a `State` trait static method with no driver
+// reference, and `Drop for ScriptedDriver` below runs on every early return out of
+// quint-connect's `replay_traces` — see the module header's I2 note). `thread_local!` is
+// safe here because both `cargo test`'s default per-test thread and `cargo nextest`'s
+// per-test process isolate one test's execution from the next; constructors still reset
+// every cell explicitly so a reused OS thread under the plain `cargo test` harness can't
+// leak a previous test's state into this one.
+thread_local! {
+    // I2: set the moment a real error is already in flight for this test (a script/trace
+    // action mismatch, an unexpected empty spec state, or a genuine state divergence) so
+    // `Drop for ScriptedDriver` knows not to assert over it — see that impl's comment.
+    static REPLAY_DIVERGED: Cell<bool> = const { Cell::new(false) };
+    // I5: only a test built via `ScriptedDriver::new_expecting_terminal_fail` may have
+    // its terminal scripted step observe a genuinely empty ITF record.
+    static EXPECTS_TERMINAL_FAIL: Cell<bool> = const { Cell::new(false) };
+    // I5: set by `step()` the moment it pops the script's last entry; `from_spec` only
+    // honors an empty record as the known `.fail()`-terminal-step idiom while this is
+    // true, so a mid-trace empty record (a model refactor gone wrong) fails loudly
+    // instead of silently disabling state checking for the rest of the run.
+    static AT_FINAL_SCRIPTED_STEP: Cell<bool> = const { Cell::new(false) };
+}
+
 struct ScriptedDriver {
     inner: ClusterDriver,
     script: std::collections::VecDeque<ScriptStep>,
+    // I2: distinguishes "the script was genuinely exhausted" (empty, fine) from
+    // "nothing ever ran" (e.g. `quint` itself failed before any step reached this
+    // driver — the missing-binary case) from a script that is non-empty because a
+    // trace lost a trailing step (a real bug, see F6). Only the last case should
+    // trip `Drop`'s exhaustion assert.
+    steps_applied: usize,
 }
 
 impl ScriptedDriver {
     fn new(script: Vec<ScriptStep>) -> Self {
+        REPLAY_DIVERGED.with(|f| f.set(false));
+        EXPECTS_TERMINAL_FAIL.with(|f| f.set(false));
+        AT_FINAL_SCRIPTED_STEP.with(|f| f.set(false));
         ScriptedDriver {
             inner: ClusterDriver::new(),
             script: script.into(),
+            steps_applied: 0,
         }
+    }
+
+    /// Like `new`, but opts this test into `ScriptedProj::from_spec`'s `NoSpecState`
+    /// bypass (I5): only a driver built this way may have its final scripted step
+    /// observe a genuinely empty ITF record (the `.fail()`-guarded terminal-action
+    /// idiom — see the module header's "Why `.fail()`-terminated runs..." section).
+    /// Use for the five named runs whose script's last entry asserts
+    /// `apply_local(...).is_err()` directly; every other test uses `new`, for which
+    /// any empty record at any step is treated as a real deserialize failure.
+    fn new_expecting_terminal_fail(script: Vec<ScriptStep>) -> Self {
+        let driver = Self::new(script);
+        EXPECTS_TERMINAL_FAIL.with(|f| f.set(true));
+        driver
     }
 }
 
@@ -695,7 +820,17 @@ impl PartialEq for ScriptedProj {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ScriptedProj::NoSpecState, _) | (_, ScriptedProj::NoSpecState) => true,
-            (ScriptedProj::Full(a), ScriptedProj::Full(b)) => a == b,
+            (ScriptedProj::Full(a), ScriptedProj::Full(b)) => {
+                let equal = a == b;
+                if !equal {
+                    // I2: quint-connect's `check_state` is about to `bail!("State
+                    // invariant failed")` off the back of this comparison — flag it
+                    // so `Drop for ScriptedDriver` doesn't mask that with its own
+                    // exhaustion assert.
+                    REPLAY_DIVERGED.with(|f| f.set(true));
+                }
+                equal
+            }
         }
     }
 }
@@ -777,11 +912,29 @@ impl State<ScriptedDriver> for ScriptedProj {
         if let itf::Value::Record(rec) = &value
             && rec.is_empty()
         {
-            return Ok(ScriptedProj::NoSpecState);
+            // I5: the `NoSpecState` bypass is opt-in per test (`EXPECTS_TERMINAL_FAIL`)
+            // and restricted to the trace's final scripted step
+            // (`AT_FINAL_SCRIPTED_STEP`) — anywhere else, an empty record is a real
+            // divergence (e.g. a model refactor that emits an empty projection
+            // mid-trace), not evidence of the known `.fail()`-terminal-step idiom.
+            let expects_terminal_fail = EXPECTS_TERMINAL_FAIL.with(|f| f.get());
+            let at_final_step = AT_FINAL_SCRIPTED_STEP.with(|f| f.get());
+            if expects_terminal_fail && at_final_step {
+                return Ok(ScriptedProj::NoSpecState);
+            }
+            REPLAY_DIVERGED.with(|f| f.set(true));
+            return Err(anyhow::anyhow!(
+                "ITF trace step carried no state variables (an empty record), but this test \
+                 either wasn't built via `ScriptedDriver::new_expecting_terminal_fail` or this \
+                 wasn't its final scripted step — treating an unexpected empty spec state as a \
+                 real divergence rather than the known `.fail()`-terminal-step idiom (I5)"
+            ));
         }
         let normalized = normalize_removed_node_ghost_fields(value);
-        let proj = ClusterProjection::deserialize(normalized)
-            .map_err(|e| anyhow::anyhow!("Failed to deserialize specification's state: {e}"))?;
+        let proj = ClusterProjection::deserialize(normalized).map_err(|e| {
+            REPLAY_DIVERGED.with(|f| f.set(true));
+            anyhow::anyhow!("Failed to deserialize specification's state: {e}")
+        })?;
         Ok(ScriptedProj::Full(Box::new(proj)))
     }
 }
@@ -791,33 +944,64 @@ impl Driver for ScriptedDriver {
 
     fn step(&mut self, step: &quint_connect::Step) -> Result {
         let action = step.action_taken.as_str();
-        let (expected, mut apply) = self.script.pop_front().ok_or_else(|| {
-            anyhow::anyhow!("script exhausted, but trace has another action `{action}`")
-        })?;
-        anyhow::ensure!(
-            action == expected,
-            "script/trace action mismatch: script expected `{expected}`, trace has `{action}` \
-             (the named run in the .qnt spec no longer matches this test's hardcoded script)"
-        );
+        let Some((expected, mut apply)) = self.script.pop_front() else {
+            // I2: flag before returning — see `Drop`'s comment.
+            REPLAY_DIVERGED.with(|f| f.set(true));
+            return Err(anyhow::anyhow!(
+                "script exhausted, but trace has another action `{action}`"
+            ));
+        };
+        if action != expected {
+            // I2: flag before returning — see `Drop`'s comment.
+            REPLAY_DIVERGED.with(|f| f.set(true));
+            anyhow::bail!(
+                "script/trace action mismatch: script expected `{expected}`, trace has `{action}` \
+                 (the named run in the .qnt spec no longer matches this test's hardcoded script)"
+            );
+        }
+        // I5: record whether this was the script's last entry *before* running the
+        // closure, so `ScriptedProj::from_spec` (called next, on this same step's
+        // trace state) can see it.
+        AT_FINAL_SCRIPTED_STEP.with(|f| f.set(self.script.is_empty()));
         apply(&mut self.inner);
+        self.steps_applied += 1;
         Ok(())
     }
 }
 
-// I6: `step()` above already errors when the trace has more actions than the script; this
-// catches the converse — a named run in the `.qnt` losing a trailing step would otherwise
-// leave the corresponding scripted closure silently never applied, and the test would still
-// pass. `!std::thread::panicking()` avoids masking a real panic (e.g. an `assert!` failure,
-// or code's own invariant panic) with a confusing second one during unwind.
+// I6 (original F6): `step()` above already errors when the trace has more actions than
+// the script; this catches the converse — a named run in the `.qnt` losing a trailing step
+// would otherwise leave the corresponding scripted closure silently never applied, and the
+// test would still pass.
+//
+// I2: quint-connect's `replay_traces` owns the driver *by value* and drops it on every
+// return out of its loop — including a normal early `return Err(...)` triggered by `?` on
+// `driver.step(...)` or `check_state(...)` (state comparison / `ScriptedProj::from_spec`),
+// which is not a panic and runs with `thread::panicking() == false`. Before this fix this
+// impl's `assert!` fired unconditionally there too (the script is essentially never empty
+// mid-replay), turning that ordinary `Err` return into a *different* panic — this
+// exhaustion assert's own generic message — which unwinds out from under the real error
+// before quint-connect's macro ever gets to `panic!("{}", err)` with it. Every one of those
+// other error sites (`step`, `ScriptedProj::from_spec`, and `PartialEq`'s divergence branch)
+// now sets `REPLAY_DIVERGED` first, so this only asserts when nothing more specific already
+// fired. `steps_applied == 0` additionally covers the case where nothing ever reached this
+// driver at all (e.g. `quint` itself failed before trace replay started) — there is no way
+// to tell that apart from an unused script from here, so stay silent rather than guess.
+// `!std::thread::panicking()` still guards a genuine panic (e.g. code's own invariant panic)
+// so this doesn't mask that with a second, confusing one during unwind.
 impl Drop for ScriptedDriver {
     fn drop(&mut self) {
-        if !std::thread::panicking() {
-            assert!(
-                self.script.is_empty(),
-                "script not exhausted: {} scripted step(s) never appeared in the trace",
-                self.script.len()
-            );
+        if std::thread::panicking() {
+            return;
         }
+        if REPLAY_DIVERGED.with(|f| f.get()) || self.steps_applied == 0 {
+            return;
+        }
+        assert!(
+            self.script.is_empty(),
+            "script not exhausted: {} scripted step(s) never appeared in the trace",
+            self.script.len()
+        );
     }
 }
 
@@ -867,7 +1051,7 @@ fn graceful_failover_before_prepare_test() -> ScriptedDriver {
 )]
 #[ignore = "pending issue 15 — observed failure is a panic inside production code, not a missing barrier: commands.rs:108 `cluster state invariants violated after apply_command: INV-MIG-1: slot 1 is migrating from 1 but is owned by 3` (graceful Failover never prunes migrations sourced at the old primary); previously miscited to issue 26 (F2/F4) — see issue 15's witness section and .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn graceful_failover_refuses_without_barrier_test() -> ScriptedDriver {
-    ScriptedDriver::new(vec![
+    ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
         step_("beginMigration", |d| d.begin_migration(1, 1, 2)),
         // Terminal `.fail()` step (F3): asserted directly rather than scripted through
@@ -976,7 +1160,7 @@ fn cancel_before_repatriation_test() -> ScriptedDriver {
 )]
 #[ignore = "pending issue 15 — no repatriation phase exists in code, so there is no repatriating-phase re-entry guard to refuse a second Cancel; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn cancel_refused_while_repatriating_test() -> ScriptedDriver {
-    ScriptedDriver::new(vec![
+    ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
         step_("beginMigration", |d| d.begin_migration(1, 1, 2)),
         step_("prepareHandoff", |d| d.prepare_handoff(1)),
@@ -1023,7 +1207,7 @@ fn cancel_without_residue_applies_immediately_test() -> ScriptedDriver {
 )]
 #[ignore = "pending issue 17 — code's PrepareSlotHandoff refuses (HandoffNotReady) a re-prepare while the current handoff's lease has not expired, rather than superseding it; see .scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md"]
 fn prepare_supersedes_live_handoff_test() -> ScriptedDriver {
-    ScriptedDriver::new(vec![
+    ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
         step_("beginMigration", |d| d.begin_migration(1, 1, 2)),
         step_("prepareHandoff", |d| d.prepare_handoff(1)),
@@ -1071,7 +1255,7 @@ fn forced_failover_demotes_test() -> ScriptedDriver {
 )]
 #[ignore = "pending issue 19 — ClusterCommand::Failover has no per-object fence fields (no obsEpoch/obsRole) and no fence check, so a stale proposal is never refused; see .scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md"]
 fn failover_refuses_stale_fence_test() -> ScriptedDriver {
-    ScriptedDriver::new(vec![
+    ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
         step_("failoverForced", |d| d.failover(1, 3, true)),
         // Terminal `.fail()` step (F3): asserted directly, see the comment on
@@ -1123,7 +1307,7 @@ fn feed_hold_overflow_disconnects_test() -> ScriptedDriver {
 )]
 #[ignore = "pending issue 20 — the terminal step now asserts directly (ScriptedProj/F3) that RemoveNode is refused; it is not, because code's RemoveNode has no still-owns-slots guard at all and always succeeds; see .scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md"]
 fn remove_node_refuses_live_owner_test() -> ScriptedDriver {
-    ScriptedDriver::new(vec![
+    ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
         // Terminal `.fail()` step (F3): asserted directly, see the comment on
         // `graceful_failover_refuses_without_barrier_test` above. Before this fix, this
@@ -1209,13 +1393,13 @@ fn remove_node_force_evicts_live_owner_test() -> ScriptedDriver {
     spec = "../../../specs/quint/cluster_migration_failover.qnt",
     seed = "20260813"
 )]
-#[ignore = "pending issues 15/17/19/20/26 plus issue 33 (ghost-field finding) — any sampled trace touching failoverGraceful/Auto/Forced, feedBuffer, completeRepatriation, or removeNode diverges immediately (simulation traces use plain ClusterDriver/ClusterProjection, not ScriptedProj, so issue 33's harness-side normalization does not apply here); see the named-run citations above"]
+#[ignore = "pending issues 15/17/19/20/26 plus issue 33 (ghost-field finding) — any sampled trace touching failoverGraceful/Auto/Forced, feedBuffer, completeRepatriation, or removeNode diverges immediately (simulation traces use plain ClusterDriver/ClusterProjection, not ScriptedProj, so issue 33's harness-side normalization does not apply here); see the named-run citations above. Un-ignore owner: .scratch/formal-spec/issues/open/03-phase2-model-hygiene-sweep.md (I7/minor-6) — held additionally on that issue's removeNode-churn fix and simulation-support validation"]
 fn seeded_simulation_test() -> ClusterDriver {
     new_driver()
 }
 
 #[quint_run(spec = "../../../specs/quint/cluster_migration_failover.qnt")]
-#[ignore = "pending issues 15/17/19/20/26 plus issue 33 (ghost-field finding) — any sampled trace touching failoverGraceful/Auto/Forced, feedBuffer, completeRepatriation, or removeNode diverges immediately (simulation traces use plain ClusterDriver/ClusterProjection, not ScriptedProj, so issue 33's harness-side normalization does not apply here); see the named-run citations above"]
+#[ignore = "pending issues 15/17/19/20/26 plus issue 33 (ghost-field finding) — any sampled trace touching failoverGraceful/Auto/Forced, feedBuffer, completeRepatriation, or removeNode diverges immediately (simulation traces use plain ClusterDriver/ClusterProjection, not ScriptedProj, so issue 33's harness-side normalization does not apply here); see the named-run citations above. Un-ignore owner: .scratch/formal-spec/issues/open/03-phase2-model-hygiene-sweep.md (I7/minor-6) — held additionally on that issue's removeNode-churn fix and simulation-support validation"]
 fn unpinned_simulation_test() -> ClusterDriver {
     new_driver()
 }
