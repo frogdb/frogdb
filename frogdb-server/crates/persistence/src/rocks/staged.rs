@@ -19,6 +19,7 @@
 //! Before this module the dir/file names were string literals duplicated
 //! across the three crates; `StagedCheckpoint` is the single owner.
 
+use super::payload::{PayloadCheck, PayloadError, PayloadReport, verify_payload};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -31,10 +32,6 @@ pub const STAGED_CHECKPOINT_DIR: &str = "checkpoint_ready";
 /// Installing the checkpoint carries it into the data dir, coupling offset
 /// durability to snapshot durability (compare Redis' RDB aux fields).
 pub const STAGED_REPLICATION_METADATA_FILE: &str = "replication_metadata.json";
-
-/// RocksDB's manifest pointer; its presence distinguishes a complete database
-/// directory from a partial copy. Same marker `RocksStore::open` trusts.
-const ROCKSDB_CURRENT_MANIFEST: &str = "CURRENT";
 
 /// How many `<db>_backup_<ts>` directories survive a successful install.
 ///
@@ -78,10 +75,23 @@ impl StagedCheckpoint {
         self.dir.exists()
     }
 
-    /// Does the staged dir hold a complete RocksDB database (has `CURRENT`)?
-    /// The installer refuses anything else — see `load_staged_checkpoint`.
+    /// Prove the staged dir holds a complete RocksDB database, naming the
+    /// defect if it does not. The installer refuses anything but `Ok` — see
+    /// `load_staged_checkpoint`.
+    ///
+    /// Structure and payload manifest only ([`verify_payload`]); the install
+    /// pairs this with a trial open through RocksDB itself, which is the party
+    /// that can resolve the MANIFEST to a live SST set.
+    pub fn verify(&self) -> Result<PayloadReport, PayloadError> {
+        verify_payload(&self.dir, PayloadCheck::Sizes)
+    }
+
+    /// [`verify`](Self::verify) as a predicate, for callers that only branch on
+    /// it. Prefer `verify` where the reason can be surfaced: "this staged
+    /// checkpoint is not a database" is the least useful half of what the check
+    /// knows.
     pub fn is_complete_db(&self) -> bool {
-        self.dir.join(ROCKSDB_CURRENT_MANIFEST).exists()
+        self.verify().is_ok()
     }
 
     /// Where the writer stamps the replication metadata inside the staged dir.
@@ -164,12 +174,13 @@ mod tests {
     }
 
     // FM-PERSISTENCE-024
-    /// `exists` and `is_complete_db` are two different questions, and the
-    /// installer asks the second: a staged directory that is merely *there* is
-    /// not a database. Only RocksDB's own `CURRENT` manifest pointer says the
-    /// download finished.
+    /// `exists` and `verify` are two different questions, and the installer
+    /// asks the second: a staged directory that is merely *there* is not a
+    /// database. Nor is one holding a `CURRENT` that resolves to nothing —
+    /// which is exactly what a truncated operator copy leaves behind, and what
+    /// the old `CURRENT.exists()` check accepted.
     #[test]
-    fn is_complete_db_requires_the_rocksdb_manifest_pointer() {
+    fn verify_requires_a_current_pointer_that_resolves_to_a_manifest() {
         let tmp = TempDir::new().unwrap();
         let staged = StagedCheckpoint::in_parent(tmp.path());
         assert!(!staged.exists(), "nothing staged yet");
@@ -183,12 +194,17 @@ mod tests {
             "but a dir of stray SSTs with no CURRENT is not a database"
         );
 
-        std::fs::write(
-            staged.dir().join(ROCKSDB_CURRENT_MANIFEST),
-            b"MANIFEST-000001\n",
-        )
-        .unwrap();
-        assert!(staged.is_complete_db(), "CURRENT is what completes it");
+        std::fs::write(staged.dir().join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+        assert!(
+            !staged.is_complete_db(),
+            "a CURRENT naming a MANIFEST that never arrived is still not a database"
+        );
+
+        std::fs::write(staged.dir().join("MANIFEST-000001"), b"version edits").unwrap();
+        assert!(
+            staged.is_complete_db(),
+            "CURRENT resolving to a real MANIFEST is what completes it"
+        );
     }
 
     /// Backup directory names carry a numeric timestamp suffix — the ordering

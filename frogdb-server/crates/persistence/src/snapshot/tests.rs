@@ -378,8 +378,15 @@ fn stager_fsyncs_metadata_and_staging_dir_before_install() {
 
     let trace = fs.trace(snap.path());
     let t = ".snapshot_00001.tmp";
+    // The metadata sequence, wherever it starts: the payload manifest
+    // (FM-PERSISTENCE-056) is written into the same staging directory first,
+    // and this test owns the ordering of the metadata ops, not their offset.
+    let start = trace
+        .iter()
+        .position(|op| op == &format!("write {t}/metadata.json.tmp"))
+        .unwrap_or_else(|| panic!("metadata must be written: {trace:?}"));
     assert_eq!(
-        trace[..5].to_vec(),
+        trace[start..start + 5].to_vec(),
         vec![
             format!("write {t}/metadata.json.tmp"),
             format!("sync_file {t}/metadata.json.tmp"),
@@ -429,11 +436,77 @@ fn stager_fsyncs_snapshot_dir_after_install_and_after_latest_repoint() {
         "sync_file latest".to_string(),
         "sync_dir .".to_string(),
     ];
+    let start = trace
+        .iter()
+        .position(|op| op == &format!("rename {t} -> snapshot_00001"))
+        .unwrap_or_else(|| panic!("the promotion rename must run: {trace:?}"));
     assert_eq!(
-        trace[4..].to_vec(),
+        trace[start..].to_vec(),
         expected,
         "each publishing rename must be followed by a sync of the directory it \
          published into; got {trace:?}"
+    );
+}
+
+// FM-PERSISTENCE-056
+/// The stager ships a manifest of the checkpoint's own files *inside* the
+/// checkpoint, so a snapshot carries the evidence needed to tell a complete
+/// payload from a truncated copy of one. Inside rather than beside: the
+/// operator restore path (FM-PERSISTENCE-021) copies `snapshot_NNNNN/checkpoint`
+/// alone, so a manifest in `metadata.json` would not survive the trip it exists
+/// to protect. Written and fsynced before the promotion rename publishes the
+/// snapshot, like everything else the stager writes (FM-PERSISTENCE-023).
+#[test]
+fn stager_writes_a_payload_manifest_inside_the_published_checkpoint() {
+    let db = TempDir::new().unwrap();
+    let store = make_store(db.path());
+    let snap = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    let fs = std::sync::Arc::new(crate::fs_seam::RecordingFs::new());
+
+    stager_on(snap.path(), data.path(), 1, 5, fs.clone())
+        .run(&store)
+        .unwrap();
+
+    // The published payload verifies against its own manifest, checksums and
+    // all — the strongest statement `frogctl` can make about a backup.
+    let cp = snap.path().join("snapshot_00001").join("checkpoint");
+    let report =
+        crate::rocks::payload::verify_payload(&cp, crate::rocks::payload::PayloadCheck::Checksums)
+            .expect("a freshly staged checkpoint must verify");
+    assert!(
+        report.payload_manifest_present,
+        "the stager must ship a payload manifest: {report:?}"
+    );
+    assert!(report.checksums_verified);
+    assert!(
+        report.files_checked > 0 && report.bytes_checked > 0,
+        "the manifest must cover the payload's files: {report:?}"
+    );
+
+    let trace = fs.trace(snap.path());
+    let t = ".snapshot_00001.tmp";
+    let m = crate::rocks::payload::PAYLOAD_MANIFEST_FILE;
+    let start = trace
+        .iter()
+        .position(|op| op == &format!("write {t}/checkpoint/{m}"))
+        .unwrap_or_else(|| panic!("the payload manifest must be written: {trace:?}"));
+    assert_eq!(
+        trace[start..start + 3].to_vec(),
+        vec![
+            format!("write {t}/checkpoint/{m}"),
+            format!("sync_file {t}/checkpoint/{m}"),
+            format!("sync_dir {t}/checkpoint"),
+        ],
+        "the manifest's contents and its directory entry must both be durable; got {trace:?}"
+    );
+    let promotion = trace
+        .iter()
+        .position(|op| op == &format!("rename {t} -> snapshot_00001"))
+        .unwrap_or_else(|| panic!("the promotion rename must run: {trace:?}"));
+    assert!(
+        start < promotion,
+        "the manifest must be durable before the snapshot is published: {trace:?}"
     );
 }
 

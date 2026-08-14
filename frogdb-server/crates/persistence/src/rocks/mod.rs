@@ -3,6 +3,7 @@ mod checkpoint;
 pub mod columns;
 pub mod config;
 mod manifest;
+pub mod payload;
 mod reclaim;
 pub mod staged;
 #[cfg(test)]

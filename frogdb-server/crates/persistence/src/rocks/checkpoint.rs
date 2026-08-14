@@ -44,6 +44,56 @@ impl RocksStore {
     pub fn path(&self) -> &Path {
         self.db.path()
     }
+    /// Open `dir` read-only through RocksDB and close it again: does this
+    /// directory hold a database, all of it?
+    ///
+    /// The structural check in [`super::payload`] proves `CURRENT` resolves to a
+    /// MANIFEST; only RocksDB can resolve that MANIFEST to the SST and blob
+    /// files the current version references. Running its own reader is the
+    /// difference between "the files I know to look for are there" and "the
+    /// database opens", and it is deliberately *not* reimplemented here: the
+    /// MANIFEST is a version-coupled `VersionEdit` log, and a hand-rolled
+    /// parser's mis-reads would refuse good checkpoints.
+    ///
+    /// `max_open_files = -1` is load-bearing: it makes the open load a table
+    /// reader for every file the version references, so a missing or truncated
+    /// SST fails *here* rather than on some later read of that key range.
+    ///
+    /// Read-only, so no `LOCK` is taken and the payload is not mutated beyond
+    /// RocksDB's own `LOG`. The merge operator is registered because the
+    /// payload's CFs were written with it; the trial open reads no values, but
+    /// a CF descriptor that disagrees with what wrote the data is not the thing
+    /// under test here.
+    pub(crate) fn trial_open_payload(dir: &Path) -> Result<(), RocksError> {
+        let mut db_opts = rocksdb::Options::default();
+        db_opts.create_if_missing(false);
+        db_opts.create_missing_column_families(false);
+        db_opts.set_paranoid_checks(true);
+        db_opts.set_max_open_files(-1);
+        let cf_names = rocksdb::DB::list_cf(&db_opts, dir)?;
+        let mut cf_opts = rocksdb::Options::default();
+        cf_opts.set_merge_operator(
+            "frogdb-value-merge",
+            super::full_value_merge,
+            super::partial_value_merge,
+        );
+        let descriptors = cf_names
+            .into_iter()
+            .map(|name| rocksdb::ColumnFamilyDescriptor::new(name, cf_opts.clone()));
+        let db =
+            rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_cf_descriptors_read_only(
+                &db_opts,
+                dir,
+                descriptors,
+                // A staged checkpoint legitimately carries WAL files (RocksDB's
+                // checkpoint includes the live log): their presence is not an error,
+                // and replaying them read-only is part of proving the payload opens.
+                false,
+            )?;
+        drop(db);
+        Ok(())
+    }
+
     /// Install a staged full-sync checkpoint (see [`super::staged`] for the
     /// three-party contract), if one is present next to `rocksdb_dir`.
     pub fn load_staged_checkpoint(rocksdb_dir: &Path) -> std::io::Result<bool> {
@@ -65,24 +115,51 @@ impl RocksStore {
             return Ok(false);
         }
         info!(checkpoint_dir = %staged.dir().display(), "Found staged checkpoint, loading...");
-        // Refuse to install a staged directory that is not a complete RocksDB
-        // database. Every valid checkpoint carries a `CURRENT` manifest pointer —
-        // the same marker `RocksStore::open` uses to detect an existing db.
-        // Installing an incomplete directory would move the live database aside
-        // (into `*_backup_*`) and then open a fresh empty db in its place, which
-        // is silent data loss. Validate *before* touching the live dir so the
-        // original data is left untouched on refusal.
-        if !staged.is_complete_db() {
-            tracing::error!(checkpoint_dir = %staged.dir().display(), "Staged checkpoint is missing its CURRENT manifest; refusing to install");
+        // Refuse to install a staged directory that is not a database this node
+        // can actually open. Installing an unopenable directory moves the live
+        // database aside (into `*_backup_*`) and then fails every subsequent
+        // boot with the only good copy sitting beside it — and with
+        // `BACKUP_RETENTION = 1` a retried sync overwrites that copy. So the
+        // whole verdict is reached *before* the first rename, while nothing has
+        // moved:
+        //
+        //   1. structure + payload manifest (`StagedCheckpoint::verify`): does
+        //      `CURRENT` resolve to a real MANIFEST, and is every file the
+        //      payload's own manifest lists present at its recorded size;
+        //   2. trial open (`trial_open_payload`): RocksDB opens the staged
+        //      directory read-only, which is what resolves the MANIFEST to the
+        //      SST/blob set it references. That check belongs to the party that
+        //      owns the format — a hand-rolled MANIFEST reader would be
+        //      version-coupled, and its mis-parses would refuse *good*
+        //      checkpoints.
+        //
+        // A failure here is fatal to the boot rather than a fallback to the live
+        // database: the operator staged this checkpoint deliberately, and
+        // quietly ignoring it would be the "restored server that isn't
+        // restored" failure. The live data is intact, so the recovery is to
+        // remove or re-copy `checkpoint_ready`.
+        let report = staged.verify().map_err(|e| {
+            tracing::error!(checkpoint_dir = %staged.dir().display(), error = %e, "Staged checkpoint failed verification; refusing to install");
+            std::io::Error::from(e)
+        })?;
+        if let Err(e) = Self::trial_open_payload(staged.dir()) {
+            tracing::error!(checkpoint_dir = %staged.dir().display(), error = %e, "RocksDB cannot open the staged checkpoint; refusing to install");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "staged checkpoint at {} is incomplete (missing CURRENT manifest); \
+                    "staged checkpoint at {} cannot be opened by RocksDB ({e}); \
                      refusing to install to avoid moving the live database aside",
                     staged.dir().display()
                 ),
             ));
         }
+        info!(
+            checkpoint_dir = %staged.dir().display(),
+            manifest = %report.manifest,
+            payload_manifest = report.payload_manifest_present,
+            files_checked = report.files_checked,
+            "Staged checkpoint verified"
+        );
 
         let db_name = rocksdb_dir
             .file_name()

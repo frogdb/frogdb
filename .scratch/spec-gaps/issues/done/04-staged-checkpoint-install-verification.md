@@ -1,6 +1,6 @@
 # Staged-checkpoint install verification: real completeness check, payload manifest, rollback
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

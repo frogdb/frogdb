@@ -25,6 +25,10 @@ pub use data_dir::{DataDirMarker, DataDirMarkerError};
 pub use recovery::{
     RecoveryError, RecoveryStats, RestoreSink, recover_shard_into, recover_warm_shard_into,
 };
+pub use rocks::payload::{
+    PAYLOAD_MANIFEST_FILE, PayloadCheck, PayloadError, PayloadFile, PayloadManifest, PayloadReport,
+    verify_payload,
+};
 pub use rocks::{CfTier, CompressionType, RocksConfig, RocksStore, StagedCheckpoint};
 pub use serialization::{
     DatasetEntry, HEADER_SIZE, SerializationError, append_entry, deserialize, merge_hll_serialized,

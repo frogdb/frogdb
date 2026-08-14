@@ -95,6 +95,7 @@ impl SnapshotStager {
         let guard = TmpDirGuard::new(&self.tmp);
 
         let seq = self.stage_checkpoint(rocks)?;
+        self.write_payload_manifest()?;
         // NOTE (proposal 23 — search-sidecar layout, DELETE branch): a snapshot no
         // longer copies the search-index sidecar (`<data_dir>/search`) into the
         // checkpoint. The former `copy_indexes` step produced an *unconsumed
@@ -153,6 +154,40 @@ impl SnapshotStager {
             .create_checkpoint(&cp)
             .map_err(|e| SnapshotError::Internal(format!("Failed to create checkpoint: {e}")))?;
         Ok(seq)
+    }
+
+    /// Record every file of the checkpoint — relative name, size, xxh3 — in a
+    /// [`PayloadManifest`] written *inside* the checkpoint directory.
+    ///
+    /// Inside, not beside: the restore path an operator follows
+    /// (FM-PERSISTENCE-021) copies `snapshot_NNNNN/checkpoint/.` into
+    /// `checkpoint_ready` and leaves `metadata.json` behind, so a manifest
+    /// stored next to the payload would never reach the installer that has to
+    /// check it. RocksDB ignores file names it cannot parse, so the file is
+    /// inert once the payload becomes a live database.
+    ///
+    /// Why the snapshot path and not [`RocksStore::create_checkpoint`]: a
+    /// snapshot is the long-lived artifact that sits on bit-rotting media until
+    /// somebody needs it, and hashing it once per save is the price of being
+    /// able to answer "is this backup still good" without restoring it. A
+    /// replica full sync's checkpoint is transient and already checksummed file
+    /// by file on the wire, so it is not made to pay for a second full read.
+    ///
+    /// Durability follows the same rule as every other publisher here
+    /// ([`crate::fs_seam`]): the file's contents are fsynced, then the directory
+    /// that gained the name — the checkpoint dir, not the staging dir, since
+    /// that is where the entry appears.
+    fn write_payload_manifest(&self) -> Result<(), SnapshotError> {
+        let cp = self.tmp.join("checkpoint");
+        let manifest = crate::rocks::payload::PayloadManifest::build(&cp)?;
+        let bytes = manifest.to_bytes().map_err(|e| {
+            SnapshotError::Internal(format!("Failed to serialize payload manifest: {e}"))
+        })?;
+        let path = cp.join(crate::rocks::payload::PAYLOAD_MANIFEST_FILE);
+        self.fs.write(&path, &bytes)?;
+        self.fs.sync_file(&path)?;
+        self.fs.sync_dir(&cp)?;
+        Ok(())
     }
 
     /// Compute the size, then write `metadata.json` atomically (`.tmp` + rename).

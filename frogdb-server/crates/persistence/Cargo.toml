@@ -32,6 +32,9 @@ parking_lot.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Checkpoint payload manifests hash each file with xxh3 — bit-rot detection for
+# a backup artifact, not a security boundary (see `rocks::payload`).
+xxhash-rust.workspace = true
 tokio-metrics = { workspace = true }
 
 [dev-dependencies]

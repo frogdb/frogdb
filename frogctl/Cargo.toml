@@ -25,6 +25,11 @@ path = "tests/main.rs"
 required-features = ["cli-tests"]
 
 [dependencies]
+# `backup checkpoint-verify` runs the *same* payload verification the boot-time
+# install runs (`frogdb_persistence::verify_payload`). Reimplementing it here
+# would let the operator's pre-restore check and the node's install check drift
+# apart, which is the one thing this command must not do.
+frogdb-persistence.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde.workspace = true

@@ -565,6 +565,91 @@ fn test_load_staged_checkpoint_incomplete_dir_refuses_and_preserves_data() {
     );
 }
 
+/// The `MANIFEST-NNNNNN` file `CURRENT` points at, inside a RocksDB directory.
+fn manifest_path(dir: &Path) -> PathBuf {
+    let current = fs::read_to_string(dir.join("CURRENT")).unwrap();
+    dir.join(current.trim())
+}
+
+/// Assert the live database at `data` was left exactly where it was, with the
+/// staged directory still on disk for the operator to inspect or re-copy.
+fn assert_install_refused_without_touching_live_db(parent: &Path, data: &Path, crd: &Path) {
+    assert_eq!(read_db(data, b"k"), Some(b"keep".to_vec()));
+    assert!(
+        backup_dirs(parent, "data").is_empty(),
+        "the live db must not be moved aside for a checkpoint that cannot replace it"
+    );
+    assert!(
+        crd.exists(),
+        "the rejected staged dir should be left for inspection"
+    );
+}
+
+// FM-PERSISTENCE-024
+/// Structure is not openability. This staged dir passes every check a
+/// filesystem-level reader can make — `CURRENT` is present and names a
+/// `MANIFEST` that exists — but the MANIFEST's contents are garbage, so no
+/// database can be recovered from it. Only RocksDB can reach that verdict, so
+/// the install trial-opens the payload read-only *before* the first rename.
+/// Without the trial open the live db is renamed aside and the boot then fails
+/// with the only good copy sitting beside it — and `BACKUP_RETENTION = 1` means
+/// a retried sync overwrites that copy.
+#[test]
+fn test_load_staged_checkpoint_refuses_a_payload_rocksdb_cannot_open() {
+    let t = TempDir::new().unwrap();
+    let parent = t.path();
+    let data = parent.join("data");
+    let crd = parent.join("checkpoint_ready");
+    write_db(&data, b"k", b"keep");
+    write_db(&crd, b"k", b"new");
+    // Structurally intact, semantically destroyed: CURRENT still resolves.
+    fs::write(manifest_path(&crd), b"not a version edit log").unwrap();
+    assert!(
+        StagedCheckpoint::for_db_dir(&data)
+            .unwrap()
+            .verify()
+            .is_ok(),
+        "precondition: the structural check cannot see this damage"
+    );
+
+    let err = RocksStore::load_staged_checkpoint(&data)
+        .expect_err("install must refuse a payload RocksDB cannot open");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert_install_refused_without_touching_live_db(parent, &data, &crd);
+}
+
+// FM-PERSISTENCE-056
+/// A staged payload that disagrees with the manifest shipped inside it is
+/// refused before any rename. The truncation here is the shape a stalled copy
+/// leaves behind — a file present at the right name and the wrong length —
+/// which the payload manifest catches without opening the database at all.
+#[test]
+fn test_load_staged_checkpoint_refuses_a_payload_that_disagrees_with_its_manifest() {
+    let t = TempDir::new().unwrap();
+    let parent = t.path();
+    let data = parent.join("data");
+    let crd = parent.join("checkpoint_ready");
+    write_db(&data, b"k", b"keep");
+    write_db(&crd, b"k", b"new");
+    let manifest = crate::rocks::payload::PayloadManifest::build(&crd).unwrap();
+    fs::write(
+        crd.join(crate::rocks::payload::PAYLOAD_MANIFEST_FILE),
+        manifest.to_bytes().unwrap(),
+    )
+    .unwrap();
+    // A copy that stopped partway through the MANIFEST.
+    fs::write(manifest_path(&crd), b"").unwrap();
+
+    let err = RocksStore::load_staged_checkpoint(&data)
+        .expect_err("install must refuse a payload that disagrees with its manifest");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("MANIFEST-"),
+        "the error must name the file that disagrees: {err}"
+    );
+    assert_install_refused_without_touching_live_db(parent, &data, &crd);
+}
+
 // FM-PERSISTENCE-025
 /// Crash window: the install renamed the live db to `*_backup_*` but crashed
 /// *before* renaming the staged dir into place. On reboot the on-disk layout is

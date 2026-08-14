@@ -25,6 +25,19 @@ Each completed snapshot is a directory `snapshot_NNNNN/` under `snapshot-dir`, c
 - `search/` — a copy of the search-index sidecar, if search indexes exist
 - `metadata.json` — epoch, sequence number, and size
 
+`checkpoint/` also carries `frogdb_payload.json`: every file in the payload with its size and
+checksum, written and fsynced before the snapshot is published. It travels *inside* the
+checkpoint so it survives the copy that matters — the restore below copies `checkpoint/`
+and nothing else. Check any snapshot, on any host, without a running server:
+
+```bash
+frogctl backup checkpoint-verify /var/lib/frogdb/snapshots/latest/checkpoint
+```
+
+That reads every byte and compares checksums (`--quick` checks sizes only, which is what the
+boot-time install does). Worth running on a schedule against off-host copies: bit-rot on backup
+media is otherwise discovered during the restore.
+
 A `latest` symlink always points at the newest complete snapshot. This is not a flat set of DB
 files — treat the whole `snapshot_NNNNN/` directory as the backup unit.
 
@@ -71,6 +84,13 @@ FrogDB looks for `checkpoint_ready` beside `data-dir`, verifies it's a complete 
 any existing `data-dir` aside to `<data-dir>_backup_<unix-timestamp>` (never deletes it), and
 renames `checkpoint_ready` into place as the new `data-dir`.
 
+That verification runs **before** anything moves, and it is three checks, not one: `CURRENT` must
+resolve to a `MANIFEST` that exists; every file listed in the payload's own manifest
+(`frogdb_payload.json`, written by the snapshot stager) must be present at its recorded size; and
+RocksDB must open the staged directory read-only. A staged directory that fails any of them is
+refused with the live `data-dir` untouched and still in place — a bad copy costs you a failed
+start, not your database.
+
 ```bash
 # Assume persistence.data-dir = /var/lib/frogdb/frogdb-data
 DATA_DIR=/var/lib/frogdb/frogdb-data
@@ -88,6 +108,10 @@ if [ -d "$SNAPSHOT/search" ]; then
   cp -a "$SNAPSHOT/search" "$(dirname "$DATA_DIR")/checkpoint_ready/search"
 fi
 chown -R frogdb:frogdb "$(dirname "$DATA_DIR")/checkpoint_ready"
+
+# 2b. Check the copy before betting the restart on it. Exits non-zero if the
+#     payload is incomplete or corrupt; --quick skips the checksum pass.
+frogctl backup checkpoint-verify "$(dirname "$DATA_DIR")/checkpoint_ready" || exit 1
 
 # 3. Restart — recovery installs the staged checkpoint before opening RocksDB,
 #    moving any existing data-dir aside rather than deleting it
