@@ -114,6 +114,25 @@ cross-reference. Coordinate wording with
 - [ ] FM-TXN-013 Invariant reworded to the deferred-fold mechanism; FM-TXN-020
       cross-ref kept; wording consistent with issue 25; `just lint-spec` green
 
+### MIN-13 — a parked continuation keeps the drain barrier up after its requester has gone
+
+Ruling: **accept**. `next_continuation_event` (`vll/src/shard.rs:383-405`)
+selects on the release receiver or `sleep_until(deadline)`, never
+`ready_tx.closed()` — a dead requester's park holds every other connection's
+SCA at `-BUSY` until full drain or the 2 s deadline, re-armed per retry. Grant
+path already cancels (TR-VLL-012); the parked state is the asymmetric gap.
+Every-blocked-state-is-leavable family (same shape as MAJ-21's accept-plus).
+Add the `ready_tx.closed()` arm so an abandoned park drops immediately; extend
+FM-VLL-003's NOT-observable with "the barrier outliving its requester"; build
+the forcing test from the existing
+`parked_continuation_deadline_survives_cancellation` fixture (fails pre-fix:
+park survives cancellation). Composes with issues 22 (absolute deadline) and
+14 (wound-wait) — no ordering constraint.
+
+- [ ] `ready_tx.closed()` arm in `next_continuation_event`
+- [ ] FM-VLL-003 NOT-observable extended; `just lint-spec` green
+- [ ] Forcing test landed (abandoned park drops immediately; fails pre-fix)
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled

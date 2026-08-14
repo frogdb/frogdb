@@ -518,3 +518,12 @@ reworded to the real mechanism so a move-fold-to-WATCH change cannot read
 itself as already compliant; FM-TXN-020 cross-ref kept; wording coordinated
 with issue 25's take-fold rewrite. Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-13 — a parked continuation keeps the drain barrier up after its requester has gone
+
+Ruling: **accept**. Dead requester's park holds shard-wide SCA at `-BUSY` up
+to 2 s, re-armed per retry — every-blocked-state-is-leavable family. Add
+`ready_tx.closed()` arm to `next_continuation_event` (abandoned park drops
+immediately); FM-VLL-003 NOT-observable gains "barrier outliving its
+requester"; forcing test from the existing cancellation fixture. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
