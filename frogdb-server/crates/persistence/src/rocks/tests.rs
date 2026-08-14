@@ -445,12 +445,10 @@ impl Fixture {
         self.layout().staging_dir()
     }
 
-    /// A backup directory with an explicit timestamp, as an interrupted install
+    /// A backup directory with an explicit sequence, as an interrupted install
     /// would have left behind.
-    fn backup(&self, unix_secs: u64) -> PathBuf {
-        self.layout()
-            .backup_root()
-            .join(format!("db_backup_{unix_secs}"))
+    fn backup(&self, seq: u64) -> PathBuf {
+        self.layout().backup_root().join(format!("db_backup_{seq}"))
     }
 
     fn install(&self) -> std::io::Result<bool> {
@@ -525,7 +523,7 @@ fn test_load_staged_checkpoint_installs_and_backs_up_old_db() {
     assert_eq!(read_db(&backups[0], b"k"), Some(b"old".to_vec()));
 }
 
-// FM-PERSISTENCE-023, FM-PERSISTENCE-057
+// FM-PERSISTENCE-023, FM-PERSISTENCE-057, FM-PERSISTENCE-058
 /// The install's crash-window reasoning ("crash between rename 1 and rename 2 is
 /// recoverable") only holds if each rename is durable when the next one runs, so
 /// every directory whose entries change is fsynced after the change — the data
@@ -547,29 +545,40 @@ fn staged_checkpoint_install_fsyncs_every_directory_it_changes() {
     let trace = recorder.trace(&f.root);
     assert_eq!(
         trace.len(),
-        6,
-        "two renames plus the backup root's own publication: {trace:?}"
+        10,
+        "two renames, the backup root's own publication, and the counter's: {trace:?}"
     );
     assert_eq!(
         trace[0], "sync_dir .",
         "the backup root's name must be durable before a database is renamed into \
          it, or the backup is reachable from nowhere: {trace:?}"
     );
+    assert_eq!(
+        &trace[1..5],
+        [
+            "write backup/counter.tmp",
+            "sync_file backup/counter.tmp",
+            "rename backup/counter.tmp -> backup/counter",
+            "sync_dir backup",
+        ],
+        "the sequence the backup is about to be named after is durable first, so a \
+         crash burns a number rather than reusing one (FM-PERSISTENCE-058): {trace:?}"
+    );
     assert!(
-        trace[1].starts_with("rename db -> backup/db_backup_"),
-        "first the live db moves aside, into the data dir's own backup root: {trace:?}"
+        trace[5].starts_with("rename db -> backup/db_backup_"),
+        "then the live db moves aside, into the data dir's own backup root: {trace:?}"
     );
     assert_eq!(
-        trace[2], "sync_dir backup",
+        trace[6], "sync_dir backup",
         "the directory that gained the backup is synced: {trace:?}"
     );
     assert_eq!(
-        trace[3], "sync_dir .",
+        trace[7], "sync_dir .",
         "and so is the one that lost `db`, before the install rename runs: {trace:?}"
     );
-    assert_eq!(trace[4], "rename staging -> db");
+    assert_eq!(trace[8], "rename staging -> db");
     assert_eq!(
-        trace[5], "sync_dir .",
+        trace[9], "sync_dir .",
         "the install rename is the commit point and must be durable: {trace:?}"
     );
 }
@@ -842,7 +851,7 @@ fn test_load_staged_checkpoint_idempotent_after_success() {
 
 // FM-PERSISTENCE-026
 /// A stale `db_backup_*` dir left by an earlier crash must not block a new
-/// install: the new backup gets a distinct timestamped name and the install
+/// install: the new backup gets a distinct counter-named directory and the install
 /// succeeds. Retention (keep the newest `BACKUP_RETENTION = 1`) then prunes
 /// the stale backup, so exactly one backup — the just-displaced live db —
 /// survives. (Before retention existed, every full sync leaked a complete
@@ -897,7 +906,7 @@ fn test_load_staged_checkpoint_crash_recovery_keeps_lone_backup() {
 }
 
 // FM-PERSISTENCE-026
-/// `prune_backups` picks "newest" by the numeric timestamp suffix — string
+/// `prune_backups` picks "newest" by the numeric sequence suffix — string
 /// order would rank `_2` above `_10` and delete the wrong directory.
 #[test]
 fn test_prune_backups_orders_numerically_not_lexically() {
@@ -906,9 +915,10 @@ fn test_prune_backups_orders_numerically_not_lexically() {
     fs::create_dir_all(backup_root.join("db_backup_2")).unwrap();
     fs::create_dir_all(backup_root.join("db_backup_10")).unwrap();
 
-    let removed = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
+    let outcome = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
 
-    assert_eq!(removed, 1);
+    assert_eq!(outcome.removed, 1);
+    assert_eq!(outcome.refused, 0);
     assert!(
         backup_root.join("db_backup_10").exists(),
         "numerically newest (10) must be kept"
@@ -933,11 +943,239 @@ fn test_prune_backups_noop_within_retention() {
     )
     .unwrap();
 
-    let removed = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
+    let outcome = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
 
-    assert_eq!(removed, 0);
+    assert_eq!(
+        outcome,
+        Default::default(),
+        "nothing removed, nothing refused"
+    );
     assert!(backup_root.join("db_backup_5").exists());
     assert!(backup_root.join("db_backup_9").exists());
+}
+
+// FM-PERSISTENCE-058
+/// The first backup a data directory ever takes is named `db_backup_0` — the
+/// counter's first value, not a wall-clock second. The name is the whole point:
+/// with a clock in it, retention order depends on a clock that can step
+/// backwards, and two installs in one second collide.
+#[test]
+fn the_first_backup_is_named_from_the_counter_not_the_clock() {
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
+
+    assert!(f.install().unwrap());
+
+    assert_eq!(
+        f.backups(),
+        vec![f.backup(0)],
+        "the first backup is sequence 0"
+    );
+    assert_eq!(
+        fs::read_to_string(crate::rocks::staged::BackupCounter::path(
+            &f.layout().backup_root()
+        ))
+        .unwrap(),
+        "0",
+        "and the sequence it used is on disk before the rename that used it"
+    );
+}
+
+// FM-PERSISTENCE-058
+/// Two installs inside one wall-clock second — which is what a resync loop
+/// does — must produce two distinct backup names. Under wall-clock naming the
+/// second install renames onto the first backup's directory and fails
+/// `ENOTEMPTY`, i.e. the resync breaks exactly when it is being retried.
+#[test]
+fn two_installs_in_the_same_second_get_distinct_backup_names() {
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"first");
+    write_db(&f.staging(), b"k", b"second");
+    assert!(f.install().unwrap());
+
+    write_db(&f.staging(), b"k", b"third");
+    assert!(
+        f.install().unwrap(),
+        "a second install in the same second must not collide with the first backup"
+    );
+
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"third".to_vec()));
+    assert_eq!(
+        f.backups(),
+        vec![f.backup(1)],
+        "the second backup carries the next sequence, and retention keeps it alone"
+    );
+    assert_eq!(
+        read_db(&f.backup(1), b"k"),
+        Some(b"second".to_vec()),
+        "and it holds the database the second install displaced"
+    );
+}
+
+// FM-PERSISTENCE-026
+/// A directory carrying the backup prefix whose sequence will not parse is
+/// **refused**, not deleted: prune leaves it alone, reports it, and the install
+/// still completes. It used to parse as sequence 0, sort oldest, and be removed
+/// — silent deletion of a directory this code cannot identify.
+#[test]
+fn prune_refuses_a_backup_name_it_cannot_parse() {
+    let t = TempDir::new().unwrap();
+    let backup_root = t.path();
+    let garbage = backup_root.join("db_backup_2026-08-14T12:00:00Z");
+    fs::create_dir_all(&garbage).unwrap();
+    fs::write(garbage.join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+    fs::create_dir_all(backup_root.join("db_backup_3")).unwrap();
+    fs::create_dir_all(backup_root.join("db_backup_4")).unwrap();
+
+    let outcome = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
+
+    assert_eq!(
+        outcome,
+        crate::rocks::staged::PruneOutcome {
+            removed: 1,
+            refused: 1
+        },
+        "the older parseable backup goes; the unparseable one is refused"
+    );
+    assert!(
+        garbage.exists(),
+        "an unidentifiable directory is never deleted"
+    );
+    assert!(backup_root.join("db_backup_4").exists(), "newest kept");
+    assert!(!backup_root.join("db_backup_3").exists(), "older pruned");
+}
+
+// FM-PERSISTENCE-058
+/// A clock that stepped backwards is the case wall-clock naming cannot survive:
+/// the backup taken *after* the step sorts *before* the one taken earlier, so
+/// retention deletes the newer generation — the only rollback copy. With the
+/// counter, a backup left behind by the old scheme (a huge clock-second name,
+/// standing in for "a name minted under a clock that has since moved") does not
+/// outrank a freshly reserved sequence: the reservation is one past the highest
+/// name present, so the new backup is unambiguously newest and retention keeps
+/// it.
+#[test]
+fn a_backup_named_under_a_moved_clock_does_not_outrank_a_new_one() {
+    let f = Fixture::new();
+    let stale = f.backup(1_700_000_000);
+    fs::create_dir_all(&stale).unwrap();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
+
+    assert!(f.install().unwrap());
+
+    let expected = f.backup(1_700_000_001);
+    assert_eq!(
+        f.backups(),
+        vec![expected.clone()],
+        "the new backup is one past the highest name on disk, and is the one kept"
+    );
+    assert_eq!(
+        read_db(&expected, b"k"),
+        Some(b"old".to_vec()),
+        "the generation retention kept is the database the install displaced"
+    );
+    assert!(
+        !stale.exists(),
+        "the genuinely older generation is the one pruned"
+    );
+}
+
+// FM-PERSISTENCE-026
+/// An unparseable directory in the backup root neither blocks an install nor is
+/// deleted by it: the install completes, its own backup lands, and the
+/// directory nobody can identify is still there afterwards for an operator to
+/// look at.
+#[test]
+fn an_unparseable_backup_neither_blocks_nor_survives_being_deleted_by_an_install() {
+    let f = Fixture::new();
+    let garbage = f.layout().backup_root().join("db_backup_yesterday");
+    fs::create_dir_all(&garbage).unwrap();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
+
+    assert!(f.install().unwrap(), "an install is not blocked by it");
+
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
+    assert!(
+        garbage.exists(),
+        "and it is not deleted by the install's prune"
+    );
+    let mut kept = f.backups();
+    kept.sort();
+    let mut expected = vec![f.backup(0), garbage.clone()];
+    expected.sort();
+    assert_eq!(
+        kept, expected,
+        "while the install's own backup is named and kept normally"
+    );
+}
+
+// FM-PERSISTENCE-058
+/// The counter file is small and the backups beside it are enormous, so the
+/// combination "backups present, counter gone" is a real state (a partial
+/// operator copy, a filesystem that lost the file). Naming must not restart at
+/// 0 and collide with a backup sitting right there: the next sequence comes
+/// from the highest one on disk, and unparseable names contribute nothing.
+#[test]
+fn a_lost_counter_file_recovers_above_the_existing_backups() {
+    let t = TempDir::new().unwrap();
+    let backup_root = t.path();
+    fs::create_dir_all(backup_root.join("db_backup_7")).unwrap();
+    fs::create_dir_all(backup_root.join("db_backup_not-a-number")).unwrap();
+    assert!(
+        !crate::rocks::staged::BackupCounter::path(backup_root).exists(),
+        "precondition: no counter file"
+    );
+
+    let next = crate::rocks::staged::BackupCounter::reserve_next(
+        backup_root,
+        "db",
+        &crate::fs_seam::RealFs,
+    )
+    .unwrap();
+
+    assert_eq!(next, 8, "one past the highest backup on disk, never 0");
+    assert_eq!(
+        fs::read_to_string(crate::rocks::staged::BackupCounter::path(backup_root)).unwrap(),
+        "8",
+        "and the recovered sequence is recorded before it is used"
+    );
+    assert_eq!(
+        crate::rocks::staged::BackupCounter::reserve_next(
+            backup_root,
+            "db",
+            &crate::fs_seam::RealFs
+        )
+        .unwrap(),
+        9,
+        "reservations are monotone from there"
+    );
+}
+
+// FM-PERSISTENCE-058
+/// Reserving a sequence publishes it durably before the caller can use it:
+/// scratch write, fsync, rename, fsync of the directory that gained the name.
+/// A reservation that reached disk after the rename that used it would let a
+/// crash reuse the number and collide on the next install.
+#[test]
+fn reserving_a_backup_sequence_is_published_like_every_other_durable_name() {
+    let t = TempDir::new().unwrap();
+    let backup_root = t.path();
+    let fs_rec = crate::fs_seam::RecordingFs::new();
+
+    crate::rocks::staged::BackupCounter::reserve_next(backup_root, "db", &fs_rec).unwrap();
+
+    assert_eq!(
+        fs_rec.trace(backup_root),
+        vec![
+            "write counter.tmp".to_string(),
+            "sync_file counter.tmp".to_string(),
+            "rename counter.tmp -> counter".to_string(),
+            "sync_dir .".to_string(),
+        ]
+    );
 }
 
 // ============================================================================

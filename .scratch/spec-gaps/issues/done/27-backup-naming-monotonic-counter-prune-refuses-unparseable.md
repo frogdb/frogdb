@@ -1,6 +1,6 @@
 # 27: Backup naming uses a persisted monotonic counter; prune refuses anything unparseable
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

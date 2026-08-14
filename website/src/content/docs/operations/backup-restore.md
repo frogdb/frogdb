@@ -82,7 +82,7 @@ the same staged-checkpoint install path FrogDB already runs on every boot for re
 (`frogdb-server/crates/persistence/src/rocks/checkpoint.rs`,
 `frogdb-server/crates/recovery/src/checkpoint.rs`): on startup, before opening RocksDB,
 FrogDB looks for `<data-dir>/staging`, verifies it's a complete database, moves any existing
-`<data-dir>/db` aside to `<data-dir>/backup/db_backup_<unix-timestamp>` (never deletes it), and
+`<data-dir>/db` aside to `<data-dir>/backup/db_backup_<seq>` (never deletes it), and
 renames `staging` into place as the new `db`.
 
 That verification runs **before** anything moves, and it is three checks, not one: `CURRENT` must

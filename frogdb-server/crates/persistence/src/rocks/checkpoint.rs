@@ -171,7 +171,7 @@ impl RocksStore {
         // data. Each is a single same-filesystem rename (atomic on POSIX), so
         // there is never a half-database at the live path:
         //
-        //   rename 1: <data-dir>/db      -> <data-dir>/backup/db_backup_<ts>
+        //   rename 1: <data-dir>/db      -> <data-dir>/backup/db_backup_<seq>
         //                                   (only if a live db exists)
         //   rename 2: <data-dir>/staging -> <data-dir>/db
         //
@@ -202,13 +202,20 @@ impl RocksStore {
             // reachable from nowhere.
             std::fs::create_dir_all(&backup_root)?;
             fs.sync_dir(root)?;
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            // The name comes from the persisted monotone counter, durably
+            // advanced before it is used, never from the clock: a clock stepped
+            // backwards would invert retention order and delete the generation
+            // worth keeping, and two installs inside one second would collide
+            // on the name and fail the second rename with `ENOTEMPTY`
+            // (FM-PERSISTENCE-058).
+            let seq = super::staged::BackupCounter::reserve_next(
+                &backup_root,
+                crate::data_dir::DB_DIR_NAME,
+                fs,
+            )?;
             let bd = backup_root.join(super::staged::backup_dir_name(
                 crate::data_dir::DB_DIR_NAME,
-                ts,
+                seq,
             ));
             info!(from = %db_dir.display(), to = %bd.display(), "Backing up existing database");
             fs.rename(&db_dir, &bd)?;
@@ -228,8 +235,12 @@ impl RocksStore {
             crate::data_dir::DB_DIR_NAME,
             super::staged::BACKUP_RETENTION,
         ) {
-            Ok(0) => {}
-            Ok(n) => info!(removed = n, "Pruned old database backups"),
+            Ok(outcome) if outcome == Default::default() => {}
+            Ok(outcome) => info!(
+                removed = outcome.removed,
+                refused = outcome.refused,
+                "Pruned old database backups"
+            ),
             Err(e) => tracing::warn!(error = %e, "Failed to prune old database backups"),
         }
 

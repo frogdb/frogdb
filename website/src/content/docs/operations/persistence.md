@@ -136,7 +136,7 @@ Everything FrogDB writes under `persistence.data-dir` lives inside it:
 | `<data-dir>/db` | The live RocksDB database. |
 | `<data-dir>/staging` | A checkpoint waiting to be installed — a replica full sync, or an operator restore. Consumed on the next boot. |
 | `<data-dir>/staging.incoming` | Scratch space for a full sync still downloading. Renamed to `staging` only once the transfer verifies. |
-| `<data-dir>/backup` | Holds `db_backup_<unix-timestamp>`, the database an install displaced. One generation is kept. |
+| `<data-dir>/backup` | Holds `db_backup_<seq>`, the database an install displaced, plus the `counter` file the sequence comes from. One generation is kept; a directory whose sequence will not parse is left alone rather than deleted. |
 | `<data-dir>/frogdb_data_dir` | The identity marker (below). It sits beside `db/` rather than inside it, so an install never moves it. |
 
 Nothing is written to the *parent* of `data-dir`, which matters when the data directory is

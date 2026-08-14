@@ -106,11 +106,6 @@ ALLOWLIST: dict[str, tuple[int, str]] = {
         "stamps a support bundle for a human reading it later; the bundle is a "
         "forensic artifact about the machine, not a server reply",
     ),
-    "frogdb-server/crates/persistence/src/rocks/checkpoint.rs": (
-        1,
-        "names the pre-restore backup directory. Operators correlate that name "
-        "with real time, and two runs must not collide on it",
-    ),
     "frogdb-server/crates/persistence/src/snapshot/rocks_coordinator.rs": (
         1,
         "fallback for a snapshot artifact's wall-clock completion time when its "

@@ -95,50 +95,235 @@ impl StagedCheckpoint {
     }
 }
 
-/// Backup-name plumbing: `<db>_backup_<unix_secs>`, inside
+/// The file that carries the backup sequence across restarts, inside
 /// `<data-dir>/backup`.
-pub(crate) fn backup_dir_name(db_name: &str, unix_secs: u64) -> String {
-    format!("{db_name}_backup_{unix_secs}")
+///
+/// Not named with the backup prefix on purpose: [`prune_backups`] only ever
+/// considers directories, and a counter that could be mistaken for a backup is
+/// a counter that can be pruned.
+pub const BACKUP_COUNTER_FILE: &str = "counter";
+
+/// Scratch name the counter is written under before its publishing rename.
+const BACKUP_COUNTER_TEMP_FILE: &str = "counter.tmp";
+
+/// Backup-name plumbing: `<db>_backup_<seq>`, inside `<data-dir>/backup`.
+///
+/// `seq` is a [monotone counter](BackupCounter), never a clock reading. A
+/// wall-clock name has two failure modes the campaign rules against elsewhere
+/// (no wall clock in state): a clock stepped backwards between two installs
+/// inverts the retention order and deletes the generation that should be kept,
+/// and two installs inside one second collide on the name — which fails the
+/// second install's rename with `ENOTEMPTY`, i.e. right when a resync is
+/// already in trouble.
+pub(crate) fn backup_dir_name(db_name: &str, seq: u64) -> String {
+    format!("{db_name}_backup_{seq}")
 }
 
-/// Delete all but the newest `keep` `<db>_backup_*` directories under
+/// Parse the sequence out of a backup directory name, if it is one.
+///
+/// `None` covers both "not a backup name at all" and "carries the prefix but
+/// the suffix is not a number". The second case used to be `unwrap_or(0)`,
+/// which sorted the directory oldest and deleted it: silent removal of a
+/// directory nobody could identify.
+fn backup_seq(name: &str, prefix: &str) -> Option<u64> {
+    name.strip_prefix(prefix)?.parse::<u64>().ok()
+}
+
+/// The monotone counter that names backups, persisted inside the backup root.
+///
+/// Reserving a sequence is durable *before* the name is used: the counter is
+/// written to a scratch file, fsynced, renamed into place, and the directory
+/// entry fsynced (the same publish rule as every other durable name here — see
+/// [`crate::fs_seam`]). A crash between the reservation and the rename that
+/// uses it therefore burns a number rather than reusing one, which is the safe
+/// direction: reuse is a name collision on the next install.
+pub(crate) struct BackupCounter;
+
+impl BackupCounter {
+    /// Where the counter lives for a backup root.
+    pub(crate) fn path(backup_root: &Path) -> PathBuf {
+        backup_root.join(BACKUP_COUNTER_FILE)
+    }
+
+    /// Reserve and durably record the next sequence for `backup_root`.
+    ///
+    /// The reserved value is one past the highest of *both* sources of truth:
+    /// the counter file and the backup directories actually present. Reading
+    /// the directories is not belt-and-braces — a counter file that is missing
+    /// (an operator copied the backups but not the file, a filesystem lost the
+    /// small file and kept the big directories) must not restart naming at 0
+    /// and collide with a backup that is sitting right there. Unparseable
+    /// backup names contribute nothing to the maximum, exactly as they
+    /// contribute nothing to retention.
+    pub(crate) fn reserve_next(
+        backup_root: &Path,
+        db_name: &str,
+        fs: &dyn crate::fs_seam::SnapshotFs,
+    ) -> io::Result<u64> {
+        let recorded = Self::read(backup_root)?;
+        let observed = Self::highest_existing(backup_root, db_name)?;
+        let next = match (recorded, observed) {
+            (Some(r), Some(o)) => r.max(o) + 1,
+            (Some(r), None) => r + 1,
+            (None, Some(o)) => {
+                tracing::warn!(
+                    backup_root = %backup_root.display(),
+                    highest_existing = o,
+                    "Backup counter missing; recovering the sequence from the backups on disk"
+                );
+                o + 1
+            }
+            // Nothing recorded and nothing on disk: this is the first backup.
+            (None, None) => 0,
+        };
+        Self::record(backup_root, next, fs)?;
+        Ok(next)
+    }
+
+    /// The highest sequence the counter file records, or `None` when it is
+    /// absent or unreadable as a number.
+    ///
+    /// A malformed counter reads as absent rather than as an error: the
+    /// recovery path (the highest backup on disk) is strictly better than
+    /// failing an install over a hygiene file, and it cannot collide.
+    fn read(backup_root: &Path) -> io::Result<Option<u64>> {
+        let path = Self::path(backup_root);
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        match raw.trim().parse::<u64>() {
+            Ok(seq) => Ok(Some(seq)),
+            Err(_) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    contents = %raw.trim(),
+                    "Backup counter is not a number; recovering the sequence from the backups on disk"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// The highest sequence any backup directory under `backup_root` carries.
+    fn highest_existing(backup_root: &Path, db_name: &str) -> io::Result<Option<u64>> {
+        let prefix = format!("{db_name}_backup_");
+        let entries = match std::fs::read_dir(backup_root) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut highest = None;
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(seq) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| backup_seq(n, &prefix))
+            else {
+                continue;
+            };
+            highest = Some(highest.map_or(seq, |h: u64| h.max(seq)));
+        }
+        Ok(highest)
+    }
+
+    /// Publish `seq` durably: scratch write, fsync, rename, fsync the directory
+    /// that gained the name.
+    fn record(backup_root: &Path, seq: u64, fs: &dyn crate::fs_seam::SnapshotFs) -> io::Result<()> {
+        let tmp = backup_root.join(BACKUP_COUNTER_TEMP_FILE);
+        let path = Self::path(backup_root);
+        let published = (|| -> io::Result<()> {
+            fs.write(&tmp, seq.to_string().as_bytes())?;
+            fs.sync_file(&tmp)?;
+            fs.rename(&tmp, &path)?;
+            fs.sync_dir(backup_root)
+        })();
+        if published.is_err() {
+            // The scratch name is not a backup and must not be left behind for
+            // an operator to puzzle over; the publish failure is the error
+            // worth reporting.
+            let _ = std::fs::remove_file(&tmp);
+        }
+        published
+    }
+}
+
+/// What one [`prune_backups`] pass did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PruneOutcome {
+    /// Backup directories deleted.
+    pub removed: usize,
+    /// Directories carrying the backup prefix whose sequence would not parse.
+    /// Left on disk, and reported so the count is observable rather than only
+    /// loggable.
+    pub refused: usize,
+}
+
+/// Delete all but the newest `keep` `<db>_backup_<seq>` directories under
 /// `backup_root`.
 ///
-/// "Newest" is decided by the numeric `<unix_secs>` suffix (numeric compare —
-/// string order would rank `_2` above `_10`); unparsable suffixes sort oldest.
-/// Returns how many directories were removed. Callers treat failure as
-/// non-fatal: retention is hygiene, never worth failing an install over.
-pub(crate) fn prune_backups(backup_root: &Path, db_name: &str, keep: usize) -> io::Result<usize> {
+/// "Newest" is decided by the numeric sequence suffix ([`BackupCounter`]) —
+/// numeric compare, because string order ranks `_2` above `_10`. A directory
+/// that carries the backup prefix but whose suffix does not parse is
+/// **refused**: it is neither a retention candidate nor a deletion candidate,
+/// and it is logged and counted. Deleting a directory whose name this code
+/// cannot explain is the one outcome worth ruling out — it used to parse as
+/// sequence 0, sort oldest, and be removed.
+///
+/// Callers treat failure as non-fatal: retention is hygiene, never worth
+/// failing an install over.
+pub(crate) fn prune_backups(
+    backup_root: &Path,
+    db_name: &str,
+    keep: usize,
+) -> io::Result<PruneOutcome> {
     let prefix = format!("{db_name}_backup_");
-    let mut backups: Vec<(u64, PathBuf)> = match std::fs::read_dir(backup_root) {
+    let entries = match std::fs::read_dir(backup_root) {
         Ok(entries) => entries,
         // Nothing has ever been backed up here: no backup root, nothing to prune.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(PruneOutcome::default()),
         Err(e) => return Err(e),
+    };
+    let mut backups: Vec<(u64, PathBuf)> = Vec::new();
+    let mut outcome = PruneOutcome::default();
+    for path in entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+    {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            // Not ours at all: never a candidate, never touched.
+            continue;
+        }
+        match backup_seq(name, &prefix) {
+            Some(seq) => backups.push((seq, path)),
+            None => {
+                tracing::warn!(
+                    path = %path.display(),
+                    "Backup directory name carries no parseable sequence; refusing to prune it"
+                );
+                outcome.refused += 1;
+            }
+        }
     }
-    .filter_map(|e| e.ok())
-    .map(|e| e.path())
-    .filter(|p| p.is_dir())
-    .filter_map(|p| {
-        let ts = p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix(&prefix))
-            .map(|suffix| suffix.parse::<u64>().unwrap_or(0))?;
-        Some((ts, p))
-    })
-    .collect();
     if backups.len() <= keep {
-        return Ok(0);
+        return Ok(outcome);
     }
-    // Newest (largest timestamp) first; delete the tail.
+    // Newest (largest sequence) first; delete the tail.
     backups.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut removed = 0;
     for (_, path) in backups.into_iter().skip(keep) {
         std::fs::remove_dir_all(&path)?;
-        removed += 1;
+        outcome.removed += 1;
     }
-    Ok(removed)
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -212,10 +397,10 @@ mod tests {
         );
     }
 
-    /// Backup directory names carry a numeric timestamp suffix — the ordering
+    /// Backup directory names carry a numeric sequence suffix — the ordering
     /// key `prune_backups` sorts on.
     #[test]
-    fn backup_dir_name_carries_the_numeric_timestamp() {
+    fn backup_dir_name_carries_the_numeric_sequence() {
         assert_eq!(
             backup_dir_name("frogdb", 1_700_000_000),
             "frogdb_backup_1700000000"
@@ -231,6 +416,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = DataDirLayout::new(tmp.path()).backup_root();
         assert!(!root.exists());
-        assert_eq!(prune_backups(&root, "db", BACKUP_RETENTION).unwrap(), 0);
+        assert_eq!(
+            prune_backups(&root, "db", BACKUP_RETENTION).unwrap(),
+            PruneOutcome::default()
+        );
     }
 }
