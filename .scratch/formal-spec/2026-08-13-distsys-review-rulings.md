@@ -86,6 +86,15 @@ target-discard, safe at any time including dead target; reconcile orphan-abort o
 FAIL-flag criterion. Supersedes issue 15's repatriation. Design is HITL — brainstorm
 before phase-3 models encode migration semantics. Details in issue 31.
 
+## MAJ-6 — `CLUSTER RESET` is replicated and therefore cluster-wide destructive
+
+Ruling: **node-local** (reviewer's first option; destructive scope = invocation
+scope, Redis parity). Reset departs and clears only the issuing node; surviving
+topology untouched; cluster-wide wipe stays achievable node-by-node. Filed as
+[cluster issue 34](../cluster-correctness/issues/open/34-cluster-reset-becomes-node-local.md)
+(ready-for-agent); rides the implementation wave. Departure uses issue 20's
+demote-don't-remove shape.
+
 ## MAJ-11 — biased select falsifies TR-BLOCKING-007; H5 unsound as ordered
 
 Ruling: **eliminate sender-drops as a signaling mechanism** (reviewer's resolution,
