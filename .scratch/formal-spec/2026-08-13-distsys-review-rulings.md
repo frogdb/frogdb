@@ -509,3 +509,12 @@ follower never joins non-sync leader) makes the row true today; it is uncited
 and upgrade-fragile on the durable-ack path. Row cites the upstream rule;
 concurrent mixed-flag `PageCacheSink` test asserts the sync count. Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-12 — FM-TXN-013's Invariant names a mechanism that does not exist
+
+Ruling: **accept** (spec-only). No watch-derived accumulator half exists; the
+property holds because the fold is deferred to `take` (per MAJ-23). Invariant
+reworded to the real mechanism so a move-fold-to-WATCH change cannot read
+itself as already compliant; FM-TXN-020 cross-ref kept; wording coordinated
+with issue 25's take-fold rewrite. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).

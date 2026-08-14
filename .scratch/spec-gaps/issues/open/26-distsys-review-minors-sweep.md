@@ -97,6 +97,23 @@ test asserts the sync count (multi-writer coverage; regression guard).
 - [ ] Concurrent mixed-flag `PageCacheSink` test asserting sync count landed;
       row's forcing tests cite it; `just lint-spec` green
 
+### MIN-12 — FM-TXN-013's Invariant names a mechanism that does not exist
+
+Ruling: **accept** (spec-only). The Invariant (`specs/txn.md:470`) claims
+`unwatch_all` clears "the watch-derived half of the slot accumulator"; no such
+half exists — `unwatch_all` is `self.watches.clear()` (`state.rs:265-267`) and
+the watch fold is deferred to `take` (MAJ-23's code-matches-spec ruling). The
+NOT-observable holds for a different reason than stated; a future
+move-fold-to-WATCH optimization would read the current wording as satisfied
+and ship the stale-fold bug. Reword to the real mechanism: "the fold is taken
+at `take`, from the current watch set, so a cleared set contributes nothing;
+there is no separately-cleared accumulator half." Keep the FM-TXN-020
+cross-reference. Coordinate wording with
+[issue 25](25-take-folds-only-live-watched-shards.md)'s `take`-fold rewrite.
+
+- [ ] FM-TXN-013 Invariant reworded to the deferred-fold mechanism; FM-TXN-020
+      cross-ref kept; wording consistent with issue 25; `just lint-spec` green
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
