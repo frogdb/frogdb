@@ -91,3 +91,18 @@ the write path into `record_wal_watermark(covered_seq)` as a `fetch_max`; amend
 FM-PERSISTENCE-035; rewrite the pinning test
 (`only_a_synced_rocks_sink_commit_records_the_durable_watermark` asserts the buggy
 equality); add the two-shard forcing test.
+
+## CRIT-4 — disconnect-while-parked undetectable; push consumed and delivered to nobody
+
+Ruling: **restructure** (reviewer's "better" option). The blocking wait becomes a
+run-loop state instead of an inline await, matching the Redis/Valkey/Dragonfly shape
+(blocked client = state on a still-readable connection). Filed bundled with CRIT-5 as
+[spec-gaps issue 13](../spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md);
+rides the implementation wave.
+
+## CRIT-5 — CLIENT KILL cannot terminate a parked client
+
+Ruling: **accept, bundle with CRIT-4's restructure** (one issue, one pass over the
+machinery). The restructure keeps `killed()` polled during the wait; CRIT-5-specific
+remainder is the CLIENT KILL TR row + forcing test. Same
+[spec-gaps issue 13](../spec-gaps/issues/open/13-blocking-wait-becomes-a-run-loop-state.md).
