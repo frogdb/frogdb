@@ -466,3 +466,13 @@ Ruling: **add checksum** — filesystem-independent argument beats naming the ex
 Torn/corrupt body parses as absent, never garbage; rows restated; corruption
 forcing test. Recorded in
 [spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
+
+## MIN-7 — backup directories wall-clock-named with `unwrap_or(0)` pruning and retention 1
+
+Ruling: **full counter redesign** (user overrode mooted-with-residue
+recommendation). Backup names carry a persisted monotonic counter (crash-safe,
+recovery from missing counter = max(parsed)+1); prune refuses anything
+unparseable — fail-stop over silent deletion of the rollback copy. Supersedes
+issue 20's step-4 sequence-name note. Graduated to
+[spec-gaps issue 27](../spec-gaps/issues/open/27-backup-naming-monotonic-counter-prune-refuses-unparseable.md);
+coordinate with issues 20/21 (shared rename machinery, in-data-dir layout).

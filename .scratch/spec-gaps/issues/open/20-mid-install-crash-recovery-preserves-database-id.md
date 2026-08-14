@@ -53,9 +53,9 @@ Rule: identity establishment is the last thing you re-derive, not the first.
      present, `database_id` unchanged (fails pre-fix: bail or re-mint).
    - Same crash + `require-existing-data = true` → boot succeeds without
      `--force-fresh-data-dir`.
-4. While touching: rename the backup dir from `<db>_backup_<ts>` (wall-clock in a
-   path name — cosmetic, not state-bearing) to a sequence-based name; adjust the
-   probe accordingly.
+4. Backup-dir naming: handled by
+   [issue 27](27-backup-naming-monotonic-counter-prune-refuses-unparseable.md)
+   (persisted monotonic counter) — the probe here matches counter-named entries.
 
 ## Cross-references
 

@@ -29,6 +29,13 @@ documented). Forcing test: corrupted/truncated body → treated as absent
 - [ ] Rows restated filesystem-independent; `just lint-spec` green
 - [ ] Corruption forcing test landed
 
+### MIN-7 — backup dirs wall-clock-named, `unwrap_or(0)` pruning
+
+Ruling: **full counter redesign** — graduated to
+[issue 27](27-backup-naming-monotonic-counter-prune-refuses-unparseable.md)
+(persisted monotonic counter naming + prune refuses unparseable entries).
+No checklist entry here; issue 27 carries the work.
+
 ## Acceptance criteria
 
 - [ ] Every checklist entry above resolved as ruled
