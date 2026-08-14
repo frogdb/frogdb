@@ -371,6 +371,13 @@ test-spec-lint:
 
 # Type-check the Quint design models (specs/quint/*.qnt)
 #
+# Every `.qnt` file, not just the runnable main models: each model is split
+# across a types+constants module, a pure-logic module, a machine module
+# (`var`s + actions) and a main module importing the rest, and `quint
+# typecheck` is the one command that applies to all four (a satellite module
+# has no `init`/`step`/invariant, so `quint test`/`run`/`verify` do not — see
+# scripts/quint-models.sh and `quint-run` below).
+#
 # A no-op until the first model lands (the cluster phase): the models are the
 # design layer of the formal spec, and CI wiring arrives with them rather than
 # with this empty directory.
@@ -395,31 +402,36 @@ quint-check:
 # each model's own named `quint test` suite, plus a small bounded+sampled
 # `quint run` that actually checks the model's invariants (not just
 # simulates — `quint run` defaults `--invariant` to `"true"`, i.e. no check,
-# unless told otherwise). Mirrors `quint-check`'s glob loop, so it stays
-# model-agnostic: a new model's invariants come from
-# scripts/quint-invariants.sh grepping the model's own `val inv_*`
-# declarations rather than a hand-maintained per-model list (task-4 review
+# unless told otherwise). It stays model-agnostic on both axes: *which* files
+# to run comes from scripts/quint-models.sh, and *which invariants* to check
+# from scripts/quint-invariants.sh grepping the model's own `val inv_*`
+# declarations — neither is a hand-maintained per-model list (task-4 review
 # finding I1 — the old hardcoded `case` silently ran a no-op invariant check
-# against any model it didn't recognize by filename). Cheap enough for the PR
-# lane, unlike `quint verify` below (Apalache/SMT) — that is the nightly
-# tier.
+# against any model it didn't recognize by filename).
+#
+# Unlike `quint-check`, this does NOT glob every `.qnt`: a model is several
+# files (types / logic / machine / main) and only the main module is
+# runnable — the satellites have no `init`/`step` and no invariants by
+# design. scripts/quint-models.sh derives that set from "declares at least
+# one `val inv_*`", the same fact `quint-invariants.sh` keys off, so the two
+# cannot drift apart. Cheap enough for the PR lane, unlike `quint verify`
+# below (Apalache/SMT) — that is the nightly tier.
 quint-run:
     #!/usr/bin/env bash
     set -uo pipefail
-    shopt -s nullglob
-    models=(specs/quint/*.qnt)
-    if [ ${#models[@]} -eq 0 ]; then
+    models=$(scripts/quint-models.sh) || exit 1
+    if [ -z "$models" ]; then
         echo "quint-run: no models under specs/quint/ yet — nothing to run"
         exit 0
     fi
     status=0
-    for model in "${models[@]}"; do
+    while read -r model; do
         echo "quint test $model"
         quint test "$model" || status=1
         invariants=$(scripts/quint-invariants.sh "$model") || { status=1; continue; }
         echo "quint run $model --max-samples=200 --max-steps=20 --invariants $invariants"
         quint run "$model" --max-samples=200 --max-steps=20 --invariants $invariants || status=1
-    done
+    done <<< "$models"
     exit $status
 
 # Bounded *exhaustive* model checking (Apalache) of one Quint design model —
@@ -432,6 +444,11 @@ quint-run:
 # scripts/quint-invariants.sh (see quint-run's docstring for why: a
 # hand-maintained per-model list has no gate keeping it in sync with the
 # model's actual `val inv_*` declarations).
+#
+# `model` must be a *main* model — the module that imports its types/logic/
+# machine satellites and owns the invariants (`scripts/quint-models.sh` lists
+# them). Pointing this at a satellite fails loudly on the invariants lookup
+# rather than verifying nothing.
 #
 # CARRIED REQUIREMENT (Task 2 review finding N1, binding — see
 # .superpowers/sdd/2026-08-13-phase2-cluster-quint-plan/task-2-report.md and

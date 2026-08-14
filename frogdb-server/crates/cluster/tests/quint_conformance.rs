@@ -12,7 +12,8 @@
 //!
 //! ## Projection coverage (projection-blindness guard)
 //!
-//! The model's state (`cluster_migration_failover.qnt`) declares:
+//! The model's state (declared in `cluster_migration_failover_machine.qnt`, the machine
+//! module `cluster_migration_failover.qnt` imports) is:
 //! `nodes, slots, migrations, handoff_seq, epoch, node_epoch`, plus a set of ghost /
 //! derived variables that exist only to make the model's own guards and postconditions
 //! expressible and have **no counterpart in `ClusterState`**.
