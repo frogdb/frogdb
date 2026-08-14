@@ -10,7 +10,8 @@ module cluster_admission_types {
   type NodeId = int
   type ClusterId = int
 
-  // Local Option — see the deviations note above for why this isn't basicSpells'.
+  // Local Option — see the deviations note in cluster_admission.qnt's header for why
+  // this isn't basicSpells'.
   type Option[a] = Some(a) | None
 
   // The persisted, node-local bootstrap-vs-join decision (state-space row

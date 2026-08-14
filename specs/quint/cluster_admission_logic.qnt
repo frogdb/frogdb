@@ -55,8 +55,9 @@ module cluster_admission_logic {
   // one gate — empty Raft state — so that is the only per-`m` check here; earlier
   // drafts of this model also gated on `mNode.intent`/`mNode.member_of`, which made
   // `inv_meet_no_absorption` unfalsifiable (those conjuncts were redundant with
-  // `raft == Empty` on every path this model could otherwise reach, until `repurpose`
-  // below made them diverge) and additionally made this guard reject nothing that
+  // `raft == Empty` on every path this model could otherwise reach, until the
+  // `repurpose` action in cluster_admission_machine.qnt made them diverge) and
+  // additionally made this guard reject nothing that
   // `raft == Empty` alone didn't already reject.
   pure def canMeet(nNode: NodeState, mNode: NodeState): bool = and {
     nNode.member_of != None,

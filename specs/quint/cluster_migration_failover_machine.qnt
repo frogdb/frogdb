@@ -76,7 +76,8 @@ module cluster_migration_failover_machine {
   // *non-defective, interesting-scenario* reach rather than bugs, so the witnesses built
   // on them cannot be satisfied by an unrelated cause the way
   // `witnessGracefulFailoverPrunedMigration`/`witnessForcedFailoverDemoted` originally
-  // were (see their removal note below): `gracefulPruned` is set only inside
+  // were (see the note at those witnesses in cluster_migration_failover.qnt):
+  // `gracefulPruned` is set only inside
   // `failoverGraceful` at the moment it *actually* prunes a migration that was open on
   // one of the moved slots (checked independently of any guard, from the pre-state);
   // `forcedDemotedReplica` only when `failoverForced` demotes a primary that owned at
@@ -86,8 +87,9 @@ module cluster_migration_failover_machine {
   // failover actions fires while the old primary had an open migration.
   var coverage: { gracefulPruned: bool, forcedDemotedReplica: bool, failoverDuringOpenMigration: bool }
 
-  // Impure (reads the `armed_barriers` state var directly) — kept separate from the
-  // pure helpers above so the purity checker doesn't reject it.
+  // Impure (reads the `armed_barriers` state var directly) — kept out of
+  // cluster_migration_failover_logic.qnt's pure helpers so the purity checker doesn't
+  // reject it.
   def barrierArmed(s: SlotId): bool = armed_barriers.contains(s)
 
   // ---------------------------------------------------------------------------

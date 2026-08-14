@@ -72,7 +72,8 @@ module cluster_admission_machine {
   }
 
   // TR-CLUSTER-035 — an operator resetting `n`'s membership/intent without wiping
-  // its local Raft state (see `canRepurpose`/`applyRepurpose` above).
+  // its local Raft state (see `canRepurpose`/`applyRepurpose` in
+  // cluster_admission_logic.qnt).
   action repurpose(n: NodeId): bool = {
     val ns = nodes.get(n)
     all {
