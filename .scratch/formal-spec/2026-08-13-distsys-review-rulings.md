@@ -25,6 +25,14 @@ Ruling: **logical admission token** (reviewer's suggested resolution (b), option
 - Note: Task 2's quint model already encodes these semantics (`drained` flag,
   seq match, `inv_complete_requires_drained`) — code converges on the model.
 
+## MAJ-1 — split-brain audit floor collapses to 0
+
+Ruling: **accept, file issue** (reviewer's resolution). Filed as
+[replication issue 31](../replication-correctness/issues/open/31-divergence-audit-floor-from-successor-offset.md)
+(ready-for-agent); rides the implementation wave. Floor from the `DemotionEvent`'s
+successor offset; `unknown-floor` variant when absent — never a silent 0; invert the
+zero-floor pinning test.
+
 ## MAJ-2 — TR-REPLICATION-022 node-id dedup key does not exist on the wire
 
 Ruling: **fix the protocol** (reviewer's resolution (a), option 1).
