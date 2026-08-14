@@ -202,13 +202,15 @@ pub fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryEr
         // looks plausible.
         let marker = data_dir::verify(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
-        let installed = checkpoint::install_staged(inputs)
-            .map_err(|e| RecoveryError::new(RecoveryPhase::InstallStagedCheckpoint, e))?;
-        // The install phase is what guarantees the data directory exists, and a
-        // marker cannot be published into a directory that is not there; this
-        // is the same phase's second half, so it reports as one.
+        // The verdict's second half, and still ahead of the install: the
+        // directory is created and stamped *before* anything is renamed into
+        // it, so no crash point leaves a database in a directory that does not
+        // know its own name — and no later boot has to re-derive an identity it
+        // would necessarily invent (FM-PERSISTENCE-059).
         data_dir::stamp(inputs.data_dir, &marker)
             .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
+        let installed = checkpoint::install_staged(inputs)
+            .map_err(|e| RecoveryError::new(RecoveryPhase::InstallStagedCheckpoint, e))?;
         let rocks = shards::open_rocks(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::OpenRocks, e))?;
         let (shards, mut stats) = shards::restore(inputs, &rocks)

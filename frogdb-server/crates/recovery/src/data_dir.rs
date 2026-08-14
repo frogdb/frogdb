@@ -20,30 +20,34 @@
 //! | no marker, but files present | **refuse** — name the resolved path and the override |
 //! | marker present but unreadable | **refuse** — an unreadable marker is not an absent one |
 //!
-//! Two orderings are load-bearing.
+//! Both halves of the phase run before the install, for two different reasons.
 //!
-//! *Before the install.* [`verify`] runs ahead of the staged-checkpoint install
+//! *The verdict.* [`verify`] runs ahead of the staged-checkpoint install
 //! (and therefore ahead of the RocksDB open, and far ahead of any replication
 //! dial), because a replica that refuses only *after* a full resync has already
 //! repopulated the directory has not refused at all — it has quietly replaced
 //! the operator's data with the primary's, which is a different failure than
 //! starting fresh but the same lost bytes.
 //!
-//! *After the install.* The marker lives at `<data-dir>/frogdb_data_dir`, a
-//! sibling of the `db/` the install renames aside (FM-PERSISTENCE-057), so an
-//! install can no longer carry the directory's identity off with the database
-//! it replaces. [`stamp`] still runs after the install rather than before, for
-//! a simpler reason: on a first boot the data directory may not exist until the
-//! install phase has created it, and a marker cannot be published into a
-//! directory that is not there.
+//! *The stamp.* The marker lives at `<data-dir>/frogdb_data_dir`,
+//! a sibling of the `db/` the install renames aside (FM-PERSISTENCE-057), and
+//! [`stamp`] publishes it *before* the install runs — creating the directory
+//! first if this is a first boot. Identity is the one thing a directory must
+//! never have to re-derive: stamping afterwards left a window (crash between
+//! the install's renames, or between the install and the stamp) in which a
+//! directory held a whole database and no name for it, and the next boot either
+//! refused it as somebody else's or, once adopted, minted a *different*
+//! `database_id` for the same data (FM-PERSISTENCE-059). CockroachDB writes its
+//! `StoreIdent` first for the same reason.
 //!
-//! Specced as FM-PERSISTENCE-048..052 and FM-PERSISTENCE-057 in
-//! `specs/persistence.md`.
+//! Specced as FM-PERSISTENCE-048..052, FM-PERSISTENCE-057 and
+//! FM-PERSISTENCE-059 in `specs/persistence.md`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use frogdb_core::persistence::data_dir::{DataDirMarker, MARKER_FILE_NAME, contains_foreign_files};
+use frogdb_core::persistence::rocks::staged::pending_install;
 use tracing::{info, warn};
 
 use crate::RecoveryInputs;
@@ -51,9 +55,9 @@ use crate::RecoveryInputs;
 /// Decide which marker this data directory must end up carrying, refusing the
 /// boot if the directory is not one FrogDB may initialize.
 ///
-/// Writes nothing: the directory does not necessarily exist yet, and the staged
-/// checkpoint install that runs next would throw away anything written here
-/// anyway. [`stamp`] does the writing once the directory is settled.
+/// Writes nothing, and does not create the directory: this is the decision, and
+/// a decision that refuses must leave the directory exactly as it found it.
+/// [`stamp`] does the writing once the verdict is in.
 pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
     let dir = inputs.data_dir;
     let force = inputs.persistence.force_fresh_data_dir;
@@ -117,14 +121,37 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
     }
 
     if !has_files && inputs.persistence.require_existing_data && !force {
-        bail!(
-            "data directory {} is empty and persistence.require-existing-data is set: refusing to \
-             start. An empty directory is what an unmounted volume and a genuine first boot both \
-             look like, and this deployment has declared that it is past its first boot. Check \
-             that the volume is mounted at that path; if this really is the first boot, restart \
-             once with --force-fresh-data-dir.",
-            resolved(dir).display(),
-        );
+        // An install this boot would finish is *data*, even though the probe
+        // above cannot see it: `staging` and `backup` are skipped there because
+        // they are FrogDB's own artifacts, so a directory holding nothing but an
+        // interrupted install — or a checkpoint an operator staged to restore
+        // from — reads as empty. Refusing it would refuse the boot that
+        // completes the install, and the only documented way past that refusal
+        // (`--force-fresh-data-dir`) mints a fresh identity for a directory
+        // whose database is already sitting there: the re-mint
+        // FM-PERSISTENCE-059 rules out.
+        let pending = pending_install(dir).with_context(|| {
+            format!(
+                "failed to inspect data directory {} for an unfinished install",
+                resolved(dir).display()
+            )
+        })?;
+        if pending {
+            info!(
+                data_dir = %resolved(dir).display(),
+                "Data directory holds an install to finish; persistence.require-existing-data is \
+                 satisfied by it"
+            );
+        } else {
+            bail!(
+                "data directory {} is empty and persistence.require-existing-data is set: \
+                 refusing to start. An empty directory is what an unmounted volume and a genuine \
+                 first boot both look like, and this deployment has declared that it is past its \
+                 first boot. Check that the volume is mounted at that path; if this really is the \
+                 first boot, restart once with --force-fresh-data-dir.",
+                resolved(dir).display(),
+            );
+        }
     }
 
     if force {
@@ -145,15 +172,26 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
     Ok(marker)
 }
 
-/// Write the marker [`verify`] settled on into the (now existing) data
-/// directory.
+/// Write the marker [`verify`] settled on into the data directory, creating the
+/// directory if this is a first boot.
 ///
 /// Unconditional rather than write-if-absent: distinguishing "already stamped"
 /// from "being initialized" means asking the same question twice, and rewriting
 /// a marker that is already correct costs one rename per process start. What it
 /// buys is an invariant with no exceptions: after this call the data directory
-/// carries the marker recovery decided on.
+/// carries the marker recovery decided on — and it runs before the install, so
+/// there is no crash point at which a database exists here without one.
+///
+/// Creating the directory is this phase's job for the same reason. It used to
+/// be the install's, which is what forced the stamp to run *after* the install
+/// and opened the window (FM-PERSISTENCE-059).
 pub(crate) fn stamp(dir: &Path, marker: &DataDirMarker) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "failed to create data directory {}",
+            resolved(dir).display()
+        )
+    })?;
     marker.stamp(dir).map_err(anyhow::Error::from)
 }
 

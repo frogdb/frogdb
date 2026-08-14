@@ -135,7 +135,6 @@ fn seed_staged(dir: &Path, num_shards: usize, key: &[u8], val: &str) {
 #[test]
 fn fresh_boot_creates_empty_shards() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     let cfg = persistence_config(tmp.path(), true);
     let repl_cfg = replication_config("standalone");
     let cluster_cfg = cluster_config(false);
@@ -238,7 +237,6 @@ fn restart_with_data_restores_keys() {
 #[test]
 fn corrupt_functions_file_is_tolerated() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     // A corrupt functions.fdb must not block startup.
     mark(tmp.path());
     std::fs::write(
@@ -276,7 +274,6 @@ fn corrupt_functions_file_is_tolerated() {
 #[test]
 fn a_corrupt_functions_file_is_counted_and_exported() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     mark(tmp.path());
     std::fs::write(
         tmp.path().join("functions.fdb"),
@@ -315,7 +312,6 @@ fn a_corrupt_functions_file_is_counted_and_exported() {
 #[test]
 fn a_boot_with_no_functions_file_counts_no_failures() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     mark(tmp.path());
 
     let cfg = persistence_config(tmp.path(), true);
@@ -342,7 +338,6 @@ fn a_boot_with_no_functions_file_counts_no_failures() {
 #[test]
 fn standalone_does_not_persist_replication_state() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     let cfg = persistence_config(tmp.path(), true);
     let repl_cfg = replication_config("standalone");
     let cluster_cfg = cluster_config(false);
@@ -371,7 +366,6 @@ fn standalone_does_not_persist_replication_state() {
 #[test]
 fn primary_loads_and_persists_replication_state() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     let cfg = persistence_config(tmp.path(), true);
     let repl_cfg = replication_config("primary");
     let cluster_cfg = cluster_config(false);
@@ -540,7 +534,6 @@ fn corrupt_replication_state_is_regenerated() {
         ),
     ] {
         let tmp = TempDir::new().unwrap();
-        let db_dir = tmp.path().join("db");
         let repl_cfg = replication_config("primary");
         mark(tmp.path());
         let state_path = tmp.path().join(&repl_cfg.state_file);
@@ -595,7 +588,6 @@ fn corrupt_replication_state_is_regenerated() {
 #[test]
 fn cluster_storage_open_failure_is_a_recovery_error() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     mark(tmp.path());
     // A plain file where the Raft store's directory must be: the open fails, and
     // a cluster node must refuse to start rather than fall back to standalone.
@@ -625,7 +617,6 @@ fn cluster_storage_open_failure_is_a_recovery_error() {
 #[test]
 fn cluster_mode_opens_raft_storage() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     let cfg = persistence_config(tmp.path(), true);
     let repl_cfg = replication_config("standalone");
     let cluster_cfg = cluster_config(true);
@@ -1328,7 +1319,6 @@ fn a_failing_key_is_previewed_whole_up_to_the_limit_and_marked_when_cut() {
 #[test]
 fn persisted_functions_are_restored() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
     mark(tmp.path());
 
     let code = "#!lua name=greetlib\nredis.register_function('hi', function() return 'hi' end)";
@@ -1673,4 +1663,146 @@ fn an_installed_checkpoint_leaves_the_data_dir_marked() {
         "the directory's identity survives having its contents replaced"
     );
     boot_standalone(&cfg).expect("the boot after a full resync must not refuse");
+}
+
+/// Leave the data directory in the state a crash between the install's two
+/// renames leaves it in: the previous database moved aside into `backup/`, the
+/// new one still staged, nothing at `db/`.
+fn crash_between_the_install_renames(data_dir: &Path, seq: u64) {
+    let backup_root = data_dir.join("backup");
+    std::fs::create_dir_all(&backup_root).unwrap();
+    std::fs::rename(
+        data_dir.join("db"),
+        backup_root.join(format!("db_backup_{seq}")),
+    )
+    .unwrap();
+}
+
+/// The install's crash window, from the boot's side rather than the installer's:
+/// power is cut between rename 1 and rename 2, so the directory holds a backup,
+/// a staged payload, and no database at all. The next boot has to finish the
+/// install *and* come up as the same database — the marker is a sibling of the
+/// `db/` rename 1 moved (FM-PERSISTENCE-057) and it is stamped before the
+/// install ever runs, so there is no state in which the identity has to be
+/// re-derived from the contents.
+// FM-PERSISTENCE-059
+// FM-PERSISTENCE-025
+#[test]
+fn a_crash_between_the_install_renames_boots_to_the_same_database() {
+    let tmp = TempDir::new().unwrap();
+    let db_dir = tmp.path().join("db");
+
+    seed_db(&db_dir, 2, b"shared", "old");
+    let before = marker_of(tmp.path()).database_id;
+    crash_between_the_install_renames(tmp.path(), 1);
+    seed_staged(&tmp.path().join("staging"), 2, b"shared", "new");
+
+    let cfg = persistence_config(tmp.path(), true);
+    let mut recovered = boot_standalone(&cfg).expect("the next boot must finish the install");
+    assert!(
+        recovered.installed_staged_checkpoint,
+        "the interrupted install is completed, not skipped"
+    );
+
+    let value = recovered
+        .shards
+        .iter_mut()
+        .filter_map(|(store, _)| store.get(b"shared"))
+        .next()
+        .expect("the staged dataset must be the one that comes up");
+    assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"new");
+    assert_eq!(
+        marker_of(tmp.path()).database_id,
+        before,
+        "a crash mid-install must not turn this into a different database"
+    );
+    assert!(
+        has_backup(tmp.path()),
+        "the pre-crash database stays recoverable"
+    );
+}
+
+/// The same crash under `persistence.require-existing-data`, and the operator
+/// restore that has the same shape on disk: a replacement node provisioned onto
+/// a fresh volume with a checkpoint copied into `<data-dir>/staging`. Neither
+/// directory holds anything `contains_foreign_files` can see — `staging` and
+/// `backup` are FrogDB's own names — so both used to refuse as "empty" with a
+/// whole database sitting in them, and the only documented way past the refusal
+/// (`--force-fresh-data-dir`) is the one that mints a fresh identity.
+// FM-PERSISTENCE-059
+// FM-PERSISTENCE-052
+#[test]
+fn an_install_waiting_to_finish_satisfies_require_existing_data() {
+    let tmp = TempDir::new().unwrap();
+    seed_staged(&tmp.path().join("staging"), 2, b"restored", "yes");
+
+    let mut cfg = persistence_config(tmp.path(), true);
+    cfg.require_existing_data = true;
+    let mut recovered = boot_standalone(&cfg)
+        .expect("a staged checkpoint is existing data, and needs no override to boot");
+    let value = recovered
+        .shards
+        .iter_mut()
+        .filter_map(|(store, _)| store.get(b"restored"))
+        .next()
+        .expect("the restore must be installed, not discarded");
+    assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"yes");
+    assert!(
+        DataDirMarker::path(tmp.path()).exists(),
+        "and the directory is marked afterwards, so the next boot is ordinary"
+    );
+    drop(recovered);
+
+    // The setting still does its job. A download that died mid-flight is not
+    // data: an unmounted volume must not be excused by a directory of scratch.
+    let half = TempDir::new().unwrap();
+    std::fs::create_dir_all(half.path().join("staging")).unwrap();
+    std::fs::write(half.path().join("staging/000123.sst"), b"partial").unwrap();
+    let mut half_cfg = persistence_config(half.path(), true);
+    half_cfg.require_existing_data = true;
+    let err = boot_standalone(&half_cfg)
+        .err()
+        .expect("half a download is not existing data");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+    assert!(
+        err.to_string().contains("require-existing-data"),
+        "the refusal must still name the setting that caused it: {err}"
+    );
+}
+
+/// Identity is established before anything can be renamed into the directory,
+/// not after. The install is what used to create the data directory, which is
+/// why the stamp ran after it — and that ordering meant every install failure
+/// and every crash inside the install left a directory whose database had no
+/// name. Re-deriving one is not possible: the id is minted, so a second attempt
+/// invents a *different* database.
+// FM-PERSISTENCE-059
+// FM-PERSISTENCE-049
+#[test]
+fn the_data_dir_is_stamped_before_the_install_can_touch_it() {
+    let tmp = TempDir::new().unwrap();
+    let staging = tmp.path().join("staging");
+
+    // A payload that will not install: `CURRENT` names a MANIFEST that never
+    // arrived, which is what a truncated copy leaves behind.
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+
+    let cfg = persistence_config(tmp.path(), true);
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("an unusable staged payload fails the boot");
+    assert_eq!(err.phase, RecoveryPhase::InstallStagedCheckpoint);
+
+    let minted = marker_of(tmp.path()).database_id;
+
+    // The operator removes the bad payload and restarts. Same directory, same
+    // database — the id was on disk before the install was attempted.
+    std::fs::remove_dir_all(&staging).unwrap();
+    boot_standalone(&cfg).expect("the directory boots once the bad payload is gone");
+    assert_eq!(
+        marker_of(tmp.path()).database_id,
+        minted,
+        "a failed install must not cost the directory its identity"
+    );
 }

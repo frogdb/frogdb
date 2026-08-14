@@ -1,6 +1,6 @@
 # 20: Mid-install crash recovery — boot finishes the install, `database_id` never re-mints
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

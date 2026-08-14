@@ -148,7 +148,11 @@ rather than the volume — lost on restart, and able to fill the node's disk on 
 
 The first time FrogDB initializes a data directory it writes a marker file,
 `frogdb_data_dir`, containing a generated database id, the creation time, and the
-directory-layout version. On every later boot FrogDB reads it back and decides:
+directory-layout version. The marker is written *before* anything else — before a staged
+checkpoint is installed, before RocksDB opens the database — so no crash can leave a
+database in a directory that does not say which database it is, and the id survives a
+full resync, an interrupted install, and a failed one. On every later boot FrogDB reads it
+back and decides:
 
 | What is in `data-dir` | What happens |
 |---|---|
@@ -201,6 +205,15 @@ require-existing-data = true
 With this set, an empty `data-dir` fails the boot instead of initializing a new database.
 Provision a genuinely new node with `--force-fresh-data-dir` for its first start. Set it
 after the node is provisioned, not before — otherwise every new node needs the flag.
+
+A directory holding only an install that has not finished is *not* empty for this purpose:
+a checkpoint staged in `<data-dir>/staging`, or a previous database moved into
+`<data-dir>/backup` by an install that was interrupted, both satisfy the setting and the
+boot completes the install. So restoring a node by copying a checkpoint into `staging` and
+starting the server needs no override, and a node whose power was cut mid-install comes
+back on its own. A partially copied `staging` does not count — a download that stopped
+halfway is not data, and the refusal you want in that case is still the one about the
+volume.
 
 ## Tiered storage
 

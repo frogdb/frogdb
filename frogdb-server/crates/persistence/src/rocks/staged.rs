@@ -253,6 +253,53 @@ impl BackupCounter {
     }
 }
 
+/// Does `data_dir` hold an install that a boot would finish — or one that a
+/// previous boot began and did not?
+///
+/// Two shapes answer yes:
+///
+/// - `<data-dir>/staging` holds a complete database
+///   ([`StagedCheckpoint::is_complete_db`]): the next boot installs it. This is
+///   both the replica full-sync handoff and the documented operator restore
+///   (copy a checkpoint into `staging`, start the server).
+/// - a `db_backup_*` directory exists under `<data-dir>/backup`: rename 1 of an
+///   install ran, so a previous database is sitting there.
+///
+/// The question exists because [`crate::data_dir::contains_foreign_files`]
+/// answers a *different* one — "did somebody else write here?" — and skips
+/// exactly these names. A directory holding only an unfinished install is
+/// therefore "empty" to that probe while holding a whole database, which is the
+/// wrong answer for `persistence.require-existing-data`: it would refuse the
+/// boot that finishes the install, and the only way past it discards the data
+/// the install exists to deliver.
+///
+/// An incomplete `staging` deliberately does not count. A download that died
+/// mid-flight is not data, and calling it data would turn the honest
+/// "your volume is not mounted" refusal into a boot that fails one phase later.
+pub fn pending_install(data_dir: &Path) -> io::Result<bool> {
+    if StagedCheckpoint::in_data_dir(data_dir).is_complete_db() {
+        return Ok(true);
+    }
+    let backup_root = DataDirLayout::new(data_dir).backup_root();
+    let prefix = format!("{}_backup_", crate::data_dir::DB_DIR_NAME);
+    let entries = match std::fs::read_dir(&backup_root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        // Prefix match only: a backup whose sequence will not parse is still a
+        // displaced database, and prune refuses rather than deletes it
+        // (FM-PERSISTENCE-026). Reporting it as absent here would be the same
+        // mistake in the other direction.
+        if entry.file_type()?.is_dir() && entry.file_name().to_string_lossy().starts_with(&prefix) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// What one [`prune_backups`] pass did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct PruneOutcome {
@@ -394,6 +441,70 @@ mod tests {
         assert!(
             staged.is_complete_db(),
             "CURRENT resolving to a real MANIFEST is what completes it"
+        );
+    }
+
+    /// The install's own artifacts are invisible to the "did somebody else
+    /// write here?" probe, so something has to answer the other question: is
+    /// there an install here that a boot would finish? Both halves of an
+    /// interrupted install answer yes — the staged payload and the backup rename
+    /// 1 left behind — and a half-arrived download answers no, because a
+    /// download that died mid-flight is not data.
+    // FM-PERSISTENCE-059
+    #[test]
+    fn an_unfinished_install_is_not_an_empty_data_directory() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let layout = DataDirLayout::new(root);
+
+        assert!(
+            !pending_install(root).unwrap(),
+            "an empty data directory holds no install"
+        );
+
+        // A download that stopped partway: a directory, some bytes, no database.
+        std::fs::create_dir_all(layout.staging_dir()).unwrap();
+        std::fs::write(layout.staging_dir().join("000123.sst"), b"partial").unwrap();
+        assert!(
+            !pending_install(root).unwrap(),
+            "an incomplete staged payload is not an install waiting to finish"
+        );
+
+        // Completed: `CURRENT` resolves to a MANIFEST that is really there.
+        std::fs::write(layout.staging_dir().join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+        std::fs::write(layout.staging_dir().join("MANIFEST-000001"), b"edits").unwrap();
+        assert!(
+            pending_install(root).unwrap(),
+            "a complete staged payload is an install the next boot finishes"
+        );
+
+        // The other half of the crash window: rename 1 ran, rename 2 did not.
+        std::fs::remove_dir_all(layout.staging_dir()).unwrap();
+        assert!(!pending_install(root).unwrap());
+        let backup_root = layout.backup_root();
+        std::fs::create_dir_all(backup_root.join(backup_dir_name(crate::data_dir::DB_DIR_NAME, 7)))
+            .unwrap();
+        assert!(
+            pending_install(root).unwrap(),
+            "a displaced database under backup/ is a database, wherever the install stopped"
+        );
+
+        // A name whose sequence will not parse is still a displaced database:
+        // prune refuses to delete it, and this must not report it as absent.
+        std::fs::remove_dir_all(&backup_root).unwrap();
+        std::fs::create_dir_all(backup_root.join("db_backup_not-a-number")).unwrap();
+        assert!(
+            pending_install(root).unwrap(),
+            "an unparseable backup name is not an absent backup"
+        );
+
+        // Files that merely share the neighbourhood are not installs.
+        std::fs::remove_dir_all(&backup_root).unwrap();
+        std::fs::create_dir_all(&backup_root).unwrap();
+        std::fs::write(backup_root.join("counter"), b"7").unwrap();
+        assert!(
+            !pending_install(root).unwrap(),
+            "the counter file is bookkeeping, not a backup"
         );
     }
 
