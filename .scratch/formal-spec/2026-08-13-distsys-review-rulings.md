@@ -359,3 +359,20 @@ TR-VLL-017 restated as a total request bound. Complementary to CRIT-7's wound-wa
 no-wall-clock principle not implicated. Filed as
 [spec-gaps issue 22](../spec-gaps/issues/open/22-scatter-carries-one-absolute-deadline.md)
 (ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
+
+## MAJ-21 — WATCH is slot-granular with a shard-wide epoch; spec says key-granular; epoch admits unbounded starvation
+
+Ruling: **accept-plus — fix the epoch, document the aliasing** (beyond the
+reviewer's document-both minimum). The shard-wide `bump_version_global()` on any
+field expiry (`event_loop.rs:365`) is an unbounded liveness violation: one HEXPIRE
+tenant starves every other WATCH/MULTI/EXEC CAS loop on the shard forever, silently
+— same family as the unleavable-blocked-state principle, and the fix is cheap
+because the lazy path already does it right (`worker.rs:768-776` bumps `shrunk`
+keys' slots, not the epoch). Ruled shape: active expiry enumerates victim keys and
+bumps per-slot; slot aliasing (bounded over-abort noise, CAS retry progresses)
+stays but becomes a *documented* deviation with FM-TXN-033 amended to honest
+slot-granular language; `watch_aborted{reason}` counter makes both abort classes
+diagnosable (observability-accuracy principle). Full key-granular WATCH rejected as
+unjustified redesign today. Filed as
+[spec-gaps issue 23](../spec-gaps/issues/open/23-watch-epoch-bump-becomes-per-slot.md)
+(ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
