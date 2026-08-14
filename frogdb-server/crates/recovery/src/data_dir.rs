@@ -29,20 +29,21 @@
 //! the operator's data with the primary's, which is a different failure than
 //! starting fresh but the same lost bytes.
 //!
-//! *After the install.* Installing a staged checkpoint renames the whole data
-//! directory aside and moves the staged one into its place, which takes the
-//! marker with it — the staged directory is a RocksDB checkpoint and carries
-//! none. [`stamp`] therefore runs after the install and rewrites the marker
-//! [`verify`] decided on, so the directory's identity survives a full resync
-//! and the *next* boot does not refuse the database this one just installed.
+//! *After the install.* The marker lives at `<data-dir>/frogdb_data_dir`, a
+//! sibling of the `db/` the install renames aside (FM-PERSISTENCE-057), so an
+//! install can no longer carry the directory's identity off with the database
+//! it replaces. [`stamp`] still runs after the install rather than before, for
+//! a simpler reason: on a first boot the data directory may not exist until the
+//! install phase has created it, and a marker cannot be published into a
+//! directory that is not there.
 //!
-//! Specced as FM-PERSISTENCE-048..052 in
+//! Specced as FM-PERSISTENCE-048..052 and FM-PERSISTENCE-057 in
 //! `specs/persistence.md`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use frogdb_core::persistence::data_dir::{DataDirMarker, MARKER_FILE_NAME, contains_files};
+use frogdb_core::persistence::data_dir::{DataDirMarker, MARKER_FILE_NAME, contains_foreign_files};
 use tracing::{info, warn};
 
 use crate::RecoveryInputs;
@@ -90,7 +91,12 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
         return Ok(marker);
     }
 
-    let has_files = contains_files(dir).with_context(|| {
+    // "Somebody else wrote here", not "there are bytes here": staging and
+    // backups live inside the data directory now (FM-PERSISTENCE-057), and a
+    // checkpoint an operator placed in `<data-dir>/staging` to restore from is
+    // exactly the boot this gate must let through, not refuse. A `db/` with no
+    // marker still counts, which is the case the gate is for.
+    let has_files = contains_foreign_files(dir).with_context(|| {
         format!(
             "failed to inspect data directory {}",
             resolved(dir).display()
@@ -142,12 +148,11 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
 /// Write the marker [`verify`] settled on into the (now existing) data
 /// directory.
 ///
-/// Unconditional rather than write-if-absent: the two states that need a write
-/// — a directory being initialized, and one whose marker a checkpoint install
-/// just renamed away — are not distinguishable here without asking the same
-/// question twice, and rewriting a marker that is already correct costs one
-/// rename per process start. What it buys is an invariant with no exceptions:
-/// after this call the data directory carries the marker recovery decided on.
+/// Unconditional rather than write-if-absent: distinguishing "already stamped"
+/// from "being initialized" means asking the same question twice, and rewriting
+/// a marker that is already correct costs one rename per process start. What it
+/// buys is an invariant with no exceptions: after this call the data directory
+/// carries the marker recovery decided on.
 pub(crate) fn stamp(dir: &Path, marker: &DataDirMarker) -> Result<()> {
     marker.stamp(dir).map_err(anyhow::Error::from)
 }

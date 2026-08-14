@@ -111,7 +111,7 @@ mod tests {
         let (buf, expected_checksum) = encode_envelope(&files).await;
 
         let dir = tempdir().unwrap();
-        let incoming = dir.path().join("checkpoint_incoming");
+        let incoming = dir.path().join("staging.incoming");
         let mut cursor = std::io::Cursor::new(buf);
 
         let (metadata, computed) = receive_checkpoint_files(&mut cursor, &incoming, files.len())
@@ -139,7 +139,7 @@ mod tests {
         // dir exist — the load-bearing guarantee the stager's rename relies on.
         let (buf, _) = encode_envelope(&[]).await;
         let dir = tempdir().unwrap();
-        let incoming = dir.path().join("checkpoint_incoming");
+        let incoming = dir.path().join("staging.incoming");
         let mut cursor = std::io::Cursor::new(buf);
 
         let (metadata, _computed) = receive_checkpoint_files(&mut cursor, &incoming, 0)
@@ -157,7 +157,7 @@ mod tests {
     #[tokio::test]
     async fn receiver_refuses_a_file_name_that_escapes_the_staging_dir() {
         let dir = tempdir().unwrap();
-        let incoming = dir.path().join("checkpoint_incoming");
+        let incoming = dir.path().join("staging.incoming");
         let escape_target = dir.path().join("escaped.txt");
         let absolute_target = dir.path().join("absolute.txt");
 
@@ -208,7 +208,7 @@ mod tests {
         buf.write_all(b"only-8b").await.unwrap(); // fewer than 16 bytes
 
         let dir = tempdir().unwrap();
-        let incoming = dir.path().join("checkpoint_incoming");
+        let incoming = dir.path().join("staging.incoming");
         let mut cursor = std::io::Cursor::new(buf);
 
         let err = receive_checkpoint_files(&mut cursor, &incoming, 1)

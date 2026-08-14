@@ -204,8 +204,9 @@ pub fn recover(inputs: &RecoveryInputs<'_>) -> Result<RecoveredState, RecoveryEr
             .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
         let installed = checkpoint::install_staged(inputs)
             .map_err(|e| RecoveryError::new(RecoveryPhase::InstallStagedCheckpoint, e))?;
-        // The install may have renamed the marker away with the directory it
-        // replaced; this is the same phase's second half, so it reports as one.
+        // The install phase is what guarantees the data directory exists, and a
+        // marker cannot be published into a directory that is not there; this
+        // is the same phase's second half, so it reports as one.
         data_dir::stamp(inputs.data_dir, &marker)
             .map_err(|e| RecoveryError::new(RecoveryPhase::VerifyDataDir, e))?;
         let rocks = shards::open_rocks(inputs)

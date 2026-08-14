@@ -332,11 +332,11 @@ impl TestServer {
             .unwrap()
             .as_nanos();
 
-        // Nest the actual data dir one level deep so that each test server
-        // has its own isolated parent directory.  The replication checkpoint
-        // staging area (`checkpoint_ready`) is placed as a sibling of the
-        // data dir (in its parent), so without isolation parallel tests race
-        // on a shared `checkpoint_ready`.
+        // Nest the actual data dir one level deep so that each test server has
+        // its own isolated parent directory. Checkpoint staging lives inside
+        // the data dir (`<data-dir>/staging`, FM-PERSISTENCE-057) so the
+        // nesting is no longer load-bearing for that, but it keeps a stray
+        // write beside a server's data dir attributable to that server.
         let dir = std::env::temp_dir().join(format!(
             "frogdb_test_{}_{}_{}/data",
             timestamp,

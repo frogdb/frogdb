@@ -65,7 +65,8 @@ pub enum BackupCommand {
     /// Verify a checkpoint payload on disk against the manifest shipped inside it
     ///
     /// Runs offline (no server connection) against a snapshot's `checkpoint/`
-    /// directory, a staged `checkpoint_ready/`, or a `<db>_backup_*` — the same
+    /// directory, a staged `<data-dir>/staging/`, or a
+    /// `<data-dir>/backup/db_backup_*` — the same
     /// check the boot-time install runs, so an operator can find out that a
     /// backup is unusable before the outage they need it for. Exits non-zero if
     /// the payload does not verify.

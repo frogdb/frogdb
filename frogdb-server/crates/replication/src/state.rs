@@ -99,9 +99,9 @@ pub fn consume_staged_replication_metadata(data_dir: &Path) {
 }
 
 /// Throw away every artifact of an inherited full sync: the staged checkpoint
-/// directory and the replication metadata that rides with it (both the copy
-/// inside the staged dir and any copy a previous install already carried into
-/// `data_dir`).
+/// directory (`<data-dir>/staging`) and the replication metadata that rides
+/// with it (both the copy inside the staged dir and any copy a previous install
+/// already carried into `<data-dir>/db`).
 ///
 /// A staged checkpoint is normally left on disk after a runtime install so a
 /// crash mid-install re-installs the same snapshot on the next boot
@@ -124,9 +124,8 @@ pub fn consume_staged_replication_metadata(data_dir: &Path) {
 /// and is propagated — the staging area is still armed, so the caller must not
 /// complete a promotion on top of it.
 pub fn discard_staged_full_sync(data_dir: &Path) -> io::Result<()> {
-    if let Some(staged) = frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(data_dir)
-        && staged.exists()
-    {
+    let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(data_dir);
+    if staged.exists() {
         let disarmed = staged.dir().with_extension("discarded");
         // A leftover from an earlier discard whose delete did not finish: a
         // rename onto a non-empty directory fails, so clear the target first.
@@ -454,9 +453,16 @@ impl ReplicationState {
         false
     }
 
-    /// Path of the staged full-sync replication metadata inside a data directory.
+    /// Path of the staged full-sync replication metadata a completed install
+    /// carried into the live database directory.
+    ///
+    /// `<data-dir>/db`, not `<data-dir>`: the writer stamps the file *inside*
+    /// the staged checkpoint so the install's commit rename carries it, and
+    /// that rename lands on `<data-dir>/db` (FM-PERSISTENCE-057).
     pub fn staged_metadata_path(data_dir: &Path) -> PathBuf {
-        data_dir.join(STAGED_METADATA_FILE)
+        frogdb_persistence::DataDirLayout::new(data_dir)
+            .db_dir()
+            .join(STAGED_METADATA_FILE)
     }
 
     /// Adopt the replication identity + offset from staged full-sync metadata.
@@ -514,6 +520,18 @@ pub(crate) fn hex_id(digit: char) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// [`ReplicationState::staged_metadata_path`] with the directory that holds
+    /// it created.
+    ///
+    /// The carried-in metadata lands in `<data-dir>/db`, which in production is
+    /// there because the install's commit rename just created it. A test that
+    /// writes the file by hand has to make the directory itself.
+    fn staged_metadata_path_in(data_dir: &Path) -> PathBuf {
+        let path = ReplicationState::staged_metadata_path(data_dir);
+        fs::create_dir_all(path.parent().expect("the path names a file")).unwrap();
+        path
+    }
 
     #[test]
     fn test_generate_replication_id() {
@@ -667,7 +685,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempdir().unwrap();
-        let path = ReplicationState::staged_metadata_path(dir.path());
+        let path = staged_metadata_path_in(dir.path());
         let json = serde_json::json!({
             "replication_id": generate_replication_id(),
             "replication_offset": 77u64,
@@ -750,11 +768,7 @@ mod tests {
             "replication_offset": 4242u64,
             "checksum": "deadbeef",
         });
-        fs::write(
-            ReplicationState::staged_metadata_path(dir.path()),
-            json.to_string(),
-        )
-        .unwrap();
+        fs::write(staged_metadata_path_in(dir.path()), json.to_string()).unwrap();
 
         let meta = read_staged_replication_metadata(dir.path())
             .unwrap()
@@ -773,11 +787,7 @@ mod tests {
     #[test]
     fn test_read_staged_replication_metadata_corrupt_is_ignored() {
         let dir = tempdir().unwrap();
-        fs::write(
-            ReplicationState::staged_metadata_path(dir.path()),
-            "not valid json",
-        )
-        .unwrap();
+        fs::write(staged_metadata_path_in(dir.path()), "not valid json").unwrap();
         // Corrupt metadata is treated as absent (forces full resync), not a crash.
         assert!(
             read_staged_replication_metadata(dir.path())
@@ -793,11 +803,7 @@ mod tests {
             "replication_id": "tooshort",
             "replication_offset": 10u64,
         });
-        fs::write(
-            ReplicationState::staged_metadata_path(dir.path()),
-            json.to_string(),
-        )
-        .unwrap();
+        fs::write(staged_metadata_path_in(dir.path()), json.to_string()).unwrap();
         assert!(
             read_staged_replication_metadata(dir.path())
                 .unwrap()
@@ -809,7 +815,7 @@ mod tests {
     #[test]
     fn test_consume_staged_replication_metadata() {
         let dir = tempdir().unwrap();
-        let path = ReplicationState::staged_metadata_path(dir.path());
+        let path = staged_metadata_path_in(dir.path());
         fs::write(&path, "{}").unwrap();
         assert!(path.exists());
         consume_staged_replication_metadata(dir.path());
@@ -821,15 +827,13 @@ mod tests {
     // FM-REPLICATION-021
     #[test]
     fn discard_staged_full_sync_disarms_the_staging_area() {
-        let parent = tempdir().unwrap();
-        let data_dir = parent.path().join("db");
-        fs::create_dir_all(&data_dir).unwrap();
-        let staged =
-            frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(&data_dir).unwrap();
+        let root = tempdir().unwrap();
+        let data_dir = root.path().to_path_buf();
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(&data_dir);
         fs::create_dir_all(staged.dir()).unwrap();
         fs::write(staged.replication_metadata_path(), "{}").unwrap();
         // A previous install may already have carried a copy into the data dir.
-        let carried = ReplicationState::staged_metadata_path(&data_dir);
+        let carried = staged_metadata_path_in(&data_dir);
         fs::write(&carried, "{}").unwrap();
 
         discard_staged_full_sync(&data_dir).unwrap();
@@ -847,11 +851,9 @@ mod tests {
     // FM-REPLICATION-021
     #[test]
     fn discard_staged_full_sync_disarms_before_deleting() {
-        let parent = tempdir().unwrap();
-        let data_dir = parent.path().join("db");
-        fs::create_dir_all(&data_dir).unwrap();
-        let staged =
-            frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(&data_dir).unwrap();
+        let root = tempdir().unwrap();
+        let data_dir = root.path().to_path_buf();
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(&data_dir);
         fs::create_dir_all(staged.dir()).unwrap();
         // A leftover from an earlier discard whose delete never finished. The
         // rename target must be cleared, not collided with, or the staging area
@@ -869,13 +871,11 @@ mod tests {
     // FM-REPLICATION-020
     #[test]
     fn discard_staged_full_sync_keeps_the_metadata_when_disarming_fails() {
-        let parent = tempdir().unwrap();
-        let data_dir = parent.path().join("db");
-        fs::create_dir_all(&data_dir).unwrap();
-        let staged =
-            frogdb_persistence::rocks::staged::StagedCheckpoint::for_db_dir(&data_dir).unwrap();
+        let root = tempdir().unwrap();
+        let data_dir = root.path().to_path_buf();
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(&data_dir);
         fs::create_dir_all(staged.dir()).unwrap();
-        let carried = ReplicationState::staged_metadata_path(&data_dir);
+        let carried = staged_metadata_path_in(&data_dir);
         fs::write(&carried, "{}").unwrap();
 
         // Make both the pre-clear and the rename fail: the rename target is a

@@ -1,6 +1,6 @@
 # 21: Staging and backup live inside the data dir — the mount point is never renamed
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

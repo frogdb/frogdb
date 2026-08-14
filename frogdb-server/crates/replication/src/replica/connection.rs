@@ -428,13 +428,10 @@ impl ReplicaConnection {
     /// [`StagedOutcome`]: crate::fullsync::StagedOutcome
     pub(crate) async fn receive_checkpoint(&mut self, file_count: usize) -> io::Result<()> {
         tracing::info!(file_count = file_count, "Receiving FrogDB checkpoint");
-        let parent_dir = self.data_dir.parent().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "data_dir has no parent directory",
-            )
-        })?;
-        let stager = CheckpointStager::new(parent_dir);
+        // Staging lives inside the data directory (FM-PERSISTENCE-057), so
+        // there is no parent to resolve and no way for the download to land
+        // outside the volume the operator provisioned.
+        let stager = CheckpointStager::new(&self.data_dir);
         let incoming = stager.incoming_dir();
 
         // Scoped like `receive_snapshot`: dropping the reader is what hands the
@@ -922,8 +919,8 @@ mod tests {
     }
 
     /// A checkpoint fixture: two files whose body is already encoded on the
-    /// wire, plus the connection wired to read it. `data_dir` is `<tmp>/db` so
-    /// its parent `<tmp>` is where staging lands.
+    /// wire, plus the connection wired to read it. `data_dir` is `<tmp>`, the
+    /// layout root, so staging lands at `<tmp>/staging` (FM-PERSISTENCE-057).
     struct CheckpointFixture {
         conn: ReplicaConnection,
         file_count: usize,
@@ -978,7 +975,7 @@ mod tests {
             _primary_addr: "127.0.0.1:6379".parse().unwrap(),
             state: state.clone(),
             connection_state: ConnectionState::Syncing,
-            data_dir: tmp.join("db"),
+            data_dir: tmp.to_path_buf(),
             offsets: offsets.clone(),
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
@@ -1028,7 +1025,7 @@ mod tests {
         assert!(f.link_up.load(Ordering::Acquire));
 
         // The checkpoint was staged (writer's commit point).
-        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(tmp.path());
         assert!(staged.exists());
         assert!(staged.dir().join("CURRENT").exists());
     }
@@ -1068,7 +1065,7 @@ mod tests {
         f.conn.receive_checkpoint(f.file_count).await.unwrap();
 
         let seen = seen.lock().unwrap().clone();
-        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(tmp.path());
         assert_eq!(
             seen,
             vec![(staged.dir().to_path_buf(), 0)],
@@ -1207,7 +1204,7 @@ mod tests {
             _primary_addr: "127.0.0.1:6379".parse().unwrap(),
             state: state.clone(),
             connection_state: ConnectionState::Syncing,
-            data_dir: tmp.join("db"),
+            data_dir: tmp.to_path_buf(),
             offsets: offsets.clone(),
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),
@@ -1287,7 +1284,7 @@ mod tests {
         assert!(f.link_up.load(Ordering::Acquire));
 
         // Nothing was staged: there is no RocksDB on this path.
-        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_parent(tmp.path());
+        let staged = frogdb_persistence::rocks::staged::StagedCheckpoint::in_data_dir(tmp.path());
         assert!(!staged.exists(), "a live dataset must not stage to disk");
     }
 
@@ -1602,7 +1599,7 @@ mod tests {
             _primary_addr: "127.0.0.1:6379".parse().unwrap(),
             state: state.clone(),
             connection_state: ConnectionState::Syncing,
-            data_dir: tmp.path().join("db"),
+            data_dir: tmp.path().to_path_buf(),
             offsets: offsets.clone(),
             link_up: link_up.clone(),
             ack_interval: Duration::from_secs(1),

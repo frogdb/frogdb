@@ -5,8 +5,10 @@
 //! - Write-Ahead Logging (WAL) with configurable durability modes
 //! - Snapshot abstractions for point-in-time backups
 //! - Recovery of persisted state back into the store
-//! - The data directory's identity marker ([`data_dir`]), which is what tells a
-//!   first boot apart from a boot against the wrong directory
+//! - The data directory ([`data_dir`]): its internal layout ([`DataDirLayout`],
+//!   the single owner of every path derived from `persistence.data-dir`) and
+//!   its identity marker, which is what tells a first boot apart from a boot
+//!   against the wrong directory
 //!
 //! Recovery owns the *format's* read protocol (column-family iteration,
 //! deserialization, expiry filtering, warm-tier precedence) but not how an
@@ -21,7 +23,7 @@ pub mod serialization;
 pub mod snapshot;
 pub mod wal;
 
-pub use data_dir::{DataDirMarker, DataDirMarkerError};
+pub use data_dir::{DataDirLayout, DataDirMarker, DataDirMarkerError};
 pub use recovery::{
     RecoveryError, RecoveryStats, RestoreSink, recover_shard_into, recover_warm_shard_into,
 };

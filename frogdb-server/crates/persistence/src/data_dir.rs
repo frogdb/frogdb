@@ -1,4 +1,5 @@
-//! The data directory's identity marker.
+//! The data directory: its internal layout ([`DataDirLayout`]) and its identity
+//! marker ([`DataDirMarker`]).
 //!
 //! `has_data()` cannot tell "this database is empty" from "I am not looking
 //! where you think I am": a mistyped `persistence.data-dir`, a volume that
@@ -22,7 +23,11 @@
 //! that replaces the database wholesale, because it names the directory, not
 //! its current contents.
 //!
-//! Specced as FM-PERSISTENCE-048..052 in
+//! [`DataDirLayout`] owns the other half: every path FrogDB derives from
+//! `persistence.data-dir`, all of them inside it. Nothing else joins a layout
+//! name onto a path.
+//!
+//! Specced as FM-PERSISTENCE-048..052 and FM-PERSISTENCE-057 in
 //! `specs/persistence.md`.
 
 use std::io;
@@ -35,6 +40,110 @@ use crate::fs_seam::{RealFs, SnapshotFs};
 
 /// The marker file's name inside the data directory.
 pub const MARKER_FILE_NAME: &str = "frogdb_data_dir";
+
+/// The live RocksDB directory, inside the data directory.
+pub const DB_DIR_NAME: &str = "db";
+
+/// Where a received or operator-placed checkpoint waits to be installed.
+pub const STAGING_DIR_NAME: &str = "staging";
+
+/// Scratch directory a full-sync download lands in before the writer's commit
+/// rename onto [`STAGING_DIR_NAME`].
+pub const STAGING_INCOMING_DIR_NAME: &str = "staging.incoming";
+
+/// Root of the install-time backups of displaced databases.
+pub const BACKUP_DIR_NAME: &str = "backup";
+
+/// The data directory's internal layout: the single owner of every path FrogDB
+/// derives from `persistence.data-dir`.
+///
+/// ```text
+/// <data-dir>/                     the configured path; in Kubernetes, the PVC mount point
+/// <data-dir>/frogdb_data_dir      the identity marker (`DataDirMarker`)
+/// <data-dir>/db/                  the live RocksDB directory
+/// <data-dir>/staging/             a checkpoint waiting to be installed
+/// <data-dir>/staging.incoming/    scratch for a full-sync download in flight
+/// <data-dir>/backup/              install-time backups of displaced databases
+/// ```
+///
+/// Everything the staging and install protocol touches is *inside* the data
+/// directory, and that is the point (FM-PERSISTENCE-057). The layout used to be
+/// flat — the live database was the data directory itself, and staging and
+/// backups were siblings derived from `data_dir.parent()`. On the standard
+/// Kubernetes deployment that parent is not the operator's volume at all: the
+/// PVC is mounted *at* the data dir, so `rename(<data-dir>, ...)` fails `EBUSY`
+/// (making full resync impossible on that node) and a staged download writes a
+/// second complete copy of the database onto the container's ephemeral root,
+/// which it can fill. Both renames of the install now have both operands inside
+/// the mount, so both are same-filesystem and atomic, and nothing outside is
+/// ever written.
+///
+/// The marker sitting beside `db/` rather than inside it is load-bearing too:
+/// the install renames `db/` aside, and a marker within it would be carried off
+/// with the database it identifies (see [`DataDirMarker`]).
+///
+/// Cheap to construct and cheap to copy: it is a `PathBuf` and some `join`s. The
+/// accessors return owned paths rather than borrows because a caller almost
+/// always wants to pass one along.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataDirLayout {
+    root: PathBuf,
+}
+
+impl DataDirLayout {
+    /// The layout of the data directory rooted at `root` (`persistence.data-dir`).
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The data directory itself — the mount point. Never a rename operand.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The live RocksDB directory.
+    pub fn db_dir(&self) -> PathBuf {
+        self.root.join(DB_DIR_NAME)
+    }
+
+    /// The staged checkpoint awaiting install.
+    pub fn staging_dir(&self) -> PathBuf {
+        self.root.join(STAGING_DIR_NAME)
+    }
+
+    /// Scratch for a full-sync download in flight.
+    pub fn staging_incoming_dir(&self) -> PathBuf {
+        self.root.join(STAGING_INCOMING_DIR_NAME)
+    }
+
+    /// The directory that holds install-time backups.
+    pub fn backup_root(&self) -> PathBuf {
+        self.root.join(BACKUP_DIR_NAME)
+    }
+
+    /// The identity marker's path.
+    pub fn marker_path(&self) -> PathBuf {
+        DataDirMarker::path(&self.root)
+    }
+
+    /// Is `name` a top-level entry the *install* owns?
+    ///
+    /// Used by [`contains_foreign_files`] to decide what is not evidence of
+    /// somebody else's data. Matches `staging` and its scratch variants
+    /// (`staging.incoming`, `staging.discarded`) by prefix, so a new scratch
+    /// suffix does not have to be enumerated here to avoid refusing a boot.
+    ///
+    /// `db` is deliberately **not** in this set: a directory holding a real
+    /// database but no marker is the shape FM-PERSISTENCE-051 exists to refuse,
+    /// and excusing it here would silently adopt it instead.
+    fn is_install_scratch(name: &str) -> bool {
+        name == BACKUP_DIR_NAME
+            || name == STAGING_DIR_NAME
+            || name
+                .strip_prefix(STAGING_DIR_NAME)
+                .is_some_and(|rest| rest.starts_with('.'))
+    }
+}
 
 /// Scratch name the marker is written under before being renamed into place.
 ///
@@ -232,6 +341,40 @@ pub fn contains_files(dir: &Path) -> io::Result<bool> {
     };
     for entry in entries {
         let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            if contains_files(&entry.path())? {
+                return Ok(true);
+            }
+        } else {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// [`contains_files`] over a data directory, ignoring the install's own scratch.
+///
+/// This is the question phase 0 actually asks: *did somebody else write here?*
+/// Since staging moved inside the data directory ([`DataDirLayout`]), a plain
+/// [`contains_files`] would answer yes for the documented operator restore —
+/// place a checkpoint in `<data-dir>/staging`, start the server — and refuse the
+/// boot it is meant to enable. `staging*` and `backup` are FrogDB's own install
+/// artifacts, so they are skipped at the top level and *only* at the top level.
+///
+/// `db` is not skipped: an unmarked directory holding a real database is what
+/// FM-PERSISTENCE-051 refuses, and that has not changed.
+pub fn contains_foreign_files(dir: &Path) -> io::Result<bool> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        if DataDirLayout::is_install_scratch(&name.to_string_lossy()) {
+            continue;
+        }
         if entry.file_type()?.is_dir() {
             if contains_files(&entry.path())? {
                 return Ok(true);
@@ -469,6 +612,86 @@ mod tests {
         assert!(
             contains_files(&not_a_dir).is_err(),
             "a data-dir that is a file must be an error, not an empty directory"
+        );
+    }
+
+    /// Every path FrogDB derives from `persistence.data-dir` is *inside* it —
+    /// which is what makes both install renames same-filesystem operations on a
+    /// mount point, and what keeps a staged download off the container's
+    /// ephemeral root. The marker is a sibling of `db/`, not a file inside it,
+    /// so the install never carries the directory's identity away with the
+    /// database it replaces.
+    // FM-PERSISTENCE-057
+    #[test]
+    fn the_layout_puts_db_staging_and_backup_inside_the_data_dir() {
+        let root = Path::new("/mnt/frogdb-data");
+        let layout = DataDirLayout::new(root);
+
+        assert_eq!(layout.root(), root);
+        for path in [
+            layout.db_dir(),
+            layout.staging_dir(),
+            layout.staging_incoming_dir(),
+            layout.backup_root(),
+            layout.marker_path(),
+        ] {
+            assert_eq!(
+                path.parent(),
+                Some(root),
+                "{} must be a direct child of the data directory",
+                path.display()
+            );
+        }
+
+        assert_eq!(layout.db_dir(), root.join("db"));
+        assert_eq!(layout.staging_dir(), root.join("staging"));
+        assert_eq!(layout.staging_incoming_dir(), root.join("staging.incoming"));
+        assert_eq!(layout.backup_root(), root.join("backup"));
+        assert_eq!(layout.marker_path(), root.join(MARKER_FILE_NAME));
+        assert_ne!(
+            layout.marker_path().parent(),
+            Some(layout.db_dir().as_path()),
+            "the marker must not live inside the directory the install renames aside"
+        );
+    }
+
+    /// Staging moved inside the data directory, so the emptiness question had to
+    /// learn to ignore the install's own artifacts — otherwise the documented
+    /// operator restore (drop a checkpoint in `<data-dir>/staging`, start the
+    /// server) refuses the very boot it exists to enable. A real `db/` is still
+    /// content, because an unmarked database is what FM-PERSISTENCE-051 refuses.
+    // FM-PERSISTENCE-048, FM-PERSISTENCE-057
+    #[test]
+    fn foreign_files_ignores_the_install_scratch_but_not_the_database() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let layout = DataDirLayout::new(root);
+
+        assert!(!contains_foreign_files(root).unwrap(), "empty is empty");
+
+        for dir in [
+            layout.staging_dir(),
+            layout.staging_incoming_dir(),
+            layout.backup_root(),
+            layout.staging_dir().with_extension("discarded"),
+        ] {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+        }
+        assert!(
+            !contains_foreign_files(root).unwrap(),
+            "a staged restore and old backups are FrogDB's own artifacts, not somebody else's data"
+        );
+        assert!(
+            contains_files(root).unwrap(),
+            "they are still files: the narrower question is the one phase 0 asks"
+        );
+
+        std::fs::create_dir_all(layout.db_dir()).unwrap();
+        std::fs::write(layout.db_dir().join("CURRENT"), b"MANIFEST-000007\n").unwrap();
+        assert!(
+            contains_foreign_files(root).unwrap(),
+            "a live database with no marker must still refuse the boot"
         );
     }
 

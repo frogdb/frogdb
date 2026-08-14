@@ -1354,7 +1354,11 @@ fn round_trip(node: &LinkNode, vehicle: Vehicle) -> Result<Carried, String> {
                 replication_offset: before.offset_at_save,
                 checksum: None,
             };
+            // The trailer lands inside the db dir of the layout, which a bare
+            // scratch data dir does not have yet (FM-PERSISTENCE-057).
             let path = ReplicationState::staged_metadata_path(scratch.path());
+            std::fs::create_dir_all(path.parent().expect("the path names a file"))
+                .map_err(|err| format!("scratch db dir: {err}"))?;
             std::fs::write(
                 &path,
                 serde_json::to_vec(&staged).map_err(|err| format!("serialize: {err}"))?,

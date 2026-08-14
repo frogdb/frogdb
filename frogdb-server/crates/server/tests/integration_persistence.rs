@@ -1571,14 +1571,14 @@ async fn test_flushdb_clears_hll_delta_chain_before_readd() {
 // directory* and so only exercises ordinary WAL replay), these tests recover a
 // server from the *actual `snapshot_NNNNN` artifact* a `BGSAVE` produces, using
 // the documented operator restore procedure: stage the snapshot's `checkpoint/`
-// contents as a `checkpoint_ready` sibling of a fresh data dir and let normal
+// contents as `<data-dir>/staging` inside a fresh data dir and let normal
 // startup recovery (`RocksStore::load_staged_checkpoint`) install it before the
 // DB is opened. See `website/src/content/docs/operations/backup-restore.md`
 // (`## Restore`).
 // ============================================================================
 
 /// Copy a directory tree (used to stage a snapshot's `checkpoint/` contents into
-/// a `checkpoint_ready` directory, mirroring the doc's `cp -a checkpoint/. dst/`).
+/// `<data-dir>/staging`, mirroring the doc's `cp -a checkpoint/. dst/`).
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -1714,15 +1714,15 @@ async fn test_bgsave_snapshot_restores_into_fresh_data_dir() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // --- Restore into a FRESH data dir via the documented procedure ---
-    // Stage the checkpoint's contents as `checkpoint_ready`, a sibling of the new
-    // (not-yet-existing) data dir; startup recovery installs it before opening.
+    // Stage the checkpoint's contents as `<data-dir>/staging` inside the new data
+    // dir; startup recovery installs it before opening (FM-PERSISTENCE-057).
     let restore_root = tempfile::tempdir().unwrap();
     let restore_data = restore_root.path().join("data");
-    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
-    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    let staged_dir = restore_data.join("staging");
+    copy_dir_recursive(&checkpoint, &staged_dir).unwrap();
     assert!(
-        !restore_data.exists(),
-        "restore target must start as a fresh, empty data directory"
+        !restore_data.join("db").exists(),
+        "restore target must start with no live database, only the staged copy"
     );
 
     let restore_config = TestServerConfig {
@@ -1734,11 +1734,11 @@ async fn test_bgsave_snapshot_restores_into_fresh_data_dir() {
     let server = TestServer::start_standalone_with_config(restore_config).await;
     let mut client = server.connect().await;
 
-    // The restore installed the checkpoint (consuming `checkpoint_ready`) rather
-    // than booting an empty fresh dir.
+    // The restore installed the checkpoint (consuming `<data-dir>/staging`)
+    // rather than booting an empty fresh dir.
     assert!(
-        !checkpoint_ready.exists(),
-        "startup recovery must consume checkpoint_ready by installing it"
+        !staged_dir.exists(),
+        "startup recovery must consume <data-dir>/staging by installing it"
     );
 
     // Every type from the snapshot must be intact.
@@ -1818,8 +1818,8 @@ async fn test_restored_snapshot_accepts_and_replays_new_writes() {
     // Install the artifact into a fresh dir.
     let restore_root = tempfile::tempdir().unwrap();
     let restore_data = restore_root.path().join("data");
-    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
-    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    let staged_dir = restore_data.join("staging");
+    copy_dir_recursive(&checkpoint, &staged_dir).unwrap();
 
     let restore_config = |data: &std::path::Path| TestServerConfig {
         persistence: true,
@@ -2053,8 +2053,8 @@ async fn test_checkpoint_preserves_single_shard_multi_atomicity_under_concurrent
     let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
     let restore_root = tempfile::tempdir().unwrap();
     let restore_data = restore_root.path().join("data");
-    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
-    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    let staged_dir = restore_data.join("staging");
+    copy_dir_recursive(&checkpoint, &staged_dir).unwrap();
 
     let restore_config = TestServerConfig {
         persistence: true,
@@ -2184,8 +2184,8 @@ async fn test_checkpoint_cross_shard_mset_contract_under_concurrent_bgsave() {
     let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
     let restore_root = tempfile::tempdir().unwrap();
     let restore_data = restore_root.path().join("data");
-    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
-    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    let staged_dir = restore_data.join("staging");
+    copy_dir_recursive(&checkpoint, &staged_dir).unwrap();
 
     let restore_config = TestServerConfig {
         persistence: true,
@@ -2342,8 +2342,8 @@ async fn test_concurrent_bgsave_stress_restores_cleanly() {
     let checkpoint = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
     let restore_root = tempfile::tempdir().unwrap();
     let restore_data = restore_root.path().join("data");
-    let checkpoint_ready = restore_root.path().join("checkpoint_ready");
-    copy_dir_recursive(&checkpoint, &checkpoint_ready).unwrap();
+    let staged_dir = restore_data.join("staging");
+    copy_dir_recursive(&checkpoint, &staged_dir).unwrap();
 
     let restore_config = TestServerConfig {
         persistence: true,
@@ -3107,7 +3107,9 @@ async fn script_info_persistence_reports_the_real_load_stats() {
     // that left one expired key and one undecodable key on disk.
     {
         let rocks = frogdb_core::persistence::RocksStore::open(
-            data_dir.path(),
+            // The live database is `<data-dir>/db` (FM-PERSISTENCE-057); the
+            // marker is its sibling at the data-dir root.
+            &data_dir.path().join("db"),
             1,
             &frogdb_core::persistence::RocksConfig::default(),
         )

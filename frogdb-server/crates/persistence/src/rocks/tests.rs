@@ -395,12 +395,13 @@ fn test_cf_enumeration_failure_propagates_and_preserves_data() {
 // Staged checkpoint install (`load_staged_checkpoint`)
 //
 // Lifecycle: a replica full-sync writes a complete RocksDB directory to
-// `<parent>/checkpoint_ready/`, then the next boot installs it by renaming the
-// live db aside (`<parent>/<name>_backup_<unix_secs>`) and renaming the staged
-// dir into place, then pruning backups beyond `staged::BACKUP_RETENTION`.
-// These tests exercise that filesystem surgery directly — they
-// construct the on-disk layouts (including crash-window intermediates) rather
-// than killing a process, and assert no layout loses data or panics.
+// `<data-dir>/staging`, then the next boot installs it by renaming the live db
+// (`<data-dir>/db`) aside into `<data-dir>/backup/db_backup_<unix_secs>` and
+// renaming the staged dir into place, then pruning backups beyond
+// `staged::BACKUP_RETENTION`. Every operand is inside the data directory
+// (FM-PERSISTENCE-057). These tests exercise that filesystem surgery directly —
+// they construct the on-disk layouts (including crash-window intermediates)
+// rather than killing a process, and assert no layout loses data or panics.
 // ---------------------------------------------------------------------------
 
 /// Create a complete, single-shard RocksDB directory holding `key -> val`.
@@ -415,120 +416,263 @@ fn read_db(path: &Path, key: &[u8]) -> Option<Vec<u8>> {
     s.get(0, key).unwrap()
 }
 
-/// All `<base>_backup_*` sibling directories under `parent`, in arbitrary order.
-fn backup_dirs(parent: &Path, base: &str) -> Vec<PathBuf> {
-    let prefix = format!("{base}_backup_");
-    fs::read_dir(parent)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(&prefix))
-        })
-        .collect()
+/// A data directory, nested one level inside a temp dir so that anything the
+/// install writes *outside* the data dir is visible to [`Fixture::outside`].
+struct Fixture {
+    tmp: TempDir,
+    root: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("data");
+        fs::create_dir_all(&root).unwrap();
+        Self { tmp, root }
+    }
+
+    fn layout(&self) -> crate::data_dir::DataDirLayout {
+        crate::data_dir::DataDirLayout::new(&self.root)
+    }
+
+    /// The live database directory.
+    fn db(&self) -> PathBuf {
+        self.layout().db_dir()
+    }
+
+    /// The staged checkpoint directory.
+    fn staging(&self) -> PathBuf {
+        self.layout().staging_dir()
+    }
+
+    /// A backup directory with an explicit timestamp, as an interrupted install
+    /// would have left behind.
+    fn backup(&self, unix_secs: u64) -> PathBuf {
+        self.layout()
+            .backup_root()
+            .join(format!("db_backup_{unix_secs}"))
+    }
+
+    fn install(&self) -> std::io::Result<bool> {
+        RocksStore::load_staged_checkpoint(&self.root)
+    }
+
+    /// Every `db_backup_*` directory under `<data-dir>/backup`, in arbitrary
+    /// order.
+    fn backups(&self) -> Vec<PathBuf> {
+        let root = self.layout().backup_root();
+        let Ok(entries) = fs::read_dir(&root) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_dir()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with("db_backup_"))
+            })
+            .collect()
+    }
+
+    /// The names sitting *beside* the data directory. Anything but `data` here
+    /// is a write that escaped the volume the operator provisioned.
+    fn outside(&self) -> Vec<String> {
+        fs::read_dir(self.tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "data")
+            .collect()
+    }
 }
 
 // FM-PERSISTENCE-025
-/// No `checkpoint_ready` marker → nothing to install; the live db is untouched.
+/// Nothing staged → nothing to install; the live db is untouched.
 #[test]
 fn test_load_staged_checkpoint_absent_marker_is_noop() {
-    let t = TempDir::new().unwrap();
-    let data = t.path().join("data");
-    write_db(&data, b"k", b"v");
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"v");
 
-    assert!(!RocksStore::load_staged_checkpoint(&data).unwrap());
-    assert_eq!(read_db(&data, b"k"), Some(b"v".to_vec()));
-    assert!(backup_dirs(t.path(), "data").is_empty());
-}
-
-// FM-PERSISTENCE-025
-/// A path with no parent (the staging area is a sibling of the db dir) can hold
-/// no staged checkpoint: return `Ok(false)` rather than erroring.
-#[test]
-fn test_load_staged_checkpoint_no_parent_is_noop() {
-    assert!(!RocksStore::load_staged_checkpoint(Path::new("")).unwrap());
+    assert!(!f.install().unwrap());
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"v".to_vec()));
+    assert!(f.backups().is_empty());
 }
 
 // FM-PERSISTENCE-025
 /// Happy path: a complete staged checkpoint wins, the previous live db is moved
-/// aside into a `*_backup_*` dir (recoverable, not deleted), and the staging
-/// marker is consumed.
+/// aside into a `backup/db_backup_*` dir (recoverable, not deleted), and the
+/// staging directory is consumed.
 #[test]
 fn test_load_staged_checkpoint_installs_and_backs_up_old_db() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&data, b"k", b"old");
-    write_db(&crd, b"k", b"new");
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
 
-    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
+    assert!(f.install().unwrap());
 
-    // Checkpoint data is now live; staging marker consumed.
-    assert_eq!(read_db(&data, b"k"), Some(b"new".to_vec()));
+    // Checkpoint data is now live; the staging directory is consumed.
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
     assert!(
-        !crd.exists(),
-        "checkpoint_ready must be consumed after install"
+        !f.staging().exists(),
+        "the staged dir must be consumed after install"
     );
 
     // The previous live db survives in exactly one backup, fully readable.
-    let backups = backup_dirs(parent, "data");
+    let backups = f.backups();
     assert_eq!(backups.len(), 1, "old db should be backed up once");
     assert_eq!(read_db(&backups[0], b"k"), Some(b"old".to_vec()));
 }
 
-// FM-PERSISTENCE-023
+// FM-PERSISTENCE-023, FM-PERSISTENCE-057
 /// The install's crash-window reasoning ("crash between rename 1 and rename 2 is
 /// recoverable") only holds if each rename is durable when the next one runs, so
-/// the data dir's parent is fsynced after both. Asserted through the `SnapshotFs`
-/// seam: an fsync reaching the platter is not observable from a unit test, but
-/// the publisher issuing it in the right place is.
+/// every directory whose entries change is fsynced after the change — the data
+/// dir for both renames, and the backup root that gains the displaced database.
+/// Every path in the trace is relative to the data dir, which is the other half
+/// of the claim: nothing outside it is touched.
+/// Asserted through the `SnapshotFs` seam: an fsync reaching the platter is not
+/// observable from a unit test, but the publisher issuing it in the right place
+/// is.
 #[test]
-fn staged_checkpoint_install_fsyncs_the_data_dir_parent() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&data, b"k", b"old");
-    write_db(&crd, b"k", b"new");
-    let fs = crate::fs_seam::RecordingFs::new();
+fn staged_checkpoint_install_fsyncs_every_directory_it_changes() {
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
+    let recorder = crate::fs_seam::RecordingFs::new();
 
-    assert!(RocksStore::load_staged_checkpoint_with(&data, &fs).unwrap());
+    assert!(RocksStore::load_staged_checkpoint_with(&f.root, &recorder).unwrap());
 
-    let trace = fs.trace(parent);
-    assert_eq!(trace.len(), 4, "two renames, each with its sync: {trace:?}");
-    assert!(
-        trace[0].starts_with("rename data -> data_backup_"),
-        "first the live db moves aside: {trace:?}"
+    let trace = recorder.trace(&f.root);
+    assert_eq!(
+        trace.len(),
+        6,
+        "two renames plus the backup root's own publication: {trace:?}"
     );
     assert_eq!(
-        trace[1], "sync_dir .",
-        "the backup rename must be durable \
-         before the install rename can consume checkpoint_ready: {trace:?}"
+        trace[0], "sync_dir .",
+        "the backup root's name must be durable before a database is renamed into \
+         it, or the backup is reachable from nowhere: {trace:?}"
     );
-    assert_eq!(trace[2], "rename checkpoint_ready -> data");
+    assert!(
+        trace[1].starts_with("rename db -> backup/db_backup_"),
+        "first the live db moves aside, into the data dir's own backup root: {trace:?}"
+    );
+    assert_eq!(
+        trace[2], "sync_dir backup",
+        "the directory that gained the backup is synced: {trace:?}"
+    );
     assert_eq!(
         trace[3], "sync_dir .",
+        "and so is the one that lost `db`, before the install rename runs: {trace:?}"
+    );
+    assert_eq!(trace[4], "rename staging -> db");
+    assert_eq!(
+        trace[5], "sync_dir .",
         "the install rename is the commit point and must be durable: {trace:?}"
     );
+}
+
+// FM-PERSISTENCE-057
+/// The whole install stays inside the data directory. On the standard
+/// Kubernetes deployment the data dir *is* the PVC mount point: a staged
+/// download or a backup placed beside it lands on the container's ephemeral
+/// root, where it is both lost on restart and able to fill the node's disk.
+#[test]
+fn staged_install_touches_no_path_outside_the_data_dir() {
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
+    let recorder = crate::fs_seam::RecordingFs::new();
+
+    assert!(RocksStore::load_staged_checkpoint_with(&f.root, &recorder).unwrap());
+
+    // `RecordingFs::trace` renders paths relative to the root it is given and
+    // leaves anything outside it absolute, so an escape shows up as a `/`-led
+    // operand.
+    let trace = recorder.trace(&f.root);
+    for op in &trace {
+        assert!(
+            !op.contains(" /") && !op.starts_with('/'),
+            "the install must not touch a path outside the data directory: {op:?} in {trace:?}"
+        );
+    }
+    assert!(
+        f.outside().is_empty(),
+        "nothing may be created beside the data directory, found {:?}",
+        f.outside()
+    );
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
+}
+
+/// A [`crate::fs_seam::SnapshotFs`] that refuses any rename naming `guarded` as
+/// an operand — the way a kernel refuses to rename a mount point (`EBUSY`).
+struct MountPointFs {
+    guarded: PathBuf,
+}
+
+impl crate::fs_seam::SnapshotFs for MountPointFs {
+    fn write(&self, path: &Path, contents: &[u8]) -> std::io::Result<()> {
+        crate::fs_seam::RealFs.write(path, contents)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        if from == self.guarded || to == self.guarded {
+            return Err(std::io::Error::other(
+                "device or resource busy: the data directory is a mount point",
+            ));
+        }
+        crate::fs_seam::RealFs.rename(from, to)
+    }
+
+    fn symlink(&self, target: &Path, link: &Path) -> std::io::Result<()> {
+        crate::fs_seam::RealFs.symlink(target, link)
+    }
+
+    fn sync_file(&self, path: &Path) -> std::io::Result<()> {
+        crate::fs_seam::RealFs.sync_file(path)
+    }
+
+    fn sync_dir(&self, path: &Path) -> std::io::Result<()> {
+        crate::fs_seam::RealFs.sync_dir(path)
+    }
+}
+
+// FM-PERSISTENCE-057
+/// The install must survive a data directory that cannot itself be renamed,
+/// because that is the only deployment shape that matters: a PVC mounted at
+/// `persistence.data-dir`. Under the old flat layout rename 1 *was*
+/// `rename(<data-dir>, ...)`, so full resync was permanently impossible on such
+/// a node.
+#[test]
+fn install_succeeds_when_the_data_dir_itself_cannot_be_renamed() {
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
+    let fs_seam = MountPointFs {
+        guarded: f.root.clone(),
+    };
+
+    assert!(
+        RocksStore::load_staged_checkpoint_with(&f.root, &fs_seam).unwrap(),
+        "the mount point is never a rename operand, so nothing here can be EBUSY"
+    );
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
+    assert_eq!(f.backups().len(), 1);
 }
 
 // FM-PERSISTENCE-025
 /// First full sync onto a node with no existing db: install with no backup.
 #[test]
 fn test_load_staged_checkpoint_first_sync_no_existing_db() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&crd, b"k", b"fresh");
+    let f = Fixture::new();
+    write_db(&f.staging(), b"k", b"fresh");
 
-    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
-    assert_eq!(read_db(&data, b"k"), Some(b"fresh".to_vec()));
+    assert!(f.install().unwrap());
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"fresh".to_vec()));
     assert!(
-        backup_dirs(parent, "data").is_empty(),
+        f.backups().is_empty(),
         "no live db existed, so no backup should be created"
     );
 }
@@ -540,27 +684,25 @@ fn test_load_staged_checkpoint_first_sync_no_existing_db() {
 /// place — silent data loss. (Regression test for that bug.)
 #[test]
 fn test_load_staged_checkpoint_incomplete_dir_refuses_and_preserves_data() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&data, b"k", b"keep");
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"keep");
     // A staged dir that is *not* a RocksDB database (no CURRENT manifest).
-    fs::create_dir_all(&crd).unwrap();
-    fs::write(crd.join("stray.txt"), b"not a database").unwrap();
+    fs::create_dir_all(f.staging()).unwrap();
+    fs::write(f.staging().join("stray.txt"), b"not a database").unwrap();
 
-    let err = RocksStore::load_staged_checkpoint(&data)
+    let err = f
+        .install()
         .expect_err("install must refuse an incomplete staged checkpoint");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 
     // Original data is untouched: still live, not moved to a backup.
-    assert_eq!(read_db(&data, b"k"), Some(b"keep".to_vec()));
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"keep".to_vec()));
     assert!(
-        backup_dirs(parent, "data").is_empty(),
+        f.backups().is_empty(),
         "live db must not be moved aside when the staged dir is incomplete"
     );
     assert!(
-        crd.exists(),
+        f.staging().exists(),
         "incomplete staged dir should be left for inspection"
     );
 }
@@ -571,16 +713,16 @@ fn manifest_path(dir: &Path) -> PathBuf {
     dir.join(current.trim())
 }
 
-/// Assert the live database at `data` was left exactly where it was, with the
-/// staged directory still on disk for the operator to inspect or re-copy.
-fn assert_install_refused_without_touching_live_db(parent: &Path, data: &Path, crd: &Path) {
-    assert_eq!(read_db(data, b"k"), Some(b"keep".to_vec()));
+/// Assert the live database was left exactly where it was, with the staged
+/// directory still on disk for the operator to inspect or re-copy.
+fn assert_install_refused_without_touching_live_db(f: &Fixture) {
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"keep".to_vec()));
     assert!(
-        backup_dirs(parent, "data").is_empty(),
+        f.backups().is_empty(),
         "the live db must not be moved aside for a checkpoint that cannot replace it"
     );
     assert!(
-        crd.exists(),
+        f.staging().exists(),
         "the rejected staged dir should be left for inspection"
     );
 }
@@ -596,26 +738,21 @@ fn assert_install_refused_without_touching_live_db(parent: &Path, data: &Path, c
 /// a retried sync overwrites that copy.
 #[test]
 fn test_load_staged_checkpoint_refuses_a_payload_rocksdb_cannot_open() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&data, b"k", b"keep");
-    write_db(&crd, b"k", b"new");
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"keep");
+    write_db(&f.staging(), b"k", b"new");
     // Structurally intact, semantically destroyed: CURRENT still resolves.
-    fs::write(manifest_path(&crd), b"not a version edit log").unwrap();
+    fs::write(manifest_path(&f.staging()), b"not a version edit log").unwrap();
     assert!(
-        StagedCheckpoint::for_db_dir(&data)
-            .unwrap()
-            .verify()
-            .is_ok(),
+        StagedCheckpoint::in_data_dir(&f.root).verify().is_ok(),
         "precondition: the structural check cannot see this damage"
     );
 
-    let err = RocksStore::load_staged_checkpoint(&data)
+    let err = f
+        .install()
         .expect_err("install must refuse a payload RocksDB cannot open");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-    assert_install_refused_without_touching_live_db(parent, &data, &crd);
+    assert_install_refused_without_touching_live_db(&f);
 }
 
 // FM-PERSISTENCE-056
@@ -625,57 +762,53 @@ fn test_load_staged_checkpoint_refuses_a_payload_rocksdb_cannot_open() {
 /// which the payload manifest catches without opening the database at all.
 #[test]
 fn test_load_staged_checkpoint_refuses_a_payload_that_disagrees_with_its_manifest() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&data, b"k", b"keep");
-    write_db(&crd, b"k", b"new");
-    let manifest = crate::rocks::payload::PayloadManifest::build(&crd).unwrap();
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"keep");
+    write_db(&f.staging(), b"k", b"new");
+    let manifest = crate::rocks::payload::PayloadManifest::build(&f.staging()).unwrap();
     fs::write(
-        crd.join(crate::rocks::payload::PAYLOAD_MANIFEST_FILE),
+        f.staging()
+            .join(crate::rocks::payload::PAYLOAD_MANIFEST_FILE),
         manifest.to_bytes().unwrap(),
     )
     .unwrap();
     // A copy that stopped partway through the MANIFEST.
-    fs::write(manifest_path(&crd), b"").unwrap();
+    fs::write(manifest_path(&f.staging()), b"").unwrap();
 
-    let err = RocksStore::load_staged_checkpoint(&data)
+    let err = f
+        .install()
         .expect_err("install must refuse a payload that disagrees with its manifest");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
         err.to_string().contains("MANIFEST-"),
         "the error must name the file that disagrees: {err}"
     );
-    assert_install_refused_without_touching_live_db(parent, &data, &crd);
+    assert_install_refused_without_touching_live_db(&f);
 }
 
 // FM-PERSISTENCE-025
-/// Crash window: the install renamed the live db to `*_backup_*` but crashed
+/// Crash window: the install renamed the live db into `backup/` but crashed
 /// *before* renaming the staged dir into place. On reboot the on-disk layout is
-/// {no live db, `checkpoint_ready` present, leftover backup present}. Recovery
-/// must finish the install cleanly and the prior data must survive in the
-/// leftover backup — no data loss in this window.
+/// {no live db, `staging` present, leftover backup present}. Recovery must
+/// finish the install cleanly and the prior data must survive in the leftover
+/// backup — no data loss in this window.
 #[test]
 fn test_load_staged_checkpoint_crash_after_backup_recovers() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
+    let f = Fixture::new();
     // Live db already renamed aside by the interrupted install.
-    let leftover_backup = parent.join("data_backup_111");
+    let leftover_backup = f.backup(111);
     write_db(&leftover_backup, b"k", b"old");
-    write_db(&crd, b"k", b"new");
+    write_db(&f.staging(), b"k", b"new");
     assert!(
-        !data.exists(),
+        !f.db().exists(),
         "precondition: live db was already moved aside"
     );
 
-    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
+    assert!(f.install().unwrap());
 
     // Staged checkpoint is now installed; the interrupted backup is untouched.
-    assert_eq!(read_db(&data, b"k"), Some(b"new".to_vec()));
-    assert!(!crd.exists(), "checkpoint_ready must be consumed");
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
+    assert!(!f.staging().exists(), "the staged dir must be consumed");
     assert_eq!(
         read_db(&leftover_backup, b"k"),
         Some(b"old".to_vec()),
@@ -685,33 +818,30 @@ fn test_load_staged_checkpoint_crash_after_backup_recovers() {
 
 // FM-PERSISTENCE-025
 /// Crash window: the install completed (staged dir renamed into place) but the
-/// process died before anything else. On reboot `checkpoint_ready` is gone, so
-/// install is a no-op and re-running it is idempotent — the freshly installed
-/// data stays intact and no spurious backup is produced.
+/// process died before anything else. On reboot `staging` is gone, so install is
+/// a no-op and re-running it is idempotent — the freshly installed data stays
+/// intact and no spurious backup is produced.
 #[test]
 fn test_load_staged_checkpoint_idempotent_after_success() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    write_db(&data, b"k", b"old");
-    write_db(&crd, b"k", b"new");
+    let f = Fixture::new();
+    write_db(&f.db(), b"k", b"old");
+    write_db(&f.staging(), b"k", b"new");
 
-    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
-    let backups_after_first = backup_dirs(parent, "data").len();
+    assert!(f.install().unwrap());
+    let backups_after_first = f.backups().len();
 
     // Second boot: nothing staged, so this is a no-op that preserves the data.
-    assert!(!RocksStore::load_staged_checkpoint(&data).unwrap());
-    assert_eq!(read_db(&data, b"k"), Some(b"new".to_vec()));
+    assert!(!f.install().unwrap());
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
     assert_eq!(
-        backup_dirs(parent, "data").len(),
+        f.backups().len(),
         backups_after_first,
         "a no-op install must not create another backup"
     );
 }
 
 // FM-PERSISTENCE-026
-/// A stale `*_backup_*` dir left by an earlier crash must not block a new
+/// A stale `db_backup_*` dir left by an earlier crash must not block a new
 /// install: the new backup gets a distinct timestamped name and the install
 /// succeeds. Retention (keep the newest `BACKUP_RETENTION = 1`) then prunes
 /// the stale backup, so exactly one backup — the just-displaced live db —
@@ -719,21 +849,18 @@ fn test_load_staged_checkpoint_idempotent_after_success() {
 /// database copy.)
 #[test]
 fn test_load_staged_checkpoint_prunes_older_backups() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    let stale_backup = parent.join("data_backup_111");
+    let f = Fixture::new();
+    let stale_backup = f.backup(111);
     write_db(&stale_backup, b"k", b"ancient");
-    write_db(&data, b"k", b"current");
-    write_db(&crd, b"k", b"staged");
+    write_db(&f.db(), b"k", b"current");
+    write_db(&f.staging(), b"k", b"staged");
 
-    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
+    assert!(f.install().unwrap());
 
     // Install succeeded; retention kept only the newest backup, which holds
     // the just-displaced live db.
-    assert_eq!(read_db(&data, b"k"), Some(b"staged".to_vec()));
-    let backups = backup_dirs(parent, "data");
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"staged".to_vec()));
+    let backups = f.backups();
     assert_eq!(
         backups.len(),
         1,
@@ -753,18 +880,15 @@ fn test_load_staged_checkpoint_prunes_older_backups() {
 /// there is no live db), so retention keeps it — the previous data survives.
 #[test]
 fn test_load_staged_checkpoint_crash_recovery_keeps_lone_backup() {
-    let t = TempDir::new().unwrap();
-    let parent = t.path();
-    let data = parent.join("data");
-    let crd = parent.join("checkpoint_ready");
-    let leftover_backup = parent.join("data_backup_111");
+    let f = Fixture::new();
+    let leftover_backup = f.backup(111);
     write_db(&leftover_backup, b"k", b"old");
-    write_db(&crd, b"k", b"new");
+    write_db(&f.staging(), b"k", b"new");
 
-    assert!(RocksStore::load_staged_checkpoint(&data).unwrap());
+    assert!(f.install().unwrap());
 
-    assert_eq!(read_db(&data, b"k"), Some(b"new".to_vec()));
-    assert_eq!(backup_dirs(parent, "data").len(), 1);
+    assert_eq!(read_db(&f.db(), b"k"), Some(b"new".to_vec()));
+    assert_eq!(f.backups().len(), 1);
     assert_eq!(
         read_db(&leftover_backup, b"k"),
         Some(b"old".to_vec()),
@@ -778,19 +902,19 @@ fn test_load_staged_checkpoint_crash_recovery_keeps_lone_backup() {
 #[test]
 fn test_prune_backups_orders_numerically_not_lexically() {
     let t = TempDir::new().unwrap();
-    let parent = t.path();
-    fs::create_dir_all(parent.join("data_backup_2")).unwrap();
-    fs::create_dir_all(parent.join("data_backup_10")).unwrap();
+    let backup_root = t.path();
+    fs::create_dir_all(backup_root.join("db_backup_2")).unwrap();
+    fs::create_dir_all(backup_root.join("db_backup_10")).unwrap();
 
-    let removed = crate::rocks::staged::prune_backups(parent, "data", 1).unwrap();
+    let removed = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
 
     assert_eq!(removed, 1);
     assert!(
-        parent.join("data_backup_10").exists(),
+        backup_root.join("db_backup_10").exists(),
         "numerically newest (10) must be kept"
     );
     assert!(
-        !parent.join("data_backup_2").exists(),
+        !backup_root.join("db_backup_2").exists(),
         "numerically older (2) must be pruned"
     );
 }
@@ -801,15 +925,19 @@ fn test_prune_backups_orders_numerically_not_lexically() {
 #[test]
 fn test_prune_backups_noop_within_retention() {
     let t = TempDir::new().unwrap();
-    let parent = t.path();
-    fs::create_dir_all(parent.join("data_backup_5")).unwrap();
-    fs::write(parent.join("data_backup_9"), b"a stray file, not a backup").unwrap();
+    let backup_root = t.path();
+    fs::create_dir_all(backup_root.join("db_backup_5")).unwrap();
+    fs::write(
+        backup_root.join("db_backup_9"),
+        b"a stray file, not a backup",
+    )
+    .unwrap();
 
-    let removed = crate::rocks::staged::prune_backups(parent, "data", 1).unwrap();
+    let removed = crate::rocks::staged::prune_backups(backup_root, "db", 1).unwrap();
 
     assert_eq!(removed, 0);
-    assert!(parent.join("data_backup_5").exists());
-    assert!(parent.join("data_backup_9").exists());
+    assert!(backup_root.join("db_backup_5").exists());
+    assert!(backup_root.join("db_backup_9").exists());
 }
 
 // ============================================================================

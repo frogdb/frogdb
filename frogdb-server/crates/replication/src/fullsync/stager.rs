@@ -24,14 +24,11 @@
 
 use crate::fullsync::FullSyncMetadata;
 use crate::state::StagedReplicationMetadata;
+use frogdb_persistence::DataDirLayout;
 use frogdb_persistence::rocks::staged::StagedCheckpoint;
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-
-/// Name of the scratch directory received checkpoint files land in before the
-/// commit rename.
-const INCOMING_DIR_NAME: &str = "checkpoint_incoming";
 
 /// What a committed stage yields the caller: the replication identity + offset
 /// the just-staged snapshot corresponds to.
@@ -51,27 +48,34 @@ pub struct StagedOutcome {
 }
 
 /// Owns verify -> commit -> metadata for one full-sync checkpoint, against the
-/// parent of the live db dir. See the module docs for the streaming-before-install
+/// data directory. See the module docs for the streaming-before-install
 /// contract.
 pub struct CheckpointStager {
-    parent_dir: PathBuf,
+    data_dir: PathBuf,
 }
 
 impl CheckpointStager {
-    /// A stager landing checkpoints into `parent_dir` (the directory that holds
-    /// the live db dir).
-    pub fn new(parent_dir: &Path) -> Self {
+    /// A stager landing checkpoints inside `data_dir` (`persistence.data-dir`,
+    /// the layout root — not the live db dir).
+    ///
+    /// Both the scratch dir and the staged dir are children of `data_dir`, so a
+    /// download never writes outside the volume the operator provisioned and
+    /// the commit rename is always same-filesystem (FM-PERSISTENCE-057). This
+    /// used to work from `data_dir.parent()`, which on the standard Kubernetes
+    /// deployment is the container's ephemeral root.
+    pub fn new(data_dir: &Path) -> Self {
         Self {
-            parent_dir: parent_dir.to_path_buf(),
+            data_dir: data_dir.to_path_buf(),
         }
     }
 
-    /// Scratch dir (`checkpoint_incoming`) that received files land in before
-    /// the commit rename. The [`receive_checkpoint_files`] loop writes here.
+    /// Scratch dir (`<data-dir>/staging.incoming`) that received files land in
+    /// before the commit rename. The [`receive_checkpoint_files`] loop writes
+    /// here.
     ///
     /// [`receive_checkpoint_files`]: crate::fullsync::receive_checkpoint_files
     pub fn incoming_dir(&self) -> PathBuf {
-        self.parent_dir.join(INCOMING_DIR_NAME)
+        DataDirLayout::new(&self.data_dir).staging_incoming_dir()
     }
 
     /// The staged-checkpoint dir [`Self::commit`] renames onto — a complete,
@@ -79,7 +83,7 @@ impl CheckpointStager {
     /// snapshot into the live keyspace, and which the boot-time Installer
     /// consumes if the process restarts first.
     pub fn staged_dir(&self) -> PathBuf {
-        let staged = StagedCheckpoint::in_parent(&self.parent_dir);
+        let staged = StagedCheckpoint::in_data_dir(&self.data_dir);
         staged.dir().to_path_buf()
     }
 
@@ -118,7 +122,7 @@ impl CheckpointStager {
         // (c) Commit through the typed staging contract shared with the boot-time
         // installer (`frogdb_persistence::rocks::staged`): the rename onto the
         // staged dir is the writer's commit point.
-        let staged = StagedCheckpoint::in_parent(&self.parent_dir);
+        let staged = StagedCheckpoint::in_data_dir(&self.data_dir);
         // Non-fatal: removing a stale staged dir is best-effort.
         if staged.exists()
             && let Err(e) = fs::remove_dir_all(staged.dir()).await
@@ -192,6 +196,29 @@ mod tests {
         incoming
     }
 
+    /// The writer's two directories are children of the data directory, not of
+    /// its parent. On the deployment that matters the data dir *is* the PVC
+    /// mount point: staging outside it writes a second complete copy of the
+    /// database onto the container's ephemeral root, and the commit rename
+    /// would cross a filesystem boundary.
+    // FM-PERSISTENCE-057
+    #[test]
+    fn the_stager_stages_inside_the_data_dir() {
+        let data_dir = Path::new("/mnt/frogdb-data");
+        let stager = CheckpointStager::new(data_dir);
+
+        assert_eq!(stager.incoming_dir(), data_dir.join("staging.incoming"));
+        assert_eq!(stager.staged_dir(), data_dir.join("staging"));
+        for path in [stager.incoming_dir(), stager.staged_dir()] {
+            assert_eq!(
+                path.parent(),
+                Some(data_dir),
+                "{} must be a direct child of the data directory",
+                path.display()
+            );
+        }
+    }
+
     // FM-REPLICATION-036
     #[tokio::test]
     async fn stager_commit_stages_and_stamps_metadata() {
@@ -214,7 +241,7 @@ mod tests {
         );
 
         // The staged dir now holds the moved content and the scratch dir is gone.
-        let staged = StagedCheckpoint::in_parent(dir.path());
+        let staged = StagedCheckpoint::in_data_dir(dir.path());
         assert!(staged.exists());
         assert!(!incoming.exists(), "scratch dir consumed by the rename");
         let current = fs::read(staged.dir().join("CURRENT")).await.unwrap();
@@ -247,7 +274,7 @@ mod tests {
         // The scratch dir was scrubbed and nothing was staged.
         assert!(!incoming.exists(), "scratch dir removed on mismatch");
         assert!(
-            !StagedCheckpoint::in_parent(dir.path()).exists(),
+            !StagedCheckpoint::in_data_dir(dir.path()).exists(),
             "no staged dir created on mismatch"
         );
     }
@@ -259,7 +286,7 @@ mod tests {
         let stager = CheckpointStager::new(dir.path());
 
         // A pre-existing staged dir with old content.
-        let staged = StagedCheckpoint::in_parent(dir.path());
+        let staged = StagedCheckpoint::in_data_dir(dir.path());
         fs::create_dir_all(staged.dir()).await.unwrap();
         fs::write(staged.dir().join("STALE"), b"old").await.unwrap();
         fs::write(staged.dir().join("CURRENT"), b"old-manifest")
@@ -303,7 +330,7 @@ mod tests {
         assert_eq!(outcome.replication_offset, 42);
         assert_eq!(outcome.replication_id, "repl-stager");
         // The staged dir is intact (rename succeeded, only the stamp failed).
-        let staged = StagedCheckpoint::in_parent(dir.path());
+        let staged = StagedCheckpoint::in_data_dir(dir.path());
         assert!(staged.exists());
         assert!(
             staged.dir().join(STAGED_REPLICATION_METADATA_FILE).is_dir(),

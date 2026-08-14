@@ -5823,10 +5823,18 @@ async fn read_json_file(path: &std::path::Path) -> serde_json::Value {
     panic!("file never became readable JSON: {}", path.display());
 }
 
-/// Produce a valid, persisted RocksDB data directory by running a short-lived
-/// standalone server. The returned directory can be staged as a replica
-/// full-sync checkpoint.
-async fn make_populated_data_dir(dir: &std::path::Path, key: &str, val: &str) {
+/// Produce a valid, persisted RocksDB payload by running a short-lived
+/// standalone server over `dir`, and return the path of the payload itself.
+///
+/// The payload is `<dir>/db`, not `<dir>`: a data directory is a layout whose
+/// database lives in `db/` (FM-PERSISTENCE-057). A staged full-sync checkpoint
+/// *is* a database directory, so it is that inner path — not the layout around
+/// it — that a test stages.
+async fn make_populated_data_dir(
+    dir: &std::path::Path,
+    key: &str,
+    val: &str,
+) -> std::path::PathBuf {
     let server = TestServer::start_standalone_with_config(TestServerConfig {
         persistence: true,
         data_dir: Some(dir.to_path_buf()),
@@ -5838,6 +5846,7 @@ async fn make_populated_data_dir(dir: &std::path::Path, key: &str, val: &str) {
     assert_ok(&client.command(&["SET", key, val]).await);
     drop(client);
     server.shutdown().await;
+    dir.join("db")
 }
 
 /// The primary's replication offset must not rewind across a restart: a replica
@@ -5915,22 +5924,22 @@ async fn test_primary_replication_offset_survives_restart() {
 /// rather than silently resetting to 0.
 #[tokio::test]
 async fn test_replica_recovers_offset_from_staged_metadata() {
-    // 1. Produce a valid RocksDB data dir to stand in for the streamed checkpoint.
+    // 1. Produce a valid RocksDB payload to stand in for the streamed checkpoint.
     let src_tmp = tempfile::tempdir().unwrap();
     let src_dir = src_tmp.path().join("data");
-    make_populated_data_dir(&src_dir, "snapshot_key", "snapshot_val").await;
+    let payload = make_populated_data_dir(&src_dir, "snapshot_key", "snapshot_val").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 2. Stage it as a full-sync checkpoint with a chosen offset + replid.
     let node_tmp = tempfile::tempdir().unwrap();
-    let parent = node_tmp.path();
-    let data_dir = parent.join("data");
-    let checkpoint_ready = parent.join("checkpoint_ready");
-    std::fs::rename(&src_dir, &checkpoint_ready).unwrap();
+    let data_dir = node_tmp.path().join("data");
+    let staged_dir = data_dir.join("staging");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::rename(&payload, &staged_dir).unwrap();
     let staged_id = "a".repeat(40);
     let staged_offset: u64 = 987_654;
     std::fs::write(
-        checkpoint_ready.join("replication_metadata.json"),
+        staged_dir.join("replication_metadata.json"),
         serde_json::json!({
             "replication_id": staged_id,
             "replication_offset": staged_offset,
@@ -5969,7 +5978,10 @@ async fn test_replica_recovers_offset_from_staged_metadata() {
         "recovered replid must match the staged checkpoint"
     );
     assert!(
-        !data_dir.join("replication_metadata.json").exists(),
+        !data_dir
+            .join("db")
+            .join("replication_metadata.json")
+            .exists(),
         "staged metadata should be consumed after recovery"
     );
 
@@ -6033,10 +6045,9 @@ async fn test_full_sync_stages_live_primary_offset() {
     );
 
     // A second replica with a known data dir now full-syncs at the live offset
-    // and stages its checkpoint metadata under <parent>/checkpoint_ready/.
+    // and stages its checkpoint metadata under <data-dir>/staging/.
     let replica2_tmp = tempfile::tempdir().unwrap();
-    let parent = replica2_tmp.path();
-    let data_dir = parent.join("data");
+    let data_dir = replica2_tmp.path().join("data");
     let replica2 = TestServer::start_replica_with_config(
         &primary,
         TestServerConfig {
@@ -6049,12 +6060,7 @@ async fn test_full_sync_stages_live_primary_offset() {
     .await;
 
     // The staged checkpoint metadata must carry the live offset + replid, not 0.
-    let staged = read_json_file(
-        &parent
-            .join("checkpoint_ready")
-            .join("replication_metadata.json"),
-    )
-    .await;
+    let staged = read_json_file(&data_dir.join("staging").join("replication_metadata.json")).await;
     let staged_offset = staged["replication_offset"].as_u64().unwrap() as i64;
     assert!(
         staged_offset > 0,
@@ -6190,17 +6196,17 @@ async fn test_info_master_replid_survives_restart() {
 async fn test_replica_ignores_corrupt_staged_metadata() {
     let src_tmp = tempfile::tempdir().unwrap();
     let src_dir = src_tmp.path().join("data");
-    make_populated_data_dir(&src_dir, "snapshot_key", "snapshot_val").await;
+    let payload = make_populated_data_dir(&src_dir, "snapshot_key", "snapshot_val").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let node_tmp = tempfile::tempdir().unwrap();
-    let parent = node_tmp.path();
-    let data_dir = parent.join("data");
-    let checkpoint_ready = parent.join("checkpoint_ready");
-    std::fs::rename(&src_dir, &checkpoint_ready).unwrap();
+    let data_dir = node_tmp.path().join("data");
+    let staged_dir = data_dir.join("staging");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::rename(&payload, &staged_dir).unwrap();
     // Garbage instead of valid metadata.
     std::fs::write(
-        checkpoint_ready.join("replication_metadata.json"),
+        staged_dir.join("replication_metadata.json"),
         "{ this is not valid json",
     )
     .unwrap();

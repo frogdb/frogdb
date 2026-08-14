@@ -95,22 +95,24 @@ impl RocksStore {
     }
 
     /// Install a staged full-sync checkpoint (see [`super::staged`] for the
-    /// three-party contract), if one is present next to `rocksdb_dir`.
-    pub fn load_staged_checkpoint(rocksdb_dir: &Path) -> std::io::Result<bool> {
-        Self::load_staged_checkpoint_with(rocksdb_dir, &crate::fs_seam::RealFs)
+    /// three-party contract), if one is present in `data_dir`.
+    ///
+    /// `data_dir` is the configured `persistence.data-dir` — the layout root,
+    /// not the RocksDB directory. Everything this touches lives inside it
+    /// (FM-PERSISTENCE-057).
+    pub fn load_staged_checkpoint(data_dir: &Path) -> std::io::Result<bool> {
+        Self::load_staged_checkpoint_with(data_dir, &crate::fs_seam::RealFs)
     }
 
     /// [`load_staged_checkpoint`](Self::load_staged_checkpoint) against an
     /// injectable filesystem, so the sync/rename ordering the install depends on
     /// can be asserted by a recording fake. See [`crate::fs_seam`] for the rule.
     pub(crate) fn load_staged_checkpoint_with(
-        rocksdb_dir: &Path,
+        data_dir: &Path,
         fs: &dyn crate::fs_seam::SnapshotFs,
     ) -> std::io::Result<bool> {
-        let staged = match super::staged::StagedCheckpoint::for_db_dir(rocksdb_dir) {
-            Some(s) => s,
-            None => return Ok(false),
-        };
+        let layout = crate::data_dir::DataDirLayout::new(data_dir);
+        let staged = super::staged::StagedCheckpoint::in_data_dir(data_dir);
         if !staged.exists() {
             return Ok(false);
         }
@@ -137,7 +139,7 @@ impl RocksStore {
         // database: the operator staged this checkpoint deliberately, and
         // quietly ignoring it would be the "restored server that isn't
         // restored" failure. The live data is intact, so the recovery is to
-        // remove or re-copy `checkpoint_ready`.
+        // remove or re-copy `<data-dir>/staging`.
         let report = staged.verify().map_err(|e| {
             tracing::error!(checkpoint_dir = %staged.dir().display(), error = %e, "Staged checkpoint failed verification; refusing to install");
             std::io::Error::from(e)
@@ -161,52 +163,71 @@ impl RocksStore {
             "Staged checkpoint verified"
         );
 
-        let db_name = rocksdb_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("db");
-        let parent = rocksdb_dir.parent().expect("for_db_dir returned Some");
+        let db_dir = layout.db_dir();
+        let backup_root = layout.backup_root();
+        let root = layout.root();
 
         // The install is two renames, sequenced so that no crash point loses
         // data. Each is a single same-filesystem rename (atomic on POSIX), so
         // there is never a half-database at the live path:
         //
-        //   rename 1: <db>              -> <db>_backup_<ts>  (only if a live db exists)
-        //   rename 2: checkpoint_ready/ -> <db>
+        //   rename 1: <data-dir>/db      -> <data-dir>/backup/db_backup_<ts>
+        //                                   (only if a live db exists)
+        //   rename 2: <data-dir>/staging -> <data-dir>/db
         //
-        // Crash between 1 and 2: the next boot sees {no live db,
-        // checkpoint_ready still present} and re-runs this install to
-        // completion — the previous data survives in the backup and the new
-        // data in checkpoint_ready. Crash after 2: rename 2 atomically
-        // consumed the staging marker, so the next boot is a no-op; rename 2
-        // is the commit point, and the staged replication metadata rides
-        // inside the installed dir. (Both windows are pinned by the
-        // crash-window tests in `rocks/tests.rs`.)
+        // Every operand is *inside* the data directory, which is what makes
+        // both renames same-filesystem on the deployment that matters: in
+        // Kubernetes the PVC is mounted at the data dir, so a rename with the
+        // data dir itself as an operand fails EBUSY and a staged download
+        // outside it lands on the container's ephemeral root
+        // (FM-PERSISTENCE-057).
+        //
+        // Crash between 1 and 2: the next boot sees {no live db, staging still
+        // present} and re-runs this install to completion — the previous data
+        // survives in the backup and the new data in staging. Crash after 2:
+        // rename 2 atomically consumed the staging directory, so the next boot
+        // is a no-op; rename 2 is the commit point, and the staged replication
+        // metadata rides inside the installed dir. (Both windows are pinned by
+        // the crash-window tests in `rocks/tests.rs`.)
         //
         // That reasoning only holds if each rename is *durable* when the next
-        // one runs, so `parent` is fsynced after both (see [`crate::fs_seam`]).
-        // Without the first sync a power loss could surface rename 2 without
-        // rename 1 — the live dir replaced while the backup that was supposed
-        // to hold the previous database never appeared.
-        if rocksdb_dir.exists() {
+        // one runs, so every directory whose entries change is fsynced after
+        // the change (see [`crate::fs_seam`]). Without the first sync a power
+        // loss could surface rename 2 without rename 1 — the live dir replaced
+        // while the backup that was supposed to hold the previous database
+        // never appeared.
+        if db_dir.exists() {
+            // The backup root's *own* name must be durable before a database
+            // is renamed into it, or a power loss can leave the backup
+            // reachable from nowhere.
+            std::fs::create_dir_all(&backup_root)?;
+            fs.sync_dir(root)?;
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let bd = parent.join(super::staged::backup_dir_name(db_name, ts));
-            info!(from = %rocksdb_dir.display(), to = %bd.display(), "Backing up existing database");
-            fs.rename(rocksdb_dir, &bd)?;
-            fs.sync_dir(parent)?;
+            let bd = backup_root.join(super::staged::backup_dir_name(
+                crate::data_dir::DB_DIR_NAME,
+                ts,
+            ));
+            info!(from = %db_dir.display(), to = %bd.display(), "Backing up existing database");
+            fs.rename(&db_dir, &bd)?;
+            fs.sync_dir(&backup_root)?;
+            fs.sync_dir(root)?;
         }
-        info!(from = %staged.dir().display(), to = %rocksdb_dir.display(), "Installing checkpoint as new database");
-        fs.rename(staged.dir(), rocksdb_dir)?;
-        fs.sync_dir(parent)?;
+        info!(from = %staged.dir().display(), to = %db_dir.display(), "Installing checkpoint as new database");
+        fs.rename(staged.dir(), &db_dir)?;
+        fs.sync_dir(root)?;
 
         // Post-commit, best-effort retention: keep the newest backup, delete
         // older ones. Without this, every replica full sync leaked a complete
         // database copy. Failure is logged, never propagated — retention is
         // hygiene, not worth failing a successful install over.
-        match super::staged::prune_backups(parent, db_name, super::staged::BACKUP_RETENTION) {
+        match super::staged::prune_backups(
+            &backup_root,
+            crate::data_dir::DB_DIR_NAME,
+            super::staged::BACKUP_RETENTION,
+        ) {
             Ok(0) => {}
             Ok(n) => info!(removed = n, "Pruned old database backups"),
             Err(e) => tracing::warn!(error = %e, "Failed to prune old database backups"),

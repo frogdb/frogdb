@@ -70,19 +70,20 @@ it fell too far behind — see [Replication](/operations/replication/).
 
 ## Restore
 
-FrogDB's `persistence.data-dir` (default `./frogdb-data`) **is** the RocksDB directory — it is
-opened directly, with no intermediate copy step. Restoring a snapshot means installing its
-`checkpoint/` contents as the new `data-dir`, then letting RocksDB replay its own internal WAL
-on open.
+`persistence.data-dir` (default `./frogdb-data`) holds the live RocksDB database at
+`<data-dir>/db`, alongside the directories the install path needs — `<data-dir>/staging`,
+`<data-dir>/staging.incoming`, and `<data-dir>/backup` — and the identity marker
+`<data-dir>/frogdb_data_dir`. Everything FrogDB writes stays **inside** `data-dir`, so the whole
+directory can be a mount point. Restoring a snapshot means installing its `checkpoint/` contents
+as the new `<data-dir>/db`, then letting RocksDB replay its own internal WAL on open.
 
-Do this by staging the snapshot as a `checkpoint_ready` directory **next to** `data-dir` (i.e.
-in its parent directory) before starting the server. This reuses the same staged-checkpoint
-install path FrogDB already runs on every boot for replica full sync
+Do this by staging the snapshot as `<data-dir>/staging` before starting the server. This reuses
+the same staged-checkpoint install path FrogDB already runs on every boot for replica full sync
 (`frogdb-server/crates/persistence/src/rocks/checkpoint.rs`,
 `frogdb-server/crates/recovery/src/checkpoint.rs`): on startup, before opening RocksDB,
-FrogDB looks for `checkpoint_ready` beside `data-dir`, verifies it's a complete database, moves
-any existing `data-dir` aside to `<data-dir>_backup_<unix-timestamp>` (never deletes it), and
-renames `checkpoint_ready` into place as the new `data-dir`.
+FrogDB looks for `<data-dir>/staging`, verifies it's a complete database, moves any existing
+`<data-dir>/db` aside to `<data-dir>/backup/db_backup_<unix-timestamp>` (never deletes it), and
+renames `staging` into place as the new `db`.
 
 That verification runs **before** anything moves, and it is three checks, not one: `CURRENT` must
 resolve to a `MANIFEST` that exists; every file listed in the payload's own manifest
@@ -99,35 +100,35 @@ SNAPSHOT=/var/lib/frogdb/snapshots/snapshot_00042   # or the "latest" symlink ta
 # 1. Stop the server
 systemctl stop frogdb
 
-# 2. Stage the snapshot's checkpoint as checkpoint_ready, a sibling of data-dir.
+# 2. Stage the snapshot's checkpoint as <data-dir>/staging.
 #    Copy the CONTENTS of checkpoint/ (not the directory itself) plus the
-#    search sidecar, if present, so the staged layout matches a live data-dir.
-mkdir -p "$(dirname "$DATA_DIR")/checkpoint_ready"
-cp -a "$SNAPSHOT/checkpoint/." "$(dirname "$DATA_DIR")/checkpoint_ready/"
+#    search sidecar, if present, so the staged layout matches a live database.
+mkdir -p "$DATA_DIR/staging"
+cp -a "$SNAPSHOT/checkpoint/." "$DATA_DIR/staging/"
 if [ -d "$SNAPSHOT/search" ]; then
-  cp -a "$SNAPSHOT/search" "$(dirname "$DATA_DIR")/checkpoint_ready/search"
+  cp -a "$SNAPSHOT/search" "$DATA_DIR/staging/search"
 fi
-chown -R frogdb:frogdb "$(dirname "$DATA_DIR")/checkpoint_ready"
+chown -R frogdb:frogdb "$DATA_DIR/staging"
 
 # 2b. Check the copy before betting the restart on it. Exits non-zero if the
 #     payload is incomplete or corrupt; --quick skips the checksum pass.
-frogctl backup checkpoint-verify "$(dirname "$DATA_DIR")/checkpoint_ready" || exit 1
+frogctl backup checkpoint-verify "$DATA_DIR/staging" || exit 1
 
 # 3. Restart — recovery installs the staged checkpoint before opening RocksDB,
-#    moving any existing data-dir aside rather than deleting it
+#    moving any existing <data-dir>/db aside rather than deleting it
 systemctl start frogdb
 
 # 4. Verify
 redis-cli -p 6379 ping && redis-cli -p 6379 dbsize
 ```
 
-Do **not** `rm -rf` the existing `data-dir` first — the install step already moves it aside as a
-timestamped backup (one generation is kept automatically), which is your rollback path if the
-restore turns out to be wrong.
+Do **not** `rm -rf` the existing `<data-dir>/db` first — the install step already moves it aside
+into `<data-dir>/backup` as a timestamped backup (one generation is kept automatically), which is
+your rollback path if the restore turns out to be wrong.
 
 The staged path above needs no extra flags: FrogDB stamps the installed directory with its
 identity marker as part of recovery. Assembling a `data-dir` by hand is what needs attention — a
-snapshot's `checkpoint/` contents copied straight into `data-dir`, or a directory carried over
+snapshot's `checkpoint/` contents copied straight into `<data-dir>/db`, or a directory carried over
 from a version that predates the marker, holds files FrogDB did not stamp, and that fails the
 boot rather than being written over. Start once with `--force-fresh-data-dir` to adopt such a
 directory; a whole-directory copy of a live `data-dir` (the offline-replica backup above) brings

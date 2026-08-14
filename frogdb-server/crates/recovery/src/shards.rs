@@ -8,6 +8,7 @@
 
 use anyhow::{Result, bail};
 use frogdb_config::OnDecodeFailure;
+use frogdb_core::persistence::data_dir::DataDirLayout;
 use frogdb_core::persistence::{RecoveryStats, RocksConfig, RocksStore, recover_all_shards};
 use frogdb_core::sync::Arc;
 use frogdb_core::{ExpiryIndex, HashMapStore};
@@ -26,8 +27,13 @@ pub(crate) fn open_rocks(inputs: &RecoveryInputs<'_>) -> Result<Arc<RocksStore>>
     // `warm_enabled`.
     let rocks_config = RocksConfig::from_persistence(config);
 
+    // The live database is `<data-dir>/db`, not the data directory itself: the
+    // data directory is the operator's mount point and holds the marker, the
+    // staging area, and the backups alongside it (FM-PERSISTENCE-057).
+    let db_dir = DataDirLayout::new(&config.data_dir).db_dir();
+
     let rocks = Arc::new(RocksStore::open_with_warm_metrics(
-        &config.data_dir,
+        &db_dir,
         inputs.num_shards,
         &rocks_config,
         inputs.warm_enabled,

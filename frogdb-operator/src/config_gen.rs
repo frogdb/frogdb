@@ -56,6 +56,10 @@ pub fn generate_toml(config: &FrogDBConfigSpec) -> String {
         persistence: PersistenceConfig {
             enabled: config.persistence.enabled,
             // Fixed operator choice: data lives on the mounted PVC at /data.
+            // The whole layout (`db/`, `staging/`, `staging.incoming/`,
+            // `backup/`) lives inside it, so a full resync never renames the
+            // mount point and never writes to the container's ephemeral root
+            // (FM-PERSISTENCE-057).
             data_dir: PathBuf::from("/data"),
             // `durability-mode` is a plain String in the server schema (validated
             // at server startup against DURABILITY_MODES), so the CRD value is

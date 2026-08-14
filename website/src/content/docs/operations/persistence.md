@@ -111,9 +111,9 @@ On startup, FrogDB (`frogdb-server/crates/server/src/server/startup.rs` and
 1. Verifies that `data-dir` is a directory FrogDB may use — see
    [Data directory identity](#data-directory-identity) below. This runs before anything
    writes to the directory, so a wrong path fails the boot instead of being overwritten.
-2. Installs a staged replica checkpoint if a `checkpoint_ready` sibling directory is
-   present next to the data directory; otherwise this step is a no-op.
-3. Opens RocksDB at `data-dir`. RocksDB replays its own internal WAL as part of opening.
+2. Installs a staged replica checkpoint if `<data-dir>/staging` is present; otherwise this
+   step is a no-op.
+3. Opens RocksDB at `<data-dir>/db`. RocksDB replays its own internal WAL as part of opening.
 4. If data exists, iterates every key in every column family (hot tier, then warm tier)
    and restores it into the in-memory store, skipping keys whose TTL already expired and
    counting (and logging) any values that fail to deserialize. Recovery continues past
@@ -121,11 +121,28 @@ On startup, FrogDB (`frogdb-server/crates/server/src/server/startup.rs` and
    behavior that exists. A warm-tier key is only restored if no hot-tier copy of the same
    key was already loaded (a hot copy always wins).
 
-There is no snapshot-load step at startup: the `data-dir` directory *is* the live RocksDB
-instance, not a directory that gets reconstructed from a snapshot on every boot.
+There is no snapshot-load step at startup: `<data-dir>/db` *is* the live RocksDB instance,
+not a directory that gets reconstructed from a snapshot on every boot.
 Snapshots in `snapshot-dir` are a separate, standalone copy of the data used for backup
 and replica bootstrap (see [Backup & restore](/operations/backup-restore/) and
 [Replication](/operations/replication/)) — primary recovery never reads them.
+
+## Data directory layout
+
+Everything FrogDB writes under `persistence.data-dir` lives inside it:
+
+| Path | What it is |
+|---|---|
+| `<data-dir>/db` | The live RocksDB database. |
+| `<data-dir>/staging` | A checkpoint waiting to be installed — a replica full sync, or an operator restore. Consumed on the next boot. |
+| `<data-dir>/staging.incoming` | Scratch space for a full sync still downloading. Renamed to `staging` only once the transfer verifies. |
+| `<data-dir>/backup` | Holds `db_backup_<unix-timestamp>`, the database an install displaced. One generation is kept. |
+| `<data-dir>/frogdb_data_dir` | The identity marker (below). It sits beside `db/` rather than inside it, so an install never moves it. |
+
+Nothing is written to the *parent* of `data-dir`, which matters when the data directory is
+itself a mount point (a Kubernetes PVC, for example): the kernel refuses to rename a mount
+point, and a staging directory placed beside it would land on ephemeral container storage
+rather than the volume — lost on restart, and able to fill the node's disk on the way there.
 
 ## Data directory identity
 
@@ -137,6 +154,7 @@ directory-layout version. On every later boot FrogDB reads it back and decides:
 |---|---|
 | The marker | Normal startup. |
 | Nothing (missing, empty, or only empty subdirectories) | First boot: FrogDB initializes the database and writes the marker. |
+| Only a staged restore (`staging/`, `staging.incoming/`, `backup/`) | First boot: those are FrogDB's own install paths, so the staged checkpoint installs and the marker is written. |
 | Files, but no marker | **Startup fails.** |
 | A marker that cannot be read or parsed | **Startup fails.** |
 
