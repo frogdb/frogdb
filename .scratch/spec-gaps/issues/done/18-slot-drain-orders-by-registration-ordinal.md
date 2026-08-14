@@ -1,6 +1,6 @@
 # 18: Slot drain orders by registration ordinal; per-key FIFO row restated honestly
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -61,14 +61,21 @@ Both halves, combined:
   the move. Coordinate if in flight.
 - [Issue 08](08-blocking-command-rows.md): blocking row family.
 
-## Acceptance criteria
+## What landed
 
-- [ ] Row restated (deque = per-key authority; ordinal = slot-drain authority);
-      `just lint-spec` green
-- [ ] `drain_waiters_for_slot` drains in registration-ordinal order
-- [ ] Forcing tests land; ordinal-mutant killable
-- [ ] TR-BLOCKING-001/013 + `check_fifo_wake_order` citations re-derived
-
-## Blocked by
-
-None — can start immediately (coordinate with issue 13 if in flight).
+- State-space rows restated: the `waiters_by_key` deque's push order is the per-key
+  FIFO authority (no pop path reads the ordinal); `next_seq`/`seq_by_slot` is the
+  cross-key drain-order authority, read by `drain_waiters_for_slot` and `dump()`.
+- `drain_waiters_for_slot` sorts the collected slab indices by `seq_by_slot` before
+  draining, so a slot migration answers the oldest registered waiter first across all
+  the slot's keys instead of inheriting HashMap iteration order.
+- TR-BLOCKING-018 postcondition + FM-BLOCKING-008 invariant/NOT-observable state the
+  ordinal order; TR-BLOCKING-001's park postcondition and TR-BLOCKING-006's serve
+  postcondition re-derived against the deque authority; the turmoil
+  `check_fifo_wake_order_exact` note now says it judges *per-key* order.
+- Forcing tests in `frogdb-core` (`shard::wait_queue::tests`):
+  `slot_drain_answers_in_registration_order_across_keys` (interleaved registrations
+  over two keys of one slot — any key-grouped drain gives `[1, 3, 2, 4]` or
+  `[2, 4, 1, 3]`, so it fails pre-fix under *every* hash order; proven failing:
+  `left: [1, 3, 2, 4]`) and `slot_drain_order_survives_hashmap_iteration_order`
+  (32 single-waiter keys — the ordinal-mutant kill; proven failing pre-fix).

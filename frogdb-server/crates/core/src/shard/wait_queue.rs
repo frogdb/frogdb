@@ -85,9 +85,13 @@ pub struct ShardWaitQueue {
     max_blocked_connections: usize,
     /// Monotonic registration counter; each `register` stamps the next value.
     next_seq: u64,
-    /// Registration ordinal per entry slot (parallel to `entries`). Only the
-    /// slots of live entries are ever read (via `dump`); reused slots are
-    /// overwritten on the next `register`, so stale ordinals are never observed.
+    /// Registration ordinal per entry slot (parallel to `entries`). The
+    /// authority for *cross-key* drain order — `drain_waiters_for_slot` sorts by
+    /// it — and the ordinal `dump` reports. No per-key pop path consults it:
+    /// per-key FIFO is the `waiters_by_key` deque's push order
+    /// (`specs/blocking.md` state space). Only the slots of live entries are
+    /// ever read; reused slots are overwritten on the next `register`, so stale
+    /// ordinals are never observed.
     seq_by_slot: Vec<u64>,
     /// Append-only journal of every registration, for `DEBUG WAITQUEUE-LOG`.
     /// See [`ShardWaitQueue::registration_log`].
@@ -373,10 +377,19 @@ impl ShardWaitQueue {
         expired
     }
 
-    /// Drain all waiters whose keys belong to the given slot.
+    /// Drain all waiters whose keys belong to the given slot, oldest
+    /// registration first (`specs/blocking.md` TR-BLOCKING-018).
     ///
     /// Used when a slot migrates to another node — all blocked clients
     /// for keys in that slot must receive `-MOVED` responses.
+    ///
+    /// The slot's waiters are spread over several keys, so the collection walks
+    /// `waiters_by_key`, whose iteration order is a hash order the caller must
+    /// never inherit. Sorting the collected entries by their registration
+    /// ordinal makes the cross-key drain both fair (the client that has been
+    /// parked longest is answered first) and deterministic across runs and hash
+    /// seeds. Within a single key the deque is already in registration order, so
+    /// the sort only interleaves the keys.
     pub fn drain_waiters_for_slot(&mut self, slot: u16) -> Vec<WaitEntry> {
         // Collect keys that belong to this slot
         let matching_keys: Vec<Bytes> = self
@@ -386,7 +399,9 @@ impl ShardWaitQueue {
             .cloned()
             .collect();
 
-        // Collect unique entry indices to drain
+        // Collect unique entry indices to drain, then order them by the
+        // registration ordinal so the reply order does not inherit the hash
+        // order `matching_keys` was collected in.
         let mut indices_to_drain = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for key in &matching_keys {
@@ -398,6 +413,7 @@ impl ShardWaitQueue {
                 }
             }
         }
+        indices_to_drain.sort_unstable_by_key(|&idx| self.seq_by_slot[idx]);
 
         let mut drained = Vec::new();
 
@@ -839,6 +855,63 @@ mod tests {
         assert_eq!(drained.len(), 2);
         assert_eq!(queue.waiter_count(), 0);
         assert_eq!(queue.blocked_keys_count(), 0);
+    }
+
+    // TR-BLOCKING-018
+    // FM-BLOCKING-008
+    #[test]
+    fn slot_drain_answers_in_registration_order_across_keys() {
+        let mut queue = ShardWaitQueue::new();
+        let slot = super::super::partition::slot_for_key(b"{testslot}a");
+
+        // Interleave the registrations across two keys of the same slot. Any
+        // key-grouped drain yields [1, 3, 2, 4] or [2, 4, 1, 3]; only an
+        // ordinal-ordered drain yields the registration order.
+        queue.register(make_entry(1, vec!["{testslot}a"])).unwrap();
+        queue.register(make_entry(2, vec!["{testslot}b"])).unwrap();
+        queue.register(make_entry(3, vec!["{testslot}a"])).unwrap();
+        queue.register(make_entry(4, vec!["{testslot}b"])).unwrap();
+
+        let order: Vec<u64> = queue
+            .drain_waiters_for_slot(slot)
+            .into_iter()
+            .map(|entry| entry.conn_id)
+            .collect();
+        assert_eq!(
+            order,
+            vec![1, 2, 3, 4],
+            "the slot drain must answer the oldest registration first, across keys"
+        );
+    }
+
+    // TR-BLOCKING-018
+    // FM-BLOCKING-008
+    #[test]
+    fn slot_drain_order_survives_hashmap_iteration_order() {
+        let mut queue = ShardWaitQueue::new();
+        let slot = super::super::partition::slot_for_key(b"{testslot}k0");
+
+        // One key per waiter: the drain order is then *entirely* decided by the
+        // order `waiters_by_key` is walked in, so a hash-ordered drain cannot
+        // come out sorted by accident (1/32! chance), and any perturbation of
+        // the registration ordinals reorders the result.
+        let keys: Vec<String> = (0..32).map(|i| format!("{{testslot}}k{i}")).collect();
+        for (i, key) in keys.iter().enumerate() {
+            queue
+                .register(make_entry(i as u64, vec![key.as_str()]))
+                .unwrap();
+        }
+
+        let order: Vec<u64> = queue
+            .drain_waiters_for_slot(slot)
+            .into_iter()
+            .map(|entry| entry.conn_id)
+            .collect();
+        assert_eq!(
+            order,
+            (0..32).collect::<Vec<u64>>(),
+            "the slot drain order must come from the registration ordinal, not hash order"
+        );
     }
 
     #[test]
