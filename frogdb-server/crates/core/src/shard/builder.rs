@@ -9,8 +9,8 @@ use crate::command::QuorumChecker;
 use crate::eviction::EvictionConfig;
 use crate::functions::SharedFunctionRegistry;
 use crate::persistence::{
-    NoopSnapshotCoordinator, RecoveryStats, RocksStore, RocksWalWriter, SnapshotCoordinator,
-    WalConfig, WalFailurePolicy, WalSink,
+    DurabilityMode, NoopSnapshotCoordinator, RecoveryStats, RocksStore, RocksWalWriter,
+    SnapshotCoordinator, WalConfig, WalFailurePolicy, WalSink,
 };
 use crate::pubsub::ShardSubscriptions;
 use crate::registry::CommandRegistry;
@@ -107,6 +107,8 @@ pub struct ShardWorkerBuilder {
     scripting_config: ScriptingConfig,
     rocks_store: Option<Arc<RocksStore>>,
     wal_config: Option<WalConfig>,
+    /// Explicit durability-mode override; defaults to `wal_config`'s own mode.
+    durability_mode: Option<DurabilityMode>,
     snapshot_coordinator: Option<Arc<dyn SnapshotCoordinator>>,
     recovery_stats: Option<Arc<RecoveryStats>>,
     function_registry: Option<SharedFunctionRegistry>,
@@ -141,6 +143,7 @@ impl ShardWorkerBuilder {
             scripting_config: ScriptingConfig::default(),
             rocks_store: None,
             wal_config: None,
+            durability_mode: None,
             snapshot_coordinator: None,
             recovery_stats: None,
             function_registry: None,
@@ -289,6 +292,16 @@ impl ShardWorkerBuilder {
         self
     }
 
+    /// Override the durability mode the shard reports to its persist bridge.
+    ///
+    /// Normally derived from the [`WalConfig`] passed to
+    /// [`Self::with_persistence`]; this setter exists for the deterministic
+    /// [`WalMode::Fake`] path, which has no `WalConfig` to derive it from.
+    pub fn with_durability_mode(mut self, mode: DurabilityMode) -> Self {
+        self.durability_mode = Some(mode);
+        self
+    }
+
     /// Inject a fake-WAL write failure (test / `fake-wal` only). Only takes
     /// effect together with [`WalMode::Fake`]. Enables the persist-failure /
     /// rollback (`EXECABORT`) branch to be exercised deterministically.
@@ -428,8 +441,23 @@ impl ShardWorkerBuilder {
             .per_request_spans
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
-        let mut persistence =
-            ShardPersistence::new(wal_writer, snapshot_coordinator, failure_policy);
+        // The durability mode the persist bridge sees: the explicit override if
+        // one was set, else the `WalConfig`'s own mode. `sync` is the only value
+        // that changes the ack path (FM-PERSISTENCE-002), so it collapses to a
+        // bool here rather than carrying a second copy of the config.
+        let sync_durability = matches!(
+            self.durability_mode
+                .as_ref()
+                .or(self.wal_config.as_ref().map(|c| &c.mode)),
+            Some(DurabilityMode::Sync)
+        );
+
+        let mut persistence = ShardPersistence::new(
+            wal_writer,
+            snapshot_coordinator,
+            failure_policy,
+            sync_durability,
+        );
         persistence.set_recovery_stats(recovery_stats);
 
         Ok(ShardWorker {

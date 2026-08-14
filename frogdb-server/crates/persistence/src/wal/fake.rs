@@ -112,6 +112,30 @@ impl FakeWalLog {
         Ok(())
     }
 
+    /// The writes a crash would leave behind, under the same page-cache model
+    /// `PageCacheSink` implements one layer down (FM-PERSISTENCE-002): a staged
+    /// entry is only past the crash once a `flush_through` has followed it.
+    /// Everything recorded after the last `FlushThrough` marker is still in the
+    /// cache when the power goes out, and is gone.
+    ///
+    /// `flush_async` deliberately does *not* count — it empties the buffer into
+    /// storage without fsyncing, which is exactly the distinction the `sync`
+    /// durability mode is about.
+    pub fn durable_writes(&self) -> Vec<RecordedWalEffect> {
+        let effects = self.effects();
+        let Some(last_flush) = effects
+            .iter()
+            .rposition(|e| e.kind == WalEffectKind::FlushThrough)
+        else {
+            return Vec::new();
+        };
+        effects[..last_flush]
+            .iter()
+            .filter(|e| e.kind.is_write())
+            .cloned()
+            .collect()
+    }
+
     /// The writes of each outermost write group, in order.
     ///
     /// Each inner `Vec` is one group's writes — in production exactly the

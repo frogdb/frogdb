@@ -368,6 +368,15 @@ pub(crate) struct ShardPersistence {
     /// WAL failure policy, encoded via [`WalFailurePolicy::as_u8`]. Shared
     /// with ConfigManager for runtime CONFIG SET support.
     failure_policy: Arc<std::sync::atomic::AtomicU8>,
+    /// Whether the configured durability mode is
+    /// [`DurabilityMode::Sync`](crate::persistence::DurabilityMode::Sync).
+    ///
+    /// Orthogonal to [`Self::failure_policy`]: the mode decides whether the ack
+    /// waits for the commit, the policy decides what a failed wait does. Boot
+    /// time only — `persistence.durability-mode` is not a live-retunable
+    /// parameter (its `CONFIG SET` arm updates the reported value and nothing
+    /// else), so unlike the policy this needs no shared atomic.
+    sync_durability: bool,
     /// This node's boot-time recovery outcome, set once after construction
     /// (recovery finishes before any shard worker exists — there is nothing
     /// to reconstruct it from at `ShardPersistence::new` time) via
@@ -382,11 +391,13 @@ impl ShardPersistence {
         wal_writer: Option<Box<dyn WalSink>>,
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         failure_policy: Arc<std::sync::atomic::AtomicU8>,
+        sync_durability: bool,
     ) -> Self {
         Self {
             wal_writer,
             snapshot_coordinator,
             failure_policy,
+            sync_durability,
             recovery_stats: Arc::new(RecoveryStats::default()),
         }
     }
@@ -428,6 +439,26 @@ impl ShardPersistence {
             self.failure_policy
                 .load(std::sync::atomic::Ordering::Relaxed),
         ) == WalFailurePolicy::Rollback
+    }
+
+    /// Returns true if this shard's durability mode is `sync`.
+    pub(crate) fn sync_durability(&self) -> bool {
+        self.sync_durability
+    }
+
+    /// Whether a write must be staged with
+    /// [`Durability::Confirm`](super::persistence::Durability::Confirm) — i.e.
+    /// whether the acknowledgement waits for the commit.
+    ///
+    /// Two orthogonal knobs, either of which is sufficient (FM-PERSISTENCE-002):
+    /// `rollback` needs the wait so a failure can be undone before the client
+    /// is told anything, and `sync` needs it because the whole contract of the
+    /// mode is that an acked write is on the device. The policy alone deciding
+    /// this was the gap issue 01 closed — `durability-mode = sync` under the
+    /// default `continue` policy used to ack with only a `FireAndForget` stage
+    /// behind it.
+    pub(crate) fn should_confirm(&self) -> bool {
+        self.should_rollback() || self.sync_durability()
     }
 }
 
@@ -1249,12 +1280,17 @@ mod persistence_tests {
     use crate::persistence::NoopSnapshotCoordinator;
 
     fn persistence() -> ShardPersistence {
+        persistence_with_durability(false)
+    }
+
+    fn persistence_with_durability(sync_durability: bool) -> ShardPersistence {
         ShardPersistence::new(
             None,
             Arc::new(NoopSnapshotCoordinator::new()),
             Arc::new(std::sync::atomic::AtomicU8::new(
                 WalFailurePolicy::default().as_u8(),
             )),
+            sync_durability,
         )
     }
 
@@ -1275,6 +1311,44 @@ mod persistence_tests {
             WalFailurePolicy::Rollback.as_u8(),
         ));
         p.set_failure_policy(flag);
+        assert!(p.should_rollback());
+    }
+
+    // FM-PERSISTENCE-002
+    // The two knobs are orthogonal, and either one alone selects `Confirm`:
+    // `sync` durability under the default `continue` policy must wait for the
+    // commit exactly as `rollback` does, and the policy must keep its own
+    // meaning (what a failed wait does) in both modes.
+    #[test]
+    fn sync_durability_selects_confirm_independently_of_the_failure_policy() {
+        let rollback = Arc::new(std::sync::atomic::AtomicU8::new(
+            WalFailurePolicy::Rollback.as_u8(),
+        ));
+
+        // continue + non-sync: the one combination that acks without waiting.
+        let p = persistence_with_durability(false);
+        assert!(!p.should_rollback());
+        assert!(!p.sync_durability());
+        assert!(!p.should_confirm());
+
+        // continue + sync: the gap issue 01 closed — the mode gates the ack even
+        // though the policy would not.
+        let p = persistence_with_durability(true);
+        assert!(!p.should_rollback(), "still the default `continue` policy");
+        assert!(
+            p.should_confirm(),
+            "`sync` durability must gate the ack on its own"
+        );
+
+        // rollback + non-sync: the policy still selects `Confirm` on its own.
+        let mut p = persistence_with_durability(false);
+        p.set_failure_policy(rollback.clone());
+        assert!(p.should_confirm());
+
+        // rollback + sync: both, and the policy is unchanged by the mode.
+        let mut p = persistence_with_durability(true);
+        p.set_failure_policy(rollback);
+        assert!(p.should_confirm());
         assert!(p.should_rollback());
     }
 }

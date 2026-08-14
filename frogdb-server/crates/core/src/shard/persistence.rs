@@ -906,3 +906,184 @@ mod tests {
         assert_eq!(t.attempts(), 0);
     }
 }
+
+/// End-to-end tests for `durability-mode = sync` under the **default**
+/// `wal-failure-policy = continue`, driven through
+/// [`ShardWorker::execute_command`] against a fake WAL sink.
+///
+/// The units above pin `persist_records`' behavior once a [`Durability`] value
+/// has been chosen; these pin the layer that *chooses* it. That layer used to
+/// read the failure policy alone, so `sync` durability under the shipped
+/// default acknowledged a write with only a `FireAndForget` stage behind it —
+/// the entry on the flush channel, the reply already on the wire, and the fsync
+/// scheduled for whenever the flush thread got round to it (FM-PERSISTENCE-002,
+/// spec-gaps issue 01).
+#[cfg(test)]
+mod sync_durability_ack_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU8;
+
+    use bytes::Bytes;
+    use tokio::sync::mpsc;
+
+    use crate::command::{
+        Arity, Command, CommandContext, CommandFlags, ExecutionStrategy, WaiterWake, WalStrategy,
+    };
+    use crate::command_spec::{
+        AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
+    };
+    use crate::noop::NoopMetricsRecorder;
+    use crate::persistence::{DurabilityMode, FakeWalLog, WalEffectKind};
+    use crate::registry::CommandRegistry;
+    use crate::shard::FakeWalRegistry;
+    use crate::shard::builder::{ShardWorkerBuilder, WalMode};
+    use crate::shard::message::{ShardReceiver, ShardSender};
+    use crate::shard::worker::ShardWorker;
+    use crate::store::{HashMapStore, Store};
+    use crate::types::Value;
+    use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+
+    /// A `SET` that really writes to the store, so an acked write has something
+    /// behind it for the crash model to keep or lose.
+    struct MockSet;
+    impl Command for MockSet {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "SET",
+                arity: Arity::AtLeast(2),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::PersistFirstKey,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            ctx.store
+                .set(args[0].clone(), Value::string(args[1].clone()));
+            Ok(Response::ok())
+        }
+    }
+
+    /// A shard with a healthy fake WAL, the shipped default failure policy
+    /// (`continue`, encoded 0) and the given durability mode.
+    fn shard_with_mode(mode: DurabilityMode) -> (ShardWorker, FakeWalLog) {
+        FakeWalRegistry::clear();
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let worker = ShardWorkerBuilder::new(0, 1)
+            .with_message_rx(ShardReceiver::new(msg_rx))
+            .with_new_conn_rx(conn_rx)
+            .with_shard_senders(Arc::new(vec![ShardSender::new(msg_tx)]))
+            .with_registry(Arc::new(registry))
+            .with_metrics(Arc::new(NoopMetricsRecorder::new()))
+            .with_store(HashMapStore::new())
+            .with_wal_mode(WalMode::Fake)
+            .with_durability_mode(mode)
+            .with_wal_failure_policy(Arc::new(AtomicU8::new(0)))
+            .build();
+        let log = FakeWalRegistry::log(0).expect("fake sink log registered for shard 0");
+        (worker, log)
+    }
+
+    fn set(key: &'static str, value: &'static str) -> ParsedCommand {
+        ParsedCommand::new(
+            Bytes::from_static(b"SET"),
+            vec![
+                Bytes::from_static(key.as_bytes()),
+                Bytes::from_static(value.as_bytes()),
+            ],
+        )
+    }
+
+    // FM-PERSISTENCE-002
+    // The ack is gated on the durability mode, not on the failure policy: with
+    // `durability-mode = sync` and the default `wal-failure-policy = continue`,
+    // the write's `flush_through` must have reached the sink *before*
+    // `execute_command` produced the reply value.
+    #[tokio::test]
+    async fn sync_mode_under_continue_policy_flushes_before_the_reply() {
+        let (mut worker, log) = shard_with_mode(DurabilityMode::Sync);
+        assert!(
+            !worker.persistence.should_rollback(),
+            "policy 0 is `continue`, the shipped default"
+        );
+
+        let response = worker
+            .execute_command(&set("k", "v"), 1, ProtocolVersion::Resp2, false)
+            .await;
+
+        assert!(
+            matches!(response, Response::Simple(ref s) if s.as_ref() == b"OK"),
+            "the write is acknowledged, got {response:?}"
+        );
+
+        // Everything the sink saw, it saw before this point: `execute_command`
+        // has returned, so the effect log is complete as of the reply.
+        let effects = log.effects();
+        let write = effects
+            .iter()
+            .find(|e| e.kind == WalEffectKind::Set)
+            .expect("the write reached the WAL");
+        let flush = effects
+            .iter()
+            .find(|e| e.kind == WalEffectKind::FlushThrough)
+            .expect(
+                "sync durability must flush_through before the reply — \
+                 an ack with only a FireAndForget stage behind it is the loss window",
+            );
+        assert!(
+            flush.order > write.order,
+            "the flush must follow the write it confirms: {flush:?} vs {write:?}"
+        );
+    }
+
+    // FM-PERSISTENCE-002
+    // The same run, read through the page-cache crash model: a crash the instant
+    // after the reply must still find the acked write on the device. `periodic`
+    // is the contrast — the same command, the same policy, and nothing durable.
+    #[tokio::test]
+    async fn sync_mode_acked_write_survives_a_crash_under_continue_policy() {
+        let (mut worker, log) = shard_with_mode(DurabilityMode::Sync);
+        let response = worker
+            .execute_command(&set("k", "v"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(matches!(response, Response::Simple(ref s) if s.as_ref() == b"OK"));
+        assert!(worker.store.get(b"k").is_some(), "live in memory");
+
+        // Crash here.
+        let survivors = log.durable_writes();
+        assert_eq!(
+            survivors.len(),
+            1,
+            "the acked write must be past the crash, got {survivors:?}"
+        );
+        assert_eq!(survivors[0].key.as_deref(), Some(&b"k"[..]));
+
+        // `periodic` makes no such promise, and pins that the assertion above is
+        // about the mode rather than about the fake sink always flushing.
+        let (mut worker, log) = shard_with_mode(DurabilityMode::Periodic { interval_ms: 1000 });
+        let response = worker
+            .execute_command(&set("k", "v"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(matches!(response, Response::Simple(ref s) if s.as_ref() == b"OK"));
+        assert!(
+            log.durable_writes().is_empty(),
+            "periodic durability acks without waiting — durability comes from the syncer"
+        );
+    }
+}

@@ -433,8 +433,16 @@ impl ShardWorker {
             .as_ref()
             .map(|h| h.flags().contains(crate::command::CommandFlags::WRITE))
             .unwrap_or(false);
+        // Two orthogonal gates (FM-PERSISTENCE-002 / TR-PERSISTENCE-003).
+        // `confirm_mode` decides whether the acknowledgement waits for the
+        // commit — true under `rollback` *or* under `durability-mode = sync`.
+        // `rollback_mode` decides what a failed wait does, and stays a pure
+        // function of the failure policy: only `rollback` snapshots the keys and
+        // undoes them.
         let rollback_mode =
             is_write && self.persistence.has_wal() && self.persistence.should_rollback();
+        let confirm_mode =
+            is_write && self.persistence.has_wal() && self.persistence.should_confirm();
 
         // Capture pre-execution snapshot for rollback (before the mutable borrow in inner)
         let snapshot = if rollback_mode {
@@ -450,7 +458,7 @@ impl ShardWorker {
         // Post-execution: rollback mode vs default path. The WAL phase becomes a
         // value (Persist vs AlreadyPersisted) rather than a separate function.
         match meta {
-            Some(ref write_meta) if rollback_mode => {
+            Some(ref write_meta) if confirm_mode => {
                 let record = WriteRecord {
                     handler: write_meta.handler.as_ref(),
                     args: command.args.as_slice(),
@@ -479,7 +487,7 @@ impl ShardWorker {
                         )
                         .await;
                     }
-                    Err(e) => {
+                    Err(e) if rollback_mode => {
                         tracing::error!(
                             error = %e,
                             cmd = write_meta.handler.name(),
@@ -488,6 +496,29 @@ impl ShardWorker {
                         self.rollback_snapshot(snapshot.unwrap());
                         WalRollbacks::inc(self.observability.metrics());
                         return Response::error(format!("IOERR WAL persistence failed: {}", e));
+                    }
+                    // `sync` durability under the `continue` policy: the wait
+                    // happened, it failed, and the policy says acknowledge
+                    // anyway (FM-PERSISTENCE-005). The loss is accounted in
+                    // `FlushOutcomes` and surfaced through `INFO`/metrics; the
+                    // effects still run, minus a second persist attempt.
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            cmd = write_meta.handler.name(),
+                            "WAL persistence failed under the continue policy, acknowledging anyway"
+                        );
+                        self.run_write_effects(
+                            WriteSummary {
+                                writes: std::slice::from_ref(&record),
+                                dirty_delta: write_meta.dirty_delta,
+                                conn_id,
+                                removal_reasons: &[],
+                            },
+                            WalPhase::AlreadyPersisted,
+                            EffectScope::Command,
+                        )
+                        .await;
                     }
                 }
             }
@@ -558,7 +589,11 @@ impl ShardWorker {
             return TransactionResult::WatchAborted;
         }
 
+        // Same two orthogonal gates as the single-command path above: the
+        // durability mode decides whether the EXEC's reply waits for the
+        // commit, the failure policy decides whether a failed wait aborts.
         let rollback_mode = self.persistence.has_wal() && self.persistence.should_rollback();
+        let confirm_mode = self.persistence.has_wal() && self.persistence.should_confirm();
 
         // Execute all commands, deferring side effects
         let mut results = Vec::with_capacity(commands.len());
@@ -647,31 +682,43 @@ impl ShardWorker {
                 })
                 .collect();
 
-            if rollback_mode {
-                // Batch WAL persistence with rollback on failure
-                if let Err(e) = self
+            if confirm_mode {
+                // Batch WAL persistence, acknowledged only once the commit is
+                // confirmed. A failure aborts under `rollback`; under
+                // `continue` it is logged and accounted, and the transaction is
+                // acknowledged anyway (FM-PERSISTENCE-005).
+                match self
                     .persist(&write_infos, super::persistence::Durability::Confirm)
                     .await
                 {
-                    tracing::error!(
+                    Ok(()) => {}
+                    Err(e) if rollback_mode => {
+                        tracing::error!(
+                            error = %e,
+                            "Transaction WAL persistence failed, rolling back"
+                        );
+                        // Rollback all snapshots in reverse order
+                        for snapshot in snapshots.into_iter().rev() {
+                            self.rollback_snapshot(snapshot);
+                        }
+                        WalRollbacks::inc(self.observability.metrics());
+                        // Mark all results as aborted
+                        results.clear();
+                        for _ in 0..commands.len() {
+                            results.push(Response::error(
+                                "EXECABORT transaction aborted due to WAL failure",
+                            ));
+                        }
+                        return TransactionResult::Success(results);
+                    }
+                    Err(e) => tracing::error!(
                         error = %e,
-                        "Transaction WAL persistence failed, rolling back"
-                    );
-                    // Rollback all snapshots in reverse order
-                    for snapshot in snapshots.into_iter().rev() {
-                        self.rollback_snapshot(snapshot);
-                    }
-                    WalRollbacks::inc(self.observability.metrics());
-                    // Mark all results as aborted
-                    results.clear();
-                    for _ in 0..commands.len() {
-                        results.push(Response::error(
-                            "EXECABORT transaction aborted due to WAL failure",
-                        ));
-                    }
-                    return TransactionResult::Success(results);
+                        "Transaction WAL persistence failed under the continue policy, \
+                         acknowledging anyway"
+                    ),
                 }
-                // WAL succeeded — run remaining post-execution (without WAL)
+                // WAL confirmed (or failed under `continue`) — run remaining
+                // post-execution (without a second WAL persist)
                 self.run_write_effects(
                     WriteSummary {
                         writes: &write_infos,
