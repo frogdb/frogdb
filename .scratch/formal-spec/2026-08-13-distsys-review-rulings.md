@@ -376,3 +376,18 @@ diagnosable (observability-accuracy principle). Full key-granular WATCH rejected
 unjustified redesign today. Filed as
 [spec-gaps issue 23](../spec-gaps/issues/open/23-watch-epoch-bump-becomes-per-slot.md)
 (ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
+
+## MAJ-22 — batched cross-shard WATCH refused with `-CROSSSLOT`; FM-TXN-049 declares that reply NOT observable
+
+Ruling: **code matches spec** (fan out per shard). The locked spec already states
+the contract — FM-TXN-049's NOT-observable clause names exactly this reply, and
+FM-TXN-020's own scenario builds the same cross-shard watch set via sequential
+single-key WATCHes and reaches EXEC. Semantics must not depend on argument packing;
+standalone Redis allows multi-key WATCH freely, so the refusal is a silent parity
+regression with zero benefit (only the *queue* is co-location-constrained,
+FM-TXN-019). Fix: `handle_watch` drops the `same_shard` pre-check, `GetVersion`
+fans out per shard; forcing test pins batched ≡ sequential; cluster-mode
+not-owned-slot redirects untouched. Filed as
+[spec-gaps issue 24](../spec-gaps/issues/open/24-batched-watch-fans-out-per-shard.md)
+(ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
+Coordinate with MAJ-23 (same watch-set machinery).
