@@ -56,3 +56,16 @@ until `Complete` applies; target catches up via slot-scoped mutation stream; abo
 target-discard, safe at any time including dead target; reconcile orphan-abort on the
 FAIL-flag criterion. Supersedes issue 15's repatriation. Design is HITL — brainstorm
 before phase-3 models encode migration semantics. Details in issue 31.
+
+## MAJ-11 — biased select falsifies TR-BLOCKING-007; H5 unsound as ordered
+
+Ruling: **eliminate sender-drops as a signaling mechanism** (reviewer's resolution,
+option 1). The deadline fast-path (`shard/blocking.rs:320-322`) sends
+`entry.op.timeout_reply()` + increments `BlockedTimeoutTotal` instead of dropping;
+`Satisfaction::Retry` and the admission refusal likewise send real replies (H7 already
+covers the latter). After that, `Err(_)` at the coordinator uniquely means channel death
+and spec-gaps issue 08's H5 (`-ERR shard unavailable`) is sound as written. Amend
+TR-BLOCKING-007 to remove the "server's reply normally wins" race claim (it is
+deterministically false — `biased;` select, `response_rx` first). Ordering dependency
+recorded as an amendment on
+[spec-gaps issue 08](../spec-gaps/issues/open/08-blocking-command-rows.md).

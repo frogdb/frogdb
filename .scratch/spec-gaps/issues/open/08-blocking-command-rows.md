@@ -86,3 +86,21 @@ all parked waiters (Redis disconnectAllBlockedClients precedent). Slot migrated 
 (cleanup_wait path). WAIT role-change row (WAIT_ROLE_CHANGED_ERR exists at
 connection/blocking.rs:330-335, unrowed). FM-BLOCKING-006 admission-limits row pinning 10k/key +
 50k/shard (wait_queue.rs:117-155) + exact error texts + NOT-observable.
+
+## Amendment (2026-08-14, distsys-review MAJ-11)
+
+**H5 has an ordering dependency.** The review proved "the server's reply normally wins"
+(TR-BLOCKING-007) false: the coordinator select is `biased;` with `response_rx` first, so a
+dropped sender deterministically takes the `Err(_)` arm. Today THREE live paths signal by
+dropping the sender — admission refusal (`shard/blocking.rs:49-57`), the deadline fast-path
+(`:320-322`), and `Satisfaction::Retry` (`:325`) — so ruling `Err(_)` → `-ERR shard
+unavailable` as-is turns ordinary timeouts into false shard-unavailable errors.
+
+Ruled: land the drop-elimination first, then H5 as written.
+
+1. Deadline fast-path sends `entry.op.timeout_reply()` (and increments
+   `BlockedTimeoutTotal`) instead of dropping the sender.
+2. `Satisfaction::Retry` likewise sends a real reply, never drops (see also MAJ-16).
+3. Admission refusal sends its refusal reply (H7 already requires this).
+4. Only then does `Err(_)` uniquely mean channel death, and the H5 `-ERR shard
+   unavailable` ruling is sound. Amend TR-BLOCKING-007 to delete the race fiction.
