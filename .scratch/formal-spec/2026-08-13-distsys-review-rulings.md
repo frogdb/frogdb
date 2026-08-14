@@ -408,3 +408,18 @@ filter mutant killable). Filed as
 [spec-gaps issue 25](../spec-gaps/issues/open/25-take-folds-only-live-watched-shards.md)
 (ready-for-agent, blocked-by issue 11); rides the implementation wave. Txn locked,
 gate 0.90. Coordinate with issue 24 (same watch-set machinery).
+
+## Minors — process ruling
+
+Ruled 2026-08-14: minors are collected into **one sweep issue per area tracker**
+(cluster / txn / replication / persistence), each ruled minor a checklist entry
+with its resolution pinned; rulings still made one finding at a time and recorded
+here.
+
+## MIN-1 — FM-CLUSTER-037's "bounded by Raft apply latency" is unsupported
+
+Ruling: **weaken phrasing**. Restate honestly as apply latency plus
+execution-pipeline queueing (VLL queue, parked blocking commands, pause holds) —
+eventual, not bounded. Load-measuring timing test ruled out (flake risk).
+Recorded in
+[cluster issue 39 (minors sweep)](../cluster-correctness/issues/open/39-distsys-review-minors-sweep.md).
