@@ -306,3 +306,20 @@ flagged for a sequence-based rename while touching (wall-clock in a path — cos
 not state-bearing). Filed as
 [spec-gaps issue 20](../spec-gaps/issues/open/20-mid-install-crash-recovery-preserves-database-id.md)
 (ready-for-agent); rides the implementation wave. Persistence locked, gate 0.85.
+
+## MAJ-18 — staging/backup live in the data dir's *parent*: undeclared deployment constraint
+
+Ruling: **restage inside the data dir** (the real fix, beyond the reviewer's
+probe-and-document minimum). Kubernetes is FrogDB's primary deployment target
+(operator, helm); the standard layout mounts the PVC *at* `persistence.data-dir`, so
+`rename(<db>, <db>_backup_*)` is an EBUSY on a mount point — full resync permanently
+impossible — and the staged download lands in the container's ephemeral rootfs where
+it can fill the node's disk. Probe-and-document would only convert silent failure to
+fast failure of something that should work. Ruled layout (etcd/CRDB shape): the mount
+point is never renamed — RocksDB dir becomes `<data-dir>/db`, staging
+`<data-dir>/staging`, backup `<data-dir>/backup`; every install rename happens inside
+one filesystem inside the mount; the spec row states the only filesystem requirement
+is the data dir itself. Pre-alpha: no layout compat shim. Filed as
+[spec-gaps issue 21](../spec-gaps/issues/open/21-staging-and-backup-live-inside-the-data-dir.md)
+(ready-for-agent); rides the implementation wave. Reworks the same rename machinery
+as issue 20 (MAJ-17) — coordinate; ideally one implementer takes both.
