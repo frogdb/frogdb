@@ -81,3 +81,13 @@ to stop laundering "reconstructible in principle" as a property. Code half (reco
 snapshot-delta emission + forcing test) rides the ruled-issues implementation wave.
 Survives issue 31's redesign (finalization drain keeps the barrier; restart mid-drain
 still needs re-arm).
+
+## CRIT-3 — `wal_watermark` can lead the durable point
+
+Ruling: **accept, file issue** (reviewer's resolution). Filed as
+[spec-gaps issue 12](../spec-gaps/issues/open/12-wal-watermark-carries-covered-sequence.md)
+(ready-for-agent); fix rides the implementation wave. Covered sequence carried through
+the write path into `record_wal_watermark(covered_seq)` as a `fetch_max`; amend
+FM-PERSISTENCE-035; rewrite the pinning test
+(`only_a_synced_rocks_sink_commit_records_the_durable_watermark` asserts the buggy
+equality); add the two-shard forcing test.
