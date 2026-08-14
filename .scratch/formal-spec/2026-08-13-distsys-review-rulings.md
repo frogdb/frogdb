@@ -458,3 +458,11 @@ live-mutable per the config standard. Feature-sized, so it graduates out of the
 minors sweep to its own issue:
 [cluster issue 40](../cluster-correctness/issues/open/40-read-consistency-contract-and-serve-stale-knob.md)
 (ready-for-agent); rides the implementation wave. Cluster locked, gate 0.80.
+
+## MIN-6 — wal_watermark's no-torn-body reasoning is filesystem-dependent, dependency unnamed
+
+Ruling: **add checksum** — filesystem-independent argument beats naming the ext4
+`auto_da_alloc` assumption (k8s-primary target; XFS/btrfs/writeback break it).
+Torn/corrupt body parses as absent, never garbage; rows restated; corruption
+forcing test. Recorded in
+[spec-gaps issue 26 (minors sweep)](../spec-gaps/issues/open/26-distsys-review-minors-sweep.md).
