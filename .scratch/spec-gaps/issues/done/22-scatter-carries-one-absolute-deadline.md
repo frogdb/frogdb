@@ -1,6 +1,6 @@
 # 22: Scatter carries one absolute deadline — per-receiver waits cannot sum
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -59,7 +59,7 @@ state-bearing time. The no-wall-clock-in-state principle is not implicated.
 
 ## Cross-references
 
-- [Issue 14](../done/14-sca-wound-wait-restores-acyclicity.md) (CRIT-7 wound-wait): handles
+- [Issue 14](14-sca-wound-wait-restores-acyclicity.md) (CRIT-7 wound-wait): handles
   the deadlock-cycle class; this issue handles the accumulation class. Both land
   independently.
 - [Issue 07](07-vll-continuation-package.md): `acquire_continuation` is part of the

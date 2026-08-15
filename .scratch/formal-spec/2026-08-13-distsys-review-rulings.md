@@ -357,7 +357,7 @@ TR-VLL-017 restated as a total request bound. Complementary to CRIT-7's wound-wa
 (cycles die proactively there; this bounds the slow-shard/overload class).
 `Instant` is monotonic request-scoped timeout mechanics, not state-bearing time —
 no-wall-clock principle not implicated. Filed as
-[spec-gaps issue 22](../spec-gaps/issues/open/22-scatter-carries-one-absolute-deadline.md)
+[spec-gaps issue 22](../spec-gaps/issues/done/22-scatter-carries-one-absolute-deadline.md)
 (ready-for-agent); rides the implementation wave. Txn locked, gate 0.90.
 
 ## MAJ-21 — WATCH is slot-granular with a shard-wide epoch; spec says key-granular; epoch admits unbounded starvation

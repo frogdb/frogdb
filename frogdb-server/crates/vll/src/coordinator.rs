@@ -71,8 +71,10 @@ pub struct ScatterRequest<O> {
     /// the order given — callers should sort by shard id to match the
     /// rest of the system's deadlock-prevention convention.
     pub participants: Vec<ScatterParticipant<O>>,
-    /// Per-phase timeout. Used independently for the lock-acquisition wait
-    /// and the gather wait.
+    /// Total bound on the whole request, not an allowance per wait: the
+    /// coordinator turns it into one absolute deadline at entry and every
+    /// receiver wait in phases 2 and 4 runs against that deadline, so the
+    /// observed bound does not grow with participant count.
     pub timeout: Duration,
     /// Command name used for metrics labels (e.g. `"MGET"`).
     pub command: &'static str,
@@ -357,6 +359,14 @@ where
         request: ScatterRequest<S::Operation>,
     ) -> Result<ScatterOutcome<S::Response>, ScatterError> {
         let start = Instant::now();
+        // One deadline for the whole request, fixed here and never recomputed.
+        // Phases 2 and 4 both wait on their receivers one at a time; a
+        // *relative* timeout per receiver would restart at each one and let a
+        // request with N slow-but-answering participants run for N × timeout.
+        // Phase 4 spends what phase 2 left rather than starting over: past
+        // phase 3 the outcome is ambiguous whenever the wait ends, and what
+        // the caller asked to be bounded is the request.
+        let deadline = start + request.timeout;
         let shard_count = request.participants.len();
 
         // Phase 1: Dispatch lock requests, tracking ready receivers.
@@ -414,7 +424,7 @@ where
                     self.record_outcome(request.command, "wounded", start, shard_count);
                     return Err(ScatterError::Wounded { shard_id: wounded_by });
                 }
-                ready = tokio::time::timeout(request.timeout, ready_rx) => ready,
+                ready = tokio::time::timeout_at(deadline, ready_rx) => ready,
             };
             match ready {
                 Ok(Ok(ShardReadyResult::Ready)) => {}
@@ -473,11 +483,14 @@ where
         // on the first dispatch failure, so reaching here means `result_rxs` is
         // complete. A timeout in this phase therefore cannot mean "never ran";
         // it means "ran, outcome unknown". It resolves nothing.
+        //
+        // The wait runs against the request's one deadline, so the gather gets
+        // whatever acquisition left of the budget rather than a fresh one.
         let mut responses: Vec<(usize, S::Response)> = Vec::with_capacity(shard_count);
         let mut pending: Vec<usize> = result_rxs.iter().map(|(id, _)| *id).collect();
         for (shard_id, rx) in result_rxs {
             pending.retain(|&id| id != shard_id);
-            match tokio::time::timeout(request.timeout, rx).await {
+            match tokio::time::timeout_at(deadline, rx).await {
                 Ok(Ok(response)) => responses.push((shard_id, response)),
                 Ok(Err(_)) => {
                     self.record_outcome(request.command, "error", start, shard_count);
@@ -572,6 +585,10 @@ where
     ///
     /// Crate-private building block for [`Self::acquire_continuation_and_run`],
     /// which owns the guard's lifetime so callers never manage it directly.
+    ///
+    /// `timeout` bounds the acquisition as a whole, not each shard's share of
+    /// it: the ready signals are awaited one at a time, so a per-receiver
+    /// timeout would let `shards.len()` slow-but-answering shards multiply it.
     async fn acquire_continuation(
         &self,
         txid: u64,
@@ -579,6 +596,7 @@ where
         shards: &[usize],
         timeout: Duration,
     ) -> Result<ContinuationGuard, ContinuationError> {
+        let deadline = Instant::now() + timeout;
         let mut release_txs: Vec<oneshot::Sender<()>> = Vec::with_capacity(shards.len());
         let mut revocations = RevocationWatch::default();
         let mut ready_rxs: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> =
@@ -619,7 +637,7 @@ where
                     drop(release_txs);
                     return Err(ContinuationError::Revoked { shard_id: wounded_by, reason });
                 }
-                waited = tokio::time::timeout(timeout, ready_rx) => waited,
+                waited = tokio::time::timeout_at(deadline, ready_rx) => waited,
             };
 
             match waited {
@@ -1698,6 +1716,214 @@ mod tests {
             "priority resolved the collision; the phase-2 acquisition timeout ({timeout:?}) was \
              not involved, but {:?} elapsed",
             start.elapsed()
+        );
+    }
+
+    /// Sink whose shard `k` answers only after `(k + 1) * stagger`, scheduled
+    /// from the moment of dispatch. Every answer is therefore exactly one
+    /// stagger later than the previous one — measured from where a sequential
+    /// receiver loop reaches it, each wait is short, while the request as a
+    /// whole runs `participants * stagger`. That is the shape a per-receiver
+    /// relative timeout cannot catch and an absolute deadline can.
+    struct StaggeredSink {
+        /// Applied to lock-request and continuation-lock ready signals.
+        ready_stagger: Duration,
+        /// Applied to execute responses.
+        result_stagger: Duration,
+        aborted: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl StaggeredSink {
+        fn new(
+            ready_stagger: Duration,
+            result_stagger: Duration,
+        ) -> (Self, Arc<Mutex<Vec<usize>>>) {
+            let aborted = Arc::new(Mutex::new(Vec::new()));
+            (
+                StaggeredSink {
+                    ready_stagger,
+                    result_stagger,
+                    aborted: aborted.clone(),
+                },
+                aborted,
+            )
+        }
+    }
+
+    impl ShardSink for StaggeredSink {
+        type Operation = u64;
+        type Response = u32;
+
+        async fn send_lock_request(
+            &self,
+            shard_id: usize,
+            _txid: u64,
+            _keys: Vec<Bytes>,
+            _mode: LockMode,
+            _operation: Self::Operation,
+            ready_tx: oneshot::Sender<ShardReadyResult>,
+            _wound_tx: oneshot::Sender<VllError>,
+        ) -> Result<(), ShardSinkError> {
+            let delay = self.ready_stagger * (shard_id as u32 + 1);
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let _ = ready_tx.send(ShardReadyResult::Ready);
+            });
+            Ok(())
+        }
+
+        async fn send_execute(
+            &self,
+            shard_id: usize,
+            _txid: u64,
+            response_tx: oneshot::Sender<Self::Response>,
+        ) -> Result<(), ShardSinkError> {
+            let delay = self.result_stagger * (shard_id as u32 + 1);
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let _ = response_tx.send(shard_id as u32 + 100);
+            });
+            Ok(())
+        }
+
+        async fn send_abort(&self, shard_id: usize, _txid: u64) {
+            self.aborted.lock().await.push(shard_id);
+        }
+
+        async fn send_continuation_lock(
+            &self,
+            shard_id: usize,
+            _txid: u64,
+            _conn_id: u64,
+            ready_tx: oneshot::Sender<ShardReadyResult>,
+            _release_rx: oneshot::Receiver<()>,
+            _revoke_tx: oneshot::Sender<VllError>,
+        ) -> Result<(), ShardSinkError> {
+            let delay = self.ready_stagger * (shard_id as u32 + 1);
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                let _ = ready_tx.send(ShardReadyResult::Ready);
+            });
+            Ok(())
+        }
+    }
+
+    // FM-VLL-011
+    //
+    // Three shards, each ready one stagger after the last, with a request
+    // timeout longer than one stagger and shorter than three. Timed per
+    // receiver, every individual wait fits and the scatter runs to completion
+    // at three staggers; timed against one deadline taken at entry, the
+    // request gives up at the bound its caller asked for.
+    #[tokio::test(start_paused = true)]
+    async fn phase2_receiver_waits_share_one_absolute_deadline() {
+        let stagger = Duration::from_secs(3);
+        let timeout = Duration::from_secs(4);
+        let (sink, aborted) = StaggeredSink::new(stagger, Duration::ZERO);
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+
+        let start = Instant::now();
+        let err = coord
+            .scatter(ScatterRequest {
+                txid: 1,
+                mode: LockMode::Write,
+                participants: vec![participant(0), participant(1), participant(2)],
+                timeout,
+                command: "TEST",
+            })
+            .await
+            .expect_err("the request deadline must fire before every shard is ready");
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(err, ScatterError::LockTimeout { shard_id: 1 }),
+            "the deadline names the shard being waited on: {err:?}"
+        );
+        assert!(
+            elapsed <= timeout,
+            "one request, one budget: {elapsed:?} elapsed against a {timeout:?} timeout \
+             (per-receiver waits would have run to {:?})",
+            stagger * 3
+        );
+        assert_eq!(
+            *aborted.lock().await,
+            vec![0, 1, 2],
+            "every dispatched participant is unwound"
+        );
+    }
+
+    // FM-VLL-011
+    //
+    // Phase 4 spends what phase 2 left of the same deadline rather than
+    // starting a fresh allowance per result receiver. Locks are granted at
+    // once here, so the whole budget goes to the gather.
+    #[tokio::test(start_paused = true)]
+    async fn phase4_gather_shares_the_request_deadline() {
+        let stagger = Duration::from_secs(3);
+        let timeout = Duration::from_secs(4);
+        let (sink, _aborted) = StaggeredSink::new(Duration::ZERO, stagger);
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+
+        let start = Instant::now();
+        let err = coord
+            .scatter(ScatterRequest {
+                txid: 1,
+                mode: LockMode::Write,
+                participants: vec![participant(0), participant(1), participant(2)],
+                timeout,
+                command: "TEST",
+            })
+            .await
+            .expect_err("the request deadline must fire before every result is in");
+        let elapsed = start.elapsed();
+
+        match err {
+            ScatterError::ResultAmbiguous {
+                shard_id,
+                applied,
+                unknown,
+            } => {
+                assert_eq!(shard_id, 1);
+                assert_eq!(applied, vec![0], "shard 0 answered inside the deadline");
+                assert_eq!(unknown, vec![1, 2], "the rest are unresolved, not aborted");
+            }
+            other => panic!("expected an ambiguous gather outcome, got {other:?}"),
+        }
+        assert!(
+            elapsed <= timeout,
+            "one request, one budget: {elapsed:?} elapsed against a {timeout:?} timeout \
+             (per-receiver waits would have run to {:?})",
+            stagger * 3
+        );
+    }
+
+    // FM-VLL-011
+    //
+    // `acquire_continuation` has the same sequential receiver loop and the
+    // same bound.
+    #[tokio::test(start_paused = true)]
+    async fn continuation_acquisition_waits_share_one_absolute_deadline() {
+        let stagger = Duration::from_secs(3);
+        let timeout = Duration::from_secs(4);
+        let (sink, _aborted) = StaggeredSink::new(stagger, Duration::ZERO);
+        let coord = VllCoordinator::new(sink, NoopMetricsSink);
+
+        let start = Instant::now();
+        let err = coord
+            .acquire_continuation(7, 1, &[0, 1, 2], timeout)
+            .await
+            .expect_err("the deadline must fire before every shard grants");
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(err, ContinuationError::LockTimeout { shard_id: 1 }),
+            "the deadline names the shard being waited on: {err}"
+        );
+        assert!(
+            elapsed <= timeout,
+            "one acquisition, one budget: {elapsed:?} elapsed against a {timeout:?} timeout \
+             (per-receiver waits would have run to {:?})",
+            stagger * 3
         );
     }
 }
