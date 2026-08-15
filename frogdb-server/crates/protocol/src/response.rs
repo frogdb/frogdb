@@ -549,6 +549,36 @@ pub enum BlockingOp {
     },
 }
 
+impl BlockingOp {
+    /// The reply this op resolves with immediately when it cannot block —
+    /// deny-blocking contexts (`MULTI`/`EXEC`) that fail out through
+    /// `Response::BlockingNeeded` rather than truly parking.
+    ///
+    /// This mirrors `frogdb_types::types::BlockingOp::timeout_reply` (the
+    /// connection-side wait coordinator's timeout-shape authority) but is
+    /// declared on *this* simplified op, so a deny-blocking context that never
+    /// builds the full `frogdb_core` `BlockingOp` — it never registers a
+    /// `WaitEntry` — can still pick the op-aware nil shape without a round
+    /// trip through the core crate. Both must agree on the partition
+    /// (array-returning vs single-value family, `specs/blocking.md`
+    /// FM-BLOCKING-002) because they answer the same client-visible question.
+    pub fn timeout_reply(&self) -> Response {
+        match self {
+            BlockingOp::BLPop
+            | BlockingOp::BRPop
+            | BlockingOp::BLMPop { .. }
+            | BlockingOp::BZPopMin
+            | BlockingOp::BZPopMax
+            | BlockingOp::BZMPop { .. }
+            | BlockingOp::XRead { .. }
+            | BlockingOp::XReadGroup { .. } => Response::NullArray,
+            // BLMOVE / BRPOPLPUSH return a single value, so their non-blocking
+            // nil is a null bulk string.
+            BlockingOp::BLMove { .. } => Response::Null,
+        }
+    }
+}
+
 /// Raft cluster operation types for Response::RaftNeeded.
 ///
 /// This is a serializable representation of cluster commands that lives in the

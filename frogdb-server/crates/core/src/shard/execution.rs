@@ -667,10 +667,12 @@ impl ShardWorker {
 
             // Inside MULTI/EXEC, blocking commands execute non-blocking: if no
             // data is available they return BlockingNeeded, which we convert to
-            // nil (matching Redis semantics where blocking commands in a
-            // transaction never actually block).
-            let response = if matches!(&response, Response::BlockingNeeded { .. }) {
-                Response::Null
+            // the op-aware nil (matching Redis semantics where blocking
+            // commands in a transaction never actually block). The shape must
+            // match FM-BLOCKING-002's array-vs-bulk split — collapsing every
+            // op to a scalar nil here was TR-BLOCKING-024's bug.
+            let response = if let Response::BlockingNeeded { op, .. } = &response {
+                op.timeout_reply()
             } else {
                 response
             };
@@ -2186,5 +2188,197 @@ mod command_effects_tests {
         assert_eq!(record.hll_wal_delta.as_deref(), Some(&[(7u16, 5u8)][..]));
         assert_eq!(record.keyspace_events.len(), 1);
         assert_eq!(record.keyspace_events[0].1, "pfadd");
+    }
+}
+
+/// TR-BLOCKING-024: a blocking command queued in `MULTI`/`EXEC` cannot park, so
+/// its `Response::BlockingNeeded` must convert to the same op-aware nil shape
+/// FM-BLOCKING-002 defines for a real timeout — not the always-scalar
+/// `Response::Null` the conversion used before this row landed. Each op family
+/// gets its own fake handler (mirroring `panic_guard.rs`'s `Boom`/`Fine`
+/// pattern) that unconditionally returns `BlockingNeeded`, so the test drives
+/// the real `execute_transaction` conversion site without needing store-backed
+/// BLPOP/BZPOPMIN/BLMOVE/XREAD semantics.
+#[cfg(test)]
+mod deny_blocking_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use bytes::Bytes;
+    use frogdb_protocol::{BlockingOp as WireBlockingOp, Direction, ParsedCommand, Response};
+    use tokio::sync::{mpsc, oneshot};
+
+    use crate::command::{
+        Arity, Command, CommandContext, CommandFlags, ConnMutation, ExecutionStrategy, WaiterWake,
+        WalStrategy,
+    };
+    use crate::command_spec::{
+        AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
+    };
+    use crate::eviction::EvictionConfig;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{CoreMsg, ShardReceiver, ShardSender};
+    use crate::shard::types::TransactionResult;
+
+    /// A blocking-op fake: always reports `BlockingNeeded` for the given op,
+    /// regardless of args or store state. `name` is the uppercase command
+    /// name the fake registers under.
+    struct FakeBlocker {
+        name: &'static str,
+        op: WireBlockingOp,
+    }
+
+    impl Command for FakeBlocker {
+        fn spec(&self) -> &'static CommandSpec {
+            // Shared shape across all four fakes — none of these fields
+            // matter to the conversion under test, only the op the handler
+            // returns does.
+            static SPEC: CommandSpec = CommandSpec {
+                name: "FAKEBLOCKER",
+                arity: Arity::AtLeast(0),
+                flags: CommandFlags::READONLY,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::NotApplicable,
+                requires_same_slot: false,
+                reindex: ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            // `name()` below is what the registry and results actually key
+            // off; the static spec's `name` field is unused by this test.
+            &SPEC
+        }
+
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            Ok(Response::BlockingNeeded {
+                keys: vec![Bytes::from_static(b"k")],
+                timeout: 1.0,
+                op: self.op.clone(),
+            })
+        }
+    }
+
+    fn worker_with_fake_blockers() -> ShardWorker {
+        let mut registry = CommandRegistry::new();
+        registry.register(FakeBlocker {
+            name: "FAKEBLPOP",
+            op: WireBlockingOp::BLPop,
+        });
+        registry.register(FakeBlocker {
+            name: "FAKEBZPOPMIN",
+            op: WireBlockingOp::BZPopMin,
+        });
+        registry.register(FakeBlocker {
+            name: "FAKEBLMOVE",
+            op: WireBlockingOp::BLMove {
+                dest: Bytes::from_static(b"dst"),
+                src_dir: Direction::Left,
+                dest_dir: Direction::Left,
+            },
+        });
+        registry.register(FakeBlocker {
+            name: "FAKEXREAD",
+            op: WireBlockingOp::XRead {
+                after_ids: vec![(0, 0)],
+                count: None,
+            },
+        });
+
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(registry),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        )
+    }
+
+    /// Run a single queued command through `ExecTransaction` and return its
+    /// one result.
+    async fn exec_one(worker: &mut ShardWorker, name: &'static str) -> Response {
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ExecTransaction {
+                commands: vec![ParsedCommand::new(
+                    Bytes::from_static(name.as_bytes()),
+                    vec![],
+                )],
+                watches: vec![],
+                conn_id: 1,
+                protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
+                response_tx: tx,
+            })
+            .await;
+        match rx.await.expect("shard replied") {
+            TransactionResult::Success(mut results) => {
+                assert_eq!(results.len(), 1);
+                results.remove(0)
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    /// Pre-fix, every op — including the array-returning family — collapsed
+    /// to `Response::Null` ($-1). Red before the `op.timeout_reply()` fix.
+    #[tokio::test]
+    async fn deny_blocking_blpop_in_multi_replies_null_array() {
+        let mut worker = worker_with_fake_blockers();
+        let response = exec_one(&mut worker, "FAKEBLPOP").await;
+        assert_eq!(
+            response,
+            Response::NullArray,
+            "BLPOP inside MULTI/EXEC must answer the array-returning family's \
+             op-aware nil (*-1), not the scalar Response::Null this path used \
+             to hardcode"
+        );
+    }
+
+    /// Same array family, BZPOPMIN. Red before the fix.
+    #[tokio::test]
+    async fn deny_blocking_bzpopmin_in_multi_replies_null_array() {
+        let mut worker = worker_with_fake_blockers();
+        let response = exec_one(&mut worker, "FAKEBZPOPMIN").await;
+        assert_eq!(response, Response::NullArray);
+    }
+
+    /// Same array family, XREAD BLOCK. Red before the fix.
+    #[tokio::test]
+    async fn deny_blocking_xread_block_in_multi_replies_null_array() {
+        let mut worker = worker_with_fake_blockers();
+        let response = exec_one(&mut worker, "FAKEXREAD").await;
+        assert_eq!(response, Response::NullArray);
+    }
+
+    /// The scalar-nil family (BLMOVE/BRPOPLPUSH) was already `Response::Null`
+    /// pre-fix by coincidence — this pins it stays that way post-fix rather
+    /// than forcing a regression.
+    #[tokio::test]
+    async fn deny_blocking_blmove_in_multi_replies_null_bulk() {
+        let mut worker = worker_with_fake_blockers();
+        let response = exec_one(&mut worker, "FAKEBLMOVE").await;
+        assert_eq!(response, Response::Null);
     }
 }
