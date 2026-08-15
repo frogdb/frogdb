@@ -730,6 +730,24 @@ mod tests {
         oneshot::channel().0
     }
 
+    /// Pins the concrete derivation, not just the ratio: every other test
+    /// touching `CONTINUATION_DRAIN_TIMEOUT` measures elapsed time relative
+    /// to the constant itself (e.g. `CONTINUATION_DRAIN_TIMEOUT / 2`), so
+    /// they'd pass unchanged even if the derivation below flipped from
+    /// halving the coordinator's timeout to doubling it — silently breaking
+    /// the "always strictly below" invariant the doc comment promises. This
+    /// test would catch that: it fails the moment the shard's parked-request
+    /// deadline stops being strictly under the coordinator's own timeout.
+    // FM-VLL-003
+    #[test]
+    fn continuation_drain_timeout_stays_below_the_coordinators_acquisition_timeout() {
+        assert!(CONTINUATION_DRAIN_TIMEOUT < crate::coordinator::DEFAULT_LOCK_ACQUISITION_TIMEOUT);
+        assert_eq!(
+            CONTINUATION_DRAIN_TIMEOUT,
+            crate::coordinator::DEFAULT_LOCK_ACQUISITION_TIMEOUT / 2
+        );
+    }
+
     #[tokio::test]
     async fn enqueue_acquires_when_no_contention() {
         let mut state: VllShardState<()> = VllShardState::default();
@@ -1352,6 +1370,17 @@ mod tests {
                 .expect("release must be observed after cancellation");
         assert_eq!(event, ContinuationEvent::Released);
         assert_eq!(state.continuation_lock_owner(), None);
+    }
+
+    /// The derived drain deadline must land strictly inside the coordinator's
+    /// acquisition timeout: the shard has to resolve (and clean up after) its
+    /// own parked request before the coordinator gives up on it. The exact
+    /// margin is a tuning knob; this ordering is the safety property the
+    /// derivation exists to preserve.
+    #[test]
+    fn drain_timeout_lands_strictly_inside_the_coordinator_acquisition_timeout() {
+        assert!(!CONTINUATION_DRAIN_TIMEOUT.is_zero());
+        assert!(CONTINUATION_DRAIN_TIMEOUT < crate::coordinator::DEFAULT_LOCK_ACQUISITION_TIMEOUT);
     }
 
     /// A parked request's deadline is cancel-safe too: losing a `select!`
