@@ -70,6 +70,15 @@ impl ShardWorker {
                                 "Continuation lock request timed out waiting for the shard queue to drain"
                             );
                         }
+                        // Nobody was left to hand the lock to. Not a warning:
+                        // the requester leaving is ordinary, and the point is
+                        // that the shard stopped refusing other work for it.
+                        ContinuationEvent::ParkAbandoned => {
+                            tracing::debug!(
+                                shard_id = self.shard_id(),
+                                "Parked continuation request abandoned by its requester; drain barrier lifted"
+                            );
+                        }
                         // The holder has been told to let go; the lock clears
                         // when its release actually arrives. A script that
                         // legitimately runs this long is a bug in the script,

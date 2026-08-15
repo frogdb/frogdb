@@ -80,6 +80,10 @@ pub enum ContinuationEvent {
     /// A parked request's drain deadline passed; it has been failed with
     /// [`VllError::LockTimeout`] and the drain barrier is lifted.
     DrainTimedOut,
+    /// A parked request's requester went away before the shard drained. The
+    /// park has been dropped and the drain barrier lifted immediately, without
+    /// waiting out its deadline — nobody is left to answer.
+    ParkAbandoned,
     /// The held lock outlived [`CONTINUATION_MAX_HOLD`]; its holder has been
     /// sent a [`VllError::Revoked`] notice. The lock itself stays installed
     /// until the holder's release signal arrives — only the holder knows when
@@ -545,8 +549,10 @@ impl<O: Debug> VllShardState<O> {
     /// - lock held → the release signal, after which the lock is cleared —
     ///   raced against [`CONTINUATION_MAX_HOLD`], which revokes a lock held
     ///   past the cap instead of clearing it;
-    /// - request parked → its drain deadline, after which the requester is
-    ///   failed with [`VllError::LockTimeout`] and the drain barrier lifts.
+    /// - request parked → whichever comes first of its requester giving up
+    ///   (the park is dropped, [`ContinuationEvent::ParkAbandoned`]) and its
+    ///   drain deadline (the requester is failed with
+    ///   [`VllError::LockTimeout`]). Either way the drain barrier lifts.
     ///
     /// The two halves are no longer mutually exclusive: wound-wait parks the
     /// older requester *behind* the younger holder it wounded, so both can be
@@ -598,8 +604,34 @@ impl<O: Debug> VllShardState<O> {
         }
 
         if let Some(deadline) = self.pending_continuation.as_ref().map(|p| p.deadline) {
-            tokio::time::sleep_until(deadline).await;
-            if let Some(pending) = self.pending_continuation.take() {
+            // The park is a barrier: while it stands, `enqueue_lock_request`
+            // refuses every other connection with `ShardBusy`. So the deadline
+            // is not the only thing worth waiting for — a requester that has
+            // given up (coordinator timed out, connection dropped) leaves a
+            // barrier nobody will ever collect on, and holding it for the rest
+            // of the drain timeout refuses live work on a dead client's behalf.
+            // Every blocked state must be leavable as soon as the reason for it
+            // is gone.
+            //
+            // Only the purely-parked case needs this arm. When a lock is *also*
+            // held the branch above runs instead, and the grant it performs on
+            // release already drops an abandoned park (`grant_continuation`
+            // installs nothing once `ready_tx` is closed).
+            let ready_tx = &mut self
+                .pending_continuation
+                .as_mut()
+                .expect("checked above")
+                .ready_tx;
+            let abandoned = tokio::select! {
+                biased;
+                _ = ready_tx.closed() => true,
+                _ = tokio::time::sleep_until(deadline) => false,
+            };
+            let pending = self.pending_continuation.take();
+            if abandoned {
+                return ContinuationEvent::ParkAbandoned;
+            }
+            if let Some(pending) = pending {
                 let _ = pending
                     .ready_tx
                     .send(ShardReadyResult::Failed(VllError::LockTimeout));
@@ -1415,6 +1447,84 @@ mod tests {
             cont_rr.await,
             Ok(ShardReadyResult::Failed(VllError::LockTimeout))
         ));
+    }
+
+    /// A parked request whose requester has gone must stop being a barrier
+    /// *immediately*, not at the end of the drain timeout.
+    ///
+    /// The park refuses every other connection's work with `ShardBusy` while it
+    /// stands. If the coordinator that asked for it timed out (or its client
+    /// disconnected), holding the shard for the remaining budget refuses live
+    /// work on behalf of nobody — and since the coordinator retries, the park
+    /// is re-armed each round, so the shard can stay busy indefinitely for a
+    /// requester that no longer exists.
+    ///
+    /// Pre-fix, `next_continuation_event` waited only on the deadline: this
+    /// test would sit for the full `CONTINUATION_DRAIN_TIMEOUT` and report
+    /// `DrainTimedOut`, and the assertion below on elapsed time fails.
+    // FM-VLL-003
+    #[tokio::test(start_paused = true)]
+    async fn an_abandoned_park_drops_immediately_instead_of_holding_the_barrier() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        // Something queued, so the continuation request parks rather than being
+        // granted outright.
+        let (rt, rr) = channels();
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+
+        let (cont_rt, cont_rr) = channels();
+        let (_release_tx, release_rx) = oneshot::channel();
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
+
+        // The barrier is up: another connection's work is refused.
+        let (other_rt, other_rr) = channels();
+        let outcome = state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"other")],
+            LockMode::Write,
+            (),
+            other_rt,
+            dead_wound(),
+        );
+        assert!(outcome.enqueue_failed);
+        assert!(matches!(
+            other_rr.await,
+            Ok(ShardReadyResult::Failed(VllError::ShardBusy))
+        ));
+
+        // The requester gives up — coordinator timeout, dropped connection.
+        drop(cont_rr);
+
+        let before = Instant::now();
+        assert_eq!(
+            state.next_continuation_event().await,
+            ContinuationEvent::ParkAbandoned
+        );
+        assert_eq!(
+            Instant::now() - before,
+            Duration::ZERO,
+            "an abandoned park must not hold the shard for the rest of its drain budget"
+        );
+
+        // And the barrier really is down: the same work now gets in.
+        let (retry_rt, retry_rr) = channels();
+        let outcome = state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"other")],
+            LockMode::Write,
+            (),
+            retry_rt,
+            dead_wound(),
+        );
+        assert!(!outcome.enqueue_failed);
+        assert!(matches!(retry_rr.await, Ok(ShardReadyResult::Ready)));
     }
 
     /// `queue_depth_warning` is a boundary: it fires at exactly
