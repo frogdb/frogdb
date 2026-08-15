@@ -448,6 +448,15 @@ define_metrics! {
         labels: [outcome: &str],
     }
 
+    /// Total WATCH-aborted transactions by what invalidated the watch:
+    /// `watched-slot-write` (a write moved the watched key's Hash Slot version --
+    /// a write to the key, to any key aliased onto its slot, or a keyless
+    /// dirtying write such as FLUSHDB) or `expiry` (a key that was live at WATCH
+    /// time is gone at EXEC). A CAS loop that never commits is diagnosed here.
+    counter TransactionsWatchAborted("frogdb_transactions_watch_aborted_total") {
+        labels: [reason: &str],
+    }
+
     // ========================================================================
     // Scatter-Gather Metrics
     // ========================================================================

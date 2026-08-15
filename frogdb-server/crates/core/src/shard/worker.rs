@@ -40,18 +40,47 @@ use super::wait_queue::ShardWaitQueue;
 /// 18). Bounded without GC: at most one `u64` per slot ever written on this
 /// shard (≤ 16384), and slots are permanent so entries never need reclaiming.
 ///
-/// `global_epoch` is the honest coarse fallback for the write sources the
-/// `shard` module cannot localize to keys within its reach: a whole-DB flush
-/// (`FLUSHDB`/`FLUSHALL`, whose write record carries no keys) and any
-/// active-expiry cycle that reaped hash *fields* from a surviving hash (a field
-/// TTL that shrinks but does not remove the key, whose keys `ExpiryResult` does
-/// not carry — only a `fields_expired` count). Because that field information is
-/// not key-attributed, ANY cycle with `fields_expired > 0` bumps the epoch,
-/// independently of whether the same cycle also removed whole keys (those are
-/// slot-attributed separately). Folding the epoch into every key's effective
-/// version makes those events invalidate *all* watches — a safe over-abort that
-/// preserves the zero-false-negative invariant, exactly matching Redis's
-/// `touchAllWatchedKeysOnFlush`.
+/// `global_epoch` is the honest coarse fallback for the one write class the
+/// `shard` module genuinely cannot localize to keys: a whole-DB flush
+/// (`FLUSHDB`/`FLUSHALL`, whose write record carries no keys). Folding the epoch
+/// into every key's effective version makes such a write invalidate *all*
+/// watches, exactly matching Redis's `touchAllWatchedKeysOnFlush`.
+///
+/// It is deliberately *not* the fallback for field expiry. An active-expiry
+/// cycle that reaps hash fields from surviving hashes enumerates those
+/// survivors (`ExpiryResult::field_shrunk_keys`), so it bumps their slots
+/// instead: a tenant whose field TTLs fire continuously would otherwise abort
+/// every other connection's WATCH on the shard on every cycle, forever
+/// (`specs/txn.md` FM-TXN-033 — an unbounded liveness violation, not a bounded
+/// over-abort).
+/// Which clause of the WATCH check refused an `EXEC`.
+///
+/// The label values are the observable contract (`specs/txn.md` FM-TXN-033), so
+/// they live next to the check rather than being spelled at the metric call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchAbortReason {
+    /// A watched key's Hash Slot version moved. That covers a write to the
+    /// watched key itself, a write to any other key aliased onto the same slot
+    /// (the declared slot-granularity deviation), an expiry that bumped, and a
+    /// keyless dirtying write (`FLUSHDB`) that advanced the shard epoch.
+    WatchedSlotWrite,
+    /// A key that was live when watched is gone at `EXEC` with no version bump
+    /// for this watcher — another watcher's no-bump `WATCH`-time purge, or its
+    /// own already-elapsed TTL.
+    Expiry,
+}
+
+impl WatchAbortReason {
+    /// The `reason` label value reported on
+    /// `frogdb_transactions_watch_aborted_total`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::WatchedSlotWrite => "watched-slot-write",
+            Self::Expiry => "expiry",
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SlotVersions {
     /// slot -> version; a slot absent from the map reads as 0 (never bumped).
@@ -690,13 +719,6 @@ impl ShardWorker {
         self.slot_versions.bump_slot(slot_for_key(key));
     }
 
-    /// Bump the shard-wide WATCH epoch, invalidating every outstanding watch on
-    /// the shard. The safe over-abort fallback for a dirtying event whose keys
-    /// the `shard` module cannot enumerate (a fields-only active-expiry cycle).
-    pub(crate) fn bump_version_global(&mut self) {
-        self.slot_versions.bump_global();
-    }
-
     /// Get the WATCH version for a key — its Hash Slot's stamp (plus the
     /// shard-wide epoch). Now load-bearing: the key selects the slot, so
     /// `check_watches` discriminates keys by slot.
@@ -717,21 +739,36 @@ impl ShardWorker {
     /// non-destructive `exists_unexpired` probe (constraint 1 — `check_watches`
     /// must not physically purge).
     pub(crate) fn check_watches(&self, watches: &[WatchEntry]) -> bool {
-        watches.iter().all(
-            |WatchEntry {
-                 key,
-                 version,
-                 live_at_watch,
-             }| {
-                if self.get_key_version(key) != *version {
-                    return false; // changed via a version-bumping path
-                }
-                if *live_at_watch && !self.store.exists_unexpired(key) {
-                    return false; // watched live, now expired/gone with no bump (gap 4)
-                }
-                true
-            },
-        )
+        self.watch_abort_reason(watches).is_none()
+    }
+
+    /// [`Self::check_watches`], but naming *which* clause failed — `None` when
+    /// every watch still holds.
+    ///
+    /// The two clauses are separately diagnosable on purpose: a WATCH loop that
+    /// never commits is otherwise indistinguishable from one that is merely
+    /// contended, and the difference (a slot being written vs. watched keys
+    /// dying under the watcher) decides where to look. The caller at the EXEC
+    /// seam turns this into `frogdb_transactions_watch_aborted_total{reason}`.
+    pub(crate) fn watch_abort_reason(&self, watches: &[WatchEntry]) -> Option<WatchAbortReason> {
+        for WatchEntry {
+            key,
+            version,
+            live_at_watch,
+        } in watches
+        {
+            if self.get_key_version(key) != *version {
+                // Changed via a version-bumping path: a write to the key, a write
+                // to any key aliased onto its slot, or a keyless dirtying write
+                // that moved the shard epoch.
+                return Some(WatchAbortReason::WatchedSlotWrite);
+            }
+            if *live_at_watch && !self.store.exists_unexpired(key) {
+                // Watched live, now expired/gone with no bump for us (gap 4).
+                return Some(WatchAbortReason::Expiry);
+            }
+        }
+        None
     }
 
     /// Lazily purge any watched keys whose TTL has elapsed, bumping the shard

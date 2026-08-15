@@ -278,17 +278,15 @@ impl ShardWorker {
         // asserted above), so this discards only what this cycle just produced —
         // never a pending lazy read.
         //
-        // The shrunk-survivor buffer, by contrast, is *not* owned by
-        // `ExpiryResult` (the sweep counts `fields_expired` but never enumerates
-        // the surviving keys), so drain it here and re-index each survivor through
-        // the *same* `reindex_shrunk_hash_keys` owner the lazy read path uses.
-        // This is what keeps a field-shrunk hash's search-index doc from holding
-        // the reaped field's stale value after an active sweep — the search
-        // analogue of the WATCH global bump below.
-        let shrunk = self.store.take_lazily_shrunk();
+        // The shrunk-survivor buffer is discarded on the same grounds: the sweep
+        // owns that reporting too, through `ExpiryResult::field_shrunk_keys`. The
+        // survivors are re-indexed (their search doc still holds the reaped
+        // field's stale value) and their slots bumped from the *result*, inside
+        // `apply_expiry_effects`, so a later command's lazy drain cannot re-fire
+        // either effect for what this cycle already reported.
+        self.store.take_lazily_shrunk();
         self.store.take_lazily_emptied();
         self.store.take_lazily_expired_fields();
-        self.reindex_shrunk_hash_keys(&shrunk);
         self.apply_expiry_effects(result).await;
     }
 
@@ -311,10 +309,15 @@ impl ShardWorker {
     /// independent-expiry model (each node expires on its own clock — a
     /// documented divergence from Redis's primary-drives-expiry; flipping it is a
     /// deliberate ADR, out of scope here).
-    pub(crate) async fn apply_expiry_effects(&mut self, result: ExpiryResult) {
+    pub(crate) async fn apply_expiry_effects(&mut self, mut result: ExpiryResult) {
         if result.is_empty() {
             return;
         }
+
+        // Hashes shrunk in place by this cycle: not removals, so they never flow
+        // through the pipeline below. Taken up front because the removal lists are
+        // moved into it.
+        let field_shrunk = std::mem::take(&mut result.field_shrunk_keys);
 
         // Expiry-specific observability (not pipeline effects): fire the per-key
         // USDT probe for every removed key, then bump the aggregate metrics.
@@ -360,19 +363,24 @@ impl ShardWorker {
         .await;
 
         // A cycle that reaped hash *fields* from a surviving hash is a mutation,
-        // not a removal, so it does not flow through the removal pipeline — but it
-        // still changed a watched hash. The swept field-keys are NOT carried by
-        // `ExpiryResult` (only a `fields_expired` count), so this is the one
-        // active-expiry event whose keys the shard cannot enumerate. Bump the
-        // shard-wide epoch whenever ANY field expired: a safe over-abort that
-        // invalidates every watch and so never misses the watched hash whose
-        // field expired (zero false negatives). This is INDEPENDENT of whether
-        // the same cycle also removed whole keys — those removals bump their own
-        // slots via the pipeline above, but a field-shrunk *survivor* hash is not
-        // among them, so its watch would slip through if the global bump were
-        // gated on `!removed_any`. `removed_any` therefore does not appear here.
-        if result.fields_expired > 0 {
-            self.bump_version_global();
+        // not a removal, so it does not flow through the removal pipeline above —
+        // but it still changed a watched hash, and its search-index doc still
+        // holds the reaped field's stale value. The sweep enumerates exactly
+        // which survivors it shrank, so both effects are keyed to those keys:
+        // re-index each one, and bump each one's *slot* (never the shard-wide
+        // epoch, which would abort every unrelated watch on the shard and let a
+        // tenant's continuously-firing field TTLs starve every other CAS loop
+        // forever — `specs/txn.md` FM-TXN-033). Removals that happened in the
+        // same cycle already bumped their own slots via the pipeline above; a
+        // shrunk survivor is not among them, which is why this is unconditional
+        // on what else the cycle did.
+        //
+        // Guarded on non-empty: `bump_versions_for` reads an empty key set as a
+        // keyless dirtying write and bumps the epoch — the exact over-abort this
+        // path exists to stop.
+        if !field_shrunk.is_empty() {
+            self.reindex_shrunk_hash_keys(&field_shrunk);
+            self.bump_versions_for(field_shrunk.iter().map(|key| key.as_ref()));
         }
     }
 
@@ -608,13 +616,39 @@ mod effect_tests {
     }
 
     /// Records counter increments so tests can read cumulative totals back.
+    ///
+    /// `counters` aggregates across label sets; `labeled` keeps the per-label-set
+    /// breakdown, which is what a `{reason=...}`-style contract has to be pinned
+    /// against (a counter that moves under the wrong label is a wrong answer, not
+    /// a missing one).
     #[derive(Default)]
     struct RecordingRecorder {
         counters: Mutex<HashMap<String, u64>>,
+        labeled: Mutex<HashMap<String, u64>>,
+    }
+
+    impl RecordingRecorder {
+        /// Cumulative value of `name` restricted to one label value, e.g.
+        /// `labeled_value("frogdb_transactions_watch_aborted_total", "reason", "expiry")`.
+        fn labeled_value(&self, name: &str, label: &str, value: &str) -> Option<u64> {
+            self.labeled
+                .lock()
+                .unwrap()
+                .get(&format!("{name}{{{label}={value}}}"))
+                .copied()
+        }
     }
 
     impl MetricsRecorder for RecordingRecorder {
-        fn increment_counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+        fn increment_counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
+            for (label, label_value) in labels {
+                *self
+                    .labeled
+                    .lock()
+                    .unwrap()
+                    .entry(format!("{name}{{{label}={label_value}}}"))
+                    .or_insert(0) += value;
+            }
             *self
                 .counters
                 .lock()
@@ -704,6 +738,7 @@ mod effect_tests {
             deleted_keys: vec![Bytes::from("plain")],
             emptied_keys: vec![Bytes::from("h")],
             fields_expired: 1,
+            field_shrunk_keys: vec![],
             budget_exhausted: false,
         };
         worker.apply_expiry_effects(result).await;
@@ -730,6 +765,7 @@ mod effect_tests {
             deleted_keys: vec![Bytes::from("a"), Bytes::from("b")],
             emptied_keys: vec![Bytes::from("h")],
             fields_expired: 4,
+            field_shrunk_keys: vec![],
             budget_exhausted: false,
         };
         worker.apply_expiry_effects(result).await;
@@ -748,15 +784,16 @@ mod effect_tests {
     /// that removes BOTH a whole-key-expired key (`Expired`) and a hash-emptied
     /// key (`FieldEmptied`) bumps each removed key's slot exactly ONCE — the two
     /// reason groups are driven through one `run_internal_removal_effects` call,
-    /// so no slot is double-bumped. Because the cycle also carries
-    /// `fields_expired > 0` (the field that emptied `h`), it additionally bumps
-    /// the shard-wide global epoch (a safe over-abort — the field information is
-    /// not key-attributed, so any `fields_expired > 0` cycle bumps the epoch).
-    /// Each removed key's effective version is therefore its once-bumped slot
-    /// PLUS the once-bumped epoch = 2 (a double slot-bump would read 3, catching
-    /// the regression the "exactly once" invariant guards). Also pins the dirty
-    /// counter (previously skipped by the hand-rolled expiry path): it advances
-    /// by the removed keys.
+    /// so no slot is double-bumped. Each removed key's effective version is
+    /// therefore exactly 1 (a double slot-bump would read 2, catching the
+    /// regression the "exactly once" invariant guards). The cycle also carries
+    /// `fields_expired > 0` — the field that emptied `h` — and that must add
+    /// NOTHING here: the emptied key already bumped its own slot through the
+    /// pipeline, and no hash survived a shrink, so there is nothing left for the
+    /// shard-wide epoch to compensate for. Also pins the dirty counter
+    /// (previously skipped by the hand-rolled expiry path): it advances by the
+    /// removed keys.
+    // FM-TXN-033
     #[tokio::test]
     async fn expiry_coalesces_version_bump_and_advances_dirty() {
         use crate::store::Store;
@@ -771,20 +808,22 @@ mod effect_tests {
             deleted_keys: vec![Bytes::from("plain")],
             emptied_keys: vec![Bytes::from("h")],
             fields_expired: 1,
+            field_shrunk_keys: vec![],
             budget_exhausted: false,
         };
         worker.apply_expiry_effects(result).await;
 
         assert_eq!(
             worker.get_key_version(b"plain"),
-            2,
-            "the whole-key-expired key's slot bumps once (1) + global epoch bump \
-             for the field expiry (1)"
+            1,
+            "the whole-key-expired key's slot bumps exactly once, and the cycle's \
+             field expiry adds no shard-wide epoch bump on top"
         );
         assert_eq!(
             worker.get_key_version(b"h"),
-            2,
-            "the field-emptied key's slot bumps once (1) + global epoch bump (1)"
+            1,
+            "the field-emptied key's slot bumps exactly once (through the removal \
+             pipeline), not once per reason group"
         );
         assert_eq!(
             worker.store.dirty(),
@@ -793,71 +832,328 @@ mod effect_tests {
         );
     }
 
-    /// Regression (whole-branch review): a single active-expiry cycle that BOTH
-    /// removes a whole key AND field-shrinks a *surviving* watched hash must
-    /// still invalidate a watch on that hash. The field-only expiry carries no
-    /// key (only `fields_expired`), so the shard cannot slot-attribute it and
-    /// compensates with a global-epoch bump. That bump must NOT be gated on
-    /// "no key was removed": when the same cycle also removes a key, the field
-    /// information still went unattributed and the watched survivor hash would
-    /// otherwise commit against a concurrently-mutated value (an optimistic-lock
-    /// false negative). Pins the exact scenario: `deleted_keys=[del]` +
-    /// `fields_expired=1` with a surviving hash `surv` on a DIFFERENT slot ⇒ a
-    /// WATCH on `surv` (live, version-snapshotted pre-cycle) must ABORT.
+    /// Regression (whole-branch review, amended by spec-gaps issue 23): a single
+    /// active-expiry cycle that BOTH removes a whole key AND field-shrinks a
+    /// *surviving* watched hash must still invalidate a watch on that hash. The
+    /// survivor is a mutation, not a removal, so it never flows through the
+    /// removal pipeline — the sweep reports it separately in `field_shrunk_keys`
+    /// and the effects bump ITS slot. That bump must NOT be gated on "no key was
+    /// removed": when the same cycle also removes a key, the watched survivor
+    /// would otherwise commit against a concurrently-mutated value (an
+    /// optimistic-lock false negative). Pins the exact scenario:
+    /// `deleted_keys=[del]` + `field_shrunk_keys=[surv]` on a DIFFERENT slot ⇒ a
+    /// WATCH on `surv` (live, version-snapshotted pre-cycle) must ABORT, while a
+    /// watch on a THIRD, untouched slot must survive — the bump is per-slot, not
+    /// shard-wide.
+    // FM-TXN-033
     #[tokio::test]
-    async fn field_expiry_bumps_global_epoch_even_when_a_key_is_also_removed() {
+    async fn field_expiry_bumps_only_the_shrunk_survivors_slot() {
         use crate::shard::message::WatchEntry;
         use crate::shard::partition::slot_for_key;
 
         let recorder = Arc::new(RecordingRecorder::default());
         let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
 
-        // The survivor hash and the removed key must live on DIFFERENT slots, so
-        // the removed key's per-slot bump cannot coincidentally touch the
-        // survivor — the ONLY thing that can invalidate `surv`'s watch is the
-        // global-epoch bump owed to the unattributed field expiry.
+        // Three distinct slots: the removed key, the shrunk survivor, and a
+        // bystander nobody touched. Distinct slots are what let each assertion
+        // below attribute a bump to exactly one cause.
         let del = "del";
         let surv = "surv";
+        let bystander = "bystander";
         assert_ne!(
             slot_for_key(del.as_bytes()),
             slot_for_key(surv.as_bytes()),
             "test precondition: removed key and survivor hash must be on distinct slots"
         );
+        assert_ne!(
+            slot_for_key(bystander.as_bytes()),
+            slot_for_key(surv.as_bytes()),
+            "test precondition: bystander must not share the survivor's slot"
+        );
+        assert_ne!(
+            slot_for_key(bystander.as_bytes()),
+            slot_for_key(del.as_bytes()),
+            "test precondition: bystander must not share the removed key's slot"
+        );
 
-        // Seed the survivor as a live, non-empty hash so `exists_unexpired` holds
-        // — the watch can then only abort via the version compare, isolating the
-        // global-epoch path (not the `live_at_watch` liveness clause).
+        // Seed both watched keys live and non-empty so `exists_unexpired` holds —
+        // each watch can then only move via the version compare, isolating the
+        // slot-bump path (not the `live_at_watch` liveness clause).
         seed_hash_with_mixed_fields(&mut worker.store, surv, &[], &["f1"]);
-        let v0 = worker.get_key_version(surv.as_bytes());
+        seed_hash_with_mixed_fields(&mut worker.store, bystander, &[], &["f1"]);
+        let surv_v0 = worker.get_key_version(surv.as_bytes());
+        let bystander_v0 = worker.get_key_version(bystander.as_bytes());
 
         // One cycle: reaps whole key `del` AND field-purges a field of `surv`
-        // (surv survives — absent from deleted_keys/emptied_keys, present only as
-        // the `fields_expired` count).
+        // (surv survives — absent from deleted_keys/emptied_keys, reported on
+        // `field_shrunk_keys`).
         let result = ExpiryResult {
             deleted_keys: vec![Bytes::from(del)],
             emptied_keys: vec![],
             fields_expired: 1,
+            field_shrunk_keys: vec![Bytes::from(surv)],
             budget_exhausted: false,
         };
         worker.apply_expiry_effects(result).await;
 
-        // The survivor's effective version must have moved (global epoch), so a
-        // live watch on it aborts.
+        // The survivor's version moved, so a live watch on it aborts.
         assert_ne!(
             worker.get_key_version(surv.as_bytes()),
-            v0,
-            "field-only expiry in a cycle that also removed a key must still bump \
-             the global epoch so the surviving hash's watch version moves"
+            surv_v0,
+            "a field-shrunk survivor's own slot must be bumped even when the same \
+             cycle also removed a whole key"
         );
         let watches = [WatchEntry {
             key: Bytes::from(surv),
-            version: v0,
+            version: surv_v0,
             live_at_watch: true,
         }];
         assert!(
             !worker.check_watches(&watches),
             "WATCH on a field-shrunk surviving hash must ABORT EXEC even when the \
              same expiry cycle also removed a whole key (optimistic-lock invariant)"
+        );
+
+        // ...and the bystander's did not: no shard-wide epoch bump escaped.
+        assert_eq!(
+            worker.get_key_version(bystander.as_bytes()),
+            bystander_v0,
+            "a slot the cycle never touched must not move — a shard-wide bump here \
+             is the starvation bug (FM-TXN-033)"
+        );
+        let bystander_watch = [WatchEntry {
+            key: Bytes::from(bystander),
+            version: bystander_v0,
+            live_at_watch: true,
+        }];
+        assert!(
+            worker.check_watches(&bystander_watch),
+            "a WATCH on an untouched slot must survive a field-expiry cycle"
+        );
+    }
+
+    /// Starvation regression (spec-gaps issue 23 / distsys-review MAJ-21), driven
+    /// through the REAL sweep rather than a hand-built `ExpiryResult`: a hash
+    /// whose field TTLs fire on every cycle must not invalidate a watch on an
+    /// unrelated key. Pre-fix, `fields_expired > 0` bumped the shard-wide epoch,
+    /// so `victim`'s watch aborted on every cycle forever — an unbounded liveness
+    /// violation with no error and no metric. Post-fix the sweep enumerates the
+    /// hash it shrank and bumps only that slot, so the unrelated watch holds
+    /// across repeated cycles.
+    // FM-TXN-033
+    #[tokio::test]
+    async fn field_expiry_does_not_starve_a_watch_on_an_unrelated_slot() {
+        use crate::shard::message::WatchEntry;
+        use crate::shard::partition::slot_for_key;
+        use crate::store::Store;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
+
+        let noisy = "noisy";
+        let victim = "victim";
+        assert_ne!(
+            slot_for_key(noisy.as_bytes()),
+            slot_for_key(victim.as_bytes()),
+            "test precondition: the noisy hash and the watched key must be on distinct slots"
+        );
+
+        // `victim` is the unrelated CAS target; `noisy` is a hash with an expired
+        // field and a live one, so each sweep shrinks it without removing it.
+        seed_hash_with_mixed_fields(&mut worker.store, victim, &[], &["f1"]);
+        let victim_v0 = worker.get_key_version(victim.as_bytes());
+        let watches = [WatchEntry {
+            key: Bytes::from(victim),
+            version: victim_v0,
+            live_at_watch: true,
+        }];
+
+        // Several cycles, each reaping a field from a fresh batch on `noisy`: the
+        // starvation bug reproduces on the FIRST one and compounds, so a loop
+        // pins "forever", not just "once".
+        for round in 0..3 {
+            let expired = format!("e{round}");
+            seed_hash_with_mixed_fields(&mut worker.store, noisy, &[expired.as_str()], &["live"]);
+            worker.run_active_expiry().await;
+            assert!(
+                worker.store.contains(noisy.as_bytes()),
+                "precondition: the noisy hash must SURVIVE the sweep (shrunk, not removed)"
+            );
+            assert!(
+                worker.check_watches(&watches),
+                "round {round}: a field-expiry sweep on an unrelated slot must not \
+                 abort this WATCH — a shard-wide epoch bump here starves every CAS \
+                 loop on the shard (FM-TXN-033)"
+            );
+        }
+    }
+
+    /// Safety half of the starvation fix: narrowing the bump to the shrunk keys'
+    /// slots must not lose the abort a watcher of that slot is owed. Same real
+    /// sweep, but the watch is on the hash being shrunk — its `EXEC` must still
+    /// be refused.
+    // FM-TXN-033
+    #[tokio::test]
+    async fn field_expiry_still_aborts_a_watch_on_the_shrunk_slot() {
+        use crate::shard::message::WatchEntry;
+        use crate::store::Store;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder);
+
+        // One expired field, one live field: the sweep shrinks `h` and leaves it
+        // alive, so the abort can only come from the survivor's own slot bump.
+        seed_hash_with_mixed_fields(&mut worker.store, "h", &["gone"], &["stays"]);
+        let v0 = worker.get_key_version(b"h");
+
+        worker.run_active_expiry().await;
+
+        assert!(
+            worker.store.contains(b"h"),
+            "precondition: the hash must survive the sweep (shrunk, not emptied)"
+        );
+        let watches = [WatchEntry {
+            key: Bytes::from_static(b"h"),
+            version: v0,
+            live_at_watch: true,
+        }];
+        assert!(
+            !worker.check_watches(&watches),
+            "a WATCH on a hash the sweep field-shrunk must still ABORT — the \
+             per-slot bump replaces the shard-wide one, it does not drop it"
+        );
+    }
+
+    /// A WATCH abort must name its cause. Class 1: the watched key's slot version
+    /// moved, so `EXEC` is refused with `reason="watched-slot-write"`. Without
+    /// this counter a CAS loop that never commits is silent — the exact failure
+    /// mode the field-expiry starvation bug hid behind (`specs/txn.md`
+    /// FM-TXN-033).
+    // FM-TXN-033
+    #[tokio::test]
+    async fn watch_abort_records_the_slot_write_reason() {
+        use crate::shard::message::WatchEntry;
+        use crate::shard::types::TransactionResult;
+        use crate::store::Store;
+        use crate::types::Value;
+        use frogdb_protocol::ProtocolVersion;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let v0 = worker.get_key_version(b"k");
+        // Something wrote into k's slot after the watch was taken.
+        worker.bump_versions_for([b"k".as_slice()]);
+
+        // Empty command list: the watch check is the whole transaction, so the
+        // reason attribution is isolated from anything a queued command does.
+        let result = worker
+            .execute_transaction(
+                vec![],
+                &[WatchEntry {
+                    key: Bytes::from_static(b"k"),
+                    version: v0,
+                    live_at_watch: true,
+                }],
+                1,
+                ProtocolVersion::Resp2,
+                &crate::write_seam::WriteAdmission::internal(),
+            )
+            .await;
+
+        assert!(
+            matches!(result, TransactionResult::WatchAborted),
+            "a moved slot version must abort the transaction"
+        );
+        assert_eq!(
+            recorder.labeled_value(
+                "frogdb_transactions_watch_aborted_total",
+                "reason",
+                "watched-slot-write"
+            ),
+            Some(1),
+            "the abort must be counted under the slot-write reason"
+        );
+        assert_eq!(
+            recorder.labeled_value(
+                "frogdb_transactions_watch_aborted_total",
+                "reason",
+                "expiry"
+            ),
+            None,
+            "and must not be misattributed to expiry"
+        );
+    }
+
+    /// Class 2 of the same contract: the watched key was live at `WATCH` time and
+    /// is gone at `EXEC` with no version bump for this watcher (here: an elapsed
+    /// TTL whose physical purge is suppressed, so nothing bumps). That abort is
+    /// counted under `reason="expiry"` — a different operator response from a
+    /// contended slot, so it must not collapse into the same bucket.
+    // FM-TXN-033
+    #[tokio::test]
+    async fn watch_abort_records_the_expiry_reason() {
+        use crate::shard::message::WatchEntry;
+        use crate::shard::types::TransactionResult;
+        use crate::store::Store;
+        use crate::types::Value;
+        use frogdb_protocol::ProtocolVersion;
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+
+        worker.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let v0 = worker.get_key_version(b"k");
+        // Elapsed TTL + suppressed purge: logically dead, physically present, no
+        // version bump — so only the liveness clause can refuse this EXEC.
+        worker.store.set_expiry(
+            b"k",
+            std::time::Instant::now() - std::time::Duration::from_secs(60),
+        );
+        worker.store.set_expiry_suppressed(true);
+
+        let result = worker
+            .execute_transaction(
+                vec![],
+                &[WatchEntry {
+                    key: Bytes::from_static(b"k"),
+                    version: v0,
+                    live_at_watch: true,
+                }],
+                1,
+                ProtocolVersion::Resp2,
+                &crate::write_seam::WriteAdmission::internal(),
+            )
+            .await;
+
+        assert!(
+            matches!(result, TransactionResult::WatchAborted),
+            "a watched key that died under the watcher must abort the transaction"
+        );
+        assert_eq!(
+            recorder.labeled_value(
+                "frogdb_transactions_watch_aborted_total",
+                "reason",
+                "expiry"
+            ),
+            Some(1),
+            "the abort must be counted under the expiry reason"
+        );
+        assert_eq!(
+            recorder.labeled_value(
+                "frogdb_transactions_watch_aborted_total",
+                "reason",
+                "watched-slot-write"
+            ),
+            None,
+            "and must not be misattributed to a slot write (no version moved)"
         );
     }
 

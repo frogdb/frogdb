@@ -1,6 +1,6 @@
 # 23: WATCH epoch bump becomes per-slot — field expiry stops starving unrelated CAS loops
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

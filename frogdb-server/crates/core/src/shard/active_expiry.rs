@@ -50,6 +50,16 @@ pub struct ExpiryResult {
     pub emptied_keys: Vec<Bytes>,
     /// Total hash fields purged across all keys (drives `frogdb_fields_expired_total`).
     pub fields_expired: u64,
+    /// Hashes that lost ≥1 field to a field TTL but **survived** the cycle (still
+    /// a non-empty hash, so absent from both removal lists above).
+    ///
+    /// They are mutations, not removals, so they never reach the removal
+    /// pipeline — yet a watch on one of them must abort and its search-index doc
+    /// is now stale. Enumerating them here is what keeps the shard from having to
+    /// fall back on the shard-wide WATCH epoch: the sweep knows exactly which
+    /// keys it shrank, so it bumps *their* slots and starves nobody
+    /// (`specs/txn.md` FM-TXN-033).
+    pub field_shrunk_keys: Vec<Bytes>,
     /// True if the time budget stopped the cycle before draining all due keys.
     pub budget_exhausted: bool,
 }
@@ -228,6 +238,11 @@ impl ActiveExpiryCoordinator {
                 }
                 if existed_before && store.get(&key).is_none() {
                     result.emptied_keys.push(key);
+                } else if purged > 0 {
+                    // Shrunk but alive: the removal pipeline will never see this
+                    // key, so record it here — its slot still has to be bumped
+                    // (WATCH) and its search doc re-indexed.
+                    result.field_shrunk_keys.push(key);
                 }
             }
             // Index drained, or nothing could be purged (defensive).

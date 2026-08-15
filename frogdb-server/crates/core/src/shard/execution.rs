@@ -4,7 +4,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
-use frogdb_types::metrics::definitions::{KeyspaceHits, KeyspaceMisses, WalRollbacks};
+use frogdb_types::metrics::definitions::{
+    KeyspaceHits, KeyspaceMisses, TransactionsWatchAborted, WalRollbacks,
+};
 
 use super::message::{ScatterOp, WatchEntry};
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
@@ -605,8 +607,11 @@ impl ShardWorker {
         // (redis PR #7920 / issue #7918).
         self.purge_expired_watches(watches);
 
-        // Check WATCH conditions
-        if !self.check_watches(watches) {
+        // Check WATCH conditions. The abort is counted with the clause that
+        // refused it, so a CAS loop that never commits is diagnosable instead of
+        // silently returning nil forever (`specs/txn.md` FM-TXN-033).
+        if let Some(reason) = self.watch_abort_reason(watches) {
+            TransactionsWatchAborted::inc(self.observability.metrics(), reason.label());
             return TransactionResult::WatchAborted;
         }
 
