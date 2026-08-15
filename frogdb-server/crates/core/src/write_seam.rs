@@ -411,14 +411,20 @@ impl ShardWriteSeam {
 /// connection-level seam already admitted can never be refused a second time
 /// here; only a producer the connection-level seam never saw — a script's
 /// runtime write — can be.
+///
+/// The importing arm is checked *independently* of the assignment, because for
+/// nearly all of a migration's life the slot is still assigned to the source:
+/// ownership only moves when the handoff completes, so an import target that
+/// only consulted the unassigned case would serve nothing for the whole
+/// bulk-transfer phase — which is exactly the window `ASKING` exists for.
 fn slot_is_locally_served(snapshot: &ClusterSnapshot, slot: u16, self_node_id: NodeId) -> bool {
-    match snapshot.slot_assignment.get(&slot) {
-        Some(&owner) => owner == self_node_id,
-        None => snapshot
-            .migrations
-            .get(&slot)
-            .is_some_and(|m| m.target_node == self_node_id),
+    if snapshot.slot_assignment.get(&slot) == Some(&self_node_id) {
+        return true;
     }
+    snapshot
+        .migrations
+        .get(&slot)
+        .is_some_and(|m| m.target_node == self_node_id)
 }
 
 #[cfg(test)]
@@ -602,6 +608,88 @@ mod tests {
         let seam = ShardWriteSeam::new(None, Some(cluster_state(snapshot, 1)), Some(1), None, None);
         let keyed: Vec<(&[u8], Vec<KeyAccessFlag>)> = vec![(key, vec![KeyAccessFlag::OW])];
         assert!(seam.admit(&request("SET", true, &keyed)).is_ok());
+    }
+
+    /// The shape a real migration actually has: the slot is *still assigned to
+    /// the source* for the whole bulk-transfer phase — ownership only moves when
+    /// the handoff completes — so the import target must be recognized from the
+    /// migration record even though the assignment names another node. This is
+    /// the `AcceptImporting` arm the connection router serves an `ASKING`
+    /// client from; refusing it here would refuse, at the shard, a batch the
+    /// connection had already admitted.
+    // FM-TXN-051
+    #[test]
+    fn an_importing_target_admits_the_write_while_the_source_still_owns_the_slot() {
+        let key = b"orphan".as_slice();
+        let slot = slot_for_key(key);
+        let mut snapshot = ClusterSnapshot::new();
+        let addr = "127.0.0.1:7000".parse().unwrap();
+        for id in [1, 2] {
+            snapshot
+                .nodes
+                .insert(id, NodeInfo::new_primary(id, addr, addr));
+        }
+        // Source (2) still owns the slot; we (1) are the migration's target.
+        snapshot.slot_assignment.insert(slot, 2);
+        snapshot
+            .migrations
+            .insert(slot, SlotMigration::new(slot, 2, 1));
+        let seam = ShardWriteSeam::new(None, Some(cluster_state(snapshot, 1)), Some(1), None, None);
+        let keyed: Vec<(&[u8], Vec<KeyAccessFlag>)> = vec![(key, vec![KeyAccessFlag::OW])];
+        assert!(seam.admit(&request("SET", true, &keyed)).is_ok());
+    }
+
+    /// The migrating *source* keeps serving its slot while the handoff is in
+    /// flight (`LocalServeMigrating`): a migration record naming someone else as
+    /// target does not strip the owner of its own slot.
+    // FM-TXN-051
+    #[test]
+    fn the_migrating_source_still_admits_its_own_slot() {
+        let key = b"orphan".as_slice();
+        let slot = slot_for_key(key);
+        let mut snapshot = ClusterSnapshot::new();
+        let addr = "127.0.0.1:7000".parse().unwrap();
+        for id in [1, 2] {
+            snapshot
+                .nodes
+                .insert(id, NodeInfo::new_primary(id, addr, addr));
+        }
+        // We (1) own the slot and are handing it to 2.
+        snapshot.slot_assignment.insert(slot, 1);
+        snapshot
+            .migrations
+            .insert(slot, SlotMigration::new(slot, 1, 2));
+        let seam = ShardWriteSeam::new(None, Some(cluster_state(snapshot, 1)), Some(1), None, None);
+        let keyed: Vec<(&[u8], Vec<KeyAccessFlag>)> = vec![(key, vec![KeyAccessFlag::OW])];
+        assert!(seam.admit(&request("SET", true, &keyed)).is_ok());
+    }
+
+    /// A migration this node is neither end of leaves the refusal intact: the
+    /// importing arm admits the *target*, not any node that happens to see the
+    /// record.
+    // FM-TXN-051
+    #[test]
+    fn a_bystander_is_still_refused_while_the_slot_migrates() {
+        let key = b"orphan".as_slice();
+        let slot = slot_for_key(key);
+        let mut snapshot = ClusterSnapshot::new();
+        let addr = "127.0.0.1:7000".parse().unwrap();
+        for id in [1, 2, 3] {
+            snapshot
+                .nodes
+                .insert(id, NodeInfo::new_primary(id, addr, addr));
+        }
+        // 2 hands the slot to 3; we are 1.
+        snapshot.slot_assignment.insert(slot, 2);
+        snapshot
+            .migrations
+            .insert(slot, SlotMigration::new(slot, 2, 3));
+        let seam = ShardWriteSeam::new(None, Some(cluster_state(snapshot, 1)), Some(1), None, None);
+        let keyed: Vec<(&[u8], Vec<KeyAccessFlag>)> = vec![(key, vec![KeyAccessFlag::OW])];
+        assert_eq!(
+            seam.admit(&request("SET", true, &keyed)).unwrap_err(),
+            NON_LOCAL_KEY_ERR
+        );
     }
 
     /// `min-replicas-to-write` with no tracker (hence zero good replicas)
