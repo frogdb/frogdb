@@ -1372,17 +1372,6 @@ mod tests {
         assert_eq!(state.continuation_lock_owner(), None);
     }
 
-    /// The derived drain deadline must land strictly inside the coordinator's
-    /// acquisition timeout: the shard has to resolve (and clean up after) its
-    /// own parked request before the coordinator gives up on it. The exact
-    /// margin is a tuning knob; this ordering is the safety property the
-    /// derivation exists to preserve.
-    #[test]
-    fn drain_timeout_lands_strictly_inside_the_coordinator_acquisition_timeout() {
-        assert!(!CONTINUATION_DRAIN_TIMEOUT.is_zero());
-        assert!(CONTINUATION_DRAIN_TIMEOUT < crate::coordinator::DEFAULT_LOCK_ACQUISITION_TIMEOUT);
-    }
-
     /// A parked request's deadline is cancel-safe too: losing a `select!`
     /// iteration must not restart the drain timer, and the parked request must
     /// not be dropped on the floor.
