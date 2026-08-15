@@ -1,6 +1,29 @@
-# Slot migration redesign — source-authoritative-until-commit (v12)
+# Slot migration redesign — source-authoritative-until-commit (v13)
 
-Status: revision 12 — draft, pending approval. Review v12 (of revision 11) found 1
+Status: revision 13 — draft, pending approval. Review v13 (of revision 12) found 1
+CRITICAL / 6 MAJOR / 3 MINOR, all in v12's own record machinery: the adoption's
+two-operand firing condition (record present ∧ replicated `Replica`) fired on
+*any* writer of `Replica` — a concurrent `Failover{force: false}` demoting the
+node under an in-shard successor made the adoption wipe the keyspace toward the
+record's upstream on someone else's admission (V13-C1); the lineage guard's
+universal ("in every reachable state the guard passes") was false under LOCKED
+TR-CLUSTER-042's outright removal of the old primary — re-creating V12-M2's
+mute node on the ordinary forced-failover-plus-crash path (V13-M1); "in-shard
+member" had no declared predicate (V13-M2); the crash-durable candidate triple
+conflicted with §0's per-boot mint (V13-M3); adoption was undefined at
+`role == Replica ∧ primary_id == None` — a permanent proposal loop (V13-M4);
+a second staged command while a record is pending was undeclared (V13-M5); and
+the fence-refused staged Demotion had contradictory dispositions across three
+passages (V13-M6). This revision resolves all nine findings — centrally by the
+**four-operand adoption binding** (record present ∧ replicated role, upstream,
+*and* run-identity all matching the record's own admitted report — discard
+fires only on the record's own admission, never someone else's), a **total
+three-arm refusal partition** (revert / fence-retry with the record persisting
+/ supersession), the declared one-hop **`in_shard_parent`** predicate, the
+**widened lineage guard** (`u == None ∨ u ∉ nodes ∨ in_shard_parent(u, self)`,
+citing TR-CLUSTER-042), per-boot **candidate re-derivation**, the
+**quiesced-replica** arm, and the record's **single-writer rule**.
+Review v12 (of revision 11) found 1
 CRITICAL / 2 MAJOR / 3 MINOR, all in v11's own staging machinery: the staged
 flip's reconcile and its kind rule read the same plane-disagreement predicate
 in opposite directions — a reconcile tick in the post-admission/pre-adoption
@@ -15,7 +38,7 @@ upstream-validity conjunct refused forever and the boot-ordering rule muted
 the node (V12-M2); plus the candidate triple with no declared durable home
 (V12-m1), its reconcile-membership undefined (V12-m2), and a vacuous
 demotion-disposition trigger (V12-m3). 3/5 of v11's findings RESOLVED, 2
-PARTIAL, no regressions. This revision resolves all of v12's findings —
+PARTIAL, no regressions. Revision 12 resolved all of v12's findings —
 centrally by the **durable pending-transition record**: fsynced before the
 report proposes, it is the kind rule's sole discriminator, the candidate
 triple's durable home, the key of the new §3 staged-flip fence row
@@ -24,7 +47,7 @@ triple's durable home, the key of the new §3 staged-flip fence row
 authority** (replicated plane wins; local plane originates transitions only
 through the record protocol) converges unexplained splits replicated→local
 behind a lineage guard, stamped `Boot`.
-Reviews: issue31-adversarial-review-v2 through -v12, job dir 2026-08-14.
+Reviews: issue31-adversarial-review-v2 through -v13, job dir 2026-08-14.
 Issue: [31](issues/open/31-slot-migration-redesign-source-authoritative-until-commit.md)
 Origin ruling: distsys review MAJ-5 (see `.scratch/formal-spec/2026-08-13-distsys-review-rulings.md`)
 
@@ -218,6 +241,18 @@ stated for every flow that destroys or replaces it, not only steady state):
   from local facts trigger a re-report) fires on exactly this divergence, and the
   boot rule's "has applied" test is evaluated against post-install applied state,
   so a node mid-install cannot satisfy it with pre-install state.
+- **Pending-transition and pending-promotion records across these flows**
+  (V13-m2 — the records are node-local durable state, so the flows that destroy
+  the identity cell must state what happens to them, else a surviving record
+  makes the kind-stamping rule and a flow's own `Boot`-report rule claim the
+  same report): **`ResetCluster` (both SOFT and HARD), removal of self
+  (observing one's own `RemoveNode`/`FORGET` apply, or discovering it at
+  rejoin), and a fresh join (`MEET` handshake admitting this node)** each
+  **clear both records — fsynced — before the re-mint/boot report**. The staged
+  intent named a `target_upstream` adjudicated in the *previous* cluster
+  generation; no rule carries it across a membership reset, so the
+  post-reset/post-join first report is stamped `Boot` per the kind rule's
+  default, with no competing claim.
 
 **Absent-operand rule** (V6-m2 — the record's `Option` fields appear as comparison
 operands, so the truth value at `None` must be defined once, not per reader;
@@ -370,6 +405,20 @@ residue entry is `shard_primary(entry.source)`; at `None` there is no lossless
 assignee and every assignment of the slot requires the explicit loss acknowledgement.
 The function reads only replicated `NodeInfo` fields, so it is evaluable identically
 on every applier.
+
+**`in_shard_parent(u, n)` — the lineage guard's one-hop parent relation, defined
+once** (V13-M2 — the guard's "in-shard member" phrase named no declared predicate,
+and the only total reading available was the multi-hop `shard_primary` walk V10-C4
+removed the residue target arm for — an unproven pointer under re-parenting):
+`in_shard_parent(u, n)` ≜ `u ∈ nodes ∧ nodes[u].primary_id == Some(n)` — a direct
+pre-apply pointer read, the same discipline as the Demotion arm's
+shard-relationship conjunct, **never a `shard_primary` walk** (a foreign upstream
+later re-parented under `n` via a multi-hop chain would make a walk pass while the
+one-hop relation stays false only for genuinely un-adjudicated lineages; the
+one-hop read admits exactly the demoted-under-`n` case a failover produces). It
+reads only replicated fields and is total over all arguments (`false` when
+`u ∉ nodes` — that case is admitted by the lineage guard's own removed-upstream
+disjunct, not by this predicate).
 
 **Residue lifecycle under membership change and reset** (V5-M2 — both removal paths
 above require the entry's `source` to still be a member, so the map needs rules for
@@ -555,15 +604,34 @@ when it is not):
      step *level-triggered re-derivable* rather than an edge a crash can lose,
      and it is the declared writer and durable home of the **candidate**
      post-demotion triple, minted here but not yet effective in the node's
-     replication runtime), then stops admitting new work as the slot-serving
+     replication runtime. Crash-durability is per component (V13-M3):
+     `{kind, target_upstream}` survive a crash as written, but the
+     `candidate_triple` is **re-derived at every boot** — a node booting with
+     a pending record re-mints the candidate against its *current* incarnation
+     (freshly incremented and fsynced per §0) and rewrites the record, fsynced,
+     before re-proposing, so the record's report *is* the boot report and
+     carries the boot's incarnation: §0's per-boot mint rule and the
+     boot-ordering rule's "has applied" test agree on one triple, and a
+     pre-crash candidate never outlives its boot. The record has **exactly one
+     writer per pending stage** (V13-M5): a second `REPLICAOF`/`SLAVEOF`/
+     `CLUSTER REPLICATE` arriving while a record is pending is refused
+     node-locally with an error naming the pending stage and never overwrites
+     the record — `CLUSTER INFO`'s pending-stage field is the read path, so
+     the advertised retry observes the outcome by being refused while pending
+     and re-evaluated by gate 3 once the stage resolves), then stops admitting
+     new work as the slot-serving
      primary — the disposition is determinate (V12-M1): **nothing is held**;
      every command that would execute on this node as a slot-serving primary
      (including writes for a slot an `AssignSlots` assigns it *after* the gate
      check — the race interleaving staging exists for) is answered `-TRYAGAIN`
      immediately, per §3's **staged-flip fence row** — **dataset untouched**;
      **(b)** proposes its `ReportRunIdentity{kind: Demotion}` with
-     fresh observations, carrying the candidate triple from the record; on
-     refusal the candidate is discarded with the record, and since the stint
+     fresh observations, carrying the candidate triple from the record; the
+     candidate's fate on refusal follows (d)'s refusal partition (V13-M6):
+     on a refuse-whole revert or a supersession the candidate is discarded
+     with the record, while on a fence refusal it **persists in the record**
+     and the re-proposal carries it unchanged (the strict-branch admission
+     in the role-authority passage). In every discard case the stint
      never ended, no discontinuity occurred and no bump is visible anywhere
      (§0's "bumps only at genuine discontinuities" claim holds on both
      branches — the bump becomes real exactly when the admission's field write
@@ -572,20 +640,77 @@ when it is not):
      which point the Demotion arm has re-homed every owned slot and re-targeted
      every residue entry to a validated successor, or refused whole. The
      adoption is **level-triggered, not edge-triggered** (V12-C1, the V7-C2
-     discipline applied to v11's own fix text): its firing condition is
-     *pending record present ∧ applied replicated `nodes[self].role` is
-     `Replica`* — observing the admission apply is merely the common first
+     discipline applied to v11's own fix text), and its firing condition
+     names **four operands** binding it to *this record's own admitted
+     report*, never to any demotion (V13-C1 — the two-operand form *pending
+     record ∧ replicated role `Replica`* was satisfied by every other writer
+     of `role = Replica`, e.g. a concurrent `Failover{force: false}`
+     (TR-CLUSTER-018) demoting the node under an in-shard successor, and
+     would have fired the destructive discard toward the *record's* upstream
+     on someone else's admission): *pending record present ∧ applied
+     replicated `nodes[self].role == Replica` ∧ applied replicated
+     `nodes[self].primary_id == Some(record.target_upstream)` ∧ applied
+     replicated `nodes[self].run_identity == Some(record's candidate
+     triple)`*. All four observation operands are replicated fields (plus
+     the durable record), so the condition stays level-re-derivable at boot;
+     it is evaluated node-locally, never at apply (FM-CLUSTER-089
+     untouched). This binding also subsumes the "persisting across ticks"
+     damping TR-CLUSTER-033's LOCKED row carries (see Transitions): under
+     that row a transiently stale applied view re-emits an idempotent event,
+     but here the consequence is a destructive discard, so the guard binds
+     to admitted operands instead of tick-persistence — strictly stronger.
+     Observing the admission apply is merely the common first
      evaluation. A node that crashes after admission but before (or during)
      adoption re-derives the condition at boot from the durable record and its
      applied state and completes the adoption then; completion is idempotent
      (a crash after the adoption is durable but before the record clears
      re-evaluates to an already-adopted state and just clears the record). The
      record is cleared — fsynced — only **after** the adoption (new upstream,
-     effective triple, durable local role) is itself durable; **(d)** on
-     refusal it **reverts**: clears the record, discards the candidate,
-     un-fences, resumes serving as primary (both planes
-     still agree it is one — nothing was destroyed), and answers the initiating
-     client with the refusal's error. The **initiating client's deferred
+     effective triple, durable local role) is itself durable; **(d)** a
+     refusal's disposition is selected by **two declared facts** — the
+     applied replicated `nodes[self].role` at the refusal, and the refusal
+     class the Demotion arm already distinguishes (V13-M6/V13-C1: v12's
+     unqualified revert claimed states where "both planes agree" and
+     "nothing was destroyed" were false, and contradicted the convergence
+     paragraph's fence-retry rule); the partition is total:
+     1. `role == Primary` ∧ **refuse-whole class** (the shard-relationship
+        or upstream-validity conjunct — a standing condition retrying cannot
+        fix): revert — clear the record (fsynced), discard the candidate,
+        un-fence, resume serving as primary (in *this* arm both planes do
+        agree and nothing was destroyed: the adoption requires replicated
+        `Replica`, so it cannot have fired), answer the initiating client
+        with the refusal's error.
+     2. `role == Primary` ∧ **fence class** (`observed_role`/
+        `observed_config_epoch` moved underneath the report while the staged
+        premise still stands — ordinary, not exotic: TR-CLUSTER-027 fires
+        `AddNode` epoch bumps live via `CONFIG SET
+        cluster-replica-priority`): the record and fence **persist**; the
+        reconcile re-proposes the record's report with fresh observations,
+        which admits under the strict branch carrying the same candidate;
+        the client's reply stays deadline-bounded. Never a revert — a fence
+        refusal is transient topology motion, not a verdict, and reverting
+        would fail an admissible command spuriously with an error
+        indistinguishable from refuse-whole.
+     3. `role != Primary` — the stint was ended by **someone else's
+        admission** (e.g. `Failover{force: false}`) while the report was in
+        flight: the staged intent is **superseded** — clear the record
+        (fsynced), answer the initiating client with an error naming the
+        supersession, and converge through the adoption machinery: the
+        four-operand condition binds the destructive adoption to the
+        record's own report, so this arm never wipes toward the record's
+        upstream on someone else's admission (V13-C1's trace dies here);
+        with the record cleared the disagreement is unexplained, and §0's
+        role-authority adoption (lineage-guarded) adopts the replicated
+        verdict. The node un-fences only per its adopted role's reply
+        rules — never "resume serving as primary" on the strength of a
+        stale local plane.
+     The combination *refused ∧ adoption already fired* is unreachable by
+     construction: the four-operand condition is exactly "the record's own
+     report admitted", and an admitted report is not refused — after
+     admission the only remaining steps are completing the adoption and
+     clearing the record, and a re-proposed identical report is the V10-M1
+     equality branch (idempotent re-delivery), never a refusal that could
+     select an arm here. The **initiating client's deferred
      reply is deadline-bounded** (V12-M1, settled ruling 2 — every held client
      gets a real reply): if neither (c) nor (d) has fired within
      `cluster-staged-flip-reply-timeout` (node-local, client-reply bounding
@@ -595,7 +720,10 @@ when it is not):
      or revert when the report resolves — reverting on timeout is *unsafe*
      (the report may still admit, and a revert-then-admit re-opens the race
      this staging closes), so the timeout bounds the reply, never the stage; a
-     retried `CLUSTER REPLICATE` (or `CLUSTER INFO`) observes the outcome.
+     retried `CLUSTER REPLICATE` is refused with the pending-stage error while
+     the stage is unresolved (single-writer rule above) and re-evaluated by
+     gate 3 after resolution, and `CLUSTER INFO`'s pending-stage field reads
+     the outcome at any time.
      While the record is pending, §0's reconcile proposes **nothing but the
      staged report itself** under the one-in-flight damping rule (V12-C1: the
      post-admission/pre-adoption window is a *planned* plane disagreement —
@@ -607,7 +735,10 @@ when it is not):
      refuse-whole veto *effective* rather than after-the-fact: the veto lands
      before the destruction it exists to prevent. **No reachable state destroys
      a copy that replicated state still counts** — the discard is gated on the
-     replicated admission that removed every such count — and the
+     admission of the record's *own* report (the four-operand binding), which
+     removed every such count for exactly the transition the record names;
+     an admission that demotes the node some *other* way leaves the
+     four-operand condition false and routes through arm 3 — and the
      locally-replica/replicated-Primary-with-slots race state is unreachable
      through this path (post-admission the node is replicated-Replica, and
      SS-11's amended invariant refuses a Replica as an `AssignSlots` assignee;
@@ -1319,14 +1450,30 @@ conjuncts, dedup, run guards).
   reconcilers never contend, because the local→replicated direction fires
   only on a durable pending record and the replicated→local direction only in
   its absence). The adoption carries one **lineage guard**: adopting
-  `Primary` requires the node's local replication lineage to be the shard's —
-  its local upstream is `None` or an in-shard member. A node locally
-  replicating a *foreign* upstream while replicated state calls it a Primary
-  with slots — the plane-split bug state, unreachable through any spec path —
+  `Primary` requires the node's local replication lineage to be verified as
+  the shard's — its local upstream `u` satisfies
+  **`u == None ∨ u ∉ nodes ∨ in_shard_parent(u, self)`** (the one-hop
+  parent relation declared in §0 — V13-M2 — never a `shard_primary` walk).
+  The **removed-upstream disjunct** (`u ∉ nodes`) is the common failover
+  path, not an edge, and is load-bearing (V13-M1): `Failover{force: true}`
+  removes the old primary from membership **outright** (LOCKED
+  TR-CLUSTER-042, cited in the blast-radius list), and `CLUSTER FORGET` of a
+  dead demoted primary reaches the same shape — the removal is itself a
+  committed adjudication of the lineage, made by the same machinery that
+  promoted this node, so an absent upstream cannot contradict the shard's
+  lineage; without the disjunct, a node promoted by a forced failover that
+  crashes before its local promotion takes effect boots with a
+  guard-failing upstream and re-creates V12-M2's mute node — the whole
+  shard's slots fenced unserved pending operator action. A node locally
+  replicating a **foreign live member** upstream (all three disjuncts
+  false) while replicated state calls it a Primary with slots — the
+  plane-split bug state, unreachable through any spec path —
   does **not** adopt (its local dataset's lineage is unverified; serving it
   would hand out stale or wiped reads): it self-fences per §3's
-  defence-in-depth passage and surfaces the operator error. In every
-  reachable state the guard passes, the node adopts, then reports `Boot`
+  defence-in-depth passage and surfaces the operator error. In every state
+  reachable through the design's own transitions **plus the LOCKED
+  failover/removal rows** (TR-CLUSTER-018, TR-CLUSTER-042, `FORGET`) the
+  guard passes, the node adopts, then reports `Boot`
   with the planes already agreeing — a
   history adoption on the demotion direction bumps the triple, and the Boot
   arm lands the field write without touching the role the adoption already
@@ -1335,16 +1482,38 @@ conjuncts, dedup, run guards).
   boots local-Replica/replicated-Primary with no record, adopts Primary
   locally, and its Boot report admits without the Demotion arm's
   upstream-validity conjunct ever evaluating — no refusal loop, no
-  permanently mute node. A report refused by the fence — the topology moved
+  permanently mute node. The adoption is **total over the replicated shapes**
+  (V13-M4): at `role == Replica ∧ primary_id == Some(p)` the node adopts
+  replica-of-`p`; at **`role == Replica ∧ primary_id == None`** — reachable
+  in replicated state (gate 3's demotion of a node whose staged upstream is
+  refused mid-flight, a demotion admitted with no in-shard successor; §3's
+  demotion-disposition row already replies `-TRYAGAIN` for exactly this
+  shape) but with **no local operation that produces it** (`REPLICAOF NO
+  ONE` makes a Primary, never a replica-of-nothing) — the node **quiesces**:
+  it detaches its replication link, retains its dataset, and serves
+  nothing, replying per §3's demotion-disposition row. The **difference
+  test treats a locally detached link as matching replicated
+  `primary_id == None`**, so the reconcile goes silent — without this arm
+  the upstream operand stays unequal forever and the damped reconcile
+  re-proposes a no-op report every observation cycle, a permanent proposal
+  loop that falsifies `witnessSplitPlanesConverge` (V13-M4). The quiesced
+  state exits through the replicated plane only: a later `AssignSlots`,
+  failover verdict, or operator `REPLICAOF` writes a new shape and the
+  adoption re-fires. A report refused by the fence — the topology moved
   underneath it — is retried against the topology that actually holds,
-  and converges or is superseded by a newer identity change; the boot report stops
+  and converges or is superseded by a newer identity change (for a staged
+  Demotion this is gate 3 (d)'s fence arm: the record and fence persist and
+  the re-proposal carries the record's own candidate; supersession — the
+  node no longer replicated-Primary — is (d)'s third arm, which clears the
+  record instead); the boot report stops
   being a one-shot edge (the V8-M3 refill hole) and becomes the level rule's first
   firing. **Convergence without re-mint** (V10-M1 replaces V9-M3's universal
   re-mint; branch mechanics corrected V11-M1): a re-proposal carries the node's
   **current** identity triple *unchanged* — nothing discontinuous happened, so
   `identity_seq` does not bump. **After a fence refusal the re-proposal admits
-  under the *strict* branch**, not the equality branch: the refusal was
-  refuse-whole, so the stored triple is still the *pre-mint* value, strictly
+  under the *strict* branch**, not the equality branch: the fence refusal
+  landed nothing — admission refusal is atomic over the whole payload — so
+  the stored triple is still the *pre-mint* value, strictly
   below the payload's — the field write and the arm writes land together under
   the fresh observations, and that is how a `Promotion`/`Demotion` role write
   lands after a fence refusal without minting a fake discontinuity. The
@@ -1597,7 +1766,7 @@ Held-write disposition on every exit (every held client gets a real reply):
 | Cap breach, pre-apply | beyond-cap writes: `-TRYAGAIN`; held set: unchanged until apply |
 | `CancelSlotMigration` applies | execute at source, acknowledged normally (release event) — **provided the source is still the slot's serving primary at apply**; **otherwise** (V10-C1 completes the else-branch) the demotion-cancel row below governs: answered per the new role, never executed |
 | **Cancel caused by the source's own demotion** (the **demotion-disposition row** — V5-m5: the `ReportRunIdentity` demotion/adoption arm's *field write* cancels the migrations the node sources. Reachability under V10-C1/V11-C2: gate 3 refuses a bare `REPLICAOF` node-locally on every migration source — a `Begin` source owns its slot, so the gate always binds — so this row's triggers are the failover-driven demotions, `Failover{force: false}`/`SetRole`, whose subsequent history-adoption report's identity **field write** cancels (stamped `kind = Boot` per V12-C1's rule — the failover apply already wrote the role; the cancel binds to the field write, arm-independent). The staged-flip *admission* is deliberately **not** a trigger (V12-m3 — the v11 text listed it vacuously): an admitted staged report implies the shard-relationship conjunct did not bind, i.e. the node owned no slots and armed no barrier at apply, so there is no barrier-held set for this row to dispose of; that window's client disposition is the **staged-flip fence row** below (nothing held, everything `-TRYAGAIN`). A *refused* staged report reverts, and anything arriving after the revert executes normally — the source is still the serving primary | the held set is answered with **the reply the node's new role implies** — `-MOVED` to the new primary when the local `shards` view names one, **`-TRYAGAIN` when `primary_id == None`** (V8-M4: the disposition is total; a successor-less demotion answers retryably and the client's retry lands wherever the eventual topology says) — and is **never executed**: a demoted node executing queued writes would fork history against its new primary. **This row retains the self-fence demotion-disposition as defence-in-depth** (V10-C1, scope narrowed V11-C2: the plane-split state — locally a replica, replicated-Primary with slots — is unreachable through gate 3's staged path; a staged report's refusal reverts instead): should the state nonetheless present, the node answers its held set and every subsequent command for those slots `-TRYAGAIN` — never `-MOVED` (replicated state names *itself*, a loop) and never executed — until an operator exit re-aligns the planes — failover of the shard, `AssignSlots` away with the loss token, or `REPLICAOF NO ONE`, with the stated caution that in a plane-split state the local dataset's lineage is unverified, so these are operator guidance for a bug state outside the spec's reachable set, **not** verified-lossless rules (V11-C2) |
-| **Staged-flip fence** (gate 3's pending-transition record present, report unresolved — V12-M1: gate 3 passing implies no owned slots and no armed migration barrier, so the staged fence inherited no cap, no exit row, and no latch coverage from this table; this row is its coverage) | **nothing is ever held** — the level rule is the self-fence latch row's shape, keyed on the pending record instead of an armed barrier: while the record is pending, the held set for this fence is *empty* by invariant; every command that would execute on this node as a slot-serving primary — including writes for a slot an `AssignSlots` assigned it after the gate check, the race interleaving staging exists for — is answered `-TRYAGAIN` immediately, so no client ever waits out a partition on this fence (settled ruling 2) and no byte cap is needed (nothing accumulates). The initiating `REPLICAOF`/`CLUSTER REPLICATE` client's deferred reply is bounded by `cluster-staged-flip-reply-timeout` (§0 gate 3 — answered `-TRYAGAIN` with the stated ambiguous outcome; the stage itself never times out, because revert-then-admit would re-open the closed race). Resolution exits: admission → adoption proceeds, subsequent commands answered per the node's new role (`-MOVED`/`-TRYAGAIN` as the demotion-disposition row's reply rule); refusal → revert, node resumes serving, subsequent commands execute normally |
+| **Staged-flip fence** (gate 3's pending-transition record present, report unresolved — V12-M1: gate 3 passing implies no owned slots and no armed migration barrier, so the staged fence inherited no cap, no exit row, and no latch coverage from this table; this row is its coverage) | **nothing is ever held** — the level rule is the self-fence latch row's shape, keyed on the pending record instead of an armed barrier: while the record is pending, the held set for this fence is *empty* by invariant; every command that would execute on this node as a slot-serving primary — including writes for a slot an `AssignSlots` assigned it after the gate check, the race interleaving staging exists for — is answered `-TRYAGAIN` immediately, so no client ever waits out a partition on this fence (settled ruling 2) and no byte cap is needed (nothing accumulates). The initiating `REPLICAOF`/`CLUSTER REPLICATE` client's deferred reply is bounded by `cluster-staged-flip-reply-timeout` (§0 gate 3 — answered `-TRYAGAIN` with the stated ambiguous outcome; the stage itself never times out, because revert-then-admit would re-open the closed race). **The fence's exempt set is enumerated like the seal's** (V13-m3): only the **`CLUSTER` command family** passes — `CLUSTER INFO` is the pending-stage read path, and a retried `CLUSTER REPLICATE` must reach gate 3 to receive its declared pending-stage refusal rather than a bare `-TRYAGAIN`; every other command follows this row. Resolution exits: admission → adoption proceeds, subsequent commands answered per the node's new role (`-MOVED`/`-TRYAGAIN` as the demotion-disposition row's reply rule); refusal → revert, node resumes serving, subsequent commands execute normally |
 | **Self-fence latch arms** (TR-CLUSTER-026: no Raft leader contact within an election timeout) | answer the **entire held set** `-TRYAGAIN` and **keep the fence** (N-M1) — a sealed source that cannot apply must not make held clients wait out a partition; erroring a held write is *more* fenced, not less, so the §3 invariant holds and the sealed rule ("no further execution until an exit applies") is untouched. **Level rule, not an edge** (V8-M1; scope corrected V9-M2 — the earlier "and the slot sealed" qualifier left pre-`Confirm` Draining uncovered: a write arriving after the one-shot flush, before any seal, was held again and waited out the partition, the indefinite hold settled ruling 2 forbids): while the latch is armed **and this node's barrier is armed for the slot — sealed or not** — the invariant is *the held set is empty*: no new hold is ever admitted, and every arriving write (including one racing the flush) is answered `-TRYAGAIN` immediately. Erroring is strictly more fenced than holding in both sub-states, so §3's "never weaker" invariant holds. The one-shot flush is merely the transition into that region; a write arriving after it does not wait out the partition |
 | Client disconnects while held | held entry dropped with the connection (no reply owed) |
 | `CLIENT UNBLOCK`/`KILL` on a held client | `-UNBLOCKED` / connection close, per blocking rows |
@@ -2080,6 +2249,7 @@ the *overhead* figure is the capacity-planning bound.
 | `cluster-migration-observation-tick-ms` | 1000 ms | leader `ObserveMigration` cadence (node-local; cadence only, **never an admission input** — V6-M4) |
 | `cluster-migration-backlog-max-bytes` | 64 MiB | bytes (per-migration stream backlog, §4/§8 — also the resume buffer) |
 | `cluster-migration-require-target-replica-ack` | off | optional `Complete` durability conjunct via `ReportTargetReplicaAck` (§5, N-M10/V4-C3) |
+| `cluster-staged-flip-reply-timeout` | 5 s | node-local bound on the staged flip's initiating `REPLICAOF`/`CLUSTER REPLICATE` deferred reply (§0 gate 3, §3 staged-flip fence row). **Client-reply bounding only** — the stage itself never times out (revert-on-timeout would re-open the closed race) and the value is **never an admission input** (V13-m1) |
 
 **Calibration obligation** (V6-M4): `preconfirm-observations × observation-tick-ms`
 must comfortably exceed the worst-case *lawful* drain — the run-to-completion tail of
@@ -2192,7 +2362,11 @@ Every touched row gets an explicit verdict in the spec change; summary:
   owns convergence, so the two reconcilers act on disjoint predicates and
   never contend) and the **lineage guard** (never adopt `Primary` over a
   foreign-lineage local dataset; that state routes to §3's defence-in-depth
-  self-fence));
+  self-fence); the row's **"persisting across ticks" damping is subsumed**,
+  not dropped (V13-C1): the destructive demotion-adoption no longer fires on
+  observing `role == Replica` for any number of ticks — it fires only on
+  gate 3's four-operand binding to the record's own admitted report, which
+  is strictly stronger than any tick count);
   FM-CLUSTER-046 (**rewritten**, V12-M2: the row records that the reconciler
   "does not exist at all until role-change detection is enabled" — under this
   design it is unconditional and load-bearing (it is what discharges the
@@ -2201,7 +2375,12 @@ Every touched row gets an explicit verdict in the spec change; summary:
   boot-ordering rule), so the feature gate is removed and the forcing tests
   `test_reconcile_self_role_demotes_a_restored_replica` /
   `test_reconcile_self_role_promotes_a_restored_primary` gain the
-  pending-record-exclusion and lineage-guard arms);
+  pending-record-exclusion and lineage-guard arms; the forcing test
+  `test_self_role_reconciler_absent_until_detection_is_enabled` forces the
+  *removed* "absent until enabled" clause and must be **deleted or
+  inverted in the same change** — left standing it would fail against the
+  unconditional reconciler and pin the old behaviour (V13 blast-radius
+  note));
   FM-CLUSTER-079 (**rewritten**, V8-M5: the unpinnable-command folding — "parks
   against the strongest pause armed on any slot" — is the mechanism behind §3's
   unpinnable held batches, and the row gains the §3 byte cap and the per-exit
@@ -2239,7 +2418,12 @@ Every touched row gets an explicit verdict in the spec change; summary:
   TR-CLUSTER-042 (`Failover{force:true}` — **rewritten**, V8-M5: the row owns
   outright-removal semantics, so the residue map's `source_gone`/`target_gone`
   marking rides it explicitly — prune marks, never removes — and issue 20's
-  demote-don't-remove default is restated at the row as the preferred path);
+  demote-don't-remove default is restated at the row as the preferred path;
+  additionally **cited by §0's lineage guard** (V13-M1): the guard's
+  removed-upstream disjunct (`u ∉ nodes`) exists because this row removes
+  the old primary from membership outright, so a node promoted by a forced
+  failover that crashes before its local promotion took effect boots with
+  an upstream absent from `nodes` — a lawful state the guard must admit);
   SS-11 (**amended**, V8-C6: gains the invariant "no slot is assigned to a node
   whose role is `Replica`" — every writer that flips a role to `Replica` re-homes
   the node's slots in the same apply, and every slot writer requires the assignee's
@@ -2470,6 +2654,39 @@ Every touched row gets an explicit verdict in the spec change; summary:
   (V12-M1); the demotion-disposition row's vacuous staged-admission trigger
   removed (V12-m3); the candidate triple's declared durable home is the
   record (V12-m1).
+  From review v13: the adoption's firing condition strengthened to the
+  **four-operand binding** — record present ∧ replicated `role == Replica`
+  ∧ `primary_id == Some(record.target_upstream)` ∧
+  `run_identity == Some(record's candidate triple)` — so the destructive
+  discard fires only on the admission of the record's *own* report, never
+  on a concurrent failover's demotion (subsumes TR-CLUSTER-033's
+  persisting-across-ticks damping, strictly stronger) (V13-C1); gate 3 (d)
+  split into a **total three-arm refusal partition** — refuse-whole while
+  replicated-Primary → revert; fence refusal while replicated-Primary →
+  record and fence persist, re-propose with fresh observations under the
+  strict branch; `role != Primary` → superseded, record cleared,
+  role-authority adoption — with "refused ∧ adoption fired" proven
+  unreachable (V13-M6/C1); **`in_shard_parent(u, n)`** declared in §0 as
+  the one-hop pre-apply pointer read, never a `shard_primary` walk
+  (V13-M2); the lineage guard **widened and grounded** —
+  `u == None ∨ u ∉ nodes ∨ in_shard_parent(u, self)`, the removed-upstream
+  disjunct justified by TR-CLUSTER-042's outright removal (cited) and
+  `FORGET` of a dead old primary, the universal restated over the design's
+  transitions plus the LOCKED failover/removal rows (V13-M1); the
+  candidate triple **re-derived at every boot** against the fresh
+  incarnation — `{kind, target_upstream}` are the crash-durable fields,
+  the record is rewritten fsynced before re-proposing, the record's report
+  is the boot report (V13-M3); the **quiesced-replica arm** — replicated
+  `role == Replica ∧ primary_id == None` adopts as detached-link,
+  dataset-retained, serving per the demotion-disposition row, with the
+  difference test matching detached to `None` (no proposal loop) (V13-M4);
+  the record's **single-writer rule** — a second staged command while a
+  record is pending is refused with the pending-stage error, `CLUSTER
+  INFO` is the read path (V13-M5); the staged-flip fence row's **exempt
+  set enumerated** (`CLUSTER` family only) (V13-m3); the
+  `cluster-staged-flip-reply-timeout` config row added (V13-m1); record
+  lifecycle across `ResetCluster`/`FORGET`/re-`MEET` declared — cleared
+  fsynced before any re-mint or boot report (V13-m2).
 - **Cross-tracker**: issue 15 closes only when §4's endpoint-failover/restart rows
   land; spec-gaps issue 12 (watermark carries covered position — landed `eedb76d0`) is
   the snapshot-position substrate; replication issue 24 (replid/offset pairing) is the
@@ -2748,11 +2965,24 @@ Every touched row gets an explicit verdict in the spec change; summary:
       candidateTriple}>` that **survives `crashRestart`** (it models the
       fsynced record), and three actions — `stageReplicaof(n)` (guard: gate
       3's applied read; effect: write the record, fence, dataset variable
-      untouched), `completeAdoption(n)` — **level-triggered**: guard is
-      *record present with kind Demotion ∧ replicated `role(n) == Replica`*,
+      untouched), `completeAdoption(n)` — **level-triggered**, guard is the
+      **four-operand binding** (V13-C1): *record present with kind Demotion
+      ∧ replicated `role(n) == Replica` ∧ replicated
+      `primaryId(n) == Some(record.upstream)` ∧ replicated
+      `runIdentity(n) == Some(record.candidateTriple)`*,
       schedulable at any later point including after a `crashRestart`, effect
-      is the discard + upstream adoption + record clear — and
-      `revertReplicaof(n)` on refusal (clears the record). Mutation tests:
+      is the discard + upstream adoption + record clear — and the **refusal
+      partition** (V13-M6) replacing the single revert action:
+      `revertReplicaof(n)` (guard: refuse-whole refusal ∧ replicated
+      `role(n) == Primary`; clears the record, node resumes),
+      `retryStagedReport(n)` (guard: fence refusal ∧ replicated
+      `role(n) == Primary`; record persists, re-proposes with fresh
+      observations carrying the same candidate), and `supersedeStaged(n)`
+      (guard: refusal ∧ replicated `role(n) != Primary`; clears the record,
+      convergence via `adoptReplicatedRole`). `crashRestart` **re-derives
+      the candidate** (V13-M3): the surviving record's `candidateTriple` is
+      rewritten from the fresh boot incarnation before any re-proposal.
+      Mutation tests:
       collapsing stage and discard (discarding at stage time) with an
       `assignSlots` interleaved between gate check and report apply must
       violate `inv_no_acked_write_lost` (the wiped-source leg) or
@@ -2761,7 +2991,20 @@ Every touched row gets an explicit verdict in the spec change; summary:
       admission and adoption must violate `inv_member_keyspace_is_tracked` —
       the untracked-stale-copy trace, V12-C1; re-edging the adoption (firing
       only on the observed admission apply, so a crash loses it) must violate
-      the same invariant. **Plus the staged-fence level rule** (V12-M1):
+      the same invariant; **weakening the guard to two operands** (record ∧
+      role Replica) and interleaving a `Failover{force: false}` toward an
+      in-shard successor while the staged report is in flight must violate
+      `inv_member_keyspace_is_tracked` or `inv_no_acked_write_lost` — the
+      keyspace wiped toward the record's upstream on someone else's
+      admission, V13-C1's trace; **dropping the refusal partition** (reverting
+      on a fence refusal) must violate `inv_no_acked_write_lost`
+      (revert-then-admit re-opens the closed race); **skipping the boot
+      re-derivation** (re-proposing the pre-crash candidate) must violate
+      `inv_run_identity_never_regresses` (a stale-incarnation triple admitted
+      over the boot mint); **allowing a record overwrite** (a second
+      `stageReplicaof` toward a different upstream while pending) must
+      violate `inv_member_keyspace_is_tracked` (adoption toward B on an
+      admission for A). **Plus the staged-fence level rule** (V12-M1):
       invariant `inv_no_hold_during_staged_flip` — in every state with a
       pending record, that node's held set is empty and a write action
       scheduled there is answered, never held; reverting to holding and
@@ -2771,9 +3014,14 @@ Every touched row gets an explicit verdict in the spec change; summary:
       `pendingTransition` record — `Demotion`/`Promotion` iff the record
       names it, `Boot` otherwise — and a new action
       `adoptReplicatedRole(n)` (guard: no record ∧ local role differs from
-      replicated ∧ the lineage guard — local upstream `None` or in-shard)
+      replicated ∧ the lineage guard — local upstream `u` satisfies
+      `u == None ∨ u ∉ nodes ∨ in_shard_parent(u, n)`, V13-M1/M2)
       converges unexplained splits replicated→local before the `Boot`
-      report proposes (TR-CLUSTER-033 modelled). Mutation tests — each must
+      report proposes (TR-CLUSTER-033 modelled); its **quiesced arm**
+      (V13-M4) covers replicated `role == Replica ∧ primaryId == None` — a
+      local `detached` upstream state that the difference test counts as
+      matching `None`, so the reconcile proposes nothing there. Mutation
+      tests — each must
       fail its named property: stamping from bare plane disagreement (the
       v11 rule) and scheduling `reconcileIdentity` inside the
       post-admission/pre-adoption window must violate
@@ -2785,8 +3033,18 @@ Every touched row gets an explicit verdict in the spec change; summary:
       refuses forever on the Demotion arm and sits mute — V12-M2's trace);
       dropping the lineage guard and injecting the plane-split bug state
       must violate `inv_no_acked_write_lost` (Primary adopted over a
-      foreign-lineage dataset). `witnessSplitPlanesConverge` itself is
-      retained: **no reachable state keeps a
+      foreign-lineage dataset); **narrowing the lineage guard** to
+      `u == None ∨ in_shard_parent(u, n)` (dropping `u ∉ nodes`) and
+      booting a node whose forced failover removed its old upstream
+      (TR-CLUSTER-042) must make `witnessSplitPlanesConverge` unreachable —
+      V12-M2's mute node re-created, V13-M1's trace; **removing the
+      quiesced arm** and driving a successor-less demotion must make the
+      reconcile propose in every observation cycle from that state — the
+      permanent proposal loop falsifying the witness's silence, V13-M4.
+      `witnessSplitPlanesConverge` itself is
+      retained and its bounded runs **cover the successor-less demotion
+      state** (replicated `role == Replica ∧ primaryId == None` converges to
+      quiesced, no in-flight proposal): **no reachable state keeps a
       node self-fenced with a stable local/replicated role disagreement** —
       convergence now runs through the pending record's report or the
       adoption + `Boot` path, per direction. **Plus the exit-row precedence**
@@ -2821,9 +3079,9 @@ Every touched row gets an explicit verdict in the spec change; summary:
   the binding — and for each verify the field with a
   declared type exists and name
   the component read — a name merely appearing somewhere in the document does not
-  count** (V4 audit note, strengthened per V5, V6, V7, V8, V9, V10, V11, and
-  again per V12:
-  **ten
+  count** (V4 audit note, strengthened per V5, V6, V7, V8, V9, V10, V11, V12,
+  and again per V13:
+  **eleven
   consecutive
   rounds each produced instances of exactly this class** — N-C4, V4-C3, V5-C2,
   V6-C1/C2, V7-C1/C2, V8-C2/C6 (an unfenced arm selector and an
@@ -2849,7 +3107,18 @@ Every touched row gets an explicit verdict in the spec change; summary:
   item (b) — while colliding uncited with TR-CLUSTER-033's LOCKED
   opposite-direction reconciler; and V12-M1's "holding/`-TRYAGAIN`-ing per §3"
   was an undetermined disjunction — a meaning-qualifier, item (f), whose
-  reader had to supply which disposition applied and against which §3 row) —
+  reader had to supply which disposition applied and against which §3 row),
+  then V13-C1/M6/M2/M3 (the **fourth consecutive round of fix-text
+  defects**, all in v12's own staging text: the adoption guard's two
+  operands under-bound the trigger to its cause — item (a): "record present
+  ∧ replicated `Replica`" fired on *any* writer of `Replica`, not the
+  record's own admitted report; the fence-refusal disposition was an
+  undeclared partition — item (b): (d)'s unqualified revert and the
+  convergence paragraph's fence-retry both claimed the same state with no
+  selector; "in-shard member" was a load-bearing name with no declared
+  predicate — items (a)/(f); and the crash-durable candidate triple was an
+  incarnation-bound value surviving into the next incarnation — item (e)'s
+  shape carried by identity instead of a trigger) —
   so the check must
   bind to declared
   types, not names, and must cover
@@ -3095,13 +3364,16 @@ Every touched row gets an explicit verdict in the spec change; summary:
   and adoption: the booted node re-derives the level-triggered adoption from
   its durable record — replicated role already `Replica` — completes the
   discard + upstream adoption, clears the record, and at no point reports
-  `Promotion` or holds an untracked stale copy (V12-C1); crash between stage
+  `Promotion` or holds an untracked stale copy (V12-C1); ~~crash between stage
   and admission: the node boots *staged* — record present, fence up per the
-  staged-flip fence row — and re-proposes the record's own candidate triple;
-  admission or refusal then discharges it normally (V12-C1/m1); node crashed
+  staged-flip fence row — and re-proposes the record's own candidate triple~~
+  (**superseded in V13**: the candidate is re-derived at every boot against
+  the fresh incarnation — the V13 test block below carries the replacement
+  scenario) (V12-C1/m1); node crashed
   after a failover promoted it in replicated state but before any local
   effect: boots locally-Replica/replicated-Primary with **no** pending
-  record, the lineage guard passes (upstream `None` or in-shard), the node
+  record, the lineage guard passes (upstream `None`, removed from `nodes`,
+  or an in-shard parent), the node
   adopts `Primary` locally, its boot report stamps `kind = Boot`, admission
   proceeds — never the mute forever-refusing Demotion arm (V12-M2); same
   boot with a **foreign** local upstream (injected plane-split bug state):
@@ -3117,4 +3389,40 @@ Every touched row gets an explicit verdict in the spec change; summary:
   silently self-demotes under role authority (V12-C1); failover-driven
   history adoption reporting `kind = Boot`: the report's identity **field
   write** still cancels the node's sourced migrations — the cancel binds to
-  the write, not the arm (V12-m3/V10-M1).
+  the write, not the arm (V12-m3/V10-M1). From review v13: a
+  `Failover{force: false}` toward an in-shard successor admits while the
+  staged Demotion report is in flight: the four-operand condition stays
+  false (`primary_id` names the successor, not the record's upstream; the
+  admitted `run_identity` is the failover's, not the candidate) — **no
+  adoption fires, the keyspace survives**, the staged report's refusal
+  routes to arm 3 (superseded), the record clears, and the node converges
+  to the failover's verdict via role-authority adoption (V13-C1); a node
+  promoted by `Failover{force: true}` crashes before local effect and
+  boots with its old upstream **absent from `nodes`**: the lineage guard
+  passes on the removed-upstream disjunct, the node adopts `Primary`,
+  reports `Boot` — no mute node (V13-M1); a demotion admitted with
+  `new_primary_id == None`: the node adopts the **quiesced-replica** state
+  — link detached, dataset retained, everything answered per the
+  demotion-disposition row — and the reconcile proposes **nothing** from
+  that state (difference test matches detached to `None`): no proposal
+  loop (V13-M4); a second `CLUSTER REPLICATE` toward a different upstream
+  while a record is pending: refused with the pending-stage error, the
+  record's fields unchanged, `CLUSTER INFO` reports the pending stage
+  (V13-M5); a staged report refused by the fence while the node is still
+  replicated-Primary after a concurrent epoch bump: record and fence
+  **persist**, the re-proposal carries the same candidate with fresh
+  observations and admits under the strict branch (V13-M6 arm 2); a staged
+  report refused whole (shard-relationship conjunct): revert with the
+  dataset intact — same assertion as the V11-C2 test, now asserting the
+  record cleared and the candidate discarded (V13-M6 arm 1); crash between
+  stage and admission: the node boots staged, **re-mints the candidate
+  under the boot's fresh incarnation**, rewrites the record fsynced, and
+  the record's report *is* the boot report — the admitted triple carries
+  the boot incarnation, never the pre-crash one (V13-M3); commands at a
+  staged node: everything `-TRYAGAIN` immediately except the `CLUSTER`
+  family — `CLUSTER INFO` reads the pending stage, a retried
+  `CLUSTER REPLICATE` receives the pending-stage refusal, not `-TRYAGAIN`
+  (V13-m3); `ResetCluster` (both paths) and `FORGET`-of-self with a
+  pending record present: the record is cleared, fsynced, before the
+  re-mint/boot report — the first post-reset report is `Boot` with no
+  competing staged claim (V13-m2).
