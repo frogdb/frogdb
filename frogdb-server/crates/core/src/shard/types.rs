@@ -703,6 +703,13 @@ impl ShardCluster {
         self.quorum_checker.as_deref()
     }
 
+    /// The same checker as an owned handle, for the
+    /// [`ShardWriteSeam`](crate::write_seam::ShardWriteSeam), which outlives the
+    /// `&self` borrow (it is held for the span of one script execution).
+    pub(crate) fn quorum_checker_owned(&self) -> Option<Arc<dyn QuorumChecker>> {
+        self.quorum_checker.clone()
+    }
+
     pub(crate) fn replication_tracker(&self) -> Option<&Arc<ReplicationTrackerImpl>> {
         self.replication_tracker.as_ref()
     }

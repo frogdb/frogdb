@@ -50,6 +50,7 @@ pub mod shard;
 pub mod slowlog;
 pub mod store;
 pub mod tracking;
+pub mod write_seam;
 
 // Re-export frogdb-vll as the vll module for backward compatibility.
 pub use frogdb_vll as vll;

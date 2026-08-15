@@ -142,6 +142,7 @@ impl ShardWorker {
                 watches,
                 conn_id,
                 protocol_version,
+                admission,
                 response_tx,
             } => {
                 // Panic isolation (c2-07), outer half. A panic in a *queued*
@@ -156,12 +157,24 @@ impl ShardWorker {
                         .load(std::sync::atomic::Ordering::Relaxed)
                     {
                         let shard_id = self.shard_id();
-                        self.execute_transaction(commands, &watches, conn_id, protocol_version)
-                            .instrument(tracing::info_span!("shard_exec_txn", shard_id))
-                            .await
+                        self.execute_transaction(
+                            commands,
+                            &watches,
+                            conn_id,
+                            protocol_version,
+                            &admission,
+                        )
+                        .instrument(tracing::info_span!("shard_exec_txn", shard_id))
+                        .await
                     } else {
-                        self.execute_transaction(commands, &watches, conn_id, protocol_version)
-                            .await
+                        self.execute_transaction(
+                            commands,
+                            &watches,
+                            conn_id,
+                            protocol_version,
+                            &admission,
+                        )
+                        .await
                     }
                 })
                 .await;

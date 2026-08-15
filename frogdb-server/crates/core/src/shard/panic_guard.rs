@@ -457,6 +457,7 @@ mod isolation_tests {
                 watches: vec![],
                 conn_id: 1,
                 protocol_version: ProtocolVersion::Resp2,
+                admission: crate::write_seam::WriteAdmission::internal(),
                 response_tx: tx,
             })
             .await;

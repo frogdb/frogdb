@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use frogdb_core::write_seam::WriteAdmission;
 use frogdb_core::{ScriptingMsg, shard_for_key};
 use frogdb_protocol::Response;
 use frogdb_vll::{
@@ -99,6 +100,7 @@ impl ConnectionHandler {
             self.state.id,
             self.state.protocol_version,
             read_only,
+            self.write_admission(),
             response_tx,
         );
 
@@ -126,6 +128,9 @@ impl ConnectionHandler {
     ) -> Response {
         let txid = next_txid();
         let primary_shard = shards[0];
+        // Captured before the continuation closure so the admission reflects the
+        // config and identity at dispatch time, not after the lock wait.
+        let admission = self.write_admission();
 
         let sink = ShardSenderSink::new(Arc::clone(&self.core.shard_senders));
         let coordinator = VllCoordinator::new(sink, NoopMetricsSink);
@@ -144,6 +149,7 @@ impl ConnectionHandler {
                         self.state.id,
                         self.state.protocol_version,
                         read_only,
+                        admission,
                         response_tx,
                     );
 
@@ -240,6 +246,7 @@ impl EvalKind {
         conn_id: u64,
         protocol_version: frogdb_protocol::ProtocolVersion,
         read_only: bool,
+        admission: WriteAdmission,
         response_tx: oneshot::Sender<Response>,
     ) -> ScriptingMsg {
         match self {
@@ -250,6 +257,7 @@ impl EvalKind {
                 conn_id,
                 protocol_version,
                 read_only,
+                admission,
                 response_tx,
             },
             EvalKind::Sha(script_sha) => ScriptingMsg::EvalScriptSha {
@@ -259,6 +267,7 @@ impl EvalKind {
                 conn_id,
                 protocol_version,
                 read_only,
+                admission,
                 response_tx,
             },
         }

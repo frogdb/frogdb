@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::JsonLimits;
+use crate::acl::KeyAccessType;
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command_spec::{AccessSpec, CommandSpec, KeySpec};
 use crate::error::CommandError;
@@ -1008,6 +1009,100 @@ impl KeyAccessFlag {
     }
 }
 
+/// Determine key access type from command flags.
+///
+/// Command-level fallback used when a key carries no per-key access flags (see
+/// [`required_access_for_key_flags`]).
+///
+/// Lives here rather than at the connection because both ACL enforcement seams
+/// need it: the connection-level `PermissionGuard` call sites in
+/// `frogdb-server`, and the shard-level
+/// [`ShardWriteSeam`](crate::write_seam::ShardWriteSeam), which authorizes the
+/// writes a Lua script produces at execute time.
+pub fn key_access_type_for_flags(flags: CommandFlags) -> KeyAccessType {
+    if flags.contains(CommandFlags::READONLY) {
+        KeyAccessType::Read
+    } else if flags.contains(CommandFlags::WRITE) {
+        KeyAccessType::Write
+    } else {
+        // Commands with neither flag (admin commands, etc.) - check both
+        KeyAccessType::ReadWrite
+    }
+}
+
+/// Map a single key's per-key access flags to the [`KeyAccessType`] the ACL
+/// layer must satisfy for that key.
+///
+/// This is what lets STORE-family commands enforce Redis semantics: the
+/// destination key needs write access while the source keys need only read, so
+/// a `%R~src* %W~dst*` user can run e.g. `SINTERSTORE dst src…`. The
+/// command-level [`key_access_type_for_flags`] applied the same access to every
+/// key and would deny that user.
+///
+/// Flag → requirement: `R` reads, `W`/`OW` write, `RW` both. A key that both
+/// reads and writes maps to [`KeyAccessType::ReadWrite`].
+///
+/// `fallback` is the command-level derivation, used only when `flags` is empty.
+/// In practice every key produced by `keys_with_flags` carries exactly one flag
+/// (both [`AccessSpec::resolve`](crate::command_spec::AccessSpec) and the
+/// dynamic hook always push a `vec![flag]`), so the empty case is unreachable
+/// today; the fallback keeps the mapping total and correct should a future spec
+/// declare keys without flags.
+pub fn required_access_for_key_flags(
+    flags: &[KeyAccessFlag],
+    fallback: KeyAccessType,
+) -> KeyAccessType {
+    if flags.is_empty() {
+        return fallback;
+    }
+    let mut read = false;
+    let mut write = false;
+    for flag in flags {
+        match flag {
+            KeyAccessFlag::R => read = true,
+            KeyAccessFlag::W | KeyAccessFlag::OW => write = true,
+            KeyAccessFlag::RW => {
+                read = true;
+                write = true;
+            }
+        }
+    }
+    match (read, write) {
+        (true, true) => KeyAccessType::ReadWrite,
+        (true, false) => KeyAccessType::Read,
+        (false, true) => KeyAccessType::Write,
+        // Unreachable: `flags` is non-empty and every variant sets a bit.
+        (false, false) => fallback,
+    }
+}
+
+/// Commands that have subcommands (container commands in Redis terminology).
+///
+/// Lives here, next to the flag→access mappings, for the same reason: ACL rules
+/// are written per `command|subcommand` (`+config|get`), so *both* enforcement
+/// seams — the connection's `PermissionGuard` and the shard's
+/// [`ShardWriteSeam`](crate::write_seam::ShardWriteSeam) — must split a command
+/// name the same way. A second copy of this list would silently under-enforce a
+/// subcommand rule on whichever seam fell behind.
+pub const CONTAINER_COMMANDS: &[&str] = &[
+    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "HOTKEYS", "MEMORY", "MODULE", "OBJECT",
+    "SCRIPT", "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB", "FUNCTION", "LATENCY", "STATUS",
+    "SELECT",
+];
+
+/// Extract subcommand from args for container commands.
+pub fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String> {
+    if CONTAINER_COMMANDS
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(command))
+    {
+        args.first()
+            .map(|a| String::from_utf8_lossy(a).to_uppercase())
+    } else {
+        None
+    }
+}
+
 // ============================================================================
 // Context Helper Structs
 // ============================================================================
@@ -1370,6 +1465,20 @@ pub struct CommandContext<'a> {
     /// recovery outcome wired.
     pub recovery_stats: Arc<RecoveryStats>,
 
+    /// The shard write seam this execution's *nested* producers are admitted
+    /// through — today, a Lua script's runtime `redis.call`s
+    /// (`specs/txn.md` FM-TXN-051).
+    ///
+    /// Set only on the outer context a script executes against
+    /// (`ShardWorker::run_script`), because that is where the per-invocation
+    /// [`WriteAdmission`](crate::write_seam::WriteAdmission) — the caller's ACL
+    /// identity and the live `min-replicas-to-write` floor — arrives on the
+    /// message. `None` everywhere else: a command that reached a shard through
+    /// the connection's pre-dispatch gauntlet has already been admitted, and
+    /// re-checking it here would double-count nothing and risk refusing a
+    /// command the connection-level seam legitimately let through.
+    pub write_seam: Option<crate::write_seam::ShardWriteSeam>,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1396,6 +1505,7 @@ impl<'a> CommandContext<'a> {
             replication_tracker: None,
             cluster_state: None,
             node_id: None,
+            write_seam: None,
             raft: None,
             network_factory: None,
             quorum_checker: None,

@@ -61,6 +61,7 @@ use crate::shard::message::ScriptingMsg;
 use crate::shard::{ShardSender, shard_for_key, slot_for_key};
 use crate::store::Store;
 use crate::sync::MutexExt;
+use crate::write_seam::{ShardWriteSeam, WriteRequest};
 
 /// Shared cross-slot accumulator for one script execution.
 ///
@@ -117,6 +118,18 @@ enum Plan {
     Remote(usize),
 }
 
+/// The single classification [`ScriptCommandGate::classify`] produces.
+///
+/// Carries `is_write` alongside the routing plan so the write seam and the
+/// write-dirty flag read the *same* verdict the routing choice was made from,
+/// rather than re-deriving "is this a write?" from the command name a second
+/// time and risking a disagreement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Classification {
+    plan: Plan,
+    is_write: bool,
+}
+
 /// Why a remote dispatch failed, so [`ScriptInvoker::run_remote`] can choose the
 /// message it surfaces to the script.
 enum RemoteError {
@@ -162,6 +175,20 @@ pub(crate) trait CommandInvoker {
     /// partial/wrong results. We deny it with a clean, catchable error instead.
     /// Returns `Ok(())` for every command that is safe to run shard-locally.
     fn reject_server_wide(&self, name: &str) -> Result<(), String>;
+    /// Admit a classified sub-command at the **shard write seam**.
+    ///
+    /// The gate decides *whether the command is legal for a script* and *where it
+    /// runs*; this decides whether the caller is allowed to make it happen here
+    /// and now — ACL, slot ownership, and write-admission (`NOREPLICAS` /
+    /// self-fence). Those three were historically checked only in the connection's
+    /// pre-dispatch gauntlet, which a script's runtime `redis.call` never passes
+    /// through (`specs/txn.md` FM-TXN-051): a script could reach an undeclared key,
+    /// a key whose slot had since moved, or write on a self-fenced primary.
+    ///
+    /// Called by [`ScriptCommandGate::dispatch`] for **every** sub-command,
+    /// read or write, before the routing choice is acted on — so a refusal is
+    /// identical whether the command would have run locally or on a peer shard.
+    fn admit(&self, parts: &[Bytes], is_write: bool) -> Result<(), String>;
     /// Run a fully-validated command against this shard's local store.
     fn run_local(&self, parts: &[Bytes]) -> Result<Response, String>;
     /// Dispatch a command to the shard that owns its keys and await the reply.
@@ -222,7 +249,7 @@ impl ScriptCommandGate {
         parts: &[Bytes],
         num_shards: usize,
         shard_id: usize,
-    ) -> Result<Plan, String> {
+    ) -> Result<Classification, String> {
         if parts.is_empty() {
             return Err("ERR wrong number of arguments for redis command".to_string());
         }
@@ -244,11 +271,8 @@ impl ScriptCommandGate {
         if self.enforce_cross_slot {
             self.cross_slot.check_all(&keys)?;
         }
-        if is_write {
-            self.mark_write();
-        }
 
-        Ok(match keys.first() {
+        let plan = match keys.first() {
             Some(first_key) if num_shards > 1 => {
                 let target = shard_for_key(first_key, num_shards);
                 if target == shard_id {
@@ -258,7 +282,19 @@ impl ScriptCommandGate {
                 }
             }
             _ => Plan::Local,
-        })
+        };
+        Ok(Classification { plan, is_write })
+    }
+
+    /// `classify`'s routing half, for the tests that only assert on the plan.
+    #[cfg(test)]
+    fn classify_plan(
+        &self,
+        parts: &[Bytes],
+        num_shards: usize,
+        shard_id: usize,
+    ) -> Result<Plan, String> {
+        self.classify(parts, num_shards, shard_id).map(|c| c.plan)
     }
 
     /// Classify then dispatch through the [`CommandInvoker`] seam. On a
@@ -277,7 +313,19 @@ impl ScriptCommandGate {
             let name = String::from_utf8_lossy(first).to_uppercase();
             invoker.reject_server_wide(&name)?;
         }
-        match self.classify(parts, invoker.num_shards(), invoker.shard_id())? {
+        let Classification { plan, is_write } =
+            self.classify(parts, invoker.num_shards(), invoker.shard_id())?;
+        // The shard write seam: ACL, slot ownership, write-admission. Sits
+        // between classification and dispatch so the answer does not depend on
+        // where the command would have run, and *before* `mark_write` so a
+        // refused write never leaves the script write-dirty (a write-dirty
+        // script is deliberately unkillable — see `run_script`'s notes — and a
+        // command that never took effect must not buy that exemption).
+        invoker.admit(parts, is_write)?;
+        if is_write {
+            self.mark_write();
+        }
+        match plan {
             Plan::Local => invoker.run_local(parts),
             Plan::Remote(target) => invoker.run_remote(target, parts),
         }
@@ -345,6 +393,11 @@ pub(crate) struct ScriptInvoker<'a> {
     /// Behind a `RefCell` for the same reason as `store`: the Lua callbacks
     /// that reach it are shared `Fn` closures.
     script_writes: RefCell<&'a mut Vec<ScriptWriteRecord>>,
+    /// The shard write seam this script's sub-commands are admitted through
+    /// (`specs/txn.md` FM-TXN-051). `None` only where there is nothing to
+    /// enforce — an in-process harness with no ACL, no cluster and no
+    /// replication — in which case every sub-command is admitted.
+    write_seam: Option<ShardWriteSeam>,
 }
 
 impl<'a> ScriptInvoker<'a> {
@@ -373,6 +426,7 @@ impl<'a> ScriptInvoker<'a> {
             snapshot_stats: ctx.snapshot_stats.clone(),
             bgsave_in_progress: ctx.bgsave_in_progress,
             recovery_stats: ctx.recovery_stats.clone(),
+            write_seam: ctx.write_seam.clone(),
             // Reborrow last, after every scalar field is read, so the mutable
             // borrows of the two written-to fields do not shadow the disjoint
             // scalar reads. `store` and `effects.script_writes` are distinct
@@ -448,6 +502,43 @@ impl CommandInvoker for ScriptInvoker<'_> {
             ));
         }
         Ok(())
+    }
+
+    /// Authorize and admit the sub-command at the shard write seam.
+    ///
+    /// Derives the ACL inputs from the *registry* — per-key access flags and the
+    /// command-level fallback — so a scripted `redis.call` is judged by exactly
+    /// the derivation the connection's `PermissionGuard` uses. An unknown
+    /// command is passed through: [`Self::run_local`] owns the unknown-command
+    /// error, and refusing it here would replace a clear `unknown command` with
+    /// a misleading `NOPERM`.
+    fn admit(&self, parts: &[Bytes], is_write: bool) -> Result<(), String> {
+        let Some(seam) = self.write_seam.as_ref() else {
+            return Ok(());
+        };
+        let Some(first) = parts.first() else {
+            return Ok(());
+        };
+        let name = String::from_utf8_lossy(first).to_uppercase();
+        let Some(entry) = self.registry.get(&name) else {
+            return Ok(());
+        };
+        let args = &parts[1..];
+        let keyed_flags = entry.keys_with_flags(args);
+        seam.admit(&WriteRequest {
+            name: &name,
+            subcommand: crate::command::extract_subcommand(&name, args),
+            // The union of the gate's name-table verdict and the registry's own
+            // flag. The gate's table is what the read-only check and the
+            // write-dirty flag are built on and must stay authoritative for
+            // *those*; but it is a hand-maintained list, and a command it has
+            // drifted away from would silently skip the seam's write halves.
+            // The registry entry is the command's own declaration, so a
+            // disagreement resolves toward gating.
+            is_write: is_write || entry.flags().contains(crate::command::CommandFlags::WRITE),
+            keyed_flags: &keyed_flags,
+            fallback_access: crate::command::key_access_type_for_flags(entry.flags()),
+        })
     }
 
     /// Execute the command against this shard's local store.
@@ -582,7 +673,7 @@ mod tests {
     fn classify_rejects_forbidden_command() {
         let gate = detached_gate(false, false, None);
         let err = gate
-            .classify(&[part("MULTI")], 1, 0)
+            .classify_plan(&[part("MULTI")], 1, 0)
             .expect_err("MULTI is forbidden in scripts");
         assert!(
             err.contains("MULTI") || err.to_lowercase().contains("not allowed"),
@@ -594,7 +685,7 @@ mod tests {
     fn classify_rejects_write_in_readonly() {
         let gate = detached_gate(true, false, None);
         let err = gate
-            .classify(&[part("SET"), part("k"), part("v")], 1, 0)
+            .classify_plan(&[part("SET"), part("k"), part("v")], 1, 0)
             .expect_err("write in read-only script must reject");
         assert_eq!(
             err,
@@ -606,24 +697,145 @@ mod tests {
     fn classify_allows_read_in_readonly() {
         let gate = detached_gate(true, false, None);
         let plan = gate
-            .classify(&[part("GET"), part("k")], 1, 0)
+            .classify_plan(&[part("GET"), part("k")], 1, 0)
             .expect("read in read-only script is allowed");
         assert_eq!(plan, Plan::Local);
     }
 
+    /// The write-dirty flag is raised by `dispatch`, once the command has been
+    /// admitted — not by `classify`. An unknown command still counts: the name
+    /// says it writes, and the flag is about what the script *attempted*.
     #[test]
-    fn classify_marks_write() {
-        let gate = detached_gate(false, false, None);
-        gate.classify(&[part("SET"), part("k"), part("v")], 1, 0)
-            .unwrap();
+    fn dispatch_marks_write() {
+        let mut store = HashMapStore::new();
+        let registry = CommandRegistry::new();
+        let gate = open_gate();
+        let mut writes = Vec::new();
+        let invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
+        let _ = gate.dispatch(&invoker, &[part("SET"), part("k"), part("v")]);
         assert!(gate.write_dirty.load(Ordering::Relaxed));
     }
 
     #[test]
-    fn classify_does_not_mark_read() {
-        let gate = detached_gate(false, false, None);
-        gate.classify(&[part("GET"), part("k")], 1, 0).unwrap();
+    fn dispatch_does_not_mark_read() {
+        let mut store = HashMapStore::new();
+        let registry = CommandRegistry::new();
+        let gate = open_gate();
+        let mut writes = Vec::new();
+        let invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
+        let _ = gate.dispatch(&invoker, &[part("GET"), part("k")]);
         assert!(!gate.write_dirty.load(Ordering::Relaxed));
+    }
+
+    /// A write refused at the seam must NOT leave the script write-dirty: a
+    /// write-dirty script is deliberately unkillable, and a command that never
+    /// took effect must not buy that exemption.
+    // FM-TXN-051
+    #[test]
+    fn a_refused_write_leaves_the_script_killable() {
+        use crate::write_seam::{AclIdentity, ShardWriteSeam, WriteAdmission};
+
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(SeamWrite);
+        let gate = open_gate();
+
+        // A user permitted nothing: the seam denies the command outright.
+        let acl = crate::acl::AclManager::new(Default::default());
+        acl.set_user("denied", &["on", ">pw", "~*", "-@all"])
+            .expect("set_user");
+        let user = acl
+            .authenticate("denied", "pw", "127.0.0.1:1")
+            .expect("authenticate");
+        let seam = ShardWriteSeam::new(
+            Some(WriteAdmission::new(
+                Some(AclIdentity::new(acl, user, "127.0.0.1:1")),
+                0,
+                std::time::Duration::ZERO,
+            )),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let mut writes = Vec::new();
+        {
+            let mut invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
+            invoker.write_seam = Some(seam);
+            let err = gate
+                .dispatch(&invoker, &[part("__SEAMWRITE")])
+                .expect_err("the seam must refuse a command the user cannot run");
+            assert!(err.starts_with("NOPERM"), "got: {err}");
+        }
+        assert!(
+            !gate.write_dirty.load(Ordering::Relaxed),
+            "a refused write must not mark the script write-dirty"
+        );
+        assert!(
+            !store.contains(b"seam"),
+            "a refused write must not reach the store"
+        );
+    }
+
+    /// The promoted repro from `.scratch/replication-cluster-rework/issues/03`:
+    /// a script declares no keys (or declares others), then writes a key whose
+    /// slot this node does not serve. The write text never reached the
+    /// connection's queue-time slot check, so before the seam it landed on the
+    /// ex-owner as an orphan write. Now it is refused where it happens, and the
+    /// store is untouched.
+    // FM-TXN-051
+    #[test]
+    fn an_undeclared_script_write_to_a_departed_slot_is_refused() {
+        use crate::cluster::{ClusterSnapshot, ClusterState, NodeInfo};
+        use crate::write_seam::{NON_LOCAL_KEY_ERR, ShardWriteSeam, WriteAdmission};
+        use std::sync::atomic::AtomicU64;
+
+        let undeclared = Bytes::from_static(b"undeclared");
+        // Slot of the undeclared key belongs to node 2; we are node 1.
+        let mut snapshot = ClusterSnapshot::new();
+        let addr = "127.0.0.1:7000".parse().unwrap();
+        snapshot
+            .nodes
+            .insert(2, NodeInfo::new_primary(2, addr, addr));
+        snapshot
+            .slot_assignment
+            .insert(slot_for_key(&undeclared), 2);
+        let cluster = std::sync::Arc::new(ClusterState::from_snapshot(
+            snapshot,
+            std::sync::Arc::new(AtomicU64::new(1)),
+        ));
+        let seam = ShardWriteSeam::new(
+            Some(WriteAdmission::internal()),
+            Some(cluster),
+            Some(1),
+            None,
+            None,
+        );
+
+        let mut store = HashMapStore::new();
+        let mut registry = CommandRegistry::new();
+        registry.register(SeamKeyedWrite);
+        let gate = open_gate();
+        let mut writes = Vec::new();
+        {
+            // The script declared nothing — `keys` is empty, exactly as for an
+            // `EVAL "…" 0` whose body writes.
+            let mut invoker = live_invoker(1, 0, vec![], &mut store, &registry, &mut writes);
+            invoker.write_seam = Some(seam);
+            let err = gate
+                .dispatch(&invoker, &[part("__SEAMKEYEDWRITE"), undeclared.clone()])
+                .expect_err("a write to a slot this node does not serve must be refused");
+            assert_eq!(err, NON_LOCAL_KEY_ERR);
+        }
+        assert!(
+            !store.contains(&undeclared),
+            "the orphan write must not reach the store"
+        );
+        assert!(
+            writes.is_empty(),
+            "a refused write must not be recorded for replication"
+        );
     }
 
     #[test]
@@ -641,7 +853,7 @@ mod tests {
             }
         }
         let err = gate
-            .classify(&[part("MSET"), a, part("va"), b, part("vb")], 1, 0)
+            .classify_plan(&[part("MSET"), a, part("va"), b, part("vb")], 1, 0)
             .expect_err("cross-slot span must reject when enforced");
         assert!(err.contains("same slot"), "got: {err}");
     }
@@ -660,7 +872,7 @@ mod tests {
             }
         }
         let plan = gate
-            .classify(&[part("MSET"), a, part("va"), b, part("vb")], 1, 0)
+            .classify_plan(&[part("MSET"), a, part("va"), b, part("vb")], 1, 0)
             .expect("cross-slot span allowed when enforcement off");
         assert_eq!(plan, Plan::Local);
     }
@@ -680,7 +892,7 @@ mod tests {
         let gate = detached_gate(false, true, Some(slot_for_key(&declared)));
         // GET of a DIFFERENT, undeclared key that shares the hash tag -> same slot.
         let plan = gate
-            .classify(&[part("GET"), part("{tag}b")], 1, 0)
+            .classify_plan(&[part("GET"), part("{tag}b")], 1, 0)
             .expect("undeclared same-slot key access must be allowed");
         assert_eq!(plan, Plan::Local);
     }
@@ -702,7 +914,7 @@ mod tests {
             }
         }
         let err = gate
-            .classify(&[part("GET"), other], 1, 0)
+            .classify_plan(&[part("GET"), other], 1, 0)
             .expect_err("undeclared different-slot key access must reject");
         assert!(err.contains("do not hash to the same slot"), "got: {err}");
     }
@@ -715,10 +927,10 @@ mod tests {
         // First access seeds the slot; must be allowed.
         let first = part("{tag}a");
         let first_slot = slot_for_key(&first);
-        gate.classify(&[part("GET"), first], 1, 0)
+        gate.classify_plan(&[part("GET"), first], 1, 0)
             .expect("first accessed key seeds the slot and is allowed");
         // A same-slot follow-up is still allowed.
-        gate.classify(&[part("GET"), part("{tag}b")], 1, 0)
+        gate.classify_plan(&[part("GET"), part("{tag}b")], 1, 0)
             .expect("same-slot follow-up allowed");
         // A different-slot follow-up now rejects.
         let mut other = part("kx");
@@ -730,7 +942,7 @@ mod tests {
             }
         }
         let err = gate
-            .classify(&[part("GET"), other], 1, 0)
+            .classify_plan(&[part("GET"), other], 1, 0)
             .expect_err("different-slot access after seed must reject");
         assert!(err.contains("do not hash to the same slot"), "got: {err}");
     }
@@ -751,7 +963,7 @@ mod tests {
             }
         }
         let plan = gate
-            .classify(&[part("GET"), other], 1, 0)
+            .classify_plan(&[part("GET"), other], 1, 0)
             .expect("standalone undeclared access is never slot-rejected");
         assert_eq!(plan, Plan::Local);
     }
@@ -760,7 +972,7 @@ mod tests {
     fn classify_single_shard_is_always_local() {
         let gate = detached_gate(false, false, None);
         let plan = gate
-            .classify(&[part("GET"), key_for_shard(3, 4)], 1, 0)
+            .classify_plan(&[part("GET"), key_for_shard(3, 4)], 1, 0)
             .unwrap();
         assert_eq!(plan, Plan::Local);
     }
@@ -769,7 +981,7 @@ mod tests {
     fn classify_routes_local_when_key_on_this_shard() {
         let gate = detached_gate(false, false, None);
         let key = key_for_shard(2, 4);
-        let plan = gate.classify(&[part("GET"), key], 4, 2).unwrap();
+        let plan = gate.classify_plan(&[part("GET"), key], 4, 2).unwrap();
         assert_eq!(plan, Plan::Local);
     }
 
@@ -778,7 +990,7 @@ mod tests {
         let gate = detached_gate(false, false, None);
         let key = key_for_shard(3, 4);
         // Running on shard 0, key owned by shard 3.
-        let plan = gate.classify(&[part("GET"), key], 4, 0).unwrap();
+        let plan = gate.classify_plan(&[part("GET"), key], 4, 0).unwrap();
         assert_eq!(plan, Plan::Remote(3));
     }
 
@@ -790,7 +1002,7 @@ mod tests {
         let first = key_for_shard(1, 4);
         let second = key_for_shard(3, 4);
         let plan = gate
-            .classify(&[part("MSET"), first, part("v1"), second, part("v2")], 4, 0)
+            .classify_plan(&[part("MSET"), first, part("v1"), second, part("v2")], 4, 0)
             .unwrap();
         assert_eq!(plan, Plan::Remote(1));
     }
@@ -799,7 +1011,7 @@ mod tests {
     fn classify_no_keys_is_local() {
         let gate = detached_gate(false, false, None);
         // PING has no keys -> always local regardless of shard count.
-        let plan = gate.classify(&[part("PING")], 4, 0).unwrap();
+        let plan = gate.classify_plan(&[part("PING")], 4, 0).unwrap();
         assert_eq!(plan, Plan::Local);
     }
 
@@ -834,6 +1046,7 @@ mod tests {
             recovery_stats: Arc::new(RecoveryStats::default()),
             store: RefCell::<&mut dyn Store>::new(store),
             script_writes: RefCell::new(writes),
+            write_seam: None,
         }
     }
 
@@ -950,6 +1163,44 @@ mod tests {
                 Bytes::from_static(b"seam"),
                 crate::types::Value::string("v1"),
             );
+            Ok(Response::Simple(Bytes::from_static(b"OK")))
+        }
+    }
+
+    /// The keyed variant of [`SeamWrite`]: `args[0]` is the key, so the seam's
+    /// slot-ownership half has something to hash. Models the `redis.call('SET',
+    /// undeclared_key, …)` a script body can issue at any time.
+    struct SeamKeyedWrite;
+
+    impl crate::command::Command for SeamKeyedWrite {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            use crate::command::{Arity, CommandFlags, WaiterWake, WalStrategy};
+            use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__SEAMKEYEDWRITE",
+                arity: Arity::Fixed(1),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::First,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            ctx: &mut CommandContext,
+            args: &[Bytes],
+        ) -> Result<Response, crate::error::CommandError> {
+            ctx.store
+                .set(args[0].clone(), crate::types::Value::string("v1"));
             Ok(Response::Simple(Bytes::from_static(b"OK")))
         }
     }
@@ -1075,6 +1326,7 @@ mod tests {
             recovery_stats: Arc::new(RecoveryStats::default()),
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
+            write_seam: None,
         };
         let gate = open_gate();
 
@@ -1123,6 +1375,7 @@ mod tests {
             recovery_stats: Arc::new(RecoveryStats::default()),
             store: RefCell::<&mut dyn Store>::new(&mut store),
             script_writes: RefCell::new(&mut writes),
+            write_seam: None,
         };
         let gate = open_gate();
 

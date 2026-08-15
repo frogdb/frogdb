@@ -12,6 +12,7 @@ use crate::slowlog::SlowLogEntry;
 use crate::tracking::InvalidationSender;
 use crate::types::StreamId;
 use crate::vll::{LockMode, ShardReadyResult};
+use crate::write_seam::WriteAdmission;
 
 use super::counters::HotShardStatsResponse;
 use super::types::{
@@ -266,6 +267,13 @@ pub enum CoreMsg {
         conn_id: u64,
         /// Protocol version for response encoding.
         protocol_version: ProtocolVersion,
+        /// Issuer-scoped half of the shard write seam: the ACL identity and the
+        /// replica floor the queued writes are admitted against
+        /// (`specs/txn.md` FM-TXN-051). The connection cannot be reached from
+        /// the shard, so the identity travels on the message; the topology half
+        /// (slot ownership, quorum, replica lag) is read live on the shard.
+        /// Internal callers use [`WriteAdmission::internal`].
+        admission: WriteAdmission,
         response_tx: oneshot::Sender<TransactionResult>,
     },
 }
@@ -410,6 +418,13 @@ pub enum ScriptingMsg {
         protocol_version: ProtocolVersion,
         /// Read-only mode (EVAL_RO) — rejects write commands in the script.
         read_only: bool,
+        /// The caller's write-admission context — ACL identity and the live
+        /// `min-replicas-to-write` floor — for the shard write seam every
+        /// `redis.call` this script issues is admitted through
+        /// (`specs/txn.md` FM-TXN-051). Travels on the message because the shard
+        /// has no connection to read it from; the seam's other two inputs (slot
+        /// ownership, self-fence) come from the shard's own handles.
+        admission: WriteAdmission,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },
@@ -428,6 +443,13 @@ pub enum ScriptingMsg {
         protocol_version: ProtocolVersion,
         /// Read-only mode (EVALSHA_RO) — rejects write commands in the script.
         read_only: bool,
+        /// The caller's write-admission context — ACL identity and the live
+        /// `min-replicas-to-write` floor — for the shard write seam every
+        /// `redis.call` this script issues is admitted through
+        /// (`specs/txn.md` FM-TXN-051). Travels on the message because the shard
+        /// has no connection to read it from; the seam's other two inputs (slot
+        /// ownership, self-fence) come from the shard's own handles.
+        admission: WriteAdmission,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },
@@ -489,6 +511,13 @@ pub enum ScriptingMsg {
         protocol_version: ProtocolVersion,
         /// Whether this is a read-only call (FCALL_RO).
         read_only: bool,
+        /// The caller's write-admission context — ACL identity and the live
+        /// `min-replicas-to-write` floor — for the shard write seam every
+        /// `redis.call` this script issues is admitted through
+        /// (`specs/txn.md` FM-TXN-051). Travels on the message because the shard
+        /// has no connection to read it from; the seam's other two inputs (slot
+        /// ownership, self-fence) come from the shard's own handles.
+        admission: WriteAdmission,
         /// Response channel.
         response_tx: oneshot::Sender<Response>,
     },

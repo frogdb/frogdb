@@ -1,6 +1,6 @@
 # Script writes must pass the shard write seam
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

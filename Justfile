@@ -617,7 +617,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1613,6 +1613,16 @@ lint-error-sanitize:
 # forces a classification. See scripts/continuation-lock-gate.py.
 lint-continuation-lock:
     ./scripts/continuation-lock-gate.py
+
+# Gate: a script's writes reach the store only through ShardWriteSeam::admit
+# (specs/txn.md FM-TXN-051). `ScriptCommandGate::dispatch` must admit before it
+# runs a sub-command and before it marks the script write-dirty; the seam is
+# assembled only on the shard worker; the two admission bypasses
+# (`pre_authorized` for replica apply, `internal` for the harness) are pinned to
+# their file; and every shard message carrying writes the connection never
+# gauntleted declares an `admission`. See scripts/script-write-seam.py.
+lint-script-write-seam:
+    ./scripts/script-write-seam.py
 
 # =============================================================================
 # Build/test execution mode

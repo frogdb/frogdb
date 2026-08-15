@@ -578,7 +578,17 @@ impl ShardWorker {
         watches: &[WatchEntry],
         conn_id: u64,
         protocol_version: ProtocolVersion,
+        admission: &crate::write_seam::WriteAdmission,
     ) -> TransactionResult {
+        // The three write gates (slot ownership, ACL, write admission) run at
+        // the shard for the whole batch before any command executes, so a
+        // topology/ACL/replica change during the MULTI window cannot let a
+        // queued write through (`specs/txn.md` FM-TXN-051). Ahead of the WATCH
+        // check: a refused transaction is refused whatever the watches say.
+        if let Err(err) = self.admit_transaction(&commands, admission) {
+            return TransactionResult::Error(err);
+        }
+
         // F3: a watched key may have expired only *lazily* — its TTL elapsed
         // with no active sweep and no access to trigger a purge since it was
         // watched. WATCH is validated against the per-shard version, not the
@@ -2329,6 +2339,7 @@ mod deny_blocking_tests {
                 watches: vec![],
                 conn_id: 1,
                 protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
+                admission: crate::write_seam::WriteAdmission::internal(),
                 response_tx: tx,
             })
             .await;
@@ -2380,5 +2391,132 @@ mod deny_blocking_tests {
         let mut worker = worker_with_fake_blockers();
         let response = exec_one(&mut worker, "FAKEBLMOVE").await;
         assert_eq!(response, Response::Null);
+    }
+}
+
+/// The MULTI arm of the shard write seam: a batch is re-admitted at the shard,
+/// as a whole, before any queued command runs (`specs/txn.md` FM-TXN-051).
+#[cfg(test)]
+mod transaction_admission_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    use bytes::Bytes;
+    use frogdb_protocol::{ParsedCommand, Response};
+    use tokio::sync::{mpsc, oneshot};
+
+    use crate::command::{
+        Arity, Command, CommandContext, CommandFlags, ConnMutation, ExecutionStrategy, WaiterWake,
+        WalStrategy,
+    };
+    use crate::command_spec::{
+        AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
+    };
+    use crate::eviction::EvictionConfig;
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{CoreMsg, ShardReceiver, ShardSender};
+    use crate::shard::types::TransactionResult;
+    use crate::write_seam::{AclIdentity, WriteAdmission};
+
+    /// Records whether it ever executed, so the test can prove a refused batch
+    /// runs *nothing* rather than running and then reporting an error.
+    struct RanFlag(Arc<AtomicBool>);
+
+    impl Command for RanFlag {
+        fn spec(&self) -> &'static CommandSpec {
+            static SPEC: CommandSpec = CommandSpec {
+                name: "__QUEUEDWRITE",
+                arity: Arity::AtLeast(0),
+                flags: CommandFlags::WRITE,
+                keys: KeySpec::None,
+                access: AccessSpec::Uniform,
+                wal: WalStrategy::NoOp,
+                wakes: WaiterWake::None,
+                event: EventSpec::Suppressed,
+                requires_same_slot: false,
+                reindex: ReindexSpec::None,
+                lookup: LookupSpec::None,
+                mutation: ConnMutation::None,
+                strategy: ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            _ctx: &mut CommandContext,
+            _args: &[Bytes],
+        ) -> Result<Response, frogdb_types::CommandError> {
+            self.0.store(true, Ordering::Relaxed);
+            Ok(Response::Simple(Bytes::from_static(b"OK")))
+        }
+    }
+
+    fn worker(ran: Arc<AtomicBool>) -> ShardWorker {
+        let mut registry = CommandRegistry::new();
+        registry.register(RanFlag(ran));
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(registry),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        )
+    }
+
+    /// The MULTI window is arbitrarily long: the user's grants can be rewritten
+    /// between `+QUEUED` and `EXEC`. The shard re-admits the whole batch, so the
+    /// now-denied write is refused there — and because EXEC is indivisible, the
+    /// refusal fails the transaction before any command runs.
+    // FM-TXN-051
+    #[tokio::test]
+    async fn a_transaction_denied_after_queue_time_fails_the_whole_exec() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let mut worker = worker(Arc::clone(&ran));
+
+        let acl = crate::acl::AclManager::new(Default::default());
+        acl.set_user("u", &["on", ">pw", "~*", "-@all"])
+            .expect("set_user");
+        let user = acl.authenticate("u", "pw", "127.0.0.1:1").expect("auth");
+        let admission = WriteAdmission::new(
+            Some(AclIdentity::new(acl, user, "127.0.0.1:1")),
+            0,
+            std::time::Duration::ZERO,
+        );
+
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ExecTransaction {
+                commands: vec![ParsedCommand::new(
+                    Bytes::from_static(b"__QUEUEDWRITE"),
+                    vec![],
+                )],
+                watches: vec![],
+                conn_id: 1,
+                protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
+                admission,
+                response_tx: tx,
+            })
+            .await;
+
+        match rx.await.expect("shard replied") {
+            TransactionResult::Error(err) => assert!(err.starts_with("NOPERM"), "got: {err}"),
+            other => panic!("expected a refused transaction, got {other:?}"),
+        }
+        assert!(
+            !ran.load(Ordering::Relaxed),
+            "a refused transaction must run none of its commands"
+        );
     }
 }

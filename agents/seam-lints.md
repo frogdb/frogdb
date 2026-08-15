@@ -1,17 +1,17 @@
 # Seam lints: chokepoint gates
 
 A seam lint states an invariant of the form **"every X must go through Y"**, where `Y` is the one
-implementation that gets it right, and fails the build on any `X` that does not. Fifteen of these
+implementation that gets it right, and fails the build on any `X` that does not. Sixteen of these
 ship today, plus `lint-failover-atomicity`'s sibling checks; each is a `just lint-<rule>` recipe
 and all but one run in well under a second because they are `grep`/`awk` over source text, not
 compiled Rust.
 
-`just lint-gates` runs the compile-free fourteen of them in one shot. It is wired into
+`just lint-gates` runs the compile-free fifteen of them in one shot. It is wired into
 lefthook `pre-commit` **unconditionally** — no `CLAUDECODE=1` skip, unlike `rust-clippy`, because
 these are greps, not a workspace compile — and into CI as the `seam-gates` job
 (`.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`, rendered to
 `.github/workflows/test.yml`), listed in `ci-pass`'s required-jobs array. `just lint` runs the
-full fifteen (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
+full sixteen (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
 `lint-gates` rather than re-listing its members, because the two hand-maintained lists had
 already drifted (three gates ran on every commit but not under `just lint`).
 
@@ -34,9 +34,10 @@ already drifted (three gates ran on every commit but not under `just lint`).
 | `lint-nested-config` | no figment `.nested()` on a config source anywhere under `frogdb-server` — it files a TOML file's top-level tables under non-default profiles that an `extract()` under `Profile::Default` never reads (round-2 issue 49); the one known site rides the named-gap warn idiom until the fix lands | yes |
 | `lint-error-sanitize` | a single-file pin on `protocol/src/response.rs`: every CRLF-framed error frame (`Resp2BytesFrame::Error`, `Resp3BytesFrame::SimpleError`) takes its payload from `sanitize_error_message(..)` so a client's error text cannot inject a second wire frame (#38); the length-framed `Resp3BytesFrame::BlobError` is deliberately exempt | yes |
 | `lint-continuation-lock` | every mutating shard-dispatch arm states a disposition against `ShardWorker::can_execute_during_lock` — GATE (calls it, in the arm body), EXEMPT (reason + a forcing test that must still exist), or a tracked named-gap bypass; the 64 arms of the 11 shard `*Msg` enums are count-pinned per enum, so a new or renamed arm cannot land without a classification | yes |
+| `lint-script-write-seam` | a script's writes reach the store only through `ShardWriteSeam::admit` (`specs/txn.md` FM-TXN-051): `ScriptCommandGate::dispatch` admits *before* it runs the sub-command and before it marks the script write-dirty, `invoker.run_local`/`run_remote` appear only in `gate.rs`, the seam is assembled only by `ShardWorker::write_seam` (live cluster state / node id / quorum checker / tracker), the two admission bypasses (`pre_authorized` for replica apply, `internal` for the shard harness) are pinned to their file, and every shard message carrying writes the connection never gauntleted declares an `admission` | yes |
 
 Two recipes sit next to this family but are out of scope for both `lint-gates` and this doc's
-"the 15": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
+"the 16": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
 `lint-turmoil-features` (checks the turmoil cargo-feature is forwarded through every dependent
 manifest — does not compile, but polices the turmoil feature rather than a seam, and the
 originating issue named "the turmoil lints" as excluded alongside the one that compiles). Both

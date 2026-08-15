@@ -7105,16 +7105,17 @@ async fn test_self_fence_multi_partial_queue_aborts_whole_transaction() {
     primary.shutdown().await;
 }
 
-/// KNOWN GAP (pinned): writes issued from inside a Lua script bypass the
-/// self-fence gate because `EVAL` lacks the WRITE flag and so skips
-/// `run_pre_checks`. A future fix that enforces at the script/shard write seam
-/// must flip this assertion deliberately. See the NOTE in `guards.rs`.
+/// The self-fence covers a Lua-internal write. `EVAL` carries no WRITE flag, so
+/// the connection's `run_pre_checks` never sees the `SET` the script body
+/// issues; the shard write seam does, and refuses it there (`specs/txn.md`
+/// FM-TXN-051). This assertion was previously inverted, pinning the gap.
+// FM-TXN-051
 #[tokio::test]
-async fn test_self_fence_does_not_gate_lua_writes() {
+async fn test_self_fence_gates_lua_writes() {
     // Direct writes are fenced by the time this returns.
     let (primary, replica, proxy) = fenced_by_a_silent_replica("lk").await;
 
-    // But a Lua-internal write slips through and applies.
+    // A Lua-internal write is fenced too, at the shard write seam.
     let lua = primary
         .send(
             "EVAL",
@@ -7126,15 +7127,12 @@ async fn test_self_fence_does_not_gate_lua_writes() {
             ],
         )
         .await;
-    assert!(
-        !is_error(&lua),
-        "EVAL write unexpectedly fenced (gap closed?): {lua:?}"
-    );
+    assert!(is_error(&lua), "EVAL write not fenced: {lua:?}");
     let got = primary.send("GET", &["lua_key"]).await;
     assert_eq!(
         got,
-        Response::Bulk(Some(Bytes::from_static(b"lua_val"))),
-        "Lua write did not apply despite bypassing the fence: {got:?}"
+        Response::Bulk(None),
+        "a fenced Lua write must not have applied: {got:?}"
     );
 
     drop(proxy);
@@ -7186,10 +7184,11 @@ async fn test_min_replicas_to_write_gate_tracks_replica_health() {
 }
 
 // FM-TXN-007
+// FM-TXN-051
 /// `min-replicas-to-write` gates MULTI at queue time (the queued write is
 /// rejected with NOREPLICAS and the transaction is flagged dirty, so EXEC
-/// answers EXECABORT) but — same known gap as self-fence — does NOT gate
-/// Lua-internal writes.
+/// answers EXECABORT) and gates a Lua-internal write at the shard write seam,
+/// where the script's `SET` is actually produced.
 #[tokio::test]
 async fn test_min_replicas_to_write_multi_and_lua_paths() {
     let primary = TestServer::start_primary_with_config(min_replicas_config(1)).await;
@@ -7212,7 +7211,8 @@ async fn test_min_replicas_to_write_multi_and_lua_paths() {
         "expected EXECABORT after queue-time NOREPLICAS gate, got {exec:?}"
     );
 
-    // KNOWN GAP (pinned): Lua-internal write bypasses the gate.
+    // The Lua-internal write is gated too — at the shard write seam, with the
+    // same NOREPLICAS string a directly-issued write earns.
     let lua = primary
         .send(
             "EVAL",
@@ -7224,9 +7224,11 @@ async fn test_min_replicas_to_write_multi_and_lua_paths() {
             ],
         )
         .await;
-    assert!(
-        !is_error(&lua),
-        "EVAL write unexpectedly gated (gap closed?): {lua:?}"
+    assert!(is_error(&lua), "EVAL write not gated: {lua:?}");
+    assert_eq!(
+        primary.send("GET", &["lk"]).await,
+        Response::Bulk(None),
+        "a gated Lua write must not have applied"
     );
 
     primary.shutdown().await;

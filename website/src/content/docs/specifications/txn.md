@@ -88,7 +88,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Precondition | `txn.queue = Some(_)`; command fails registry lookup, arity, `try_queue_in_transaction`'s slot check, or a `run_pre_checks` gate, in order: NOAUTH → READONLY → MISCONF (`guards.rs:296`) → self-fence → NOREPLICAS → NOADMIN (`guards.rs:355`) → ACL → pubsub-mode (CLUSTERDOWN is not a `run_pre_checks` gate — it is `validate_cluster_slots`, already covered by `try_queue_in_transaction`'s slot check above) |
 | Postcondition | `txn.exec_abort = true`; `txn.queued_errors` gains the rejection message; `txn.queue` unchanged (the rejected command is never pushed); reply is the gate's own error, not `+QUEUED` |
 | Source | `frogdb-server/crates/server/src/connection/guards.rs:513` (`try_queue_in_transaction`), `:544` (`queue_command`), `frogdb-server/crates/server/src/connection/dispatch.rs:482` (`PreChecks` stage calls `abort_transaction` while a transaction is open), `frogdb-server/crates/txn/src/state.rs:223` (`abort`) |
-| Rulings | [issue 06](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/06-script-writes-pass-shard-write-seam.md) — a script's undeclared runtime write bypasses this gate entirely (see TR-TXN-022) |
+| Rulings | [issue 06](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/06-script-writes-pass-shard-write-seam.md) — a script's undeclared runtime write bypasses this *queue-time* gate entirely; it is admitted at the shard write seam instead (TR-TXN-022, FM-TXN-051) |
 
 ## TR-TXN-005 — DISCARD closes an open transaction
 
@@ -246,15 +246,14 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Source | `frogdb-server/crates/txn/src/exec.rs:358` (`run_shard_transaction`), `:259` (`deferral_of`) |
 | Rulings | — |
 
-## TR-TXN-022 — A script's runtime write inside a transaction passes the shard write seam (RULED, not yet built)
+## TR-TXN-022 — A script's runtime write inside a transaction passes the shard write seam
 
 | Field | Value |
 | --- | --- |
 | Precondition | `txn.queue` contains an `EVAL`/`EVALSHA`/`FCALL` whose Lua body issues a write to a key outside its declared `KEYS`, or to a declared key whose slot no longer belongs to this shard, or that ACL denies |
-| Postcondition | (RULED) the write is refused at the shard write seam — the single mutation entry point every producer (declared/undeclared script writes, MULTI-queued writes, internal callers) passes through — checking slot ownership, ACL, and write-admission (NOREPLICAS/self-fence) there, not at queue/validation time |
-| Source | `frogdb-server/crates/server/src/connection/guards.rs:544` (`queue_command`'s gate covers only directly-queued commands, not script-issued writes); no single shard write seam chokepoint exists in the code today — the nearest candidates (`ScriptCommandGate`, the data-structure-level `store/hashmap.rs:309`, `guards.rs::run_pre_checks`) each fail to be it, and `guards.rs:326`'s own comment concedes "uniform enforcement belongs at the shard/script-gate write seam" as an open follow-up; issue 06 calls for building one |
-| Rulings | [issue 06](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/06-script-writes-pass-shard-write-seam.md) |
-| Pending | [issue 06](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/06-script-writes-pass-shard-write-seam.md) — FM-TXN-030 and FM-TXN-007 **must be** marked KNOWN-VIOLATED for this gap until the seam lands; as of this row, neither has been marked yet. `.scratch/replication-cluster-rework/issues/03` is the forcing-test source |
+| Postcondition | the write is refused at the shard write seam — the single mutation entry point every producer (declared/undeclared script writes, MULTI-queued writes, internal callers) passes through — checking slot ownership, ACL, and write-admission (NOREPLICAS/self-fence) there, not at queue/validation time |
+| Source | `frogdb-server/crates/core/src/write_seam.rs` (`ShardWriteSeam::admit`), reached from `scripting/gate.rs` (`ScriptCommandGate::dispatch` → `CommandInvoker::admit`) for a script's runtime write and from `shard/worker.rs` (`admit_transaction`, called by `execute_transaction`) for a MULTI batch |
+| Rulings | [issue 06](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/06-script-writes-pass-shard-write-seam.md) — built; the behavior is FM-TXN-051 |
 
 ## TR-TXN-023 — Re-WATCH of an already-watched key keeps the first snapshot
 
@@ -404,7 +403,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Invariant | The `PreChecks` dispatch stage aborts the open transaction on every rejection path before returning the error, so a rejection can never leave a half-populated queue that a later `EXEC` would treat as complete. |
 | Outcome variant | `TransactionOutcome::ExecAbort` (label `execabort`) |
 | Forced by | `test_acl_denial_in_multi_poisons_the_transaction`, `test_acl_log_entry_for_each_denial_path_in_multi`, `test_self_fence_multi_rejected_at_queue_time`, `test_min_replicas_to_write_multi_and_lua_paths` |
-| Bug refs | `.scratch/replication-cluster-rework/issues/03` (the same gate is *not* applied to writes a Lua script issues from inside a transaction) |
+| Bug refs | `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md` (the same three gates now also run at the shard write seam, which covers the producers this queue-time gate cannot see — FM-TXN-051) |
 
 ## FM-TXN-008 — A partially queued transaction aborts wholesale
 
@@ -680,7 +679,7 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Invariant | Key extraction for the fold covers scatter key specs and script-declared keys; the keyless fast path is only reachable when no command in the batch names a key. |
 | Outcome variant | `TransactionOutcome::Redirected` (label `redirected`) |
 | Forced by | `test_multi_exec_scatter_gather_batch_is_slot_validated`, `test_multi_exec_eval_with_declared_keys_is_slot_validated`, `test_multi_exec_readonly_does_not_rescue_a_scatter_write` |
-| Bug refs | `.scratch/replication-cluster-rework/issues/03` (a script's *undeclared* runtime writes are still unvalidated) |
+| Bug refs | `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md` (a script's *undeclared* runtime writes are validated at the shard write seam instead — FM-TXN-051) |
 
 ## FM-TXN-031 — The shard rejects the transaction
 
@@ -921,6 +920,20 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) when the earlier snapshot is dirty |
 | Forced by | `rewatching_a_key_keeps_the_first_snapshot`, `test_rewatch_does_not_rearm_a_dirty_watch` |
 | Bug refs | `.scratch/concurrency-testing/issues/done/12-rewatch-resets-watch-snapshot.md` (done — this row is its outcome) |
+
+---
+
+## FM-TXN-051 — A script's runtime write outside the declared key set
+
+| Field | Value |
+|---|---|
+| Trigger | A write whose command text never reached the connection's queue-time gauntlet, so none of its three gates ever saw it. Two producers: a Lua/function body issuing `redis.call('SET', k, …)` for a `k` outside — or absent from — its declared `KEYS` (FrogDB does not require declaration; only slot cohesion is required), and a `MULTI` batch whose slot ownership, ACL grants or good-replica count changed between `+QUEUED` and `EXEC`. |
+| Observable | The write is refused at the shard write seam, with the same three checks and the same wire strings a directly-issued write earns: `-NOPERM …` (plus the matching `ACL LOG` entry, context `command` or `key`), `ERR Lua script attempted to access a non local key in a cluster node` for a slot this node does not serve, and the write-admission refusals — the quorum checker's own `SELFFENCE …` and `NOREPLICAS Not enough good replicas to write.`. ACL is checked first, so a denied user learns it is denied rather than learning the cluster's topology. For a `MULTI`, the refusal fails the whole `EXEC` before any queued command runs. |
+| NOT observable | The write landing in the keyspace, in the WAL, or in the replication stream. A refused write must not mark the script write-dirty either: a write-dirty script is deliberately unkillable (`lua-time-limit` and `SCRIPT KILL` stop enforcing once it is set), and a command that never took effect must not buy that exemption. Also **not** observable: a `-MOVED` from a script (it cannot be redirected — part of it has already run, and Redis answers a plain error too); a replicated or replayed write being filtered on the receiving node (a replica that second-guesses its primary's stream diverges — `WriteAdmission::pre_authorized`); an importing target refusing a write for the slot it is being handed. |
+| Invariant | `ShardWriteSeam::admit` is the single admission decision, and every producer reaches it: a script's `redis.call` through `ScriptCommandGate::dispatch` → `CommandInvoker::admit` (before `mark_write` and before either `run_local`/`run_remote` arm), a `MULTI` through `ShardWorker::admit_transaction`, called by `execute_transaction` ahead of the WATCH check. The seam's issuer-scoped half (ACL identity, live `min-replicas-to-write`) travels on the shard message as a `WriteAdmission`; its topology half (cluster state, node id, quorum checker, replication tracker) is read live from the worker, so the answer is the node's *current* truth rather than a value captured at dispatch. Slot ownership is the permissive union of the connection router's local-serve arms (owner, migrating owner, importing target), so a batch already admitted at the connection can never be refused twice. `just lint-script-write-seam` keeps the chokepoint structural: `dispatch` must admit before it runs or marks anything, `invoker.run_local`/`run_remote` appear only in `gate.rs`, the seam is assembled only by `ShardWorker::write_seam`, the two admission bypasses are pinned to their file, and every shard message carrying an unseen write declares an `admission`. |
+| Outcome variant | n/a (a per-command refusal; for `MULTI` it surfaces as `TransactionResult::Error`) |
+| Forced by | `a_denied_command_is_refused_and_logged`, `a_write_to_a_slot_owned_elsewhere_is_refused`, `an_importing_target_admits_the_write`, `min_replicas_refuses_when_no_replica_is_good`, `the_quorum_checker_owns_its_refusal_wording`, `acl_outranks_slot_ownership_and_admission`, `a_replicated_write_is_admitted_unconditionally`, `a_refused_write_leaves_the_script_killable`, `an_undeclared_script_write_to_a_departed_slot_is_refused`, `a_transaction_denied_after_queue_time_fails_the_whole_exec`, `test_self_fence_gates_lua_writes`, `test_min_replicas_to_write_multi_and_lua_paths` |
+| Bug refs | `.scratch/spec-gaps/issues/done/06-script-writes-pass-shard-write-seam.md`, `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md` (the forcing-test source; its Lua-bypass half is this row, its cross-shard-continuation half is still open) |
 
 ---
 

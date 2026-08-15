@@ -330,6 +330,73 @@ impl ShardWorker {
     /// seam (normal dispatch, EVAL / EVALSHA / FCALL, and cross-shard script
     /// sub-commands) observes the *same* context and cannot drift out of sync
     /// (e.g. a Lua script reporting the wrong replica role via ROLE / INFO).
+    /// Assemble the [`ShardWriteSeam`](crate::write_seam::ShardWriteSeam) a
+    /// script execution's `redis.call`s are admitted through
+    /// (`specs/txn.md` FM-TXN-051).
+    ///
+    /// The issuer-scoped half (`admission`) arrives on the shard message; slot
+    /// ownership and the self-fence come from *this worker's* live handles, so
+    /// they are the node's current truth rather than a value captured when the
+    /// command was dispatched — which is the whole point of moving the three
+    /// checks off the connection's queue-time gauntlet.
+    ///
+    /// Separate from [`Self::command_context`] because it is not part of every
+    /// execution: a command that reached the shard through the connection's
+    /// gauntlet has already been admitted.
+    pub(crate) fn write_seam(
+        &self,
+        admission: crate::write_seam::WriteAdmission,
+    ) -> crate::write_seam::ShardWriteSeam {
+        // Same derivation as `command_context`'s: the dynamic self_node_id from
+        // ClusterState (updated by HARD reset) wins over the static one.
+        let node_id = self
+            .cluster
+            .cluster_state()
+            .and_then(|cs| cs.self_node_id())
+            .or(self.cluster.node_id());
+        crate::write_seam::ShardWriteSeam::new(
+            Some(admission),
+            self.cluster.cluster_state().cloned(),
+            node_id,
+            self.cluster.quorum_checker_owned(),
+            self.cluster.replication_tracker().cloned(),
+        )
+    }
+
+    /// Admit every command of a queued transaction through the shard write
+    /// seam before any of them runs (`specs/txn.md` FM-TXN-051).
+    ///
+    /// The connection's queue-time gauntlet checked the same three things when
+    /// each command was *queued*; between then and EXEC the slot can move, the
+    /// user's ACL can be rewritten and the good-replica count can drop. Because
+    /// EXEC's whole point is that the batch is indivisible, a refusal here fails
+    /// the transaction as a whole rather than one slot of it — no command has
+    /// run yet, so nothing partial survives.
+    pub(crate) fn admit_transaction(
+        &self,
+        commands: &[frogdb_protocol::ParsedCommand],
+        admission: &crate::write_seam::WriteAdmission,
+    ) -> Result<(), String> {
+        let seam = self.write_seam(admission.clone());
+        for command in commands {
+            let name = command.name_uppercase_string();
+            let Some(entry) = self.registry.get(&name) else {
+                // Unknown command: EXEC's own per-command path reports it.
+                continue;
+            };
+            let args = &command.args;
+            let keyed_flags = entry.keys_with_flags(args);
+            seam.admit(&crate::write_seam::WriteRequest {
+                name: &name,
+                subcommand: crate::command::extract_subcommand(&name, args),
+                is_write: entry.flags().contains(crate::command::CommandFlags::WRITE),
+                keyed_flags: &keyed_flags,
+                fallback_access: crate::command::key_access_type_for_flags(entry.flags()),
+            })?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn command_context(
         &mut self,
         conn_id: u64,
@@ -377,6 +444,10 @@ impl ShardWorker {
             snapshot_stats,
             bgsave_in_progress,
             recovery_stats,
+            // Set by `run_script` alone: only a script invocation carries the
+            // per-caller `WriteAdmission` the seam needs, and only a script
+            // produces writes the connection's gauntlet never saw.
+            write_seam: None,
             effects: Default::default(),
         }
     }

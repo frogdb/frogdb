@@ -71,3 +71,17 @@ The barrier work deliberately wrote no row for it, because the continuation-lock
 tracked bypasses of its own (`CoreMsg::ExecTransaction` — round-2 #50, `ScriptingMsg::FunctionCall`
 — hardening-2 #05); pinning barrier behaviour on a known-leaky seam would be a false claim. Sequence:
 fix #50/#05 first, then witness the cross-shard case here and write its row.
+
+## Comment — 2026-08-14: the Lua-bypass half is closed; the repro is promoted
+
+Spec-gaps issue 06 built the shard write seam (`frogdb-core/src/write_seam.rs`,
+`specs/txn.md` FM-TXN-051). Every `redis.call` a script issues is admitted there — slot ownership,
+ACL, write admission — so the acceptance bullets about self-fence /
+`min-replicas-to-write` are answered: `test_self_fence_does_not_gate_lua_writes` is now
+`test_self_fence_gates_lua_writes`, and the Lua half of
+`test_min_replicas_to_write_multi_and_lua_paths` asserts the gate instead of the bypass. The
+"writes land where they should not" repro is promoted to
+`an_undeclared_script_write_to_a_departed_slot_is_refused` (gate.rs), a forcing test of FM-TXN-051.
+
+What this issue still owns is unchanged: the **cross-shard script holding a VLL continuation**
+across a handoff, still gated on the continuation-lock bypasses (round-2 #50, hardening-2 #05).

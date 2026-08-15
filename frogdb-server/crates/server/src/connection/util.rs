@@ -3,73 +3,20 @@
 //! These functions have no coupling to `ConnectionHandler` and are used
 //! by various connection submodules.
 
-use bytes::Bytes;
 use frogdb_core::{
-    CommandFlags, KeyAccessFlag, KeyAccessType, StreamId,
+    StreamId,
     cluster::{ClusterCommand, NodeInfo, NodeRole, SlotRange},
 };
 use frogdb_protocol::{ParsedCommand, RaftClusterOp};
 
-/// Determine key access type from command flags.
-///
-/// Command-level fallback used when a key carries no per-key access flags (see
-/// [`required_access_for_key_flags`]).
-pub(crate) fn key_access_type_for_flags(flags: CommandFlags) -> KeyAccessType {
-    if flags.contains(CommandFlags::READONLY) {
-        KeyAccessType::Read
-    } else if flags.contains(CommandFlags::WRITE) {
-        KeyAccessType::Write
-    } else {
-        // Commands with neither flag (admin commands, etc.) - check both
-        KeyAccessType::ReadWrite
-    }
-}
-
-/// Map a single key's per-key access flags to the [`KeyAccessType`] the ACL
-/// layer must satisfy for that key.
-///
-/// This is what lets STORE-family commands enforce Redis semantics: the
-/// destination key needs write access while the source keys need only read, so
-/// a `%R~src* %W~dst*` user can run e.g. `SINTERSTORE dst src…`. The
-/// command-level [`key_access_type_for_flags`] applied the same access to every
-/// key and would deny that user.
-///
-/// Flag → requirement: `R` reads, `W`/`OW` write, `RW` both. A key that both
-/// reads and writes maps to [`KeyAccessType::ReadWrite`].
-///
-/// `fallback` is the command-level derivation, used only when `flags` is empty.
-/// In practice every key produced by `keys_with_flags` carries exactly one flag
-/// (both [`AccessSpec::resolve`](frogdb_core::AccessSpec) and the dynamic hook
-/// always push a `vec![flag]`), so the empty case is unreachable today; the
-/// fallback keeps the mapping total and correct should a future spec declare
-/// keys without flags.
-pub(crate) fn required_access_for_key_flags(
-    flags: &[KeyAccessFlag],
-    fallback: KeyAccessType,
-) -> KeyAccessType {
-    if flags.is_empty() {
-        return fallback;
-    }
-    let mut read = false;
-    let mut write = false;
-    for flag in flags {
-        match flag {
-            KeyAccessFlag::R => read = true,
-            KeyAccessFlag::W | KeyAccessFlag::OW => write = true,
-            KeyAccessFlag::RW => {
-                read = true;
-                write = true;
-            }
-        }
-    }
-    match (read, write) {
-        (true, true) => KeyAccessType::ReadWrite,
-        (true, false) => KeyAccessType::Read,
-        (false, true) => KeyAccessType::Write,
-        // Unreachable: `flags` is non-empty and every variant sets a bit.
-        (false, false) => fallback,
-    }
-}
+// The ACL layer's three name/flag→access mappings live in `frogdb-core`
+// (`command.rs`), not here: the shard-level `ShardWriteSeam` authorizes a Lua
+// script's runtime writes with the *same* derivation the connection uses, and a
+// second copy of the mapping is exactly the drift `PermissionGuard` was created
+// to prevent. Re-exported so the connection call sites keep their short path.
+pub(crate) use frogdb_core::command::{
+    extract_subcommand, key_access_type_for_flags, required_access_for_key_flags,
+};
 
 /// Convert protocol BlockingOp to core BlockingOp.
 pub(crate) fn convert_blocking_op(op: frogdb_protocol::BlockingOp) -> frogdb_core::BlockingOp {
@@ -246,26 +193,6 @@ pub(crate) fn raft_op_to_command(op: &RaftClusterOp) -> ClusterCommand {
     }
 }
 
-/// Commands that have subcommands (container commands in Redis terminology).
-pub(crate) const CONTAINER_COMMANDS: &[&str] = &[
-    "ACL", "CLIENT", "CONFIG", "CLUSTER", "DEBUG", "HOTKEYS", "MEMORY", "MODULE", "OBJECT",
-    "SCRIPT", "SLOWLOG", "XGROUP", "XINFO", "COMMAND", "PUBSUB", "FUNCTION", "LATENCY", "STATUS",
-    "SELECT",
-];
-
-/// Extract subcommand from args for container commands.
-pub(crate) fn extract_subcommand(command: &str, args: &[Bytes]) -> Option<String> {
-    if CONTAINER_COMMANDS
-        .iter()
-        .any(|c| c.eq_ignore_ascii_case(command))
-    {
-        args.first()
-            .map(|a| String::from_utf8_lossy(a).to_uppercase())
-    } else {
-        None
-    }
-}
-
 /// Validate a client name for `CLIENT SETNAME` / `HELLO … SETNAME`.
 ///
 /// Redis (`networking.c` `clientSetNameOrReply`) rejects any byte outside the
@@ -285,6 +212,7 @@ pub(crate) fn validate_client_name(name: &[u8]) -> Result<(), &'static str> {
 mod tests {
     use super::*;
     use frogdb_core::KeyAccessFlag::{OW, R, RW, W};
+    use frogdb_core::acl::KeyAccessType;
 
     #[test]
     fn read_only_flag_maps_to_read() {

@@ -211,6 +211,10 @@ impl TxnHost for ConnectionHandler {
             watches,
             conn_id: self.state.id,
             protocol_version: self.state.protocol_version,
+            // Re-admitted at the shard before any queued command runs: the
+            // queue-time checks are as old as the MULTI window
+            // (`specs/txn.md` FM-TXN-051).
+            admission: self.write_admission(),
             response_tx,
         };
 

@@ -109,6 +109,10 @@ impl ReplicaCommandExecutor {
             watches: Vec::new(),
             conn_id: REPLICA_INTERNAL_CONN_ID,
             protocol_version: ProtocolVersion::Resp2,
+            // Replica apply: the primary admitted this write for the user that
+            // issued it, and re-checking here would refuse every replicated
+            // write (the slot belongs to the primary).
+            admission: frogdb_core::write_seam::WriteAdmission::pre_authorized(),
             response_tx,
         };
         self.sender_for(shard_id)?

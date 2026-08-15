@@ -65,6 +65,7 @@ async fn exec_tx(worker: &mut ShardWorker, commands: Vec<ParsedCommand>) -> Tran
         watches: vec![],
         conn_id: 1,
         protocol_version: ProtocolVersion::Resp3,
+        admission: frogdb_core::write_seam::WriteAdmission::internal(),
         response_tx: tx,
     };
     worker.drive(msg).await;

@@ -113,6 +113,7 @@ impl Fixture {
             conn_id: 1,
             protocol_version: ProtocolVersion::Resp2,
             read_only: false,
+            admission: frogdb_core::write_seam::WriteAdmission::internal(),
             response_tx: tx,
         };
         self.worker.drive(msg).await;

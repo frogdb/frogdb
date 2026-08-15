@@ -10,6 +10,7 @@ use frogdb_types::metrics::labels::{ScriptError as ScriptErrorLabel, ScriptKind}
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
 use crate::scripting::{CacheDisposition, ScriptExecutor, ScriptOutcome};
+use crate::write_seam::WriteAdmission;
 
 use super::worker::ShardWorker;
 use crate::clock;
@@ -24,12 +25,14 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
         read_only: bool,
+        admission: WriteAdmission,
     ) -> Response {
         let is_cluster_mode = self.cluster.is_cluster_mode();
         self.run_script(
             ScriptKind::Eval,
             conn_id,
             protocol_version,
+            admission,
             |executor, ctx, registry| {
                 executor.eval(
                     script_source,
@@ -54,12 +57,14 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
         read_only: bool,
+        admission: WriteAdmission,
     ) -> Response {
         let is_cluster_mode = self.cluster.is_cluster_mode();
         self.run_script(
             ScriptKind::Evalsha,
             conn_id,
             protocol_version,
+            admission,
             |executor, ctx, registry| {
                 executor.evalsha(
                     script_sha,
@@ -89,6 +94,7 @@ impl ShardWorker {
         kind: ScriptKind,
         conn_id: u64,
         protocol_version: ProtocolVersion,
+        admission: WriteAdmission,
         invoke: impl FnOnce(&mut ScriptExecutor, &mut CommandContext, &CommandRegistry) -> ScriptOutcome,
     ) -> Response {
         let shard_label = self.identity.shard_id().to_string();
@@ -110,8 +116,12 @@ impl ShardWorker {
             .scripting
             .take_executor()
             .expect("executor presence checked above");
+        // The shard write seam every `redis.call` this script issues is admitted
+        // through (`specs/txn.md` FM-TXN-051).
+        let write_seam = self.write_seam(admission);
         let (outcome, script_writes) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
+            ctx.write_seam = Some(write_seam);
             let outcome = invoke(&mut executor, &mut ctx, &registry);
             // Drain the effective writes the script's `redis.call`s recorded
             // before the context drops; the pipeline below consumes them.

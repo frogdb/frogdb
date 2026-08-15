@@ -318,12 +318,13 @@ impl PreDispatchView<'_> {
         // only happens for WRITE-flagged commands.
         //
         // NOTE: like the self-fence gate this fires only in `run_pre_checks`,
-        // which covers direct writes and MULTI *queue* time. Writes issued from
-        // inside a Lua script (`redis.call`, EVAL lacks the WRITE flag) and the
-        // narrow window where a MULTI is queued while replicas are healthy and
-        // then EXEC'd after they drop are NOT gated here — a bound shared with
-        // self-fence, tracked as a follow-up (uniform enforcement belongs at the
-        // shard/script-gate write seam).
+        // which covers direct writes and MULTI *queue* time. The two producers
+        // it cannot see — a Lua `redis.call` (EVAL lacks the WRITE flag) and a
+        // MULTI queued while replicas are healthy then EXEC'd after they drop —
+        // are gated on the shard instead, by `ShardWriteSeam::admit`
+        // (`specs/txn.md` FM-TXN-051), against the `WriteAdmission` this
+        // connection built at dispatch time. So both fences run twice for a
+        // script or a transaction: here, and again where the write happens.
         if let Some(cmd_impl) = self.registry.get_entry(cmd_name)
             && cmd_impl.flags().contains(CommandFlags::WRITE)
         {

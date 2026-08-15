@@ -17,7 +17,10 @@
 //! sites that had already drifted (a queue path that skipped logging, a
 //! `' '`-vs-`'|'` subcommand separator).
 
+use std::sync::Arc;
+
 use bytes::Bytes;
+use frogdb_core::write_seam::{AclIdentity, WriteAdmission};
 use frogdb_core::{
     AclError, AclLog, AclManager, AuthenticatedUser, FullAclChecker, KeyAccessFlag, KeyAccessType,
     PermissionResult,
@@ -36,6 +39,30 @@ impl ConnectionHandler {
     /// command). The `client-info` recorded for any denial is `ip:port`.
     pub(crate) fn permission_guard(&self) -> Option<PermissionGuard<'_>> {
         build_permission_guard(&self.core.acl_manager, &self.state)
+    }
+
+    /// The issuer-scoped half of a shard write-seam decision for this
+    /// connection: its ACL identity and the live `min-replicas-to-write` floor.
+    ///
+    /// The seam that consumes it runs on the *shard*, which can see neither —
+    /// so both travel on the shard message (`specs/txn.md` FM-TXN-051). Same
+    /// identity binding as [`Self::permission_guard`] (`None` when
+    /// unauthenticated → ACL not enforced) and the same live config read as
+    /// `run_pre_checks`'s `NOREPLICAS` gate, so a write a script issues is
+    /// judged exactly as the same write typed directly would be.
+    pub(crate) fn write_admission(&self) -> WriteAdmission {
+        let acl = self.state.authenticated_user().map(|user| {
+            AclIdentity::new(
+                Arc::clone(&self.core.acl_manager),
+                user.clone(),
+                format!("{}:{}", self.state.addr.ip(), self.state.addr.port()),
+            )
+        });
+        WriteAdmission::new(
+            acl,
+            self.admin.config_manager.min_replicas_to_write(),
+            std::time::Duration::from_millis(self.admin.config_manager.min_replicas_timeout_ms()),
+        )
     }
 }
 

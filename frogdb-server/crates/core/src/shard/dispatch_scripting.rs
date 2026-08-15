@@ -12,6 +12,7 @@ impl ShardWorker {
                 conn_id,
                 protocol_version,
                 read_only,
+                admission,
                 response_tx,
             } => {
                 if let Err(err) = self.can_execute_during_lock(conn_id) {
@@ -26,6 +27,7 @@ impl ShardWorker {
                         conn_id,
                         protocol_version,
                         read_only,
+                        admission,
                     )
                     .await;
                 let _ = response_tx.send(response);
@@ -37,6 +39,7 @@ impl ShardWorker {
                 conn_id,
                 protocol_version,
                 read_only,
+                admission,
                 response_tx,
             } => {
                 if let Err(err) = self.can_execute_during_lock(conn_id) {
@@ -51,6 +54,7 @@ impl ShardWorker {
                         conn_id,
                         protocol_version,
                         read_only,
+                        admission,
                     )
                     .await;
                 let _ = response_tx.send(response);
@@ -81,6 +85,7 @@ impl ShardWorker {
                 conn_id,
                 protocol_version,
                 read_only,
+                admission,
                 response_tx,
             } => {
                 let response = self
@@ -91,6 +96,7 @@ impl ShardWorker {
                         conn_id,
                         protocol_version,
                         read_only,
+                        admission,
                     )
                     .await;
                 let _ = response_tx.send(response);

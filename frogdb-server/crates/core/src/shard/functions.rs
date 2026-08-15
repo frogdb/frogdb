@@ -5,6 +5,7 @@ use frogdb_scripting::FunctionFlags;
 use crate::sync::RwLockExt;
 
 use super::worker::ShardWorker;
+use crate::write_seam::WriteAdmission;
 
 impl ShardWorker {
     /// Handle FCALL/FCALL_RO - execute a function.
@@ -16,6 +17,7 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
         read_only: bool,
+        admission: WriteAdmission,
     ) -> Response {
         // Get function and library code from registry in a single scope
         // to release the immutable borrow before the OOM check.
@@ -91,8 +93,12 @@ impl ShardWorker {
             .scripting
             .take_executor()
             .expect("executor presence checked above");
+        // Same shard write seam as EVAL/EVALSHA: a function's `redis.call`s are
+        // writes the connection's gauntlet never saw (`specs/txn.md` FM-TXN-051).
+        let write_seam = self.write_seam(admission);
         let (result, script_writes) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
+            ctx.write_seam = Some(write_seam);
             let result = executor.execute_function(
                 &func_name,
                 &library_code,
