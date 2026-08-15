@@ -40,6 +40,10 @@ pub(crate) trait DurableSyncTarget: Send + Sync {
     fn publish_synced_through(&self, seq: u64);
 }
 
+/// Live sync targets paired with the committed sequence snapshotted for each
+/// before the flush in [`RocksStore::durable_sync`].
+type PendingSyncTargets = Vec<(Arc<dyn DurableSyncTarget>, u64)>;
+
 pub struct RocksStore {
     pub(crate) db: DBWithThreadMode<MultiThreaded>,
     pub(crate) num_shards: usize,
@@ -351,7 +355,7 @@ impl RocksStore {
     /// prevent. Publishing after a failed flush would make
     /// the same claim, so a flush error short-circuits.
     pub fn durable_sync(&self) -> Result<(), RocksError> {
-        let (pending, covered_seq): (Vec<(Arc<dyn DurableSyncTarget>, u64)>, u64) = {
+        let (pending, covered_seq): (PendingSyncTargets, u64) = {
             let mut targets = self.sync_targets.lock().unwrap();
             targets.retain(|w| w.strong_count() > 0);
             let pending = targets
