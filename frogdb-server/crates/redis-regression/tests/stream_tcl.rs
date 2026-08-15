@@ -1139,12 +1139,15 @@ async fn tcl_xread_xadd_del_should_not_awake_client() {
 //
 // Same scenario as the previous test but the MULTI additionally does
 // `LPUSH s1 foo bar` after the DEL, so the key ends the transaction as a
-// list, not a stream. The blocker on XREAD must still not wake. After a
-// standalone DEL + XADD to reset the key back to a stream, the blocker
-// finally wakes with the new entry.
+// list, not a stream. Upstream leaves the blocker parked; FrogDB deviates
+// deliberately (TR-BLOCKING-022, specs/blocking.md deviations section): a
+// wrong-typed key drains every stream waiter with WRONGTYPE, because a
+// `BLOCK 0` waiter would otherwise sit unleavable for as long as the key
+// stays wrong-typed. The connection stays usable afterwards: a fresh XREAD
+// against the reset stream parks and wakes normally.
 
 #[tokio::test]
-async fn tcl_xread_xadd_del_lpush_should_not_awake_client() {
+async fn tcl_xread_xadd_del_lpush_drains_the_waiter_with_wrongtype() {
     let server = TestServer::start_standalone().await;
     let mut blocker = server.connect().await;
     let mut writer = server.connect().await;
@@ -1165,16 +1168,22 @@ async fn tcl_xread_xadd_del_lpush_should_not_awake_client() {
     writer.command(&["LPUSH", "s1", "foo", "bar"]).await;
     writer.command(&["EXEC"]).await;
 
-    // Verify the blocker was not woken.
-    let still_blocked = blocker.read_response(Duration::from_millis(200)).await;
-    assert!(
-        still_blocked.is_none(),
-        "blocker should still be blocked after XADD+DEL+LPUSH transaction, got {still_blocked:?}"
-    );
-    assert_eq!(server.blocked_client_count(), 1);
+    // TR-BLOCKING-022: the wrong-typed key drains the waiter with WRONGTYPE
+    // instead of leaving it parked (upstream behavior).
+    let resp = blocker
+        .read_response(Duration::from_secs(5))
+        .await
+        .expect("blocker should be drained with WRONGTYPE after the key turns into a list");
+    assert_error_prefix(&resp, "WRONGTYPE");
+    assert_eq!(server.blocked_client_count(), 0);
 
-    // Reset the key back to a stream and wake the blocker.
+    // The connection stays usable: reset the key back to a stream, park a
+    // fresh XREAD, and wake it with a new entry.
     writer.command(&["DEL", "s1"]).await;
+    blocker
+        .send_only(&["XREAD", "BLOCK", "20000", "STREAMS", "s1", "$"])
+        .await;
+    server.wait_for_blocked_clients(1).await;
     writer
         .command(&["XADD", "s1", "*", "new", "abcd1234"])
         .await;
