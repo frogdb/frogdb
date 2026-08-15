@@ -258,6 +258,7 @@ enum EvalKind {
 }
 
 impl EvalKind {
+    #[allow(clippy::too_many_arguments)]
     fn into_message(
         self,
         keys: Vec<Bytes>,
