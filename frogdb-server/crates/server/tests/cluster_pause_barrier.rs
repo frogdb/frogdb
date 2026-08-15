@@ -392,3 +392,66 @@ async fn write_exec_parks_on_a_slot_barrier_and_commits_after_release() {
 
     server.shutdown().await;
 }
+
+/// TR-BLOCKING-025's bypass of `CLIENT PAUSE` for blocking-capable commands
+/// (spec-gaps issue 17 / distsys-review MAJ-14) is scoped to the node-global
+/// pause dimension only. A slot-scoped barrier must still hold back a
+/// blocking command's *synchronous immediate-pop* path: `BLPOP` on a
+/// barriered slot with data already present must park, not pop through the
+/// barrier, or an acknowledged write could cross a handoff mid-flight — the
+/// hazard `ReplicaFeedGate`/FM-CLUSTER-097 closes. `wait_if_paused`'s
+/// `slot_pause_blocks_command` check exists precisely to keep this case
+/// parked even though the same command bypasses a plain node-global pause.
+#[tokio::test]
+async fn blocking_command_still_parks_on_a_slot_barrier_despite_the_pause_bypass() {
+    let server = TestServer::start_standalone().await;
+    let barriered = key_for_slot(BARRIERED_SLOT);
+
+    let mut admin = server.connect().await;
+    // Data is already present -- an unscoped bypass would let BLPOP pop it
+    // synchronously and reply immediately, barrier or no barrier.
+    assert_eq!(
+        admin.command(&["RPUSH", &barriered, "v"]).await,
+        Response::Integer(1)
+    );
+    assert_eq!(
+        admin
+            .command(&["DEBUG", "PAUSE-SLOT", &BARRIERED_SLOT.to_string(), "5000"])
+            .await,
+        Response::ok()
+    );
+
+    let mut reader = server.connect().await;
+    assert_parked(
+        &mut reader,
+        &["BLPOP", &barriered, "0"],
+        "BLPOP on the barriered slot with data already available",
+    )
+    .await;
+
+    // The element must still be there -- nothing popped it while parked.
+    assert_eq!(
+        admin.command(&["LLEN", &barriered]).await,
+        Response::Integer(1),
+        "the barrier must hold back the pop itself, not just the reply"
+    );
+
+    assert_eq!(
+        admin
+            .command(&["DEBUG", "PAUSE-SLOT", &BARRIERED_SLOT.to_string(), "0"])
+            .await,
+        Response::ok(),
+        "0 ms should disarm the barrier"
+    );
+
+    let resp = assert_released(&mut reader, "BLPOP on the barriered slot").await;
+    assert_eq!(
+        resp,
+        Response::Array(vec![
+            Response::Bulk(Some(bytes::Bytes::from(barriered.clone()))),
+            Response::Bulk(Some(bytes::Bytes::from_static(b"v"))),
+        ])
+    );
+
+    server.shutdown().await;
+}

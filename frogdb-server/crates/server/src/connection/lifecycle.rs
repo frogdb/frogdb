@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{
-    BlockingMsg, BoxFuture, ClientTrackingProvider, CommandFlags, FunctionFlags,
+    BlockingMsg, BoxFuture, ClientTrackingProvider, CommandFlags, ExecutionStrategy, FunctionFlags,
     InvalidationMessage, InvalidationSender, PauseMode, PubSubMsg, ShardSender, TrackingMsg,
 };
 use tokio::sync::mpsc;
@@ -368,16 +368,73 @@ impl ConnectionHandler {
         if !overview.is_active() {
             return false;
         }
-        let slot_mode = if overview.slot_scoped && !pause_gate::exempt_from_slot_pause(cmd_name) {
+        let slot_mode = self.slot_pause_mode(cmd_name, cmd_args, &overview);
+
+        match PauseMode::strongest(overview.node, slot_mode) {
+            Some(mode) => self.command_matches_pause_mode(cmd_name, cmd_args, mode),
+            None => false,
+        }
+    }
+
+    /// Resolves the slot-scoped pause mode covering `cmd_name`, if any —
+    /// the migration finalization barrier's half of [`should_pause_command`].
+    /// Split out so [`slot_pause_blocks_command`](Self::slot_pause_blocks_command)
+    /// can ask the slot-scoped question alone, without the node-global
+    /// `CLIENT PAUSE` dimension that dilutes `should_pause_command`'s answer.
+    fn slot_pause_mode(
+        &self,
+        cmd_name: &str,
+        cmd_args: &[bytes::Bytes],
+        overview: &frogdb_core::PauseOverview,
+    ) -> Option<PauseMode> {
+        if overview.slot_scoped && !pause_gate::exempt_from_slot_pause(cmd_name) {
             let slot = pause_gate::command_pause_slot(&self.core.registry, cmd_name, cmd_args);
             self.admin.client_registry.slot_pause(slot)
         } else {
             None
-        };
+        }
+    }
 
-        match PauseMode::strongest(overview.node, slot_mode) {
-            Some(PauseMode::All) => true,
-            Some(PauseMode::Write) => {
+    /// Whether the *slot-scoped* pause alone — the migration finalization
+    /// barrier, never a node-global `CLIENT PAUSE` — currently holds
+    /// `cmd_name` back.
+    ///
+    /// Blocking-capable commands bypass `CLIENT PAUSE` (spec-gaps issue 17 /
+    /// distsys-review MAJ-14: pause gates execution, not parking), but that
+    /// ruling is scoped to the admin-facing pause command, not the
+    /// migration barrier a slot-scoped pause implements — letting a
+    /// blocking command's synchronous immediate-pop path write straight
+    /// through an armed handoff barrier would reopen the acknowledged-write
+    /// hazard `ReplicaFeedGate`/FM-CLUSTER-097 close. So the bypass in
+    /// [`wait_if_paused`](Self::wait_if_paused) only fires when this
+    /// returns `false`.
+    fn slot_pause_blocks_command(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) -> bool {
+        let overview = self.admin.client_registry.pause_overview();
+        if !overview.slot_scoped {
+            return false;
+        }
+        match self.slot_pause_mode(cmd_name, cmd_args, &overview) {
+            Some(mode) => self.command_matches_pause_mode(cmd_name, cmd_args, mode),
+            None => false,
+        }
+    }
+
+    /// Whether `cmd_name` is subject to `mode` (`PauseMode::All` covers every
+    /// command; `PauseMode::Write` covers writes, scripts conservatively, and
+    /// a short list of commands with write-adjacent side effects). Shared by
+    /// [`should_pause_command`](Self::should_pause_command) (node-global +
+    /// slot-scoped combined) and
+    /// [`slot_pause_blocks_command`](Self::slot_pause_blocks_command)
+    /// (slot-scoped alone).
+    fn command_matches_pause_mode(
+        &self,
+        cmd_name: &str,
+        cmd_args: &[bytes::Bytes],
+        mode: PauseMode,
+    ) -> bool {
+        match mode {
+            PauseMode::All => true,
+            PauseMode::Write => {
                 // Get command flags to determine if this is a write/script
                 // command. Resolve through the registry *union* (`get_entry`) so
                 // keyed connection commands (EVAL/EVALSHA/FCALL) — which carry the
@@ -416,7 +473,6 @@ impl ConnectionHandler {
                     || is_script_command
                     || matches!(cmd_name, "PFCOUNT" | "PUBLISH" | "SPUBLISH")
             }
-            None => false,
         }
     }
 
@@ -503,6 +559,18 @@ impl ConnectionHandler {
         false
     }
 
+    /// Whether `cmd_name` is a blocking-capable command (BLPOP, BRPOP,
+    /// BLMOVE, BRPOPLPUSH, BZPOPMIN, BZPOPMAX, BLMPOP, BZMPOP, XREAD,
+    /// XREADGROUP) per its registered [`ExecutionStrategy`]. This is the
+    /// canonical, complete predicate — unlike `CommandFlags::BLOCKING`
+    /// (XREAD/XREADGROUP never carry it) or a hardcoded name list.
+    fn is_blocking_capable_command(&self, cmd_name: &str) -> bool {
+        self.core
+            .registry
+            .get_entry(cmd_name)
+            .is_some_and(|e| matches!(e.execution_strategy(), ExecutionStrategy::Blocking { .. }))
+    }
+
     /// Wait if the server is paused (CLIENT PAUSE).
     /// This queues commands (not drops them) by blocking until pause ends.
     /// Marks the client as PAUSED so `wait_for_blocked_clients` can observe it
@@ -510,7 +578,31 @@ impl ConnectionHandler {
     ///
     /// Called from `route_and_execute_with_transaction` after transaction-control
     /// dispatch and transaction queuing, so it only blocks commands outside MULTI.
+    ///
+    /// Blocking-capable commands bypass the node-global `CLIENT PAUSE`
+    /// dimension of this gate: `CLIENT PAUSE` gates *execution*, not
+    /// *parking* (spec-gaps issue 17 / distsys-review MAJ-14). A blocking
+    /// command's own `execute()` decides synchronously whether data is
+    /// already available; if not, it registers a real wait-queue entry
+    /// (`handle_blocking_wait`) whose deadline starts immediately and whose
+    /// BLOCKED flag makes it visible in `blocked_clients`/`CLIENT LIST`,
+    /// independent of any pause window (Redis's "Blocking timeout following
+    /// PAUSE should honor the timeout"). The write that would satisfy such a
+    /// waiter (e.g. LPUSH) still goes through this same gate on its own
+    /// connection, so PAUSE WRITE continues to hold back new data during the
+    /// pause — only the *waiter's* deadline is pause-independent.
+    ///
+    /// The bypass does *not* extend to the slot-scoped pause the migration
+    /// finalization barrier arms (`slot_pause_blocks_command`): a blocking
+    /// command that finds data immediately available performs its pop
+    /// synchronously, and letting that write cross an armed handoff barrier
+    /// would reopen the acknowledged-write hazard `ReplicaFeedGate` closes.
     pub(crate) async fn wait_if_paused(&self, cmd_name: &str, cmd_args: &[bytes::Bytes]) {
+        if self.is_blocking_capable_command(cmd_name)
+            && !self.slot_pause_blocks_command(cmd_name, cmd_args)
+        {
+            return;
+        }
         if !self.should_pause_command(cmd_name, cmd_args) {
             return;
         }

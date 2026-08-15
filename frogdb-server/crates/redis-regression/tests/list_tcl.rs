@@ -2908,13 +2908,11 @@ async fn tcl_client_no_touch_with_brpop_and_rpush_regression_test() {
 
 /// Upstream: `Blocking timeout following PAUSE should honor the timeout`
 /// CLIENT PAUSE (very long) is called, then a BLPOP with a 1s timeout is
-/// issued, then CLIENT UNPAUSE is called. The BLPOP should time out after
-/// ~1s, not wait forever for the pause to lift.
-///
-/// FrogDB note: CLIENT PAUSE blocks at the dispatch level before the BLPOP
-/// enters the blocking wait, so `blocked_client_count` stays at 0 during
-/// the pause. We assert the command completes with nil shortly after unpause
-/// rather than waiting for a blocked-count transition.
+/// issued. The BLPOP must time out after ~1s on its own deadline, without
+/// waiting for the pause to lift: CLIENT PAUSE gates execution, not parking
+/// (TR-BLOCKING-025). The pause is still active — deliberately never lifted
+/// — when the timeout reply is read, so a reply here can only come from the
+/// wait's own deadline, not from unpause-then-reprocess.
 #[tokio::test]
 async fn tcl_blocking_timeout_following_pause_should_honor_the_timeout() {
     let server = TestServer::start_standalone().await;
@@ -2923,32 +2921,44 @@ async fn tcl_blocking_timeout_following_pause_should_honor_the_timeout() {
 
     control.command(&["DEL", "mylist"]).await;
 
-    // PAUSE all writes for a very long time
+    // PAUSE all writes for a very long time -- long enough that the test
+    // would hang (and eventually fail on the 3s read bound below) if the
+    // BLPOP's timeout were gated by the pause instead of running on its own.
     assert_ok(
         &control
             .command(&["CLIENT", "PAUSE", "10000000000000", "WRITE"])
             .await,
     );
 
-    // Send a BLPOP with 1s timeout while paused; it should not complete yet.
+    let start = std::time::Instant::now();
     rd.send_only(&["BLPOP", "mylist", "1"]).await;
 
-    // Sanity: a short poll should NOT receive a response while paused.
+    // The wait registers immediately: `blocked_clients` reflects it well
+    // before the pause is ever lifted.
+    server.wait_for_blocked_clients(1).await;
+
+    // Sanity: a short poll should NOT receive a response yet (the 1s
+    // deadline has not elapsed).
     let early = rd.read_response(Duration::from_millis(100)).await;
     assert!(
         early.is_none(),
-        "BLPOP must not return while paused, got {early:?}"
+        "BLPOP must not return before its own deadline, got {early:?}"
     );
 
-    // Now unpause the writes; the BLPOP can proceed and should time out.
-    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
-
-    // The BLPOP should produce a nil reply reasonably soon after unpause.
-    let resp = rd.read_response(Duration::from_secs(3)).await;
+    // The BLPOP must produce its nil reply at ~1s -- while the pause is
+    // still fully active, not "shortly after unpause".
+    let resp = rd
+        .read_response(Duration::from_secs(3))
+        .await
+        .expect("BLPOP should time out on its own 1s deadline while still paused");
+    assert_nil(&resp);
+    let elapsed = start.elapsed();
     assert!(
-        resp.is_none() || matches!(&resp, Some(Response::Bulk(None))),
-        "expected nil/timeout, got {resp:?}"
+        elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(2500),
+        "BLPOP should honor its 1s timeout regardless of the still-active pause, elapsed={elapsed:?}"
     );
+
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
 }
 
 // ---------------------------------------------------------------------------

@@ -654,18 +654,30 @@ async fn tcl_randomkey_no_infinite_loop_during_pause_write() {
 // CLIENT UNBLOCK cannot unblock clients blocked by CLIENT PAUSE
 // ---------------------------------------------------------------------------
 
+/// CLIENT PAUSE gates execution, not parking (TR-BLOCKING-025 / spec-gaps
+/// issue 17): a blocking command issued during an active pause enters the
+/// real BLOCKED state immediately rather than sitting PAUSED at dispatch, so
+/// `CLIENT UNBLOCK` -- which only refuses genuinely PAUSED clients -- works
+/// on it right away, without waiting for `CLIENT UNPAUSE`.
+///
+/// This supersedes the pre-issue-17 behavior (a BLPOP sent during pause used
+/// to sit PAUSED, not BLOCKED, and `CLIENT UNBLOCK` correctly refused it
+/// until unpause). A plain write command (SET) still goes through the
+/// ordinary PAUSED poll loop and stays unaffected by `CLIENT UNBLOCK`.
 #[tokio::test]
-async fn tcl_client_unblock_not_allowed_for_pause_blocked_clients() {
+async fn tcl_client_unblock_works_for_blocking_commands_during_pause() {
     let server = TestServer::start_standalone().await;
     let mut control = server.connect().await;
     let mut rd1 = server.connect().await;
     let mut rd2 = server.connect().await;
+    let mut writer = server.connect().await;
 
     // Get client IDs
     let resp1 = rd1.command(&["CLIENT", "ID"]).await;
     let client_id1 = unwrap_integer(&resp1);
     let resp2 = rd2.command(&["CLIENT", "ID"]).await;
     let client_id2 = unwrap_integer(&resp2);
+    let writer_id = unwrap_integer(&writer.command(&["CLIENT", "ID"]).await);
 
     control.command(&["DEL", "mylist"]).await;
 
@@ -675,58 +687,35 @@ async fn tcl_client_unblock_not_allowed_for_pause_blocked_clients() {
             .await,
     );
 
+    // A genuinely PAUSED (non-blocking) client: CLIENT UNBLOCK never applies
+    // to it, pause or no pause, since it never carries the BLOCKED flag.
+    writer.send_only(&["SET", "mylist", "not-a-list"]).await;
+    server.wait_for_blocked_clients(1).await;
+    assert_integer_eq(
+        &control
+            .command(&["CLIENT", "UNBLOCK", &writer_id.to_string(), "TIMEOUT"])
+            .await,
+        0,
+    );
+
     rd1.send_only(&["BLPOP", "mylist", "0"]).await;
     rd2.send_only(&["BLPOP", "mylist", "0"]).await;
-    server.wait_for_blocked_clients(2).await;
+    server.wait_for_blocked_clients(3).await;
 
-    // CLIENT UNBLOCK should return 0 (cannot unblock pause-blocked clients)
+    // CLIENT UNBLOCK succeeds immediately -- the pause is still fully
+    // active, and was never lifted before these calls.
     assert_integer_eq(
         &control
             .command(&["CLIENT", "UNBLOCK", &client_id1.to_string(), "TIMEOUT"])
             .await,
-        0,
+        1,
     );
     assert_integer_eq(
         &control
             .command(&["CLIENT", "UNBLOCK", &client_id2.to_string(), "ERROR"])
             .await,
-        0,
+        1,
     );
-
-    // After unpause, CLIENT UNBLOCK should work. BLPOP will resume and
-    // block on the list (transitioning from PAUSED to BLOCKED).
-    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
-
-    // Wait for the PAUSED -> BLOCKED transition. Poll CLIENT UNBLOCK until
-    // it returns 1, indicating the client has the BLOCKED flag (not PAUSED).
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let resp = control
-            .command(&["CLIENT", "UNBLOCK", &client_id1.to_string(), "TIMEOUT"])
-            .await;
-        if matches!(&resp, frogdb_protocol::Response::Integer(1)) {
-            break;
-        }
-        if tokio::time::Instant::now() > deadline {
-            panic!("CLIENT UNBLOCK did not succeed after unpause");
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-
-    // Now unblock the second client
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let resp = control
-            .command(&["CLIENT", "UNBLOCK", &client_id2.to_string(), "ERROR"])
-            .await;
-        if matches!(&resp, frogdb_protocol::Response::Integer(1)) {
-            break;
-        }
-        if tokio::time::Instant::now() > deadline {
-            panic!("CLIENT UNBLOCK did not succeed after unpause");
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 
     // rd1 should get nil (timeout unblock)
     let resp = rd1.read_response(Duration::from_secs(2)).await;
@@ -735,4 +724,65 @@ async fn tcl_client_unblock_not_allowed_for_pause_blocked_clients() {
     // rd2 should get an UNBLOCKED error
     let resp = rd2.read_response(Duration::from_secs(2)).await;
     assert_error_prefix(&resp.expect("rd2 should get UNBLOCKED error"), "UNBLOCKED");
+
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
+    let resp = writer.read_response(Duration::from_secs(2)).await;
+    assert_ok(&resp.expect("SET response after unpause"));
+}
+
+/// The satisfaction path -- a later write waking a parked waiter -- still
+/// respects PAUSE WRITE even though the waiter itself bypassed the pause
+/// gate to park immediately (TR-BLOCKING-025). The would-be satisfying write
+/// is on its own connection and goes through the same `wait_if_paused` gate,
+/// which does not exempt LPUSH (it is not blocking-capable), so it queues
+/// behind the pause exactly as it always has; the parked BLPOP is served
+/// only once the pause lifts and the write actually runs.
+#[tokio::test]
+async fn tcl_blocking_satisfaction_still_respects_write_pause() {
+    let server = TestServer::start_standalone().await;
+    let mut control = server.connect().await;
+    let mut rd = server.connect().await;
+    let mut writer = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "100000", "WRITE"])
+            .await,
+    );
+
+    // The waiter parks immediately, bypassing the pause gate.
+    rd.send_only(&["BLPOP", "mylist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    // The would-be satisfying write does NOT bypass the gate: it queues
+    // behind the still-active pause instead of running and waking rd.
+    writer.send_only(&["LPUSH", "mylist", "elem"]).await;
+    server.wait_for_blocked_clients(2).await;
+
+    // rd must still be waiting -- the LPUSH has not actually run yet.
+    let early = rd.read_response(Duration::from_millis(200)).await;
+    assert!(
+        early.is_none(),
+        "BLPOP must not be served by a write still queued behind the pause, got {early:?}"
+    );
+
+    // Lifting the pause lets the LPUSH run, which then wakes the waiter.
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
+
+    let push_resp = writer
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("LPUSH should complete after unpause");
+    assert_integer_eq(&push_resp, 1);
+
+    let resp = rd
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("BLPOP should be served once the satisfying write actually runs");
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2, "expected [key, element] array");
+    assert_eq!(unwrap_bulk(&items[0]), b"mylist");
+    assert_eq!(unwrap_bulk(&items[1]), b"elem");
 }

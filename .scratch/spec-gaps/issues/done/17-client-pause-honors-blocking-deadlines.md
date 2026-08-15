@@ -1,6 +1,6 @@
 # 17: CLIENT PAUSE honors blocking deadlines — blocked state entered, timer runs
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
