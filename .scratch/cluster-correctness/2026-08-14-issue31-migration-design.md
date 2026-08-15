@@ -1,13 +1,17 @@
-# Slot migration redesign — source-authoritative-until-commit (v8)
+# Slot migration redesign — source-authoritative-until-commit (v10)
 
-Status: revision 8 — draft, pending approval. Review v8 (of revision 7) found 6
-CRITICAL / 6 MAJOR / 5 MINOR: two of revision 7's fixes were regressions (the
-self-cleanse rule was the predicate §7 forbids — V8-C1; the Demotion arm was an
-unfenced role writer with no slot re-homing — V8-C2/C6), plus the target-attestation
-durability hole (V8-C3), the volatile proxy precondition (V8-C4), and the LOCKED
-`MIGRATE` pause-exemption seal hole (V8-C5). 9/16 of v7's findings RESOLVED, 3
-PARTIAL, 2 REGRESSED. This revision resolves all of v8's findings.
-Reviews: issue31-adversarial-review-v2/-v3/-v4/-v5/-v6/-v7/-v8, job dir 2026-08-14.
+Status: revision 10 — draft, pending approval. Review v10 (of revision 9) found 4
+CRITICAL / 2 MAJOR / 8 MINOR: three of revision 9's own fixes regressed (the
+refuse-whole veto never gated the node-local `REPLICAOF` that mints the demotion,
+so the local adoption proceeded while replicated state kept the node Primary —
+V10-C1; the level-triggered target re-home arm reproduced V9-C1's unproven pointer
+walk — V10-C4; V9-C2's durable-attestation rule was never propagated to the
+replica-ack floor — V10-C2), plus `Complete` never re-verifying the target's role
+(V10-C3), the universal re-mint falsifying §0's identity-discontinuity claim
+(V10-M1), and the replica floor surviving counted-set changes stale (V10-M2). 4/11
+of v9's findings RESOLVED, 4 PARTIAL, 3 REGRESSED. This revision resolves all of
+v10's findings.
+Reviews: issue31-adversarial-review-v2 through -v10, job dir 2026-08-14.
 Issue: [31](issues/open/31-slot-migration-redesign-source-authoritative-until-commit.md)
 Origin ruling: distsys review MAJ-5 (see `.scratch/formal-spec/2026-08-13-distsys-review-rulings.md`)
 
@@ -90,8 +94,13 @@ moments produce indistinguishable `(node, run_id)` triples, per FM-REPLICATION-0
 bare-`REPLICAOF` demotion and a boot both bump `identity_seq`, so the arm a report
 selects must be a committed payload fact, never inferred at apply)
 (V4-M4a — the FM-REPLICATION-023 one-cell-per-process identity changes, all three):
-**boot** (`kind = Boot`), **promotion** (`kind = Promotion`), and **demotion / history
-adoption** (`kind = Demotion`; FM-REPLICATION-022: a bare
+**boot** (`kind = Boot`; a **`ResetCluster` re-mint also reports `kind = Boot`** —
+V10-m4: reset is a fourth identity *moment* but deliberately not a fourth *arm*,
+because `ResetCluster`'s own apply writes the node's role and membership, so the
+Boot arm's write-only-the-identity behavior is exactly what the reset report
+needs — stated again at the lifecycle bullet below), **promotion**
+(`kind = Promotion`), and **demotion / history adoption** (`kind = Demotion`;
+FM-REPLICATION-022: a bare
 `REPLICAOF` demotion ends the stint and `adopt_replication_history` replaces the replid
 on link-up — a full history discontinuity that must reach the replicated field).
 A `Demotion` report additionally carries `new_primary_id: Option<NodeId>` — the
@@ -114,14 +123,23 @@ registration initializes the field absent, and the boot report fills it.)
 within a boot, but promote→demote→re-promote changes identity three times inside one
 boot, so incarnation alone cannot order the reports): each node keeps `identity_seq`, a
 monotone counter **persisted with the incarnation** and bumped on every identity change
-(boot, promotion, demotion/adoption) — that node-local durable counter is the *mint*;
+(boot, promotion, demotion/adoption, cluster reset — and **only** these genuine
+discontinuities, V10-m4/V10-M1) — that node-local durable counter is the *mint*;
 the *authoritative comparison operand* is the copy inside the replicated
 `NodeInfo.run_identity` triple. `ReportRunIdentity` admission: proposer is `node` ∧
-`(payload.incarnation, payload.identity_seq) > (stored.incarnation,
+`(payload.incarnation, payload.identity_seq) ≥ (stored.incarnation,
 stored.identity_seq)` (lexicographic), **both sides read from replicated state and the
 committed payload — never a node-local cell at apply** (FM-CLUSTER-089 determinism
-preserved; the conjunct is evaluable identically on every applier). A retried or
-reordered report from earlier in the boot is a refused no-op — it can neither regress
+preserved; the conjunct is evaluable identically on every applier). **The ordering
+conjunct is split (V10-M1)**: the **strict** comparison (`>`) guards only the
+`run_identity` **field write** — apply writes the field iff the payload triple orders
+strictly above the stored one. At **equality** the report is still admitted, as a
+**topology-only re-proposal**: the field write is skipped (it would be idempotent) and
+the selected arm's role/upstream writes proceed under their own per-object fence
+conjuncts, which consume the payload's fresh committed topology facts. This is what
+lets a level-triggered reconcile re-report the *same* identity with corrected
+role/upstream facts without minting a fake discontinuity. A payload triple ordering
+strictly *below* the stored one is a refused no-op — it can neither regress
 the field nor spuriously cancel migrations. **Every equality on a run identity
 (`record.run_id == nodes[record.source].run_identity`, the receipt assertions of §4,
 the resume rule) compares all three components** — a component-dropping comparison
@@ -198,8 +216,15 @@ stays **false** at `None` — no replica ack precedes the first ingest report,
 preserving V5-M3's ordering; `ObserveMigration`'s dedup (`(term, tick) >
 last_observation`) is **true** at `None` — the first observation counts; and
 `ReportRunIdentity`'s ordering conjunct is **true** against an absent stored value
-(V6-M3, above). The declared absence tests: `ClearSlotResidue`'s
-`shard_primary(entry.source) == None` conjunct (its row, V8-M6). §9's derived
+(V6-M3, above). The declared absence tests, each also stated at its row (V10-m6
+completes the enumeration): `ClearSlotResidue`'s `shard_primary(entry.source) ==
+None` conjunct (V8-M6); `PrepareSlotHandoff`'s `record.attempt_id == None`
+conjunct (no live attempt may exist — an absence test, not a value read); and
+`BeginSlotMigration`'s two map-absence conjuncts (`slot ∉ migrations`,
+`slot ∉ handoff_residue` — key-absence tests on maps, to which the Option rule
+does not apply but which are declared here for the same reason).
+`CompleteSlotMigration`'s `record.drained_pos == Some(token)` is a **value read**
+— false at `None` under the standing rule — stated at its row. §9's derived
 metrics (the ack-lag subtraction) render only when both
 operands are set.
 
@@ -229,7 +254,13 @@ operands are set.
   re-requested at resume — never silently skipped.
 
 Only `covered_applied` (and its replica-side floor `target_replicas_acked_pos`, §5)
-ever reaches an admission predicate.
+ever reaches an admission predicate. **The floor carries the same durable-attestation
+meaning (V10-C2)**: a counted replica's `ReportTargetReplicaAck` position attests
+**fsync-durable application on that replica, regardless of the replica's configured
+durability** — the same protocol-commitment argument as `covered_applied` above, with
+the same consequence: no replica crash can regress a replica below any position it
+has attested, so the replicated floor can never sit above what every counted replica
+durably holds. Stated again at the report's row and in §5's install contract.
 
 Two distinct identity counters, never conflated (v2-C3/M1):
 
@@ -304,7 +335,9 @@ removes the existing entry; none inserts. State this as a checked invariant
 below means, defined once** (V7-M2 — the state space has no shard object, so the
 phrase must be a total function of declared fields): `shard_primary(n)` = `n` itself
 if `nodes[n].role == Primary`; otherwise follow `nodes[n].primary_id` (SS-3)
-transitively, at most `|nodes|` steps. The result is `None` — not an error — when the
+transitively, at most `|nodes|` steps. The result is `None` — not an error — when
+`n ∉ nodes` (V10-m5: the function is total over all `NodeId` arguments — callers may
+hold an `entry.source` whose node has since been removed), when the
 pointer is absent (`primary_id == None`), dangling (names a non-member), or the walk
 cycles or exhausts its step bound without reaching a Primary (transient states
 `RemoveNode` reparenting or interleaved role writes can produce). Every conjunct that
@@ -373,13 +406,28 @@ when it is not):
   successor's reaper performs the delete and proposes `ConfirmSlotDeleted`).
   Symmetrically, an entry naming the demoted node as **target** at
   `promoted == false` re-targets its `target` to `p` (the same rule as the
-  failover-with-successor arm above). A demotion that carries no validated
+  failover-with-successor arm above). **This in-apply re-target is the *only*
+  target-side re-home** (V10-C4 — the level-triggered target arm of
+  `RetargetSlotResidue` reproduced V9-C1's unproven pointer walk: once the
+  demotion has applied, no predicate over *current* state can distinguish the
+  demoted target's lineage successor from a foreign primary the target was later
+  re-parented onto, so a sound destination proof does not exist outside the
+  demotion's own apply, and the arm is removed rather than guarded. In-apply
+  re-targeting is total nonetheless: `Complete` creates residue entries only
+  while the target's role is Primary — its V10-C3 conjunct — and every
+  transition that writes role → Replica on a member (the three above) carries an
+  admission-validated successor and re-targets every residue entry naming that
+  node in the same apply, with refuse-whole covering the successor-less case; so
+  no reachable state holds an unpromoted entry naming a non-primary target, and
+  no level-triggered target catch-up is needed. This supersedes V9-M1's stuck
+  state by construction, not by an extra remover.) A demotion that carries no validated
   successor while the node owns slots or is named by a residue entry **refuses
   whole** at admission (the `ReportRunIdentity` row and TR-CLUSTER-004's ruled
   precondition, V9-C1) — so within these three transitions the skip case is
   unreachable; the level-triggered
-  `RetargetSlotResidue` transition (below, both arms) remains the re-derivable
-  catch-up for any entry that nonetheless names a non-primary member. **`RetargetSlotResidue`
+  `RetargetSlotResidue` transition (below, **source arm only** — V10-C4) remains the
+  re-derivable catch-up for any entry that nonetheless names a non-primary
+  **source**. **`RetargetSlotResidue`
   — the level-triggered residue re-home** (V8-C4 replaces V7-C1's broadened
   `ConfirmSlotDeleted` proxy arm: that arm's proposal precondition — "the demoted
   source has completed a full resync from the proxy" — was node-local, volatile
@@ -437,7 +485,7 @@ when it is not):
   have deleted every replica's dataset, every empty-slot-map follower's
   (FM-CLUSTER-032: bootstrap assigns slots locally before the map replicates), and
   every just-demoted node's. No unilateral deletion rule survives this revision;
-  the design closes the *entrance* instead, with two node-local fail-closed
+  the design closes the *entrance* instead, with three node-local fail-closed
   admission gates — the Redis analogs):
   1. **Join-empty**: a node accepts cluster membership — the `MEET`/`AddNode`
      handshake (TR-CLUSTER-005), both first join and re-join after `FORGET` —
@@ -458,8 +506,33 @@ when it is not):
      HARD` requires an empty DB): reset is the path back toward a re-join, so the
      same gate holds there; the error names the non-empty slots and the wipe the
      operator must perform deliberately.
+  3. **Replication-command gate** (V10-C1): a node refuses `REPLICAOF`/`SLAVEOF
+     <host> <port>` and `CLUSTER REPLICATE` **node-locally** while, per its
+     applied state, the slot map assigns it any slot **or** any `handoff_residue`
+     entry names it. The refusal error names the binding slots/entries and the
+     lawful paths out: a failover that demotes the node with a validated
+     successor, or moving the slots first (`AssignSlots`/`SETSLOT`, with the loss
+     token where the residue rules demand one). This gate is what the replicated
+     refuse-whole veto (the `ReportRunIdentity` Demotion arm) structurally cannot
+     be: refuse-whole vetoes only the *report*, but the local `REPLICAOF` has
+     already ended the stint and adopted the foreign upstream's history
+     (FM-REPLICATION-022) — destroying the node's dataset — before any report is
+     proposed; a veto after the fact leaves replicated state calling the node a
+     Primary it no longer is, and clients `MOVED` into `-READONLY`. With the
+     gate, the destructive local action is refused up front (Redis parity:
+     `CLUSTER REPLICATE` refuses on a node that owns slots or holds keys), and
+     refuse-whole becomes defence-in-depth rather than the only line.
+     **Residual race, declared**: the gate reads applied state, so a concurrent
+     apply (an `AssignSlots` landing between the gate check and the local role
+     flip) can still yield a node that is locally a replica while replicated
+     state holds it Primary with slots. Its Demotion report is then refused
+     (refuse-whole) and the node **self-fences**: it stops serving the affected
+     slots and answers `-TRYAGAIN` (§3's demotion-disposition row names this
+     state). Exits: operator failover of the shard, `AssignSlots` away with the
+     loss token, or `REPLICAOF NO ONE` (the Promotion arm re-aligns local with
+     replicated state).
 
-  With both gates, a member node only ever holds slot data in a *tracked* state —
+  With these gates, a member node only ever holds slot data in a *tracked* state —
   owner, replica of an owner, open-record source/target, or residue-entry source —
   and every tracked state has a declared remover (§1's enumeration: reaper,
   rollback arm, re-target rules, `ClearSlotResidue`). The untracked-stale-copy
@@ -485,13 +558,13 @@ Field writers (every field has exactly one writing transition):
 | attempt_id | `PrepareSlotHandoff` (mints from generation) | replaced per attempt |
 | drained_pos | `ConfirmSlotHandoffDrained` (source) | **cleared** by `AbortSlotHandoff` |
 | target_ingested_pos | `ReportMigrationIngest` (target) | `covered_applied`; monotone within the target's attesting run; a cross-run report **replaces** (may regress — V8-C3) |
-| target_replicas_acked_pos | `ReportTargetReplicaAck` (target); **cleared** by a cross-run `ReportMigrationIngest` (V8-C3) | source-space replica-ack floor (§5, V4-C3); monotone within the target's attesting run |
+| target_replicas_acked_pos | `ReportTargetReplicaAck` (target); **cleared** by a cross-run `ReportMigrationIngest` (V8-C3) **and by any apply that changes `counted_replicas(record.target)`** — a member added to or removed from the target's counted replica set stales the "every counted replica" claim in both directions (V10-M2; the set-changing writers: `AddNode` registration parenting onto the target, `RemoveNode`/`CLUSTER FORGET`, the `ReportRunIdentity` Demotion arm's re-parent, failover transitions, `SetRole`) | source-space replica-ack floor (§5, V4-C3); monotone within the target's attesting run |
 | target_attesting_run | `ReportMigrationIngest` (target — set/replaced with each admitted report's `target_run`; V8-C3) | which target run attests the two positions above; `Complete` requires it current |
 | attempts | `AbortSlotHandoff` (+1); reset by re-issued `MIGRATING` **at most once per record** (N-m4, §6; V6-M4) | any failed attempt counts |
 | attempts_reset_used | `BeginSlotMigration` (false); re-issue arm (sets true when it resets `attempts`) | one-shot reset latch; V6-M4 |
 | observations | `ObserveMigration` (+1); **reset by a `ReportMigrationIngest` that advances `target_ingested_pos` to a value still below a *set* `drained_pos`** (N-M6, narrowed per V4-M2/V5-M1 — no reset while `drained_pos` is unset); **reset by a `ReportTargetReplicaAck` that advances `target_replicas_acked_pos` to a value still below a *set* `drained_pos`** (V8-M2 — same toward-the-token rule); **reset by `ConfirmSlotHandoffDrained`'s apply** (V7-C3 — the seal switches the applicable bound from `preconfirm_observations` to the smaller `draining_observations`, a phase change in all but name; carrying pre-seal ticks across it would abort every lawful drain longer than the small bound at stock defaults); and by phase change | replicated; survives leader change |
 | last_observation | `ObserveMigration`; **cleared by `ConfirmSlotHandoffDrained`'s apply** (with the counter — V7-C3) | dedup state for the counter (N-M5) |
-| handoff_residue entry | `CompleteSlotMigration` (creates); `ReportSlotPromoted` (sets promoted); `ConfirmSlotDeleted` (removes); membership prune (sets `source_gone` on source-departure, sets `target_gone` on target-departure that unassigns the slot, re-targets on target failover — V5-M2/V7-C2/V7-M6); demotion transitions (re-target `source`/`target` to the admission-validated successor — V6-C3/V9-C1); `RetargetSlotResidue` (re-writes `source` to the shard's current primary — V8-C4; second arm re-writes a non-primary `target` at `promoted == false` to its shard's current primary — V9-M1); `AssignSlots` rollback arm (removes; clears `target_gone` when re-homing an orphaned `promoted == true` entry — V7-M5/M6); `ClearSlotResidue` (removes — V7; `promoted == true` only, V9-M4); `ResetCluster` (clears map) | replicated, snapshot-carried |
+| handoff_residue entry | `CompleteSlotMigration` (creates); `ReportSlotPromoted` (sets promoted); `ConfirmSlotDeleted` (removes); membership prune (sets `source_gone` on source-departure, sets `target_gone` on target-departure that unassigns the slot, re-targets on target failover — V5-M2/V7-C2/V7-M6); demotion transitions (re-target `source`/`target` to the admission-validated successor — V6-C3/V9-C1); `RetargetSlotResidue` (re-writes `source` to the shard's current primary — V8-C4; **source arm only** — the V9-M1 target arm is removed, V10-C4: target re-home is exclusively the demotion transitions' in-apply re-target); `AssignSlots` rollback arm (removes; clears `target_gone` when re-homing an orphaned `promoted == true` entry — V7-M5/M6); `ClearSlotResidue` (removes — V7; `promoted == true` only, V9-M4); `ResetCluster` (clears map) | replicated, snapshot-carried |
 
 ### Transitions
 
@@ -660,21 +733,44 @@ conjuncts, dedup, run guards).
   `draining_observations` ticks (default 3) to drain the fence window aborts
   every knob-on migration at stock defaults). `pos` is denominated in the **source's** position space: it is the highest
   source-space batch stamp (`to_pos`, §4) through which **every counted replica** has
-  durably applied the shadow. **The counted set is the target's replica set as
-  recorded in replicated cluster state** (the `NodeInfo` parent/replica relationships
-  the cluster already tracks for failover scoring) — **never the target's node-local
+  durably applied the shadow — where "durably applied" means **fsync-durable
+  through that stamp on that replica, regardless of the replica's configured
+  `Durability`** (V10-C2 — §0's durable-attestation rule, propagated to the
+  floor it was minted for: a counted replica acks a batch to the target only
+  once its store is fsynced through it, and the target folds only such acks
+  into the floor it attests; §5's install contract states the replica-side
+  half. Consequence, mirroring `covered_applied`'s: no replica crash can
+  regress a replica below a position folded into an attested floor, so the
+  replicated floor never sits above what every counted replica durably holds
+  — the within-history regression `Complete` would otherwise inherit is
+  unreachable). **The counted set is `counted_replicas(record.target)`** — the
+  members whose replicated `primary_id` names the target, i.e. the target's
+  replica set as recorded in replicated cluster state (the `NodeInfo`
+  parent/replica relationships the cluster already tracks for failover
+  scoring; a pure function of applied state, like `shard_primary`) — **never
+  the target's node-local
   session table** (V5-M3: a set defined by live sessions shrinks on a single TCP
   disconnect, silently voiding the durability the knob exists to provide; a
   disconnected-but-member replica instead stalls the floor, and the migration exits
   via the observation bound, exactly the dead-replica behaviour §1 already names).
   The floor is the minimum over *that* set; the target knows each fed batch's
   source-space stamp and each counted replica's ack, so the floor is computable
-  node-locally and *attested* by this replicated write. **Empty-set and unset rules**
-  (V5-M3/V5-m4): with the knob on and zero counted replicas, and likewise while
-  `target_replicas_acked_pos` is still `None`, `Complete`'s optional conjunct is
-  **false** — never vacuously true — and the migration exits by the observation
-  bound. The optional `Complete` conjunct reads only the replicated field — two
-  replicated numbers, one space, deterministic at apply on every node.
+  node-locally and *attested* by this replicated write. **Set-change staleness**
+  (V10-M2): a stored floor attests a claim about **every member of the counted
+  set as it stood when the floor was written**; any apply that changes
+  `counted_replicas(record.target)` — a member removed *or* a newcomer added —
+  stales that claim, so it **clears `target_replicas_acked_pos`** in the same
+  apply (the field-writers table names the set-changing writers). **Empty-set
+  and unset rules** (V5-M3/V5-m4, strengthened per V10-M2): `Complete`'s
+  optional conjunct carries `counted_replicas(record.target) ≠ ∅` **directly**
+  — revision 9 enforced the empty-set case only through the floor being
+  `None`, which a floor written before the last counted replica left would
+  have defeated; with the set-change clearing above the stale-floor state is
+  unreachable anyway, and the direct conjunct makes the rule independent of
+  that clearing — and while `target_replicas_acked_pos` is `None` the conjunct
+  is **false** — never vacuously true — so the migration exits by the
+  observation bound. The optional `Complete` conjunct reads only
+  replicated operands — deterministic at apply on every node.
 - **`PrepareSlotHandoff{slot, migration_id, proposer}`** (V6-m1 — the record the
   admission reads is named by the payload, not implied; source-proposed) → mints
   attempt_id, phase=Draining, barrier
@@ -684,7 +780,8 @@ conjuncts, dedup, run guards).
   ∧ **proposer is `record.source`** ∧ **`record.run_id ==
   nodes[record.source].run_identity`** ∧ attempts < `record.max_handoff_attempts`
   (the captured parameter, V6-C2) ∧ neither
-  endpoint FAIL-flagged ∧ no live attempt_id. The source *chooses* to propose at
+  endpoint FAIL-flagged ∧ `record.attempt_id == None` (no live attempt — a
+  **declared absence test**, §0's enumeration, V10-m6). The source *chooses* to propose at
   parity (`feed_head − target_ingested_pos ≤` parity threshold) — a scheduling
   heuristic, not a correctness input.
 - **`ConfirmSlotHandoffDrained{slot, migration_id, attempt_id, run_id, pos,
@@ -733,7 +830,8 @@ conjuncts, dedup, run guards).
   ```
   phase == Draining
   ∧ attempt_id == record.attempt_id
-  ∧ record.drained_pos == Some(token)
+  ∧ record.drained_pos == Some(token)                    // value read — false at None
+                                                         // (§0 rule, stated per V10-m6)
   ∧ record.target_ingested_pos >= record.drained_pos     // covered_applied — possession
   ∧ record.target_attesting_run                          // the possession proof is
       == Some(nodes[record.target].run_identity)         // backed by the target's
@@ -758,14 +856,34 @@ conjuncts, dedup, run guards).
   ∧ slot_map[slot] == record.source                      // source still owner
   ∧ record.target ∈ nodes                                // membership — FM-CLUSTER-033's
                                                          // ghost-owner guard (V4-m4)
+  ∧ nodes[record.target].role == Primary                 // commit-time re-verification
+                                                         // (V10-C3): Begin checked the
+                                                         // role once, a mid-migration
+                                                         // demotion of the target is
+                                                         // lawful, and assigning the
+                                                         // slot to a Replica would
+                                                         // violate SS-11's amended rule
+                                                         // and wedge the residue entry
+                                                         // (ReportSlotPromoted's role
+                                                         // conjunct refuses forever)
   ∧ record.target not FAIL-flagged                       // N-m6, symmetric with Prepare
   ∧ [if record.require_target_replica_ack]               // optional durability conjunct;
-      record.target_replicas_acked_pos >= record.drained_pos
+      counted_replicas(record.target) ≠ ∅                // direct empty-set refusal
+                                                         // (V10-M2)
+      ∧ record.target_replicas_acked_pos >= record.drained_pos
                                                          // replicated, source-space (V4-C3);
                                                          // the guard reads the captured
                                                          // record field, never the config
                                                          // knob (V6-C2)
   ```
+
+  The role conjunct is the CockroachDB commit-time-re-verification discipline: a
+  target demoted mid-`Draining` **stalls `Complete`** — the conjunction stays false
+  until the target is re-promoted or the migration exits by the standing `Draining`
+  exits (the observation bound aborts the attempt; `CancelSlotMigration` aborts the
+  whole migration) — it never assigns a slot to a Replica. It also guarantees every
+  `handoff_residue` entry is **created with a Primary target**, the base fact §0's
+  V10-C4 in-apply-re-target totality argument stands on.
 
   On apply: ownership flips, `MOVED` correct, barrier release event emitted **after**
   the assignment mutation (FM-CLUSTER-092 ordering preserved), record removed, and the
@@ -793,38 +911,41 @@ conjuncts, dedup, run guards).
   ∧ `promoted == true` (the source's delete is gated on the promotion attestation,
   V4-M11 — see §7) ∧ `target_gone == false` (V7-M6 — while the flag is set the
   source's copy is the last in-cluster copy; the re-home arm clears it first).
-- **`RetargetSlotResidue{slot, migration_id, new_source: Option<NodeId>,
-  new_target: Option<NodeId>, proposer}`**
+- **`RetargetSlotResidue{slot, migration_id, new_source: NodeId, proposer}`**
   (primary-proposed; **new**, V8-C4 — §0's level-triggered residue re-home;
-  target arm added V9-M1) — two declared arms, selected by which payload field
-  is `Some` (exactly one must be; both `Some` or both `None` is refused):
-  **source arm** (`new_source`): re-writes the entry's `source` to
+  **source arm only**: V9-M1's target arm is removed by V10-C4 — once a target
+  demotion has applied, `shard_primary(entry.target)` is an unproven pointer
+  walk: a demoted target later re-parented onto a *foreign* shard's primary is,
+  in current state, indistinguishable from one parented onto its lineage
+  successor, so the arm could hand the entry to a primary that never received
+  the shadow, whose `ReportSlotPromoted` would then be admissible and the
+  source's reaper would delete the last complete copy. No sound guard exists —
+  the discriminating fact lives only in the demotion's own apply — so target
+  re-home is **exclusively** the demotion transitions' in-apply re-target,
+  which §0's V10-C4 argument proves total; V9-M1's stuck state is closed by
+  construction, not by a level arm): re-writes the entry's `source` to
   `payload.new_source`, touching nothing else. Admission: entry exists ∧
   migration_id matches ∧ `nodes[entry.source].role !=
   Primary` ∧ `payload.new_source == shard_primary(entry.source)` (§0's total
   definition; false at `None`, so a successor-less shard refuses — `ClearSlotResidue`
   is that state's exit) ∧ `nodes[new_source].role == Primary` ∧ `proposer ==
   new_source` (the proposer re-homes the entry to *itself*: it holds the copy via
-  replication and its reaper takes over).
-  **target arm** (`new_target`, V9-M1 — the catch-up the §0 demotion rule and §1
-  case 2 cite for a missed *target* re-target; without it an entry whose target
-  was demoted successor-less freezes at `promoted == false` forever —
-  `ReportSlotPromoted`'s proposer conjunct names a node that can never again
-  satisfy its role conjunct): re-writes the entry's `target` to
-  `payload.new_target`, touching nothing else. Admission: entry exists ∧
-  migration_id matches ∧ `entry.promoted == false` ∧ `nodes[entry.target].role
-  != Primary` ∧ `payload.new_target == shard_primary(entry.target)` (false at
-  `None`) ∧ `nodes[new_target].role == Primary` ∧ `proposer == new_target` —
-  safe for the same reason as the in-apply failover re-target: the successor
-  holds base + shadow via §5's full-sync rule and resumes the promotion, and
-  `ReportSlotPromoted`'s proposer conjunct reads the updated field.
+  replication and its reaper takes over). **Why this walk is proven where the
+  target arm's was not** (V10-C4): `entry.source` is residue-named, so every
+  role→Replica write on it binds the refuse-whole conjunct (V9-C1) — it must
+  carry an admission-validated in-shard successor and it re-parents the node
+  onto that successor in the same apply — and the V10-C1 local gate refuses a
+  bare `REPLICAOF`/`CLUSTER REPLICATE` on it outright, so a foreign re-parent
+  of a residue-named source is refused on both planes.
+  `shard_primary(entry.source)` therefore walks only validated-successor edges
+  and can land only on the lineage successor, which holds the entry's copy via
+  replication.
   Proposal side is the level rule of §0:
   every primary's reconcile scans applied residue entries and proposes for each
-  one whose `source` — or whose `target` at `promoted == false` — is a
-  non-primary in its own shard. Both arms are idempotent by admission (once
-  re-written, the named field is a Primary and the arm refuses); a race between
-  two successors across a failover resolves by the `shard_primary` conjunct —
-  only the current successor's proposal is admissible at apply.
+  one whose `source` is a non-primary in its own shard. Idempotent by admission
+  (once re-written, `entry.source` is a Primary and the arm refuses); a race
+  between two successors across a failover resolves by the `shard_primary`
+  conjunct — only the current successor's proposal is admissible at apply.
 - **`AssignSlots{slots, node, proposer, accept_data_loss: bool}`** (operator-proposed;
   the existing TR-CLUSTER-008 transition, extended — V7-M5: the rollback verb's
   admission reads role, `source_gone`, and the loss token, so the verb is this
@@ -857,7 +978,14 @@ conjuncts, dedup, run guards).
   honestly; without this conjunct the verb would delete the entry
   `ReportSlotPromoted` requires — the slot `-TRYAGAIN` forever on the target
   and its replicas — and would make the still-live shadow satisfy §5's discard
-  predicate, deleting the last copy once the source is gone) ∧ **no effective
+  predicate, deleting the last copy once the source is gone) ∧
+  **`entry.target_gone == false`** (V10-m8 — at `promoted == true ∧
+  target_gone == true` the source's retained copy is the last in-cluster copy
+  of an owner-less slot, and §1 case 4b's sole exit is the `AssignSlots`
+  orphan re-home arm, whose `accept_data_loss` token names what is actually
+  abandoned; without this conjunct, the `source_gone` disjunct below would
+  admit removal of that last copy's tracking entry under `accept_stale_copy` —
+  a token attesting a *different*, milder loss) ∧ **no effective
   automatic remover exists**, carried as the conjuncts that exclude each
   remover in §1's enumeration (V9-M4 re-words the guard as its checkable form):
   the case-1 reaper and the case-2 re-targets are excluded by
@@ -865,7 +993,8 @@ conjuncts, dedup, run guards).
   `shard_primary(entry.source) == None` — a **declared absence test**, §0's
   V8-M6 carve-out: the conjunct *is* the `None` check, evaluated as written, not
   false-at-`None` under the value-read rule); the case-3 rollback arm is
-  excluded by the `promoted == true` conjunct above. Every conjunct here is
+  excluded by the `promoted == true` conjunct above; case 4b is excluded by
+  the `target_gone == false` conjunct above. Every conjunct here is
   re-derivable
   from replicated state alone, so "effective" means what it says — no arm whose
   admissibility depends on unobservable node-local facts counts as a remover,
@@ -937,10 +1066,17 @@ conjuncts, dedup, run guards).
   at promotion, and at demotion/history adoption — §0, V4-M4) → writes
   `NodeInfo.run_identity`. Admission: proposer is `node` (`payload.proposer ==
   payload.node`, V6-C1) ∧ `node ∈ nodes` (V6-M3) ∧ `(incarnation,
-  identity_seq) >` stored pair (§0; **true at absent stored value** — the first
-  report is always admitted, V6-M3). Applying a run_identity change for a node that is
+  identity_seq) ≥` stored pair (§0's **split ordering conjunct**, V10-M1: strict
+  `>` gates the `run_identity` **field write**; **equality** admits the report as
+  a topology-only re-proposal whose arm writes land under the per-object fences
+  with the payload's fresh observations, the field write skipped; **true at
+  absent stored value** — the first
+  report is always admitted, V6-M3). Applying a run_identity **field write** for a node
+  that is
   the **source** of any open migration **cancels those migrations** — the replicated
-  form of "source restart aborts" (§4). The **`kind == Demotion` arm** is a
+  form of "source restart aborts" (§4). The cancel binds to the **field write**,
+  never to mere admission: a topology-only re-proposal at equality changes no
+  identity and cancels nothing (V10-M1). The **`kind == Demotion` arm** is a
   **fenced role writer** (V8-C2 — identity monotonicity is not topology recency: a
   demotion report proposed before a `Failover` promotion but applied after it would
   otherwise clobber the promotion, exactly the stale-writer class issue 19's
@@ -969,7 +1105,13 @@ conjuncts, dedup, run guards).
   a pair that co-holds only in the narrow interval before `p`'s own promotion
   report clears its upstream pointer — so in practice **a bare-`REPLICAOF`
   demotion of a slot-owning primary refuses whole**, and that is the intended
-  fail-closed outcome, not a defect (the lawful paths are below). When admitted,
+  fail-closed outcome, not a defect (the lawful paths are below).
+  **Reachability under gate 3** (V10-C1): the node-local replication-command
+  gate (§0) refuses the bare `REPLICAOF`/`CLUSTER REPLICATE` *before* the
+  identity change is minted — the veto here could never undo the local history
+  adoption that precedes the report, only refuse to record it — so this arm
+  sees such a report only through the gate's declared race window, and
+  refuse-whole is defence-in-depth, not the primary line. When admitted,
   the arm
   writes **`nodes[node].role = Replica` and `nodes[node].primary_id =
   payload.new_primary_id`** (V7-C1 — without the role write, a bare-`REPLICAOF`
@@ -993,9 +1135,18 @@ conjuncts, dedup, run guards).
   owns slots or residue and `new_primary_id` is `None`, a non-member, or not a
   current in-shard replica — the arm refuses whole** (deleting or mis-homing the
   assignment would orphan or lose the slots): the demotion is
-  deferred, not lost — replicated state keeps the node Primary, which is the
-  truth the topology can serve, and the re-proposal rule below retries as facts
-  change. This refusal is a deliberate, stated **availability loss over silent
+  deferred, not lost — replicated state keeps the node Primary, and the
+  re-proposal rule below retries as facts change. **Node-local disposition of a
+  refused Demotion report** (V10-C1 — a refusal here means the node is already
+  locally a replica while replicated state holds it Primary with slots, a state
+  reachable only through gate 3's declared race window): the node
+  **self-fences** — it stops serving the slots replicated state assigns it and
+  answers `-TRYAGAIN` (§3's demotion-disposition row names this state) —
+  because serving would hand clients a `MOVED` destination that answers
+  `-READONLY`, or stale reads from a locally-abandoned dataset. Exits are the
+  gate-3 list: operator failover, `AssignSlots` away with the loss token, or
+  `REPLICAOF NO ONE` (the Promotion arm re-aligns the planes). This refusal is
+  a deliberate, stated **availability loss over silent
   data loss**. The lawful paths to demote a slot-owning primary are the failover
   transitions, which carry succession atomically (TR-CLUSTER-017/018), or
   `AssignSlots` first: an operator intending a cross-lineage re-parent issues the
@@ -1024,14 +1175,24 @@ conjuncts, dedup, run guards).
   underneath it — is therefore retried against the topology that actually holds,
   and converges or is superseded by a newer identity change; the boot report stops
   being a one-shot edge (the V8-M3 refill hole) and becomes the level rule's first
-  firing. **Convergence rule (V9-M3): every re-proposal re-mints
-  `identity_seq`.** The mint is node-local and monotone, so the fresh triple
-  strictly exceeds the stored pair and the ordering conjunct admits the retry —
-  without the re-mint, a re-proposal carrying the *same* triple with different
-  topology facts is refused by strict `>` forever: the `Promotion` arm's role
-  write could never land after its first refusal (permanent role divergence and
-  an unbounded refused-proposal loop on every reconcile tick), and any future
-  partially-admitting arm would re-create the same stall. **A target's identity change does not cancel**
+  firing. **Convergence without re-mint** (V10-M1 replaces V9-M3's universal
+  re-mint): a re-proposal carries the node's **current** identity triple
+  *unchanged* — nothing discontinuous happened, so `identity_seq` does not bump —
+  and §0's split ordering conjunct admits it at equality as a topology-only
+  re-proposal, whose arm writes land under the per-object fences with the fresh
+  observations. The `Promotion` arm's role write therefore lands after a fence
+  refusal without minting a fake discontinuity. (The universal re-mint falsified
+  §0's "`identity_seq` bumps only at genuine discontinuities" claim and had two
+  concrete failure legs: a Raft-snapshot-install divergence would re-mint, and
+  that *identity change* would cancel every migration the node sources — §4's
+  cancel rule firing on a non-event; and the boot rule's "has applied" test
+  could livelock — a node re-minting faster than Raft applies its reports never
+  sees its own triple in applied state, staying muted with an fsync per tick.)
+  **Damping rule, stated**: a node keeps **at most one** `ReportRunIdentity`
+  proposal in flight — the reconcile re-proposes only after observing the
+  previous proposal applied or refused — so the level rule converges without
+  flooding the log; a genuine identity change mid-flight simply supersedes it
+  (the new mint orders strictly above, the stale report refuses). **A target's identity change does not cancel**
   (V4-M5 — asymmetric by design: positions are denominated in the *source's* history,
   so a source discontinuity invalidates them, while a target restart invalidates
   nothing about the position space; the target's boot reconcile resumes from
@@ -1113,24 +1274,32 @@ reachable entry state names its remover, and every remover is a declared transit
    `RetargetSlotResidue` **source arm** (V8-C4) catches every entry the in-apply
    re-target missed (an entry created after the demotion applied, or a
    successor promoted later) — after either, case 1 applies to the new source.
-   Symmetrically for the **target field** (V9-M1): an entry whose `target` is a
-   non-primary member at `promoted == false` is caught by the
-   `RetargetSlotResidue` **target arm** once the target's shard has a primary —
-   the successor holds base + shadow (§5's full-sync rule) and resumes the
-   promotion.
+   For the **target field** no level-triggered catch-up exists *or is needed*
+   (V10-C4 supersedes V9-M1's target arm): entries are created only with a
+   Primary target (`Complete`'s role conjunct, V10-C3), and every lawful
+   role→Replica write on a residue-named member carries a validated successor
+   and re-targets the entry **in the same apply** (§0 — refuse-whole covers the
+   successor-less case), so no reachable state holds an unpromoted entry naming
+   a non-primary target; the in-apply successor holds base + shadow (§5's
+   full-sync rule) and resumes the promotion.
 3. **`promoted == false`**: the `AssignSlots` rollback arm (Transitions, V7-M5) —
    lossless to `shard_primary(entry.source)` while `source_gone == false`,
    token-gated otherwise.
-4a. **No lawful automatic remover, promotion attested** (`promoted == true`, and
+4a. **No lawful automatic remover, promotion attested** (`promoted == true ∧
+   target_gone == false` — V10-m8 scopes the case, and
    `source_gone == true` or `role != Primary ∧ shard_primary(entry.source) ==
    None`): the token-gated `ClearSlotResidue{accept_stale_copy}` for the entry
    (V9-M4 — the verb admits **only** at `promoted == true`; the same source
    states at `promoted == false` are case 3's territory, where the rollback
    arm's apply moves the slot map and its token names the loss honestly).
-4b. **Orphaned slot** (`promoted == true ∧ target_gone == true` — the source is
-   typically a live Primary, so `ClearSlotResidue`'s source conjuncts refuse
-   here, V9-m2): the `AssignSlots` orphan re-home arm for the slot
-   (Transitions, V7-M6) is the state's exit.
+4b. **Orphaned slot** (`promoted == true ∧ target_gone == true`):
+   `ClearSlotResidue` refuses here **unconditionally** — its
+   `target_gone == false` conjunct (V10-m8; V9-m2's reading relied on the
+   source typically being a live Primary, which the `source_gone` disjunct
+   defeated exactly when the source was *also* gone — removal of the last
+   in-cluster copy's tracking entry under a token attesting a milder loss).
+   The `AssignSlots` orphan re-home arm for the slot
+   (Transitions, V7-M6) is the state's **sole** exit.
 5. **Departed source rejoins under the same NodeId** (re-`MEET`): the join-empty
    admission gate (§0, V8-C1) refuses the handshake while the stale copy exists —
    the node rejoins only after a wipe, so it arrives holding nothing the entry no
@@ -1194,12 +1363,24 @@ feed above `drained_pos`; unenumerated, they falsify the seal's headline claim
 exactly like an exempt `MIGRATE` would — the target resurrects any key they
 delete post-seal): **both are suspended for a sealed slot**. Eviction selects
 victims from other slots (the sealed slot's memory is about to leave the node
-either way); expired keys in the sealed slot stay lazily-expired-on-read as
-always, and the *target's* convergence rule (§5: TTLs stored, never enforced
-during ingest, full expiry semantics resume at promotion) makes the deferral
-invisible after cutover. The suspension window is bounded by `Draining`'s exits
-— the observation bound, cap breach, or `Complete` — so neither mutator is
-deferred unboundedly.
+either way); the active-expiry cycle skips the sealed slot. **The one permitted
+post-seal mutator, classified** (V10-m7 — revision 9 permitted it in passing
+without classifying it against the seal's headline): **lazy expiry-on-read** in
+the sealed slot continues — a read of a key whose TTL has passed answers absent
+and removes the key locally. It is sound where the two suspended mutators are
+not, on two grounds: it is **feed-invisible** (the local removal emits no `DEL`
+on the migration stream — expiry deletes never propagate there, §4/§5: each
+side expires on its own clock, FM-REPLICATION-030's rule) and **logically
+idempotent across the pair** (the key's logical value is already "absent" on
+both sides once its TTL passes — the target holds the same stored TTL, §5, and
+its own lazy expiry converges to the identical state after promotion). The
+seal's headline claim is therefore **scoped, stated**: "no write below
+`drained_pos` remains and none will follow" quantifies over **feed-visible
+mutations of logical state**; lazy expiry mutates only the physical store, in a
+way both sides reach independently. The suspension window is bounded by
+`Draining`'s exits
+— the observation bound, cap breach, or `Complete` — so neither suspended
+mutator is deferred unboundedly.
 
 **Fence reconstruction at boot** (V7-m5 — the invariant needs a stated restart rule
 or a crash discharges it silently): on source restart, **before admitting any client
@@ -1217,8 +1398,8 @@ Held-write disposition on every exit (every held client gets a real reply):
 | `Complete` applies | pinnable writes: `MOVED <slot> <target>` (FM-CLUSTER-092 amended); **unpinnable held batches** (FM-CLUSTER-096: straddling slots or keyless): `-TRYAGAIN` — one `MOVED` slot cannot describe them; the client's retry re-routes per key (N-m3) |
 | `AbortSlotHandoff` applies | execute at source, acknowledged normally |
 | Cap breach, pre-apply | beyond-cap writes: `-TRYAGAIN`; held set: unchanged until apply |
-| `CancelSlotMigration` applies | execute at source, acknowledged normally (release event) — **provided the source is still the slot's serving primary at apply** |
-| **Cancel caused by the source's own demotion** (V5-m5: the `ReportRunIdentity` demotion/adoption arm cancels the migrations the node sources; a bare `REPLICAOF` mid-Draining lands here) | the held set is answered with **the reply the node's new role implies** — `-MOVED` to the new primary when the local `shards` view names one, **`-TRYAGAIN` when `primary_id == None`** (V8-M4: the disposition is total; a successor-less demotion answers retryably and the client's retry lands wherever the eventual topology says) — and is **never executed**: a demoted node executing queued writes would fork history against its new primary |
+| `CancelSlotMigration` applies | execute at source, acknowledged normally (release event) — **provided the source is still the slot's serving primary at apply**; **otherwise** (V10-C1 completes the else-branch) the demotion-cancel row below governs: answered per the new role, never executed |
+| **Cancel caused by the source's own demotion** (the **demotion-disposition row** — V5-m5: the `ReportRunIdentity` demotion/adoption arm's *field write* cancels the migrations the node sources. Reachability under V10-C1: gate 3 refuses a bare `REPLICAOF` node-locally on every migration source — a `Begin` source owns its slot, so the gate always binds — so this row's triggers are the failover-driven demotions, `Failover{force: false}`/`SetRole`, whose subsequent Demotion report cancels, plus gate 3's declared race window) | the held set is answered with **the reply the node's new role implies** — `-MOVED` to the new primary when the local `shards` view names one, **`-TRYAGAIN` when `primary_id == None`** (V8-M4: the disposition is total; a successor-less demotion answers retryably and the client's retry lands wherever the eventual topology says) — and is **never executed**: a demoted node executing queued writes would fork history against its new primary. **This row is also the self-fence demotion-disposition** (V10-C1): a node whose Demotion report is *refused* (refuse-whole — the gate-race state: locally a replica, replicated-Primary with slots) answers its held set and every subsequent command for those slots `-TRYAGAIN` — never `-MOVED` (replicated state names *itself*, a loop) and never executed — until an operator exit re-aligns the planes (gate 3's list) |
 | **Self-fence latch arms** (TR-CLUSTER-026: no Raft leader contact within an election timeout) | answer the **entire held set** `-TRYAGAIN` and **keep the fence** (N-M1) — a sealed source that cannot apply must not make held clients wait out a partition; erroring a held write is *more* fenced, not less, so the §3 invariant holds and the sealed rule ("no further execution until an exit applies") is untouched. **Level rule, not an edge** (V8-M1; scope corrected V9-M2 — the earlier "and the slot sealed" qualifier left pre-`Confirm` Draining uncovered: a write arriving after the one-shot flush, before any seal, was held again and waited out the partition, the indefinite hold settled ruling 2 forbids): while the latch is armed **and this node's barrier is armed for the slot — sealed or not** — the invariant is *the held set is empty*: no new hold is ever admitted, and every arriving write (including one racing the flush) is answered `-TRYAGAIN` immediately. Erroring is strictly more fenced than holding in both sub-states, so §3's "never weaker" invariant holds. The one-shot flush is merely the transition into that region; a write arriving after it does not wait out the partition |
 | Client disconnects while held | held entry dropped with the connection (no reply owed) |
 | `CLIENT UNBLOCK`/`KILL` on a held client | `-UNBLOCKED` / connection close, per blocking rows |
@@ -1344,7 +1525,15 @@ the self-fence client release above.
   replicated and same-space): during ingest the target stamps every batch it feeds its
   replicas with the batch's source-space `to_pos`; each replica's ack therefore yields
   a source-space floor, and the target periodically proposes `ReportTargetReplicaAck`
-  (Transitions) carrying the minimum across the replicas it counts. `Complete`'s
+  (Transitions) carrying the minimum across the replicas it counts. **The replica-side
+  install contract** (V10-C2 — the half §0's durable-attestation note promises): a
+  counted replica acks a stamped batch only once its shadow store is **fsync-durable
+  (file and parent directory) through that batch, regardless of the replica's
+  configured `Durability`** — the ack is an attestation in the same sense as the
+  target's own ingest reports, and the target folds only such acks into the minimum
+  it proposes. Without this rule a `relaxed`-durability replica's ack would let the
+  optional conjunct's "N durable copies" claim admit copies a single crash erases;
+  with it, the conjunct's meaning is configuration-independent. `Complete`'s
   optional conjunct reads `record.target_replicas_acked_pos ≥ record.drained_pos` —
   two replicated numbers in the one §0 space; no node-local state, no cross-space
   comparison, deterministic on every applier. `Complete` does **not** require
@@ -1827,7 +2016,15 @@ Every touched row gets an explicit verdict in the spec change; summary:
   whose role is `Replica`" — every writer that flips a role to `Replica` re-homes
   the node's slots in the same apply, and every slot writer requires the assignee's
   role to be `Primary`; forcing test asserts the invariant over every transition
-  interleaving, `inv_slots_only_assigned_to_primaries`).
+  interleaving, `inv_slots_only_assigned_to_primaries`);
+  SS-2/SS-3 (**amended**, V10-m3: the `role`/`primary_id` rows gain their
+  **closed writer enumeration** — the `ReportRunIdentity` Demotion arm, the
+  Promotion arm, the failover transitions, `ResetCluster`'s SOFT NodeInfo
+  handling, and a fresh `AddNode`/`MEET` registration; **only** these — so this
+  design's new writers appear in the LOCKED rows rather than beside them;
+  forcing test asserts every role/primary_id change in a transition sweep comes
+  from the enumerated set, and the Quint property
+  `inv_role_written_only_by_declared_writers` is its model twin).
 - **Retired**: FM-CLUSTER-085 (handoff lease — its property, "a dead finalizer cannot
   wedge a slot", is re-provided by the observation bound *plus the leader
   auto-`Complete`* (V4-M2), which together exit every Draining state; replacement row
@@ -1952,11 +2149,17 @@ Every touched row gets an explicit verdict in the spec change; summary:
   (V9-C1); **durable attestation** — the target proposes only fsync-durable
   positions regardless of configured durability, making `Complete` safe while the
   target is down and demoting V8-C3's replacement machinery to belt-and-braces
-  (V9-C2); `RetargetSlotResidue`'s **target arm** — a symmetric re-home for a
-  demoted target on an unpromoted entry, `new_source`/`new_target` exactly-one-Some
-  payload (V9-M1); the latch level rule's scope corrected to **armed-barrier, sealed
-  or not** (V9-M2); the **Promotion arm as a fenced role writer** with the universal
-  re-mint convergence rule on re-proposal (V9-M3); `ClearSlotResidue`'s
+  (V9-C2); ~~`RetargetSlotResidue`'s **target arm**~~ (V9-M1 — **superseded in
+  V10**: the target arm was an unproven pointer walk, removed by V10-C4; target
+  re-home is exclusively the demotion transitions' in-apply re-target, total via
+  V10-C3's Primary-target-at-creation conjunct); the latch level rule's scope
+  corrected to **armed-barrier, sealed
+  or not** (V9-M2); the **Promotion arm as a fenced role writer** ~~with the
+  universal
+  re-mint convergence rule on re-proposal~~ (V9-M3 — the arm survives; the
+  universal re-mint is **superseded in V10**: it falsified §0's
+  identity-discontinuity claim, replaced by V10-M1's split ordering conjunct with
+  topology-only re-proposal at equality); `ClearSlotResidue`'s
   `promoted == true` conjunct closing the case-3 short-circuit (V9-M4); the
   join-empty gate **composed with TR-CLUSTER-005's issue-25 empty-Raft-state
   precondition** — one stated precondition, refusal names the failing gate, wipe
@@ -1964,7 +2167,33 @@ Every touched row gets an explicit verdict in the spec change; summary:
   bound to `nodes[node].config_epoch` (V9-m1); the orphan re-home arm's case-4b
   split from `ClearSlotResidue`'s case-4a (V9-m2); the SOFT/HARD `ResetCluster`
   identity-cell distinction (V9-m3); eviction and active expiry **suspended for a
-  sealed slot** as enumerated non-command mutators (V9-m4).
+  sealed slot** as enumerated non-command mutators (V9-m4). From review v10: the
+  **replication-command gate** — gate 3, refusing `REPLICAOF`/`SLAVEOF`/`CLUSTER
+  REPLICATE` node-locally while the node owns slots or is residue-named, making
+  refuse-whole defence-in-depth rather than the only line, with the declared
+  gate-race self-fence disposition (§3's demotion-disposition row) and its
+  operator exits (V10-C1); the **replica-side fsync-attestation half** of the
+  ack floor — a counted replica acks only fsync-durable application regardless
+  of its configured `Durability`, stated at §0's floor note,
+  `ReportTargetReplicaAck`'s row, and §5's install contract (V10-C2);
+  `Complete`'s **target-role conjunct** (`nodes[record.target].role == Primary`)
+  — commit-time re-verification guaranteeing residue entries are created only
+  with a Primary target (V10-C3); the **target arm removed** from
+  `RetargetSlotResidue` — payload back to single `new_source`, target re-home
+  exclusively in-apply, with the source-arm walk's guard-chain proof (V10-C4);
+  the **split ordering conjunct** — `≥` admits, strict `>` gates the
+  `run_identity` field write, equality is a topology-only re-proposal, the
+  cancel binds to the field write, with the one-in-flight damping rule
+  (V10-M1, replacing V9-M3's universal re-mint); `counted_replicas(record.target)`
+  as a named pure function with **set-change floor clearing** — any apply that
+  changes the counted set clears `target_replicas_acked_pos`, and `Complete`
+  carries `counted_replicas ≠ ∅` directly (V10-M2); `ResetCluster`'s re-mint
+  stamped `kind = Boot` (V10-m4); `shard_primary` total via the `n ∉ nodes` None
+  case (V10-m5); Prepare/Begin/Complete absence tests declared in §0's
+  enumeration (V10-m6); **lazy expiry-on-read classified** as the one permitted
+  post-seal mutator, with the seal headline scoped to feed-visible mutations of
+  logical state (V10-m7); `ClearSlotResidue`'s `target_gone == false` conjunct —
+  case 4b refused unconditionally, orphan re-home arm sole exit (V10-m8).
 - **Cross-tracker**: issue 15 closes only when §4's endpoint-failover/restart rows
   land; spec-gaps issue 12 (watermark carries covered position — landed `eedb76d0`) is
   the snapshot-position substrate; replication issue 24 (replid/offset pairing) is the
@@ -2097,9 +2326,12 @@ Every touched row gets an explicit verdict in the spec change; summary:
       never-rejoining node's copy is outside the membership and outside the model's
       claims (operator-owned, §7).
   11. `sourceCannotApply` flag + witness that the held set empties (self-fence
-      release) while the flag holds (N-M1). **Plus the level form** (V8-M1):
+      release) while the flag holds (N-M1). **Plus the level form** (V8-M1,
+      scope per V9-M2/V10-m2):
       invariant `inv_held_set_empty_while_latched` — in every state with the latch
-      armed and the slot sealed, the held set is empty; a write action scheduled in
+      armed and the **barrier armed, sealed or not** (the latch covers the whole
+      hold region, not only post-seal), the held set is empty; a write action
+      scheduled in
       that region is answered, never held. Reverting the level rule (flushing once
       and letting later arrivals hold) must violate it. **Plus `targetSilent`** (V4-M2 — the
       mirror escape: alive-but-unable-to-act on the target side): bounded witness
@@ -2146,11 +2378,25 @@ Every touched row gets an explicit verdict in the spec change; summary:
       operator arm admissible, or a rollback/prune verb is admissible, or
       `ClearSlotResidue`'s no-effective-automatic-remover admission is true —
       must still hold. **Plus `retargetSlotResidue(s, m)`** (V8-C4, replacing the
-      V6-C3 proxy `ConfirmSlotDeleted` arm in the model too): level-triggered
+      V6-C3 proxy `ConfirmSlotDeleted` arm in the model too; **source arm only
+      per V10-C4** — the model carries no target arm): level-triggered
       re-home of an entry whose `source` is no longer a primary, admissible
       whenever `shard_primary(entry.source)` is a live primary proposing for
       itself; reverting it, the in-apply demotion re-target, or the verb's
-      admission must each violate the invariant. **Plus invariant
+      admission must each violate the invariant. **Target-side totality is
+      in-apply** (V10-C4): `demoteNode(n)` on a residue-named *target* re-targets
+      the unpromoted entry in the same step; mutation test — reverting that
+      in-apply target re-home (demoting a target and leaving the entry naming it)
+      must violate `residueHasAnEffectiveRemover` (no level-triggered target
+      re-home exists to recover, by design — the invariant is what proves none is
+      needed when the in-apply rule is intact). **Plus `Complete`'s target-role
+      conjunct** (V10-C3): `completeMigration` gains the guard
+      `nodes[record.target].role == Primary`; mutation test — dropping the
+      conjunct and scheduling `demoteNodeExternal(target)` mid-Draining, then
+      `completeMigration`, must violate `inv_slots_only_assigned_to_primaries`
+      (the slot lands on a Replica) — and with the conjunct intact the same
+      schedule stalls at `Complete`, exiting via the observation bound.
+      **Plus invariant
       `inv_slots_only_assigned_to_primaries`** (V8-C6 — SS-11's amendment as a
       model property): in every reachable state, `slot_map` assigns no slot to a
       node whose role is `Replica`; reverting the Demotion arm's same-apply slot
@@ -2239,10 +2485,15 @@ Every touched row gets an explicit verdict in the spec change; summary:
   a trigger that is a *change* rather than a *value* must name the two states being
   compared and the replicated field holding each, or be restated level-triggered
   (V7-C2's hole: "on abandonment, convert" compared a before to an after that no
-  applier of a snapshot ever observes) — and for each verify the field with a
+  applier of a snapshot ever observes), and (f) every **meaning-qualifier** — an
+  adverb or adjective doing load-bearing work inside a conjunct or claim
+  ("durably", "refuses", "validated", "proven") must be bound to a declared rule,
+  gate, or class stated in the document, not left as prose whose reader supplies
+  the binding — and for each verify the field with a
   declared type exists and name
   the component read — a name merely appearing somewhere in the document does not
-  count** (V4 audit note, strengthened per V5, V6, V7, V8, and again per V9: **seven
+  count** (V4 audit note, strengthened per V5, V6, V7, V8, V9, and again per V10:
+  **eight
   consecutive
   rounds each produced instances of exactly this class** — N-C4, V4-C3, V5-C2,
   V6-C1/C2, V7-C1/C2, V8-C2/C6 (an unfenced arm selector and an
@@ -2250,10 +2501,20 @@ Every touched row gets an explicit verdict in the spec change; summary:
   those items were added to the check), then V9-C1/C2 (an unvalidated re-home
   destination read post-write instead of proven pre-apply, and a conjunct whose
   operand's *meaning* — "durable" — was never bound to a declared durability
-  class, so the conjunct stayed satisfiable by a stale cell) — so the check must
+  class, so the conjunct stayed satisfiable by a stale cell), then V10-C1/C2/C4
+  (three meaning-qualifiers at once — "refuses" with no node-local gate carrying
+  the refusal to the command path, "durably" unbound a *second* time on the
+  replica side of the same floor, and a target-arm walk asserted safe by analogy
+  to a proven source-side argument that did not transfer — item (f) exactly,
+  added this round) — so the check must
   bind to declared
   types, not names, and must cover
-  guards, origins, arm selectors, and edge triggers, not just comparison operands).
+  guards, origins, arm selectors, edge triggers, and meaning-qualifiers, not just
+  comparison operands. **And the check is diff-scoped per revision** (V10's
+  process lesson): a round's *fix text* is text like any other — three of v10's
+  four CRITICALs lived in text v9 introduced — so each revision runs the
+  mechanical check over its own diff before dispatch, not only over the
+  original body).
   **Staged-checkpoint boundary note** (V5-M4): the property "a shadow inside the
   staged checkpoint would be discarded by FM-REPLICATION-021's disarm path" belongs to
   the *replication* model's scope, not this one; the design discharges it by routing
@@ -2402,12 +2663,15 @@ Every touched row gets an explicit verdict in the spec change; summary:
   auto-`Complete` while the target stays down — never lands above what the disk
   holds; reverting the durable-attestation gate loses acked writes even with
   V8-C3's conjunct intact (V9-C2); target demoted at `promoted == false`:
-  `RetargetSlotResidue`'s target arm re-homes the entry to the target's successor,
+  the demotion's **own apply** re-targets the entry to the validated successor
+  (V10-C4's in-apply totality — V9-M1's target arm is removed; the outcome, not
+  the mechanism, survives),
   which finishes ingest and promotes — no wedge, no rollback forced (V9-M1); write
   arriving post-flush while the latch is still armed on an *unsealed* barrier slot:
   answered `-TRYAGAIN` immediately, never held for the remaining partition
   (V9-M2); bare `REPLICAOF NO ONE` on a replica holding a residue entry as source:
-  the Promotion arm's fenced role write lands via re-mint re-proposal, the reaper's
+  the Promotion arm's fenced role write lands via the split-rule re-proposal
+  (topology-only at equality — V10-M1 revises V9-M3's re-mint), the reaper's
   role guard opens, the entry drains (V9-M3); `ClearSlotResidue` against a
   `promoted == false` entry: refused, the rollback arm remains the only exit
   (V9-M4); eviction pressure and active expiry against keys in a sealed slot:
@@ -2415,4 +2679,39 @@ Every touched row gets an explicit verdict in the spec change; summary:
   other slots, lazy expiry on reads still answers correctly (V9-m4); joiner with
   empty keyspace but non-empty local Raft state (and the converse): each refused
   by the composed TR-CLUSTER-005 precondition with the refusal naming the failing
-  gate; `CLUSTER RESET HARD` then admits (V9-M5).
+  gate; `CLUSTER RESET HARD` then admits (V9-M5). From review v10: bare
+  `REPLICAOF <other>` issued to a node that owns slots or is residue-named as
+  source: **refused node-locally by gate 3** with the error naming the owned
+  slots/entries, replicated state untouched, the migration continues (V10-C1);
+  the gate race forced (command wins locally, Demotion report then refused
+  whole): the node self-fences — affected slots answer `-TRYAGAIN`, never
+  `-MOVED`-to-self, no held write executes — and each stated operator exit
+  (failover onto a replica; `AssignSlots{accept_data_loss}`; `REPLICAOF NO ONE`)
+  un-wedges it (V10-C1); a counted replica configured `relaxed` durability:
+  its ack is withheld until its shadow store is fsynced through the batch —
+  kill -9 of every counted replica immediately after their acks, then target
+  failover, loses nothing below the acked floor; reverting the replica-side
+  fsync rule loses acked writes with the knob on (V10-C2); target demoted
+  mid-`Draining` with the knob off: `Complete` — including leader
+  auto-`Complete` — stalls on the role conjunct, the migration exits via the
+  observation bound, and **no residue entry naming a Replica target is ever
+  created**; dropping the conjunct in the model violates
+  `inv_slots_only_assigned_to_primaries` (V10-C3); model mutation — reverting
+  the in-apply target re-home (demote a residue-named target, leave the entry)
+  violates `residueHasAnEffectiveRemover`, proving the removed target arm is
+  not needed rather than merely absent (V10-C4); a topology-only re-proposal
+  (equal triple, changed role facts) admitted mid-`Draining`: **no migration
+  cancels** — the cancel binds to the field write; a genuine bump (strict
+  ordering) still cancels the node's sourced migrations (V10-M1); replica
+  added to the target's shard after acks accrue: `target_replicas_acked_pos`
+  clears, `Complete` waits for the *new* counted set's floor — and
+  symmetrically on removal (V10-M2); `ResetCluster` re-mint carries
+  `kind = Boot` and drives no demotion/cancel arm (V10-m4); each declared
+  absence test (`Prepare`'s `attempt_id == None`, `Begin`'s two map absences,
+  `Complete`'s `Some(token)` value read) exercised against both present and
+  absent states (V10-m6); read of an expired key in a sealed slot: answers
+  absent, emits no `DEL` on the migration stream, and source/target state
+  converge after promotion — the seal's feed-visible quantification holds
+  (V10-m7); `ClearSlotResidue` against a `target_gone == true` entry: refused
+  unconditionally even with `accept_stale_copy`; the orphan re-home arm is the
+  only admitted exit (V10-m8).
