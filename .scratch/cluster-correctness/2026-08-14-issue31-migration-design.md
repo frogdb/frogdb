@@ -1,6 +1,37 @@
-# Slot migration redesign — source-authoritative-until-commit (v14)
+# Slot migration redesign — source-authoritative-until-commit (v15)
 
-Status: revision 14 — draft, pending approval. Review v14 (of revision 13) found 3
+Status: revision 15 — **candidate, UNSOUND-pending**: not approved, and not
+claimed sound until a review round finds nothing structural. Review v15 (of
+revision 14) found 4 CRITICAL / 5 MAJOR / 5 MINOR, and — for the **sixth
+consecutive round**, by the tally the mechanical-check section keeps — the
+worst defects were in the *previous round's own fix text*, all four
+CRITICALs inside the three adjudication stamps revision 14 introduced one
+round earlier: the companion-field rule was keyed on writers of
+**`role`**, while two LOCKED appliers write a node's **parent pointer**
+without writing its role — the failover **sibling re-parent**
+(`reparent_children(.., Some(new_primary))`, TR-CLUSTER-018/042) and
+`RemoveNode`'s **detach** (`reparent_children(.., None)`,
+TR-CLUSTER-003/FM-CLUSTER-002) — so every surviving sibling of a failover
+kept a stale `admitted_stage`/`synced` (V15-C1); the staged adoption's
+operand list and the reconcile guard could both claim the same state after a
+re-parent, with no rule saying which (V15-C2); the shape
+`role == Replica ∧ primary_id == None` was declared *unreachable* when
+FM-CLUSTER-002 specifies it, force-tested, as the deliberate **detached
+replica** (V15-C3); and `AttestReplicaSynced` carried no parent fence, so an
+attestation minted before a re-parent could stamp `synced = true` about a
+parent whose history the node holds none of — the zero-byte candidate V14-C3
+existed to prevent (V15-C4). Revision 15 resolves all fourteen findings —
+centrally by **re-basing the companion-field rule on `primary_id` writers**
+(with two named carve-outs), by **collapsing the adoption's five operands to
+one selector**, `admitted_stage == Some(record.stage_id)`, which the
+reconcile guard reads in its negated direction so the two can never contend,
+by **declaring the detached replica** as a tracked state with named exits,
+by **fencing the attestation** with an observed parent/epoch pair, by
+**binding every refusal disposition to its record's `stage_id`**, and by a
+new permanent **writer-join subsection** that joins this design's writer
+claims against LOCKED `specs/cluster.md` cells verbatim — the mechanical
+check that would have caught all three of revision 14's CRITICALs and the
+one this round adds. Review v14 (of revision 13) found 3
 CRITICAL / 7 MAJOR / 5 MINOR, and this revision's fixes are **structural rather
 than textual**: v13's whole role-transition surface was written against
 `REPLICAOF` spellings the server refuses at dispatch in cluster mode, so the
@@ -748,12 +779,10 @@ when it is not):
      every residue entry to a validated successor, or refused whole. The
      adoption is **level-triggered, not edge-triggered** (V12-C1, the V7-C2
      discipline applied to v11's own fix text), and its firing condition
-     names **four binding operands** — the record's presence, the replicated
-     role, the replicated upstream, and the replicated stage stamp — which
-     bind it to *this record's own admitted
-     report*, never to any demotion, **plus the `adopted` idempotence guard**
-     described below (the guard is not a binding operand: it does not identify
-     the report, it records that this node already acted on it) (V13-C1 — the two-operand form *pending
+     names **five operands** — the record's presence, the `adopted`
+     idempotence flag, the replicated role, the replicated upstream, and the
+     replicated stage stamp — which bind it to *this record's own admitted
+     report*, never to any demotion (V13-C1 — the two-operand form *pending
      record ∧ replicated role `Replica`* was satisfied by every other writer
      of `role = Replica`, e.g. a concurrent `Failover{force: false}`
      (TR-CLUSTER-018) demoting the node under an in-shard successor, and
@@ -763,17 +792,62 @@ when it is not):
      replicated `nodes[self].role == Replica` ∧ applied replicated
      `nodes[self].primary_id == Some(record.target_upstream)` ∧ applied
      replicated `nodes[self].admitted_stage == Some(record.stage_id)`*.
-     The fourth **binding** operand is the replicated
+     The load-bearing operand is the replicated
      **`admitted_stage: Option<u64>`**
      field (V14-M1, replacing revision 13's `run_identity == Some(record's
      candidate triple)` operand, which the per-boot candidate re-mint
      falsified at exactly the boot that had to re-derive the adoption): the
-     Demotion arm writes `Some(payload.stage_id)`, and the Boot arm and
-     **every other role writer** (both failover arms, `SetRole`) write `None`,
-     so the stamp names the most recent role-affecting adjudication and only
-     the record's *own* report can set it to this record's `stage_id` — a
-     `Failover{force: false}` demotion writes `None` and leaves the condition
-     false, so V13-C1's trace stays dead. All observation operands are
+     Demotion arm is its **sole minting site**, and **every writer of
+     `nodes[self].primary_id` clears it** (§0's companion-field rule), so only
+     the record's *own* report can set it to this record's `stage_id`.
+
+     **The five operands collapse to one selector** (V15-C2, this round's
+     other structural correction). By the companion-field rule any apply that
+     moves `primary_id` clears `admitted_stage`; and by LOCKED SS-2/SS-3 every
+     writer of `role` is also a writer of `primary_id`. Therefore
+     `admitted_stage == Some(record.stage_id)` **implies** both
+     `primary_id == Some(record.target_upstream)` and `role == Replica`: the
+     Demotion arm wrote all three in one apply, and nothing has written
+     `primary_id` since. Operands 3 and 4 are kept in the statement above for
+     legibility, but they **cannot be false while operand 5 is true — they go
+     false together, or not at all**. V13-C1's separation now falls out of
+     that general rule rather than an arm-specific stipulation: a
+     `Failover{force: false}` demoting the staged node writes its
+     `primary_id` to the successor, hence clears `admitted_stage`, hence
+     leaves the condition false, so someone else's admission can never fire
+     this record's destructive discard. What remains is a single predicate
+     over durable state and one replicated field:
+     - **resolved** — `admitted_stage == Some(record.stage_id)`: this
+       record's own report is admitted and the node's parent has not moved
+       since. *Adopt*; **never propose**.
+     - **unresolved** — `admitted_stage ≠ Some(record.stage_id)`: the report
+       has not landed, or a later apply moved the node's parent out from
+       under it. *Propose* (the reconcile guard below); **never adopt**.
+
+     That one predicate selects between (c)'s adoption and the reconcile's
+     proposal — the two rules revision 14 left both claiming the same state
+     (V15-C2: a re-parent after admission falsified the adoption's
+     `primary_id` operand while `admitted_stage` stayed stamped, so (c)
+     waited forever on a condition nothing could restore while the reconcile
+     read the stage as resolved and proposed nothing — an immortal record
+     under a never-lifting whole-node fence whose only exits destroyed the
+     node's dataset). **The trace in its live form**, which the re-based rule
+     discharges end to end: the staged node's report admits (stamp `Some(s)`,
+     parent `U`); a `Failover` then demotes `U` and `reparent_children` moves
+     the staged node onto the successor `S`; that write clears
+     `admitted_stage`; the stage reads **unresolved**; the reconcile
+     re-proposes the record's own report; the report is refused
+     `upstream-validity` (`U` is no longer a member whose `role == Primary`)
+     at a node that is no longer replicated-`Primary`, which is gate 3 (d)
+     **arm 3 — supersession**: record cleared, fence lifted, client answered,
+     and the node converges to the failover's verdict through role-authority
+     adoption. Nothing is destroyed on the way out, and the fence lifts in
+     bounded time (one reconcile round plus one Raft round). If `U` is still
+     a lawful primary when the re-proposal applies, the report simply
+     **re-admits** — the node owns no slots and no residue names it, so the
+     shard-relationship conjunct does not bind — the stamp is re-written, the
+     stage reads resolved, and the adoption fires: the operator's intended
+     outcome, one round later. All observation operands are
      replicated fields (plus
      the durable record), and **every one of them survives the candidate
      re-mint and the boot**, so the condition is genuinely
@@ -790,12 +864,24 @@ when it is not):
      durable adoption would "just clear the record", but backed the promise
      with a re-evaluation the candidate re-mint falsified): the order is
      *fire the destructive discard and link the new upstream* → *fsync
-     `record.adopted = true`* → *clear the record (fsynced)*. A node booting
-     with `adopted == true` **skips the discard and clears the record**,
-     reading a durable flag rather than re-deriving anything. A node booting
-     with `adopted == false` evaluates the four binding operands: true → fire;
-     false and no terminal outcome observed → re-mint the candidate, rewrite
-     the record (**same `stage_id`**), re-propose; **(d)** a
+     `record.adopted = true`* → *clear the record (fsynced)*. The whole
+     machinery — at a boot and at every later tick alike — is therefore the
+     **one three-way rule** below, evaluated over durable state only, with no
+     "observed", "since" or "already tried" operand anywhere (V15-m3):
+     1. `record.adopted == true` → **skip the discard and clear the record**,
+        reading a durable flag rather than re-deriving anything;
+     2. `record.adopted == false` ∧ stage **resolved** → **adopt**: fire the
+        discard, link the upstream, then (1)'s ordering;
+     3. `record.adopted == false` ∧ stage **unresolved** → **propose**: at a
+        boot, first re-mint the candidate and rewrite the record (**same
+        `stage_id`**); then propose the record's report and wait.
+
+     Every terminal refusal clears the record (fsynced) *before* the client is
+     answered, so "a record is present" is itself the durable statement that
+     no terminal outcome has been reached — which is why no volatile
+     "outcome observed" predicate appears in this rule or in the reconcile
+     guard below (V15-m3: revision 14 carried one in both places, an operand
+     with no declared type and no durable home); **(d)** a
      refusal's disposition is selected by **two declared facts** — the
      refusal's declared **`RefusalClass`** (a committed apply outcome, declared
      at the `ReportRunIdentity` row — V14-M3) and, where the class needs it,
@@ -804,6 +890,30 @@ when it is not):
      "nothing was destroyed" were false, and contradicted the convergence
      paragraph's fence-retry rule).
 
+     **Record-binding conjunct** (V15-M1, stated once and a conjunct of
+     **every one of the six arms below**): an arm fires only for a refusal
+     whose payload belongs to *this* record —
+     `refused_payload.stage_id == Some(record.stage_id)`. A refusal carrying
+     any other `stage_id` — a `None`-stamped `Boot` report's refusal, or a
+     refusal belonging to an **earlier, already-cleared** record — is a
+     **log-only no-op**: no arm is selected, the record and fence are
+     untouched. Revision 14 declared per-proposal attribution unnecessary on
+     the strength of the precedence rule below, but that rule only neutralises
+     duplicates of the *live* stage; a refusal of stage `S1`, whose record was
+     cleared and re-staged as `S2` before the refusal was observed, routed
+     into arms 1/3 and disposed of a live record — clearing `S2`'s record and
+     dropping its fence while `S2`'s report was still in flight, which
+     re-opens exactly the revert-then-admit race the staging exists to close.
+     The conjunct is evaluable because `stage_id` is a committed payload field
+     (`Some` on every `Demotion` report, `None` on every `Boot` report) and
+     `record.stage_id` is durable node-local state; it is compared node-locally
+     at the proposer, never at apply (FM-CLUSTER-089 untouched). This also
+     subsumes V14-M7's volatile-damping residue: the "at most one proposal in
+     flight" damping is a *flooding* control, and no longer carries any
+     correctness weight in selecting a disposition — a refusal that arrives
+     after the damping state was lost to a crash is disposed of by the two
+     durable facts (`record.stage_id`, `admitted_stage`) and by nothing else.
+
      **Stage-resolution precedence rule** (V14-M7, stated once, checked before
      any arm): a refusal's disposition applies **only while the record's stage
      is unresolved**. Once applied state shows
@@ -811,13 +921,22 @@ when it is not):
      **resolved-admitted**, and every later refusal of a same-stage report —
      for instance the pre-crash duplicate that the boot re-proposal raced — is
      a **stale-duplicate no-op** whatever its class: the record and fence are
-     untouched and the adoption machinery runs to completion. This is what
-     makes per-proposal refusal attribution unnecessary; a refusal is never
-     acted on against a stage whose admission is already stamped in
-     replicated state.
+     untouched and the adoption machinery runs to completion. A refusal is
+     never acted on against a stage whose admission is already stamped in
+     replicated state. **Same-stage duplicates are therefore idempotent, and
+     the argument is durable-state-only** (V15-M1/V15-m3): a same-stage
+     refusal observed in the *resolved* state is a no-op by this rule; a
+     same-stage refusal observed in the *unresolved* state selects an arm, and
+     every arm is itself idempotent under repetition — arms 1/3/5 clear an
+     already-cleared record (a no-op, and the client is answered once because
+     the reply is bound to the record's presence), arm 2 re-proposes a report
+     the damping rule already has in flight (a no-op), and arm 4 is a no-op by
+     definition. Repetition therefore cannot change the outcome; only a
+     *different* record could be harmed, and the record-binding conjunct above
+     is what excludes it.
 
-     With that check first, the partition over the six declared refusal
-     classes is **total**:
+     With those two checks first — record-binding, then stage-resolution — the
+     partition over the six declared refusal classes is **total**:
      1. **`upstream-validity` / `shard-relationship`** (jointly the
         *refuse-whole* verdict — a standing condition retrying cannot fix)
         ∧ `role == Primary`: revert — clear the record (fsynced), discard the
@@ -855,7 +974,7 @@ when it is not):
         flight: the staged intent is **superseded** — clear the record
         (fsynced), answer the initiating client with an error naming the
         supersession, and converge through the adoption machinery: the
-        four binding operands bind the destructive adoption to the
+        resolved-stage selector binds the destructive adoption to the
         record's own report, so this arm never wipes toward the record's
         upstream on someone else's admission (V13-C1's trace dies here);
         with the record cleared the disagreement is unexplained, and §0's
@@ -903,16 +1022,20 @@ when it is not):
      the stage is unresolved (single-writer rule above) and re-evaluated by
      gate 3 after resolution, and `CLUSTER INFO`'s pending-stage field reads
      the outcome at any time.
-     **Reconcile guard.** While the record is pending, §0's reconcile proposes
-     **nothing but the staged report itself**, and **proposes it only while the
-     stage is unresolved** — applied
-     `nodes[self].admitted_stage ≠ Some(record.stage_id)` and no terminal
-     outcome (refuse-whole, supersession, membership) observed (V14-m3: in the
+     **Reconcile guard — the same one selector, in its proposing direction.**
+     While the record is pending, §0's reconcile proposes **nothing but the
+     staged report itself**, and proposes it **exactly when case 3 of (c)'s
+     three-way rule holds**: `record present ∧ record.adopted == false ∧
+     applied nodes[self].admitted_stage ≠ Some(record.stage_id)` — the
+     *unresolved* branch, and nothing else (V15-C2: this is now the **same
+     predicate** (c) reads, so the two rules cannot claim the same state; and
+     V15-m3: the operand set is durable state only — revision 14's trailing
+     "and no terminal outcome observed" is deleted, since a terminal arm
+     clears the record fsynced before answering, making *record present* the
+     durable statement that operand was groping for). In the
      post-admission/pre-adoption window the stage reads *resolved* and the
      reconcile proposes **nothing**, because completing the adoption is local
-     machinery, not a proposal — which is what the v12 test block already
-     asserted and revision 13's "the reconcile's only proposal is that record's
-     own report" contradicted). The window is a *planned* plane disagreement
+     machinery, not a proposal (V14-m3). The window is a *planned* plane disagreement
      (V12-C1: local Primary, replicated Replica) that no level rule may read as
      a promotion — and since V14-C1 there is no `Promotion` kind to stamp at
      all, so the hole is closed by the enum, not only by the guard. The staging
@@ -920,7 +1043,8 @@ when it is not):
      refuse-whole veto *effective* rather than after-the-fact: the veto lands
      before the destruction it exists to prevent. **No reachable state destroys
      a copy that replicated state still counts** — the discard is gated on the
-     admission of the record's *own* report (the four binding operands), which
+     admission of the record's *own* report (the resolved-stage selector),
+     which
      removed every such count for exactly the transition the record names;
      an admission that demotes the node some *other* way leaves the
      binding false and routes through arm 3 — and the
@@ -934,9 +1058,14 @@ when it is not):
      which no spec path now reaches.
 
   With these gates, a member node only ever holds slot data in a *tracked* state —
-  owner, replica of an owner, open-record source/target, or residue-entry source —
+  owner, replica of an owner, open-record source/target, residue-entry source, or
+  **detached replica** (V15-C3, declared below at the role-authority passage: the
+  state LOCKED FM-CLUSTER-002 creates when `CLUSTER FORGET` removes a primary and
+  `reparent_children(.., None)` clears its replicas' parent pointers **without
+  changing their role**) —
   and every tracked state has a declared remover (§1's enumeration: reaper,
-  rollback arm, re-target rules, `ClearSlotResidue`). The untracked-stale-copy
+  rollback arm, re-target rules, `ClearSlotResidue`; for the detached replica, the
+  operator's re-home or `CLUSTER FORGET` of the replica itself). The untracked-stale-copy
   class the self-cleanse chased can no longer be created inside a cluster. §5's
   promotion precondition (live region empty) stays as defence-in-depth. Residual,
   stated: a stale copy on a node that never rejoins sits outside every rule's
@@ -967,17 +1096,106 @@ Field writers (every field has exactly one writing transition):
 | last_observation | `ObserveMigration`; **cleared by `ConfirmSlotHandoffDrained`'s apply** (with the counter — V7-C3) | dedup state for the counter (N-M5) |
 | handoff_residue entry | `CompleteSlotMigration` (creates); `ReportSlotPromoted` (sets promoted); `ConfirmSlotDeleted` (removes); membership prune (sets `source_gone` on source-departure, sets `target_gone` on target-departure that unassigns the slot, re-targets on target failover — V5-M2/V7-C2/V7-M6); demotion transitions (re-target `source`/`target` to the admission-validated successor — V6-C3/V9-C1); `RetargetSlotResidue` (re-writes `source` to the shard's current primary — V8-C4; **source arm only** — the V9-M1 target arm is removed, V10-C4: target re-home is exclusively the demotion transitions' in-apply re-target); `AssignSlots` rollback arm (removes; clears `target_gone` when re-homing an orphaned `promoted == true` entry — V7-M5/M6); `ClearSlotResidue` (removes — V7; `promoted == true` only, V9-M4); `ResetCluster` (clears map) | replicated, snapshot-carried |
 
-The three `NodeInfo` fields this design adds (V14) have several declared writers
-each, so they are tabulated separately — the "exactly one writing transition" rule
-above governs the migration record; for these the rule is **every writer of the
-governed role fact also writes the companion field**, which is what makes them
-readable as adjudication stamps rather than as hints:
+The three `NodeInfo` fields this design adds (V14, **re-based on `primary_id`
+writes in V15**) have several declared writers each, so they are tabulated
+separately — the "exactly one writing transition" rule above governs the migration
+record. For these three the governing rule is stated **once**, here, and every
+other passage that mentions them references it rather than re-listing writers:
+
+> **Companion-field rule** (V15-C1/C2/C3, replacing revision 14's *"every writer
+> of the governed role fact also writes the companion field"*): **every apply that
+> writes `nodes[n].primary_id` — to any value, `Some` or `None` — also writes
+> `nodes[n].synced`, `nodes[n].admitted_stage` and `nodes[n].promoted_from` for
+> that same `n`, in the same apply.** The default write is
+> `synced = false, admitted_stage = None, promoted_from = None`, with exactly
+> **two carve-outs**:
+>
+> 1. **the minting site** — the `ReportRunIdentity` **Demotion arm** writes
+>    `admitted_stage = Some(payload.stage_id)` (with the default
+>    `synced = false`, `promoted_from = None`). It is the *only* writer that ever
+>    stamps a stage; every other `primary_id` writer clears it.
+> 2. **applies that force `role = Primary`** — both failover **promotion** arms,
+>    LOCKED `SetRole` writing `role = Primary`, `ResetCluster` (SOFT and HARD,
+>    which force this node's role to `Primary` and null its parent pointer), and
+>    a fresh `AddNode`/`MEET` registration that registers the node **as a
+>    primary** — write **`synced = true`** (a primary is trivially current with
+>    itself; V15-m4 — revision 14 had `ResetCluster` write `false` here while the
+>    promotion arms wrote `true`, two writers of one governed fact stamping the
+>    companion differently) and `admitted_stage = None`. The failover promotion
+>    arms additionally write `promoted_from = Some(old_primary_id)`; every other
+>    member of this carve-out writes `promoted_from = None`.
+>
+> **Why `primary_id` and not `role`** — the round's structural correction
+> (V15-C1/C2/C3). What `synced` and `admitted_stage` qualify is *who this node's
+> parent is*: "does it hold **that parent's** history", "which adjudication gave
+> it **that parent**". Revision 14 keyed both on writers of `role`, and **two
+> LOCKED appliers write `primary_id` without writing `role`**:
+> - `reparent_children(.., Some(new_primary))` in **both** failover arms — LOCKED
+>   TR-CLUSTER-018 "siblings of `old_primary_id` re-parented to `new_primary_id`"
+>   and TR-CLUSTER-042 "`old_primary_id`'s remaining replicas … are re-parented to
+>   `new_primary_id` (`reparent_children`, `commands.rs:459`)": a sibling's *role*
+>   is untouched;
+> - `reparent_children(.., None)` in **`RemoveNode`** — LOCKED TR-CLUSTER-003 /
+>   FM-CLUSTER-002 "Every replica parented to it is *detached*: its `primary_id`
+>   clears, **its role does not change**" (`commands.rs:231`).
+>
+> Under the v14 rule a sibling re-parented onto a brand-new primary kept the
+> `synced == true` it earned under its **old** parent and was instantly an
+> auto-failover candidate holding none of the new shard's history — V15-C1's
+> zero-history promotion, `inv_no_acked_write_lost` — and a detached replica kept
+> a stage stamp naming an adjudication that no longer described it, which is half
+> of V15-C2's stranded record. Keying the rule on `primary_id` makes the
+> companions' writer set **exactly** the writer set of the fact they qualify.
+> Two consequences worth stating because later passages turn on them:
+> - **V13-C1's separation now falls out of the general rule** rather than being
+>   an arm-specific stipulation: a `Failover{force: false}` demoting the staged
+>   node writes that node's `primary_id` to the successor, hence
+>   `admitted_stage = None`, hence the adoption's stage operand is false and
+>   someone else's admission can never fire this record's destructive discard.
+> - **`admitted_stage == Some(s)` implies the parent has not moved since `s` was
+>   stamped**, because *every* `primary_id` write clears the stamp. This is what
+>   collapses gate 3's adoption operands to a single selector (see (c)).
+>
+> **Two writers of a companion that are not `primary_id` writers**, both declared
+> here so the rule's converse is never assumed: `AttestReplicaSynced` writes
+> `synced = true` under the parent-fenced conjuncts declared at its Transitions
+> row — it is the *only* transition that raises `synced` for a replica; and
+> nothing else. In particular the `Boot` arm of `ReportRunIdentity` writes **no**
+> companion field at all (V15-m1 — revision 14 had it clear `admitted_stage` as
+> "garbage collection", a write that bought nothing and whose accompanying claim
+> was false; see that arm).
+>
+> **Reading discipline** (V15-C1): `synced(n)` is consulted **only where
+> `nodes[n].role == Replica`** — the failover-candidacy conjunct is its sole
+> reader. Its value on a primary is stamped for stamp-consistency and never read.
+> `admitted_stage(n)` is read only by `n` itself, against its own pending record.
 
 | `NodeInfo` field | Written by | Notes |
 |-------|-----------|-------|
-| `promoted_from: Option<NodeId>` | failover **promotion** arms (`Failover{force: false}` and `{force: true}` — TR-CLUSTER-017/018/042) write `Some(old_primary_id)` on the promotee; **every writer of `role = Replica`** (the `ReportRunIdentity` Demotion arm, LOCKED `SetRole`-to-replica, the failover demote-and-re-parent arm) writes `None`; `ResetCluster` clears it; `AddNode`'s upsert **preserves** it field-wise (V7-M3's rule, same as `run_identity`); a genuinely fresh registration initializes it absent | V14-C2 — the replicated record of *which* primary a promotion adjudicated away from; sole operand of the lineage guard's third disjunct |
-| `synced: bool` | every apply that gives a node a **new parent** (Demotion arm; `SetRole` writing `role = Replica`; failover demote-and-re-parent) writes `false`; failover **promotion** arms write `true` on the promotee (a primary is trivially current with itself); the new `AttestReplicaSynced{node, proposer}` transition writes `true`; `ResetCluster` writes `false`; fresh registration initializes `false` | V14-C3 — data-possession gate on failover candidacy (TR-CLUSTER-021); no wall clock anywhere |
-| `admitted_stage: Option<u64>` | the `ReportRunIdentity` **Demotion arm** writes `Some(payload.stage_id)`; the **Boot arm** and **every other role writer** (both failover arms, `SetRole`) write `None`; `ResetCluster` clears it; `AddNode`'s upsert preserves it field-wise | V14-M1 — names the most recent role-affecting adjudication, so the staged adoption can bind to *its own* admission across a boot |
+| `promoted_from: Option<NodeId>` | **every `primary_id` writer** (companion-field rule): failover **promotion** arms write `Some(old_primary_id)` on the promotee; every other `primary_id` writer writes `None` — the `ReportRunIdentity` Demotion arm, LOCKED `SetRole` in either direction, the failover **demote-and-re-parent** of the old primary, the failover **sibling re-parent** (`reparent_children(.., Some(new_primary))`, TR-CLUSTER-018/042), `RemoveNode`'s **detach** (`reparent_children(.., None)`, TR-CLUSTER-003/FM-CLUSTER-002), `ResetCluster`, and a fresh `AddNode`/`MEET` registration. An `AddNode` **upsert** — a bare re-registration, which per LOCKED TR-CLUSTER-002 writes neither role nor parent pointer ("are **not** downgraded by a bare re-registration") — writes no `primary_id` and therefore **preserves** all three companions field-wise (V7-M3's rule, V15-M2) | V14-C2 — the replicated record of *which* primary a promotion adjudicated away from; sole operand of the lineage guard's third disjunct |
+| `synced: bool` | the same writer set, by the same rule: default `false`; the `role = Primary` carve-out writes `true`; **plus** `AttestReplicaSynced`, the one non-`primary_id` writer, which writes `true` only under its declared parent fence (`observed_primary_id`/`observed_config_epoch`, V15-C4) | V14-C3 — data-possession gate on failover candidacy (TR-CLUSTER-021); read only where `role == Replica`; no wall clock anywhere |
+| `admitted_stage: Option<u64>` | the same writer set, by the same rule: default `None`; the `ReportRunIdentity` **Demotion arm** is the sole minting site, writing `Some(payload.stage_id)`. No other transition writes it — in particular the `Boot` arm does not (V15-m1) | V14-M1 — names the adjudication that gave the node its **current** parent, so the staged adoption binds to *its own* admission across a boot; stage ids are per-node monotone and never reused, so a stamp left over from an earlier stage satisfies no later record's operand |
+
+#### Writer join against the LOCKED state space (V15-F10, permanent)
+
+Revision 14's three CRITICALs were one omission repeated across three
+enumerations, and all three would have been caught by joining this design's
+writer claims against `specs/cluster.md`'s **State space** rows instead of
+against the design's own prose. That join is therefore a permanent subsection,
+re-run every revision. For each replicated field this design reads or stamps,
+the LOCKED `Writer(s)` cell is quoted **verbatim** and every writer in it is
+marked *carried* (the design leaves it alone) or *amended* (with what the
+amendment adds). **A LOCKED-named writer that appears in neither column is a
+defect, not an omission.**
+
+| Field (LOCKED row) | LOCKED `Writer(s)`, verbatim | Per-writer disposition |
+|---|---|---|
+| **Node role** (SS-2, `NodeInfo.role`) | "`apply_command`: `SetRole`, `Failover` (promote/demote), `ResetCluster` (forces this node's role to `Primary`, `commands.rs:834`)" | `SetRole` — **amended** (companion-field rule; to-`Primary` takes carve-out 2, to-`Replica` the default). `Failover` (promote/demote) — **amended**: the *promote* half takes carve-out 2 and writes `promoted_from = Some(old_primary_id)`; the *demote* half takes the default. `ResetCluster` — **amended**: carve-out 2, so `synced = true` (V15-m4 corrects v14). **Added by this design**: the `ReportRunIdentity` **Demotion arm** (carve-out 1) — the LOCKED row gains it, blast-radius verdict Amended. **Flagged LOCKED-internal disagreement**: SS-2's writer cell omits `AddNode`, while TR-CLUSTER-002's postcondition says "'Node role', 'Node parent pointer' … all set from the command's `node` fields" at a fresh registration. This design treats a fresh `AddNode`/`MEET` registration as a role writer (carve-out 2) and the blast-radius entry asks SS-2's cell to name it; the alternative reading — that registration is not a role write — would leave a registered node's role written by nobody. |
+| **Node parent pointer** (SS-3, `NodeInfo.primary_id`) | "`apply_command`: `AddNode`, `SetRole`, `Failover` (re-parent), `RemoveNode` (re-parents the departing node's children via `reparent_children`, `commands.rs:231`), `ResetCluster` (nulls this node's own parent pointer, `commands.rs:835`)" | **All five carried, all five amended by the companion-field rule** — this is the row the rule is keyed on, so no member of it may be skipped. `AddNode` — fresh registration writes the companions (carve-out 2 when it registers a primary, default otherwise); a bare **upsert** writes no `primary_id` and preserves them (V15-M2, LOCKED TR-CLUSTER-027 fires exactly this path live). `SetRole` — default or carve-out 2 by direction. `Failover` (re-parent) — **three distinct writes**, each taking the rule separately: the promotee's parent **cleared** (carve-out 2), the old primary **re-parented** to the successor (default), and the old primary's **siblings re-parented** via `reparent_children(.., Some(new_primary))` (default — this is the write revision 14 missed, V15-C1). `RemoveNode` — `reparent_children(.., None)` **detaches** every child (default write: `synced = false`, `admitted_stage = None`, `promoted_from = None`), producing the **detached replica** tracked state declared below (V15-C3). `ResetCluster` — carve-out 2. **Added by this design**: the Demotion arm (carve-out 1). |
+| **Node's own config epoch** (SS-4, `NodeInfo.config_epoch`) | "`apply_command`: `AddNode` (initial), `SetConfigEpoch`, `Failover` (stamp on promotion), `ResetCluster` (HARD only: reset to 0, `commands.rs:843`)" | **All four carried, none amended** — this design writes no epoch. It *reads* the field in three admission conjuncts (the Demotion arm's fence, `AttestReplicaSynced`'s new `observed_config_epoch` conjunct, and, via TR-CLUSTER-018/042, the failover fences), so each of these four writers can refuse an in-flight report or attestation: that is the fence working, and gate 3 (d) arm 2 plus the attestation's re-attest disposition are the declared responses. |
+| **Slot ownership** (SS-11, `slot_assignment`) | "`apply_command`: `AssignSlots`, `RemoveSlots`, `Failover` (transfer), `CompleteSlotMigration` (move), `RemoveNode` (unassigns the departing node's slots, left unassigned rather than retargeted, `commands.rs:222-224`), `ResetCluster` (clears all, `commands.rs:821`)" | `AssignSlots` — **amended** (rollback arm; assignee-role conjunct; `accept_data_loss` token rules). `RemoveSlots`, `Failover` (transfer), `ResetCluster` — **carried**. `CompleteSlotMigration` — **amended** (rewritten wholesale by this design). `RemoveNode` — **carried**, and its unassign is what makes the detached replica's slots ownerless rather than re-homed (FM-CLUSTER-002's "NOT observable" is explicit that inventing a successor here is forbidden). **Added by this design**: the Demotion arm's in-apply re-home to the validated successor. Invariant added: no slot is assigned to a node whose role is `Replica`. |
+| **Node membership** (SS-1, `nodes`) | "`apply_command`: `AddNode`, `RemoveNode`, `Failover` (remove/re-parent), `ResetCluster` (clears to just this node, `commands.rs:832-855`; if `node_id` is not a member — a reset racing a `FORGET` — the `else` branch at `commands.rs:855-858` clears membership to *empty* instead and still returns `Ok`)" | **All four carried, none amended.** The design *reads* membership in the `membership` and `upstream-validity` conjuncts and in the lineage guard's third disjunct; `RemoveNode` and `Failover{force: true}` are the two writers that can falsify an upstream mid-flight, and both route to declared arms (gate 3 (d) arms 3/5). |
+| **`NodeInfo.run_identity`**, **`.synced`**, **`.admitted_stage`**, **`.promoted_from`** | *No LOCKED row* — all four are new replicated fields introduced by this design | Each lands as a **New row** in the blast-radius list with its own writer enumeration (the tables above), and each is bound by the companion-field rule or, for `run_identity`, by the `ReportRunIdentity` row. Nothing to carry; everything to declare. |
 
 ### Transitions
 
@@ -1537,10 +1755,20 @@ conjuncts, dedup, run guards).
   shard-relationship}` — **the first conjunct that failed in the evaluation
   order above**. The class is a pure function of the committed payload and
   pre-apply replicated state, so every applier computes the same value
-  (FM-CLUSTER-089 determinism preserved, no node-local operand), and the
-  proposing node reads its own refusal's class from the apply outcome — this
-  extends FM-CLUSTER-047's committed-rejection rule with the rejection's
-  *class*, a LOCKED amendment carried in the blast-radius list. Gate 3 (d)'s
+  (FM-CLUSTER-089 determinism preserved, no node-local operand).
+  **Read path, declared** (V15-m2): the proposing node obtains the class by
+  **computing it locally at its own apply of the committed entry** — every node
+  applies every entry, `payload.proposer` is a committed field, so the proposer
+  recognises its own report and evaluates the same pure function every other
+  applier does. It does **not** read the class out of a `ClusterResponse`: a
+  staged node is usually **not** the Raft leader, and LOCKED TR-CLUSTER-041
+  answers a forwarded proposal with `Proposed::Forwarded` and **no**
+  `ClusterResponse` at all. FM-CLUSTER-047's committed-rejection rule (a
+  rejection rides back through the success channel) is the *leader-side*
+  companion and stays exactly as LOCKED — the amendment this design asks of it
+  is only that the refusal's **class** be part of the recorded outcome, so that
+  the local computation and the leader-side reply agree by construction. Both
+  rows are carried in the blast-radius list. Gate 3 (d)'s
   disposition partition is keyed on this outcome; a `Demotion` payload with
   `new_primary_id == None` is malformed and refuses in the
   `upstream-validity` class. Applying a run_identity **field write** for a node
@@ -1599,8 +1827,10 @@ conjuncts, dedup, run guards).
   `nodes[node].synced = false` (V14-C3 — the node has just been given a new
   parent and holds none of that parent's history yet, so it is not a failover
   candidate until it attests) and `nodes[node].promoted_from = None`
-  (V14-C2 — every writer of `role = Replica` clears the promotion
-  adjudication)** (V7-C1 — without the role write, a node-originated
+  (V14-C2 — the promotion adjudication is cleared by every `primary_id`
+  writer)** — this arm is **carve-out 1 of §0's companion-field rule**, the
+  sole minting site of `admitted_stage`, and the only place any of the three
+  companion fields is written to anything but its default — (V7-C1 — without the role write, a node-originated
   demotion the failover machinery never saw leaves `nodes[node].role` at Primary
   forever: §7's defer guard never defers, `RetargetSlotResidue`'s
   `role != Primary` gate never opens, and the re-target rule never fires — a
@@ -1664,16 +1894,22 @@ conjuncts, dedup, run guards).
   token-gated `AssignSlots{accept_data_loss: true}` for the owned slots before
   the `CLUSTER REPLICATE`, after which the demotion re-homes nothing and the
   shard conjunct no longer binds.
-  The `Boot` arm writes no role, no `primary_id`, and therefore no `synced` or
-  `promoted_from` (the companion-field rule binds a writer of the role fact,
-  and this arm is not one) — but it **does** write
-  **`admitted_stage = None`** (V14-M1), which is the stamp's garbage
-  collection: a stage stamp outlives its record by at most one report.
-  **This cannot erase a live stage** (V14-M1/V14-M7): a node whose record is
-  still pending stamps its boot report `kind = Demotion` from that record —
-  the kind rule's whole purpose — so the only boots that emit a `Boot` report
-  are boots with no pending record, i.e. boots after the adoption completed
-  and cleared it, or after a terminal refusal abandoned it. The arm
+  The `Boot` arm writes no role and no `primary_id`, and therefore — by §0's
+  companion-field rule, which is keyed on `primary_id` writes — **writes none
+  of the three companion fields**. Revision 14 had it clear `admitted_stage`
+  as "the stamp's garbage collection: a stage stamp outlives its record by at
+  most one report"; **that write is deleted and the claim withdrawn**
+  (V15-m1). The claim was false: gate 3 (d) arm 1's **live-run** sub-case
+  explicitly owes no further report, so a stamp from an earlier admitted
+  demotion can outlive its record indefinitely — and nothing was buying the
+  write, because **stage ids are per-node monotone and never reused**, so a
+  leftover stamp `Some(s)` satisfies no later record's operand
+  (`s ≠ record.stage_id` for every subsequently minted record) and, by the
+  reconcile guard, reads as *unresolved* — the safe direction, in which the
+  node proposes rather than adopts. What the stamp means is therefore stated
+  positively and without a lifetime claim: **`admitted_stage(n)` names the
+  adjudication that gave `n` its current parent**, and is cleared by every
+  writer of that parent. The `Boot` arm
   carries the fence fields inert (admission
   ignores them on that arm). **There is no `Promotion` arm** (V14-C1, deleting
   revision 13's fenced Promotion writer and the pending-promotion record that
@@ -1682,9 +1918,13 @@ conjuncts, dedup, run guards).
   moment was `REPLICAOF NO ONE` — which cluster mode refuses at dispatch (gate
   3's role-command surface). Every cluster-mode promotion is a `Failover` apply,
   which writes the role itself, so the report kind enum is `{Boot, Demotion}`
-  and SS-2/SS-3's writer lists name exactly the Demotion arm plus the LOCKED
-  failover and `SetRole` writers — the Quint role-writer property
-  (`inv_role_written_only_by_declared_writers`) is tightened accordingly, not
+  and SS-2/SS-3's writer lists name exactly the Demotion arm plus **the LOCKED
+  cells' own writers, in full** — `SetRole`, both failover halves *including
+  the sibling re-parent*, `RemoveNode`'s detach, `ResetCluster`, `AddNode`
+  (V15-C1: revision 14 wrote "the LOCKED failover and `SetRole` writers" here
+  and in two other places, a prose list short by two) — and the Quint
+  role-writer property (`inv_role_written_only_by_declared_writers`,
+  **re-based on `primaryId` in ext-17**) is tightened accordingly, not
   weakened.
   **Level-triggered re-proposal** (V8-C2/V8-M3 — a refused report must not strand
   the truth): each node runs a standing reconcile — whenever its current local
@@ -1712,9 +1952,15 @@ conjuncts, dedup, run guards).
 
   **While a pending-transition
   record exists, the reconcile's only proposal is that record's own report,
-  and it proposes only while the stage is unresolved** — applied
-  `nodes[self].admitted_stage ≠ Some(record.stage_id)` and no terminal outcome
-  (refuse-whole, supersession, membership) observed
+  and it proposes only while the stage is unresolved** — the single rule
+  stated at gate 3 (c), read here in its proposing direction: *record present
+  ∧ `record.adopted == false` ∧ applied
+  `nodes[self].admitted_stage ≠ Some(record.stage_id)`*, and **nothing else**
+  (V15-m3 deletes the "and no terminal outcome observed" qualifier this
+  passage used to carry: it was a node-local *volatile* predicate with no
+  declared type or durable home, and it is unnecessary — every terminal arm
+  clears the record, fsynced, before answering, so a terminal outcome is
+  already the absence of a record)
   (V12-C1 — the guard the difference test was missing: the staging window's
   role disagreement is planned, and the pending report already in flight under
   the damping rule *is* its convergence — plus V14-m3's qualifier: in the
@@ -1785,40 +2031,96 @@ conjuncts, dedup, run guards).
   permanently mute node. The adoption is **total over the replicated shapes**
   (V13-M4, re-grounded per V14-M4): at `role == Replica ∧ primary_id ==
   Some(p)` the node adopts replica-of-`p`. The remaining shape
-  **`role == Replica ∧ primary_id == None`** is **unreachable by writer
-  enumeration** — every writer of `role = Replica` is enumerated in the
-  field-writer table and each writes a `Some` upstream in the same apply:
-  the `ReportRunIdentity` **Demotion arm** writes
-  `payload.new_primary_id`, which is `Some` by construction and whose `None`
-  form the arm now refuses as malformed (V14-C1); LOCKED
-  **`SetRole`-to-replica** validates a present Primary and writes `Some(p)`;
-  the failover **demote-and-re-parent** arm writes `Some(new_primary)`; and
-  the three remaining writers in SS-2/SS-3's closed enumeration never write
-  `Replica` at all — the failover **promote** arm, `ResetCluster`'s **SOFT**
-  `NodeInfo` handling, and a fresh **`AddNode`/`MEET`** registration each write
-  `role = Primary` with `primary_id = None` (a slotless self-standing primary is
-  the lawful shape; it is the *replica* shape with a `None` upstream that has no
-  producer). Nothing else writes the role — the enumeration is closed by
-  SS-2/SS-3 as amended. (Revision 13 declared this shape reachable and gave it
-  a **quiesced-replica** arm; with the `None` upstream unrepresentable that
-  arm had no producer, and — worse — it described a member holding a
-  slot-worth of data in a state with no declared remover, which
-  `inv_member_keyspace_is_tracked` forbids, and named two exits that cannot
-  fire: `AssignSlots` refuses a Replica assignee under the amended SS-11, and
-  a failover verdict cannot select an unsynced replica under the amended
-  TR-CLUSTER-021.) Should the shape nonetheless present — a bug state, like
-  the plane-split state — the node **self-fences per §3's defence-in-depth
-  passage**: it does not serve, its dataset is retained but fenced, and it
-  does **not** loop proposals, because the **difference
-  test treats a locally detached link as matching replicated
-  `primary_id == None`** (retained from V13-M4 — without it the upstream
-  operand stays unequal forever and the damped reconcile
+  **`role == Replica ∧ primary_id == None`** is **reachable, and it is a
+  declared tracked state: the detached replica** (V15-C3 — revision 14
+  called this shape "unreachable by writer enumeration", which is **false
+  against LOCKED FM-CLUSTER-002**: the detach is deliberate, specified, and
+  force-tested by `remove_node_prunes_migrations_and_detaches_replicas`).
+  Its producer is LOCKED `RemoveNode`'s `reparent_children(.., None)`
+  (TR-CLUSTER-003), whose FM-CLUSTER-002 *Observable* row reads: "Every
+  replica parented to it is *detached*: its `primary_id` clears, its role
+  does not change, and `CLUSTER NODES` renders `-` for its master id" — and
+  whose *NOT observable* half is equally binding: the orphans are **not**
+  re-parented and **not** promoted, so nothing may invent a successor for
+  them. (`ResetCluster` also nulls a parent pointer, but forces
+  `role = Primary` in the same apply, so it never lands this shape; the
+  `role = Replica` writers other than the detach — the Demotion arm, LOCKED
+  `SetRole`-to-replica, the failover demote-and-re-parent arm — do each
+  write a `Some` upstream in the same apply, which is why
+  `reparent_children(.., None)` is the *only* producer.)
+  **The adoption over it is replica-of-nobody**, which is what keeps the
+  role-authority rule total: the node keeps `Replica`, keeps its dataset,
+  has no upstream to replicate from, and **serves per its role's existing
+  read rules — no new fence, no new refusal**, which is exactly
+  FM-CLUSTER-002's minimal text. Three properties follow from rows already
+  LOCKED or amended here: it is in **no failover candidate set** (it is
+  nobody's replica, so no verdict enumerates it — and the amended
+  TR-CLUSTER-021 would refuse it regardless, its `synced` having been
+  cleared by the detach's `primary_id` write per §0's companion-field rule);
+  **`AssignSlots` refuses it** under the amended SS-11 (a `Replica` is never
+  an assignee); and it holds a slot-worth of data, so it is **its own arm of
+  §0's tracked-state enumeration** (owner, replica of an owner, open-record
+  source/target, residue-entry source, **detached replica**), which is what
+  keeps `inv_member_keyspace_is_tracked` total over it rather than excusing
+  it.
+  **Declared exits, non-destructive.** The operator **re-homes** it, and the
+  declared spelling is the **LOCKED `SetRole` re-parent** (TR-CLUSTER-004):
+  its precondition already validates that the named `p` is present with
+  `role == Primary`, its postcondition writes the new parent pointer, and it
+  fires `Demoted` even on an already-`Replica` node precisely so the
+  replication stream re-points — one lawful replicated write, which clears
+  `admitted_stage`/`synced`/`promoted_from` with it per §0's companion-field
+  rule (**decision, V15-F3**). This design's **staged** gate-3 machinery is
+  *not* required for it: staging exists for a slotless **Primary** flipping
+  to Replica, where an `AssignSlots` can bind the node between the gate's
+  applied-state read and the flip; a node already replicated-`Replica`
+  cannot be assigned slots at all under the amended SS-11, so that race has
+  no producer here.
+  `CLUSTER REPLICATE <new-primary>` issued **at** a detached replica is
+  nonetheless **admissible, not refused** — it is the operator-facing
+  spelling of the same re-home, and it converges to the same state through a
+  **degenerate stage**: gate 3 binds only on owned slots or a residue entry
+  naming the node, and a detached replica owns no slots (SS-11), so the gate
+  passes; the Demotion arm's **shard-relationship conjunct is vacuous** (it
+  is qualified on owning slots or residue), leaving **upstream-validity** as
+  the only live check; the arm admits and writes the same
+  `(role, primary_id)` pair the `SetRole` path writes, plus the stage stamp.
+  The stage's whole-node `-TRYAGAIN` fence applies for its duration and
+  costs nothing that was being served as an owner. Both paths land the same
+  state, so no reader has to reconcile two outcomes. (Where a residue entry
+  *does* still name the node, gate 3 refuses the `CLUSTER REPLICATE` by
+  rule and the `SetRole` path is the exit.)
+  **Declared exit, destructive:** `CLUSTER FORGET` of the node itself
+  remains the removal path, and is what removes its keyspace from the
+  tracked enumeration. What is **not** an exit is an automatic one: nothing
+  in this design re-parents or promotes a detached replica on its own,
+  because FM-CLUSTER-002 says the system does not, and adding one here would
+  amend a LOCKED row with no failure-mode row asking for it.
+  (Revision 13 gave this shape a **quiesced-replica arm of the report** — a
+  proposal path — and revision 14 deleted the arm *and* the shape. The arm's
+  deletion stands, for a sharper reason than revision 14 gave: no
+  *node-originated* transition lands here, the detach being authored by
+  another node's `RemoveNode`, so the shape needs a declared **state**, not
+  a report arm. The unreachability claim that replaced them is withdrawn.
+  The two "exits that cannot fire" revision 14 charged against the quiesced
+  arm — `AssignSlots` and a failover verdict — were correctly identified as
+  non-exits, and are indeed *not* among the exits declared above.) A detached replica does **not** loop
+  proposals, because the **difference test treats a locally detached link as
+  matching replicated `primary_id == None`** (retained from V13-M4 — without
+  it the upstream operand stays unequal forever and the damped reconcile
   re-proposes a no-op report every observation cycle, a permanent proposal
-  loop that falsifies `witnessSplitPlanesConverge`); the state surfaces as an
-  operator error and exits through the replicated plane only. The retained
-  dataset does not weaken `inv_member_keyspace_is_tracked`, which ranges over
-  reachable states; the model carries the unreachability as an invariant
-  instead (Quint ext-16). A report refused by the fence — the topology moved
+  loop that falsifies `witnessSplitPlanesConverge`); with the operand equal
+  the reconcile has nothing to report and the node sits in its declared
+  state until an operator exit above fires. The **self-fence per §3's
+  defence-in-depth passage is scoped to genuinely-unreachable bug states** —
+  the plane-split shape (locally a replica, replicated-Primary **with
+  slots**) — and explicitly **not** to a detached replica, which is a lawful
+  state of the LOCKED system and serves per its role's read rules (V15-C3
+  corrects revision 14, which fenced this shape as a bug state). The
+  retained dataset does not weaken `inv_member_keyspace_is_tracked`: the
+  **detached-replica arm** of the tracked-state enumeration is what
+  discharges it, and the model carries that arm rather than an
+  unreachability invariant (Quint ext-16). A report refused by the fence — the topology moved
   underneath it — is retried against the topology that actually holds,
   and converges or is superseded by a newer identity change (for a staged
   Demotion this is gate 3 (d)'s fence arm: the record and fence persist and
@@ -1875,19 +2177,53 @@ conjuncts, dedup, run guards).
   nothing about the position space; the target's boot reconcile resumes from
   `covered_applied` or, if its shadow is unavailable, proposes `CancelSlotMigration`
   itself, §4/§5).
-- **`AttestReplicaSynced{node, proposer}`** (new — V14-C3; proposed by the
-  replica itself when its initial full sync with its **current** upstream
-  completes: history adopted and the replication link caught up to the sync
-  point). Admission: `payload.proposer == payload.node` (V6-C1's origin rule)
-  ∧ `node ∈ nodes` ∧ `nodes[node].role == Replica`. Apply: writes
-  `nodes[node].synced = true`. **No wall clock anywhere** (settled ruling 1):
-  the attestation is an event the replica observes locally and stamps into a
-  committed payload; admission reads only replicated state, and the field it
-  writes is the *only* thing any later predicate reads. Every apply that gives
-  the node a **new parent** — the `ReportRunIdentity` Demotion arm,
-  `SetRole`-to-replica, the failover demote-and-re-parent arm — writes
-  `synced = false` in the same apply, so the attestation is always *about* the
-  current parent and can never be inherited across a re-parent.
+- **`AttestReplicaSynced{node, proposer, observed_primary_id: NodeId,
+  observed_config_epoch: u64}`** (new — V14-C3; payload **fenced** per
+  V15-C4). **The trigger, stated once and covering both resync shapes**
+  (V15-M3): the replica proposes when its **replication link with its
+  current upstream is established and its replica offset has reached that
+  link's sync point**. An *initial full sync* completing satisfies it; so
+  does a *partial resync* — the PSYNC continuation, including the `replid2`
+  path a promotion opens — catching up to the upstream head observed when
+  the link was established. Revision 14 named only the full sync, which left
+  every partially-resynced replica with no route back to `synced == true`
+  and, after V15-C1 zeroed the failover siblings' stamps, no route back into
+  any candidate set (V15-M3's liveness hole). One trigger, both shapes, no
+  second mechanism. Admission: `payload.proposer == payload.node` (V6-C1's
+  origin rule) ∧ `node ∈ nodes` ∧ `nodes[node].role == Replica` ∧ — new,
+  V15-C4 — **`nodes[node].primary_id == Some(payload.observed_primary_id)`
+  ∧ `nodes[node].config_epoch == payload.observed_config_epoch`** — the
+  Demotion arm's per-object fence with its **first operand re-pointed from
+  `role` to `primary_id`**, because what this transition qualifies is the
+  *parent*, not the role (the epoch half is unchanged, and is the same
+  declared `NodeInfo.config_epoch` field TR-CLUSTER-018/042's fences use, not
+  a prose phrase). Apply: writes `nodes[node].synced = true`.
+  The observed pair is read from **applied replicated state at mint** and
+  **re-checked against applied replicated state at apply**, so admission
+  reads only replicated state plus the committed payload and never a
+  node-local value (FM-CLUSTER-089 apply-determinism) — and **no wall clock
+  anywhere** (settled ruling 1): the attestation is an event the replica
+  observes locally and stamps into a committed payload, and the field it
+  writes is the *only* thing any later predicate reads.
+  Two mechanisms, not one, make the attestation *about the current parent*:
+  every apply that gives the node a **new parent** clears `synced` in the
+  same apply (§0's companion-field rule, keyed on the `primary_id` write —
+  the Demotion arm, LOCKED `SetRole`-to-replica, the failover
+  demote-and-re-parent arm, the failover **sibling** re-parent, and
+  `RemoveNode`'s detach), **and** the fence above refuses an attestation
+  *already in flight* when the re-parent lands first. Without the fence the
+  companion rule is not enough: a replica of `A` mints an attestation, a
+  re-parent to `B` commits, the stale attestation applies afterwards and
+  stamps `synced = true` for a parent whose history the node holds none of —
+  a zero-byte promotee re-created behind the very gate V14-C3 added
+  (V15-C4). **Refusal disposition** (V15-m5): a refused attestation is a
+  **no-op at apply** — nothing is written, nothing is recorded, no record or
+  fence exists to dispose of. The proposer re-evaluates its trigger against
+  its *current* upstream and re-proposes if (still) caught up; since a
+  re-parent necessarily establishes a new link, the trigger fires again on
+  that link's own sync point, so the retry needs no extra rule. Gate 3 (d)'s
+  **`RefusalClass` enumeration is scoped to `ReportRunIdentity`** and does
+  not extend here: attestation refusals are uniformly no-op-and-re-attest.
   **Failover-candidacy amendment** (LOCKED TR-CLUSTER-021, with
   TR-CLUSTER-018's belt gaining the same conjunct — blast-radius entries
   below): the candidate set for a failing primary is its replicas **with
@@ -1900,7 +2236,25 @@ conjuncts, dedup, run guards).
   as a replica in replicated state but has not yet received a byte is exactly
   the zero-byte promotee V14-C3 traced — promoting it silently substitutes an
   empty keyspace for the shard's, violating `inv_no_acked_write_lost`, which is
-  this design's declared priority. Both failover **promotion** arms write
+  this design's declared priority.
+  **A planned failover is never refused by this belt** (V15-M4, reconciling
+  LOCKED TR-CLUSTER-017): the planned flow already arms a barrier, drains,
+  and **waits for offset parity** between the primary and the chosen
+  successor before proposing the `Failover` — and offset parity on the
+  successor's live link *is* this attestation's trigger. The flow therefore
+  orders the attestation's commit ahead of the `Failover` proposal: wait for
+  parity, verify applied `nodes[successor].synced == true` (re-attestation
+  being the successor's own level-triggered duty if the observed pair moved
+  under it), then propose. **No exemption is carved for the planned path —
+  one belt, uniformly**; parity is simply the proof the belt was already
+  asking for, which is why adding the conjunct costs the planned flow no new
+  wait. The residual availability case — *every* replica of a dead shard
+  unsynced, so no auto-failover — has a declared operator escape: LOCKED
+  TR-CLUSTER-020's replica-issued `CLUSTER FAILOVER` (issue 28 refuses the
+  command on a primary, so it is issued **at** the chosen replica), whose
+  `force: true` branch bypasses the gate with the substitution accepted
+  explicitly rather than silently.
+  Both failover **promotion** arms write
   `synced = true` and `promoted_from = Some(old_primary_id)` on the promotee
   (V14-C2/V14-C3), and `admitted_stage = None` (V14-M1).
 - **`CancelSlotMigration{slot, migration_id}`** (V6-m1; operator / source / **target** / leader —
@@ -2719,10 +3073,15 @@ Every touched row gets an explicit verdict in the spec change; summary:
   self-fence); the row's **"persisting across ticks" damping is subsumed**,
   not dropped (V13-C1): the destructive demotion-adoption no longer fires on
   observing `role == Replica` for any number of ticks — it fires only on
-  gate 3's four binding operands, which name the record's own admitted report
-  (the fourth being the replicated `admitted_stage` stamp — V14-M1 replaces
-  v13's `run_identity` operand, which the per-boot candidate re-mint
-  falsified), and which are strictly stronger than any tick count);
+  gate 3's **resolved-stage selector**, which names the record's own admitted
+  report (the replicated `admitted_stage` stamp — V14-M1 replaces v13's
+  `run_identity` operand, which the per-boot candidate re-mint falsified;
+  V15-C2 then collapses the remaining operands into this one, the role and
+  pointer facts being theorems of the companion-field rule rather than
+  independent guards), and which is strictly stronger than any tick count —
+  and, crucially, the **same** predicate the pending-record exclusion reads in
+  its negated direction, so this LOCKED reconciler and the staged adoption can
+  never both claim a state);
   FM-CLUSTER-046 (**rewritten**, V12-M2: the row records that the reconciler
   "does not exist at all until role-change detection is enabled" — under this
   design it is unconditional and load-bearing (it is what discharges the
@@ -2832,25 +3191,106 @@ Every touched row gets an explicit verdict in the spec change; summary:
   the node's slots in the same apply, and every slot writer requires the assignee's
   role to be `Primary`; forcing test asserts the invariant over every transition
   interleaving, `inv_slots_only_assigned_to_primaries`);
-  SS-2/SS-3 (**amended**, V10-m3, tightened V14-C1: the `role`/`primary_id`
-  rows gain their
-  **closed writer enumeration** — the `ReportRunIdentity` Demotion arm,
-  the failover transitions, `SetRole`, `ResetCluster`'s SOFT NodeInfo
-  handling, and a fresh `AddNode`/`MEET` registration; **only** these — so this
-  design's new writers appear in the LOCKED rows rather than beside them; the
-  Promotion arm is **removed** from the enumeration, since cluster mode has no
-  node-originated promotion spelling at all;
-  forcing test asserts every role/primary_id change in a transition sweep comes
-  from the enumerated set, and the Quint property
-  `inv_role_written_only_by_declared_writers` is its model twin.
+  SS-2/SS-3 (**amended**, V10-m3, tightened V14-C1, **re-based on the LOCKED
+  writer cells in V15** — V15-C1: revision 14's "closed writer enumeration"
+  was the *design's own prose list*, and it **omitted two LOCKED writers**,
+  which is exactly how the companion stamps went unwritten on the failover
+  **sibling re-parent** and on `RemoveNode`'s **detach**. The enumeration is
+  therefore stated as the LOCKED cells verbatim with every writer marked, and
+  §0's writer-join subsection re-runs that join every revision:
+  **SS-2 `role`** — "`apply_command`: `SetRole`, `Failover` (promote/demote),
+  `ResetCluster` (forces this node's role to `Primary`, `commands.rs:834`)":
+  `SetRole` **amended**; `Failover` promote/demote **amended**;
+  `ResetCluster` **amended** (carve-out 2, so `synced = true` — V15-m4);
+  **added by this design**: the `ReportRunIdentity` **Demotion arm**. Flagged
+  for the spec change: SS-2's cell omits `AddNode` although TR-CLUSTER-002's
+  postcondition sets role at a fresh registration — the row should name it
+  (§0's writer-join records the disagreement rather than silently choosing).
+  **SS-3 `primary_id`** — "`apply_command`: `AddNode`, `SetRole`, `Failover`
+  (re-parent), `RemoveNode` (re-parents the departing node's children via
+  `reparent_children`, `commands.rs:231`), `ResetCluster` (nulls this node's
+  own parent pointer, `commands.rs:835`)": **all five amended**, this being
+  the row the companion-field rule is keyed on — including `Failover`'s
+  *three* distinct pointer writes (promotee cleared, old primary re-parented,
+  **siblings re-parented**) and `RemoveNode`'s `reparent_children(.., None)`
+  detach; **added by this design**: the Demotion arm. The Promotion arm is
+  **removed** from the enumeration, since cluster mode has no node-originated
+  promotion spelling at all.
+  Forcing tests: every role/`primary_id` change in a transition sweep comes
+  from the enumerated set, **and every `primary_id` write in that sweep also
+  writes the three companion fields** —
+  `companion_fields_written_by_every_parent_writer`, the v15 test that fails
+  against revision 14's rule; the Quint property
+  `inv_role_written_only_by_declared_writers` is re-based on `primaryId` as
+  its model twin.
   **New replicated fields, V14**: `promoted_from: Option<NodeId>`,
   `synced: bool` and `admitted_stage: Option<u64>` join the `NodeInfo` rows,
   each with the writer enumeration in §0's field-writer table and each subject
-  to the same rule — *every writer of the governed role fact also writes the
-  companion field*, which is what lets a reader treat them as adjudication
-  stamps. `AddNode`'s upsert preserves `promoted_from`/`admitted_stage`
-  field-wise (V7-M3's rule); `ResetCluster` clears them and writes
-  `synced = false`).
+  to the same rule — *every writer of the node's parent pointer also writes
+  the companion field* (V15-C1 re-bases the rule from the role fact to the
+  `primary_id` fact, the two LOCKED detach/re-parent writers being
+  `primary_id`-only writers), which is what lets a reader treat them as
+  adjudication stamps. `AddNode`'s upsert preserves **all three** —
+  `promoted_from`, `admitted_stage` *and* `synced` — field-wise (V7-M3's
+  rule, extended per V15-M2); `ResetCluster` clears the pointer stamps and,
+  forcing `role = Primary`, writes `synced = true`).
+- **Added in revision 15** (the rows the v15 review found the design reading,
+  amending, or contradicting while citing none of them — each with verdict and
+  forcing-test disposition):
+  **TR-CLUSTER-018 + TR-CLUSTER-042, sibling-re-parent halves**
+  (**amended**, V15-C1): "siblings of `old_primary_id` re-parented to
+  `new_primary_id`" / "`old_primary_id`'s remaining replicas … are re-parented
+  to `new_primary_id` (`reparent_children`, `commands.rs:459`)" is a
+  `primary_id` write on *every* sibling, so each sibling's apply now also
+  writes `synced = false`, `admitted_stage = None`, `promoted_from = None`.
+  Revision 14 wrote none of them, leaving the whole surviving replica set
+  carrying stale stamps — the stage stamp of a sibling being the operand gate
+  3's destructive adoption binds to. Existing forcing tests for both rows stay
+  valid; new forcing test
+  `failover_sibling_reparent_clears_companion_stamps`.
+  **TR-CLUSTER-003 + FM-CLUSTER-002, the detach half** (TR-CLUSTER-003
+  **amended** — its prune rewrite above now also carries the companion writes
+  on `reparent_children(.., None)`; FM-CLUSTER-002 **unchanged, stated** —
+  behaviour preserved exactly, V15-C3): the row's *Observable* detach and its
+  *NOT observable* "no re-parent, no promotion" are what make
+  `role == Replica ∧ primary_id == None` a **reachable, declared** state, the
+  detached replica, which revision 14 wrongly called unreachable and fenced.
+  FM-CLUSTER-002 appeared **nowhere** in revisions 1–14; that omission is the
+  defect this entry closes. Forcing test
+  `remove_node_prunes_migrations_and_detaches_replicas` **stays valid
+  unchanged** and gains two assertions (the detached replica's companions are
+  cleared; it is in no candidate set); new forcing tests
+  `detached_replica_serves_per_its_role_and_is_no_candidate` and
+  `detached_replica_is_rehomed_by_setrole`.
+  **TR-CLUSTER-017** (**unchanged, stated**, V15-M4): the planned-failover
+  barrier/drain/**offset-parity** wait is the same condition as this design's
+  attestation trigger, so the flow orders the attestation's commit before the
+  `Failover` proposal and the amended TR-CLUSTER-021 belt never refuses a
+  parity-proven planned failover. **No exemption is added** — one belt,
+  uniformly. Forcing test
+  `planned_failover_waits_for_the_successors_attestation`.
+  **TR-CLUSTER-020** (**unchanged, cited**, issue 28): its replica-issued
+  `CLUSTER FAILOVER` — refused on a primary — is the declared operator escape
+  for a shard whose replicas are all unsynced, reaching the `force: true`
+  branch that bypasses the candidacy belt with the substitution accepted
+  explicitly.
+  **TR-CLUSTER-027** (**unchanged, stated — extended**, V15-M2): the live
+  `CONFIG SET cluster-replica-priority` re-registration routes through the
+  field-wise `AddNode` upsert, so it must preserve `synced` as well as
+  `run_identity`/`promoted_from`/`admitted_stage` — otherwise a routine
+  priority change silently de-candidates a synced replica. Forcing test
+  `priority_config_set_preserves_synced`.
+  **TR-CLUSTER-041** (**unchanged, cited**, V15-m2): follower proposals answer
+  `Proposed::Forwarded` and carry no `ClusterResponse`, which is *why* the
+  `RefusalClass` cannot ride the reply channel and is instead computed
+  locally, deterministically, at every node's own apply (FM-CLUSTER-047's
+  extension is the leader-side companion; FM-CLUSTER-089 determinism is what
+  makes the two agree).
+  **`AttestReplicaSynced`'s fence fields** (**new row content**, V15-C4): the
+  transition's payload gains `observed_primary_id`/`observed_config_epoch`
+  and its admission the matching per-object conjuncts, the same fence
+  TR-CLUSTER-018/042 already use; forcing test
+  `attestation_minted_under_the_old_parent_is_refused_after_a_reparent`.
 - **Retired**: FM-CLUSTER-085 (handoff lease — its property, "a dead finalizer cannot
   wedge a slot", is re-provided by the observation bound *plus the leader
   auto-`Complete`* (V4-M2), which together exit every Draining state; replacement row
@@ -3416,7 +3856,11 @@ Every touched row gets an explicit verdict in the spec change; summary:
       narrowed by V14-C1, that set is: this action's Demotion arm, the
       failover transitions, `setRole`, `resetCluster`'s SOFT NodeInfo handling, and a fresh
       registration in `meetNode`/`AddNode`** — any other action touching
-      `role`/`primary_id` must violate it. ~~The **Promotion arm** is modelled as a
+      `role`/`primary_id` must violate it (**re-based in ext-17**: the
+      enumeration is the LOCKED SS-2/SS-3 cells, so it also contains
+      `removeNode`'s `reparentChildren(.., None)` detach and the failover
+      **sibling** re-parent — two writers this list omitted, which is why the
+      property went green over V15-C1's hole). ~~The **Promotion arm** is modelled as a
       fenced role write (`role → Primary`, `primary_id → None`, no slot-map touch);
       mutation test: removing the arm and then scheduling a bare `REPLICAOF NO ONE`
       promotion must violate `residueHasAnEffectiveRemover` — the immortal-entry
@@ -3534,7 +3978,14 @@ Every touched row gets an explicit verdict in the spec change; summary:
       local `detached` upstream state that the difference test counts as
       matching `None`, so the reconcile proposes nothing there~~
       (**superseded in ext-16**: that state has no writer, so the model
-      asserts its unreachability instead of covering it, V14-M4). Mutation
+      asserts its unreachability instead of covering it, V14-M4)
+      (**re-corrected in ext-17**: the state *does* have a writer —
+      `removeNode`'s detach — so the struck text's *behaviour* was right all
+      along: at a detached replica the difference test counts the local
+      `detached` upstream as matching replicated `None` and the reconcile
+      proposes nothing. What was wrong in ext-15 was calling it a **report
+      arm**; in ext-17 it is a declared **state** with the same silence,
+      V15-C3). Mutation
       tests — each must
       fail its named property: ~~stamping from bare plane disagreement (the
       v11 rule) and scheduling `reconcileIdentity` inside the
@@ -3562,7 +4013,14 @@ Every touched row gets an explicit verdict in the spec change; summary:
       permanent proposal loop falsifying the witness's silence, V13-M4~~
       (**superseded in ext-16** by mutation (6): the state is unreachable,
       so the property is an unreachability invariant and the mutation is
-      *re-adding* a `None`-writing demotion, V14-M4).
+      *re-adding* a `None`-writing demotion, V14-M4)
+      (**restored, re-aimed, in ext-17**: the state is reachable via the
+      detach, ext-16's mutation (6) is deleted with its property, and the
+      honest mutation is **dropping the difference test's
+      detached-matches-`None` equivalence** and scheduling
+      `reconcileIdentity` at a detached replica — the permanent proposal loop
+      must falsify `witnessSplitPlanesConverge`'s silence, V13-M4's original
+      trace now aimed at a state that exists, V15-C3).
       `witnessSplitPlanesConverge` itself is
       retained: **no reachable state keeps a
       node self-fenced with a stable local/replicated role disagreement** —
@@ -3571,7 +4029,11 @@ Every touched row gets an explicit verdict in the spec change; summary:
       claim to **cover the successor-less demotion state** (V14-M4 — that
       claim was false the moment the state became unreachable); that state
       is discharged by ext-16's `inv_no_replica_without_a_primary_pointer`
-      instead. **Plus the exit-row precedence**
+      instead (**re-corrected in ext-17**: the state is *reachable* — it is
+      the detached replica — so neither the witness's coverage claim nor
+      ext-16's unreachability invariant was right; the declared state plus
+      `inv_member_keyspace_is_tracked`'s detached-replica arm is what covers
+      it, V15-C3). **Plus the exit-row precedence**
       (V11-C1): held-set release actions (`abortHandoff`, `cancelMigration`)
       carry the serving-primary guard; mutation test — dropping it from
       *either* action and scheduling it after a demotion apply must violate
@@ -3590,7 +4052,10 @@ Every touched row gets an explicit verdict in the spec change; summary:
       `admittedStage: NodeId -> Option[int]`, `promotedFrom: NodeId ->
       Option[NodeId]`, `synced: NodeId -> bool`. Every writer of `role` in the
       declared writer set writes all three in the same step — the model's form
-      of "the companion field is written by whoever writes the governed fact".
+      of "the companion field is written by whoever writes the governed fact"
+      (**re-keyed in ext-17**: the writer set is `primaryId`'s, not `role`'s —
+      keying it on `role` is precisely what let the two LOCKED pointer-only
+      writers escape the rule, V15-C1).
       *Actions*: `reportRunIdentity`'s Demotion arm writes
       `admittedStage(n) = Some(payload.stageId)`, `synced(n) = false`,
       `promotedFrom(n) = None`; the failover promote arm writes
@@ -3599,7 +4064,9 @@ Every touched row gets an explicit verdict in the spec change; summary:
       `promotedFrom = None`, `admittedStage = None`; a new action
       `attestReplicaSynced(n)` (guard: `n ∈ nodes ∧ role(n) == Replica ∧`
       the model's link-caught-up flag; effect: `synced(n) = true`) is the only
-      other `true` writer. `completeAdoption(n)`'s guard becomes *record present
+      other `true` writer (**fenced in ext-17**: the action mints an
+      observed-parent/epoch pair and its apply guard re-checks it, so a
+      re-parent interleaved between mint and apply refuses it). `completeAdoption(n)`'s guard becomes *record present
       ∧ `record.adopted == false` ∧ `role(n) == Replica` ∧
       `primaryId(n) == Some(record.upstream)` ∧ `admittedStage(n) ==
       Some(record.stageId)`*, and its effect orders discard+link, then
@@ -3617,10 +4084,16 @@ Every touched row gets an explicit verdict in the spec change; summary:
       `synced(c) == true`, bypassed only by `force: true`.
       *Properties*: `inv_role_written_only_by_declared_writers` extends to the
       three companion fields (a writer touching `role` without them must
-      violate it); new `inv_no_replica_without_a_primary_pointer` — no reachable
+      violate it — **re-based on `primaryId` in ext-17**, the `role`-keyed
+      form being green over both of V15-C1's writers); new
+      `inv_no_replica_without_a_primary_pointer` — no reachable
       state has `role(n) == Replica ∧ primaryId(n) == None` — is the V13-M4
       quiesced shape's replacement, an unreachability claim rather than a
-      covered arm; `inv_no_acked_write_lost` and
+      covered arm (**withdrawn in ext-17**: the property is **false of the
+      LOCKED system** — `removeNode`'s `reparentChildren(.., None)` writes
+      exactly that state, TR-CLUSTER-003/FM-CLUSTER-002 — and a model carrying
+      it would have gone green only by omitting the detach writer, V15-C3);
+      `inv_no_acked_write_lost` and
       `inv_member_keyspace_is_tracked` are the traces' targets as before.
       *Mutations, each named with the property it must falsify*:
       (1) **stage-free binding** — revert `completeAdoption`'s guard to the
@@ -3648,7 +4121,65 @@ Every touched row gets an explicit verdict in the spec change; summary:
       `witnessStagedFlipCompletesAcrossCrash` becomes unreachable (V14-M7);
       (6) **`None`-writing demotion re-added** — give any writer a
       `primaryId = None` demotion write → `inv_no_replica_without_a_primary_pointer`
-      (V14-M4; this is the mutation that keeps the deleted quiesced arm honest).
+      (V14-M4; this is the mutation that keeps the deleted quiesced arm honest)
+      (**deleted in ext-17** with the property it targeted: the state is
+      lawful, so writing it is not a bug and the mutation had no signal —
+      ext-17's mutation (10) is its honest replacement).
+  17. **The v15 corrections** (V15-C1/C2/C3/C4/M1/M2/M3), again one mechanism:
+      the companion rule keyed on the **parent pointer**, the adoption
+      collapsed to **one selector**, and the two LOCKED writers revision 14
+      never modelled.
+      *State/actions*: the model gains `removeNode`'s
+      `reparentChildren(.., None)` **detach** and the failover
+      **sibling re-parent** `reparentChildren(.., Some(newPrimary))` as
+      first-class actions — without them the model cannot even express the
+      defects. Both write the three companions (`synced = false`,
+      `admittedStage = None`, `promotedFrom = None`) exactly as every other
+      `primaryId` writer does. `addNode`'s upsert writes no `primaryId` and
+      preserves all three (V15-M2). `attestReplicaSynced(n)` carries
+      `observedPrimary`/`observedEpoch` minted from applied state, re-checked
+      in its apply guard (V15-C4), and its trigger flag is set by **either**
+      resync shape (V15-M3). `completeAdoption(n)`'s guard drops to the
+      **single selector** `record present ∧ record.adopted == false ∧
+      admittedStage(n) == Some(record.stageId)` — the role and pointer
+      operands are theorems of the companion rule, not guards (V15-C2) — and
+      the reconcile action's guard is the same predicate negated on its last
+      conjunct, so the two can never both be enabled. Every disposition arm
+      gains `refusedPayload.stageId == Some(record.stageId)` (V15-M1).
+      *Properties*: `inv_role_written_only_by_declared_writers` is **re-based
+      on `primaryId`** — every step that changes `primaryId(n)` comes from the
+      declared writer set **and writes all three companions in the same step**
+      (this is the property whose `role`-keyed form went green over revision
+      14's two holes); `inv_no_replica_without_a_primary_pointer` is
+      **deleted**, its intent re-provided by `inv_member_keyspace_is_tracked`
+      quantifying over the **detached-replica** arm; `inv_no_acked_write_lost`
+      remains the traces' target.
+      *Mutations, each with the property it must falsify*:
+      (7) **sibling stamp drop** — let the sibling re-parent write `primaryId`
+      alone, then run a failover of the shard followed by a staged flip at a
+      sibling → `inv_no_acked_write_lost` (a sibling's stale `admittedStage`
+      satisfies a later record's operand and fires the destructive discard on
+      someone else's adjudication, V15-C1); the same mutation applied to the
+      **detach** action must falsify the re-based writer property directly.
+      (8) **attestation fence drop** — remove the observed-pair conjunct and
+      interleave a re-parent between mint and apply →
+      `inv_no_acked_write_lost` (a `synced` stamp about the old parent makes a
+      zero-byte candidate promotable, V15-C4).
+      (9) **stage-unbound refusal** — drop the
+      `refusedPayload.stageId == Some(record.stageId)` conjunct and deliver a
+      refusal minted for a cleared stage while a second stage is live →
+      `witnessStagedFlipCompletesAcrossCrash` unreachable (the live record is
+      cleared by the dead stage's refusal, V15-M1).
+      (10) **detach unmodelled** — remove the detach action (revision 14's
+      state of the model) → every property still holds, which is the point:
+      the mutation's *pass* is the signal, and it is asserted as a
+      **negative** check in the rework section (a model that cannot express a
+      LOCKED writer proves nothing about it, V15-C3).
+      (11) **full-sync-only trigger** — restrict `attestReplicaSynced`'s
+      trigger to the full-sync shape, then re-parent a caught-up replica by
+      partial resync and fail its primary → the bounded witness
+      `witnessResyncedReplicaBecomesCandidate` (new) is unreachable: the
+      liveness hole V15-M3 found.
 - **Stated structural limits** (recorded in the rework section, not silent): the model
   has one global applied view, so the "node acts on state it has not applied / cannot
   observe" defect class (v2-C2/C8, v3 N-C4, N-M1's cause) is discharged by spec review
@@ -3731,7 +4262,26 @@ Every touched row gets an explicit verdict in the spec change; summary:
   item (e) exactly, one round after item (e) caught the same shape; and the
   refusal partition was three prose arms where six declared classes were
   needed — items (b)/(d), fixed by making `RefusalClass` a committed apply
-  outcome) —
+  outcome), then V15-C1/C2/C3/C4 (the **sixth consecutive round of
+  fix-text defects**, and the sharpest lesson yet about *what* the check is
+  run against: all four CRITICALs were in v14's own stamp machinery, and
+  three of them were **joins the document never performed against the LOCKED
+  spec** — item (f) applied to `specs/cluster.md` rather than to the doc's
+  own prose. v14 wrote its "closed writer enumeration" from its own
+  paragraphs and it was short by two LOCKED writers (V15-C1); it declared a
+  state unreachable that a LOCKED failure-mode row specifies and a LOCKED
+  forcing test exercises (V15-C3); and it fenced its Demotion payload against
+  concurrent topology change while leaving the *other* new transition it
+  introduced in the same revision, `AttestReplicaSynced`, unfenced against
+  the same race — item (b), the two siblings again (V15-C4). V15-C2 is
+  item (b) in its pure form once more: after a re-parent the adoption's
+  operand list and the reconcile guard both claimed the same state, with
+  nothing selecting an owner. **Process consequence, adopted this round**:
+  item (f) is executed as a *literal join* — for every replicated field the
+  design reads or writes, the LOCKED `Writer(s)` cell is quoted verbatim and
+  each writer marked carried or amended — and that join is a **permanent
+  subsection of §0**, not a per-round chore, because a prose restatement of a
+  LOCKED list is precisely what failed here) —
   so the check must
   bind to declared
   types, not names, and must cover
@@ -4045,7 +4595,12 @@ Every touched row gets an explicit verdict in the spec change; summary:
   that state (difference test matches detached to `None`): no proposal
   loop~~ (**superseded in V14**, V14-M4: no writer produces that state, so the
   scenario is replaced by the v14 block's unreachability assertion plus the
-  injected-bug-state self-fence assertion) (V13-M4); a second `CLUSTER REPLICATE` toward a different upstream
+  injected-bug-state self-fence assertion) (**re-corrected in V15**, V15-C3:
+  a writer does produce it — `RemoveNode`'s detach — so the v14 replacement
+  is withdrawn and the v15 block's **detached-replica** scenarios carry the
+  behaviour, including the "proposes nothing" half the struck text had right;
+  what stays superseded is the *demotion admitted with `new_primary_id ==
+  None`* premise, which V14-C1 made unreachable at the payload) (V13-M4); a second `CLUSTER REPLICATE` toward a different upstream
   while a record is pending: refused with the pending-stage error, the
   record's fields unchanged, `CLUSTER INFO` reports the pending stage
   (V13-M5); a staged report refused by the fence while the node is still
@@ -4127,8 +4682,66 @@ Every touched row gets an explicit verdict in the spec change; summary:
   the failover's verdict (V14-M2's arm partition, exercised through the
   `RefusalClass` value rather than through prose);
   plus two **negative** assertions carried as invariant checks over the
-  transition sweep: no reachable state has `role == Replica ∧
-  primary_id == None` (V14-M4's unreachability — the injected bug state still
-  self-fences and still proposes nothing), and every writer of `role` in the
-  same sweep also writes `synced`, `promoted_from` and `admitted_stage`
-  (V14-C2/C3/M1's companion-field rule).
+  transition sweep: ~~no reachable state has `role == Replica ∧
+  primary_id == None`~~ (**superseded in v15**, V15-C3: that state is the
+  lawful **detached replica** of LOCKED FM-CLUSTER-002 — the assertion would
+  have failed against `remove_node_prunes_migrations_and_detaches_replicas`;
+  the v15 block below carries the state's own scenarios instead), and every
+  writer of `role` in the same sweep also writes `synced`, `promoted_from`
+  and `admitted_stage` (V14-C2/C3/M1's companion-field rule — **re-based in
+  v15** onto every writer of **`primary_id`**, V15-C1, which is the form that
+  fails against revision 14's rule,
+  `companion_fields_written_by_every_parent_writer`).
+  From review v15: **failover sibling re-parent clears the companion stamps**
+  — a shard with a primary and two replicas fails over; the surviving
+  sibling's `admitted_stage`, `synced` and `promoted_from` are all cleared by
+  the `reparent_children(.., Some(new_primary))` half, and a subsequent
+  staged flip at that sibling does **not** fire its adoption on a stale
+  stamp — keyspace digest unchanged across the failover
+  (`failover_sibling_reparent_clears_companion_stamps`, V15-C1);
+  **`RemoveNode`'s detach is a companion writer too** — `CLUSTER FORGET` of a
+  primary detaches its replicas; each detached replica's three companions are
+  cleared and it is in no candidate set, while the LOCKED forcing test
+  `remove_node_prunes_migrations_and_detaches_replicas` still passes
+  unchanged (V15-C1/C3);
+  **the detached replica is a declared state** — after the detach the node
+  serves per its role's existing read rules (it is **not** fenced), proposes
+  **nothing** over any number of observation cycles, is refused as an
+  `AssignSlots` assignee, and is re-homed by a `SetRole` re-parent naming a
+  live primary; the same fixture driven with `CLUSTER REPLICATE` *at* the
+  detached node converges to the identical applied state through the
+  degenerate stage
+  (`detached_replica_serves_per_its_role_and_is_no_candidate`,
+  `detached_replica_is_rehomed_by_setrole`, V15-C3);
+  **attestation minted under the old parent** — a replica reaches its sync
+  point, its attestation is held in flight, a re-parent commits, and the
+  attestation then applies: **refused** on the observed-parent conjunct,
+  `synced` stays `false`, the node is not promotable; dropping the conjunct
+  in the same fixture promotes a zero-byte candidate, and the assertion is
+  the keyspace digest after that promotion
+  (`attestation_minted_under_the_old_parent_is_refused_after_a_reparent`,
+  V15-C4);
+  **partial resync attests** — a replica re-parented onto a primary it can
+  PSYNC-continue from (the `replid2` path) reaches the sync point without a
+  full sync, attests, and becomes a lawful candidate; under revision 14's
+  full-sync-only trigger it never does — the liveness hole is the negative
+  control (`partial_resync_replica_attests_and_becomes_a_candidate`, V15-M3);
+  **planned failover waits for the attestation** — TR-CLUSTER-017's
+  parity-proven flow proposes its `Failover` only after the successor's
+  attestation has committed, so the amended TR-CLUSTER-021 belt never refuses
+  a planned failover and no exemption exists in the belt to exercise
+  (`planned_failover_waits_for_the_successors_attestation`, V15-M4);
+  **priority `CONFIG SET` preserves `synced`** — TR-CLUSTER-027's live
+  re-registration of a synced replica leaves it a candidate; an upsert that
+  reset the field would de-candidate a healthy shard member
+  (`priority_config_set_preserves_synced`, V15-M2);
+  **stage-bound refusals** — a refusal minted for stage *S1*, delivered after
+  *S1*'s record was cleared and *S2* staged, is a **log-only no-op**: *S2*'s
+  record, fence and eventual adoption are untouched; removing the `stage_id`
+  conjunct strands the node with a fence nothing lifts
+  (`refusal_for_a_dead_stage_does_not_disturb_the_live_one`, V15-M1);
+  **one selector, both directions** — over the staged-flip fixture's entire
+  crash schedule, the adoption and the reconcile guard are asserted **never
+  simultaneously enabled**, the executable form of the collapse to
+  `admitted_stage == Some(record.stage_id)`
+  (`adoption_and_reconcile_are_mutually_exclusive`, V15-C2).
