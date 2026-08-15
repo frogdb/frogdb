@@ -30,11 +30,18 @@ pub const QUEUE_DEPTH_WARN_THRESHOLD: usize = 8000;
 /// How long a continuation-lock request stays parked waiting for the shard
 /// to drain before it is failed with `LockTimeout`.
 ///
-/// Deliberately below the coordinator's
-/// [`DEFAULT_LOCK_ACQUISITION_TIMEOUT`](crate::DEFAULT_LOCK_ACQUISITION_TIMEOUT)
-/// so the shard resolves (and cleans up after) its own parked request rather
-/// than having the coordinator give up on it first.
-pub const CONTINUATION_DRAIN_TIMEOUT: Duration = Duration::from_millis(2000);
+/// Derived from — always strictly below — the coordinator's
+/// [`DEFAULT_LOCK_ACQUISITION_TIMEOUT`](crate::DEFAULT_LOCK_ACQUISITION_TIMEOUT),
+/// so the shard resolves (and cleans up after) its own parked request before
+/// the coordinator gives up on it, by construction rather than by two
+/// hand-tuned constants that could drift apart in a later edit. The margin
+/// itself (currently half) is a tuning knob, not the safety property: what
+/// actually makes a lost race harmless is `grant_continuation` installing
+/// neither the lock nor the release receiver when the requester has already
+/// given up (`ready_tx` closed) — see [FM-VLL-003](../../../../specs/vll.md#fm-vll-003--continuation-lock-requested-while-the-shard-queue-has-not-drained).
+pub const CONTINUATION_DRAIN_TIMEOUT: Duration = Duration::from_millis(
+    (crate::coordinator::DEFAULT_LOCK_ACQUISITION_TIMEOUT.as_millis() / 2) as u64,
+);
 
 /// Hard cap on how long one continuation lock may be held.
 ///

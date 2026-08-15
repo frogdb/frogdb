@@ -1234,6 +1234,189 @@ mod tests {
         }
     }
 
+    /// Pins today's documented gap from TR-VLL-021 / FM-VLL-002's Invariant:
+    /// cancelling the connection task that holds a continuation lock (e.g.
+    /// `acceptor.rs:358-360` — connections are spawned with no stored
+    /// `JoinHandle`, so nothing ordinarily aborts one, but a future runtime
+    /// change or a panic-unwind-adjacent path could) releases the lock the
+    /// same way a normal return or panic would, with no acknowledgement from
+    /// the shard that whatever sub-command it still believes is executing has
+    /// actually stopped.
+    ///
+    /// A real shard actor holds the lock while `run` blocks forever
+    /// (standing in for "still executing the script's sub-commands"). A
+    /// second, younger request is refused while the lock is held — the
+    /// ordinary FM-VLL-002 refusal, included here as a control. The holder's
+    /// task is then aborted mid-`run`, exactly as if its connection had been
+    /// dropped out from under it. `ContinuationGuard::drop` runs during that
+    /// abort regardless — `handle.await`'s `JoinError::is_cancelled()`
+    /// confirms the future (and everything on its stack, including the
+    /// guard) has finished dropping — and its unconditional release is what
+    /// lets a *third* request succeed immediately afterward, even though the
+    /// shard was never told the "still executing" work actually stopped.
+    // FM-VLL-002
+    #[tokio::test]
+    async fn cancelling_the_holder_mid_run_releases_the_lock_with_no_shard_acknowledgement() {
+        use crate::VllShardState;
+        use tokio::sync::mpsc;
+        use tokio::time::timeout;
+
+        /// One message the shard actor understands — the only one this test
+        /// needs, since continuation locks are the whole subject. Mirrors the
+        /// harness in `older_continuation_wins_over_a_younger_partial_holder`.
+        struct ContinuationRequest {
+            txid: u64,
+            conn_id: u64,
+            ready_tx: oneshot::Sender<ShardReadyResult>,
+            release_rx: oneshot::Receiver<()>,
+            revoke_tx: oneshot::Sender<VllError>,
+        }
+
+        /// A shard worker in miniature: owns a real [`VllShardState`] and
+        /// drives `next_continuation_event` from its event loop, exactly as
+        /// `frogdb-core`'s shard does.
+        fn spawn_shard() -> mpsc::UnboundedSender<ContinuationRequest> {
+            let (tx, mut rx) = mpsc::unbounded_channel::<ContinuationRequest>();
+            tokio::spawn(async move {
+                let mut state: VllShardState<()> = VllShardState::default();
+                loop {
+                    tokio::select! {
+                        biased;
+                        msg = rx.recv() => match msg {
+                            Some(req) => state.request_continuation_lock(
+                                req.txid,
+                                req.conn_id,
+                                req.ready_tx,
+                                req.release_rx,
+                                req.revoke_tx,
+                            ),
+                            None => break,
+                        },
+                        _ = state.next_continuation_event() => {}
+                    }
+                }
+            });
+            tx
+        }
+
+        struct ShardActorSink {
+            shards: Vec<mpsc::UnboundedSender<ContinuationRequest>>,
+        }
+
+        impl ShardSink for ShardActorSink {
+            type Operation = u64;
+            type Response = u32;
+
+            async fn send_lock_request(
+                &self,
+                _shard_id: usize,
+                _request: LockRequest<Self::Operation>,
+            ) -> Result<(), ShardSinkError> {
+                unreachable!("this harness only exercises continuation locks")
+            }
+
+            async fn send_execute(
+                &self,
+                _shard_id: usize,
+                _txid: u64,
+                _response_tx: oneshot::Sender<Self::Response>,
+            ) -> Result<(), ShardSinkError> {
+                unreachable!("this harness only exercises continuation locks")
+            }
+
+            async fn send_abort(&self, _shard_id: usize, _txid: u64) {}
+
+            async fn send_continuation_lock(
+                &self,
+                shard_id: usize,
+                txid: u64,
+                conn_id: u64,
+                ready_tx: oneshot::Sender<ShardReadyResult>,
+                release_rx: oneshot::Receiver<()>,
+                revoke_tx: oneshot::Sender<VllError>,
+            ) -> Result<(), ShardSinkError> {
+                self.shards[shard_id]
+                    .send(ContinuationRequest {
+                        txid,
+                        conn_id,
+                        ready_tx,
+                        release_rx,
+                        revoke_tx,
+                    })
+                    .map_err(|_| ShardSinkError {
+                        shard_id,
+                        reason: "shard channel closed",
+                    })
+            }
+        }
+
+        let shards = vec![spawn_shard()];
+        let sink = |shards: &Vec<mpsc::UnboundedSender<ContinuationRequest>>| ShardActorSink {
+            shards: shards.clone(),
+        };
+        let acquire_timeout = Duration::from_secs(10);
+
+        // The holder acquires shard 0 and then blocks forever in `run`,
+        // standing in for sub-command execution that never gets to finish
+        // and tell the shard so. It runs on its own task so it can be
+        // cancelled independently of this test's own task.
+        let holder = VllCoordinator::new(sink(&shards), NoopMetricsSink);
+        let (holding_tx, holding_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            holder
+                .acquire_continuation_and_run(10, 1, &[0], acquire_timeout, move || async move {
+                    let _ = holding_tx.send(());
+                    std::future::pending::<()>().await
+                })
+                .await
+        });
+        holding_rx.await.expect("holder acquired shard 0");
+
+        // Control: while the lock is held, a younger request is refused —
+        // the ordinary FM-VLL-002 path, unaffected by anything that happens
+        // next.
+        let refused = VllCoordinator::new(sink(&shards), NoopMetricsSink)
+            .acquire_continuation_and_run(20, 2, &[0], acquire_timeout, || async { "unreachable" })
+            .await
+            .expect_err("a second, younger request is refused while the lock is held");
+        assert!(matches!(
+            refused,
+            ContinuationError::LockFailed { shard_id: 0, .. }
+        ));
+
+        // Cancel the holder's task mid-`run`, as if its connection had
+        // dropped out from under it. `handle.await` only resolves once the
+        // aborted future has finished dropping, so by the time it returns,
+        // `ContinuationGuard::drop` has already fired shard 0's release —
+        // unconditionally, exactly as on a normal return.
+        handle.abort();
+        let join_err = handle.await.expect_err("the task was cancelled");
+        assert!(join_err.is_cancelled());
+
+        // The release still has to reach the shard's own event loop before
+        // it clears `continuation_lock`, so poll briefly rather than assume
+        // a single attempt lands after it.
+        let unlocked = timeout(Duration::from_secs(2), async {
+            loop {
+                match VllCoordinator::new(sink(&shards), NoopMetricsSink)
+                    .acquire_continuation_and_run(30, 3, &[0], acquire_timeout, || async {
+                        "third request"
+                    })
+                    .await
+                {
+                    Ok(value) => return value,
+                    Err(ContinuationError::LockFailed { .. }) => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(other) => panic!("unexpected error: {other}"),
+                }
+            }
+        })
+        .await
+        .expect("the lock released without the shard ever hearing the sub-command finish");
+        assert_eq!(unlocked, "third request");
+    }
+
     /// A wound reported through the ready channel while acquisition is still
     /// walking the shard list must abandon the acquisition immediately, and be
     /// distinguishable from an ordinary `ShardBusy` refusal — the caller retries

@@ -524,12 +524,15 @@ async fn test_dead_cross_shard_watch_commits_instead_of_crossslot() {
     server.shutdown().await;
 }
 
-// FM-TXN-020
+// FM-TXN-020, FM-TXN-033
 /// The safety half of the same rule: the dead watch's shard is *not* folded into
 /// the target, so the version check has to reach it on a round-trip of its own.
 /// Another client creating the watched key before `EXEC` breaks the CAS, and
 /// missing it would be a silent WATCH false negative — the shape FM-TXN-020
-/// exists to forbid.
+/// exists to forbid. Also FM-TXN-033's case (i): the key was absent at `WATCH`
+/// and is later created — `live_at_watch = false`, so this abort comes from the
+/// off-target round-trip's own slot-version check, not from FM-TXN-033's
+/// `live_at_watch && !exists_unexpired` clause.
 #[tokio::test]
 async fn test_dead_cross_shard_watch_still_aborts_when_the_key_is_created() {
     let server = TestServer::start_standalone().await;
