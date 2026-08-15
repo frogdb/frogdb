@@ -1,7 +1,84 @@
-# Slot migration redesign — source-authoritative-until-commit (v22)
+# Slot migration redesign — source-authoritative-until-commit (v23)
 
-Status: revision 22 — **candidate, UNSOUND-pending**: not approved, and not
-claimed sound until a review round finds nothing structural. Review v22 (of
+Status: revision 23 — **candidate, UNSOUND-pending**: not approved, and not
+claimed sound until a review round finds nothing structural. Review v23 (of
+revision 22) found **0 CRITICAL** / 4 MAJOR / 4 MINOR. It conceded revision
+22's two CRITICAL fixes, and **V22-C2's resolution is retained untouched** —
+the mint-time floor and every derivation that leans on it, the advisory-seed
+language, the canonical five-reader list, the latch and mint-precondition
+analysis, and arm 5's clause commutation all stand exactly as revision 22 wrote
+them. What failed is, once again, the machinery underneath: all four MAJORs
+live in revision 22's own fix text for V22-C1, and three of the four are one
+defect in three places — **a durable node-local value with a writer, a reader,
+or a state that revision 22 never wrote down**.
+**V23-M1 (MAJOR)** — revision 22 raised `DataDirMarker.layout_version` 1 → 2
+and claimed the raise "adds no writer", pointing at recovery phase 0's existing
+`verify`/`stamp` pair. That pair cannot raise it: `verify` returns an existing
+marker **verbatim** (`recovery/src/data_dir.rs:88-95`) and `stamp` writes back
+exactly what `verify` decided, so on every upgrade boot the stamp would stay at
+1, the mint precondition would never clear, and this design's own staging path
+would be wedged shut on every existing cluster. The raise is now a **real,
+named second write**: a new writer at cluster boot's step (iv-b), performed
+**after** the identity store's atomic write has been fsynced —
+**store-then-stamp, always** — with the two other candidate mechanisms excluded
+by name at the definition. This **amends a LOCKED row** (FM-PERSISTENCE-049),
+which revision 22 explicitly denied doing.
+**V23-M2 (MAJOR)** — two places claimed `CLUSTER RESET HARD` "clears Raft state
+per TR-CLUSTER-035's HARD path". It does not: that row's Postcondition
+(`specs/cluster.md:498`) enumerates in-memory `ClusterStateInner` mutations
+only, its source (`cluster/src/commands.rs:816-863`) touches no filesystem, and
+nothing in the repository removes `<data-dir>/raft` on any reset path. Both
+claims are deleted. The wipe is given a real mechanism: a **second LOCKED-row
+amendment** — TR-CLUSTER-035's HARD path gains a durable discard-mark
+obligation that the next boot completes before the Raft store is opened — for a
+node that can still get a `ResetCluster` committed, and a scoped **out-of-band**
+step for a node that provably cannot, one already removed from membership. Both
+exits from the `stage-counter-untrusted` state and the single-member forcing
+control are re-derived end to end against the real sequence, including the
+`FLUSHALL` exit (a) omitted. **A second, self-found consequence is recorded at
+the same place**: since no wipe sequence touches the node-local identity store,
+the mandated wipe does **not** restart the stage counter either — which makes
+this document's dozen "the counter restarts across the wipe" claims
+*conservative* rather than wrong, and the note states why no rule may ever come
+to depend on the reset.
+**V23-M3 (MAJOR)** — the schema stamp does not exist at all on a node with
+persistence disabled or the `fake` WAL: `verify`/`stamp` run **inside** the
+`rocks_backed` gate (`recovery/src/lib.rs:188-190`), and this design's own
+sim-level forcing tests run on exactly those nodes, so the discriminator was
+undefined for the tests meant to force it. The marker's two data-directory
+operations move **out** of that gate — a **third LOCKED-row amendment** — and
+the absent marker is totalized as a third value of the stamp dimension rather
+than left to the reader. The boot partition is recounted: **five store shapes ×
+three stamp states × two membership answers = thirty cells**, every one
+declared.
+**V23-M4 (MAJOR)** — the raise makes a **downgrade** refuse the boot with
+`FutureLayout`, and the fail-closed recovery discipline — this design's own
+fourth permanent discipline — had no row for it. The row is added, with the
+one-way-door rollback story stated plainly and both costs of the
+`--force-fresh-data-dir` escape priced, including its tension with
+FM-PERSISTENCE-059's mint-once rule.
+**V23-m1 (MINOR)**: the blast-radius entry's "adds no writer and no reader" is
+corrected to **one writer and one reader** — and the reader is new plumbing,
+since `RecoveredState` carries no marker today.
+**V23-m2 (MINOR)**: `sync_dir` degrades to a no-op off unix
+(`persistence/src/fs_seam.rs:89-92`), so the "same single atomic write" claim
+now carries that caveat everywhere it is load-bearing.
+**V23-m3 (MINOR)**: the stamp is declared a Quint **structural limit** alongside
+the counter, closed by a forcing test rather than by the model.
+**V23-m4 (MINOR)**: `DataDirMarker` is a `frogdb-persistence` type and recovery
+only calls it; attribution and six citations corrected.
+**A fifth permanent discipline** is added — the **writer join for node-local
+durable state** — and discharged for both artifacts this design touches, because
+every substantive defect of revisions 21 through 23 (V21-M1, V22-C1, V22-M2,
+V23-M1, V23-M3) was a missing writer, a missing reader, or a missing cell in
+node-local durable state, and the existing writer-join discipline covers only
+the **replicated** state space.
+**Two LOCKED rows are Amended this round** — FM-PERSISTENCE-049 (twice) and
+TR-CLUSTER-035 — and two more are read as binding constraints without moving
+(FM-PERSISTENCE-050, FM-PERSISTENCE-059). This is the first round in which this
+design amends a locked spec row. Every amendment is **declared** in the blast
+radius with its forcing test; none is performed here.
+Dated 2026-08-15. Review v22 (of
 revision 21) found **2 CRITICAL** / 2 MAJOR / 3 MINOR, **all four of the
 substantive findings inside revision 21's own containment machinery** — the
 twelfth consecutive round whose findings live in the previous round's fix text.
@@ -63,6 +140,11 @@ supplies a reset counter in-band and C2 supplies a floor too stale to catch it.
 **No operand of any existing fence changed this round**, and no LOCKED row is
 Amended, New or Retired — the schema stamp and `stage_counter_state` are
 node-local additions.
+(**Corrected in revision 23**: the second half of that claim was false. Revision
+22's stamp raise had no mechanism that did not amend FM-PERSISTENCE-049
+— V23-M1 — and the stamp did not exist on a persistence-disabled node at all
+— V23-M3. Revision 23 amends FM-PERSISTENCE-049 and TR-CLUSTER-035; the first
+half stands, no operand of any existing fence has changed in either round.)
 Dated 2026-08-15. Review v21 (of
 revision 20) found **0 CRITICAL** / 2 MAJOR / 3 MINOR, conceded all three of
 revision 20's declared deviations sound, and moved no safety claim — both
@@ -437,7 +519,7 @@ triple's durable home, the key of the new §3 staged-flip fence row
 authority** (replicated plane wins; local plane originates transitions only
 through the record protocol) converges unexplained splits replicated→local
 behind a lineage guard, stamped `Boot`.
-Reviews: issue31-adversarial-review-v2 through -v22, job dir 2026-08-14.
+Reviews: issue31-adversarial-review-v2 through -v23, job dir 2026-08-14.
 Issue: [31](issues/open/31-slot-migration-redesign-source-authoritative-until-commit.md)
 Origin ruling: distsys review MAJ-5 (see `.scratch/formal-spec/2026-08-13-distsys-review-rulings.md`)
 
@@ -492,10 +574,34 @@ migration is cancelled.** A position is meaningful only within its `run_id`.
 
 **Incarnation durability** (V4-M3 — the token the whole restart-detection argument
 rests on gets a stated writer and durability contract): the incarnation is a
-node-durable counter in its **own file** — never the replication state file, whose save
+node-durable counter in its **own file** — the **node-local identity store**,
+`<data-dir>/frogdb_node_identity`, a sibling of the data-directory marker and of
+`raft/` rather than a file inside `db/`, which is FM-PERSISTENCE-057's layout rule
+applied to a new name — never the replication state file, whose save
 is deliberately un-fsynced (FM-REPLICATION-021's stated non-guarantee) — incremented and
-**fsynced (file and parent directory) at boot, before the node admits any client write
-or proposes any command**. A node that cannot read or durably increment the counter
+**fsynced (the file, then the data directory that holds it) at boot, before the node
+admits any client write or proposes any command**. The directory fsynced is the data
+directory **itself**, the one whose entries changed, not its parent:
+FM-PERSISTENCE-057's Invariant states that no party derives a location from
+`data_dir.parent()` and its NOT-observable cell rules out any precondition on the
+parent's writability. **The store is written on every persistence configuration**,
+including `persistence.enabled = false` and the `fake` WAL — it is a data-directory
+operation, not a RocksDB operation, exactly as `<data-dir>/raft` is opened on those
+nodes today (`recovery/src/cluster.rs:23-25`, gated on `cluster.enabled` and nothing
+else, with the module doc saying so at `cluster.rs:9-10`). V23-M3 is the same point
+made against the marker, which today is *not* written on those nodes; the
+amendment that fixes it is stated in §0's *Where the counter lives* bullet,
+mechanism (2).
+**Off-unix caveat** (V23-m2): the directory half of that barrier is
+`File::open(dir)?.sync_all()`, and a platform whose directories cannot be opened for
+sync — Windows — degrades it to a **no-op** rather than failing the write
+(`persistence/src/fs_seam.rs:89-92`; LOCKED FM-PERSISTENCE-023's Invariant states the
+degradation in those words). Every durability claim this design makes about the store
+and the marker is therefore a **unix** claim; off unix the file's own fsync still
+holds and only the directory-entry barrier is lost, so a crash can lose the *rename*
+while keeping the *bytes*, which reads as the older shape — the same direction every
+crash window below is already declared benign in.
+A node that cannot read or durably increment the counter
 mints its ordering pair
 **above its own replicated record** (V6-M2): it reads `nodes[self].run_identity` from
 its applied cluster state and mints `(stored.incarnation + 1, 0)` (no stored value →
@@ -1126,39 +1232,166 @@ stated for every flow that destroys or replaces it, not only steady state):
       store's existence and not the field's absence (V22-M2). Every FrogDB data
       directory carries a `DataDirMarker` — `{database_id, created_at_unix_ms,
       layout_version}` at `<data-dir>/frogdb_data_dir`, published atomically
-      before anything in the process writes anything else
-      (`frogdb-server/crates/persistence/src/data_dir.rs:163-178`; LOCKED
-      FM-PERSISTENCE-049, FM-PERSISTENCE-059). **`N` is the
-      `DATA_DIR_LAYOUT_VERSION` this design ships**, raised from `1` to `2`
-      (`.../persistence/src/data_dir.rs:154-161`, whose own contract is "bump
+      before anything in the process writes anything else. **`DataDirMarker` is
+      a `frogdb-persistence` type** (`frogdb-server/crates/persistence/src/data_dir.rs`,
+      struct at `:169-178`, atomic publish in `stamp_with` at `:289-314` whose
+      `write` → `sync_file` → `rename` → `sync_dir` sequence is `:299-304`);
+      `frogdb-recovery` only **calls** it, and revision 22 attributed the type
+      to recovery throughout (V23-m4). LOCKED FM-PERSISTENCE-049 and
+      FM-PERSISTENCE-059 own it. **`N` is the `DATA_DIR_LAYOUT_VERSION` this
+      design ships**, raised from `1` to `2` (the constant is
+      `.../persistence/src/data_dir.rs:161`, its contract `:154-160`: "bump
       this when the *directory layout* changes in a way a older binary must not
-      open — … the marker's own required fields"). The marker is read by
-      recovery **phase 0** (`frogdb-server/crates/recovery/src/data_dir.rs:61-96`),
+      open — … the marker's own required fields"). The marker is read and
+      re-published by recovery **phase 0** (`verify` spans
+      `frogdb-server/crates/recovery/src/data_dir.rs:61-173`, `stamp` `:188-196`),
       which is a **gate rather than a step** and runs ahead of the
       staged-checkpoint install, the RocksDB open and every replication dial
-      (`.../recovery/src/data_dir.rs:23-41`; LOCKED FM-PERSISTENCE-059's
-      "`recover` runs `verify` → `stamp` → `install_staged`"), and which
-      **refuses the boot** on a marker that is unreadable, malformed or from a
-      future layout (LOCKED FM-PERSISTENCE-050 / TR-PERSISTENCE-051,
-      `specs/persistence.md:558-566`). So §0's rules never run against a stamp
-      they cannot trust, and "unreadable stamp" is not a cell in the partition
-      below — it is a boot refusal one phase earlier, owned by a LOCKED row.
-      - **never created** ⟺ the latched `layout_version` is **below `N`**: this
-        directory has only ever been managed by builds that predate this design.
+      (call sites in order at `frogdb-server/crates/recovery/src/lib.rs:203-211`,
+      with `install_staged` at `:212` and `open_rocks` at `:214`; LOCKED
+      FM-PERSISTENCE-059's "`recover` runs `verify` → `stamp` →
+      `install_staged`"), and which **refuses the boot** on a marker that is
+      unreadable, malformed or from a future layout (LOCKED FM-PERSISTENCE-050 /
+      TR-PERSISTENCE-051, `specs/persistence.md:558-566`). So §0's rules never
+      run against a stamp they cannot trust, and "unreadable stamp" is not a
+      cell in the partition below — it is a boot refusal one phase earlier,
+      owned by a LOCKED row.
+      **The stamp must first be made to exist everywhere** (V23-M3 — **a LOCKED
+      row moves here, and this is the first of the round's two spec-first
+      obligations**). Today `verify` and `stamp` run **inside** the
+      `rocks_backed` branch — `let rocks_backed = inputs.persistence.enabled &&
+      !inputs.persistence.mode.eq_ignore_ascii_case("fake")`,
+      `frogdb-server/crates/recovery/src/lib.rs:188-190`, with the call sites at
+      `:203-211` inside the `if rocks_backed {` block that opens at `:190` — so a
+      node with persistence disabled or the `fake` WAL **has no marker at all**,
+      and this design's own sim-level forcing tests run on exactly such nodes.
+      A "RocksDB-backed directories only" scope would therefore wedge the test
+      plan that is supposed to force these rules. **The two operations move out
+      of the gate and run on every configuration.** They are data-directory
+      operations, not RocksDB operations: `verify` reads and writes one file in
+      `<data-dir>`, `stamp` does `create_dir_all` plus that same atomic publish
+      (`.../recovery/src/data_dir.rs:188-196`), and neither touches a column
+      family. The precedent is in the same recovery module: `<data-dir>/raft` is
+      opened by phase 6 gated on `cluster.enabled` **and nothing else**
+      (`frogdb-server/crates/recovery/src/cluster.rs:23-25`, called from
+      `lib.rs:257` outside the `rocks_backed` block, with the module doc stating
+      the independence at `cluster.rs:9-10`), and `ClusterStorage::open` sets
+      `create_if_missing(true)` (`frogdb-server/crates/cluster/src/storage.rs:288`),
+      so a persistence-disabled node **already creates and writes inside its data
+      directory** — it simply does so with no marker. So does the replication
+      state file (`frogdb-server/crates/server/src/server/replication_init.rs:134-137`
+      building the path from `config.persistence.data_dir` unconditionally, and
+      `ReplicationState::save` doing `create_dir_all` at
+      `frogdb-server/crates/replication/src/state.rs:278-281`). The move
+      **narrows** no LOCKED row's guarantees and collides with none of them:
+      FM-PERSISTENCE-059's ordering invariant (`verify` → `stamp` →
+      `install_staged`) is preserved because the install still follows both, and
+      FM-PERSISTENCE-050's refusal set is unchanged — it simply now applies to
+      directories it never saw. It **widens** an observable, which is why it is a
+      declared amendment rather than a silent fix: a persistence-disabled node
+      now creates `<data-dir>/frogdb_data_dir` and can now refuse a boot it
+      previously could not. Forcing test:
+      `a_persistence_disabled_node_stamps_its_data_directory`. **A second-order
+      benefit, noted not claimed**: it also closes an existing asymmetry in which
+      a node that flips `persistence.enabled` from `false` to `true` boots into a
+      directory holding `raft/` and `replication_state.json` and **no marker**,
+      which is exactly TR-PERSISTENCE-051's foreign-files refusal shape
+      (`contains_foreign_files` skips only `staging*`/`backup`,
+      `.../persistence/src/data_dir.rs:139-145`). Closing it is not this design's
+      purpose and no rule below leans on it.
+      **The stamp therefore has three values, not two** (V23-M3 — revision 22's
+      partition was stated over a stamp that is always present, and the absent
+      marker had no cell):
+      - **never created** ⟺ the latched `layout_version` is **absent or below
+        `N`**. Below `N`: this directory has only ever been managed by builds
+        that predate this design. **Absent**: no boot of a build shipping this
+        design has ever completed phase 0 on this directory — which, by the mint
+        precondition in (3), means no `stage_id` was ever minted from it. The two
+        cases decide identically and are one branch of the partition, but they
+        are **not** the same repair: below `N` is a *raise*, preserving
+        `database_id` and `created_at_unix_ms`; absent is a **first mint** of the
+        whole marker, which is `verify`'s existing fresh-directory path
+        (`.../recovery/src/data_dir.rs:166`) and not a re-mint, so
+        FM-PERSISTENCE-059's mint-once rule is satisfied rather than strained.
       - **lost** ⟺ the latched `layout_version` is **at or above `N`** *and* the
         store is absent, unreadable, or carries no `stage_counter_state`. A
         store re-created with an incarnation and nothing else — the shape §0's
         own incarnation rule produces on the loss path — is therefore **lost**,
         which is the cell V22-C1 walked straight through.
-      **The raise.** On the never-created branch the node writes the store and
-      then re-stamps the marker with `layout_version = N`, **preserving
-      `database_id` and `created_at_unix_ms`**: identity is minted once and
-      never re-derived (LOCKED FM-PERSISTENCE-059), and only the version moves.
-      This adds **no writer** — `recovery::data_dir::verify`/`stamp` is already
-      the marker's writer and already re-publishes it unconditionally on every
-      boot (`frogdb-server/crates/recovery/src/data_dir.rs:175-196`) — what this
-      design adds is the *value* that pair settles on for a directory whose
-      identity store it has just initialized.
+      **Why "absent" is safe to read as "never created", stated rather than
+      assumed.** The marker's writer set is closed and **none of its writers
+      removes it** — the writer table in the fifth permanent discipline below
+      enumerates all three (first mint, boot re-publish, the raise), and
+      `--force-fresh-data-dir` *re-mints* rather than deletes
+      (`.../recovery/src/data_dir.rs:67-75` → `:166`). So absence is a positive
+      fact about a directory no post-design boot has finished phase 0 on, not a
+      fact that a lost write can manufacture. The one way to manufacture it is to
+      **delete the marker file out of band** on a directory that had a stamp at
+      or above `N`, which would read a **lost** counter as never created —
+      V22-C1's shape one layer up. That is the out-of-band-restore class this
+      design scopes out by declaration in `registration_seq_gen`'s §0 bullet (an
+      out-of-band edit of a node's node-local directory rewinds every node-local
+      durable value at once, leaving no in-protocol operand to floor against),
+      and the belt that survives it is the same one that survives a rewound
+      store: the **mint-time floor** `max(stage_counter, nodes[self].admitted_stage
+      or 0) + 1`, which re-derives above every id this registration **admitted**
+      from replicated state the deletion cannot touch. The residue is unchanged
+      from V21-m1's — an id minted and then *refused*, which nothing replicated
+      floors.
+      **The raise, and the writer it needs** (V23-M1 — **the round's second
+      spec-first obligation**). On the never-created branch the node writes the
+      identity store, and then — **only after that write's fsync has returned** —
+      raises the marker to `layout_version = N`, **preserving `database_id` and
+      `created_at_unix_ms`** on the below-`N` case and minting the whole marker
+      on the absent case. The order is **store-then-stamp, always**. Revision 22
+      claimed this "adds **no writer**", pointing at recovery phase 0's existing
+      `verify`/`stamp` pair. **That claim was false and the mechanism it named
+      cannot raise anything**, and the three candidate mechanisms are worth
+      naming because two of them are wrong:
+      - **(i) Reuse the existing `verify`/`stamp` pair — impossible.** `verify`
+        returns an existing marker **verbatim**: `if let Some(marker) = existing
+        { info!(…); return Ok(marker); }`
+        (`frogdb-server/crates/recovery/src/data_dir.rs:88-95`), and `stamp`
+        writes back exactly the value `verify` decided
+        (`.../recovery/src/lib.rs:203-211`). On every upgrade boot that pair
+        re-publishes `layout_version = 1` and returns. Nothing in it can move the
+        version, so under revision 22's text the stamp never reaches `N`, the
+        mint precondition in (3) never clears, and **this design's staging path
+        is wedged shut on every existing cluster** — V21-M1's day-one wedge,
+        re-created by the fix for it.
+      - **(ii) Raise it at recovery phase 0 — forbidden.** Phase 0 runs before
+        the identity store is read or written and before cluster bring-up exists,
+        so raising there opens a crash window that spans **the whole of
+        recovery**: a crash inside it leaves `stamp ≥ N` with the store still
+        absent, which the partition reads as **lost** on a directory where
+        nothing was ever lost. That is a spurious `stage-counter-untrusted` state
+        on a first boot — fail-closed, so not unsafe, but it converts an ordinary
+        upgrade into an operator incident, and it is the exact inversion of the
+        residue store-then-stamp leaves.
+      - **(iii) A new, second marker write performed by cluster boot's step
+        (iv-b) — adopted.** It runs after step (iv)'s identity-store write has
+        been fsynced, so the only residue it can leave is "stamp below `N` or
+        absent **∧** store present with a readable `stage_counter_state`" — a
+        cell the master rule already decides on the **field**, which is why the
+        partition needs no ordering argument and why this residue is declared
+        benign in the crash-window list rather than argued about.
+      **What this owes the spec, declared here and in the blast radius.** The new
+      writer extends `verify`'s outcome set beyond what LOCKED FM-PERSISTENCE-049
+      states. That row's Invariant (`specs/persistence.md:1182`) says "`verify`
+      decides which marker the directory ends up with (**an existing one, or a
+      freshly minted one**) and `stamp` writes that decision" — a two-element
+      set. The design adds a third: **an existing one with its `layout_version`
+      raised**, written by a different writer at a later point in boot.
+      FM-PERSISTENCE-049 is therefore **Amended**, forced by
+      `an_upgraded_directory_is_stamped_only_after_its_identity_store_is_durable`.
+      Two further LOCKED rows **constrain the raise without moving**:
+      FM-PERSISTENCE-050 owns the version comparison and the `FutureLayout`
+      refusal the raise makes reachable on a downgrade (see the recovery row
+      below), and FM-PERSISTENCE-059 owns mint-once — which the raise satisfies
+      by construction, since it moves only `layout_version` and re-derives no
+      identity. The implementation plan sequences this the way every locked-area
+      change in this repository is sequenced: **spec row first, then a failing
+      forcing test, then the code**.
       **What the raise costs, stated because it is also the reason the stamp
       works**: after it, a build predating this design reads `layout_version =
       2` against its own maximum of `1` and **refuses the directory outright**
@@ -1169,26 +1402,48 @@ stated for every flow that destroys or replaces it, not only steady state):
       directory to re-stamp it. A merely *informational* marker field would
       have been downgrade-tolerant and would have been **silently dropped** by
       the first older build that re-stamped (the marker deliberately tolerates
-      unknown fields, `.../persistence/src/data_dir.rs:163-168`, and re-writes
-      only what its own struct holds) — the same defeat V22-C1 found one layer
-      down, one release later.
+      unknown fields — no `deny_unknown_fields`, no `flatten` catch-all,
+      `.../persistence/src/data_dir.rs:165-168` says so deliberately — and
+      re-writes only what its own struct holds, since `stamp` re-serializes the
+      struct unconditionally on every boot) — the same defeat V22-C1 found one
+      layer down, one release later.
     - **(3) The mint precondition, which is what makes (2) total.** **No
-      `stage_id` is ever minted while the latched stamp is below `N` and this
-      boot has not durably raised it**: gate 3 (a) refuses the `CLUSTER
-      REPLICATE` node-locally with the mint rule's durability error — no
-      record, no fence, no id spent — exactly as it does for a counter it
-      cannot durably increment. Therefore **`layout_version < N` ⟹ this node
-      has never minted a stage id from this directory**, and the never-created
-      branch is sound on *every* store shape rather than by a shape argument:
-      an interrupted initialization, a torn store, and a store lost between the
-      initialization and the raise all land in a state where there is no spent
-      id to re-use, so re-initializing to `0` there re-uses nothing. The
-      initialization sequence has **no crash window that has to be argued about
-      one at a time**, which is the property revision 21's discriminator could
-      not have had at any ordering. The same precondition disposes of
-      `admitted_stage`, which is also a field this design introduces: a
-      directory stamped below `N` cannot face a surviving stamp in its own cell
-      either, because nothing could have minted the id that stamp would carry.
+      `stage_id` is ever minted while the latched stamp is absent or below `N`
+      and this boot has not durably raised it**: gate 3 (a) refuses the `CLUSTER
+      REPLICATE` node-locally, with its own reply token — see the token list in
+      the gate — no record, no fence, no id spent, exactly as it does for a
+      counter it cannot durably increment. Therefore **a stamp absent or below
+      `N` ⟹ this node has never minted a stage id from this directory**, and the
+      never-created branch is sound on *every* store shape rather than by a shape
+      argument: an interrupted initialization, a torn store, and a store lost
+      between the initialization and the raise all land in a state where there is
+      no spent id to re-use, so re-initializing to `0` there re-uses nothing.
+      **Re-derived under store-then-stamp** (V23-M1 — revision 22 asserted this
+      against a mechanism that did not exist, so the property has to be re-earned
+      against the one that does): boot writes **two** artifacts, in a fixed
+      order, so there are exactly three places to crash and the master rule
+      decides all three without an ordering argument.
+      - Crash **before** the store write: nothing changed. The next boot latches
+        the same shape and reaches the same verdict. Idempotent.
+      - Crash **after** the store write and **before** the raise: store present
+        with a readable `stage_counter_state`, stamp still absent or below `N`.
+        The master rule's **first** operand decides — the field, not the stamp —
+        so the next boot adopts the recorded value (or keeps the recorded
+        untrusted state) and then completes the raise. No id is re-used because
+        none was spendable: the mint precondition was refusing throughout this
+        window. This is the residue mechanism (2)'s horn (iii) is chosen for.
+      - Crash **after** the raise: stamp at or above `N` with the store present,
+        which is the partition's ordinary cell.
+      The reverse order — stamp-then-store — would put the crash in the second
+      window at "stamp at or above `N` **∧** store absent", which the partition
+      reads as **lost** on a directory that lost nothing, and that is horn (ii)'s
+      defect stated as a window rather than as a phase. **The initialization
+      sequence therefore has no crash window that has to be argued about one at a
+      time**, which is the property revision 21's discriminator could not have had
+      at any ordering. The same precondition disposes of `admitted_stage`, which
+      is also a field this design introduces: a directory stamped absent or below
+      `N` cannot face a surviving stamp in its own cell either, because nothing
+      could have minted the id that stamp would carry.
   - **At boot, on a lost store — a *staging* refusal, not a boot failure**
     (V21-M1, entry predicate re-founded per V22-C1): if the boot decision above
     says **lost** — the latched stamp is at or above `N` and the store is
@@ -1205,10 +1460,28 @@ stated for every flow that destroys or replaces it, not only steady state):
     was a store present with an incarnation and no counter field — which
     revision 21 read as *never created* (V22-C1 (iii)). Under this revision
     that shape does not occur on this path at all, and if it occurs by any
-    other path it is a **lost** cell, not a never-created one. While the state
+    other path it is a **lost** cell, not a never-created one.
+    **The unix caveat this claim carries** (V23-m2 — stated here because "same
+    single atomic write" is load-bearing in this paragraph rather than
+    decorative): the write's atomicity is `write` → `sync_file` → `rename` →
+    `sync_dir`, and the last step is the one that is not portable. LOCKED
+    FM-PERSISTENCE-049's *NOT observable* cell is what mandates the shape for
+    this design's stores, and it names FM-PERSISTENCE-023 as the source of the
+    rule; FM-PERSISTENCE-023's Invariant states the degradation in its own words
+    — "a platform whose directories cannot be opened for sync (Windows) degrades
+    to a no-op rather than failing a save" — and the code is
+    `frogdb-server/crates/persistence/src/fs_seam.rs:89-92` (the unix arm at
+    `:84-87` is `File::open(path)?.sync_all()`). Off unix, therefore, the *bytes*
+    are durable and only the **rename** can be lost, so the surviving shape is
+    the **older** store, never a mixed one — the field set never tears, which is
+    the property this paragraph actually needs. What is lost off unix is
+    *promptness*, not *shape*: a crash can lose the transition into the untrusted
+    state, and the next boot then re-derives it from the same latched inputs,
+    because every rule here is level-triggered on the latch rather than on having
+    observed a write. While the state
     stands, gate 3 (a)
-    **refuses every `CLUSTER REPLICATE` node-locally with the same durability
-    error the mint rule below declares: no record, no fence, no id spent.**
+    **refuses every `CLUSTER REPLICATE` node-locally with a reply token of its
+    own — see the token list at the gate: no record, no fence, no id spent.**
     **`CLUSTER INFO` exposes the state** alongside its pending-stage field, so
     the condition is readable in-band rather than only in a start-up log line.
     **The state clears on a fresh registration**, level-triggered on applied
@@ -1273,36 +1546,58 @@ stated for every flow that destroys or replaces it, not only steady state):
     `stage_counter_state` field**; **(S-d)** store present,
     `Trusted { value }`; **(S-e)** store present,
     `Untrusted { since_registration }`. Each is crossed with the latched stamp
-    (**below `N`** / **at or above `N`**) and with `self ∈ nodes` /
-    `self ∉ nodes` in applied state — twenty cells, and every one has a
-    declared outcome. The **record** dimension is orthogonal and settled one
+    — which has **three** values, not two (V23-M3): **absent** (no marker file
+    at all, the shape a persistence-disabled or `fake`-WAL directory has today),
+    **below `N`**, **at or above `N`** — and with `self ∈ nodes` /
+    `self ∉ nodes` in applied state. **Five shapes × three stamp states × two
+    membership answers = thirty cells**, and every one has a declared outcome.
+    (Revision 22 counted twenty because it wrote the partition over a stamp that
+    is always present; the marker's own absence had no cell, and the tests meant
+    to force these rules run on exactly the nodes that have no marker.) The
+    **record** dimension is orthogonal and settled one
     step earlier: the effect-keyed clause has already run at step (ii) and
     answered the client if it fired, so each cell below states only what the
     counter rule does with whatever the clause left standing.
 
-    **One rule decides all twenty**: *if the store carries a readable
-    `stage_counter_state`, that field decides; otherwise the stamp decides.*
-    Written out:
-    - **Stamp below `N`** (ten cells: five shapes × both membership values) →
-      **never created**, and by the mint precondition nothing has ever been
-      minted here, so the outcome is the same in all ten and it re-uses
-      nothing. **S-a/S-b/S-c**: write `Trusted { value: 0 }` (rewriting an
+    **One rule decides all thirty**: *if the store carries a readable
+    `stage_counter_state`, that field decides; otherwise the stamp decides — and
+    an **absent** stamp decides exactly as a stamp **below `N`** does.* The
+    second operand's absent case is not a convenience: it is forced, because a
+    directory with no marker is one no post-design boot has finished phase 0 on,
+    and the mint precondition makes that equivalent to "nothing was ever minted
+    here" — the same fact `below N` carries. Written out:
+    - **Stamp absent or below `N`** (twenty cells: five shapes × two stamp
+      states × both membership values) → **never created**, and by the mint
+      precondition nothing has ever been minted here, so the outcome is the same
+      in all twenty and it re-uses nothing. **S-a/S-b/S-c**: write
+      `Trusted { value: 0 }` (rewriting an
       unreadable store wholesale — there is nothing in it worth adopting and
-      nothing that could have been spent), **then raise the stamp to `N`**,
+      nothing that could have been spent), **then bring the stamp to `N`**,
       boot normally, stage normally. **S-d**: adopt `value` as the counter —
-      *not* a reset to `0` — and raise the stamp; this is the shape an
+      *not* a reset to `0` — and bring the stamp to `N`; this is the shape an
       initialization that crashed after the store write and before the raise
       leaves behind, and adopting is both harmless and idempotent. **S-e**:
       keep the state and treat it as the `≥ N` S-e cell below; the shape is
-      unreachable (nothing enters the untrusted state below `N`), and it is
+      unreachable (nothing enters the untrusted state below `N` or with no
+      stamp), and it is
       given an outcome anyway so that the field-decides-first rule needs no
       reachability argument to be total. `self ∈ nodes` does not enter: **no
       untrusted state is entered on this branch under any membership**, which
       is what makes the rolling upgrade work (forcing-test control (ii)).
-      **This is the upgrade path**: on the first boot after this design ships,
-      every node of every existing cluster has a directory stamped below `N`
-      and no store at all — cell S-a — and initializes, boots and stages
-      normally, emitting no operator-visible fault. Revision 21 believed this
+      **"Bring the stamp to `N`" is two different writes on the two stamp
+      states, and the distinction matters to a LOCKED row**: below `N` it is a
+      **raise** that preserves `database_id` and `created_at_unix_ms`; absent it
+      is a **first mint** of the whole marker, `verify`'s existing
+      fresh-directory path, which mints identity once rather than re-deriving it
+      (LOCKED FM-PERSISTENCE-059). Neither ever re-mints an identity a directory
+      already has.
+      **This is the upgrade path**, and after V23-M3 it has two entrances: on
+      the first boot after this design ships, a RocksDB-backed node of an
+      existing cluster has a directory stamped **below `N`** with no store at
+      all, and a persistence-disabled or `fake`-WAL node has **no stamp** and no
+      store — both are cell S-a on their respective stamp states, and both
+      initialize, boot and stage normally, emitting no operator-visible fault.
+      Revision 21 believed this
       cell was "store present, field absent"; it is **S-a**, and reading it as
       a loss is V22-M2.
     - **Stamp at or above `N`, S-a/S-b/S-c** (six cells) → **lost**. With
@@ -1335,7 +1630,9 @@ stated for every flow that destroys or replaces it, not only steady state):
     **No cell wedges a node**, which is the property revision 20's version of
     this table failed; and **no cell reads a shape this design writes as
     evidence that nothing was lost**, which is the property revision 21's
-    version failed.
+    version failed; and **every value of every dimension has a cell**, which is
+    the property revision 22's version failed — its stamp dimension was total
+    only over directories that already had a marker.
 
     **V22-C1's trace, re-walked against this partition** (the loss it names,
     step by step, with the step it now dies at): (1) `n` stages a flip in
@@ -1434,35 +1731,95 @@ stated for every flow that destroys or replaces it, not only steady state):
     `registration_seq` for this node, or removes it from `nodes` — nothing
     else clears the state**, and revision 21 named two exits that do neither
     (V22-M1). The exits, spelled out:
-    **(a) multi-member — `CLUSTER FORGET <node>` at another member, then
-    re-`MEET`.** The `FORGET` deletes the cell (`commands.rs:233`) and the
-    re-`MEET` returns through the **fresh** `AddNode` arm (`commands.rs:132`'s
-    `existed` predicate is false), which mints a strictly greater
-    `registration_seq`; the clearing rule fires level-triggered.
-    **(b) single-member — `FLUSHALL`, then `CLUSTER RESET HARD`, then
-    *restart the node*, then re-`MEET`.** All four steps are load-bearing.
-    `FLUSHALL` first because gate 2's empty-keyspace rule is a real refusal in
-    shipped code (`commands/cluster/admin.rs:404-409`, `"ERR CLUSTER RESET
-    can't be called with master nodes containing keys"`). **HARD**, not the
-    bare (SOFT) spelling: SOFT removes and re-inserts this node's own cell in
-    the same apply with `registration_seq` **carried unchanged**
-    (`commands.rs:833` → `:852`), so the predicate stays false and the state
-    stands. And the **restart**, because HARD's re-key is random and
-    **in-memory only** (`commands/cluster/admin.rs:411-417`, published via
-    `cluster/src/writer.rs:249-250`, never persisted): while the node stays up,
-    `self ∈ nodes` under the random id with the same `registration_seq`, and a
-    re-`MEET` of that id is an **upsert**, which mints nothing. Only the
-    reboot's re-derived configured-or-address-derived id
-    (`frogdb-server/crates/server/src/server/cluster_init.rs:186-190`,
-    `frogdb-server/crates/server/src/server/util.rs:33`) finds **no cell**, at
-    which point `self ∉ nodes` clears the state on the rule's second disjunct
-    and the re-`MEET` registers freshly. This is the same sequence, and the
-    same reasoning, the record-clearing clause's own producer list already
-    states two subsections above. **The cost, stated at the row rather than
-    left to the operator to discover**: this destroys a serving dataset to
-    escape a fault confined to one command. It is the price of a single-member
-    cluster having no second member to re-register it, and it is why the
-    multi-member exit is preferred whenever one exists.
+    **(a) multi-member — `CLUSTER FORGET <node>` at another member.** Revision
+    22 wrote this exit as one sequence; it is **two separable things**, and
+    running them together is what hid the step V23-M2 found missing.
+    *Clearing the state* needs nothing beyond the `FORGET`. That command commits
+    a `RemoveNode` **data** entry which deletes the cell (`commands.rs:229`), and
+    that entry is committed and replicated **before** any Raft voter change is
+    attempted — the voter change is a follow-on action fired at the leader's
+    commit site, after the write returns
+    (`frogdb-server/crates/server/src/connection/cluster.rs:83-109` →
+    `frogdb-server/crates/cluster/src/network.rs:878-926`), and application
+    membership and the Raft voter set are **two different maps** (`network.rs:1562`).
+    So the forgotten node normally receives and applies the removal and observes
+    `self ∉ nodes` in its own applied state: the clearing rule's **second
+    disjunct**, level-triggered, and the clear is durable. If the removal never
+    reaches it — the voter removal won the race, or the node was down — the state
+    clears instead at the re-`MEET`'s **fresh** `AddNode` arm
+    (`commands.rs:132`'s `existed` predicate is false), which mints a strictly
+    greater `registration_seq`: the first disjunct.
+    **The clear does not depend on the *value* of any new `registration_seq`**,
+    and that is worth stating because the clearing test is `≠`, not `>`: a
+    re-registration that happened to mint the *same* number would leave the flag
+    standing. It cannot arise. On this exit the `self ∉ nodes` disjunct has
+    already cleared the flag durably before any re-registration is proposed, and
+    on exit (b) the same disjunct fires at the wipe boot, before the node
+    registers itself at all.
+    *Returning the node to service* is the ordinary rejoin, it is **not specific
+    to this state**, and gate 1 owns it. Revision 22 omitted it entirely.
+    It needs two things this state does not supply: the node's **keyspace
+    emptied** (`FLUSHALL` — its copy is stale, and the removal already unassigned
+    its slots), and its **local Raft state wiped**. **The wipe is not
+    `CLUSTER RESET HARD` on this exit** — that command is cluster-wide
+    destructive, see gate 1 — and the corrected sequence, its mechanism and its
+    one named dependency are stated once at gate 1 rather than duplicated here.
+    **(b) single-member — `FLUSHALL`, then `CLUSTER RESET HARD`, then *restart
+    the node*.** Re-derived step by step in revision 23 against what the reset
+    actually does (V23-M2), because revision 22 asserted a Raft-state clear the
+    reset does not perform and stopped at a re-`MEET` that has nobody to issue it:
+    1. **`FLUSHALL`.** Gate 2's empty-keyspace rule is a real refusal in shipped
+       code (`frogdb-server/crates/server/src/commands/cluster/admin.rs:404-409`,
+       `"ERR CLUSTER RESET can't be called with master nodes containing keys"`).
+       Its accuracy caveat is at gate 2. **The cost is the dataset**, and it is
+       priced here rather than left for the operator to discover: this destroys a
+       serving dataset to escape a fault confined to one command. It is the price
+       of a single-member cluster having no second member to re-register it, and
+       it is why exit (a) is preferred whenever a second member exists.
+    2. **`CLUSTER RESET HARD`**, not the bare (SOFT) spelling: SOFT removes and
+       re-inserts this node's own cell in the same apply with `registration_seq`
+       **carried unchanged** (`commands.rs:833` → `:852`), so the predicate stays
+       false and the state stands. HARD additionally re-keys the node and zeroes
+       both config epochs (`commands.rs:841-844`). The command is proposed
+       through Raft and its `+OK` is written only after the entry has committed
+       and applied on the leader (`admin.rs:422-429` returns
+       `Response::RaftNeeded`; `connection/cluster.rs:46-55` intercepts it;
+       `cluster/src/writer.rs:219-256` awaits `propose` → `client_write`).
+       **Under this design's amendment to TR-CLUSTER-035** the same command also
+       durably marks this node's Raft store for discard before that `+OK` — the
+       mechanism, its crash windows and its spec obligation are at gate 1.
+       **This step is admissible here only because the cluster has one member**:
+       the reset's apply arm is node-agnostic and clears *every* member's `nodes`
+       map, so on a live multi-member cluster it is not a node-local wipe at all.
+       Gate 1 states that in full.
+    3. **Restart.** Two things need it, not one. HARD's re-key is random and
+       **in-memory only** (`admin.rs:411-417`, published via
+       `cluster/src/writer.rs:249-250`, never persisted): while the node stays
+       up, `self ∈ nodes` under the random id with the same `registration_seq`,
+       so nothing clears. And the discard mark is completed by the **next boot**,
+       before the Raft store is opened, which is the only point at which a node
+       can safely delete the log it is not currently serving from.
+    4. **The boot.** Recovery wipes the marked store and opens a fresh one, the
+       node's id re-derives to the configured-or-address-derived value
+       (`frogdb-server/crates/server/src/server/cluster_init.rs:186-190`,
+       `frogdb-server/crates/server/src/server/util.rs:33`), and step (i) of the
+       boot-ordering rule reads applied state that is now **empty** — so
+       `self ∉ nodes` holds and the clearing rule fires on its second disjunct at
+       step (iii), **durably, before cluster bring-up proposes anything**. The
+       state is gone at the end of this step; nothing later in the sequence has
+       to clear it.
+    5. **The node re-forms.** A single-member cluster has nobody to `MEET` it, and
+       it does not need one: a node whose Raft store is empty **self-bootstraps**
+       — it inserts itself into `initial_members` unconditionally and takes the
+       bootstrap role as the lowest id (`cluster_init.rs:383-391`), calls
+       `raft.initialize` when the store carries no membership (`:442-460`),
+       registers itself through `AddNode` (`:527`, `:558-604`) and re-assigns its
+       own slots (`:535-552`). The registration mints `registration_seq` from a
+       fresh generation, which is **irrelevant to this exit** by the `≠`-not-`>`
+       argument above — the flag was already cleared at step 4.
+    **The sequence terminates**, which is the property revision 22's version of
+    this exit did not have: it ended at a re-`MEET` that a one-member cluster
+    cannot issue, having assumed a Raft-state clear that does not happen.
     **(c) not an exit: a graceful failover.** Revision 21 named "a controlled
     failover of the shard", and settled ruling 2 is **demote-don't-remove**:
     LOCKED FM-CLUSTER-101 states it in the negative — "Nor a graceful
@@ -1493,9 +1850,39 @@ stated for every flow that destroys or replaces it, not only steady state):
     availability) decides it: the exits above are expensive and they are
     *sound*, and expensive-and-sound beats cheap-and-asserted. ***Mint refusal***
     — *state*: the node is up and serving, unfenced, with no record and no
-    spent id; *in-band surface*: all of it; *operator command*: repair the
+    spent id; *in-band surface*: all of it; *reply token*:
+    `-ERR CLUSTER REPLICATE refused: stage counter could not be durably
+    incremented`; *operator command*: repair the
     node-local durable-state fault the error names (disk full, permissions,
     I/O) and re-issue the `CLUSTER REPLICATE`.
+    ***Stamp-precondition refusal*** (V23-M1's row — gate 3 (a)'s *other* mint
+    refusal, which revision 22 named nowhere): *state*: the node is up and
+    serving, unfenced, with no record and no spent id, on a data directory whose
+    latched stamp is absent or below `N` and whose raise this boot did not
+    complete; *in-band surface*: all of it; *reply token*:
+    `-ERR CLUSTER REPLICATE refused: data directory is not stamped for this
+    build`; *operator command*: repair the data-directory fault the error names
+    and **restart** — the raise is attempted once per boot, at step (iv-b), so a
+    restart is what retries it. *Reachability, stated because it is not obvious
+    and is the reason this row is short*: under **store-then-stamp** the raise
+    completes at boot step (iv-b), which is before the node admits any client
+    write, so on a healthy upgrade boot this refusal is **unreachable** — it can
+    only be observed when the raise itself failed to become durable. Revision 22
+    could not have written this row honestly, because under its non-mechanism the
+    refusal was reachable on **every** boot of **every** existing cluster,
+    forever.
+    **Three distinct tokens, not one class** (V23-m2's neighbour finding —
+    revision 22 said "a durability error" at both mint refusals and "the same
+    durability error" at the untrusted state). The operator actions differ, so
+    the tokens must: the untrusted state's token is
+    `-ERR CLUSTER REPLICATE refused: stage counter untrusted on this node`,
+    whose repair is an *exit sequence*, not a disk repair; the mint refusal's is
+    a disk repair and a retry of the same command; the stamp-precondition
+    refusal's is a disk repair and a **restart**. §3's reply-token totality rule
+    requires every exit to name a token, and a class name is not a token.
+    **Nothing in the design's commutation claims depends on these three being
+    equal** — those claims are about the *lost-registration* error at arms 4b and
+    5, which is a different refusal with a different token, and it is unchanged.
   **Ordering at boot, stated because five rules read overlapping state**
   (revision 21 said "four" and ordered four; §0's incarnation re-mint is the
   fifth, it writes the same file the counter rules read, and revision 21 left it
@@ -1509,7 +1896,11 @@ stated for every flow that destroys or replaces it, not only steady state):
   fires; (iii) apply the counter-store rules above against the latch —
   initialize, or enter/clear the untrusted state; (iv) apply §0's incarnation
   rule — increment and fsync, or, if the latch says the store was unreadable or
-  absent, re-mint above `nodes[self].run_identity` — writing the store; (v) only
+  absent, re-mint above `nodes[self].run_identity` — writing the store;
+  **(iv-b) bring the data-directory stamp to `N`** if the latch says it was
+  absent or below `N` — **only after step (iv)'s write has been fsynced**, which
+  is the store-then-stamp order V23-M1 forces and mechanism (2)'s horn (iii)
+  adopts; (v) only
   then re-mint the candidate triple and run gate 3 (c)'s three-way
   record-resolution rule. **Step (ii) before step (iii)** is what keeps the two
   record-clearing rules from disagreeing about the client: the clause is the
@@ -1525,22 +1916,39 @@ stated for every flow that destroys or replaces it, not only steady state):
   single atomic write named above, carrying the re-minted incarnation and the
   `stage_counter_state` step (iii) decided on. Step (iv) before step (v) is what
   binds the candidate triple to this boot's incarnation; step (iii) before step
-  (v) is what keeps a possibly re-used id out of a new record.
-  **The crash windows, declared rather than left to the reader** (V22-C1): the
-  boot writes the store at most once, so there are exactly two places to crash
-  and both are answered by the partition above, *not* by an ordering argument.
-  Crash **before** that write and the next boot latches the same shape this one
-  did and reaches the same verdict — the decision is a pure function of the
-  latch, so it is idempotent under repetition. Crash **after** it and the next
-  boot latches **(S-e)** — present, `Untrusted`, no trusted counter, stamp ≥ `N`
+  (v) is what keeps a possibly re-used id out of a new record. **Step (iv)
+  before step (iv-b)** is the one ordering constraint added in revision 23, and
+  it is the whole of V23-M1's fix: the stamp is the never-created discriminator,
+  so raising it before the store it is supposed to describe is durable would
+  publish "this directory has a counter" over a directory that does not yet.
+  **The crash windows, declared rather than left to the reader** (V22-C1,
+  **re-derived in revision 23** — the boot now writes **two** artifacts, so
+  revision 22's "at most once, therefore two places to crash" no longer holds as
+  written): the boot writes the store at most once and the marker at most once,
+  in that fixed order, so there are exactly **three** places to crash, and all
+  three are answered by the partition above, *not* by an ordering argument.
+  Crash **before the store write** and the next boot latches the same shape this
+  one did and reaches the same verdict — the decision is a pure function of the
+  latch, so it is idempotent under repetition.
+  Crash **after the store write and before step (iv-b)** and the next boot
+  latches a store with a readable `stage_counter_state` under a stamp still
+  absent or below `N`. The master rule's first operand decides — **the field, not
+  the stamp** — so the boot adopts the recorded value or re-enters the recorded
+  untrusted state, and then completes the raise. **This window spends nothing**:
+  the mint precondition was refusing `CLUSTER REPLICATE` throughout it, so no id
+  could have been minted against the un-raised stamp.
+  Crash **after step (iv-b)** and the next boot latches the ordinary cell: on the
+  loss path **(S-e)** — present, `Untrusted`, no trusted counter, stamp ≥ `N`
   — which the partition sends **back into the untrusted state**, not into
   never-created. That is the cell revision 21 could not express, and it is why
   the discriminator had to stop being file existence: the loss path's own write
   produces a store, and a store-presence test would have read that write as
   proof the node had a counter all along. The residual window revision 21 would
   have had to argue — store re-created with an incarnation and no counter field,
-  crash before a second write — **does not exist**, because there is no second
-  write.
+  crash before a second write — **does not exist**, because the store is still
+  written exactly once; step (iv-b) writes the *marker*, a different artifact,
+  and the two have disjoint writer sets (the fifth permanent discipline below
+  tabulates both).
 
 **Absent-operand rule** (V6-m2 — the record's `Option` fields appear as comparison
 operands, so the truth value at `None` must be defined once, not per reader;
@@ -1881,16 +2289,144 @@ when it is not):
      side, never an apply-time deletion: fail-closed, deletes nothing. This gate
      **composes with** TR-CLUSTER-005's issue-25 ruled precondition (empty local
      Raft state) — the row's verdict in the blast-radius list states the composed
-     precondition, and the refusal names *which* gate fired. The complete wipe
-     sequence a rejoining node's operator must perform, stated once:
-     `CLUSTER RESET HARD` (clears Raft state per TR-CLUSTER-035's HARD path *and*
-     requires/effects the empty DB — gate 2 below refuses it on a non-empty
-     keyspace, so `FLUSHALL` first when data remains). `FLUSHALL` alone is
-     insufficient — the node still fails the empty-Raft-state precondition.
+     precondition, and the refusal names *which* gate fired.
+     **The complete wipe sequence a rejoining node's operator must perform,
+     stated once — and rewritten in revision 23** (V23-M2). Revisions 8 through
+     22 said `CLUSTER RESET HARD` "clears Raft state per TR-CLUSTER-035's HARD
+     path". **It does not, and the claim is deleted.** TR-CLUSTER-035's
+     Postcondition (`specs/cluster.md:498`) enumerates in-memory
+     `ClusterStateInner` mutations only — slot assignment, membership, role,
+     parent pointer, open migrations, handoff counter, config epochs — its Source
+     is `cluster/src/commands.rs:816-863`, and that arm touches **no filesystem
+     and no storage handle**; nothing anywhere in the repository removes
+     `<data-dir>/raft` on any reset path (the only `purge` in the Raft store is
+     openraft's log-prefix trim, `cluster/src/storage.rs:671`). So after a HARD
+     reset the vote and the log of the old cluster survive verbatim, and
+     `FLUSHALL` + `RESET HARD` leaves the node failing the empty-Raft-state
+     precondition it was supposed to satisfy.
+     **Two further facts decide which vehicle is admissible where, and both are
+     load-bearing.** First, **`CLUSTER RESET` is not node-local**: it is proposed
+     through Raft (`admin.rs:422-429` → `connection/cluster.rs:46-55` →
+     `cluster/src/writer.rs:219-256` → `client_write`), its apply arm is
+     **node-agnostic** — it keys on the *command's* `node_id`, not on the applying
+     node — and every member that applies it ends with `nodes` cleared to the
+     resetting node alone (`commands.rs:833-854`), or, when that id is absent from
+     membership, cleared to **empty** (`commands.rs:855-859`, the `else` branch,
+     which still returns `Ok`). Issuing it at one member of a live cluster
+     therefore erases **every** member's topology. Second, it performs **no Raft
+     membership change at all** — `voter_change` maps `ResetCluster` to `None`
+     deliberately (`cluster/src/network.rs:726-732`, citing FM-CLUSTER-101) — so
+     the former peers remain voters of a group whose application state now claims
+     one member. The sequence is therefore **two sequences**, not one:
+     - **Single-member cluster, in-band** — `FLUSHALL`, `CLUSTER RESET HARD`,
+       **restart**. This is `stage-counter-untrusted`'s exit (b), walked step by
+       step at its row. The reset is admissible here precisely because there is no
+       other member's topology to erase.
+     - **Live multi-member cluster, out-of-band** — `CLUSTER FORGET <node>` at a
+       surviving member, then at the departing node: `FLUSHALL`, **stop the
+       node**, remove `<data-dir>/raft`, restart. **`CLUSTER RESET HARD` must not
+       be used here**, and revision 22's single sequence was actively dangerous
+       for saying so: a `RESET HARD` issued at a member of a live cluster commits
+       cluster-wide and empties every survivor's `nodes` map.
+     **What neither sequence touches, stated because the rest of this document
+     leans on the opposite in a dozen places** (found while re-deriving V23-M2,
+     not raised by the review — recorded rather than swept): **the wipe does not
+     destroy the node-local identity store**, and therefore does not restart the
+     stage counter. `CLUSTER RESET HARD` touches no filesystem at all, and the
+     out-of-band step removes `<data-dir>/raft` and nothing else;
+     `<data-dir>/frogdb_node_identity` survives both. The many places that say
+     "the counter restarts across the mandated wipe" — the record-binding
+     conjunct's freshness row above all — are therefore **conservative rather
+     than wrong**: they assume the *worse* world, in which a re-used `stage_id`
+     is possible after a rejoin, and discharge the hazard with the
+     `registration_seq` pairing regardless. Every one of those arguments stays
+     sound if the counter in fact survives, because a surviving counter only
+     makes ids **more** unique, never less. **No rule in this design depends on
+     the counter restarting**, and none may be added that does: a rule that
+     needed a counter reset would need a writer that deletes the store, which
+     the node-local durable-state join above shows does not exist.
+     **The in-band vehicle needs a mechanism, and the mechanism is a LOCKED-row
+     amendment** (V23-M2, the round's third spec-first obligation, and it is
+     **declared here, not performed**). `CLUSTER RESET HARD` cannot delete the
+     Raft store at apply time: the reset is itself a committed Raft entry, so the
+     node would be deleting the log it is applying from. The sound shape is
+     **mark-then-wipe-on-restart**, and it fits the restart the exit already
+     needs for an unrelated reason (HARD's re-key is in-memory only):
+     TR-CLUSTER-035's HARD path gains a third obligation — the node the payload
+     **names** durably marks its own Raft store for discard
+     (`<data-dir>/frogdb_raft_discard`, a sibling under FM-PERSISTENCE-057's
+     layout rule, published with the same `write` → `sync_file` → `rename` →
+     `sync_dir` shape as the marker) **before the reset's `+OK` is written**,
+     which is a placement the code already admits because the reply waits for
+     commit *and* apply (`writer.rs:185-186`, `connection/cluster.rs:174-186`).
+     The **next boot** completes it: recovery removes `<data-dir>/raft` and then
+     the mark, **before** phase 6 opens the store
+     (`frogdb-server/crates/recovery/src/cluster.rs:23-25`). Crash windows,
+     declared:
+     - Crash **before the mark is durable**: the boot opens the old store, the
+       node comes up with the reset applied and its Raft state intact, and the
+       re-join is **refused by this gate naming the Raft-state half**. The repair
+       is to **re-issue `CLUSTER RESET HARD`**, which succeeds: after a restart
+       the node's id has re-derived to the configured-or-address-derived value,
+       which the first reset re-keyed away from, so the second reset takes the
+       `else` branch (`commands.rs:855-859`) and still returns `Ok` while writing
+       the mark. Fail-closed, observable, and repaired by repeating the same
+       command.
+     - Crash **during the wipe**: the mark is still present, so the next boot
+       repeats it. `remove_dir_all` of an already-absent path is a no-op, so the
+       whole step is idempotent under repetition.
+     - Crash **after the wipe, before the mark is removed**: same — the next boot
+       wipes nothing and clears the mark.
+     **The mark is written on an observed apply rather than re-derived from
+     applied state, and that is a declared exception to this design's
+     level-triggered rule for durable reactions**, admitted for one reason: a
+     *missed* edge here cannot leave the system in a state no rule can re-derive.
+     It leaves the first crash window above, whose outcome is a refusal that names
+     its own gate and a repair that is re-issuing the same command. There is no
+     level predicate available that would do better — "`self ∉ nodes`" is equally
+     true after a `FORGET`, where wiping unilaterally would be exactly the
+     destructive act this gate exists to prevent.
+     Forcing tests: `reset_hard_marks_the_raft_store_for_discard_before_it_replies`,
+     `the_next_boot_wipes_a_marked_raft_store_before_opening_it`,
+     `a_crash_before_the_discard_mark_leaves_the_reset_re_issuable`,
+     `a_single_member_reset_hard_then_restart_comes_up_with_empty_raft_state`.
+     **One named dependency, which this design records and does not discharge.**
+     A node whose Raft store is empty **self-bootstraps** today — it inserts
+     itself into `initial_members` unconditionally and takes the bootstrap role as
+     the lowest id (`cluster_init.rs:383-391`), then calls `raft.initialize` when
+     the store carries no membership (`:442-460`). There is no "uninitialized,
+     awaiting `MEET`" state and no config flag that produces one. For the
+     single-member exit that is exactly the wanted behaviour. For the
+     multi-member rejoin it **undoes the wipe on the very next boot**, because the
+     bootstrap writes a vote and a log entry and this gate then refuses the
+     re-`MEET` forever. Gate 1's own precondition is TR-CLUSTER-005's issue-25
+     ruling, whose `Source` cell says "Not yet in code" (`specs/cluster.md:199`),
+     and the solo bootstrap is issue 25's own subject. **This design creates
+     neither problem and closes neither**; it records that gate 1's implementation
+     must leave a wiped node awaiting `MEET` rather than bootstrapping, or the
+     Raft-state half of the gate is unsatisfiable by any sequence. Forcing test:
+     `a_wiped_node_awaits_meet_instead_of_solo_bootstrapping`.
+     **`FLUSHALL` alone is insufficient** on either path — the node still fails
+     the empty-Raft-state precondition.
   2. **`ResetCluster` refuses on a non-empty main keyspace** (Redis `CLUSTER RESET
      HARD` requires an empty DB): reset is the path back toward a re-join, so the
      same gate holds there; the error names the non-empty slots and the wipe the
      operator must perform deliberately.
+     **Accuracy note on the shipped guard, recorded because two rules above lean
+     on it** (V23-M2's gate-2 observation): the check is
+     `if !ctx.store.is_empty()` at
+     `frogdb-server/crates/server/src/commands/cluster/admin.rs:404-409`, and
+     `ctx.store` is the **local shard's** data store
+     (`frogdb-server/crates/core/src/command.rs:1153-1154`) under
+     `ExecutionStrategy::Standard`
+     (`frogdb-server/crates/server/src/commands/cluster/mod.rs:105`). On a
+     multi-shard node it therefore inspects **one** shard — whichever the
+     dispatcher landed on — so a node holding keys on every other shard passes
+     it. Nothing in this design leans on the guard as a *safety* property: it is
+     an operator ergonomic, and the sequences above put `FLUSHALL` first
+     precisely because `FLUSHALL` is server-wide and the guard is not. The gate
+     this design does lean on is the join-empty gate above, which is stated over
+     the node's whole keyspace.
   3. **Replication-command gate** (V10-C1). First, the **cluster-mode role-command
      surface**, declared once here and referenced from §0, the Transitions rows,
      §3 and the Quint section (V14-C1/V14-M5/V14-m1 — revision 13 treated bare
@@ -1972,12 +2508,26 @@ when it is not):
      value before and after any number of crashes, which is what lets the
      adoption's firing condition survive the re-mint.
      **The mint is fail-closed** (V20-C1 part 2): the counter is read and
-     durably incremented — file and parent directory fsynced — **before** the
+     durably incremented — the file, then the data directory that holds it,
+     fsynced — **before** the
      record is written, and if that cannot be done the gate **refuses this
-     `CLUSTER REPLICATE` node-locally** with a durability error, leaving no
+     `CLUSTER REPLICATE` node-locally**, leaving no
      record, no fence and no spent id. A stage whose id cannot be proven fresh
      is not staged.
-     **The same refusal, with the same error, is what the
+     **Three refusals live at this gate, and revision 23 gives each its own reply
+     token** (V23-M1's minor half — revision 22 named an error *class* at all
+     three, "a durability error", and §3's reply-token totality rule requires a
+     token; the operator actions differ, so the tokens must):
+     - `-ERR CLUSTER REPLICATE refused: stage counter could not be durably
+       incremented` — the mint's own durability failure. Repair the disk fault,
+       re-issue the command.
+     - `-ERR CLUSTER REPLICATE refused: stage counter untrusted on this node` —
+       the `stage-counter-untrusted` state. Repair is an **exit sequence** (§0's
+       recovery row), not a disk repair; re-issuing the command changes nothing.
+     - `-ERR CLUSTER REPLICATE refused: data directory is not stamped for this
+       build` — the mint precondition below. Repair the data-directory fault and
+       **restart**: the raise is attempted once per boot, at step (iv-b).
+     **The second of those is what the
      `stage-counter-untrusted` state imposes** (V21-M1): while that state
      stands — the counter's store was lost with this node's `NodeInfo` cell
      intact — **every** `CLUSTER REPLICATE` is refused here, node-locally, and
@@ -1990,8 +2540,9 @@ when it is not):
      may be stale, and this design says so about boot reads in its own words) —
      so a mint that reaches this point is above every id this registration had
      admitted **as of this mint**. The gate also refuses if the boot's latched
-     data-directory schema stamp is below `N` and this boot has not raised it
-     (V22-C1's mint precondition), which is what makes "stamp below `N` ⟹ no id
+     data-directory schema stamp is **absent or below `N`** and this boot has not
+     raised it (V22-C1's mint precondition, totalized over the absent marker by
+     V23-M3), which is what makes "stamp absent or below `N` ⟹ no id
      was ever minted here" true rather than hoped for. All of these rules are
      stated in full at §0's counter bullet, with their
      recovery rows; the gate is where they take effect, and the gate is a
@@ -2929,25 +3480,138 @@ Applied to every fail-closed rule in this design:
 | Fail-closed rule | State | In-band surface | Operator command |
 |---|---|---|---|
 | **`stage-counter-untrusted`** (§0, added in revision 21; exits corrected in revision 22 — V22-M1 found two of the three did not clear the state) | **up and serving**; all slots held; dataset and Raft state intact; unfenced | all of it; `CLUSTER INFO` names the state | an exit that **mints a fresh `registration_seq` or removes this node from `nodes`** — nothing else clears the state. **Multi-member**: `CLUSTER FORGET <node>` at another member, then re-`MEET` (the re-`MEET` returns through the fresh `AddNode` arm and mints). **Single-member**: `FLUSHALL`, `CLUSTER RESET HARD`, **restart the node**, re-`MEET` — all four steps load-bearing, and the restart because HARD's re-key is in-memory only, so only the reboot's re-derived id finds no cell. **Not an exit**: a graceful `Failover { force: false }`, which by LOCKED FM-CLUSTER-101 demotes and *retains* the cell (settled ruling 2), leaving `registration_seq` unchanged. Written out at the rule, with the single-member exit's cost (a destroyed serving dataset) stated there |
-| **Mint refusal** (§0 gate 3 (a), counter cannot durably increment) | up and serving; no record, no fence, no id spent | all of it; the error names the durability fault | repair the node-local durable-state fault, re-issue `CLUSTER REPLICATE` |
+| **Mint refusal** (§0 gate 3 (a), counter cannot durably increment) | up and serving; no record, no fence, no id spent | all of it; the error names the durability fault, reply token `-ERR CLUSTER REPLICATE refused: stage counter could not be durably incremented` | repair the node-local durable-state fault, re-issue `CLUSTER REPLICATE` |
+| **Stamp-precondition refusal** (§0 gate 3 (a)'s *other* mint refusal — **new row in revision 23**, V23-M1; the rule existed in revision 22 and had no row) | up and serving; no record, no fence, no id spent; the latched stamp is absent or below `N` and this boot's raise did not become durable | all of it; reply token `-ERR CLUSTER REPLICATE refused: data directory is not stamped for this build` | repair the data-directory fault the error names, then **restart** — the raise is attempted once per boot at step (iv-b), so a restart is what retries it. **Single-member**: identical, and the surface is this node's own, because the node is up. *Reachability*: under store-then-stamp the raise completes at boot before any client write is admitted, so on a healthy upgrade boot this row is **unreachable**; it is written because revision 22's non-mechanism made it reachable on every boot of every existing cluster, forever, and nobody noticed for want of this row |
+| **`FutureLayout` boot refusal** (LOCKED FM-PERSISTENCE-050's downgrade rule, read by this design as a binding constraint — **new row in revision 23**, V23-M4; the rule is the shipped code's, and revision 23's stamp raise is what makes it reachable in practice) | **down**; recovery refuses at marker verification — the error is minted where the read compares versions (`persistence/src/data_dir.rs:265-271`) and becomes the boot refusal at `verify`'s unreadable-marker arm (`recovery/src/data_dir.rs:76-85`), **before** the install or any store open (`recovery/src/lib.rs:203-214`); **dataset, Raft state and identity store intact and untouched**; serves nothing | **none on this node**, and unlike the persistently-refused boot report there is **no other member's surface that helps** — the fault is this node's binary being older than its own data directory, which no cluster-side command repairs | **Roll forward**: restart on a build that ships this design (the recommended exit, and the only one with no cost). **Or `--force-fresh-data-dir`**, at two costs this row prices rather than mentions. *Cost 1*: the flag re-mints the marker with a **fresh `database_id`** (`data_dir.rs:67-75` swallows the `FutureLayout` error and falls through to the mint at `:166`), and LOCKED FM-PERSISTENCE-059 is the row that says a data directory's id is stable across restarts — the tension is **declared, not resolved**: the flag is an operator-asserted discard of the directory's identity, which is why it is a flag and not a fallback. *Cost 2*: the re-mint writes `layout_version: 1`, so the directory re-reads as **never-created** under §0's master rule and the node's stage counter starts from a store the boot rules treat as fresh. That is survivable **only** because the mint-time floor is `max(stage_counter, nodes[self].admitted_stage or 0) + 1` evaluated at the mint against applied state (V22-C2) — the replicated `admitted_stage` re-derives the counter above every id this registration has admitted, so a re-minted directory cannot re-issue an admitted id. It does **not** cover ids minted-then-refused, exactly as the record-binding row's scope sentence says. **One-way door, stated**: rolling *back* to a pre-design build is only possible through this flag, and the flag destroys the directory's identity to do it — so a cluster that has taken the raise has, in operational terms, no clean downgrade. That is the rollback story, and the answer to "what is the plan if the upgrade goes wrong" is **roll forward**, not roll back. Forcing test (a gap this design names rather than fills — no `FutureLayout`-under-force test exists today): `force_fresh_data_dir_re_mints_a_future_layout_marker` |
 | **Persistently-refused boot report** (§0 incarnation bullet — the one remaining rule that *does* refuse the boot) | **down**; dataset and Raft state intact and untouched; serves nothing | **none on this node** — and this is the row that has to say so. The reachable surface is **another member's** | `CLUSTER FORGET <node>` at any other member; the node then boots (its `self ∉ nodes`, so the clause clears any record and it comes up a non-member awaiting `MEET`). **Single-member: the state is unreachable**, so the row is vacuous rather than unissuable — persistent refusal requires *other* proposers moving applied state past this node's read between retries, and a one-member cluster is its own sole proposer, so its retry always succeeds. Stated because that is exactly the check revision 20's stage-counter rule failed |
-| **Gate 1 join-empty** (a node with keys refuses to join) | up and serving standalone; keyspace intact | all of it | already has its row at the gate: the TR-CLUSTER-005 sequence (`FLUSHALL`, then `CLUSTER RESET HARD`) or a different, empty node — both client commands to a node that **serves them** |
+| **Gate 1 join-empty** (a node with keys, or with non-empty Raft state, refuses to join) | up and serving standalone; keyspace and Raft state intact | all of it | already has its row at the gate — **and the row it points at was rewritten in revision 23** (V23-M2), because the sequence this cell used to name (`FLUSHALL`, then `CLUSTER RESET HARD`) does not clear Raft state and, at a live multi-member cluster, erases every survivor's topology. The gate's two sequences: **single-member, in-band** — `FLUSHALL`, `CLUSTER RESET HARD`, restart (which needs TR-CLUSTER-035's declared amendment to actually discard the store); **live multi-member, out-of-band** — `CLUSTER FORGET <node>` at a survivor, then at the departing node `FLUSHALL`, stop, remove `<data-dir>/raft`, restart. Either way, or a different, empty node. Every in-band step is a client command to a node that **serves it**; the out-of-band steps are on a **stopped** node, which is the honest form of "no in-band surface" for a wipe that no command can perform |
 | **Gate 2 reset refusal** (`CLUSTER RESET` with a non-empty keyspace) | up and serving; nothing changed | all of it | already has its row: `FLUSHALL` first, and the ordering is the point of the gate |
 | **Gate 3 (d)'s node-local refusals** (`upstream-validity`, `shard-relationship`, `fence`, `ordering`, `membership`) | up and serving (or converged to the role the refusal implies); un-fenced on every terminal arm | all of it | already covered: each arm's error names the lawful path, and §3's exit list is checked for reply tokens by the rule above |
 | **All-replicas-unsynced escape** (§5) | up; slots held; writes refused for the affected shard | all of it | already has its row: LOCKED TR-CLUSTER-020 `CLUSTER FAILOVER force: true`, cited at the escape |
 | **Plane-split self-fence** (§3 demotion-disposition row) | up; answering `-TRYAGAIN` for the affected slots | all of it | already has its row, with the stated caution that these are guidance for a bug state, not verified-lossless rules |
 | **`handoff_residue` escapes** (§7) | up and serving; the residue entry is replicated state, not a node state | all of it | already covered by the residue lifecycle rules: `RetargetSlotResidue`, the `AssignSlots` rollback arm, and `ClearSlotResidue` (`promoted == true` only) — each a replicated transition proposed at a serving node |
 
-**One** rule in the table is a **down**-state rule — the persistently-refused
-boot report — and it is reachable only in a **multi-member** cluster, which is
-also the only configuration in which its recovery surface (another member's)
-exists (V22-m2: revision 21 said "two ... and only one of them is reachable",
-counting the stage-counter rule it had just converted from a boot failure into a
-staging refusal; the count outlived the rule it counted). Every other
+**Two** rules in the table are **down**-state rules, and they fail the
+recovery-row rule's (2) in **different** ways — which is why revision 23 added
+the second rather than folding it into the first (V23-M4; and the count itself
+has now been wrong twice, so it is stated with its members rather than as a
+number: revision 21 said "two" while counting a rule it had already converted
+into a staging refusal, V22-m2 corrected it to "one", and revision 22 then
+shipped a design whose stamp raise makes a genuine second one reachable).
+**(1) The persistently-refused boot report** — reachable only in a
+**multi-member** cluster, which is also the only configuration in which its
+recovery surface (another member's) exists, so its (2) is answered by *somebody
+else's* in-band surface. **(2) The `FutureLayout` boot refusal** — reachable in
+**every** configuration including single-member, and its (2) is answered by
+**no in-band surface at all**, on this node or any other: the fault is a
+binary/directory version mismatch, and the only two exits are a different
+binary or a startup flag. That is the weakest (2) any rule in this design has,
+and it is admissible only because the rule is **not this design's** — it is
+LOCKED FM-PERSISTENCE-050's shipped downgrade refusal, which this design makes
+*reachable* by raising the stamp and therefore owes a row. Every other
 fail-closed rule in this design leaves the node **up and
 serving**, which is the shape ruling 5 should produce whenever the hazard is
 confined to one command. A future fail-closed rule that leaves a node down owes
-this table an explicit argument for why the hazard is *not* so confined.
+this table an explicit argument for why the hazard is *not* so confined — and,
+after this round, an explicit answer to "is there any in-band surface anywhere,
+or is the exit a restart with different bits?"
+
+#### Writer join for node-local durable state (V23-M1/M3, permanent)
+
+The fifth permanent discipline, and the one the last three rounds argue for
+loudly. Look at what those rounds actually found. **V21-M1**: a fail-closed rule
+whose recovery command could not be issued — a *missing reader* of the operator's
+reachable surface. **V22-C1**: "lost" decided on the store file's existence,
+which the loss path's own re-creating write defeats — a *missing writer* of the
+file the rule read. **V22-M2**: the incarnation re-mint writing the same file the
+counter rules read, unplaced in the boot order — a *writer with no position*.
+**V23-M1**: a mandated `layout_version` raise with **no writer at all**.
+**V23-M3**: a stamp read on configurations where **nothing ever writes it**, and
+therefore a partition with an undeclared cell. Five defects, one shape: the
+design enumerated writers, readers and cells meticulously for **replicated**
+state — three of the four disciplines above are that enumeration — and
+enumerated them by prose for **node-local durable** state, where the state
+machine is a filesystem and the transitions are `write`/`rename`/`fsync`/crash.
+The replicated writer join exists because prose enumeration failed once for
+`nodes`; it has now failed five times for the data directory.
+
+> **Node-local durable-state join (permanent).** Every node-local durable value
+> this design reads in a correctness decision owes a **writer-enumeration
+> table** stating, for the artifact that holds it: **(1) every writer** — what
+> it writes, and what it does to every *co-located* field in the same artifact
+> (the co-location rule: a writer that rewrites a whole file is a writer of
+> every field in it); **(2) the fsync point** of each write, in the
+> `write` → `sync_file` → `rename` → `sync_dir` shape or with the deviation
+> named; **(3) the crash window** each write opens and which cell of the boot
+> partition the crash residue lands in; **(4) the boot-ordering position** of
+> each writer, against the numbered steps of §0's boot-ordering rule; and
+> **(5) every reader**, with what it does when the value is absent. **A writer
+> that appears in no row is a defect; a value the design reads that has no row
+> at all is a worse one** — that is V23-M1, where a whole write was mandated
+> in prose and existed nowhere. **A value with readers and no writers, or
+> writers on only some configurations, is the V23-M3 defect** and the table is
+> where it becomes visible, because column (1) is empty for the configurations
+> that lack one.
+
+This design reads **two** node-local durable artifacts, and they get **two
+tables**, deliberately not one: they have different writer sets, different
+fsync points, and different positions in the boot order, and the raise (V23-M1)
+writes the **marker** while every counter rule writes the **store**. Collapsing
+them is how "the raise happens at the same time as the store write" reads as
+true without anybody asking which file gets written.
+
+**Table A — the node identity store** (`<data-dir>/frogdb_node_identity`; carries
+`incarnation`, `identity_seq`, `stage_counter`, `stage_counter_state`). Every
+write is a **whole-store atomic publish** — serialize the full struct, `write`
+to a temp sibling, `sync_file`, `rename`, `sync_dir` — and **there is no
+in-place field-update path**, which is the structural fact that makes column
+(3) short. That shape is also what makes the counter increment safe against the
+V22-C1 shape by construction (review D3): the increment cannot write a store
+that has lost `stage_counter_state`, because it does not write *fields*, it
+writes the store it read.
+
+| Writer (§0 rule) | Writes | Preserves `stage_counter_state`? | Fsync point | Crash window → partition cell | Boot-ordering position |
+|---|---|---|---|---|---|
+| **Boot initialization** (first boot on a fresh directory) | the whole store: fresh `incarnation`, `identity_seq = 1`, `stage_counter = 0`, `stage_counter_state = Trusted{0}` | **mints** it — the field is created here and never absent afterwards | before step (iv-b) reads the write as done | crash before publish → **store absent** (cell S-a); with the stamp not yet raised, S-a ∧ stamp-below-`N` = never-created, and the next boot re-initializes | step **(iv)** |
+| **Incarnation re-mint** (every boot; the rule V22-C1 left unplaced and V22 placed) | the whole store: new `incarnation`, `identity_seq + 1`, **carrying** `stage_counter` and `stage_counter_state` verbatim | **yes, by whole-store carry** — it copies the struct it latched at step (0) and replaces two fields | `sync_file` + `sync_dir` before step (iv-b) | crash before publish → the *previous* store is intact (cell S-d or S-e unchanged); the boot is simply repeated | step **(iv)** |
+| **Untrusted entry** (loss detected: readable store, no `stage_counter_state`, stamp at or above `N`) | the whole store: `stage_counter_state = Untrusted{since_registration}` | **writes** it — this is the field's transition into the untrusted value | same publish, before any staging is admitted | crash before publish → the store still reads as lost on the next boot, and the same rule fires again: **idempotent by re-derivation**, not by a flag | step **(iii)**, before the incarnation re-mint at (iv) |
+| **Untrusted clear** (an exit fires: fresh `registration_seq`, or `self ∉ nodes`) | the whole store: `stage_counter_state = Trusted{stage_counter}` | **writes** it — the field's transition out | published before the node admits the first staging of the new registration | crash before publish → the state still stands on the next boot, and the exit's own predicate (a `registration_seq` that differs from `untrusted_since_registration`) is **level-triggered against applied state**, so it re-fires | step **(iii)**, and level-triggered while running |
+| **Counter increment at the mint** (gate 3 (a); the value is `max(stage_counter, nodes[self].admitted_stage or 0) + 1`, V22-C2) | the whole store: the new `stage_counter`, inside `Trusted{…}` | **yes, structurally** — the mint refuses outright while the state is `Untrusted`, so the only state it can publish is `Trusted`, and it publishes the whole store | `sync_file` + `sync_dir` **before** the `CLUSTER REPLICATE` is answered and before any record is staged | crash before publish → the id was never durably spent **and never used**; the client gets no `+OK`, so no record exists that names it. Crash after publish, before the record → a **skipped** id, which is harmless: the space is spent-once, not dense | **not at boot** — this is a serving-path writer, and it is the only one in this table |
+| **The `layout_version` raise** | **nothing in this store** | n/a | n/a | n/a | it writes Table B's artifact; named here only so the reader cannot conclude it is a store writer (V23-M1's exact confusion) |
+
+**Readers of the store**: step (0)'s latch (reads once, holds for the boot);
+step (iii)'s counter rules (consume the latch); step (iv)'s re-mint (consumes
+the latch, writes); the mint at gate 3 (a) (reads the live store, not the
+latch — it runs on the serving path); and the untrusted-clear predicate. **What
+each does when the value is absent** is exactly §0's master rule, which is why
+the rule is stated over the *pair* (store shape, stamp) rather than over the
+store alone.
+
+**Table B — the data-directory marker** (`<data-dir>/frogdb_data_dir`; this
+design reads exactly one field of it, `layout_version` — **not**
+`database_id`, which FM-PERSISTENCE-049 pre-empts as "not a consumer of this
+id" and this design is indeed not).
+
+| Writer | Writes | Fsync point | Crash window → partition cell | Boot-ordering position |
+|---|---|---|---|---|
+| **First mint** on a fresh directory (`DataDirMarker::mint()`, reached only when `verify` found no marker — `recovery/src/data_dir.rs:166`) | the whole marker with `layout_version = DATA_DIR_LAYOUT_VERSION` | `stamp_with`'s publish sequence (`persistence/src/data_dir.rs:299-304`), before the install and before any store is opened (`recovery/src/lib.rs:203-214`) | crash before publish → **marker absent**, and the directory is genuinely fresh; the next boot mints again | recovery **phase 0**, before cluster boot's step (0) latches it |
+| **Boot re-publish** (`stamp` is unconditional, not write-if-absent — `recovery/src/data_dir.rs:188-196`) | the marker `verify` returned, **verbatim**, including whatever `layout_version` it read | same publish sequence | crash before publish → the previous marker is intact and identical; the write is a no-op in value | recovery **phase 0** |
+| **The raise** (**new writer, this design** — V23-M1) | the latched marker with `layout_version` set to `N`, and no other field touched | the same `write` → `sync_file` → `rename` → `sync_dir` publish, **after** the identity store's step-(iv) write is fsynced (store-then-stamp) | crash before publish → **stamp below `N` ∧ store present** (cell S-d/S-e ∧ below-`N`), which the partition declares benign: the master rule lets the store's `stage_counter_state` decide, and the next boot re-attempts the raise | cluster boot, step **(iv-b)** — the one ordering constraint revision 23 adds |
+| **`--force-fresh-data-dir` re-mint** (operator flag; swallows an unreadable or future-layout marker at `:67-75` and falls through to the mint at `:166`) | a **fresh** marker: new `database_id`, `layout_version = DATA_DIR_LAYOUT_VERSION` | phase 0's publish | no new window; the flag's cost is the *values* it writes, priced at the `FutureLayout` recovery row above | recovery **phase 0** |
+
+**Readers of the marker**: recovery's own version comparison
+(`persistence/src/data_dir.rs:265-271`, which refuses a future layout — LOCKED
+FM-PERSISTENCE-050), and **boot step (0)'s latch**, which is *new plumbing this
+design owes* rather than a free read: today `recover` binds the marker locally
+inside phase 0 and drops it — `RecoveredState` carries no marker — so making
+`layout_version` a cluster-correctness operand adds a reader as surely as the
+raise adds a writer. Both are named in the blast radius.
+
+**One thing this discipline does not do**, stated so it is not over-claimed: it
+enumerates writers and windows; it does not prove the filesystem honours the
+publish sequence. That is FM-PERSISTENCE-023's territory, and its
+non-unix `sync_dir` degradation is carried as a stated caveat at every place
+the atomicity is load-bearing (V23-m2), not silently assumed here.
 
 ### Transitions
 
@@ -5155,13 +5819,25 @@ Every touched row gets an explicit verdict in the spec change; summary:
   accepts the handshake — first join and re-join after `FORGET` alike — only while
   its local Raft state is empty *and* its main keyspace is empty; both checks are
   node-local and fail-closed, the refusal is handshake-side (deletes nothing) and
-  names *which* gate fired; the wipe path is `CLUSTER RESET HARD`
-  (TR-CLUSTER-035's HARD path clears the Raft state, and its own non-empty-keyspace
-  refusal — gate 2 — forces `FLUSHALL` first when data remains; `FLUSHALL` alone
-  never satisfies the Raft-state half); forcing tests:
+  names *which* gate fired; **the wipe path was rewritten in revision 23**
+  (V23-M2 — revisions 9 through 22 said here that "TR-CLUSTER-035's HARD path
+  clears the Raft state", which is **false**: that row's Postcondition is
+  in-memory `ClusterStateInner` only, its source arm touches no filesystem, and
+  nothing in the tree removes `<data-dir>/raft`; the claim is **deleted**). The
+  wipe path is now **two paths**, stated at gate 1: *single-member, in-band* —
+  `FLUSHALL`, `CLUSTER RESET HARD`, restart, which requires the TR-CLUSTER-035
+  **amendment declared below**; *live multi-member, out-of-band* —
+  `CLUSTER FORGET` at a survivor, then `FLUSHALL`, stop the node, remove
+  `<data-dir>/raft`, restart. Gate 2's non-empty-keyspace refusal still forces
+  `FLUSHALL` first when data remains, and `FLUSHALL` alone still never satisfies
+  the Raft-state half. **A named, undischarged dependency rides this row**: an
+  empty Raft store solo-bootstraps today (`cluster_init.rs:383-391`, `:442-460`),
+  which re-populates what the wipe removed — issue 25's subject, and the reason
+  this row's precondition is `Source: "Not yet in code"`. Forcing tests:
   `join_refused_while_keyspace_nonempty`, `join_refused_while_raft_state_nonempty`,
   `join_refusal_names_the_failing_gate`,
-  `reset_hard_then_rejoin_succeeds_flushall_alone_does_not`);
+  `reset_hard_then_rejoin_succeeds_flushall_alone_does_not`,
+  `a_wiped_node_awaits_meet_instead_of_solo_bootstrapping`);
   TR-CLUSTER-042 (`Failover{force:true}` — **rewritten**, V8-M5: the row owns
   outright-removal semantics, so the residue map's `source_gone`/`target_gone`
   marking rides it explicitly — prune marks, never removes — and issue 20's
@@ -5553,18 +6229,39 @@ Every touched row gets an explicit verdict in the spec change; summary:
   `membership_refusal_and_removal_of_self_answer_the_client_once` — all
   node-local-durability or node-local-disposition tests in the crate that owns
   the record, per the in-crate forcing-test rule.
-- **Added in revision 22** (V22-C1/C2/M1/M2/m1/m2/m3): **no LOCKED row changes,
-  and this round's additions are node-local durable state plus one schema
-  constant — nothing replicated, no transition, no payload field, no apply-time
-  conjunct.** **(1) The `stage_counter_state` field** (V22-C1) lives in the
+- **Added in revision 22** (V22-C1/C2/M1/M2/m1/m2/m3): revision 22 claimed **no
+  LOCKED row changes**, on the grounds that its additions were node-local
+  durable state plus one schema constant — nothing replicated, no transition, no
+  payload field, no apply-time conjunct. **The verdict is withdrawn in revision
+  23** (V23-M1/M3, and it is left standing here with its correction rather than
+  rewritten, because "this round moves no LOCKED row" is a claim the next round
+  has to be able to check): the schema constant's raise needs a **writer that
+  does not exist**, and adding it amends LOCKED FM-PERSISTENCE-049 twice — once
+  in `verify`'s outcome set, once in the marker phase's scope. Both amendments
+  are declared in the revision-23 entry below. The rest of the round's
+  additions were, and remain, LOCKED-neutral: **(1) The `stage_counter_state` field** (V22-C1) lives in the
   node-local identity store this design introduces, alongside the incarnation,
   and is written by the same atomic write. That store is **not** a LOCKED cell
   and is not `replication_state.json`. **(2) The data-directory schema stamp**
   (V22-C1/V22-M2) raises `DATA_DIR_LAYOUT_VERSION` from 1 to 2
-  (`frogdb-server/crates/persistence/src/data_dir.rs:154-161`) and adds **no
-  writer and no reader**: recovery phase 0 already reads the marker before
-  anything writes (`frogdb-server/crates/recovery/src/data_dir.rs:61-96`), and
-  already stamps it before the install (`:188-196`). The LOCKED persistence rows
+  (`frogdb-server/crates/persistence/src/data_dir.rs:154-161`) and — revision 22
+  claimed — adds **no writer and no reader**: recovery phase 0 already reads the
+  marker before anything writes
+  (`frogdb-server/crates/recovery/src/data_dir.rs:61-173`), and already stamps it
+  before the install (`:188-196`). **That claim is false in both halves, and
+  revision 23 corrects it** (V23-m1, and it is the sentence that let V23-M1 and
+  V23-M3 through): the raise adds **one writer** — a second marker publish that
+  no existing call site performs, because `verify` returns an existing marker
+  verbatim (`:88-95`) and `stamp` re-publishes the value it was handed — and
+  **one reader**, because boot step (0) latches `layout_version` as a
+  *cluster-correctness* operand while today's `recover` binds the marker inside
+  phase 0 and drops it (`RecoveredState` carries no marker), so the plumbing that
+  carries the value out of recovery is new. What the design consumes is
+  **`layout_version`, not `database_id`** — FM-PERSISTENCE-049 pre-empts the
+  latter with its "not a consumer of this id" note, and this design is indeed not
+  a consumer of it. Both the writer and the reader are enumerated in **Table B**
+  of the node-local durable-state join, and the writer's spec-first amendment is
+  declared in the revision-23 entry below. The LOCKED persistence rows
   this reads and does not move: **TR-PERSISTENCE-051**, which is stated
   parametrically in `DATA_DIR_LAYOUT_VERSION` and pins no value — a raise is
   exactly what that row is written to absorb; **FM-PERSISTENCE-050**, which
@@ -5589,15 +6286,97 @@ Every touched row gets an explicit verdict in the spec change; summary:
   carry the generation). The row's text, status and forcing tests are untouched;
   what changes is this document. **(6) The reader-list consolidation** (V22-m1),
   **the down-state count** (V22-m2) and the citation sweep are documentation of
-  existing obligations. Blast-radius verdict for the round: **no row Amended, no
-  row New, no row Retired.** Forcing tests: the two named in the revision-21
-  entry are **amended, not added to** —
+  existing obligations. Blast-radius verdict for the round, **as revision 22
+  recorded it and as revision 23 corrects it**: revision 22 wrote "no row
+  Amended, no row New, no row Retired"; the true verdict for its own additions
+  is **FM-PERSISTENCE-049 Amended, twice** — the amendments are only *declared*
+  in revision 23 because that is the round that found the missing writer, not
+  because the obligation arrived late. Forcing tests: the two named in the
+  revision-21 entry are **amended, not added to** —
   `stage_counter_loss_enters_untrusted_state_not_boot_failure` (new
   discriminator; control (ii) becomes a **pre-design stamp**; control (iii)
   asserts the restart; plus the restart-re-entry assertion the new partition
   makes reachable) and
   `rewound_stage_counter_is_floored_by_the_replicated_admitted_stage` (floored
   at the mint, with the negative control re-based on a boot-time read).
+- **Added in revision 23** (V23-M1/M2/M3/M4/m1/m2/m3/m4): **this is the first
+  round of this cycle whose blast-radius verdict is not "nothing moves".** Three
+  LOCKED-row amendments are **declared** here as spec-first obligations — this
+  document cannot edit a LOCKED spec, so each is listed with the row, the
+  amendment, and the forcing test, in the order the implementation plan must
+  sequence them (spec row → failing test → code).
+  **(1) FM-PERSISTENCE-049 — Amended, first amendment: `verify`'s outcome set**
+  (V23-M1). The row's Invariant enumerates the marker `verify` settles on as
+  "(an existing one, or a freshly minted one)" (`specs/persistence.md:1182`);
+  the raise adds a third outcome, **an existing one with its `layout_version`
+  raised**, published by a *second* marker write that no call site performs
+  today. The amendment names the new writer, its position (cluster boot step
+  (iv-b), **after** the identity store's write is fsynced — store-then-stamp),
+  and the crash residue it admits (stamp below `N` with the store present, a
+  cell the partition already declares benign). Forcing test:
+  `an_upgraded_directory_is_stamped_only_after_its_identity_store_is_durable`.
+  **(2) FM-PERSISTENCE-049 — Amended, second amendment: the scope of the
+  marker phase** (V23-M3). `verify`/`stamp` run only inside the `rocks_backed`
+  gate (`recovery/src/lib.rs:188-190`:
+  `let rocks_backed = inputs.persistence.enabled && !inputs.persistence.mode.eq_ignore_ascii_case("fake")`),
+  so a persistence-disabled or `fake`-WAL node has no marker at all — including
+  every sim/turmoil node this design's own forcing tests run on. The marker is a
+  **data-directory** artifact, not a RocksDB one (the Raft store at
+  `<data-dir>/raft` is opened independently, `recovery/src/cluster.rs:23-25`), so
+  the amendment moves verify/stamp **out of** the gate and makes the marker
+  unconditional. Forcing test: `a_persistence_disabled_node_stamps_its_data_directory`.
+  **(3) TR-CLUSTER-035 — Amended: the HARD path gains a Raft-store discard
+  obligation** (V23-M2). The row's Postcondition (`specs/cluster.md:498`) is
+  in-memory `ClusterStateInner` only and its source arm
+  (`cluster/src/commands.rs:816-863`) touches no filesystem, so the wipe every
+  rejoin sequence in this document assumed **does not exist**. The reset is
+  itself a committed Raft entry, so the wipe cannot precede the commit; the
+  amendment is **mark-then-wipe-on-restart** — the node the payload names
+  durably marks `<data-dir>/frogdb_raft_discard` before the `+OK`, and the next
+  boot removes `<data-dir>/raft` and then the mark, before
+  `recovery/src/cluster.rs:23-25` opens the store. Crash windows and the declared
+  level-trigger exception are at gate 1. Forcing tests:
+  `reset_hard_marks_the_raft_store_for_discard_before_it_replies`,
+  `the_next_boot_wipes_a_marked_raft_store_before_opening_it`,
+  `a_crash_before_the_discard_mark_leaves_the_reset_re_issuable`,
+  `a_single_member_reset_hard_then_restart_comes_up_with_empty_raft_state`.
+  **Note on where cluster forcing tests are recorded**: `specs/cluster.md`'s rows
+  carry `Rulings`/`Pending` cells but **no `Forced by` column**, unlike
+  `specs/persistence.md`, so a cluster amendment's forcing tests are named here
+  and at the mechanism rather than in the row itself; `just lint-spec`'s
+  spec↔test agreement runs on the `FM-`/`TR-` tags, and the implementation plan
+  must carry the tags into the tests.
+  **Read as binding constraints, not moved**: **FM-PERSISTENCE-050** (the
+  version comparison and the `FutureLayout` refusal — untouched, and revision 23
+  gives its downgrade refusal the recovery row it never had, V23-M4);
+  **FM-PERSISTENCE-059** (mint-once: the raise re-stamps `database_id` rather
+  than re-minting it, so the raise preserves the row — and
+  `--force-fresh-data-dir` **does** re-mint, which is the tension the
+  `FutureLayout` recovery row prices rather than hides);
+  **FM-PERSISTENCE-023** (the atomic-publish precedent, whose `sync_dir`
+  degrades to a no-op off unix, `persistence/src/fs_seam.rs:89-92` — carried as a
+  stated caveat wherever atomicity is load-bearing, V23-m2);
+  **FM-PERSISTENCE-057** (the data-directory layout rule under which both
+  `<data-dir>/frogdb_node_identity` and `<data-dir>/frogdb_raft_discard` are
+  siblings); **TR-PERSISTENCE-051** (stated parametrically in
+  `DATA_DIR_LAYOUT_VERSION`, so it absorbs the raise by construction);
+  **TR-CLUSTER-005** (already *Rewritten* above; its wipe-path clause is
+  **corrected** this round rather than moved, and it acquires a named,
+  undischarged dependency on issue 25's solo-bootstrap behaviour);
+  **FM-CLUSTER-101** (demote-don't-remove, read at the untrusted exits, unmoved).
+  **Not a LOCKED-row change**: the fifth permanent discipline (**writer join for
+  node-local durable state**, V23-M1/M3), the three distinct reply tokens
+  (V23-m2's neighbour finding), the `DataDirMarker` attribution sweep to
+  `frogdb-persistence` (V23-m4), and the `layout_version` Quint structural limit
+  (V23-m3) — all documentation of obligations this design already carried.
+  **Blast-radius verdict for the round: two rows Amended (FM-PERSISTENCE-049,
+  twice, and TR-CLUSTER-035), no row New, no row Retired** — and the
+  revision-22 entry's "no LOCKED row changes" verdict stands corrected above.
+  Forcing tests added this round, beyond the amendments':
+  `force_fresh_data_dir_re_mints_a_future_layout_marker` (V23-M4, a gap this
+  design names and does not fill — no `FutureLayout`-under-force test exists) and
+  `a_wiped_node_awaits_meet_instead_of_solo_bootstrapping` (V23-M2's named
+  dependency).
 - **Retired**: FM-CLUSTER-085 (handoff lease — its property, "a dead finalizer cannot
   wedge a slot", is re-provided by the observation bound *plus the leader
   auto-`Complete`* (V4-M2), which together exit every Draining state; replacement row
@@ -6704,6 +7483,22 @@ Every touched row gets an explicit verdict in the spec change; summary:
     **mint** refusal the `stage-counter-untrusted` state imposes (V21-M1, no
     longer a boot failure), checked by the forcing test
     `stage_counter_loss_enters_untrusted_state_not_boot_failure`, not by Quint.
+    **The `layout_version` stamp is a structural limit of the same kind, declared
+    here alongside the counter rather than left implicit** (V23-m3): the model has
+    no data directory, no marker file and no notion of a binary version, so it
+    cannot represent the discriminator the counter rules read, cannot represent
+    the **raise** that this design adds at boot step (iv-b), and cannot represent
+    the crash that lands between the store write and the raise. Everything about
+    the stamp is therefore **closed by forcing tests, not by Quint** — by
+    `an_upgraded_directory_is_stamped_only_after_its_identity_store_is_durable`,
+    by `a_persistence_disabled_node_stamps_its_data_directory`, by the
+    untrusted-state test's **control (ii)** (a pre-design stamp: a directory
+    stamped below `N` with a store present must **not** enter the untrusted
+    state), and by the **downgrade sub-control**
+    (`force_fresh_data_dir_re_mints_a_future_layout_marker`: an older binary
+    refuses a raised directory, and the flag's re-mint reverts the stamp to `1`
+    with a fresh `database_id`). A green model says nothing about any of them,
+    and this sentence is the declaration that it does not.
 - **Stated structural limits** (recorded in the rework section, not silent): the model
   has one global applied view, so the "node acts on state it has not applied / cannot
   observe" defect class (v2-C2/C8, v3 N-C4, N-M1's cause) is discharged by spec review
@@ -7027,6 +7822,41 @@ Every touched row gets an explicit verdict in the spec change; summary:
 
 - Spec-first: every rewritten/new row lands with its forcing test or an explicit
   temporary hole.
+- **Spec-first sequencing for revision 23's three declared LOCKED-row
+  amendments** (V23-M1/M2/M3 — this is the first round of the cycle that has
+  any, and the blast radius declares them; this bullet is the order the
+  implementation must take them in, since a LOCKED row moves **spec row →
+  failing test → code**, never code first):
+  1. **FM-PERSISTENCE-049, scope** — amend the row so the marker phase is a
+     data-directory operation rather than a RocksDB-gated one; add
+     `a_persistence_disabled_node_stamps_its_data_directory` to its `Forced by`
+     cell as a **failing** test; then move `verify`/`stamp` out of
+     `recovery/src/lib.rs`'s `rocks_backed` gate. **First**, because every
+     other item in this list is untestable on the sim/`fake`-WAL nodes until it
+     lands.
+  2. **FM-PERSISTENCE-049, outcome set** — amend the Invariant's "(an existing
+     one, or a freshly minted one)" to admit the raised third outcome; add
+     `an_upgraded_directory_is_stamped_only_after_its_identity_store_is_durable`
+     as a failing test; then implement boot step (iv-b). **Second**, because the
+     raise's forcing test asserts an ordering against the identity store's
+     write, which is this design's code and not the shipped tree's.
+  3. **TR-CLUSTER-035, HARD-path Raft discard** — amend the Postcondition with
+     the discard-mark obligation; add the four forcing tests
+     (`reset_hard_marks_the_raft_store_for_discard_before_it_replies`,
+     `the_next_boot_wipes_a_marked_raft_store_before_opening_it`,
+     `a_crash_before_the_discard_mark_leaves_the_reset_re_issuable`,
+     `a_single_member_reset_hard_then_restart_comes_up_with_empty_raft_state`)
+     as failing tests; then implement the mark and the boot-time wipe.
+     **Third and separable** — it is a cluster-crate change with no dependency
+     on the two above, and it is the one whose *sequencing risk* is external:
+     the exit it completes is only end-to-end useful once issue 25's
+     solo-bootstrap behaviour changes (`a_wiped_node_awaits_meet_instead_of_solo_bootstrapping`),
+     which this design does not own.
+  **Test placement, per the in-crate forcing-test rule**: items 1 and 2 are
+  `frogdb-persistence`/`frogdb-recovery` tests (that is where the mutation
+  score for the amended rows is computed); item 3's four are `frogdb-cluster`
+  tests. A forcing test written only at the `frogdb-server` integration level
+  contributes nothing to the owning crate's gate.
 - Quint: the eighteen extensions above, mutation-validated against their named findings
   (revert the design fix in the model → the named property must fail).
 - Turmoil/Jepsen: quiet-source cutover (coverage obligation + leader auto-`Complete`
@@ -7713,12 +8543,49 @@ Every touched row gets an explicit verdict in the spec change; summary:
   "lost" fails every one of them. **The stamp is what carries this control**:
   the store's absence is identical in this fixture and in the loss fixture
   above, and the two are distinguished by nothing else.
+  **Amended in revision 23, because until now this control asserted an outcome
+  no code path could produce** (V23-M1): "raises the stamp to `N`" had **no
+  writer** — `verify` returns an existing marker verbatim
+  (`recovery/src/data_dir.rs:88-95`) and `stamp` re-publishes what it was
+  handed, so the raise happened nowhere and every upgraded cluster's mints were
+  wedged forever. The control now asserts the **mechanism**: the raise is a
+  second marker publish at cluster boot step **(iv-b)**, and it happens **only
+  after** the identity store's step-(iv) write is fsynced. Two orderings are
+  asserted, not one. **Ordering assertion**: crash the node between the store
+  write and the raise, and the next boot must find (store present, stamp below
+  `N`) — a cell the partition declares benign — and must come up **trusted**,
+  staging normally, never untrusted. **Negative control**: with the raise moved
+  to recovery phase 0 (horn (ii), the ordering revision 22's two consecutive
+  sentences also admitted), the same crash lands on (stamp at or above `N`,
+  store absent) = **lost**, and the upgrading node enters the untrusted state
+  spuriously — the control must fail. Test name:
+  `an_upgraded_directory_is_stamped_only_after_its_identity_store_is_durable`.
+  **Second sub-control, the absent marker** (V23-M3): the same upgrade fixture
+  with `persistence.enabled = false`, and again with `persistence.mode = "fake"`
+  — the configurations on which `verify`/`stamp` do not run today
+  (`recovery/src/lib.rs:188-190`) and on which this design's own sim-level
+  forcing tests execute. Asserted: the node **has** a stamped data directory, the
+  raise happens, the mint precondition is satisfied and the node stages normally.
+  Negative control: with the marker phase left inside the `rocks_backed` gate,
+  the node has no marker, gate 3 (a)'s stamp precondition refuses every staging
+  forever, and every sim-level forcing test in this design's own plan wedges.
+  Test name: `a_persistence_disabled_node_stamps_its_data_directory`.
   **Sub-control, the downgrade wrinkle** (V22-M2): a directory stamped at `N` by
   an earlier run of this design, whose store is then lost while the node runs a
   binary from before it, reads on the next post-design boot as **stamped and
   storeless** → **lost** → untrusted. Asserted as the correct outcome, not a
   false positive: the counter genuinely is unaccounted for, and fail-closed is
-  the ruling (settled ruling 5);
+  the ruling (settled ruling 5).
+  **Extended in revision 23 to assert what the downgrade actually costs**
+  (V23-M4): the older binary does not merely ignore the raised stamp — it
+  **refuses to boot** on it (LOCKED FM-PERSISTENCE-050's `FutureLayout`,
+  `persistence/src/data_dir.rs:265-271`), so the fixture above is reached only
+  by an operator who used `--force-fresh-data-dir` to get the old binary up. The
+  sub-control therefore asserts the flag's two costs directly: the marker is
+  re-minted with a **different `database_id`** (the re-mint FM-PERSISTENCE-059
+  otherwise forbids) and `layout_version` back at `1`. Test name:
+  `force_fresh_data_dir_re_mints_a_future_layout_marker` — a test that **does not
+  exist today**, which is why this cost went four revisions unpriced;
   (iii) **the single-member-cluster control** (V21-M1, the case in which
   revision 20's prescribed recovery was unissuable; **exits corrected in
   revision 22** — V22-M1): the same loss in a
@@ -7733,7 +8600,39 @@ Every touched row gets an explicit verdict in the spec change; summary:
   survive, and a re-`MEET` of the random id is an upsert that mints nothing),
   and only clears once the node has rebooted under its re-derived id and
   re-`MEET`ed. Revision 21's sequence, which omitted both `HARD` and the
-  restart, is the negative control and leaves the node in the state forever;
+  restart, is the negative control and leaves the node in the state forever.
+  **Rewritten in revision 23, because the sequence above did not terminate**
+  (V23-M2): the re-`MEET` at the end of it is refused by this design's **own**
+  join-empty gate, whose Raft-state half `CLUSTER RESET HARD` does not satisfy —
+  nothing in the tree removes `<data-dir>/raft`, so the node arrives at the
+  re-`MEET` with the old cluster's vote and log intact and the exit dead-ends.
+  The control now asserts the exit **to a successful re-`MEET`**, under the
+  TR-CLUSTER-035 amendment declared in the blast radius: `FLUSHALL`;
+  `CLUSTER RESET HARD`, which must durably write `<data-dir>/frogdb_raft_discard`
+  **before** its `+OK` (asserted directly —
+  `reset_hard_marks_the_raft_store_for_discard_before_it_replies`); a restart,
+  whose recovery must remove `<data-dir>/raft` and then the mark **before**
+  opening the store (`the_next_boot_wipes_a_marked_raft_store_before_opening_it`,
+  and `a_single_member_reset_hard_then_restart_comes_up_with_empty_raft_state`);
+  then a re-`MEET` that is **admitted**, minting a fresh `registration_seq`,
+  which clears the untrusted state and lets the next `CLUSTER REPLICATE` stage.
+  Two further assertions the rewrite adds. **Crash control**: crash before the
+  discard mark is durable, and the node must come up with the reset applied, its
+  Raft state intact, the join **refused naming the Raft-state half**, and the
+  same `CLUSTER RESET HARD` **re-issuable** and succeeding
+  (`a_crash_before_the_discard_mark_leaves_the_reset_re_issuable`).
+  **Multi-member negative control, which is a safety assertion rather than an
+  edge**: issuing `CLUSTER RESET HARD` at one member of a **live** cluster must
+  be shown to empty **every** survivor's `nodes` map — the reset is Raft-proposed
+  with a node-agnostic apply (`commands.rs:833-859`) and performs no membership
+  change (`network.rs:726-732`) — which is why the multi-member exit is
+  `CLUSTER FORGET` elsewhere plus an out-of-band `<data-dir>/raft` removal at the
+  stopped node, and why revisions 8 through 22 prescribed a genuinely dangerous
+  sequence. **One dependency this control cannot discharge and names instead**:
+  an empty Raft store solo-bootstraps today (`cluster_init.rs:383-391`,
+  `:442-460`), re-populating the vote and log the wipe removed — wanted for the
+  single-member exit, fatal for the multi-member rejoin. Forcing test
+  `a_wiped_node_awaits_meet_instead_of_solo_bootstrapping`, owned by issue 25;
   (iv) a counter present and readable but **un-fsyncable at the mint** makes
   gate 3 (a) refuse the `CLUSTER REPLICATE` node-locally with the same
   durability error, leaving **no record, no fence and no spent id**, while the
