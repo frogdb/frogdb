@@ -215,6 +215,10 @@ impl TxnHost for ConnectionHandler {
             // queue-time checks are as old as the MULTI window
             // (`specs/txn.md` FM-TXN-051).
             admission: self.write_admission(),
+            // Carry the routing generation the batch was validated against so
+            // the shard can refuse the apply atomically if it moved on
+            // (`specs/txn.md` TR-TXN-020).
+            routing_fence: self.pending_slot_fence,
             response_tx,
         };
 
@@ -229,6 +233,19 @@ impl TxnHost for ConnectionHandler {
         match response_rx.await {
             Ok(result) => ShardTxnReply::Replied(result),
             Err(_) => ShardTxnReply::Dropped,
+        }
+    }
+
+    fn routing_unsettled_reply(&self) -> Response {
+        // The batch is runnable, just not against a topology that will hold
+        // still: tell the client to retry rather than misreport it as an error.
+        // `-TRYAGAIN` is exactly the reply the reply seam gives for the same
+        // condition (`slot_migration::fence_verdict`), so a client sees one
+        // answer for "a handoff is in flight on your slot" whichever seam
+        // caught it.
+        match self.pending_slot_fence {
+            Some(fence) => frogdb_core::redirect::tryagain_slot_handoff(fence.slot),
+            None => frogdb_core::redirect::tryagain(),
         }
     }
 

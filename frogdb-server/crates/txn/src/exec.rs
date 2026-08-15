@@ -45,6 +45,15 @@ pub enum TransactionOutcome {
     Committed,
 }
 
+/// How many times EXEC re-validates and re-sends a batch the shard refused
+/// because the routing generation moved under it.
+///
+/// Bounded, not unbounded: a slot that keeps changing hands must eventually
+/// answer the client rather than spin. Three is enough to absorb a single
+/// handoff racing a single EXEC (the case the carry exists for) while still
+/// terminating under a migration storm.
+const ROUTING_ATTEMPTS: usize = 3;
+
 /// A queued command deferred until after the shard transaction completes,
 /// remembered with the command name the deferred dispatch needs.
 enum DeferredKind {
@@ -312,7 +321,9 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     // the target's commands committed behind it.
     let (target_watches, off_target_watches) = partition_watches(watches, target_shard);
     for (shard, entries) in off_target_watches {
-        if let Err((outcome, reply)) = run_shard_transaction(host, shard, vec![], entries).await {
+        if let Err((outcome, reply)) =
+            run_shard_transaction(host, shard, vec![], entries, &queue, asking).await
+        {
             return (outcome, vec![reply]);
         }
     }
@@ -323,13 +334,23 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         // (with an empty command list) to be checked and cleared.
         if !target_watches.is_empty()
             && let Err((outcome, reply)) =
-                run_shard_transaction(host, target_shard, vec![], target_watches).await
+                run_shard_transaction(host, target_shard, vec![], target_watches, &queue, asking)
+                    .await
         {
             return (outcome, vec![reply]);
         }
         vec![]
     } else {
-        match run_shard_transaction(host, target_shard, shard_commands, target_watches).await {
+        match run_shard_transaction(
+            host,
+            target_shard,
+            shard_commands,
+            target_watches,
+            &queue,
+            asking,
+        )
+        .await
+        {
             Ok(results) => results,
             Err((outcome, reply)) => return (outcome, vec![reply]),
         }
@@ -411,38 +432,104 @@ fn partition_watches(
     (target, off_target)
 }
 
-/// One shard round-trip for EXEC: hand the batch to the host and map every
-/// reply arm onto an `(outcome, reply)` pair.
+/// What one shard round-trip settled, before the retry policy is applied.
+enum ShardStep {
+    /// The shard ran the batch.
+    Results(Vec<Response>),
+    /// The shard refused *before running anything*: the routing generation the
+    /// batch was validated against is no longer the live one.
+    TopologyChanged,
+    /// The round-trip is over, one way or another.
+    Finished(TransactionOutcome, Response),
+}
+
+/// One shard round-trip for EXEC, retried while the routing generation keeps
+/// moving under it, and mapped onto an `(outcome, reply)` pair.
 ///
-/// Both EXEC branches — the watch-only check (empty command list) and the
-/// real execution — call this, so the mapping exists once.
+/// Both EXEC branches — the watch-only check (empty command list) and the real
+/// execution — call this, so the mapping exists once.
+///
+/// The retry is what makes the carried routing generation (`specs/txn.md`
+/// TR-TXN-020) usable rather than merely safe. The shard refuses an apply whose
+/// generation went stale, which closes the probe/apply window; without a retry
+/// here every such refusal would surface as a spurious error to a client whose
+/// batch is perfectly runnable one snapshot later. So: re-validate against the
+/// fresh topology (which re-stamps the generation on the host), and re-send. A
+/// re-validation that answers with a redirect is the real answer — the slot has
+/// genuinely moved on — and ends the transaction.
+///
+/// `queue` and `asking` are the re-validation arguments; they are the whole
+/// batch, not `commands`, because the queue's verdict is a whole-batch fact and
+/// the deferred commands are part of it.
 async fn run_shard_transaction<H: TxnHost + ?Sized>(
+    host: &mut H,
+    target_shard: usize,
+    mut commands: Vec<ParsedCommand>,
+    mut watches: Vec<WatchEntry>,
+    queue: &[ParsedCommand],
+    asking: bool,
+) -> Result<Vec<Response>, (TransactionOutcome, Response)> {
+    for attempt in 1..=ROUTING_ATTEMPTS {
+        // Sending consumes the batch, so keep a copy back while another attempt
+        // is still allowed. The payload is `Bytes`, so the copy is a refcount
+        // bump per argument.
+        let held = (attempt < ROUTING_ATTEMPTS).then(|| (commands.clone(), watches.clone()));
+
+        match shard_step(host, target_shard, commands, watches).await {
+            ShardStep::Results(results) => return Ok(results),
+            ShardStep::Finished(outcome, reply) => return Err((outcome, reply)),
+            ShardStep::TopologyChanged => {
+                let Some((held_commands, held_watches)) = held else {
+                    break;
+                };
+                debug!(
+                    conn_id = host.conn_id(),
+                    attempt, "Shard refused the apply: routing generation moved; re-validating"
+                );
+                if let Some(redirect) = host.validate_queued_batch(queue, asking).await {
+                    return Err((TransactionOutcome::Redirected, redirect));
+                }
+                commands = held_commands;
+                watches = held_watches;
+            }
+        }
+    }
+
+    Err((
+        TransactionOutcome::Redirected,
+        host.routing_unsettled_reply(),
+    ))
+}
+
+/// Hand the batch to the host once and classify what came back.
+async fn shard_step<H: TxnHost + ?Sized>(
     host: &mut H,
     target_shard: usize,
     commands: Vec<ParsedCommand>,
     watches: Vec<WatchEntry>,
-) -> Result<Vec<Response>, (TransactionOutcome, Response)> {
+) -> ShardStep {
     let conn_id = host.conn_id();
     match host
         .send_shard_transaction(target_shard, commands, watches)
         .await
     {
-        ShardTxnReply::Replied(TransactionResult::Success(results)) => Ok(results),
+        ShardTxnReply::Replied(TransactionResult::Success(results)) => ShardStep::Results(results),
         ShardTxnReply::Replied(TransactionResult::WatchAborted) => {
             debug!(conn_id, "Transaction aborted due to WATCH conflict");
-            Err((TransactionOutcome::WatchAborted, Response::null()))
+            ShardStep::Finished(TransactionOutcome::WatchAborted, Response::null())
         }
+        ShardTxnReply::Replied(TransactionResult::TopologyChanged) => ShardStep::TopologyChanged,
         ShardTxnReply::Replied(TransactionResult::Error(e)) => {
-            Err((TransactionOutcome::Error, Response::error(e)))
+            ShardStep::Finished(TransactionOutcome::Error, Response::error(e))
         }
-        ShardTxnReply::Unavailable => Err((
+        ShardTxnReply::Unavailable => ShardStep::Finished(
             TransactionOutcome::Error,
             Response::error("ERR shard unavailable"),
-        )),
-        ShardTxnReply::Dropped => Err((
+        ),
+        ShardTxnReply::Dropped => ShardStep::Finished(
             TransactionOutcome::Error,
             Response::error("ERR shard dropped request"),
-        )),
+        ),
     }
 }
 

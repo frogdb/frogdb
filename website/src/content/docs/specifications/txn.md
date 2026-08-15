@@ -38,7 +38,7 @@ entirely. See [vll.md](/specifications/vll/#state-space) for that state.
 | `txn.queued_errors` | rejection messages accumulated while `txn.exec_abort = true` (`state.rs:192`, pushed by `abort` at `:241`, cleared by `begin` at `:223`) — write-only: no accessor reads it and it is not carried into `TxnSummary` | `abort` | connection-local, in-memory | No |
 | `txn.start_time` | timestamp stamped at `begin` | `begin`, read by `record_transaction_metrics` | connection-local, in-memory | No |
 | `conn.asking` | `ConnectionState.asking: bool` (`connection/state.rs:476`) — one-shot `ASKING` flag | set by `ASKING`; read without consuming via `is_asking()` (used by `WATCH`'s slot probe, `guards.rs:792`); read-without-clearing via `take_asking()` while `in_transaction()` (`state.rs:811-816`), so a single `ASKING` before `MULTI` covers every queued command and the EXEC-time re-validation; cleared by direct assignment (`self.asking = false`) at the three transaction-exit sites — `take_transaction` (`state.rs:743-747`), `discard_transaction` (`:758-762`), `clear_transaction` (`:767-770`) — none of which call `take_asking()` | connection-local, in-memory | No |
-| `conn.pending_slot_fence` | `ConnectionHandler.pending_slot_fence: Option<SlotFence>` (`connection.rs:172`) | `TxnHost::validate_queued_batch`'s impl (`connection/transaction.rs:184`) for the batch case; the per-command `ClusterSlotValidation` stage (`dispatch.rs:595`); cleared on handoff (`dispatch.rs:383`) | connection-local, in-memory | No |
+| `conn.pending_slot_fence` | `ConnectionHandler.pending_slot_fence: Option<SlotFence>` (`connection.rs:172`) | `TxnHost::validate_queued_batch`'s impl (`connection/transaction.rs:184`) for the batch case; the per-command `ClusterSlotValidation` stage (`dispatch.rs:595`); cleared on handoff (`dispatch.rs:383`). Read at two seams: the post-hoc reply seam (`dispatch.rs:411`, `spend_slot_fence`) and — copied onto `CoreMsg::ExecTransaction.routing_fence` (`connection/transaction.rs:209`) — the shard's pre-apply gate (TR-TXN-020) | connection-local, in-memory | No |
 | `pause.mode` | node/slot pause state — **not owned by this file**, cross-referenced from `ClientRegistry::pause_overview()`/`slot_pause(slot)` | `CLIENT PAUSE`/`CLUSTER SETSLOT` machinery outside `frogdb-txn` | node-local, in-memory | No |
 | `batch.footprint` (ephemeral) | `QueuedBatch { keys, readonly_eligible }`, recomputed by `fold_queued_batch` on every `validate_queued_batch` call **that reaches the fold** — never stored | `fold_queued_batch` — cluster mode only; `validate_queued_batch_inner` returns early on the three cluster handles in standalone mode, before the fold ever runs (`guards.rs:964`, one call site at `:1063`, guarded by the three early returns at `:1056-1058`) | not stored — recomputed per call | n/a |
 | `outcome` (ephemeral) | `TransactionOutcome` (`ExecAbort`/`RateLimited`/`CommittedEmpty`/`CrossSlot`/`Redirected`/`WatchAborted`/`Error`/`Committed`) — the EXEC verdict, not persisted state | `execute_transaction`, `handle_exec` | not stored — computed once per EXEC | n/a |
@@ -226,15 +226,14 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Source | `frogdb-server/crates/txn/src/exec.rs:290` (`target.resolve()` maps `Multi` to `Err`) |
 | Rulings | [issue 10](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/10-txn-vll-advisory-sweep.md) — Finding A4: the rationale names "no cross-shard rollback story" as inherent when the missing piece is per-shard undo, not structural impossibility; reword pending. This row's Postcondition disagrees with `FM-VLL-002`'s Trigger (a protected FM row, not touched by this draft), which still describes a cross-shard MULTI taking a continuation lock — `vll.md`'s own Scope paragraph was brought into agreement with this row under a sibling fix, leaving `FM-VLL-002` as the one remaining stale site, on the wrap-up list |
 
-## TR-TXN-020 — Routing-epoch carry closes the probe/apply window (RULED, not yet built)
+## TR-TXN-020 — Routing-generation carry closes the probe/apply window
 
 | Field | Value |
 | --- | --- |
-| Precondition | cluster mode; the EXEC-time verdict (TR-TXN-015/016) resolved to a local serve from one routing-epoch snapshot taken once per EXEC |
-| Postcondition | (RULED) the shard message carries the routing epoch observed at that verdict; the shard refuses the apply if its own epoch has since advanced (CockroachDB lease shape); on refusal the coordinator retries validation (re-enters TR-TXN-015) rather than committing on a stale verdict |
-| Source | `frogdb-server/crates/txn/src/exec.rs:290-311` (today: one snapshot, no epoch carried to the shard — the window `.scratch/replication-cluster-rework/issues/02` names) |
-| Rulings | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) |
-| Pending | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) — no epoch is carried on the shard message today; the window is real and unclosed |
+| Precondition | cluster mode; the EXEC-time verdict (TR-TXN-015/016) resolved to a local serve from one routing snapshot taken once per EXEC |
+| Postcondition | that verdict stamps `conn.pending_slot_fence` — the slot's routing generation, `(slot, owner, handoff_seq)` — and every `CoreMsg::ExecTransaction` the batch produces carries it. The shard re-reads the live cluster snapshot **before running any queued command** and returns `TransactionResult::TopologyChanged` if the generation no longer matches (CockroachDB lease shape); the store is untouched. On refusal the coordinator re-enters TR-TXN-015 (`validate_queued_batch`, which re-stamps the generation) and re-sends, up to `ROUTING_ATTEMPTS = 3` sends in total: a re-validation that answers with a redirect ends the EXEC as `Redirected`, and exhausting the attempts answers `-TRYAGAIN` (FM-TXN-053) rather than committing on a stale verdict |
+| Source | `frogdb-server/crates/core/src/write_seam.rs` (`SlotFence::still_current`), `frogdb-server/crates/core/src/shard/execution.rs:577` (the pre-apply gate), `frogdb-server/crates/server/src/connection/transaction.rs:209` (the carry), `frogdb-server/crates/txn/src/exec.rs` (`run_shard_transaction`, the retry) |
+| Rulings | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/09-routing-epoch-carry-and-watch-recheck.md) — built; the behavior is FM-TXN-052 / FM-TXN-053 |
 
 ## TR-TXN-021 — Shard round-trip and deferred-command merge
 
@@ -648,8 +647,8 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 |---|---|
 | Trigger | Cluster mode, slot `MIGRATING` on this node, but the probe finds every one of the batch's keys still local. |
 | Observable | The batch commits normally: an array of per-command results. |
-| NOT observable | A gratuitous `ASK`/`TRYAGAIN` for a batch that is perfectly serviceable here — the permissive half of the contract, which a mutant that hard-refuses on the flag would violate silently. |
-| Invariant | Presence decides; the flag only selects which probe to run. An unknown migration target likewise degrades to serving locally rather than redirecting into the void. |
+| NOT observable | A gratuitous `ASK`/`TRYAGAIN` for a batch that is perfectly serviceable here — the permissive half of the contract, which a mutant that hard-refuses on the flag would violate silently. Nor, since TR-TXN-020, a commit on the *ex-owner*: the probe and the shard apply are two steps, and the migration can complete between them, but the batch carries the routing generation the probe saw and the shard refuses the apply if it has moved (FM-TXN-052). The permissive arm is therefore permissive about the *flag*, not about the ownership it was read under. |
+| Invariant | Presence decides; the flag only selects which probe to run. An unknown migration target likewise degrades to serving locally rather than redirecting into the void. The probe's verdict is only ever spent under the routing generation it was taken from. |
 | Outcome variant | `TransactionOutcome::Committed` (label `committed`) |
 | Forced by | `test_multi_exec_during_migration_serves_when_keys_still_local`, `batch_on_migrating_source_with_unknown_target_serves_locally` |
 | Bug refs | none |
@@ -805,10 +804,10 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 |---|---|
 | Trigger | `CLIENT PAUSE … WRITE` (or a full pause) in effect when a write transaction reaches `EXEC`. |
 | Observable | The `EXEC` reply is withheld until the pause lifts, then the batch commits (`*1\r\n+OK\r\n` for a single `SET`); concurrent reads keep answering and do not see the pending write. |
-| NOT observable | The batch committing during the pause; the batch committing after the pause on a *stale* slot verdict — the topology may have moved while the transaction was parked, so the batch is validated a second time when the barrier actually blocked. |
-| Invariant | Exactly two `validate_queued_batch` calls when the barrier blocked, exactly one when it did not. The first verdict is never reused across a wait. |
-| Outcome variant | `TransactionOutcome::Committed`, or any redirect outcome if the second verdict refuses |
-| Forced by | `a_blocking_pause_forces_a_second_slot_verdict`, `a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict`, `write_exec_parks_on_a_slot_barrier_and_commits_after_release` |
+| NOT observable | The batch committing during the pause; the batch committing after the pause on a *stale* slot verdict — the topology may have moved while the transaction was parked, so the batch is validated a second time when the barrier actually blocked. Nor a CAS decided against the *pre*-pause topology: a watched slot that departed while the transaction was parked breaks the watch, and the check that says so runs after the barrier, not before it. |
+| Invariant | Each verdict covers the queue **and** the watch set, and neither half of a verdict is ever reused across a wait. Concretely: exactly two `validate_queued_batch` calls when the barrier blocked, exactly one when it did not; and the single `watched_slots_still_local` call is ordered *after* `wait_if_paused` and after the post-pause `validate_queued_batch`, so the watch verdict is cut from the same post-pause topology the queue verdict is. |
+| Outcome variant | `TransactionOutcome::Committed`, or any redirect outcome if the second verdict refuses, or `WatchAborted` if the post-pause watch check refuses |
+| Forced by | `a_blocking_pause_forces_a_second_slot_verdict`, `a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict`, `write_exec_parks_on_a_slot_barrier_and_commits_after_release`, `a_watched_slot_lost_during_the_pause_aborts_the_cas`, `the_watch_check_is_ordered_after_the_pause_barrier` |
 | Bug refs | `.scratch/replication-cluster-rework/issues/02` |
 
 ## FM-TXN-041 — A read-only transaction never reaches the pause barrier
@@ -945,6 +944,30 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Outcome variant | n/a (a per-command refusal; for `MULTI` it surfaces as `TransactionResult::Error`) |
 | Forced by | `a_denied_command_is_refused_and_logged`, `a_write_to_a_slot_owned_elsewhere_is_refused`, `an_importing_target_admits_the_write`, `min_replicas_refuses_when_no_replica_is_good`, `the_quorum_checker_owns_its_refusal_wording`, `acl_outranks_slot_ownership_and_admission`, `a_replicated_write_is_admitted_unconditionally`, `a_refused_write_leaves_the_script_killable`, `an_undeclared_script_write_to_a_departed_slot_is_refused`, `a_transaction_denied_after_queue_time_fails_the_whole_exec`, `test_self_fence_gates_lua_writes`, `test_min_replicas_to_write_multi_and_lua_paths` |
 | Bug refs | `.scratch/spec-gaps/issues/done/06-script-writes-pass-shard-write-seam.md`, `.scratch/replication-cluster-rework/issues/open/03-lua-internal-write-validation.md` (the forcing-test source; its Lua-bypass half is this row, its cross-shard-continuation half is still open) |
+
+## FM-TXN-052 — A slot changes hands between the EXEC verdict and the shard apply
+
+| Field | Value |
+|---|---|
+| Trigger | Cluster mode. The EXEC-time verdict resolved to a local serve, and the slot's routing generation advances (handoff prepared, or ownership moves) in the window between that verdict and the shard actually running the batch. |
+| Observable | The shard refuses the apply and answers `TransactionResult::TopologyChanged`; the coordinator re-validates against the fresh topology and re-sends. If the fresh verdict serves locally, the client sees an ordinary committed array — one extra `validate_queued_batch` and one extra shard round-trip, nothing else. If the fresh verdict refuses, the client sees that refusal (`-MOVED`/`-ASK`/`-TRYAGAIN`/`-CLUSTERDOWN`, `outcome = Redirected`). |
+| NOT observable | The batch committing on the ex-owner. A *partial* batch: the gate runs before the first queued command, so the refusal leaves the store, the WAL and the replication stream untouched — which is why the check is here and not at the reply seam (`spend_slot_fence`), whose refusal is post-hoc and only suppresses the acknowledgement. A refusal surfacing as `-ERR`: the batch is runnable, it merely needs a fresh verdict. |
+| Invariant | The routing generation is `(slot, owner, handoff_seq)` — `SlotFence` — stamped once by `validate_queued_batch` and carried on every `CoreMsg::ExecTransaction` the batch produces. `SlotFence::still_current` is a pure comparison against the live `ClusterSnapshot`: no clock is read, so a generation is never "expired" by time, only by an owner change or a newly minted handoff. Replica apply (`WriteAdmission::pre_authorized`) carries no fence — the slot belongs to the primary, so the replica has no local generation to fence against and must not second-guess its primary's stream. |
+| Outcome variant | `TransactionOutcome::Committed` (the retry succeeded) or `Redirected` (the fresh verdict refused) |
+| Forced by | `a_stale_routing_fence_refuses_the_apply_before_any_command_runs`, `a_current_routing_fence_admits_the_apply`, `a_topology_change_is_retried_after_revalidation`, `a_redirect_on_revalidation_ends_the_transaction` |
+| Bug refs | `.scratch/replication-cluster-rework/issues/02` (the "residual commit/apply window"), `.scratch/spec-gaps/issues/done/09-routing-epoch-carry-and-watch-recheck.md` |
+
+## FM-TXN-053 — A routing generation that will not settle
+
+| Field | Value |
+|---|---|
+| Trigger | Cluster mode. The shard refuses the apply on a stale routing generation, re-validation says "serve here", and the generation moves again — repeatedly. |
+| Observable | After `ROUTING_ATTEMPTS = 3` sends the coordinator stops and answers `-TRYAGAIN` (`outcome = Redirected`), naming the slot when one is known. |
+| NOT observable | An unbounded retry loop — a slot flapping between owners must not hold an EXEC forever. Any queued command having run: every attempt was refused before its first command, so no attempt left a partial effect behind, and stopping is therefore safe at any point. A `-ERR`, which would tell a correct client to give up on a batch that is merely unlucky. |
+| Invariant | The retry budget counts *sends*, not refusals, and the reply is built by the host (`TxnHost::routing_unsettled_reply`), not by `frogdb-txn`: the redirect vocabulary lives behind the server's redirect seam, and `-TRYAGAIN` is exactly what the reply seam (`slot_migration::fence_verdict`) gives for the same condition, so one condition has one wire answer whichever seam catches it. |
+| Outcome variant | `TransactionOutcome::Redirected` (label `redirected`) |
+| Forced by | `a_routing_generation_that_never_settles_answers_tryagain` |
+| Bug refs | none |
 
 ---
 

@@ -458,6 +458,7 @@ mod isolation_tests {
                 conn_id: 1,
                 protocol_version: ProtocolVersion::Resp2,
                 admission: crate::write_seam::WriteAdmission::internal(),
+                routing_fence: None,
                 response_tx: tx,
             })
             .await;

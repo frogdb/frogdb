@@ -127,6 +127,21 @@ pub trait TxnHost {
         watches: Vec<WatchEntry>,
     ) -> ShardTxnReply;
 
+    /// The reply for a batch whose routing generation refused to settle.
+    ///
+    /// A shard refuses an apply outright when the routing generation the batch
+    /// was validated against is no longer the live one
+    /// ([`TransactionResult::TopologyChanged`]). EXEC answers that by
+    /// re-validating and re-sending — but only a bounded number of times, so a
+    /// slot changing hands repeatedly cannot spin here. When the attempts run
+    /// out the client is told to try again, a reply this crate cannot build
+    /// itself: the redirect vocabulary lives behind the server's redirect seam
+    /// (`frogdb-types::redirect`), which `frogdb-txn` does not depend on.
+    ///
+    /// Standalone hosts never see this call — they stamp no routing generation,
+    /// so no shard can refuse one.
+    fn routing_unsettled_reply(&self) -> Response;
+
     /// Run a deferred connection-level command (CLIENT, CONFIG, INFO, the
     /// pub/sub family, …).
     ///

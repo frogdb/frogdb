@@ -274,6 +274,17 @@ pub enum CoreMsg {
         /// (slot ownership, quorum, replica lag) is read live on the shard.
         /// Internal callers use [`WriteAdmission::internal`].
         admission: WriteAdmission,
+        /// The routing generation the coordinator validated this batch against
+        /// (`specs/txn.md` TR-TXN-020), or `None` in standalone mode and on the
+        /// paths that have no slot to fence (importing target, internal
+        /// callers, replication apply).
+        ///
+        /// The shard compares it with the live one and refuses the whole batch
+        /// — before the first command runs, so nothing is applied — when it has
+        /// moved. Carrying it rather than re-deriving it on the shard is the
+        /// whole point: the shard would derive the *current* generation, which
+        /// is exactly the value the check must not use.
+        routing_fence: Option<crate::write_seam::SlotFence>,
         response_tx: oneshot::Sender<TransactionResult>,
     },
 }

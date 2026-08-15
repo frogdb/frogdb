@@ -56,6 +56,64 @@ pub const NON_LOCAL_KEY_ERR: &str =
 /// gate's so a client cannot tell which producer was refused.
 pub const NO_REPLICAS_ERR: &str = "NOREPLICAS Not enough good replicas to write.";
 
+/// The slot-routing generation a request was validated against — the routing
+/// epoch a shard message carries so the shard can refuse an apply taken on a
+/// verdict the topology has since invalidated (`specs/txn.md` TR-TXN-020).
+///
+/// Two replicated numbers, together, name the generation: the slot's **owner**
+/// and the **handoff attempt** (`SlotHandoff::seq`) recorded for it. The owner
+/// alone is not enough — a source node only learns that ownership moved when it
+/// *applies* the completing entry, which is by construction after the cluster
+/// committed it, and that lag is precisely the window being fenced. The prepare
+/// that mints a new `seq` applies a Raft round trip earlier, so a batch
+/// validated before it and applied after it sees a changed token while its own
+/// node still believes it owns the slot.
+///
+/// The connection stamps the token at EXEC-time validation and the shard
+/// re-checks it before the first queued command runs, which is what makes the
+/// refusal atomic: the connection-side fence
+/// (`frogdb-server/src/slot_migration/slot_fence.rs`) can only suppress a reply
+/// *after* the batch already mutated the store, leaving an orphan commit on the
+/// ex-owner even though the client was told `TRYAGAIN`.
+///
+/// No clock is read: the stored `seq` is compared raw, never lease-filtered, so
+/// "unchanged" means the replicated record did not move rather than "did not
+/// move *and* the lease had not lapsed at two different instants".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotFence {
+    /// The slot the request is pinned to.
+    pub slot: u16,
+    /// The owner seen at validation time — always this node, because the token
+    /// is stamped only on the source side of a handoff. Carried rather than
+    /// assumed so the verdict is a pure function of its inputs.
+    pub owner: NodeId,
+    /// The handoff attempt recorded for `slot` at validation time; `0` when no
+    /// handoff was prepared. `SlotHandoff::seq` is minted from a replicated
+    /// monotone counter, so `0` can never be a real attempt id.
+    pub handoff_seq: u64,
+}
+
+impl SlotFence {
+    /// Whether the routing generation this token names is still the live one.
+    ///
+    /// `false` is the refusal signal: either the slot changed hands or a
+    /// handoff attempt was prepared, aborted, or completed underneath the
+    /// request. Both are real changes it deserves to be refused for.
+    pub fn still_current(&self, snapshot: &ClusterSnapshot) -> bool {
+        snapshot.get_slot_owner(self.slot) == Some(self.owner)
+            && handoff_seq_of(snapshot, self.slot) == self.handoff_seq
+    }
+}
+
+/// The handoff attempt currently recorded for `slot`, or `0` for none.
+pub fn handoff_seq_of(snapshot: &ClusterSnapshot, slot: u16) -> u64 {
+    snapshot
+        .migrations
+        .get(&slot)
+        .and_then(|migration| migration.handoff.as_ref())
+        .map_or(0, |handoff| handoff.seq)
+}
+
 /// The issuer-scoped half of a write admission decision: what the shard cannot
 /// derive from its own handles.
 ///

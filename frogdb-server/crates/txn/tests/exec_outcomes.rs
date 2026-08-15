@@ -40,6 +40,9 @@ enum Effect {
     WaitIfPaused {
         commands: usize,
     },
+    /// The watch set's "are these slots still mine?" check. Recorded so a test
+    /// can pin *when* it runs relative to the pause and the batch verdict.
+    WatchCheck,
     ShardRoundTrip {
         target_shard: usize,
         commands: usize,
@@ -110,9 +113,10 @@ struct MockTxnHost {
     rate_limit: Option<RateLimitExceeded>,
     /// One verdict per `validate_queued_batch` call; exhausted = `None`.
     validate_verdicts: VecDeque<Option<Response>>,
-    /// What `watched_slots_still_local` reports (false = a watched key's slot
-    /// has left this node).
-    watched_slots_local: bool,
+    /// One verdict per `watched_slots_still_local` call (false = a watched
+    /// key's slot has left this node); exhausted = `true`. Scripted rather
+    /// than fixed so a test can move a watched slot *between* two calls.
+    watched_slots_local: VecDeque<bool>,
     /// What `wait_if_paused` reports (true = it actually blocked).
     paused: bool,
     /// One reply per shard round-trip; exhausted = empty success.
@@ -132,7 +136,7 @@ impl Default for MockTxnHost {
             queue_has_writes: false,
             rate_limit: None,
             validate_verdicts: VecDeque::new(),
-            watched_slots_local: true,
+            watched_slots_local: VecDeque::new(),
             paused: false,
             shard_replies: VecDeque::new(),
             connection_level_reply: (Response::ok(), vec![]),
@@ -181,7 +185,8 @@ impl TxnHost for MockTxnHost {
     }
 
     fn watched_slots_still_local(&mut self, _watches: &[WatchEntry], _asking: bool) -> bool {
-        self.watched_slots_local
+        self.effects.push(Effect::WatchCheck);
+        self.watched_slots_local.pop_front().unwrap_or(true)
     }
 
     async fn wait_if_paused(&mut self, queue: &[ParsedCommand]) -> bool {
@@ -207,6 +212,10 @@ impl TxnHost for MockTxnHost {
                 commands.iter().map(|_| Response::ok()).collect(),
             ))
         })
+    }
+
+    fn routing_unsettled_reply(&self) -> Response {
+        Response::error("TRYAGAIN slot handoff in progress")
     }
 
     async fn run_connection_level(
@@ -464,7 +473,7 @@ async fn a_watched_slot_that_left_this_node_aborts_the_watch() {
     // its version can no longer observe the real owner's writes, so the CAS
     // must fail rather than commit against a stale local copy.
     let mut host = MockTxnHost {
-        watched_slots_local: false,
+        watched_slots_local: VecDeque::from([false]),
         ..Default::default()
     };
     let mut s = summary(vec![cmd("PING")]);
@@ -475,7 +484,10 @@ async fn a_watched_slot_that_left_this_node_aborts_the_watch() {
     assert_eq!(outcome, TransactionOutcome::WatchAborted);
     assert_eq!(only(responses), Response::null());
     // Nothing ran: the batch never reached a shard.
-    assert_eq!(host.effects, vec![Effect::Validate { asking: false }]);
+    assert_eq!(
+        host.effects,
+        vec![Effect::Validate { asking: false }, Effect::WatchCheck]
+    );
 }
 
 // FM-TXN-049
@@ -487,7 +499,7 @@ async fn a_queue_redirect_outranks_the_watched_slot_abort() {
     let redirect = frogdb_core::redirect::moved(99, "10.0.0.2:6379".parse().expect("literal"));
     let mut host = MockTxnHost {
         validate_verdicts: VecDeque::from([Some(redirect)]),
-        watched_slots_local: false,
+        watched_slots_local: VecDeque::from([false]),
         ..Default::default()
     };
     let mut s = summary(vec![cmd("SET")]);
@@ -678,6 +690,186 @@ async fn a_non_blocking_pause_keeps_the_batch_at_exactly_one_slot_verdict() {
             },
         ],
         "an unblocked pause must not re-take the snapshot"
+    );
+}
+
+// FM-TXN-040
+#[tokio::test]
+async fn a_watched_slot_lost_during_the_pause_aborts_the_cas() {
+    // A `CLIENT PAUSE` is exactly the window a slot changes hands in — the
+    // migration barrier *is* a pause. The watch set is re-checked after the
+    // park, so a watched slot that departed while the transaction sat there
+    // breaks the CAS instead of being decided against this node's stale copy.
+    let mut host = MockTxnHost {
+        queue_has_writes: true,
+        paused: true,
+        // Two verdicts: the queue is servable here both before and after the
+        // park. Only the *watch* set moved.
+        validate_verdicts: VecDeque::from([None, None]),
+        watched_slots_local: VecDeque::from([false]),
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("SET")]);
+    s.watches = vec![watched(b"k", 3, true)];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::WatchAborted);
+    assert_eq!(only(responses), Response::null());
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            Effect::WaitIfPaused { commands: 1 },
+            Effect::Validate { asking: false },
+            Effect::WatchCheck,
+        ],
+        "the watch verdict must be cut from the post-pause topology"
+    );
+}
+
+// FM-TXN-040
+#[tokio::test]
+async fn the_watch_check_is_ordered_after_the_pause_barrier() {
+    // The complement of the test above: the watch set survives the park, so the
+    // batch commits — but the ordering is the same, and it is the ordering that
+    // is the invariant. A mutant that hoists the watch check above
+    // `wait_if_paused` still commits here and still aborts there; only the
+    // effect sequence catches it.
+    let mut host = MockTxnHost {
+        queue_has_writes: true,
+        paused: true,
+        validate_verdicts: VecDeque::from([None, None]),
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("SET")]);
+    s.watches = vec![watched(b"k", 3, true)];
+
+    let (outcome, _) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            Effect::WaitIfPaused { commands: 1 },
+            Effect::Validate { asking: false },
+            Effect::WatchCheck,
+            Effect::ShardRoundTrip {
+                target_shard: MOCK_SHARD,
+                commands: 1
+            },
+        ],
+        "exactly one watch check, after both the barrier and the second verdict"
+    );
+}
+
+// FM-TXN-052
+#[tokio::test]
+async fn a_topology_change_is_retried_after_revalidation() {
+    // The shard refused the apply because the routing generation moved under
+    // the batch. Nothing ran, so the batch is still perfectly runnable — the
+    // coordinator re-validates (which re-stamps the generation) and re-sends.
+    let mut host = MockTxnHost {
+        shard_replies: VecDeque::from([
+            ShardTxnReply::Replied(TransactionResult::TopologyChanged),
+            ShardTxnReply::Replied(TransactionResult::Success(vec![Response::ok()])),
+        ]),
+        ..Default::default()
+    };
+
+    let (outcome, responses) = execute_transaction(&mut host, summary(vec![cmd("SET")])).await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(only(responses), Response::Array(vec![Response::ok()]));
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            Effect::ShardRoundTrip {
+                target_shard: MOCK_SHARD,
+                commands: 1
+            },
+            Effect::Validate { asking: false },
+            Effect::ShardRoundTrip {
+                target_shard: MOCK_SHARD,
+                commands: 1
+            },
+        ],
+        "a refused apply must be re-validated before it is re-sent"
+    );
+}
+
+// FM-TXN-052
+#[tokio::test]
+async fn a_redirect_on_revalidation_ends_the_transaction() {
+    // Same refusal, but the fresh topology says the slot really has moved on.
+    // That verdict is the answer — retrying it would be a loop with a known end.
+    let redirect = frogdb_core::redirect::moved(99, "10.0.0.2:6379".parse().expect("literal"));
+    let mut host = MockTxnHost {
+        validate_verdicts: VecDeque::from([None, Some(redirect)]),
+        shard_replies: VecDeque::from([ShardTxnReply::Replied(TransactionResult::TopologyChanged)]),
+        ..Default::default()
+    };
+
+    let (outcome, responses) = execute_transaction(&mut host, summary(vec![cmd("SET")])).await;
+
+    assert_eq!(outcome, TransactionOutcome::Redirected);
+    assert_eq!(error_text(&only(responses)), "MOVED 99 10.0.0.2:6379");
+    assert_eq!(
+        host.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::ShardRoundTrip { .. }))
+            .count(),
+        1,
+        "the batch must not be re-sent after a redirect: {:?}",
+        host.effects
+    );
+}
+
+// FM-TXN-053
+#[tokio::test]
+async fn a_routing_generation_that_never_settles_answers_tryagain() {
+    // A slot flapping between owners must not hold the EXEC forever. The budget
+    // counts sends; when it runs out the host builds the reply, because the
+    // redirect vocabulary does not live in this crate.
+    let mut host = MockTxnHost {
+        shard_replies: VecDeque::from([
+            ShardTxnReply::Replied(TransactionResult::TopologyChanged),
+            ShardTxnReply::Replied(TransactionResult::TopologyChanged),
+            ShardTxnReply::Replied(TransactionResult::TopologyChanged),
+            // A fourth reply that must never be consumed.
+            ShardTxnReply::Replied(TransactionResult::Success(vec![Response::ok()])),
+        ]),
+        ..Default::default()
+    };
+
+    let (outcome, responses) = execute_transaction(&mut host, summary(vec![cmd("SET")])).await;
+
+    assert_eq!(outcome, TransactionOutcome::Redirected);
+    assert_eq!(
+        error_text(&only(responses)),
+        "TRYAGAIN slot handoff in progress"
+    );
+    assert_eq!(
+        host.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::ShardRoundTrip { .. }))
+            .count(),
+        3,
+        "the retry budget is three sends: {:?}",
+        host.effects
+    );
+    // One verdict per send and no more: the last refusal has no attempt left to
+    // spend, so it must not pay for a re-validation it cannot use.
+    assert_eq!(
+        host.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Validate { .. }))
+            .count(),
+        3,
+        "the exhausted attempt re-validates nothing: {:?}",
+        host.effects
     );
 }
 
@@ -893,6 +1085,7 @@ async fn a_dead_watch_off_the_target_gets_its_own_version_check() {
         host.effects,
         vec![
             Effect::Validate { asking: false },
+            Effect::WatchCheck,
             // The off-target watch's own check, before the batch.
             Effect::ShardRoundTrip {
                 target_shard: 3,
@@ -929,6 +1122,7 @@ async fn a_dirtied_off_target_watch_aborts_before_the_batch_runs() {
         host.effects,
         vec![
             Effect::Validate { asking: false },
+            Effect::WatchCheck,
             Effect::ShardRoundTrip {
                 target_shard: 3,
                 commands: 0
@@ -962,6 +1156,7 @@ async fn off_target_watches_are_grouped_one_round_trip_per_shard_in_shard_order(
         host.effects,
         vec![
             Effect::Validate { asking: false },
+            Effect::WatchCheck,
             Effect::ShardRoundTrip {
                 target_shard: 2,
                 commands: 0

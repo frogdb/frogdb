@@ -113,6 +113,9 @@ impl ReplicaCommandExecutor {
             // issued it, and re-checking here would refuse every replicated
             // write (the slot belongs to the primary).
             admission: frogdb_core::write_seam::WriteAdmission::pre_authorized(),
+            // Replica apply carries no routing fence: the slot belongs to the
+            // primary, so this node has no local generation to fence against.
+            routing_fence: None,
             response_tx,
         };
         self.sender_for(shard_id)?
@@ -132,6 +135,14 @@ impl ReplicaCommandExecutor {
             TransactionResult::Error(e) => Err(ApplyError::Rejected {
                 shard: shard_id,
                 detail: e,
+            }),
+            // Unreachable in practice: replica apply carries no routing fence
+            // (see the message above), and only a stale fence produces this.
+            // Named rather than wildcarded so a new result variant fails
+            // compilation here instead of silently becoming a rejection.
+            TransactionResult::TopologyChanged => Err(ApplyError::Rejected {
+                shard: shard_id,
+                detail: "transaction refused: routing generation changed".to_string(),
             }),
         }
     }

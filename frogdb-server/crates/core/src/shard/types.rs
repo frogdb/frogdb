@@ -1222,6 +1222,17 @@ pub enum TransactionResult {
     Success(Vec<Response>),
     /// Transaction aborted due to WATCH conflict.
     WatchAborted,
+    /// The routing generation the batch was validated against is no longer the
+    /// live one, so the shard refused the apply **before running any command**
+    /// (`specs/txn.md` TR-TXN-020).
+    ///
+    /// Not an error and not a redirect: the shard cannot name the new owner
+    /// (that is connection-side knowledge) and nothing was applied, so the
+    /// coordinator re-validates against a fresh snapshot and either retries or
+    /// answers with whatever the fresh verdict says. Distinct from
+    /// [`Self::Error`] precisely so it cannot be mistaken for a terminal answer
+    /// and surfaced to the client as one.
+    TopologyChanged,
     /// Transaction failed with an error.
     Error(String),
 }

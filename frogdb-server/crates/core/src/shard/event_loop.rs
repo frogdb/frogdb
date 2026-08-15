@@ -1062,6 +1062,7 @@ mod effect_tests {
                 1,
                 ProtocolVersion::Resp2,
                 &crate::write_seam::WriteAdmission::internal(),
+                None,
             )
             .await;
 
@@ -1130,6 +1131,7 @@ mod effect_tests {
                 1,
                 ProtocolVersion::Resp2,
                 &crate::write_seam::WriteAdmission::internal(),
+                None,
             )
             .await;
 

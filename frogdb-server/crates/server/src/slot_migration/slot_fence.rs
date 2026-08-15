@@ -56,34 +56,30 @@
 //! lease still leaves the record (and its seq) in place until an abort,
 //! complete, or cancel removes it, and each of those is a real change the
 //! command deserves to be refused for.
+//!
+//! # Where the token is checked
+//!
+//! Two seams check it, and they are not redundant:
+//!
+//! * The **reply seam** (`spend_slot_fence`) re-checks after the command ran
+//!   and suppresses its acknowledgement. That is all a single command needs:
+//!   its write is one entry, and a client that is never told `+OK` cannot have
+//!   relied on it.
+//! * The **shard apply seam** re-checks *before* the first queued command of a
+//!   `MULTI` batch runs (`specs/txn.md` TR-TXN-020). A batch is many writes, so
+//!   suppressing its reply after the fact would still leave the whole batch
+//!   committed on the ex-owner and replicated to its followers. The token
+//!   therefore also rides on `CoreMsg::ExecTransaction`, which is why
+//!   [`SlotFence`] itself lives in `frogdb-core` — one struct, stamped once,
+//!   read at both seams.
 
 use frogdb_cluster::types::ClusterSnapshot;
 use frogdb_core::NodeId;
+pub(crate) use frogdb_core::write_seam::SlotFence;
+use frogdb_core::write_seam::handoff_seq_of;
 use frogdb_protocol::Response;
 
 use super::redirect;
-
-/// The slot-ownership generation a command was validated against.
-///
-/// Stamped by `ClusterSlotValidation` (and by the EXEC-time batch validator)
-/// only when **this node is the slot's current owner** — i.e. only on the
-/// source side of a handoff. The importing target is deliberately never
-/// stamped: on the target, completing the handoff makes the node *more*
-/// entitled to serve, and a fence there would answer `MOVED` pointing at
-/// itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SlotFence {
-    /// The slot the command is pinned to.
-    pub(crate) slot: u16,
-    /// The owner this node saw at validation time — always itself, by the
-    /// construction rule above. Carried rather than assumed so the verdict is a
-    /// pure function of its inputs.
-    pub(crate) owner: NodeId,
-    /// The handoff attempt recorded for `slot` at validation time; `0` when no
-    /// handoff was prepared. `SlotHandoff::seq` is minted from a replicated
-    /// monotone counter, so `0` can never be a real attempt id.
-    pub(crate) handoff_seq: u64,
-}
 
 /// What slot validation decided, plus the fence the execute seam must re-check
 /// if the command is allowed to run.
@@ -99,15 +95,6 @@ pub(crate) enum SlotVerdict {
     /// Run locally. `Some(fence)` when this node is the slot's owner and the
     /// execute seam owes a re-check.
     Serve(Option<SlotFence>),
-}
-
-/// The handoff attempt currently recorded for `slot`, or `0` for none.
-fn handoff_seq_of(snapshot: &ClusterSnapshot, slot: u16) -> u64 {
-    snapshot
-        .migrations
-        .get(&slot)
-        .and_then(|migration| migration.handoff.as_ref())
-        .map_or(0, |handoff| handoff.seq)
 }
 
 /// Stamp the fence for a command that slot validation just cleared to run
@@ -150,11 +137,10 @@ pub(crate) fn stamp_fence(
 ///   → `CLUSTERDOWN`. Same answer the routing guard gives for an unassigned
 ///   slot; there is nowhere to send the client.
 pub(crate) fn fence_verdict(snapshot: &ClusterSnapshot, fence: SlotFence) -> Option<Response> {
-    let owner_now = snapshot.get_slot_owner(fence.slot);
-    if owner_now == Some(fence.owner) && handoff_seq_of(snapshot, fence.slot) == fence.handoff_seq {
+    if fence.still_current(snapshot) {
         return None;
     }
-    match owner_now {
+    match snapshot.get_slot_owner(fence.slot) {
         // Still ours; only the handoff generation moved. Undecided, so retry.
         Some(owner) if owner == fence.owner => Some(redirect::tryagain_slot_handoff(fence.slot)),
         Some(owner) => match snapshot.nodes.get(&owner).map(|node| node.addr) {

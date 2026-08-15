@@ -738,6 +738,11 @@ impl ShardWorker {
     /// `wk->expired`), which must NOT abort when the key stays gone. Uses the
     /// non-destructive `exists_unexpired` probe (constraint 1 — `check_watches`
     /// must not physically purge).
+    ///
+    /// Test-only since the abort path started naming its reason: production
+    /// code calls [`Self::watch_abort_reason`] directly, because it needs the
+    /// reason for the metric label.
+    #[cfg(test)]
     pub(crate) fn check_watches(&self, watches: &[WatchEntry]) -> bool {
         self.watch_abort_reason(watches).is_none()
     }

@@ -581,7 +581,28 @@ impl ShardWorker {
         conn_id: u64,
         protocol_version: ProtocolVersion,
         admission: &crate::write_seam::WriteAdmission,
+        routing_fence: Option<crate::write_seam::SlotFence>,
     ) -> TransactionResult {
+        // Routing-generation fence, first of everything (`specs/txn.md`
+        // TR-TXN-020). The coordinator's EXEC-time slot verdict is taken from
+        // one snapshot and the batch then travels here as a separate message;
+        // a migration that completes in between would otherwise let the
+        // permissive arm of FM-TXN-027 commit the whole batch on the ex-owner
+        // and replicate it to *its* followers. The connection-side fence cannot
+        // fix that: it runs after the reply, so it can withhold the
+        // acknowledgement but not the writes.
+        //
+        // Refusing here is what makes the refusal atomic — no command has run,
+        // no WAL entry exists, and the coordinator is free to re-validate and
+        // retry. Ahead of the write gates because it is the coarser question:
+        // if the generation moved, nothing about this batch is decidable here.
+        if let Some(fence) = routing_fence
+            && let Some(cluster_state) = self.cluster.cluster_state()
+            && !fence.still_current(&cluster_state.snapshot())
+        {
+            return TransactionResult::TopologyChanged;
+        }
+
         // The three write gates (slot ownership, ACL, write admission) run at
         // the shard for the whole batch before any command executes, so a
         // topology/ACL/replica change during the MULTI window cannot let a
@@ -2345,6 +2366,7 @@ mod deny_blocking_tests {
                 conn_id: 1,
                 protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
                 admission: crate::write_seam::WriteAdmission::internal(),
+                routing_fence: None,
                 response_tx: tx,
             })
             .await;
@@ -2511,6 +2533,7 @@ mod transaction_admission_tests {
                 conn_id: 1,
                 protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
                 admission,
+                routing_fence: None,
                 response_tx: tx,
             })
             .await;
@@ -2523,5 +2546,118 @@ mod transaction_admission_tests {
             !ran.load(Ordering::Relaxed),
             "a refused transaction must run none of its commands"
         );
+    }
+
+    const FENCED_SLOT: u16 = 1234;
+    const ME: crate::NodeId = 1;
+    const OTHER: crate::NodeId = 2;
+
+    /// A cluster state that owns `FENCED_SLOT`, optionally with a prepared
+    /// handoff whose `seq` is the routing generation's second half.
+    fn cluster(handoff_seq: Option<u64>) -> Arc<crate::cluster::ClusterState> {
+        use frogdb_cluster::types::{ClusterSnapshot, NodeInfo, SlotHandoff, SlotMigration};
+
+        let mut snapshot = ClusterSnapshot::new();
+        let mine = "127.0.0.1:7001".parse().expect("literal");
+        let theirs = "127.0.0.1:7002".parse().expect("literal");
+        snapshot
+            .nodes
+            .insert(ME, NodeInfo::new_primary(ME, mine, mine));
+        snapshot
+            .nodes
+            .insert(OTHER, NodeInfo::new_primary(OTHER, theirs, theirs));
+        snapshot.slot_assignment.insert(FENCED_SLOT, ME);
+        if let Some(seq) = handoff_seq {
+            // The published counter must be at least as high as any handoff it
+            // has minted (INV-HANDOFF-1).
+            snapshot.handoff_seq = seq;
+            let mut migration = SlotMigration::new(FENCED_SLOT, ME, OTHER);
+            migration.handoff = Some(SlotHandoff {
+                seq,
+                prepared_at_ms: 1_000,
+                barrier_ms: 100,
+                lease_ms: 10_000,
+                drained: false,
+            });
+            snapshot.migrations.insert(FENCED_SLOT, migration);
+        }
+        Arc::new(crate::cluster::ClusterState::from_snapshot(
+            snapshot,
+            Arc::new(AtomicU64::new(ME)),
+        ))
+    }
+
+    fn fence(handoff_seq: u64) -> crate::write_seam::SlotFence {
+        crate::write_seam::SlotFence {
+            slot: FENCED_SLOT,
+            owner: ME,
+            handoff_seq,
+        }
+    }
+
+    /// Send one `__QUEUEDWRITE` batch under `routing_fence` and report the
+    /// shard's verdict.
+    async fn exec_fenced(
+        worker: &mut ShardWorker,
+        routing_fence: Option<crate::write_seam::SlotFence>,
+    ) -> TransactionResult {
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ExecTransaction {
+                commands: vec![ParsedCommand::new(
+                    Bytes::from_static(b"__QUEUEDWRITE"),
+                    vec![],
+                )],
+                watches: vec![],
+                conn_id: 1,
+                protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
+                admission: WriteAdmission::internal(),
+                routing_fence,
+                response_tx: tx,
+            })
+            .await;
+        rx.await.expect("shard replied")
+    }
+
+    /// The probe/apply window: the coordinator's verdict was taken from one
+    /// snapshot, and a handoff was prepared for the slot before the batch got
+    /// here. The refusal has to land *before* the first command, because there
+    /// is nothing to undo a batch that already ran and replicated.
+    // FM-TXN-052
+    #[tokio::test]
+    async fn a_stale_routing_fence_refuses_the_apply_before_any_command_runs() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let mut worker = worker(Arc::clone(&ran));
+        worker.set_cluster_state(cluster(Some(7)));
+
+        // The batch was validated when no handoff existed.
+        let result = exec_fenced(&mut worker, Some(fence(0))).await;
+
+        assert!(
+            matches!(result, TransactionResult::TopologyChanged),
+            "a moved routing generation must refuse the apply, got {result:?}"
+        );
+        assert!(
+            !ran.load(Ordering::Relaxed),
+            "the refusal must be atomic: no queued command may have run"
+        );
+    }
+
+    /// The permissive half, and the one that keeps the fence from being a
+    /// blanket refusal: an unchanged generation runs the batch normally.
+    // FM-TXN-052
+    #[tokio::test]
+    async fn a_current_routing_fence_admits_the_apply() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let mut worker = worker(Arc::clone(&ran));
+        worker.set_cluster_state(cluster(Some(7)));
+
+        let result = exec_fenced(&mut worker, Some(fence(7))).await;
+
+        assert!(
+            matches!(result, TransactionResult::Success(_)),
+            "an unchanged routing generation must commit, got {result:?}"
+        );
+        assert!(ran.load(Ordering::Relaxed), "the batch must have run");
     }
 }

@@ -1,6 +1,6 @@
 # Cross-shard routing-epoch carry + post-pause watch re-check
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
