@@ -179,6 +179,7 @@ impl ShardWaitQueue {
     /// Both bounds are checked over every requested key *before* any insertion,
     /// so a refusal leaves the queue exactly as it found it — no partial
     /// registration under the keys checked before the offending one.
+    #[allow(clippy::result_large_err)] // the refusal carries the entry back by design
     pub fn register(&mut self, entry: WaitEntry) -> Result<(), RegisterRefused> {
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -190,6 +191,7 @@ impl ShardWaitQueue {
     ///
     /// `seq` is supplied by the caller because a retry keeps the ordinal it was
     /// first stamped with, and only a first registration is journalled.
+    #[allow(clippy::result_large_err)] // the refusal carries the entry back by design
     fn insert(
         &mut self,
         entry: WaitEntry,
@@ -610,6 +612,7 @@ impl ShardWaitQueue {
     ///
     /// Deliberately not journalled: the retried waiter registered once, and a
     /// second record would make the exact-FIFO checker judge one client as two.
+    #[allow(clippy::result_large_err)] // the refusal carries the entry back by design
     pub fn requeue_retry(&mut self, entry: WaitEntry, seq: u64) -> Result<(), RegisterRefused> {
         self.insert(entry, seq, Placement::Head)
     }

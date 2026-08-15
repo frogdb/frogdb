@@ -17,6 +17,7 @@ use crate::clock;
 
 impl ShardWorker {
     /// Handle EVAL / EVAL_RO - execute a Lua script.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_eval_script(
         &mut self,
         script_source: &Bytes,
@@ -49,6 +50,7 @@ impl ShardWorker {
     }
 
     /// Handle EVALSHA / EVALSHA_RO - execute a cached Lua script by SHA.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_evalsha(
         &mut self,
         script_sha: &Bytes,

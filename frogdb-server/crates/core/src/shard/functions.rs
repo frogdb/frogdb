@@ -9,6 +9,7 @@ use crate::write_seam::WriteAdmission;
 
 impl ShardWorker {
     /// Handle FCALL/FCALL_RO - execute a function.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_function_call(
         &mut self,
         function_name: &Bytes,

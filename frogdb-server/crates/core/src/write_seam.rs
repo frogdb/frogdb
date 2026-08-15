@@ -391,7 +391,7 @@ impl ShardWriteSeam {
             .as_ref()
             .map(|t| t.count_good_replicas(admission.min_replicas_max_lag))
             .unwrap_or(0);
-        if (good as u32) < admission.min_replicas {
+        if good < admission.min_replicas {
             return Err(NO_REPLICAS_ERR.to_string());
         }
         Ok(())
