@@ -89,7 +89,7 @@ fn encode(seq: u64) -> String {
 
 /// Parse a body written by [`encode`], or `None` if it is not intact.
 fn decode(raw: &str) -> Option<u64> {
-    let mut fields = raw.trim().split_whitespace();
+    let mut fields = raw.split_whitespace();
     let (tag, seq_text, checksum) = (fields.next()?, fields.next()?, fields.next()?);
     if fields.next().is_some() || tag != FORMAT_TAG {
         return None;
