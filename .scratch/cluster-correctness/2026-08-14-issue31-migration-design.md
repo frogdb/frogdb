@@ -1,7 +1,57 @@
-# Slot migration redesign — source-authoritative-until-commit (v18)
+# Slot migration redesign — source-authoritative-until-commit (v19)
 
-Status: revision 18 — **candidate, UNSOUND-pending**: not approved, and not
-claimed sound until a review round finds nothing structural. Review v18 (of
+Status: revision 19 — **candidate, UNSOUND-pending**: not approved, and not
+claimed sound until a review round finds nothing structural. Review v19 (of
+revision 18) found **0 CRITICAL** / 1 MAJOR / 2 MINOR — the **first
+zero-CRITICAL round** this design has had, and the round in which the safety
+core held under full re-derivation: `registration_seq`'s monotonicity was
+re-derived from the code's writer enumeration as a *theorem* rather than
+accepted as an assertion, and every regression trace (V18-C1 and its
+`ResetCluster` variant, V18-M1's two legs, V17-C1's three shapes, V16-C1,
+V16-M1, V15-C4/V14-C3) passed. Revision 19 is therefore **liveness plus
+consistency debt**, not a structural round.
+**V19-M1 (MAJOR)** — the tenth consecutive round of the fix-text pattern,
+now in its named form (*a rule narrowed in one place is not re-derived at the
+places that dispose of its outcomes*): V18-M1 narrowed the absent-operand
+exception to `kind = Boot`, which added a structurally new member to the
+`ordering` refusal class, and gate 3 (d) **arm 4** — which disposes of that
+class as a *stale duplicate strictly below the stored pair* — was not
+re-derived against it. Composed with a §0 record-lifecycle rule written in
+**transition** terms (events the node observes or performs) while its own
+justification quotes it in **effect** terms ("cleared on every flow that
+creates an absent cell"), a node staged for demotion that crashes, is
+`FORGET`ten and re-`MEET`ed while down boots with a live record, stamps
+`Demotion` by the kind rule, is refused class `ordering` against the absent
+cell, is disposed of by arm 4 as a no-op whose rationale is false here (there
+is **no** stored pair), and re-proposes forever: a permanently
+`-TRYAGAIN`-fenced, mute, operator-exit-only node. Liveness, not safety — leg
+(b) of the staged-flip row holds, nothing is adopted, stamped or discarded.
+Resolved by giving the durable record a **registration operand**
+(`staged_registration_seq`, stamped at gate 3 (a) from applied state) and an
+**effect-keyed** clearing clause — the record dies whenever applied state
+shows `nodes[self].registration_seq ≠ record.staged_registration_seq` or
+`self ∉ nodes`, *whether or not this node observed the transition that ended
+the registration* — by restating the record-lifecycle enumeration in effect
+terms (naming the uncovered producer explicitly: **any other member's
+`ResetCluster`**, `commands.rs:837`), by splitting arm 4 into its *transient*
+and **terminal** sub-cases so the terminal verdict has a clearing exit, and by
+restoring the staged-flip fence row's leg (a) to genuine sufficiency.
+**V19-m1 (MINOR)**: §0's registration-seq reading discipline still named
+`AttestReplicaSynced` as the sole reader and claimed the field "gates no role
+transition", both falsified by V18-M1's own `observed_registration_seq`
+conjunct on the Demotion arm; the reader list is corrected (and gains this
+round's third reader, the record-clearing clause) with the magnitude and
+cross-node prohibitions kept. **V19-m2 (MINOR)**: the snapshot-carry bullet
+asserted monotonicity across install from "wholesale adoption" without its
+premise; the forward-only premise is now stated, with the out-of-band restore
+of an older snapshot routed to FM-CLUSTER-100 like `handoff_seq` and the
+epochs. A **third permanent obligation** is adopted alongside the writer join
+and the fence-freshness discipline — the **refusal-class join**: every
+revision that adds, narrows or widens an admission conjunct must state which
+`RefusalClass` its new failures land in and re-derive that class's disposition
+arm against the new member, *transient* or *terminal*. **No operand changed
+this round**, so the attestation fence's operand history below is unchanged.
+Dated 2026-08-15. Review v18 (of
 revision 17) found 1 CRITICAL / 3 MAJOR / 3 MINOR, and — for the **ninth
 consecutive round** — the CRITICAL was again in the *previous round's own fix
 text*: v17's second freshness operand for the attestation fence, the node's
@@ -202,7 +252,7 @@ triple's durable home, the key of the new §3 staged-flip fence row
 authority** (replicated plane wins; local plane originates transitions only
 through the record protocol) converges unexplained splits replicated→local
 behind a lineage guard, stamped `Boot`.
-Reviews: issue31-adversarial-review-v2 through -v18, job dir 2026-08-14.
+Reviews: issue31-adversarial-review-v2 through -v19, job dir 2026-08-14.
 Issue: [31](issues/open/31-slot-migration-redesign-source-authoritative-until-commit.md)
 Origin ruling: distsys review MAJ-5 (see `.scratch/formal-spec/2026-08-13-distsys-review-rulings.md`)
 
@@ -421,7 +471,16 @@ value space is a function of the log alone.
   (`cluster/src/state.rs:145-166`) adopt them like `handoff_seq`. A restore that
   dropped the generation would re-mint spent values — the identical argument
   FM-CLUSTER-100 already makes for `handoff_seq`, which is why that counter is carried
-  by the DTO rather than re-derived.
+  by the DTO rather than re-derived. **The premise wholesale adoption rests on, stated
+  rather than assumed** (V19-m2 — carrying a field is not the same as the field never
+  going backwards, and this counter's monotonicity is supposed to be a *theorem* over
+  the enumeration, not an assertion): **install is forward-only** — a Raft snapshot
+  never carries state older than the installing node's applied state — so adoption
+  cannot regress the generation. An **out-of-band restore of an older snapshot**
+  regresses it exactly as it regresses `handoff_seq` and both epochs, and is governed
+  by FM-CLUSTER-100 rather than by this bullet or by the writer-join row below: it is
+  not a new exposure this design creates, and it is the one path on which a fresh
+  registration could be handed a value a deleted cell already held.
 - **The property, and it is a writer-enumerating one**: the counter never decreases,
   and **every** fresh registration under **any** NodeId increments it, so two
   registrations of the same NodeId necessarily carry **different** values and the later
@@ -431,9 +490,24 @@ value space is a function of the log alone.
   the counter's only mint site. No durability assumption, no node-local state, no
   replication-layer identity.
 - **Reading discipline**: `registration_seq(n)` is read **only** as an equality operand
-  against a value minted from applied state by `n` itself (today's sole reader:
-  `AttestReplicaSynced`). It is never read as a magnitude, never compared across nodes,
-  and orders nothing. It selects no arm and gates no role transition.
+  against a value minted from applied state by `n` itself. **Today's readers, in full**
+  (V19-m1 — revision 18 wrote "today's sole reader: `AttestReplicaSynced`" and was
+  falsified by its *own* V18-M1 conjunct in the same revision, which is exactly the
+  narrowing-not-re-derived shape the refusal-class join below exists to catch):
+  1. `AttestReplicaSynced`'s `observed_registration_seq` conjunct;
+  2. the `ReportRunIdentity` **Demotion** arm's `observed_registration_seq` conjunct
+     (V18-M1) — **never the `Boot` arm**, which deliberately carries no registration
+     conjunct;
+  3. the **record-clearing clause** of the pending-transition record's lifecycle
+     (V19-M1), which compares `nodes[self].registration_seq` against the record's
+     `staged_registration_seq` — a node-local read of *its own* applied cell, for
+     equality, by the node the value describes.
+
+  All three use **equality only**, so the prohibitions are unchanged and binding on
+  each: the field is never read as a magnitude, never compared across nodes, and
+  orders nothing. **It selects no arm** — it *gates* the Demotion arm's admission and
+  the record's survival, but the arm is selected by the committed `kind` field and
+  never by this operand.
 
 **Identity ordering** (V4-M4b, replicated home per V5-C2 — incarnation is constant
 within a boot, but promote→demote→re-promote changes identity three times inside one
@@ -564,15 +638,57 @@ stated for every flow that destroys or replaces it, not only steady state):
   (V13-m2 — the record is node-local durable state, so the flows that destroy
   the identity cell must state what happens to it, else a surviving record
   makes the kind-stamping rule and a flow's own `Boot`-report rule claim the
-  same report; singular since V14-C1 deleted the pending-promotion record):
-  **`ResetCluster` (both SOFT and HARD), removal of self
-  (observing one's own `RemoveNode`/`FORGET` apply, or discovering it at
-  rejoin), and a fresh join (`MEET` handshake admitting this node)** each
-  **clear the record — fsynced — before the re-mint/boot report**. The staged
+  same report; singular since V14-C1 deleted the pending-promotion record).
+  **The rule is keyed on the *effect*, not on the transitions this node
+  happened to observe** (V19-M1 — the definition below is the one every fence
+  row cites; the transition list that follows it is the *mechanism* for the
+  observed cases, never the definition):
+
+  > **Record-clearing clause (effect-keyed, definitional).** The record is
+  > **cleared — fsynced — whenever applied state shows
+  > `nodes[self].registration_seq ≠ record.staged_registration_seq`, or
+  > `self ∉ nodes`**: the registration the staged intent was adjudicated in is
+  > gone, **whether or not this node was running to observe the transition that
+  > ended it**. The clause is evaluated **at boot, before the candidate re-mint
+  > and before any report is proposed**, and **level-triggered** in the standing
+  > reconcile thereafter — it is a pure comparison over durable node-local state
+  > and this node's own applied cell, so it is re-derivable at every tick and
+  > cannot be lost to a crash. Forcing tests
+  > `staged_record_from_a_dead_registration_is_cleared_at_boot` and
+  > `staged_record_cleared_when_registration_changes_underneath_a_running_node`.
+
+  The clause is evaluable because the record carries
+  **`staged_registration_seq`**, stamped at gate 3 (a) from
+  `nodes[self].registration_seq` in applied state at staging time (a committed,
+  replicated, cluster-minted value — the pairing-partner rule at the
+  fence-freshness discipline is satisfied, and no node-local durability premise
+  enters). **Every producer of an absent or re-created cell, enumerated by
+  effect**: **any apply that deletes this node's `NodeInfo`** —
+  `RemoveNode`/`CLUSTER FORGET` (`commands.rs:233`), this node's **own**
+  `ResetCluster`, **and any *other* member's `ResetCluster`**, which deletes
+  every cell but the resetting node's (`commands.rs:837`) — followed, or not,
+  by a re-creation through the fresh `AddNode`/`MEET` arm. **Whether this node
+  was running is irrelevant to the clause**, and that is the whole content of
+  the fix: `FORGET` + re-`MEET` while the node is **down**, and any other
+  member's reset composed with a re-`MEET` while the node is down, are exactly
+  the flows a transition-keyed enumeration cannot see — the node observes
+  neither apply, boots with `self ∈ nodes`, and would otherwise carry a live
+  record into a registration that never adjudicated it (V19-M1's wedge).
+  **The mechanism, for the cases the node does observe** — retained because it
+  is how the clearing actually happens on those paths, and because each states
+  what is owed *before* the re-mint/boot report: **`ResetCluster` (both SOFT
+  and HARD), removal of self (observing one's own `RemoveNode`/`FORGET` apply,
+  or discovering it at rejoin), and a fresh join (`MEET` handshake admitting
+  this node)** each **clear the record — fsynced — before the re-mint/boot
+  report**. Every one of them is an instance of the effect-keyed clause; none
+  of them is the definition. The staged
   intent named a `target_upstream` adjudicated in the *previous* cluster
   generation; no rule carries it across a membership reset, so the
   post-reset/post-join first report is stamped `Boot` per the kind rule's
-  default, with no competing claim. **Residue of an in-flight report**
+  default, with no competing claim. **With the record cleared, the wedge trace
+  terminates as an ordinary join**: the boot report is stamped `Boot`, the
+  unnarrowed absent-operand exception admits it against the absent cell, and
+  the node converges exactly as any fresh join does. **Residue of an in-flight report**
   (V14-m4): clearing the record does not withdraw a report already proposed
   into the *old* cluster's log — it may still apply there, writing a
   `role = Replica, primary_id = Some(target)` entry for a node that has since
@@ -619,13 +735,26 @@ with its reason** (V18-M1): the exception exists for exactly one producer — a
 node's *first* report after a fresh registration, which is a `Boot` report by the
 kind rule's default (the pending-transition record that stamps `Demotion` is
 cleared, fsynced, on every flow that creates an absent cell, per the
-record-lifecycle bullet in §0). A **`Demotion`** report meeting an absent stored
+**effect-keyed record-clearing clause** in §0's record-lifecycle bullet —
+V19-M1 made that quotation true: revision 18 cited the bullet in *effect* terms
+while the bullet was written in *transition* terms, and the two flows the gap
+admitted are the wedge trace this revision closes). A **`Demotion`** report
+meeting an absent stored
 value therefore has no lawful producer: the only way for a `Demotion` report to
 face a cell with no reported identity is for the cell to have been **deleted and
 re-created** under it — the report was minted in a registration that is now dead.
 Such a report is **refused**, refusal class `ordering`, and that refusal is what
 answers the mandatory cell-deletion sub-question at the Demotion arm's
-fence-freshness row. The narrowing costs nothing: no `Demotion` report is ever a
+fence-freshness row. **Where that refusal is disposed of, stated here because
+the narrowing is what created it** (V19-M1, and the retroactive entry of the
+refusal-class join below): it is a **terminal** verdict about a dead
+registration, not a superseded duplicate, so it routes to gate 3 (d) **arm 4's
+terminal sub-case (4b)** — clear the record, un-fence, answer the client — and
+**not** to arm 4's stale-duplicate no-op, whose rationale ("strictly below the
+stored pair") is false when there is no stored pair at all. Revision 18 added
+this member to the `ordering` class without re-deriving the arm that disposes
+of it, and the resulting no-op-plus-re-propose loop is V19-M1's wedge.
+The narrowing costs nothing: no `Demotion` report is ever a
 node's first report in a registration, because the boot ordering rule requires the
 `Boot` report to precede every other proposal by that node. The declared absence tests, each also stated at its row (V10-m6
 completes the enumeration): `ClearSlotResidue`'s `shard_primary(entry.source) ==
@@ -986,6 +1115,7 @@ when it is not):
      executes in stages: the node **(a)** durably records the staged intent and
      fences — it fsyncs a **pending-transition record**
      `{kind: Demotion, target_upstream: NodeId, stage_id: u64,
+     staged_registration_seq: u64,
      candidate_triple: {replid, incarnation, identity_seq}, adopted: bool}`
      to its own node-local file (every field typed — V14-m2; the
      incarnation-counter discipline: file and parent directory fsynced before
@@ -994,7 +1124,8 @@ when it is not):
      and it is the declared writer and durable home of the **candidate**
      post-demotion triple, minted here but not yet effective in the node's
      replication runtime. Crash-durability is per component (V13-M3):
-     `{kind, target_upstream, stage_id, adopted}` survive a crash as written,
+     `{kind, target_upstream, stage_id, staged_registration_seq, adopted}`
+     survive a crash as written,
      but the
      `candidate_triple` is **re-derived at every boot** — a node booting with
      a pending record re-mints the candidate against its *current* incarnation
@@ -1008,7 +1139,24 @@ when it is not):
      incarnation, **incremented when a record is created and never re-minted
      for an existing record** — so unlike the candidate triple it is the same
      value before and after any number of crashes, which is what lets the
-     adoption's firing condition survive the re-mint. `adopted: bool` is the
+     adoption's firing condition survive the re-mint.
+     **`staged_registration_seq` is the record's registration operand**
+     (V19-M1): stamped **here**, at staging, from `nodes[self].registration_seq`
+     in the node's **applied** state — a committed, replicated, cluster-minted
+     value, so the record's lifetime is bound to a value no node-local
+     durability question can move (the pairing-partner rule at the
+     fence-freshness discipline: *name where the operand's value is produced,
+     and if the answer is "on the node", it is not a fence*). Like `stage_id` it
+     is **never re-minted for an existing record** — a boot rewrites the
+     candidate triple and nothing else — because its whole job is to say which
+     registration adjudicated *this* intent. It is the operand of §0's
+     **effect-keyed record-clearing clause**, which is evaluated at boot before
+     the candidate re-mint and level-triggered thereafter: if applied state
+     shows a different `registration_seq` under this node's id, or no cell at
+     all, the record is cleared, fsynced, and the node proceeds as an ordinary
+     boot/join. Without it the node cannot tell that its cell was deleted and
+     re-created underneath it, which is V19-M1's permanent whole-node wedge.
+     `adopted: bool` is the
      adoption's own crash-idempotence flag, initialized `false`, described at
      (c). The record has **exactly one
      writer per pending stage** (V13-M5, respelled per V14-m1): a second
@@ -1209,10 +1357,11 @@ when it is not):
      the argument is durable-state-only** (V15-M1/V15-m3): a same-stage
      refusal observed in the *resolved* state is a no-op by this rule; a
      same-stage refusal observed in the *unresolved* state selects an arm, and
-     every arm is itself idempotent under repetition — arms 1/3/5 clear an
+     every arm is itself idempotent under repetition — arms 1/3/5 **and 4b**
+     clear an
      already-cleared record (a no-op, and the client is answered once because
      the reply is bound to the record's presence), arm 2 re-proposes a report
-     the damping rule already has in flight (a no-op), and arm 4 is a no-op by
+     the damping rule already has in flight (a no-op), and arm 4a is a no-op by
      definition. Repetition therefore cannot change the outcome; only a
      *different* record could be harmed, and the record-binding conjunct above
      is what excludes it.
@@ -1245,8 +1394,10 @@ when it is not):
         `AddNode` epoch bumps live via `CONFIG SET
         cluster-replica-priority`; the registration operand moves only when this
         node's own cell was deleted and re-created, in which case the staged
-        premise is gone with it and the record-lifecycle rule has already
-        cleared the record): the record and fence **persist**; the
+        premise is gone with it and §0's **effect-keyed record-clearing
+        clause** has already cleared the record — level-triggered, on applied
+        state, without waiting for this node to have observed anything,
+        V19-M1): the record and fence **persist**; the
         reconcile re-proposes the record's report with fresh observations,
         which admits under the strict branch carrying the same candidate and
         the same `stage_id`;
@@ -1268,11 +1419,55 @@ when it is not):
         verdict. The node un-fences only per its adopted role's reply
         rules — never "resume serving as primary" on the strength of a
         stale local plane.
-     4. **`ordering` class** — the refused entry is by construction strictly
-        below the stored pair, i.e. a superseded proposal and never the live
-        stage's verdict: **stale-duplicate no-op**, record and fence
-        untouched (V14-M3 — revision 13's two-fact selector left this class
-        in no arm at all).
+     4. **`ordering` class — split into two sub-cases** (V19-M1; revision 18's
+        single arm stated a rationale that is **false** for the member V18-M1's
+        narrowing added to this class, and disposing of a terminal verdict as a
+        no-op is what wedges the node). The discriminator is the **stored
+        operand at the refusing apply**, and it is exactly as computable as the
+        class itself — both are pure functions of the committed payload and
+        pre-apply replicated state, evaluated by every applier at its own apply,
+        so the proposer computes it identically (the `RefusalClass` read path,
+        below). The six-class partition is therefore **unchanged**; what changes
+        is that this arm, like arms 1 and 3, now selects on the class *plus* one
+        further declared fact:
+        - **(4a) refused against a *stored* pair** — the refused entry is by
+          construction strictly below it, i.e. a superseded proposal and never
+          the live stage's verdict: **stale-duplicate no-op**, record and fence
+          untouched (V14-M3 — revision 13's two-fact selector left this class in
+          no arm at all). This is the sub-case revision 18's rationale describes,
+          and it is **transient**: the reconcile's re-proposal carries a triple
+          minted above the stored pair, so retrying is what resolves it.
+        - **(4b) refused against an *absent* stored value** — reachable only for
+          `kind == Demotion` under V18-M1's narrowing, and it is a **terminal**
+          verdict, not a duplicate: there **is** no stored pair for the entry to
+          be "strictly below", the refusal *is* the live stage's only verdict,
+          and no re-mint can ever make an absent operand compare true, so
+          re-proposing is an infinite loop rather than a retry. Disposition —
+          the **clearing** shape, exactly arm 1's: **clear the record (fsynced),
+          un-fence, answer the initiating client** (if still attached) with an
+          error naming the lost registration — the stage was adjudicated in a
+          registration this node no longer holds — and then the same two
+          sub-cases arm 1 declares about what is owed the identity protocol:
+          *live-run* → the pre-stage triple is still the node's applied identity
+          and **no new report is owed**; *boot-window* → the record's report
+          **was** this boot's report, so the node **re-proposes the same
+          boot-minted triple as a `Boot` report** (the record is gone, so the
+          kind rule stamps `Boot`, and the unnarrowed absent-operand exception
+          admits it), with the boot-ordering rule binding until it applies.
+          **Relationship to §0's record-clearing clause** (V19-M1's fix (1)):
+          that clause clears the record from *applied state* — at boot before
+          the mint, and level-triggered while running — so on the flows that
+          produce this refusal the two node-local reactions **commute**,
+          exactly as the refusal and the locally-observed removal commute in
+          arm 5. Whichever runs first, the terminal state is the same: record
+          cleared, fence dropped, node converging as an ordinary join. If the
+          clause ran first the refusal finds no record and the record-binding
+          conjunct makes it a log-only no-op; if the refusal is disposed of
+          first, this arm clears. **The arm is retained even though the clause
+          makes the wedge unreachable**, because its absence is what made a
+          false rationale load-bearing: a class whose arm assumes every member
+          is a stale duplicate cannot absorb a terminal verdict, and the next
+          narrowing must find a terminating arm already here.
      5. **`membership` class** (`node ∉ nodes`) — the node was removed while
         staged: the `run_identity` lifecycle bullet's **removal-of-self flow**
         governs (clear the record fsynced, un-fence, behave as a non-member
@@ -1556,7 +1751,7 @@ other passage that mentions them references it rather than re-listing writers:
 | `promoted_from: Option<NodeId>` | **every `primary_id` writer** (companion-field rule): failover **promotion** arms write `Some(old_primary_id)` on the promotee; every other `primary_id` writer writes `None` — the `ReportRunIdentity` Demotion arm, LOCKED `SetRole` in either direction, the failover **demote-and-re-parent** of the old primary, the failover **sibling re-parent** (`reparent_children(.., Some(new_primary))`, TR-CLUSTER-018/042), `RemoveNode`'s **detach** (`reparent_children(.., None)`, TR-CLUSTER-003/FM-CLUSTER-002), `ResetCluster`, and a fresh `AddNode`/`MEET` registration. An `AddNode` **upsert** — a bare re-registration, which per LOCKED TR-CLUSTER-002 writes neither role nor parent pointer ("are **not** downgraded by a bare re-registration") — writes no `primary_id` and therefore **preserves** all three companions field-wise (V7-M3's rule, V15-M2) and does not increment `parent_seq` (V16-C1) | V14-C2 — the replicated record of *which* primary a promotion adjudicated away from; sole operand of the lineage guard's third disjunct |
 | `synced: bool` | the same writer set, by the same rule: default `false`; the `role = Primary` carve-out writes `true`; **plus** `AttestReplicaSynced`, the one non-`primary_id` writer, which writes `true` only under its declared parent fence (`observed_primary_id` + **`observed_parent_seq`** + **`observed_registration_seq`**, V15-C4 as corrected by V16-C1, paired by V17-C1 and **re-paired by V18-C1** — the epoch operand was dropped by V16-C1 and the `observed_run` operand by V18-C1, see that row) | V14-C3 — data-possession gate on failover candidacy (TR-CLUSTER-021); read only where `role == Replica`; no wall clock anywhere |
 | `parent_seq: u64` | **exactly the `primary_id` writer set, with no exceptions and no carve-outs** (parenting-token rule): every one of them increments by one in the same apply — the `ReportRunIdentity` Demotion arm, LOCKED `SetRole` in either direction, both failover **promotion** arms (which clear the promotee's pointer), the failover **demote-and-re-parent**, the failover **sibling re-parent** (`reparent_children(.., Some(new_primary))`), `RemoveNode`'s **detach** (`reparent_children(.., None)`), `ResetCluster` (which nulls the pointer), and a fresh `AddNode`/`MEET` registration (which initializes it to `0`). A bare `AddNode` **upsert** writes no `primary_id` and therefore does not increment | V16-C1 — a freshness operand of the attestation fence; monotone **within one registration epoch**, never read as a magnitude or across nodes. **Registration reset, stated** (V17-C1): a fresh `AddNode`/`MEET` re-initializes it to `0`, and the cell it lives in is deletable (`RemoveNode`, `commands.rs:233`; `ResetCluster`, `commands.rs:833-854`) while the NodeId is address-derived and returns — so the token is **not** ABA-proof across a removal/re-registration and its reader pairs it with **`registration_seq`** (V18-C1 replaces V17-C1's `run_identity` pairing) |
-| `registration_seq: u64` | **exactly one writer: a fresh `AddNode`/`MEET` registration** — the arm whose `payload.node.id ∉ nodes` pre-apply (`commands.rs:132`'s `existed` predicate) — which mints `ClusterStateInner.registration_seq_gen + 1` into the cell it creates and stores the incremented generation. **No other transition writes the field and none writes the generation**: a bare `AddNode` **upsert** preserves it field-wise (V7-M3/V15-M2's rule, the TR-CLUSTER-027 live path); `ResetCluster` **carries** the resetting node's value unchanged into the re-inserted cell (`commands.rs:844`/`:852`) and does **not** rewind the generation, unlike the epochs it zeroes (`:841`/`:843`) and `handoff_seq` (`:830`); every *other* member's cell is deleted (`:837`) and can only return through a fresh registration. Both snapshot vehicles carry field and generation | V18-C1 — the attestation fence's **cross-registration** freshness operand, replacing revision 17's `run_identity` pairing. Cluster-minted from committed log entries, so no node-local durability premise is involved. Never read as a magnitude and never compared across nodes: the sole reader is `AttestReplicaSynced`'s equality conjunct. **Cell deletion + re-creation moves it strictly upward** — the transition `parent_seq` cannot see — because re-creation *is* the mint site |
+| `registration_seq: u64` | **exactly one writer: a fresh `AddNode`/`MEET` registration** — the arm whose `payload.node.id ∉ nodes` pre-apply (`commands.rs:132`'s `existed` predicate) — which mints `ClusterStateInner.registration_seq_gen + 1` into the cell it creates and stores the incremented generation. **No other transition writes the field and none writes the generation**: a bare `AddNode` **upsert** preserves it field-wise (V7-M3/V15-M2's rule, the TR-CLUSTER-027 live path); `ResetCluster` **carries** the resetting node's value unchanged into the re-inserted cell (`commands.rs:844`/`:852`) and does **not** rewind the generation, unlike the epochs it zeroes (`:841`/`:843`) and `handoff_seq` (`:830`); every *other* member's cell is deleted (`:837`) and can only return through a fresh registration. Both snapshot vehicles carry field and generation | V18-C1 — the attestation fence's **cross-registration** freshness operand, replacing revision 17's `run_identity` pairing. Cluster-minted from committed log entries, so no node-local durability premise is involved. Never read as a magnitude and never compared across nodes; **three readers, all equality-only** (V19-m1 corrects "the sole reader is `AttestReplicaSynced`", which V18-M1's own conjunct falsified in the revision that wrote it): `AttestReplicaSynced`'s conjunct, the `ReportRunIdentity` **Demotion** arm's `observed_registration_seq` conjunct (never the `Boot` arm), and the pending-transition record's **effect-keyed clearing clause**, which compares this field against the record's `staged_registration_seq` (V19-M1). The record's copy is **not a writer** of the field and creates no second mint site — it is a node-local snapshot of a replicated value, read back for equality by the node it describes. **Cell deletion + re-creation moves it strictly upward** — the transition `parent_seq` cannot see — because re-creation *is* the mint site |
 | `admitted_stage: Option<u64>` | the same writer set, by the same rule: default `None`; the `ReportRunIdentity` **Demotion arm** is the sole minting site, writing `Some(payload.stage_id)`. No other transition writes it — in particular the `Boot` arm does not (V15-m1) | V14-M1 — names the adjudication that gave the node its **current** parent, so the staged adoption binds to *its own* admission across a boot; stage ids are per-node monotone and never reused, so a stamp left over from an earlier stage satisfies no later record's operand |
 
 #### Writer join against the LOCKED state space (V15-F10, permanent)
@@ -1577,7 +1772,7 @@ defect, not an omission.**
 | **Node parent pointer** (SS-3, `NodeInfo.primary_id`) | "`apply_command`: `AddNode`, `SetRole`, `Failover` (re-parent), `RemoveNode` (re-parents the departing node's children via `reparent_children`, `commands.rs:231`), `ResetCluster` (nulls this node's own parent pointer, `commands.rs:835`)" | **All five carried, all five amended by the companion-field rule** — this is the row the rule is keyed on, so no member of it may be skipped. `AddNode` — fresh registration writes the companions (carve-out 2 when it registers a primary, default otherwise); a bare **upsert** writes no `primary_id` and preserves them (V15-M2, LOCKED TR-CLUSTER-027 fires exactly this path live). `SetRole` — default or carve-out 2 by direction. `Failover` (re-parent) — **three distinct writes**, each taking the rule separately: the promotee's parent **cleared** (carve-out 2), the old primary **re-parented** to the successor (default), and the old primary's **siblings re-parented** via `reparent_children(.., Some(new_primary))` (default — this is the write revision 14 missed, V15-C1). `RemoveNode` — `reparent_children(.., None)` **detaches** every child (default write: `synced = false`, `admitted_stage = None`, `promoted_from = None`), producing the **detached replica** tracked state declared below (V15-C3). `ResetCluster` — carve-out 2. **Added by this design**: the Demotion arm (carve-out 1). |
 | **Node's own config epoch** (SS-4, `NodeInfo.config_epoch`) | "`apply_command`: `AddNode` (initial), `SetConfigEpoch`, `Failover` (stamp on promotion), `ResetCluster` (HARD only: reset to 0, `commands.rs:843`)" | **All four carried, none amended** — this design writes no epoch. **Citation correction** (V17 check (b)): the LOCKED cell's "`ResetCluster` (HARD only: reset to 0, `commands.rs:843`)" understates the apply — HARD resets the epoch in **two** places, the **cluster** epoch at `commands.rs:841` and the **node's own** epoch at `:843`, and re-keys the node at `:842`. Non-load-bearing for the writer set (the writer is the same transition), load-bearing for the Demotion fence's discharge below, which cites the re-key. It *reads* the field in **two** admission conjuncts (the Demotion arm's fence and, via TR-CLUSTER-018/042, the failover fences), so each of these four writers can refuse an in-flight report: that is the fence working, and gate 3 (d) arm 2 is the declared response. **V16-C1 removed the third reader**: `AttestReplicaSynced`'s `observed_config_epoch` conjunct was **inert** — the epoch it compared is the *attesting replica's own* `config_epoch`, and none of the four writers above is a writer of `primary_id`, the fact the attestation qualifies, so no re-parent moved the operand. (The Demotion arm's epoch operand is not inert, because the writers that could *restore* the role it fences — the failover promotion arms, `ResetCluster` HARD — stamp the epoch in the same apply. That coupling exists for the role and does not exist for the parent pointer, which is the whole content of V16-C1.) The attestation's freshness operand is now `parent_seq`, next row. |
 | **`NodeInfo.parent_seq`** (V16-C1 — *no LOCKED row*; a **new** replicated field whose writer set is, by construction, SS-3's) | SS-3's cell, verbatim, because it *is* this field's writer list: "`apply_command`: `AddNode`, `SetRole`, `Failover` (re-parent), `RemoveNode` (re-parents the departing node's children via `reparent_children`, `commands.rs:231`), `ResetCluster` (nulls this node's own parent pointer, `commands.rs:835`)" | **All five amended by this design** — the field is new, so every writer named above gains the increment; none is merely carried. `AddNode` — fresh registration initializes `parent_seq = 0`; a bare **upsert** writes no `primary_id` and so does not increment (V15-M2's field-wise rule, unchanged). `SetRole` — increments in either direction. `Failover` (re-parent) — the same **three distinct writes** SS-3 above enumerates each increment separately: the promotee's cleared pointer, the old primary's re-parent, and every **sibling** re-parented by `reparent_children(.., Some(new_primary))`. `RemoveNode` — every child detached by `reparent_children(.., None)` increments. `ResetCluster` — for the **resetting** node it nulls the pointer and therefore increments (it is **not** a rewind of that node's counter: `handoff_seq` is the one counter LOCKED rewinds, FM-CLUSTER-086/100). **Cell deletion is not a writer, and that is the row's load-bearing caveat** (V17-C1): for **every other member** the same `ResetCluster` apply *deletes the `NodeInfo` cell* (`commands.rs:833-854` — `nodes.clear()` then re-insert of the resetting node only), as does `RemoveNode`/`CLUSTER FORGET` (`commands.rs:233`), and a later fresh `AddNode`/`MEET` re-initializes `parent_seq = 0` under the **same** address-derived NodeId (`commands/cluster/admin.rs:72-78`, `server/util.rs:32-37`). The field's *value history* therefore admits a return to a previously-held value even though **no writer decreases it** — a distinction this join cannot make, because a join enumerates writers. The consequence is discharged where the operand is read, at the fence-freshness table's attestation row (pairing with **`registration_seq`**, the next row — V18-C1 replaces V17-C1's `run_identity` pairing), never by a claim of unconditional monotonicity here. **By-construction coupling, stated as the join's whole point**: this row can never fall behind SS-3, because the increment is not a second rule with a second enumeration — it is the same apply, on the same enumeration, as the companion-field rule. A future LOCKED writer added to SS-3 lands in this row automatically, and the writer join is what makes that mechanical rather than hoped for. |
-| **`NodeInfo.registration_seq` and `ClusterStateInner.registration_seq_gen`** (V18-C1 — *no LOCKED row*; a **new** replicated field and a **new** cluster-level counter, whose writer set is deliberately **not** any LOCKED cell's, because the whole point is a writer set of size one) | The nearest LOCKED cells, quoted because the field lives inside one and is deleted by the other, and both must be checked against this row: **SS-1 Node membership** — "`apply_command`: `AddNode`, `RemoveNode`, `Failover` (remove/re-parent), `ResetCluster` (clears to just this node, `commands.rs:832-855`; if `node_id` is not a member — a reset racing a `FORGET` — the `else` branch at `commands.rs:855-858` clears membership to *empty* instead and still returns `Ok`)"; and **Handoff attempt counter** — "`apply_command`: `PrepareSlotHandoff` (increment), `ResetCluster` (rewind to 0)", the precedent for a cluster-level counter in `ClusterStateInner` | **`AddNode` — amended, and split**: the **fresh** arm (`node.id ∉ nodes`, `commands.rs:132`) is the counter's **sole writer** and the field's sole writer — increment the generation, stamp the new value; the **upsert** arm writes neither (field-wise preservation, V15-M2). **`RemoveNode` — carried, non-writer**: it deletes the cell, and cell deletion is not a write; the *generation* is untouched, which is exactly what makes the re-created cell's value strictly greater than the deleted one's. **`Failover` (remove/re-parent) — carried, non-writer**: it re-parents and can remove membership, never registers. **`ResetCluster` — carried, explicitly non-writer on both halves, and this is the row's load-bearing disposition**: for the **resetting** node the cell is removed and re-inserted by the same apply (`commands.rs:833` → `:844` HARD / `:852` SOFT) with `registration_seq` **carried unchanged** — the cell is moved, not fresh-registered — and for **every other** member the cell is destroyed (`:837`) and can return only through the fresh `AddNode` arm above. The generation is **not rewound**, in deliberate contrast to the two rewinds the same apply performs (`config_epoch` to `0` at `:841`/`:843`, `handoff_seq` to `0` at `:830`): a rewind would re-mint values that deleted cells already held, which is the ABA this field exists to refuse, produced by the transition that deletes the most cells. **`PrepareSlotHandoff` — carried**, cited only for the counter precedent. **Both snapshot vehicles carry field and generation** under the same wholesale-adoption clause (`ClusterSnapshot`, `cluster/src/state.rs:145-166`) — the FM-CLUSTER-100 argument `handoff_seq` already makes. **Why this row cannot silently rot** (the join's own test): a future writer of `nodes` that *creates* a cell without minting would break the fence, so the row states the invariant in creation terms rather than transition terms — **every apply that puts a `NodeInfo` under a key absent pre-apply either mints a new value or carries an existing cell's value with it; it may never write a value some other cell held**. Both of today's inserts satisfy it and they satisfy it differently: `AddNode`'s fresh arm **mints**, and `ResetCluster` HARD's re-key (`commands.rs:842/:844` — the resetting node's own cell moved to a random new id) **carries**, which is sound because it is the same cell continuing under a new key rather than a registration, and because the value it carries is not re-mintable by anything (the generation never rewinds). |
+| **`NodeInfo.registration_seq` and `ClusterStateInner.registration_seq_gen`** (V18-C1 — *no LOCKED row*; a **new** replicated field and a **new** cluster-level counter, whose writer set is deliberately **not** any LOCKED cell's, because the whole point is a writer set of size one) | The nearest LOCKED cells, quoted because the field lives inside one and is deleted by the other, and both must be checked against this row: **SS-1 Node membership** — "`apply_command`: `AddNode`, `RemoveNode`, `Failover` (remove/re-parent), `ResetCluster` (clears to just this node, `commands.rs:832-855`; if `node_id` is not a member — a reset racing a `FORGET` — the `else` branch at `commands.rs:855-858` clears membership to *empty* instead and still returns `Ok`)"; and **Handoff attempt counter** — "`apply_command`: `PrepareSlotHandoff` (increment), `ResetCluster` (rewind to 0)", the precedent for a cluster-level counter in `ClusterStateInner` | **`AddNode` — amended, and split**: the **fresh** arm (`node.id ∉ nodes`, `commands.rs:132`) is the counter's **sole writer** and the field's sole writer — increment the generation, stamp the new value; the **upsert** arm writes neither (field-wise preservation, V15-M2). **`RemoveNode` — carried, non-writer**: it deletes the cell, and cell deletion is not a write; the *generation* is untouched, which is exactly what makes the re-created cell's value strictly greater than the deleted one's. **`Failover` (remove/re-parent) — carried, non-writer**: it re-parents and can remove membership, never registers. **`ResetCluster` — carried, explicitly non-writer on both halves, and this is the row's load-bearing disposition**: for the **resetting** node the cell is removed and re-inserted by the same apply (`commands.rs:833` → `:844` HARD / `:852` SOFT) with `registration_seq` **carried unchanged** — the cell is moved, not fresh-registered — and for **every other** member the cell is destroyed (`:837`) and can return only through the fresh `AddNode` arm above. The generation is **not rewound**, in deliberate contrast to the two rewinds the same apply performs (`config_epoch` to `0` at `:841`/`:843`, `handoff_seq` to `0` at `:830`): a rewind would re-mint values that deleted cells already held, which is the ABA this field exists to refuse, produced by the transition that deletes the most cells. **`PrepareSlotHandoff` — carried**, cited only for the counter precedent. **Both snapshot vehicles carry field and generation** under the same wholesale-adoption clause (`ClusterSnapshot`, `cluster/src/state.rs:145-166`) — the FM-CLUSTER-100 argument `handoff_seq` already makes — **and carrying is not by itself monotonicity, so the premise is stated rather than left implicit** (V19-m2): a **Raft** install is **forward-only** (it never carries state older than the installing node's applied state), so wholesale adoption cannot regress the generation; an **out-of-band restore of an older snapshot** regresses it exactly as it regresses `handoff_seq` and both epochs, and that path is governed by **FM-CLUSTER-100**, not by this row. **Why this row cannot silently rot** (the join's own test): a future writer of `nodes` that *creates* a cell without minting would break the fence, so the row states the invariant in creation terms rather than transition terms — **every apply that puts a `NodeInfo` under a key absent pre-apply either mints a new value or carries an existing cell's value with it; it may never write a value some other cell held**. Both of today's inserts satisfy it and they satisfy it differently: `AddNode`'s fresh arm **mints**, and `ResetCluster` HARD's re-key (`commands.rs:842/:844` — the resetting node's own cell moved to a random new id) **carries**, which is sound because it is the same cell continuing under a new key rather than a registration, and because the value it carries is not re-mintable by anything (the generation never rewinds). |
 | **Slot ownership** (SS-11, `slot_assignment`) | "`apply_command`: `AssignSlots`, `RemoveSlots`, `Failover` (transfer), `CompleteSlotMigration` (move), `RemoveNode` (unassigns the departing node's slots, left unassigned rather than retargeted, `commands.rs:222-224`), `ResetCluster` (clears all, `commands.rs:821`)" | `AssignSlots` — **amended** (rollback arm; assignee-role conjunct; `accept_data_loss` token rules). `RemoveSlots`, `Failover` (transfer), `ResetCluster` — **carried**. `CompleteSlotMigration` — **amended** (rewritten wholesale by this design). `RemoveNode` — **carried**, and its unassign is what makes the detached replica's slots ownerless rather than re-homed (FM-CLUSTER-002's "NOT observable" is explicit that inventing a successor here is forbidden). **Added by this design**: the Demotion arm's in-apply re-home to the validated successor. Invariant added: no slot is assigned to a node whose role is `Replica`. |
 | **Node membership** (SS-1, `nodes`) | "`apply_command`: `AddNode`, `RemoveNode`, `Failover` (remove/re-parent), `ResetCluster` (clears to just this node, `commands.rs:832-855`; if `node_id` is not a member — a reset racing a `FORGET` — the `else` branch at `commands.rs:855-858` clears membership to *empty* instead and still returns `Ok`)" | **All four carried, none amended.** The design *reads* membership in the `membership` and `upstream-validity` conjuncts and in the lineage guard's third disjunct; `RemoveNode` and `Failover{force: true}` are the two writers that can falsify an upstream mid-flight, and both route to declared arms (gate 3 (d) arms 3/5). **Citation correction, offered to the LOCKED cell** (V17 check (b) — the quote above is verbatim and stays verbatim; the correction is this design's, for the spec edit): the membership-reduction block is `commands.rs:833-854`, not `832-855` — `832` is the comment line and `855` is the `else` the cell separately cites. **Load-bearing for V17-C1, not cosmetic**: that block is `nodes.clear()` followed by re-insert of the resetting node **only**, so a reset destroys every *other* member's `NodeInfo` cell — the cell deletion the attestation fence's cross-registration argument now quantifies over. |
 | **Open migrations** (SS, `ClusterStateInner.migrations`) | "`apply_command`: `BeginSlotMigration`, `CompleteSlotMigration`/`CancelSlotMigration` (remove), `Failover` (prune naming the demoted/removed node), `RemoveNode` (`prune_migrations_naming`, `commands.rs:230`), `ResetCluster` (drains all, paying every release event the prepared handoffs owe, `commands.rs:826-829`)" | `BeginSlotMigration` — **amended** (rewritten in Transitions: residue guard, `slot_map[slot] == source` conjunct, captured parameters, `run_id`). `CompleteSlotMigration` — **amended** (rewritten wholesale: token conjunction, target-role conjunct, residue-entry creation). `CancelSlotMigration` — **amended** (repatriation precondition retired, target added to the proposer set, target-discard + release). `Failover` (prune naming the demoted/removed node) — **carried**: the prune itself is untouched, and its held-write consequence is declared by §3's *"Failover prunes the record"* exit row and, when the same failover demotes this source, by the demotion-disposition row that takes precedence over it. `RemoveNode` (`prune_migrations_naming`) — **amended**: the migration prune is carried, but the *residue* half is rewritten to mark-don't-remove (`source_gone`/`target_gone` + unassign — blast-radius TR-CLUSTER-003, and §5's level-triggered shadow discard on the target side); its held-write consequence is §3's new **`RemoveNode` prune** exit row (V16-M1). `ResetCluster` — **carried, including the clause "paying every release event the prepared handoffs owe"**: the drain semantics are unchanged; what this design adds at that writer is the *declared client disposition* the clause implies, §3's new **`ResetCluster` drain** exit row (V16-M1), plus the shadow-discard trigger (§5, blast-radius TR-CLUSTER-035). **Added by this design**: `ReportRunIdentity` (**both arms** — the identity **field write** cancels the migrations this node *sources*, §4 and the transition row; the cancel binds to the field write and is therefore arm-independent, so the `Boot` arm removes records exactly as the `Demotion` arm does). Blast-radius verdict Amended; its held-write consequence is §3's seventh exit row (V17-M1). **This clause is the row's whole lesson** (V17-M1): revision 16 wrote "this design adds no writer here" while §4 and the transition row both declared the cancel, and §3's totality table — derived from the LOCKED cell alone — inherited the omission, leaving an ordinary source restart with no declared client disposition. |
@@ -1631,8 +1826,47 @@ Discharged inline for the three fences that exist:
 | Fence | Fenced fact | Freshness operand | Writers of the operand | Cannot-return argument |
 |---|---|---|---|---|
 | `ReportRunIdentity` **Demotion arm** (V8-C2) | "at mint, this node was `role == Primary` at config epoch *e*" | `NodeInfo.role` **coupled with** `NodeInfo.config_epoch` (in-registration), **plus `NodeInfo.registration_seq`** (cross-registration — V18-M1) | role: `SetRole`, `Failover` (promote/demote), `ResetCluster`, the Demotion arm; epoch: `AddNode` (initial), `SetConfigEpoch`, `Failover` (stamp on promotion), `ResetCluster` (HARD); `registration_seq`: the fresh-registration mint, sole writer (writer-join row above) | `role` alone **is** restorable (`Primary → Replica → Primary`). It is the **coupling** that discharges (iv): every writer that can *restore* `role = Primary` — both failover promotion arms (LOCKED TR-CLUSTER-018/042 stamp the bumped cluster epoch onto the promotee in the same apply) and `ResetCluster` HARD (zeroes it) — writes the epoch **in the same apply**, so a round trip back to `Primary` necessarily moves the epoch. Restoration without an epoch move would require a promotion that does not stamp, which no LOCKED row permits. **Mandatory sub-question, answered** (V18-M1 — revision 17 left this row's cell-deletion half unanswered, and the answer it *would* have given was wrong: `ResetCluster` HARD zeroes the epoch, so a stale report minted at epoch `0` against a node that was re-created at epoch `0` passes the coupling): **yes**, the cell is deletable, and the containment is the **narrowed absent-operand rule**, not the coupling. A stale `Demotion` report arriving after its registration died meets exactly two states. **(a) The re-created cell before the rejoined node's first report** — `run_identity` absent, and §0's rule (narrowed by V18-M1) makes the ordering conjunct **false for `kind = Demotion`**: refused, class `ordering`. This is the leg revision 17 lacked; the epoch coupling does *not* cover it, because a HARD reset restores both `role = Primary` (`commands.rs:834`) and `config_epoch = 0` (`:843`), reproducing the exact pair a pre-reset report could have observed. **(b) The cell after that first report** — and here the v18 review's prescribed leg is **not sound, so this row does not use it** (deviation, reasoned): the review argued the stale report "does not order above the rejoined life's triple", which is true only when the node's counters survived. On the wipe path they did not, the re-mint rule reads an **absent** stored value and mints `(1, 0)` (§0's V6-M2 branch), and a stale pair like `(3, 7)` orders *above* it — the identical counter-loss hole V18-C1 found at the attestation fence, reproduced one row down. **What actually carries (b)**: this arm's payload gains **`observed_registration_seq`** and its admission requires `nodes[node].registration_seq == payload.observed_registration_seq`, exactly as the attestation fence does (V18-C1's operand, extended here — see the transition row). A report minted in a dead registration observed that registration's seq; the re-created cell's is strictly greater; the report is refused, class `fence`, and the node re-proposes with fresh observations (the declared `fence`-class behaviour, not an exit). So: the (role, epoch) coupling carries **in-registration** freshness, `registration_seq` carries **cross-registration** freshness *totally*, and the narrowed absent-operand rule is the **semantic** statement that a `Demotion` report against a node with no reported identity has no lawful producer — kept as declared defense-in-depth, not as the load-bearing leg. |
-| **Staged-flip** adoption fence (V14-M1/M7, V15-M1/C2) | "this record's *own* report is the one that was admitted" | `record.stage_id` matched against `nodes[n].admitted_stage` | `admitted_stage`: the entire `primary_id` writer set (companion-field rule) — the Demotion arm mints, every other writer clears | The operand is **single-use, never restorable by any writer**: stage ids are per-node monotone and never reused, and the *only* minting writer stamps the id carried in its own committed payload. No transition can write `admitted_stage = Some(s)` for an `s` that was stamped before, so a cleared stage never returns. Monotonicity is the argument; equality is safe because the value space is spent-once. **Cross-registration containment, now declared rather than incidental** (V17-C1's scope note — `admitted_stage` lives in the same deletable `NodeInfo` cell as `parent_seq`, and the node-local `stage_id` mint is destroyed by the wipe TR-CLUSTER-005 mandates, so across cell deletion the operand *is* rewindable and this column owes the containment explicitly): a stale `Demotion` report applying after a re-registration cannot fire an adoption, on two independently sufficient grounds. **(a)** The adoption's *other* conjunct is the node's **durable pending-transition record**, and §0's record-lifecycle rule clears that record — fsynced, before the re-mint/boot report — on **`ResetCluster` (SOFT and HARD), removal of self, and a fresh join**, which is every path that deletes and re-creates the cell; with no record there is nothing for a stamp to match. **(b)** The companion-field rule forces `synced = false` in the same apply that writes the re-parented pointer, so even a stamp that landed marks a **non-candidate** — the report is the V14-m4 inert residue, not a promotion path. **What revision 17 said did not contain it, revised** (V18-M1): revision 17 noted that "the `ordering` conjunct is vacuously true against the absent post-registration cell", leaving legs (a) and (b) to carry the whole argument. After V18-M1 that is no longer true — the report never reaches this fence, because the narrowed absent-operand rule refuses a `Demotion` against an absent cell and the Demotion arm's `observed_registration_seq` conjunct refuses it against a re-created one. Legs (a) and (b) are **kept anyway, and the reason is the point of the row**: they are the containment that holds even if the stamp somehow lands, and this design has now spent two rounds learning that a single leg is how a CRITICAL gets in. The `registration_seq` pairing the attestation fence carries is therefore **not** needed here, because the operand this fence reads (`admitted_stage`) is spent-once rather than restorable; if any leg is ever weakened — a record that survives a rejoin, a `synced` write dropped from the re-parent, or the Demotion arm's registration conjunct removed — this row must be re-derived in the same change. |
+| **Staged-flip** adoption fence (V14-M1/M7, V15-M1/C2) | "this record's *own* report is the one that was admitted" | `record.stage_id` matched against `nodes[n].admitted_stage` | `admitted_stage`: the entire `primary_id` writer set (companion-field rule) — the Demotion arm mints, every other writer clears | The operand is **single-use, never restorable by any writer**: stage ids are per-node monotone and never reused, and the *only* minting writer stamps the id carried in its own committed payload. No transition can write `admitted_stage = Some(s)` for an `s` that was stamped before, so a cleared stage never returns. Monotonicity is the argument; equality is safe because the value space is spent-once. **Cross-registration containment, now declared rather than incidental** (V17-C1's scope note — `admitted_stage` lives in the same deletable `NodeInfo` cell as `parent_seq`, and the node-local `stage_id` mint is destroyed by the wipe TR-CLUSTER-005 mandates, so across cell deletion the operand *is* rewindable and this column owes the containment explicitly): a stale `Demotion` report applying after a re-registration cannot fire an adoption, on two independently sufficient grounds. **(a)** The adoption's *other* conjunct is the node's **durable pending-transition record**, and §0's **effect-keyed record-clearing clause** clears that record — fsynced, at boot before the re-mint and level-triggered while running — **whenever applied state shows `nodes[self].registration_seq ≠ record.staged_registration_seq` or `self ∉ nodes`**. That predicate is keyed on the *effect* (the cell this record's intent was adjudicated in is gone or has been re-created), not on the node having observed some enumerated transition, so it covers **every** path that deletes and re-creates the cell — `RemoveNode`/`FORGET`, this node's own `ResetCluster`, **and any other member's `ResetCluster`** (`commands.rs:837`) — including the compositions that complete while this node is down. **Before revision 19 this leg was transition-keyed and its "every path" claim was false** (V19-M1): a record could outlive its registration and wedge the node; the clause restores the claim. With no record there is nothing for a stamp to match. Forced by `staged_record_from_a_dead_registration_is_cleared_at_boot` and `staged_record_cleared_when_registration_changes_underneath_a_running_node`. **(b)** The companion-field rule forces `synced = false` in the same apply that writes the re-parented pointer, so even a stamp that landed marks a **non-candidate** — the report is the V14-m4 inert residue, not a promotion path. **What revision 17 said did not contain it, revised** (V18-M1): revision 17 noted that "the `ordering` conjunct is vacuously true against the absent post-registration cell", leaving legs (a) and (b) to carry the whole argument. After V18-M1 that is no longer true — the report never reaches this fence, because the narrowed absent-operand rule refuses a `Demotion` against an absent cell and the Demotion arm's `observed_registration_seq` conjunct refuses it against a re-created one. Legs (a) and (b) are **kept anyway, and the reason is the point of the row**: they are the containment that holds even if the stamp somehow lands, and this design has now spent two rounds learning that a single leg is how a CRITICAL gets in. **Revision 19 restores the row to two *independently sufficient* legs** (V19-M1): between revisions 17 and 18 leg (a) had quietly degraded to a conditional one — true only for the deletions this node observed — so the row's own trip-wire ("a record that survives a rejoin … this row must be re-derived in the same change") had in fact been tripped without being re-derived. With the effect-keyed clause, leg (a) alone suffices (no record survives a registration change, so no stamp has a partner) and leg (b) alone suffices (a landed stamp marks a non-candidate); neither leans on the other, and neither leans on the V18-M1 narrowing. The `registration_seq` pairing the attestation fence carries is therefore **not** needed here, because the operand this fence reads (`admitted_stage`) is spent-once rather than restorable; if any leg is ever weakened — a record that survives a rejoin, a `synced` write dropped from the re-parent, or the Demotion arm's registration conjunct removed — this row must be re-derived in the same change. |
 | `AttestReplicaSynced` (V15-C4, corrected by V16-C1, paired by V17-C1, **re-paired by V18-C1**) | "at mint, this node's parent was *p*, and the sync point it reached is *p*'s history" | the **pair** (**`NodeInfo.parent_seq`**, **`NodeInfo.registration_seq`**). `observed_primary_id` is retained as the *readable* statement of which parent and is not a freshness operand. **`run_identity` is no longer an operand of this fence** (V18-C1) | `parent_seq`: exactly the `primary_id` writer set, **by construction** (parenting-token rule) — every apply that writes the pointer increments the token in the same apply. `registration_seq`: **one writer, the fresh-registration arm of `AddNode`** (writer-join row above) — an upsert preserves, `ResetCluster` carries the resetting node's value and rewinds no generation, cell deletion is not a write, and both snapshot vehicles carry field and generation | Discharged over **both** ABA shapes, which is why the operand is a pair. **In-registration ABA** — `parent_seq` is monotone within one registration epoch and moved by every writer of the fenced fact, so equality at mint and at apply implies **no `primary_id` write occurred at all in between**, strictly stronger than "the pointer is equal again". **Cross-registration ABA** (V17-C1's shape, discharged by V18-C1's operand): the mandatory sub-question's first half is **yes** — the cell is deletable and the address-derived NodeId returns — and the second half is **no**, by writer enumeration alone. Re-creating a deleted cell **is** a fresh registration (the `existed == false` arm at `commands.rs:132`), fresh registration is the **only** mint site of `registration_seq`, and the generation it mints from is never rewound by any transition, `ResetCluster` included. So the re-created cell's `registration_seq` is **strictly greater** than the deleted cell's, and the equality conjunct refuses every attestation minted in a prior registration — before *or* after the rejoined node's first identity report, with **no** appeal to node-local durability, to `replication_state.json`, to a wipe having happened, or to the TR-CLUSTER-005 join gate. **Why the operand changed** (the lesson, not the mechanics): revision 17 discharged this same half with a two-leg argument ending "either the counters survived and the re-mint orders above, or they did not and a fresh `replid` is forced" — and the second leg's premise was a replication behaviour **LOCKED FM-REPLICATION-021 does not provide** (V18-C1). Every operand this fence has worn until now was **node-local in origin** (`config_epoch` v15, `parent_seq` v16, `run_identity` v17); `registration_seq` is minted by the cluster from committed log entries, so its freshness is a property of the log rather than of any node's disk. **Neither operand alone discharges (iv)**: `parent_seq` alone is rewound to `0` by re-registration, and `registration_seq` alone is unmoved by a re-parent. The v15 form failed (iv) outright: `primary_id` equality is restorable (`A → F → A`; the same-shard failover pair `P → Q → P`) and its companion operand, the replica's own `config_epoch`, is moved by **no** `primary_id` writer. **The TR-CLUSTER-005 join gate is no longer load-bearing here** (V18-m3, re-derived under the new operand — see §1's rejoin case): the discharge above holds whether or not the rejoining node wiped, and even on the path where a forgotten-but-still-running node re-`MEET`s without any reset, because that path re-registers into an **absent** cell and so mints too. The gate remains valuable defense-in-depth for the keyspace and stale-copy reasons stated at §0, and this fence does not rest on it. |
+
+#### Refusal-class join (V19-M1, permanent)
+
+The writer join catches a *missing writer*; the fence-freshness discipline
+catches a *restorable operand*. V19-M1 is the third shape, and it is the one
+ten rounds of this document keep producing: **a rule narrowed in one place is
+not re-derived at the places that dispose of its outcomes.** V18-M1 narrowed
+the absent-operand exception so a `Demotion` report against an absent cell is
+*refused*; it correctly recorded the refusal's class (`ordering`) and never
+asked what gate 3 (d)'s `ordering` arm *does* with it. That arm's rationale —
+"a strictly-lower stored pair means a stale duplicate, so no-op" — is simply
+false for the new member, because there is no stored pair at all, and a
+terminal verdict disposed of as a no-op is an infinite re-propose loop.
+
+So, as a third permanent obligation, run every revision:
+
+> **Refusal-class join (permanent).** Every revision that adds, narrows, or
+> widens an admission conjunct must state which `RefusalClass` its new failures
+> land in, and must re-derive that class's disposition arm against the new
+> member — specifically, whether the arm's stated rationale still holds for it,
+> and whether the outcome is *transient* (re-propose) or *terminal* (clear and
+> exit). **A class whose arm assumes all its members are stale duplicates
+> cannot absorb a terminal verdict.** A conjunct changed without a row here is
+> a defect, exactly as a fence without a freshness row is.
+
+The class is not a free choice: `RefusalClass` is defined as *the first
+conjunct that failed*, so a new conjunct's class follows from where it sits in
+the evaluation order. What the join asks is the question after that one — does
+the arm that already exists for that class mean what it says about this new
+member, and if not, does the member get a sub-case or the design gets a new
+class. Both answers are legitimate; the row records which and why.
+
+Applied retroactively to this revision's own change, and to the narrowing that
+produced it:
+
+| Class | New member | Is the arm's rationale still true | Transient or terminal | Disposition |
+|---|---|---|---|---|
+| `ordering` | V18-M1's narrowing: a `ReportRunIdentity` with `kind = Demotion` refused against an **absent** stored `run_identity` cell | **No.** Arm 4's rationale is "the report's triple is strictly below the stored pair, so it is a stale duplicate of an already-applied report" — there is no stored pair here, and the report is not a duplicate of anything; it is an intent adjudicated in a registration that no longer exists | **Terminal.** No later apply re-creates the dead registration, so re-proposing the same record can never be admitted | **Sub-case, not a new class** (V19-M1 — flagged choice): arm 4 splits into **4a** (stored pair present and strictly above the report — the original transient stale-duplicate no-op, rationale intact) and **4b** (no stored value — clear the record fsynced, drop the whole-node fence, answer the initiating client with an error naming the lost registration, then behave exactly as arm 1's live-run / boot-window sub-cases). The six-class partition is unchanged, which is the reason for the choice: the class is *the first failing conjunct* and both sub-cases fail the same conjunct, so a seventh class would make the partition no longer a function of the admission order, and arms 1 and 3 already select on class **plus one further declared fact** |
+| `ordering` | V19-M1's own fix: a report whose record was cleared by the effect-keyed clause never reaches this class at all | n/a — the clause removes the producer rather than adding a member | n/a | **No new member.** Recorded so the next revision can see that the two mechanisms are independent: the clause prevents the refusal, 4b terminates it if it happens anyway, and the two **commute** (§0 and gate 3 (d) arm 4) |
 
 ### Transitions
 
@@ -3068,8 +3302,8 @@ Held-write disposition on every exit (every held client gets a real reply):
 | `AbortSlotHandoff` applies | execute at source, acknowledged normally — **provided the source is still the slot's serving primary at apply** (V11-C1: the same else-branch as the Cancel row, previously stated on one execute-at-source exit but not the other); **otherwise** the demotion-disposition row below governs: answered per the new role, never executed |
 | Cap breach, pre-apply | beyond-cap writes: `-TRYAGAIN`; held set: unchanged until apply |
 | `CancelSlotMigration` applies | execute at source, acknowledged normally (release event) — **provided the source is still the slot's serving primary at apply**; **otherwise** (V10-C1 completes the else-branch) the demotion-cancel row below governs: answered per the new role, never executed |
-| **Cancel caused by the source's own demotion** (the **demotion-disposition row** — V5-m5: the `ReportRunIdentity` demotion/adoption arm's *field write* cancels the migrations the node sources. Reachability under V10-C1/V11-C2: gate 3 refuses a `CLUSTER REPLICATE` node-locally on every migration source — a `Begin` source owns its slot, so the gate always binds — so this row's triggers are the failover-driven demotions, `Failover{force: false}`/`SetRole`, whose subsequent history-adoption report's identity **field write** cancels (stamped `kind = Boot` per V12-C1's rule — the failover apply already wrote the role; the cancel binds to the field write, arm-independent). The staged-flip *admission* is deliberately **not** a trigger (V12-m3 — the v11 text listed it vacuously): an admitted staged report implies the shard-relationship conjunct did not bind, i.e. the node owned no slots and armed no barrier at apply, so there is no barrier-held set for this row to dispose of; that window's client disposition is the **staged-flip fence row** below (nothing held, everything `-TRYAGAIN`). A *refused* staged report is disposed of by **gate 3 (d)'s refusal partition, keyed on the declared `RefusalClass`** (V14-M2 — the v13 text's unqualified "reverts, and anything arriving after the revert executes normally" was true only of the refuse-whole-at-a-still-Primary-node arm): refuse-whole (`upstream-validity`/`shard-relationship`) at a still-Primary node reverts and subsequent commands execute normally, the source being still the serving primary; a `fence`-class refusal keeps **both the record and the fence up**, so subsequent commands keep answering `-TRYAGAIN`; a supersession (same classes, node no longer Primary) clears the record and replies per the node's newly adopted role; `ordering` is a stale-duplicate no-op that changes nothing; `membership` runs the removal-of-self flow | the held set is answered with **the reply the node's new role implies** — `-MOVED` to the new primary when the local `shards` view names one, **`-TRYAGAIN` when `primary_id == None`** (V8-M4: the disposition is total; a successor-less demotion answers retryably and the client's retry lands wherever the eventual topology says) — and is **never executed**: a demoted node executing queued writes would fork history against its new primary. **This row retains the self-fence demotion-disposition as defence-in-depth** (V10-C1, scope narrowed V11-C2: the plane-split state — locally a replica, replicated-Primary with slots — is unreachable through gate 3's staged path; a staged report's refusal reverts instead): should the state nonetheless present, the node answers its held set and every subsequent command for those slots `-TRYAGAIN` — never `-MOVED` (replicated state names *itself*, a loop) and never executed — until an operator exit re-aligns the planes — failover of the shard, `AssignSlots` away with the loss token, or `CLUSTER FAILOVER TAKEOVER` on the shard's surviving member (V14-C1 replaces the v13 text's `REPLICAOF NO ONE`, which cluster mode refuses at dispatch; `TAKEOVER` proposes a replicated `Failover`, i.e. the replicated-plane exit), with the stated caution that in a plane-split state the local dataset's lineage is unverified, so these are operator guidance for a bug state outside the spec's reachable set, **not** verified-lossless rules (V11-C2) |
-| **Staged-flip fence** (gate 3's pending-transition record present, report unresolved — V12-M1: gate 3 passing implies no owned slots and no armed migration barrier, so the staged fence inherited no cap, no exit row, and no latch coverage from this table; this row is its coverage) | **nothing is ever held** — the level rule is the self-fence latch row's shape, keyed on the pending record instead of an armed barrier: while the record is pending, the held set for this fence is *empty* by invariant; the fence's scope is the **whole node** (V14-m5 replaces the v13 text's unbound "every command that would execute on this node as a slot-serving primary"): **every** command arriving at the staged node — keyed or keyless, read or write, admin included, and including writes for a slot an `AssignSlots` assigned it after the gate check, the race interleaving staging exists for — is answered `-TRYAGAIN` immediately, so no client ever waits out a partition on this fence (settled ruling 2) and no byte cap is needed (nothing accumulates). The initiating `CLUSTER REPLICATE` client's deferred reply is bounded by `cluster-staged-flip-reply-timeout` (§0 gate 3 — answered `-TRYAGAIN` with the stated ambiguous outcome; the stage itself never times out, because revert-then-admit would re-open the closed race). **The fence's exempt set is enumerated by member, like the seal's** (V13-m3, made explicit per V14-m4 — the v13 text exempted the whole **`CLUSTER` family**, which would have admitted `CLUSTER FLUSHSLOTS` and `CLUSTER SETSLOT` against the very dataset and slot map the staging exists to preserve): *read-only introspection* — `CLUSTER INFO` (the pending-stage read path), `CLUSTER MYID`, `CLUSTER NODES`, `CLUSTER SHARDS`, `CLUSTER SLOTS`, `CLUSTER COUNTKEYSINSLOT`, `CLUSTER GETKEYSINSLOT`; *gate-reaching* — `CLUSTER REPLICATE` and `CLUSTER FAILOVER` (any variant), which must reach gate 3's single-writer rule to receive the declared pending-stage refusal rather than a bare `-TRYAGAIN`; *operator escape* — `CLUSTER RESET` (still gated by gate 2's empty-keyspace rule) and `CLUSTER FORGET`. **Everything else follows this row, explicitly including `CLUSTER FLUSHSLOTS` and every other mutating `CLUSTER` subcommand.** `REPLICAOF`/`SLAVEOF` in any spelling never reaches this fence at all — cluster mode refuses them at dispatch (§0 gate 3's role-command surface), so the fence and the single-writer rule cannot disagree about their reply (V14-m1). Resolution exits, enumerated per gate 3 (d)'s partition (V14-M2): admission → adoption proceeds, subsequent commands answered per the node's new role (`-MOVED`/`-TRYAGAIN` as the demotion-disposition row's reply rule); **refuse-whole at a still-Primary node** → revert, node resumes serving, subsequent commands execute normally; **supersession** → record cleared, replies per the newly adopted role. A **`fence`-class refusal is explicitly not an exit** — the record and this fence both persist and the report is re-proposed with fresh observations; likewise an `ordering`-class stale-duplicate refusal changes nothing. A `membership`-class refusal exits via the removal-of-self flow (record cleared, fence dropped, non-member behavior) |
+| **Cancel caused by the source's own demotion** (the **demotion-disposition row** — V5-m5: the `ReportRunIdentity` demotion/adoption arm's *field write* cancels the migrations the node sources. Reachability under V10-C1/V11-C2: gate 3 refuses a `CLUSTER REPLICATE` node-locally on every migration source — a `Begin` source owns its slot, so the gate always binds — so this row's triggers are the failover-driven demotions, `Failover{force: false}`/`SetRole`, whose subsequent history-adoption report's identity **field write** cancels (stamped `kind = Boot` per V12-C1's rule — the failover apply already wrote the role; the cancel binds to the field write, arm-independent). The staged-flip *admission* is deliberately **not** a trigger (V12-m3 — the v11 text listed it vacuously): an admitted staged report implies the shard-relationship conjunct did not bind, i.e. the node owned no slots and armed no barrier at apply, so there is no barrier-held set for this row to dispose of; that window's client disposition is the **staged-flip fence row** below (nothing held, everything `-TRYAGAIN`). A *refused* staged report is disposed of by **gate 3 (d)'s refusal partition, keyed on the declared `RefusalClass`** (V14-M2 — the v13 text's unqualified "reverts, and anything arriving after the revert executes normally" was true only of the refuse-whole-at-a-still-Primary-node arm): refuse-whole (`upstream-validity`/`shard-relationship`) at a still-Primary node reverts and subsequent commands execute normally, the source being still the serving primary; a `fence`-class refusal keeps **both the record and the fence up**, so subsequent commands keep answering `-TRYAGAIN`; a supersession (same classes, node no longer Primary) clears the record and replies per the node's newly adopted role; `ordering` **splits** (V19-M1) — refused against a *stored* pair (4a) it is a stale-duplicate no-op that changes nothing, refused against an *absent* stored value (4b, the `kind = Demotion` member V18-M1's narrowing created) it is a **terminal** verdict about a dead registration that clears the record, drops the fence and answers the client, exactly as arm 1 does; `membership` runs the removal-of-self flow | the held set is answered with **the reply the node's new role implies** — `-MOVED` to the new primary when the local `shards` view names one, **`-TRYAGAIN` when `primary_id == None`** (V8-M4: the disposition is total; a successor-less demotion answers retryably and the client's retry lands wherever the eventual topology says) — and is **never executed**: a demoted node executing queued writes would fork history against its new primary. **This row retains the self-fence demotion-disposition as defence-in-depth** (V10-C1, scope narrowed V11-C2: the plane-split state — locally a replica, replicated-Primary with slots — is unreachable through gate 3's staged path; a staged report's refusal reverts instead): should the state nonetheless present, the node answers its held set and every subsequent command for those slots `-TRYAGAIN` — never `-MOVED` (replicated state names *itself*, a loop) and never executed — until an operator exit re-aligns the planes — failover of the shard, `AssignSlots` away with the loss token, or `CLUSTER FAILOVER TAKEOVER` on the shard's surviving member (V14-C1 replaces the v13 text's `REPLICAOF NO ONE`, which cluster mode refuses at dispatch; `TAKEOVER` proposes a replicated `Failover`, i.e. the replicated-plane exit), with the stated caution that in a plane-split state the local dataset's lineage is unverified, so these are operator guidance for a bug state outside the spec's reachable set, **not** verified-lossless rules (V11-C2) |
+| **Staged-flip fence** (gate 3's pending-transition record present, report unresolved — V12-M1: gate 3 passing implies no owned slots and no armed migration barrier, so the staged fence inherited no cap, no exit row, and no latch coverage from this table; this row is its coverage) | **nothing is ever held** — the level rule is the self-fence latch row's shape, keyed on the pending record instead of an armed barrier: while the record is pending, the held set for this fence is *empty* by invariant; the fence's scope is the **whole node** (V14-m5 replaces the v13 text's unbound "every command that would execute on this node as a slot-serving primary"): **every** command arriving at the staged node — keyed or keyless, read or write, admin included, and including writes for a slot an `AssignSlots` assigned it after the gate check, the race interleaving staging exists for — is answered `-TRYAGAIN` immediately, so no client ever waits out a partition on this fence (settled ruling 2) and no byte cap is needed (nothing accumulates). The initiating `CLUSTER REPLICATE` client's deferred reply is bounded by `cluster-staged-flip-reply-timeout` (§0 gate 3 — answered `-TRYAGAIN` with the stated ambiguous outcome; the stage itself never times out, because revert-then-admit would re-open the closed race). **The fence's exempt set is enumerated by member, like the seal's** (V13-m3, made explicit per V14-m4 — the v13 text exempted the whole **`CLUSTER` family**, which would have admitted `CLUSTER FLUSHSLOTS` and `CLUSTER SETSLOT` against the very dataset and slot map the staging exists to preserve): *read-only introspection* — `CLUSTER INFO` (the pending-stage read path), `CLUSTER MYID`, `CLUSTER NODES`, `CLUSTER SHARDS`, `CLUSTER SLOTS`, `CLUSTER COUNTKEYSINSLOT`, `CLUSTER GETKEYSINSLOT`; *gate-reaching* — `CLUSTER REPLICATE` and `CLUSTER FAILOVER` (any variant), which must reach gate 3's single-writer rule to receive the declared pending-stage refusal rather than a bare `-TRYAGAIN`; *operator escape* — `CLUSTER RESET` (still gated by gate 2's empty-keyspace rule) and `CLUSTER FORGET`. **Everything else follows this row, explicitly including `CLUSTER FLUSHSLOTS` and every other mutating `CLUSTER` subcommand.** `REPLICAOF`/`SLAVEOF` in any spelling never reaches this fence at all — cluster mode refuses them at dispatch (§0 gate 3's role-command surface), so the fence and the single-writer rule cannot disagree about their reply (V14-m1). Resolution exits, enumerated per gate 3 (d)'s partition (V14-M2): admission → adoption proceeds, subsequent commands answered per the node's new role (`-MOVED`/`-TRYAGAIN` as the demotion-disposition row's reply rule); **refuse-whole at a still-Primary node** → revert, node resumes serving, subsequent commands execute normally; **supersession** → record cleared, replies per the newly adopted role. A **`fence`-class refusal is explicitly not an exit** — the record and this fence both persist and the report is re-proposed with fresh observations; likewise an `ordering`-class refusal **against a stored pair** (arm 4a) — a stale duplicate — changes nothing. **An `ordering`-class refusal against an *absent* stored value (arm 4b) *is* an exit** (V19-M1, and this row's exit list is one of the places the old single arm made unreachable): the stage was adjudicated in a registration that no longer exists, so the record is cleared, **this fence is dropped**, and the client is answered with an error naming the lost registration — without this exit the node stays fenced whole-node and mute forever, which is the wedge V19-M1 traced. A `membership`-class refusal exits via the removal-of-self flow (record cleared, fence dropped, non-member behavior). **§0's effect-keyed record-clearing clause is the other, level-triggered way out of this fence**: a record whose `staged_registration_seq` no longer matches applied state is cleared at boot before the mint and at every reconcile tick thereafter, which drops this fence whether or not any refusal is ever observed |
 | **Self-fence latch arms** (TR-CLUSTER-026: no Raft leader contact within an election timeout) | answer the **entire held set** `-TRYAGAIN` and **keep the fence** (N-M1) — a sealed source that cannot apply must not make held clients wait out a partition; erroring a held write is *more* fenced, not less, so the §3 invariant holds and the sealed rule ("no further execution until an exit applies") is untouched. **Level rule, not an edge** (V8-M1; scope corrected V9-M2 — the earlier "and the slot sealed" qualifier left pre-`Confirm` Draining uncovered: a write arriving after the one-shot flush, before any seal, was held again and waited out the partition, the indefinite hold settled ruling 2 forbids): while the latch is armed **and this node's barrier is armed for the slot — sealed or not** — the invariant is *the held set is empty*: no new hold is ever admitted, and every arriving write (including one racing the flush) is answered `-TRYAGAIN` immediately. Erroring is strictly more fenced than holding in both sub-states, so §3's "never weaker" invariant holds. The one-shot flush is merely the transition into that region; a write arriving after it does not wait out the partition |
 | Client disconnects while held | held entry dropped with the connection (no reply owed) |
 | `CLIENT UNBLOCK`/`KILL` on a held client | `-UNBLOCKED` / connection close, per blocking rows |
@@ -4096,6 +4330,22 @@ Every touched row gets an explicit verdict in the spec change; summary:
   is the discharge: counters lost, `replication_state.json` valid, the same
   `replid` reported — and the attestation still refused, on `registration_seq`
   alone.
+- **Added in revision 19** (V19-M1/m1/m2): **no LOCKED row changes, and that is
+  the entry** — the round's whole content is node-local and design-internal.
+  **`staged_registration_seq`** is a new field of the **node-local durable
+  pending-transition record**, not of any replicated state-space row: it is a
+  *copy* of `nodes[self].registration_seq` read at gate 3 (a) from applied
+  state, so it adds **no writer** to the field's LOCKED-adjacent join row and
+  **no second mint site** for the generation (the writer-join row states this
+  explicitly). The **effect-keyed record-clearing clause** reads that field for
+  equality and reads membership; both are reads. **Gate 3 (d) arm 4's split
+  into 4a/4b** keeps the six-value `RefusalClass` partition unchanged, so no
+  transition's declared refusal set moves. Blast-radius verdict for the round:
+  **no row Amended, no row New, no row Retired.** Forcing tests:
+  `staged_record_from_a_dead_registration_is_cleared_at_boot`,
+  `staged_record_cleared_when_registration_changes_underneath_a_running_node`
+  (both node-local-durability tests in the crate that owns the record, per the
+  in-crate forcing-test rule).
 - **Retired**: FM-CLUSTER-085 (handoff lease — its property, "a dead finalizer cannot
   wedge a slot", is re-provided by the observation bound *plus the leader
   auto-`Complete`* (V4-M2), which together exit every Draining state; replacement row
@@ -5275,7 +5525,23 @@ Every touched row gets an explicit verdict in the spec change; summary:
   exception silently admits — and V18-M2 is the model-evidence analogue of
   item (g): a mutation that "kills" a fence by removing a guard over a token
   the model has no minting structure for is *true by construction*, not
-  evidence, which is why ext-17 now carries the counter and its mint) —
+  evidence, which is why ext-17 now carries the counter and its mint), then
+  V19-M1 (the **tenth round**, and the first with **zero CRITICALs** — the
+  safety core survived full re-derivation, and the whole finding is liveness:
+  V18-M1's narrowing was correct, recorded its refusal's class correctly, and
+  was never re-derived at the *arm that disposes of that class*, whose
+  rationale — "strictly below a stored pair, hence a stale duplicate" — is
+  false for the member the narrowing created. A terminal verdict absorbed by a
+  transient arm is an infinite re-propose loop, and the fix text of the round
+  before is again where it lived. That is item **(h)**, added this round —
+  *for every conjunct added, narrowed or widened, name the `RefusalClass` its
+  failures land in, and re-derive that class's disposition arm against the new
+  member: is the arm's rationale still true, and is the outcome transient or
+  terminal* — discharged in §0's permanent **refusal-class join** subsection,
+  with a missing row counting as a defect, exactly as at (f) and (g). The
+  three obligations now cover the three shapes this document has actually
+  produced: a missing **writer**, a restorable **operand**, and an
+  unre-derived **disposition**) —
   so the check must
   bind to declared
   types, not names, and must cover
@@ -5933,3 +6199,40 @@ Every touched row gets an explicit verdict in the spec change; summary:
   by snapshot mints above every value in the snapshot rather than from zero —
   the FM-CLUSTER-100 argument, extended
   (`snapshot_install_carries_the_registration_generation`).
+
+  From review v19: **a staged record from a dead registration is cleared at
+  boot** — the V19-M1 wedge trace verbatim, and the test that would have gone
+  red against revision 18. A primary passes gate 3, fsyncs the
+  pending-transition record (`kind: Demotion`, `staged_registration_seq` = its
+  cell's current value) and raises the whole-node `-TRYAGAIN` fence; the node
+  **crashes** before its report is admitted; while it is down the cluster
+  `CLUSTER FORGET`s it and it is re-`MEET`ed, so the cell it was staged in is
+  destroyed and a new one minted. The node then boots. Assertions, in order:
+  the record-clearing clause is evaluated **before** the boot-time re-mint and
+  clears the record (fsynced — the fixture re-reads the file, and a second
+  restart finds it absent); the node's first proposal is stamped **`Boot`**,
+  not `Demotion`; it is **admitted** against the absent cell by the unnarrowed
+  exception; the node converges to ordinary replica-or-primary behaviour with
+  **no `-TRYAGAIN` fence** standing, asserted by executing a keyed command
+  against it. Negative control, carried as the regression witness: with the
+  clause removed (revision 18's transition-keyed lifecycle), the record
+  survives, the kind rule stamps `Demotion`, the report is refused class
+  `ordering`, and the node is still fenced and mute after N reconcile ticks —
+  the fixture asserts the wedge positively rather than asserting a timeout, so
+  it cannot pass by being slow
+  (`staged_record_from_a_dead_registration_is_cleared_at_boot`, V19-M1);
+  **the same clearing happens level-triggered underneath a running node** —
+  the reconcile-path sibling, and the shape no boot-time check can cover: the
+  node stages and stays **up**, and another member issues `CLUSTER RESET`,
+  which deletes every other member's cell (`commands.rs:837`); the node is then
+  re-`MEET`ed and its cell returns with a strictly greater `registration_seq`.
+  The record is cleared at the next reconcile tick — no restart, no observed
+  removal-of-self, no operator action — and the fence drops with it. The
+  fixture also exercises the **race** the design's commuting argument claims is
+  safe: a `Demotion` report already in flight applies against the absent cell
+  and is refused, class `ordering`, arm **4b**; whichever of the two node-local
+  reactions runs first (arm 4b's terminal clear, or the level-triggered clause),
+  the terminal state is identical — record absent, fence dropped, node serving
+  — and both orderings are asserted
+  (`staged_record_cleared_when_registration_changes_underneath_a_running_node`,
+  V19-M1).
