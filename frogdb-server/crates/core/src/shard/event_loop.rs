@@ -70,6 +70,16 @@ impl ShardWorker {
                                 "Continuation lock request timed out waiting for the shard queue to drain"
                             );
                         }
+                        // The holder has been told to let go; the lock clears
+                        // when its release actually arrives. A script that
+                        // legitimately runs this long is a bug in the script,
+                        // not in the shard, so this is worth a warning.
+                        ContinuationEvent::HoldCapExpired => {
+                            tracing::warn!(
+                                shard_id = self.shard_id(),
+                                "Continuation lock held past the cap; revoked its holder"
+                            );
+                        }
                     }
                 }
 

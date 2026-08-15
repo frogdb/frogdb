@@ -12,7 +12,7 @@ use std::future::Future;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::{LockMode, ShardReadyResult};
+use crate::{LockMode, ShardReadyResult, VllError};
 
 /// Error returned when a shard sink cannot deliver a message — typically
 /// because the receiving shard channel has been closed.
@@ -66,6 +66,12 @@ pub trait ShardSink: Send + Sync {
     fn send_abort(&self, shard_id: usize, txid: u64) -> impl Future<Output = ()> + Send;
 
     /// Send a VLL continuation-lock acquisition request.
+    ///
+    /// `revoke_tx` is the shard's back-channel: it fires when the shard takes
+    /// the lock away from this holder — wounded by an older transaction,
+    /// killed, or held past the shard's cap. Without it a continuation lock's
+    /// hold time would be bounded only by the caller's own work, which is a
+    /// node-wide availability risk with no escape.
     fn send_continuation_lock(
         &self,
         shard_id: usize,
@@ -73,6 +79,7 @@ pub trait ShardSink: Send + Sync {
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) -> impl Future<Output = Result<(), ShardSinkError>> + Send;
 }
 

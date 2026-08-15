@@ -135,42 +135,60 @@ impl ConnectionHandler {
         let sink = ShardSenderSink::new(Arc::clone(&self.core.shard_senders));
         let coordinator = VllCoordinator::new(sink, NoopMetricsSink);
 
-        let outcome = coordinator
-            .acquire_continuation_and_run(
-                txid,
-                self.state.id,
-                &shards,
-                DEFAULT_LOCK_ACQUISITION_TIMEOUT,
-                move || async move {
-                    let (response_tx, response_rx) = oneshot::channel();
-                    let msg = kind.into_message(
-                        keys,
-                        argv,
-                        self.state.id,
-                        self.state.protocol_version,
-                        read_only,
-                        admission,
-                        response_tx,
-                    );
+        // Wound-wait's progress guarantee is only cashed in by retrying, and
+        // only by retrying under the *same* txid: age is the priority, so a
+        // retry that minted a fresh (higher) txid could be wounded again by
+        // every later arrival, forever. Bounded because a caller waiting on a
+        // reply deserves an answer even in the face of a pathological
+        // arrival pattern; on exhaustion the client gets the same retryable
+        // reply a busy shard gives.
+        let mut attempts_left = MAX_WOUND_RETRIES;
+        loop {
+            let kind = kind.clone();
+            let keys = keys.clone();
+            let argv = argv.clone();
+            let admission = admission.clone();
+            let outcome = coordinator
+                .acquire_continuation_and_run(
+                    txid,
+                    self.state.id,
+                    &shards,
+                    DEFAULT_LOCK_ACQUISITION_TIMEOUT,
+                    move || async move {
+                        let (response_tx, response_rx) = oneshot::channel();
+                        let msg = kind.into_message(
+                            keys,
+                            argv,
+                            self.state.id,
+                            self.state.protocol_version,
+                            read_only,
+                            admission,
+                            response_tx,
+                        );
 
-                    if self.core.shard_senders[primary_shard]
-                        .send(msg)
-                        .await
-                        .is_err()
-                    {
-                        return Response::error("ERR shard unavailable");
-                    }
-                    match response_rx.await {
-                        Ok(resp) => resp,
-                        Err(_) => Response::error("ERR script execution failed"),
-                    }
-                },
-            )
-            .await;
+                        if self.core.shard_senders[primary_shard]
+                            .send(msg)
+                            .await
+                            .is_err()
+                        {
+                            return Response::error("ERR shard unavailable");
+                        }
+                        match response_rx.await {
+                            Ok(resp) => resp,
+                            Err(_) => Response::error("ERR script execution failed"),
+                        }
+                    },
+                )
+                .await;
 
-        match outcome {
-            Ok(resp) => resp,
-            Err(err) => continuation_error_to_response(err),
+            match outcome {
+                Ok(resp) => return resp,
+                Err(err) if err.is_wound() && attempts_left > 0 => {
+                    attempts_left -= 1;
+                    continue;
+                }
+                Err(err) => return continuation_error_to_response(err),
+            }
         }
     }
 
@@ -233,6 +251,7 @@ enum ScriptShards {
 }
 
 /// Source of the script: literal source vs. cached SHA1.
+#[derive(Clone)]
 enum EvalKind {
     Source(Bytes),
     Sha(Bytes),
@@ -274,6 +293,13 @@ impl EvalKind {
     }
 }
 
+/// How many times a wounded cross-shard script re-acquires before giving up.
+///
+/// Wound-wait guarantees the *older* transaction finishes, and each retry keeps
+/// the script's original txid, so it only ages relative to new arrivals — three
+/// attempts is generous rather than load-bearing.
+const MAX_WOUND_RETRIES: u32 = 3;
+
 fn continuation_error_to_response(err: ContinuationError) -> Response {
     match err {
         ContinuationError::ShardUnavailable(_) => Response::error("ERR shard unavailable"),
@@ -290,6 +316,17 @@ fn continuation_error_to_response(err: ContinuationError) -> Response {
         ContinuationError::LockTimeout { shard_id } => {
             Response::error(format!("ERR lock acquisition timeout on shard {shard_id}"))
         }
+        // A wound that survived every retry is a contention condition, so it
+        // gets the same retryable reply a busy shard does. A kill or a hold-cap
+        // revocation is not contention: the work was deliberately stopped, and
+        // saying "retry" would be a lie.
+        ContinuationError::Revoked {
+            reason: frogdb_vll::VllError::Wounded,
+            ..
+        } => Response::error("BUSY shard busy with continuation lock; retry"),
+        ContinuationError::Revoked { shard_id, .. } => Response::error(format!(
+            "ERR Script stopped while holding shard {shard_id}; its effects may be partial"
+        )),
     }
 }
 

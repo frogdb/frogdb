@@ -11,7 +11,7 @@ use bytes::Bytes;
 use frogdb_core::{
     MetricsRecorder, PartialResult, ScatterOp, ShardReadyResult, ShardSender, VllMsg,
 };
-use frogdb_vll::{LockMode, MetricsSink, ShardSink, ShardSinkError};
+use frogdb_vll::{LockMode, MetricsSink, ShardSink, ShardSinkError, VllError};
 use tokio::sync::oneshot;
 
 #[cfg(feature = "turmoil")]
@@ -141,12 +141,14 @@ impl ShardSink for ShardSenderSink {
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) -> Result<(), ShardSinkError> {
         let msg = VllMsg::VllContinuationLock {
             txid,
             conn_id,
             ready_tx,
             release_rx,
+            revoke_tx,
         };
         self.senders[shard_id]
             .send(msg)

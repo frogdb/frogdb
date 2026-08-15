@@ -1,6 +1,6 @@
 # VLL continuation package: wound-wait, SCRIPT KILL, unwind/gather rows, panic restart
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -104,3 +104,21 @@ timeout yields an AMBIGUOUS outcome (FM-TXN-032 model — possibly-applied vs de
 resolves commit/abort by clock (wall-clock-as-correctness is the banned anti-pattern). (4) Panic in
 a VLL write path → restart the shard from WAL (clean state) rather than trusting the catch_unwind
 boundary; extend the NOT-observable with "partial writes surviving a panic".
+
+## Outcome
+
+Items 1-3 built. One revocation back-channel per grant (`oneshot::Sender<VllError>`, installed with
+the lock) serves all three of wound, `SCRIPT KILL`, and a new `CONTINUATION_MAX_HOLD` (5 s) cap.
+Wound-wait parks the older requester *behind* the wounded holder rather than refusing it, so the
+winner takes the lock from the drain point; the connection handler retries a wound under the same
+txid, bounded by `MAX_WOUND_RETRIES`. `ScatterError::ResultTimeout` became
+`ResultAmbiguous { shard_id, applied, unknown }`. New rows: FM-VLL-006 (wound-wait), FM-VLL-007
+(revocation/kill/hold cap), FM-VLL-008 (scatter-phase unwind — the three existing phase tests wired
+in), FM-VLL-009 (phase-4 AMBIGUOUS), LV-VLL-001 (progress under collision); TR-VLL-013/014/015/019
+restated as built.
+
+Item 4 (panic → WAL restart) is **not** built and moved to
+[issue 28](../open/28-vll-panic-restarts-the-shard-from-wal.md): no single-shard restart mechanism
+exists anywhere in the tree to build it on (recovery is a process-startup path; the shard
+supervisor's only answer to a dead worker is `AbortFailStop`), so it is a design task rather than an
+increment on this package. TR-VLL-020 keeps a `Pending` field pointing there.

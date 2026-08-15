@@ -258,14 +258,32 @@ impl ShardWorker {
     }
 
     /// Handle SCRIPT KILL - kill the running script.
-    pub(crate) fn handle_script_kill(&self) -> Result<(), String> {
+    ///
+    /// A *cross-shard* script holds this shard's continuation lock, which takes
+    /// the shard exclusively: killing the script without taking that lock back
+    /// leaves every other connection refused until a future nobody is waiting
+    /// on happens to finish. So the kill revokes the lock first, and a revoked
+    /// holder counts as a killed script even on a shard whose own executor is
+    /// idle — on every shard but the primary that is exactly the state a
+    /// cross-shard script leaves behind.
+    ///
+    /// Revoking on one shard is enough to free them all: the notice goes to the
+    /// script's coordinator, which abandons its work and drops the guard that
+    /// holds every participant's lock. That is what lets the caller's
+    /// `find_first` scatter stop at the first shard with something to say.
+    pub(crate) fn handle_script_kill(&mut self) -> Result<(), String> {
+        let revoked = self.vll.revoke_held_continuation();
         match self.scripting.executor() {
             Some(executor) => {
                 if !executor.is_running() {
+                    if revoked {
+                        return Ok(());
+                    }
                     return Err("NOTBUSY No scripts in execution right now.".to_string());
                 }
                 executor.kill_script().map_err(|e| e.to_string())
             }
+            None if revoked => Ok(()),
             None => Err("ERR scripting not available".to_string()),
         }
     }

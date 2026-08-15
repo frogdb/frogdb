@@ -11,7 +11,7 @@ use crate::pubsub::{ConnId, IntrospectionRequest, IntrospectionResponse, PubSubS
 use crate::slowlog::SlowLogEntry;
 use crate::tracking::InvalidationSender;
 use crate::types::StreamId;
-use crate::vll::{LockMode, ShardReadyResult};
+use crate::vll::{LockMode, ShardReadyResult, VllError};
 use crate::write_seam::WriteAdmission;
 
 use super::counters::HotShardStatsResponse;
@@ -795,6 +795,9 @@ pub enum VllMsg {
         ready_tx: oneshot::Sender<ShardReadyResult>,
         /// Channel to receive release signal.
         release_rx: oneshot::Receiver<()>,
+        /// Back-channel the shard uses to take the lock away from its holder:
+        /// wounded by an older transaction, killed, or held past the cap.
+        revoke_tx: oneshot::Sender<VllError>,
     },
 
     /// Get VLL queue information from this shard.

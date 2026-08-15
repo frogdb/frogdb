@@ -23,17 +23,11 @@ shard worker must pair every `dequeue_for_execution` with a `release_after_execu
 the inside — a caller that never returns leaves the entry held forever — so the way that
 pairing survives an abnormal exit is rowed here ([FM-VLL-005](#fm-vll-005--a-granted-op-panics-while-executing)).
 
-Not yet rowed (superseded below): the scatter phases themselves (lock-request dispatch failure,
-phase-2/3 partial failure unwind, gather timeouts). Those paths have tests — `phase1_dispatch_failure_aborts_shards_already_holding_intents`,
-`phase3_failure_aborts_remaining_holders_not_positions`,
-`phase2_failure_aborts_real_shard_ids_for_sparse_participants` — but their observable is a
-generic `-ERR VLL lock acquisition failed` (except the phase-4 gather timeout, see TR-VLL-019, which
-maps to a distinct `-ERR VLL execution timeout`); the modes the generic string's callers distinguish
-are internal (which shard is unwound), so they were left unspecced pending the phase-1 spec pass. This note is
-stale: TR-VLL-016/017/018/019 below now row exactly these four phases and wire exactly these three
-tests. It is left in place pending the Scope-paragraph rewrite that will fold in the issue-07
-continuation-package work; treat `## Transitions` as authoritative over this paragraph in the
-meantime.
+The scatter phases are in scope too: TR-VLL-016/017/018 row the phase-1/2/3 partial-failure
+unwinds ([FM-VLL-008](#fm-vll-008--a-scatter-phase-fails-partway-through)) and TR-VLL-019 rows the
+phase-4 gather timeout ([FM-VLL-009](#fm-vll-009--a-scatter-gather-wait-times-out-after-execute-was-dispatched)),
+which is the one scatter failure that does not unwind — past phase 3 there is nothing left to
+unwind *to*.
 
 ## State space
 
@@ -49,7 +43,9 @@ Variable names below are the tokens `## Transitions` pre/postconditions referenc
 | `shard.executing_ops` | `VllShardState.executing_ops: usize` | `+= 1` in `dequeue_for_execution`; `saturating_sub` in `release_after_execution` | shard-local, in-memory | No |
 | `shard.continuation_lock` | `VllShardState.continuation_lock: Option<ContinuationLock>` (`{txid, conn_id, acquired_at}`) | installed by `grant_continuation`; cleared by `next_continuation_event`'s `Released` arm | shard-local, in-memory | No |
 | `shard.pending_continuation_release` | `VllShardState.pending_continuation_release: Option<oneshot::Receiver<()>>` | set alongside `shard.continuation_lock` by `grant_continuation`; taken by `next_continuation_event` | shard-local, in-memory | No |
-| `shard.pending_continuation` | `VllShardState.pending_continuation: Option<PendingContinuation>` (`{txid, conn_id, ready_tx, release_rx, deadline}`) | set by `request_continuation_lock` when not drained; taken by `try_grant_pending_continuation` or the timeout arm of `next_continuation_event` | shard-local, in-memory | No |
+| `shard.pending_continuation` | `VllShardState.pending_continuation: Option<PendingContinuation>` (`{txid, conn_id, ready_tx, release_rx, revoke_tx, deadline}`) | set by `request_continuation_lock` when not drained *or* when it wounds a younger holder and parks behind it; taken by `try_grant_pending_continuation` (which now also runs from the `Released` arm) or the timeout arm of `next_continuation_event` | shard-local, in-memory | No |
+| `shard.continuation_revoke_tx` | `VllShardState.continuation_revoke_tx: Option<oneshot::Sender<VllError>>` — the shard's only way to make a holder let go | installed with the lock by `grant_continuation`; **taken** by `revoke_continuation` so the notice fires at most once per grant; cleared with the lock by the `Released` arm | shard-local, in-memory | No |
+| `shard.continuation_hold_deadline` | `VllShardState.continuation_hold_deadline: Option<Instant>` = grant time + `CONTINUATION_MAX_HOLD` (5000ms) | set by `grant_continuation`; disarmed (`None`) by `next_continuation_event` once the cap has fired, so a revoked-but-unreleased lock does not spin the host loop | shard-local, in-memory | No |
 | `pending_continuation.deadline` | `PendingContinuation.deadline: Instant` = park time + `CONTINUATION_DRAIN_TIMEOUT` (2000ms) | set at park time in `request_continuation_lock` | shard-local, in-memory | No |
 | `guard.release_txs` | `ContinuationGuard.release_txs: Vec<oneshot::Sender<()>>` (one per participating shard) | populated by `acquire_continuation`; drained (fired) by `Drop for ContinuationGuard` **on the success path only** — on an *acquisition-failure* unwind (`coordinator.rs:386/398/402/406`) no `ContinuationGuard` exists yet (it is constructed at `:412`, after success), so the raw `Vec<oneshot::Sender<()>>` built up so far is dropped directly, which *closes* each channel rather than sending `()`; the shard side tolerates this (`shard.rs:395`'s `let _ = release_rx.await;` accepts the `Err` and clears the lock the same way) — see TR-VLL-013 | connection-task-local (owned by the caller of `acquire_continuation_and_run`), in-memory | No — dropped with the task; see TR-VLL-021 |
 | `acquisition.timeout` | caller-supplied `Duration` to `acquire_continuation`/`scatter` (default `DEFAULT_LOCK_ACQUISITION_TIMEOUT`, 4000ms); the field's own doc comment (`coordinator.rs:58-59`) is "used independently for the lock-acquisition wait and the gather wait" — phase 4 applies it **per receiver** in a sequential loop (`coordinator.rs:294-306`), so the worst-case phase-4 wall clock is `participants × timeout`, not `timeout` once. For `scatter` specifically the constant is a **lower bound**, not a default: `scatter/executor.rs:116` passes `self.timeout.max(DEFAULT_LOCK_ACQUISITION_TIMEOUT)` — only the continuation path (`eval.rs:134`) passes the constant itself | caller (`eval.rs`'s `execute_cross_shard_script`, or other scatter callers) | connection-task-local, in-memory | No |
@@ -175,30 +171,28 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 
 | Field | Value |
 | --- | --- |
-| Precondition | `continuation_held_or_pending() = true` (held or parked, from any connection) |
-| Postcondition | the second requester's `ready_tx` fires `Failed(ShardBusy)`; `run` is never invoked for that requester; every already-acquired lock on other shards releases before the error surfaces — via the raw `Vec<oneshot::Sender<()>>` being dropped on the unwind path (`coordinator.rs:386/398/402/406`, before any `ContinuationGuard` exists), which *closes* each `release_rx`; the shard's `next_continuation_event` tolerates the resulting `Err` (`shard.rs:395`) and clears the lock the same way a normal `Released` signal would |
-| Source | `frogdb-server/crates/vll/src/shard.rs:309`, `frogdb-server/crates/vll/src/coordinator.rs:361` (`acquire_continuation`, unwind-on-failure) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — Finding H1: this no-wait refusal, with no priority ordering, is a livelock hazard the wound-wait rule (TR-VLL-014) replaces |
+| Precondition | `continuation_held_or_pending() = true` (held or parked, from any connection) **and** the arriving request's `txid` is >= the existing claim's — i.e. the newcomer is the younger transaction. A *lower*-txid newcomer takes TR-VLL-014's wound path instead |
+| Postcondition | the second requester's `ready_tx` fires `Failed(ShardBusy)`; `run` is never invoked for that requester; every already-acquired lock on other shards releases before the error surfaces — via the raw `Vec<oneshot::Sender<()>>` being dropped on the unwind path, which *closes* each `release_rx`; the shard's `next_continuation_event` tolerates the resulting `Err` and clears the lock the same way a normal `Released` signal would. This refusal respects the global `txid` order, so it cannot take part in a wait cycle |
+| Source | `frogdb-server/crates/vll/src/shard.rs` (`request_continuation_lock`, the two `txid >= …` arms), `frogdb-server/crates/vll/src/coordinator.rs` (`acquire_continuation`, unwind-on-failure) |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H1: the *unconditional* version of this refusal, with no priority ordering, was the livelock hazard; TR-VLL-014's wound path now covers the other half |
 
-## TR-VLL-014 — Wound-wait resolves a continuation-lock collision (RULED, not yet built)
-
-| Field | Value |
-| --- | --- |
-| Precondition | two continuation requests collide on an overlapping shard set (today: both fail `ShardBusy` per TR-VLL-013, no ordering guarantee of forward progress) |
-| Postcondition | (RULED) the lower-`txid` requester wins; the higher-`txid` holder/requester is wounded — aborted and made to retry — guaranteeing progress (CockroachDB txn-priority shape). The "shards must be sorted … to prevent deadlocks" doc comment (`coordinator.rs:329,354`) is corrected: sorted dispatch order does not itself buy deadlock-freedom under concurrent (non-serialized) acquisition — wound-wait does |
-| Source | `frogdb-server/crates/vll/src/coordinator.rs:329,354,371-392` (today: sequential sorted dispatch — a `for &shard_id in shards` loop `.await`s `send_continuation_lock` one shard at a time, `:371-392` — followed by a separate sequential ready-wait loop, `:394-410`; acquisition itself is non-serialized *across transactions* since all dispatches precede any ready-wait; no-wait refusal, no priority) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) |
-| Pending | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — no `FM-VLL` row documents wound-wait yet; issue 07's Finding H1 is the authority. Today's behavior is TR-VLL-013's mutual-abort shape, which admits livelock |
-
-## TR-VLL-015 — SCRIPT KILL revokes a held continuation lock (RULED, not yet built)
+## TR-VLL-014 — Wound-wait resolves a continuation-lock collision
 
 | Field | Value |
 | --- | --- |
-| Precondition | a cross-shard script holds a continuation lock (`shard.continuation_lock.conn_id` = the killed connection) via `acquire_continuation_and_run`; `SCRIPT KILL`/`FUNCTION KILL` is issued |
-| Postcondition | (RULED) the kill revokes the continuation locks the script holds, bounded by a hold-time cap (FDB 5s-cap / CRDB heartbeat-lock precedent); writes already applied on some shards before the kill are possibly-applied, per-shard — the kill does not roll them back. Today: `handle_script_kill` dispatches `ScriptingMsg::ScriptKill` via scatter/gather with no interaction with `shard.continuation_lock` at all — a killed script's continuation lock releases only when its own `run` future eventually returns or drops, not synchronously with the kill |
-| Source | `frogdb-server/crates/server/src/connection/scripting/script.rs` (`handle_script_kill`, no VLL/continuation reference), `frogdb-server/crates/vll/src/coordinator.rs:330` (`acquire_continuation_and_run`, unbounded `run`) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) |
-| Pending | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — no row or code ties SCRIPT KILL to continuation-lock revocation today |
+| Precondition | a continuation request arrives at a shard that already has a claim (held or parked) belonging to a **higher** `txid` |
+| Postcondition | the older (lower-`txid`) requester wins. A younger *holder* is sent `VllError::Wounded` on `shard.continuation_revoke_tx` and the older request parks behind it, taking the lock from the `Released` arm's drain-point grant; a younger *parked* claim is failed outright with `Failed(Wounded)` and the older request takes its slot. `shard.continuation_lock` is never cleared by the wound itself — only the holder knows when its shard-side work stopped, and it says so by dropping its guard. Coordinator-side the wound surfaces as `ContinuationError::Revoked { reason: Wounded }` (`is_wound() = true`), which the caller retries **under the same txid** (see [LV-VLL-001](#lv-vll-001--a-colliding-pair-of-continuations-always-makes-progress)). The old "shards must be sorted … to prevent deadlocks" doc comment is corrected: sorted dispatch does not buy deadlock-freedom under pipelined acquisition — the `txid` priority rule does |
+| Source | `frogdb-server/crates/vll/src/shard.rs` (`request_continuation_lock`, `revoke_continuation`, `park_continuation`), `frogdb-server/crates/vll/src/coordinator.rs` (`RevocationWatch`, `acquire_continuation`'s revocation race, `acquire_continuation_and_run`), `frogdb-server/crates/server/src/connection/scripting/eval.rs` (`MAX_WOUND_RETRIES`, same-txid retry) |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) |
+
+## TR-VLL-015 — SCRIPT KILL, or the hold cap, revokes a held continuation lock
+
+| Field | Value |
+| --- | --- |
+| Precondition | a cross-shard script holds a continuation lock (`shard.continuation_lock.conn_id` = the killed connection) via `acquire_continuation_and_run`, and either `SCRIPT KILL`/`FUNCTION KILL` reaches the shard or the lock outlives `CONTINUATION_MAX_HOLD` (5 s; FDB 5 s-cap / CRDB heartbeat-lock precedent) |
+| Postcondition | the shard fires `VllError::Revoked` on `shard.continuation_revoke_tx`; `acquire_continuation_and_run` drops the `run` future and returns `ContinuationError::Revoked` (`is_wound() = false` — not retried), which drops the guard and releases the lock on **every** participating shard. The hold cap disarms after firing (`shard.continuation_hold_deadline = None`) so a revoked-but-unreleased lock does not re-fire, and the lock clears on the holder's release, not on the shard's say-so. Writes already applied on some shards before the revocation are possibly-applied, per-shard — nothing rolls them back, and the client's reply says so |
+| Source | `frogdb-server/crates/vll/src/shard.rs` (`revoke_held_continuation`, `next_continuation_event`'s cap arm), `frogdb-server/crates/core/src/shard/scripting.rs` (`handle_script_kill`), `frogdb-server/crates/server/src/connection/scripting/eval.rs` (`continuation_error_to_response`) |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) |
 
 ## TR-VLL-016 — Scatter phase-1 dispatch failure unwinds already-declared intents
 
@@ -207,7 +201,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Precondition | `scatter` dispatching lock requests to participants in order; dispatch to participant `k` fails |
 | Postcondition | every participant `0..k` (already holding/queuing an intent) is aborted; participant `k` and later never received the request and are not aborted; result is `ScatterError::ShardUnavailable` |
 | Source | `frogdb-server/crates/vll/src/coordinator.rs:219-240` (Phase 1), test `phase1_dispatch_failure_aborts_shards_already_holding_intents` (`:662`) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — Finding H3: this transition has a forcing test but no row today |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H3: rowed as FM-VLL-008 |
 
 ## TR-VLL-017 — Scatter phase-2 lock-acquisition failure/timeout unwinds by real shard id
 
@@ -216,7 +210,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Precondition | `scatter` awaiting each dispatched participant's ready signal; one reports `Failed`, drops its channel, or times out |
 | Postcondition | every dispatched participant (by real shard id, not vector position) is aborted; result is `ScatterError::LockFailed`/`LockChannelClosed`/`LockTimeout` |
 | Source | `frogdb-server/crates/vll/src/coordinator.rs:246-266` (Phase 2), tests `phase2_failure_aborts_real_shard_ids_for_sparse_participants` (`:626`), `scatter_aborts_when_shard_lock_fails` (`:595`) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — Finding H3 |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H3 |
 
 ## TR-VLL-018 — Scatter phase-3 execute-dispatch failure unwinds remaining holders only
 
@@ -225,17 +219,16 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Precondition | `scatter` dispatching execute to each ready participant in order; dispatch to the participant at index `idx` fails |
 | Postcondition | participants at `0..idx` already received execute and release their own locks on completion — not aborted; participants at `idx..` still hold granted locks with no execute in flight and are aborted by real shard id; result is `ScatterError::ShardUnavailable`. This is bounded by the same fail-stop as FM-VLL-005: a live node does not keep serving reads against a shard whose worker is gone in this window — `send_execute` (`vll_adapter.rs:117-130`) only fails with `reason: "shard channel closed"`, which an mpsc `send().await` returns solely when the receiver has been dropped, i.e. the shard worker task is gone, never merely wedged or backpressured; `shard_supervisor.rs:53-64`'s `AbortFailStop` aborts the process on exactly that event, so the partial-commit window is node-fatally bounded, not indefinitely observable |
 | Source | `frogdb-server/crates/vll/src/coordinator.rs:278-290` (Phase 3), test `phase3_failure_aborts_remaining_holders_not_positions` (`coordinator.rs:710`, the `fn` line — `:709` is its `#[tokio::test]` attribute), `frogdb-server/crates/server/src/server/shard_supervisor.rs:53-64` (`AbortFailStop`) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — Finding H3 |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H3 |
 
-## TR-VLL-019 — Scatter phase-4 gather timeout yields an AMBIGUOUS outcome (RULED, not yet built)
+## TR-VLL-019 — Scatter phase-4 gather timeout yields an AMBIGUOUS outcome
 
 | Field | Value |
 | --- | --- |
 | Precondition | `scatter` awaiting a dispatched participant's execute result; the wait for one shard exceeds `acquisition.timeout` after execute was already sent (op is executing or has executed on that shard) |
-| Postcondition | (RULED) the timeout does not resolve the op's outcome to commit or abort by wall clock — it yields an AMBIGUOUS outcome mirroring `TransactionOutcome`'s possibly-applied/definitely-not distinction. Phase 4 is entered only after phase-3 dispatch has already succeeded for every participant (`coordinator.rs:278-290` returns `ShardUnavailable` on the first `send_execute` failure, so `result_rxs` is either complete or the function has already exited) — so at this point every participant already received `VllExecute`, and "never ran" is reachable only via a shard worker that is gone (never merely wedged or backpressured — `send_execute` only fails when its mpsc receiver has been dropped, `vll_adapter.rs:117-130`), which is node-fatal (`process::abort()`, see FM-VLL-005 / TR-VLL-018). The op may have already applied or may still be executing; today's `ScatterError::ResultTimeout` already maps to a **distinct** client-visible error, `-ERR VLL execution timeout` (`scatter/executor.rs:182-191`), separate from the generic `-ERR VLL lock acquisition failed` that `LockFailed`/`LockChannelClosed`/`LockTimeout` share (`:158,166,173`) — the gap this row's ruled work must close is not string collision but that `ResultTimeout { shard_id }` names one shard and says nothing about which participants applied |
-| Source | `frogdb-server/crates/vll/src/coordinator.rs:292-306` (Phase 4) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) |
-| Pending | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — no AMBIGUOUS outcome variant exists yet; `ResultTimeout` collapses possibly-applied and never-applied |
+| Postcondition | the timeout does not resolve the op's outcome to commit or abort by wall clock — it yields an AMBIGUOUS outcome mirroring `TransactionOutcome`'s possibly-applied/definitely-not distinction. Phase 4 is entered only after phase-3 dispatch has already succeeded for every participant (`coordinator.rs:278-290` returns `ShardUnavailable` on the first `send_execute` failure, so `result_rxs` is either complete or the function has already exited) — so at this point every participant already received `VllExecute`, and "never ran" is reachable only via a shard worker that is gone (never merely wedged or backpressured — `send_execute` only fails when its mpsc receiver has been dropped, `vll_adapter.rs:117-130`), which is node-fatal (`process::abort()`, see FM-VLL-005 / TR-VLL-018). The op may have already applied or may still be executing; today's `ScatterError::ResultTimeout` already maps to a **distinct** client-visible error, `-ERR VLL execution timeout` (`scatter/executor.rs:182-191`), separate from the generic `-ERR VLL lock acquisition failed` that `LockFailed`/`LockChannelClosed`/`LockTimeout` share (`:158,166,173`) — and the gap this row closed was not string collision but that the old `ResultTimeout { shard_id }` named one shard and said nothing about which participants applied. `ScatterError::ResultAmbiguous { shard_id, applied, unknown }` replaces it: `applied` is the participants that answered, `unknown` the ones whose fate the timeout did not settle ([FM-VLL-009](#fm-vll-009--a-scatter-gather-wait-times-out-after-execute-was-dispatched)) |
+| Source | `frogdb-server/crates/vll/src/coordinator.rs` (Phase 4), `frogdb-server/crates/server/src/scatter/executor.rs` (`ResultAmbiguous` arm) |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) |
 
 ## TR-VLL-020 — A granted op panics mid-execution; locks release, shard resumes
 
@@ -244,8 +237,8 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Precondition | an op holds granted locks and is executing when the underlying code panics |
 | Postcondition | (current) the panic is caught at the shard boundary; TR-VLL-005/006's dequeue/release pairing stays intact across the unwind, so locks release and `shard.executing_ops` decrements correctly; the shard answers the next message normally; the caller sees an error-shaped result. (RULED addendum) rather than trusting the `catch_unwind` boundary alone, a panic in a VLL write path restarts the shard from its WAL (clean state); the NOT-observable set gains "partial writes surviving a panic" |
 | Source | `frogdb-server/crates/vll/src/shard.rs:226,250` (dequeue/release pairing), `frogdb-server/crates/core/src/shard/vll.rs:40-74` (`handle_vll_execute`: `panic_guard::caught` wraps `execute_scatter_part`, `release_after_execution` runs on both the success and the panic-recovery arm) |
-| Rulings | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) |
-| Pending | [issue 07](../.scratch/spec-gaps/issues/open/07-vll-continuation-package.md) — WAL-restart-on-panic is not yet built; today's isolation relies on `catch_unwind` alone |
+| Rulings | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) |
+| Pending | [issue 28](../.scratch/spec-gaps/issues/open/28-vll-panic-restarts-the-shard-from-wal.md) — WAL-restart-on-panic is not yet built (no shard-restart mechanism exists to build it on); today's isolation relies on `catch_unwind` alone |
 
 ## TR-VLL-021 — Continuation-lock cancellation mid-run (RULED, not yet built)
 
@@ -335,3 +328,64 @@ here names the `ShardReadyResult` the shard sends and the coordinator error it b
 | Outcome variant | n/a — the locks were already granted; the failure is in execution, not acquisition. |
 | Forced by | `a_panicking_vll_op_releases_its_locks_and_the_shard_keeps_serving` |
 | Bug refs | [campaign-2 issue 07](../.scratch/hardening-2/issues/done/07-no-panic-isolation-at-the-shard-boundary.md), [round-2 issue 63](../.scratch/testing-improvements-round2/issues/done/63-ft-search-limit-0-0-panics-the-shard-worker.md) |
+
+---
+
+## FM-VLL-006 — two continuation requests collide
+
+| Field | Value |
+|---|---|
+| Trigger | Two cross-shard scripts request continuation locks over overlapping shard sets. On at least one shard the arriving request's `txid` is *lower* than the claim already there — held, or parked waiting for the drain ([FM-VLL-003](#fm-vll-003--continuation-lock-requested-while-the-shard-queue-has-not-drained)). |
+| Observable | The older transaction acquires. A younger *holder* receives `VllError::Wounded` on its revocation channel: its coordinator abandons `run`, drops the guard, releases every shard it held, and returns `ContinuationError::Revoked { reason: Wounded }`; the connection retries the whole script under the **same** txid, and only once `MAX_WOUND_RETRIES` is exhausted does the client see `-BUSY shard busy with continuation lock; retry`. A younger *parked* claim is failed outright with `Failed(Wounded)` and becomes the same coordinator error. A younger *arriving* request is refused `Failed(ShardBusy)` and the incumbent is untouched ([FM-VLL-002](#fm-vll-002--continuation-lock-refused-while-another-connection-holds-one)). |
+| NOT observable | Both parties aborting each other and retrying into the same interleaving — the mutual-abort livelock this row exists to exclude; a wounded caller retrying under a *fresh* txid (a retry that gave up its seniority could be wounded by every later arrival, forever); a wound clearing `shard.continuation_lock` shard-side before the holder releases (the shard cannot know the holder's sub-commands have stopped, and a lock freed under a live holder would let a second owner in); an older request losing to a younger claim merely because the younger one arrived first; more than one revocation notice per grant. |
+| Invariant | `request_continuation_lock` resolves the *parked* slot before the *held* one, so an older arrival parking behind a wounded holder cannot overwrite an even older claim already waiting there. Every comparison is `txid >=` against the globally unique, totally ordered txid, so priority is antisymmetric and no wait cycle can form — this, not the callers' sorted shard order, is what buys deadlock-freedom under pipelined acquisition. `revoke_continuation` *takes* the sender, so the back-channel fires at most once per grant, and the wounding request parks so the `Released` arm's drain-point grant hands it the lock. |
+| Outcome variant | `ShardReadyResult::Failed(VllError::Wounded)` (parked victim) or `VllError::Wounded` on `shard.continuation_revoke_tx` (holder) → `ContinuationError::Revoked { reason: Wounded }`, `is_wound() = true` |
+| Forced by | `older_continuation_request_wounds_the_younger_holder`, `older_continuation_request_wounds_a_parked_younger_claim`, `younger_continuation_request_is_refused_without_wounding`, `wound_during_acquisition_gives_way_immediately`, `older_continuation_wins_over_a_younger_partial_holder` |
+| Bug refs | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H1, found by review rather than in production |
+
+## FM-VLL-007 — a held continuation lock is revoked out from under its holder
+
+| Field | Value |
+|---|---|
+| Trigger | `SCRIPT KILL`/`FUNCTION KILL` reaches a shard whose continuation lock is held, or the lock is still held `CONTINUATION_MAX_HOLD` (5 s) after it was granted. |
+| Observable | The shard fires `VllError::Revoked` on the holder's revocation channel; the coordinator drops the `run` future, releases the lock on every participant, and returns `ContinuationError::Revoked` with `is_wound() = false`. The client that owned the script sees `-ERR Script stopped while holding shard <id>; its effects may be partial`. `SCRIPT KILL` succeeds on a shard whose own executor is idle but whose continuation lock was revoked — on every shard but the script's primary that is exactly the state a cross-shard script leaves behind — and still answers `-NOTBUSY No scripts in execution right now.` when there was neither a running script nor a lock to revoke. Sub-command writes already applied on sibling shards stand. |
+| NOT observable | Rollback of writes already applied on sibling shards — a script is not a transaction, the same rule the local effect drain lives under; a reply that invites a retry (this was a deliberate stop, not contention, so it must not reuse `-BUSY`); the hold cap firing a second time for the same grant; the shard clearing `continuation_lock` at revocation time rather than when the holder's guard drops; `-NOTBUSY` after a lock really was revoked; other shards' locks staying held because only one shard was killed. |
+| Invariant | One `oneshot::Sender<VllError>` per grant, installed with the lock and cleared with it, and *taken* by `revoke_continuation`, so it fires at most once. The hold deadline disarms itself when it fires (`continuation_hold_deadline = None`), so a revoked-but-not-yet-released lock cannot re-fire on every poll of the event arm. Revoking on one shard frees them all because the notice travels to the coordinator, which owns the guard for every participant — which is what lets `SCRIPT KILL`'s scatter stop at the first shard with something to say. |
+| Outcome variant | `VllError::Revoked` on `shard.continuation_revoke_tx` → `ContinuationError::Revoked { reason: Revoked }`, `is_wound() = false` |
+| Forced by | `revoking_a_held_continuation_notifies_its_holder`, `revoking_an_unheld_continuation_reports_no_holder`, `continuation_hold_cap_revokes_the_holder_once`, `continuation_revoked_mid_run_abandons_the_work_and_releases` |
+| Bug refs | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H2 |
+
+## FM-VLL-008 — a scatter phase fails partway through
+
+| Field | Value |
+|---|---|
+| Trigger | One participant fails while the others are already committed to the round: phase-1 dispatch of `VllLockRequest` fails after earlier participants declared intents (TR-VLL-016); phase-2's ready wait fails or times out while earlier participants hold granted locks (TR-VLL-017); phase-3 execute dispatch fails after earlier participants already received `VllExecute` (TR-VLL-018). |
+| Observable | The whole scatter fails with the phase's own `ScatterError` and the client sees that error's reply. Every participant that declared an intent or holds a granted lock **and has not received execute** is aborted, addressed by its real shard id. Participants that already received execute are left alone: they release their own locks when they finish. |
+| NOT observable | An abort addressed by loop *position* rather than real shard id — participant sets are sparse, so position `1` is routinely not shard `1`, and the wrong shard would be freed while the right one stayed locked; a participant left holding granted locks once the error has surfaced to the client; an abort sent to a participant that already received execute (it would double-free a lock the executing op still needs); the phase-3 partial-commit window persisting on a live node (the only way `send_execute` fails is a dropped shard receiver, which is node-fatal — TR-VLL-018). |
+| Invariant | Each phase unwinds exactly the set it created, and the unwind is driven from the participants vec, so every abort carries a real shard id. Phase 3 is the boundary: before it, "not executed" is knowable and the round unwinds; at and after it the round is past the point of no return and reports rather than unwinds ([FM-VLL-009](#fm-vll-009--a-scatter-gather-wait-times-out-after-execute-was-dispatched)). |
+| Outcome variant | `ScatterError::ShardUnavailable` (phases 1 and 3), `ScatterError::LockFailed`/`LockChannelClosed`/`LockTimeout` (phase 2) → `-ERR shard unavailable`, `-BUSY shard busy with continuation lock; retry`, `-ERR VLL lock acquisition failed` |
+| Forced by | `phase1_dispatch_failure_aborts_shards_already_holding_intents`, `phase2_failure_aborts_real_shard_ids_for_sparse_participants`, `phase3_failure_aborts_remaining_holders_not_positions` |
+| Bug refs | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H3 |
+
+## FM-VLL-009 — a scatter gather wait times out after execute was dispatched
+
+| Field | Value |
+|---|---|
+| Trigger | Phase 4's wait for a participant's `PartialResult` exceeds the request's timeout. Phase 4 is entered only once phase-3 dispatch succeeded for *every* participant, so each one has already received `VllExecute`. |
+| Observable | `ScatterError::ResultAmbiguous { shard_id, applied, unknown }` — `applied` names the participants that answered, `unknown` the ones whose fate the timeout did not settle. The executor logs both sets with the txid and replies `-ERR VLL execution timeout; outcome unknown`. |
+| NOT observable | The timeout resolving the op to committed or aborted — that is wall-clock-as-correctness, the banned anti-pattern, and the whole point of the AMBIGUOUS shape; a reply that claims the op was aborted, or that reuses the `-ERR VLL lock acquisition failed` string the never-accepted failures share ([FM-VLL-008](#fm-vll-008--a-scatter-phase-fails-partway-through)); an abort sent to a participant that already received execute; an empty `unknown` set (a timeout with nothing unresolved is not this failure mode); `applied` folding silently into the merged reply as if the op had succeeded. |
+| Invariant | Mirrors `FM-TXN-032`'s possibly-applied vs. definitely-not split. Past phase 3 there is nothing left to unwind *to*, so the coordinator reports which shards are unresolved instead of picking an outcome for them. "Never ran" is not reachable here without a shard worker that is gone, and that is node-fatal ([FM-VLL-005](#fm-vll-005--a-granted-op-panics-while-executing), TR-VLL-018) — so `unknown` genuinely means possibly-applied, never definitely-not. |
+| Outcome variant | `ScatterError::ResultAmbiguous { shard_id, applied, unknown }` → `-ERR VLL execution timeout; outcome unknown` |
+| Forced by | `phase4_gather_timeout_reports_which_shards_are_unknown` |
+| Bug refs | [issue 07](../.scratch/spec-gaps/issues/done/07-vll-continuation-package.md) — Finding H3 |
+
+---
+
+## LV-VLL-001 — a colliding pair of continuations always makes progress
+
+| Field | Value |
+|---|---|
+| Property | For two continuation acquisitions colliding on an overlapping shard set, one of them runs to completion, and it is the older (lower-`txid`) one. The loser's retry keeps its txid, so with each round it only grows more senior relative to new arrivals — a stream of fresh cross-shard scripts cannot starve it. |
+| Assumptions | Txids are globally unique and totally ordered (`next_txid`); a caller that sees `is_wound()` retries under the same txid rather than minting a new one; a wounded holder eventually drops its guard, which is what releases the lock the winner is parked on. Bounded by `MAX_WOUND_RETRIES` in the connection handler: past that the caller gets a retryable `-BUSY` and the *client* owns the next attempt, so this is a guarantee about the lock protocol, not an unbounded promise the server keeps on the caller's behalf. |
+| Source | `frogdb-server/crates/vll/src/shard.rs` (`request_continuation_lock`), `frogdb-server/crates/server/src/connection/scripting/eval.rs` (`MAX_WOUND_RETRIES`) |
+| Forced by | `older_continuation_wins_over_a_younger_partial_holder` |

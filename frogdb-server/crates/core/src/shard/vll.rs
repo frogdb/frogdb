@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::vll::{LockMode, ShardReadyResult};
+use crate::vll::{LockMode, ShardReadyResult, VllError};
 
 use super::message::ScatterOp;
 use super::types::PartialResult;
@@ -93,9 +93,10 @@ impl ShardWorker {
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) {
         self.vll
-            .request_continuation_lock(txid, conn_id, ready_tx, release_rx);
+            .request_continuation_lock(txid, conn_id, ready_tx, release_rx, revoke_tx);
     }
 }
 
@@ -167,7 +168,7 @@ mod tests {
         let (cont_ready_tx, mut cont_ready_rx) = oneshot::channel();
         let (_release_tx, release_rx) = oneshot::channel();
         let before = tokio::time::Instant::now();
-        worker.handle_vll_continuation_lock(2, 99, cont_ready_tx, release_rx);
+        worker.handle_vll_continuation_lock(2, 99, cont_ready_tx, release_rx, oneshot::channel().0);
         assert_eq!(
             tokio::time::Instant::now(),
             before,
@@ -219,7 +220,13 @@ mod tests {
         // shard — granted synchronously because there is nothing to drain.
         let (cont_ready_tx, cont_ready_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
-        worker.handle_vll_continuation_lock(1, 100, cont_ready_tx, release_rx);
+        worker.handle_vll_continuation_lock(
+            1,
+            100,
+            cont_ready_tx,
+            release_rx,
+            oneshot::channel().0,
+        );
         assert!(matches!(cont_ready_rx.await, Ok(ShardReadyResult::Ready)));
         assert_eq!(worker.vll.continuation_lock_owner(), Some(100));
 

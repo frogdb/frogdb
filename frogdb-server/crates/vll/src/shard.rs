@@ -36,6 +36,21 @@ pub const QUEUE_DEPTH_WARN_THRESHOLD: usize = 8000;
 /// than having the coordinator give up on it first.
 pub const CONTINUATION_DRAIN_TIMEOUT: Duration = Duration::from_millis(2000);
 
+/// Hard cap on how long one continuation lock may be held.
+///
+/// A continuation lock takes the shard exclusively: while it is held every
+/// foreign SCA request is refused ([`VllError::ShardBusy`]), so an unbounded
+/// hold is a node-wide availability event with no escape. The cap turns that
+/// into a bounded one — past it the lock is *revoked*: the holder's
+/// coordinator is told to abandon the work and drop its guard. FoundationDB
+/// caps a transaction's life at 5 s and CockroachDB expires a lock whose
+/// owner stops heartbeating for the same reason.
+///
+/// This is a liveness backstop, not a correctness clock: nothing about the
+/// *outcome* of the holder's work is decided here — the revocation is
+/// delivered to the holder, which resolves its own transaction.
+pub const CONTINUATION_MAX_HOLD: Duration = Duration::from_millis(5000);
+
 /// A continuation-lock request parked until the shard drains.
 ///
 /// Holds the requester's channels so the state machine can answer it later:
@@ -46,6 +61,7 @@ struct PendingContinuation {
     conn_id: u64,
     ready_tx: oneshot::Sender<ShardReadyResult>,
     release_rx: oneshot::Receiver<()>,
+    revoke_tx: oneshot::Sender<VllError>,
     deadline: Instant,
 }
 
@@ -57,6 +73,11 @@ pub enum ContinuationEvent {
     /// A parked request's drain deadline passed; it has been failed with
     /// [`VllError::LockTimeout`] and the drain barrier is lifted.
     DrainTimedOut,
+    /// The held lock outlived [`CONTINUATION_MAX_HOLD`]; its holder has been
+    /// sent a [`VllError::Revoked`] notice. The lock itself stays installed
+    /// until the holder's release signal arrives — only the holder knows when
+    /// its shard-side work has actually stopped.
+    HoldCapExpired,
 }
 
 /// Per-shard VLL state machine.
@@ -70,6 +91,15 @@ pub struct VllShardState<O: Debug> {
     tx_queue: Option<TransactionQueue<O>>,
     continuation_lock: Option<ContinuationLock>,
     pending_continuation_release: Option<oneshot::Receiver<()>>,
+    /// Back-channel to the current holder's coordinator: the shard's only way
+    /// to make a holder let go. Installed with the lock, fired at most once
+    /// (by a wound, a `SCRIPT KILL`, or the hold cap), and dropped with the
+    /// lock.
+    continuation_revoke_tx: Option<oneshot::Sender<VllError>>,
+    /// When the held lock's [`CONTINUATION_MAX_HOLD`] cap expires. Cleared
+    /// once the cap has fired so a revoked-but-not-yet-released lock does not
+    /// spin the host's event loop.
+    continuation_hold_deadline: Option<Instant>,
     pending_continuation: Option<PendingContinuation>,
     /// Ops handed to the host by [`VllShardState::dequeue_for_execution`] that
     /// have not yet reported back through
@@ -94,6 +124,8 @@ impl<O: Debug> VllShardState<O> {
             tx_queue: None,
             continuation_lock: None,
             pending_continuation_release: None,
+            continuation_revoke_tx: None,
+            continuation_hold_deadline: None,
             pending_continuation: None,
             executing_ops: 0,
             max_queue_depth,
@@ -299,30 +331,110 @@ impl<O: Debug> VllShardState<O> {
     /// The host is responsible for driving [`Self::next_continuation_event`]
     /// from its event loop; without it a parked request never times out and a
     /// granted lock is never cleared.
+    ///
+    /// **Wound-wait.** A collision with an existing claim is not resolved by
+    /// refusing whoever arrives second: that rule has no priority order, so
+    /// two cross-shard scripts over overlapping shard sets can each win a
+    /// different shard, refuse each other, release, and retry into the same
+    /// interleaving forever. Instead the *older* transaction (lower `txid`)
+    /// wins: it wounds the younger claim — the younger holder is told to
+    /// abandon its work through `revoke_tx`, the younger parked request is
+    /// failed with [`VllError::Wounded`] — and the older request takes or
+    /// parks for the lock. A younger requester colliding with an older claim
+    /// still gets [`VllError::ShardBusy`]; that refusal is order-respecting
+    /// and cannot cycle. Because the total order on `txid` is a global one,
+    /// the same transaction wins on *every* shard, so progress is guaranteed.
     pub fn request_continuation_lock(
         &mut self,
         txid: u64,
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) {
-        if self.continuation_held_or_pending() {
-            let _ = ready_tx.send(ShardReadyResult::Failed(VllError::ShardBusy));
+        // The parking slot holds at most one claim, so it is resolved first:
+        // whichever of the two is older keeps it. Doing this before the held
+        // check matters — a request that parks behind a wounded holder must
+        // not silently overwrite an even older claim already waiting there.
+        if let Some(parked) = self.pending_continuation.as_ref() {
+            if txid >= parked.txid {
+                let _ = ready_tx.send(ShardReadyResult::Failed(VllError::ShardBusy));
+                return;
+            }
+            // A parked claim has no shard-side work to unwind — failing its
+            // requester is the whole wound.
+            if let Some(victim) = self.pending_continuation.take() {
+                let _ = victim
+                    .ready_tx
+                    .send(ShardReadyResult::Failed(VllError::Wounded));
+            }
+        }
+
+        if let Some(held) = self.continuation_lock.as_ref() {
+            if txid >= held.txid {
+                let _ = ready_tx.send(ShardReadyResult::Failed(VllError::ShardBusy));
+                return;
+            }
+            // Wound the younger holder and park behind it: its release is the
+            // drain point that hands this request the lock. Parking (rather
+            // than refusing) is what makes the wound worth anything — the
+            // older transaction must end up holding what it wounded for.
+            self.revoke_continuation(VllError::Wounded);
+            self.park_continuation(txid, conn_id, ready_tx, release_rx, revoke_tx);
             return;
         }
 
         if self.is_drained() {
-            self.grant_continuation(txid, conn_id, ready_tx, release_rx);
+            self.grant_continuation(txid, conn_id, ready_tx, release_rx, revoke_tx);
             return;
         }
 
+        self.park_continuation(txid, conn_id, ready_tx, release_rx, revoke_tx);
+    }
+
+    /// Park a continuation request until the shard drains (or, when it was
+    /// parked behind a wounded holder, until that holder releases).
+    fn park_continuation(
+        &mut self,
+        txid: u64,
+        conn_id: u64,
+        ready_tx: oneshot::Sender<ShardReadyResult>,
+        release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
+    ) {
         self.pending_continuation = Some(PendingContinuation {
             txid,
             conn_id,
             ready_tx,
             release_rx,
+            revoke_tx,
             deadline: Instant::now() + CONTINUATION_DRAIN_TIMEOUT,
         });
+    }
+
+    /// Tell the current holder's coordinator to abandon its work.
+    ///
+    /// Fires at most once per grant — the sender is taken, so a wound followed
+    /// by a `SCRIPT KILL` (or by the hold cap) does not double-signal. The
+    /// lock stays installed: only the holder knows when its shard-side work
+    /// has stopped, and it says so by dropping its guard, which is the release
+    /// signal this shard already waits on.
+    fn revoke_continuation(&mut self, reason: VllError) -> bool {
+        match self.continuation_revoke_tx.take() {
+            Some(tx) => tx.send(reason).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Revoke the continuation lock this shard holds, if any.
+    ///
+    /// The `SCRIPT KILL` / `FUNCTION KILL` entry point: killing a cross-shard
+    /// script has to take its continuation locks away too, or the shard stays
+    /// exclusively held — refusing every other connection's work — until a
+    /// future nobody is waiting on happens to finish. Returns whether a holder
+    /// was notified.
+    pub fn revoke_held_continuation(&mut self) -> bool {
+        self.revoke_continuation(VllError::Revoked)
     }
 
     /// Whether this shard already has a continuation claim — held or parked.
@@ -348,12 +460,15 @@ impl<O: Debug> VllShardState<O> {
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) {
         if ready_tx.send(ShardReadyResult::Ready).is_err() {
             return;
         }
         self.continuation_lock = Some(ContinuationLock::new(txid, conn_id));
         self.pending_continuation_release = Some(release_rx);
+        self.continuation_revoke_tx = Some(revoke_tx);
+        self.continuation_hold_deadline = Some(Instant::now() + CONTINUATION_MAX_HOLD);
     }
 
     /// Grant a parked continuation request if the shard has drained.
@@ -372,6 +487,7 @@ impl<O: Debug> VllShardState<O> {
             pending.conn_id,
             pending.ready_tx,
             pending.release_rx,
+            pending.revoke_tx,
         );
     }
 
@@ -381,9 +497,17 @@ impl<O: Debug> VllShardState<O> {
     /// they are mutually exclusive, since a request is only parked when no
     /// lock is held:
     ///
-    /// - lock held → the release signal, after which the lock is cleared;
+    /// - lock held → the release signal, after which the lock is cleared —
+    ///   raced against [`CONTINUATION_MAX_HOLD`], which revokes a lock held
+    ///   past the cap instead of clearing it;
     /// - request parked → its drain deadline, after which the requester is
     ///   failed with [`VllError::LockTimeout`] and the drain barrier lifts.
+    ///
+    /// The two halves are no longer mutually exclusive: wound-wait parks the
+    /// older requester *behind* the younger holder it wounded, so both can be
+    /// set at once. The held half wins while it lasts, and clearing the lock
+    /// runs the same drain-point grant every other release path runs, so the
+    /// parked request is answered as soon as the holder lets go.
     ///
     /// With neither, the future never completes, so it is safe to drive from a
     /// `select!` arm that recreates it every iteration. Cancel-safe: a losing
@@ -391,10 +515,40 @@ impl<O: Debug> VllShardState<O> {
     /// and the state transition happens with no await between it and the event
     /// it applies.
     pub async fn next_continuation_event(&mut self) -> ContinuationEvent {
-        if let Some(release_rx) = self.pending_continuation_release.as_mut() {
-            let _ = release_rx.await;
+        if self.pending_continuation_release.is_some() {
+            let hold_deadline = self.continuation_hold_deadline;
+            let release_rx = self
+                .pending_continuation_release
+                .as_mut()
+                .expect("checked above");
+            let released = match hold_deadline {
+                Some(deadline) => tokio::select! {
+                    biased;
+                    _ = release_rx => true,
+                    _ = tokio::time::sleep_until(deadline) => false,
+                },
+                None => {
+                    let _ = release_rx.await;
+                    true
+                }
+            };
+
+            if !released {
+                // Hold cap expired. Tell the holder to let go and disarm the
+                // cap: the lock clears when the holder's release arrives, not
+                // on this shard's say-so.
+                self.continuation_hold_deadline = None;
+                self.revoke_continuation(VllError::Revoked);
+                return ContinuationEvent::HoldCapExpired;
+            }
+
             self.continuation_lock = None;
             self.pending_continuation_release = None;
+            self.continuation_revoke_tx = None;
+            self.continuation_hold_deadline = None;
+            // Releasing is a drain point like any other: a request parked
+            // behind this holder (wound-wait) gets its lock here.
+            self.try_grant_pending_continuation();
             return ContinuationEvent::Released;
         }
 
@@ -518,6 +672,13 @@ mod tests {
         oneshot::channel()
     }
 
+    /// A revocation sender whose receiver is already gone — for the tests that
+    /// do not exercise revocation. Sending on it fails harmlessly, which is
+    /// the same shape as a coordinator that has already given up.
+    fn dead_revoke() -> oneshot::Sender<VllError> {
+        oneshot::channel().0
+    }
+
     #[tokio::test]
     async fn enqueue_acquires_when_no_contention() {
         let mut state: VllShardState<()> = VllShardState::default();
@@ -600,7 +761,7 @@ mod tests {
         // Acquire a continuation lock first.
         let (cont_rt, cont_rr) = oneshot::channel();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
         assert!(matches!(cont_rr.await, Ok(ShardReadyResult::Ready)));
 
         // SCA request from a *different* connection arrives. It must be
@@ -623,12 +784,12 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
         let (rt1, rr1) = oneshot::channel();
         let (_release_tx1, release_rx1) = oneshot::channel();
-        state.request_continuation_lock(100, 7, rt1, release_rx1);
+        state.request_continuation_lock(100, 7, rt1, release_rx1, dead_revoke());
         assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
 
         let (rt2, rr2) = oneshot::channel();
         let (_release_tx2, release_rx2) = oneshot::channel();
-        state.request_continuation_lock(101, 8, rt2, release_rx2);
+        state.request_continuation_lock(101, 8, rt2, release_rx2, dead_revoke());
         assert!(matches!(
             rr2.await,
             Ok(ShardReadyResult::Failed(VllError::ShardBusy))
@@ -650,12 +811,12 @@ mod tests {
 
         let (cont_rt1, mut cont_rr1) = channels();
         let (_release_tx1, release_rx1) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt1, release_rx1);
+        state.request_continuation_lock(50, 7, cont_rt1, release_rx1, dead_revoke());
         assert!(cont_rr1.try_recv().is_err(), "first request is parked");
 
         let (cont_rt2, cont_rr2) = channels();
         let (_release_tx2, release_rx2) = oneshot::channel();
-        state.request_continuation_lock(51, 8, cont_rt2, release_rx2);
+        state.request_continuation_lock(51, 8, cont_rt2, release_rx2, dead_revoke());
         assert!(matches!(
             cont_rr2.await,
             Ok(ShardReadyResult::Failed(VllError::ShardBusy))
@@ -690,7 +851,7 @@ mod tests {
         let (cont_rt, mut cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
         let before = Instant::now();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
 
         assert_eq!(Instant::now(), before, "parking must not wait");
         assert!(
@@ -728,7 +889,7 @@ mod tests {
 
         let (cont_rt, cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
 
         // The host's event-loop arm: nothing drains, so the deadline fires.
         let before = Instant::now();
@@ -781,7 +942,7 @@ mod tests {
 
         let (cont_rt, mut cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
         assert!(
             cont_rr.try_recv().is_err(),
             "an executing op must keep the request parked"
@@ -806,7 +967,7 @@ mod tests {
 
         let (cont_rt, mut cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
         assert!(cont_rr.try_recv().is_err());
 
         state.abort(1);
@@ -827,7 +988,7 @@ mod tests {
 
         let (cont_rt, cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
 
         // The coordinator times out and drops its half of both channels.
         drop(cont_rr);
@@ -864,7 +1025,7 @@ mod tests {
 
         let (cont_rt, mut cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
         assert!(cont_rr.try_recv().is_err(), "request is parked");
 
         // A second connection's SCA request arrives while the drain is pending.
@@ -906,7 +1067,7 @@ mod tests {
 
         let (cont_rt, mut cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
 
         assert!(
             matches!(cont_rr.try_recv(), Ok(ShardReadyResult::Ready)),
@@ -928,7 +1089,7 @@ mod tests {
 
         let (rt, rr) = channels();
         let (release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, rt, release_rx);
+        state.request_continuation_lock(50, 7, rt, release_rx, dead_revoke());
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         assert_eq!(state.continuation_lock_owner(), Some(7));
@@ -986,7 +1147,7 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
         let (rt, rr) = channels();
         let (release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, rt, release_rx);
+        state.request_continuation_lock(50, 7, rt, release_rx, dead_revoke());
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         // Lock still held: the future does not resolve, and this cancelled
@@ -1019,7 +1180,7 @@ mod tests {
 
         let (cont_rt, cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
 
         let before = Instant::now();
         // Half the drain budget elapses in a losing `select!` arm.
@@ -1126,7 +1287,7 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
         let (cont_rt, cont_rr) = channels();
         let (_release_tx, release_rx) = oneshot::channel();
-        state.request_continuation_lock(50, 7, cont_rt, release_rx);
+        state.request_continuation_lock(50, 7, cont_rt, release_rx, dead_revoke());
         assert!(matches!(cont_rr.await, Ok(ShardReadyResult::Ready)));
 
         let (rt, rr) = channels();
@@ -1138,6 +1299,196 @@ mod tests {
             Ok(ShardReadyResult::Failed(VllError::ShardBusy))
         ));
         assert_eq!(outcome.queue_depth_warning, None);
+    }
+
+    /// Wound-wait's core: an older (lower-txid) request colliding with a
+    /// younger *holder* is not refused. The holder is told to let go, the older
+    /// request parks behind it, and the holder's release hands the lock over.
+    ///
+    /// Refusing here instead (the pre-wound-wait rule) has no priority order,
+    /// so two cross-shard scripts over overlapping shard sets can each win a
+    /// different shard and refuse each other forever.
+    ///
+    /// Time is paused: none of this needs a clock, and the assertions below
+    /// would be met by a drain/hold *timeout* if one were allowed to fire.
+    // FM-VLL-006
+    #[tokio::test(start_paused = true)]
+    async fn older_continuation_request_wounds_the_younger_holder() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        let (rt_young, rr_young) = channels();
+        let (release_tx_young, release_rx_young) = oneshot::channel();
+        let (revoke_tx_young, revoke_rx_young) = oneshot::channel();
+        state.request_continuation_lock(50, 7, rt_young, release_rx_young, revoke_tx_young);
+        assert!(matches!(rr_young.await, Ok(ShardReadyResult::Ready)));
+
+        let (rt_old, mut rr_old) = channels();
+        let (_release_tx_old, release_rx_old) = oneshot::channel();
+        state.request_continuation_lock(20, 8, rt_old, release_rx_old, dead_revoke());
+
+        assert_eq!(
+            revoke_rx_young.await,
+            Ok(VllError::Wounded),
+            "the younger holder is told to abandon its work"
+        );
+        assert!(
+            rr_old.try_recv().is_err(),
+            "the older request parks rather than being refused"
+        );
+        assert_eq!(
+            state.continuation_lock_owner(),
+            Some(7),
+            "the wound does not clear the lock — only the holder knows when its work stopped"
+        );
+
+        // The wounded holder lets go; its release is the drain point that hands
+        // the lock to the request that wounded it.
+        let _ = release_tx_young.send(());
+        assert_eq!(
+            state.next_continuation_event().await,
+            ContinuationEvent::Released
+        );
+        assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+        assert_eq!(state.continuation_lock_owner(), Some(8));
+    }
+
+    /// The parking slot holds one claim, so an older request colliding with a
+    /// *parked* younger one takes the slot: the younger requester is failed
+    /// with a retryable `Wounded`, never left holding a channel nobody answers.
+    // FM-VLL-006
+    #[tokio::test(start_paused = true)]
+    async fn older_continuation_request_wounds_a_parked_younger_claim() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        let (rt, rr) = channels();
+        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+
+        let (rt_young, rr_young) = channels();
+        let (_release_tx_young, release_rx_young) = oneshot::channel();
+        state.request_continuation_lock(50, 7, rt_young, release_rx_young, dead_revoke());
+
+        let (rt_old, mut rr_old) = channels();
+        let (_release_tx_old, release_rx_old) = oneshot::channel();
+        state.request_continuation_lock(20, 8, rt_old, release_rx_old, dead_revoke());
+
+        assert!(matches!(
+            rr_young.await,
+            Ok(ShardReadyResult::Failed(VllError::Wounded))
+        ));
+        assert!(
+            rr_old.try_recv().is_err(),
+            "the older claim now owns the slot"
+        );
+
+        let dequeued = state.dequeue_for_execution(1).expect("op 1 ready");
+        state.release_after_execution(dequeued.txid, &dequeued.keys);
+        assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+        assert_eq!(state.continuation_lock_owner(), Some(8));
+    }
+
+    /// A younger request colliding with an older claim is still refused — that
+    /// refusal respects the txid order and so cannot take part in a cycle.
+    // FM-VLL-006
+    #[tokio::test(start_paused = true)]
+    async fn younger_continuation_request_is_refused_without_wounding() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        let (rt_old, rr_old) = channels();
+        let (_release_tx_old, release_rx_old) = oneshot::channel();
+        let (revoke_tx_old, mut revoke_rx_old) = oneshot::channel();
+        state.request_continuation_lock(20, 7, rt_old, release_rx_old, revoke_tx_old);
+        assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+
+        let (rt_young, rr_young) = channels();
+        let (_release_tx_young, release_rx_young) = oneshot::channel();
+        state.request_continuation_lock(50, 8, rt_young, release_rx_young, dead_revoke());
+
+        assert!(matches!(
+            rr_young.await,
+            Ok(ShardReadyResult::Failed(VllError::ShardBusy))
+        ));
+        assert!(
+            revoke_rx_old.try_recv().is_err(),
+            "the older holder is never wounded by a younger arrival"
+        );
+        assert_eq!(state.continuation_lock_owner(), Some(7));
+    }
+
+    /// `SCRIPT KILL` / `FUNCTION KILL` has to reach the continuation lock: a
+    /// killed cross-shard script that keeps its lock leaves the shard refusing
+    /// every other connection's work until a future nobody awaits happens to
+    /// finish.
+    // FM-VLL-007
+    #[tokio::test(start_paused = true)]
+    async fn revoking_a_held_continuation_notifies_its_holder() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        let (rt, rr) = channels();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (revoke_tx, revoke_rx) = oneshot::channel();
+        state.request_continuation_lock(50, 7, rt, release_rx, revoke_tx);
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+
+        assert!(state.revoke_held_continuation(), "a holder was notified");
+        assert_eq!(revoke_rx.await, Ok(VllError::Revoked));
+        assert_eq!(
+            state.continuation_lock_owner(),
+            Some(7),
+            "revocation asks; the holder's release is what clears the lock"
+        );
+        assert!(
+            !state.revoke_held_continuation(),
+            "the notice fires at most once per grant"
+        );
+
+        let _ = release_tx.send(());
+        assert_eq!(
+            state.next_continuation_event().await,
+            ContinuationEvent::Released
+        );
+        assert_eq!(state.continuation_lock_owner(), None);
+    }
+
+    /// Revoking with no lock held is a no-op, not a panic: `SCRIPT KILL` runs
+    /// against every shard, most of which hold nothing.
+    // FM-VLL-007
+    #[tokio::test]
+    async fn revoking_an_unheld_continuation_reports_no_holder() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        assert!(!state.revoke_held_continuation());
+    }
+
+    /// The hold cap is the backstop for a holder nobody kills: past
+    /// `CONTINUATION_MAX_HOLD` the shard revokes on its own, so an exclusive
+    /// hold cannot be unbounded. It disarms afterwards — a revoked-but-not-yet-
+    /// released lock must not re-fire the cap on every loop iteration.
+    // FM-VLL-007
+    #[tokio::test(start_paused = true)]
+    async fn continuation_hold_cap_revokes_the_holder_once() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        let (rt, rr) = channels();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (revoke_tx, revoke_rx) = oneshot::channel();
+        state.request_continuation_lock(50, 7, rt, release_rx, revoke_tx);
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+
+        let start = Instant::now();
+        assert_eq!(
+            state.next_continuation_event().await,
+            ContinuationEvent::HoldCapExpired
+        );
+        assert_eq!(start.elapsed(), CONTINUATION_MAX_HOLD);
+        assert_eq!(revoke_rx.await, Ok(VllError::Revoked));
+
+        // Disarmed: the next event is the holder's release, not a second cap
+        // expiry, and it costs no further virtual time.
+        let _ = release_tx.send(());
+        assert_eq!(
+            state.next_continuation_event().await,
+            ContinuationEvent::Released
+        );
+        assert_eq!(start.elapsed(), CONTINUATION_MAX_HOLD);
+        assert_eq!(state.continuation_lock_owner(), None);
     }
 
     #[test]

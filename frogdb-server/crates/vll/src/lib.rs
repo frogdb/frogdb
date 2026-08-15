@@ -20,7 +20,7 @@ pub use coordinator::{
     ScatterOutcome, ScatterParticipant, ScatterRequest, VllCoordinator,
 };
 pub use shard::{
-    CONTINUATION_DRAIN_TIMEOUT, ContinuationEvent, ContinuationLockSnapshot,
+    CONTINUATION_DRAIN_TIMEOUT, CONTINUATION_MAX_HOLD, ContinuationEvent, ContinuationLockSnapshot,
     DEFAULT_MAX_QUEUE_DEPTH, IntentSnapshot, PendingOpSnapshot, QUEUE_DEPTH_WARN_THRESHOLD,
     VllShardState,
 };

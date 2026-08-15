@@ -26,8 +26,9 @@ impl ShardWorker {
                 conn_id,
                 ready_tx,
                 release_rx,
+                revoke_tx,
             } => {
-                self.handle_vll_continuation_lock(txid, conn_id, ready_tx, release_rx);
+                self.handle_vll_continuation_lock(txid, conn_id, ready_tx, release_rx, revoke_tx);
             }
             VllMsg::GetVllQueueInfo { response_tx } => {
                 let info = self.collect_vll_queue_info();

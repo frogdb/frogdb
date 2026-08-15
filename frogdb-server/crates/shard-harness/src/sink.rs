@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use frogdb_vll::{LockMode, ShardReadyResult, ShardSink, ShardSinkError};
+use frogdb_vll::{LockMode, ShardReadyResult, ShardSink, ShardSinkError, VllError};
 use tokio::sync::oneshot;
 
 use frogdb_core::shard::types::PartialResult;
@@ -81,6 +81,7 @@ impl ShardSink for ChannelSink {
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) -> Result<(), ShardSinkError> {
         self.senders[shard_id]
             .send(VllMsg::VllContinuationLock {
@@ -88,6 +89,7 @@ impl ShardSink for ChannelSink {
                 conn_id,
                 ready_tx,
                 release_rx,
+                revoke_tx,
             })
             .await
             .map_err(|_| ShardSinkError {

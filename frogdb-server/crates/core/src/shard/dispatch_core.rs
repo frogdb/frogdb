@@ -284,7 +284,7 @@ mod tests {
         let (release_tx, release_rx) = oneshot::channel();
         worker
             .vll
-            .request_continuation_lock(1, owner, ready_tx, release_rx);
+            .request_continuation_lock(1, owner, ready_tx, release_rx, oneshot::channel().0);
         assert!(matches!(ready_rx.await, Ok(ShardReadyResult::Ready)));
         assert_eq!(worker.vll.continuation_lock_owner(), Some(owner));
         release_tx

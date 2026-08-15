@@ -179,15 +179,26 @@ impl ScatterGatherExecutor {
                 );
                 Response::error("ERR shard dropped VLL result")
             }
-            ScatterError::ResultTimeout { shard_id } => {
+            ScatterError::ResultAmbiguous {
+                shard_id,
+                applied,
+                unknown,
+            } => {
+                // Past the point of no return: every participant already
+                // received its execute, so this timeout resolves nothing. The
+                // reply says so — it does not claim the op was aborted, and the
+                // log names which shards are unresolved so an operator can find
+                // out what the clock could not.
                 warn!(
                     conn_id = self.conn_id,
                     timeout_ms = self.timeout.as_millis() as u64,
                     txid,
                     shard_id,
-                    "scatter-gather operation timed out"
+                    applied = ?applied,
+                    unknown = ?unknown,
+                    "scatter-gather outcome is ambiguous: execute was dispatched to every shard"
                 );
-                Response::error("ERR VLL execution timeout")
+                Response::error("ERR VLL execution timeout; outcome unknown")
             }
         }
     }
