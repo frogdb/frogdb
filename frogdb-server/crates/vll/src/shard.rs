@@ -235,6 +235,13 @@ impl<O: Debug> VllShardState<O> {
     /// and is simply waited for: it holds no cross-shard wait edge of its own,
     /// so it always finishes.
     fn try_acquire_for(lock_table: &mut LockTable, tx_queue: &mut TransactionQueue<O>, txid: u64) {
+        // The `Pending` guard states the caller's contract; no test can force
+        // it false, so mutating it to `true` survives. Both callers already
+        // pass pending txids only (enqueue has just enqueued, and
+        // `try_advance_pending_locks` filters), and a `Ready` op holds every
+        // key it asked for, so re-granting one takes the `Granted` arm and
+        // finds `ready_tx` already spent. Kept so a future caller's mistake is
+        // a no-op rather than a second ready notification.
         let keys = match tx_queue.get_mut(txid) {
             Some(op) if op.state == PendingOpState::Pending => op.keys.clone(),
             _ => return,

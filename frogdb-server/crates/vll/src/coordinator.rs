@@ -844,6 +844,74 @@ mod tests {
         }
     }
 
+    // FM-VLL-010
+    //
+    // `is_wound` is what the executor's retry loop branches on, and a retry is
+    // only safe for the one error a wound produces: every other failure has
+    // either not run or already run, and re-running it under the same txid
+    // would be a second attempt at work nobody asked for. Pinned per variant
+    // so a widened predicate cannot pass unnoticed.
+    #[test]
+    fn only_a_wound_is_a_retryable_scatter_error() {
+        assert!(ScatterError::Wounded { shard_id: 1 }.is_wound());
+
+        for err in [
+            ScatterError::ShardUnavailable(ShardSinkError {
+                shard_id: 1,
+                reason: "closed",
+            }),
+            ScatterError::LockFailed {
+                shard_id: 1,
+                error: VllError::LockTimeout,
+            },
+            ScatterError::LockChannelClosed { shard_id: 1 },
+            ScatterError::LockTimeout { shard_id: 1 },
+            ScatterError::ResultChannelClosed { shard_id: 1 },
+            ScatterError::ResultAmbiguous {
+                shard_id: 1,
+                applied: vec![0],
+                unknown: vec![1],
+            },
+        ] {
+            assert!(!err.is_wound(), "{err:?} is not retryable");
+        }
+    }
+
+    // FM-VLL-010
+    //
+    // Same contract on the continuation path: a revocation is retryable only
+    // when its reason is a wound. A lock the shard took back because the
+    // script was killed or outran its hold cap is not an invitation to retry.
+    #[test]
+    fn only_a_wound_is_a_retryable_continuation_error() {
+        assert!(
+            ContinuationError::Revoked {
+                shard_id: 1,
+                reason: VllError::Wounded,
+            }
+            .is_wound()
+        );
+
+        for err in [
+            ContinuationError::Revoked {
+                shard_id: 1,
+                reason: VllError::LockTimeout,
+            },
+            ContinuationError::LockTimeout { shard_id: 1 },
+            ContinuationError::LockChannelClosed { shard_id: 1 },
+            ContinuationError::LockFailed {
+                shard_id: 1,
+                error: VllError::LockTimeout,
+            },
+            ContinuationError::ShardUnavailable(ShardSinkError {
+                shard_id: 1,
+                reason: "closed",
+            }),
+        ] {
+            assert!(!err.is_wound(), "{err} is not retryable");
+        }
+    }
+
     fn participant(shard_id: usize) -> ScatterParticipant<u64> {
         ScatterParticipant {
             shard_id,
