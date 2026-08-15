@@ -2,6 +2,10 @@
 
 Status: ready-for-human
 
+> **IN PROGRESS** (2026-08-14): design revision 5 approved and under adversarial review in an
+> active session (branch `spec-gaps-impl`). Design doc: [2026-08-14-issue31-migration-design.md](../../2026-08-14-issue31-migration-design.md).
+> Do not start independent work on this issue or the slot-migration area.
+
 ## Origin
 
 Ruled by the user 2026-08-14 while triaging the independent distsys review's MAJ-5
