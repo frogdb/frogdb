@@ -449,6 +449,9 @@ async fn test_unwatch_in_multi_clears_stale_cross_shard_watch_fold() {
     // --- Control: cross-shard WATCH set + single-shard EXEC must CROSSSLOT. ---
     // (Confirms the two keys really are on different shards AND that a live
     // cross-shard watch set still promotes the target to Multi.)
+    // The watched key is seeded first: only a *live* watch folds its shard
+    // (FM-TXN-020), so watching an absent key here would commit instead.
+    client.command(&["SET", "{t0}kv0", "seed"]).await;
     let response = client.command(&["WATCH", "{t0}kv0"]).await;
     assert_eq!(response, Response::Simple(Bytes::from("OK")));
     let response = client.command(&["MULTI"]).await;
@@ -486,6 +489,72 @@ async fn test_unwatch_in_multi_clears_stale_cross_shard_watch_fold() {
     // The write actually landed.
     let response = client.command(&["GET", "{t1}kv1"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("v"))));
+
+    server.shutdown().await;
+}
+
+// FM-TXN-020
+/// The canonical create-if-absent CAS, across shards: `WATCH counter` while
+/// `counter` does not exist, then a `MULTI` whose queued write lives on another
+/// shard. A dead watch has no data on its shard to be atomic with, so it must
+/// not promote the target to `Multi` — Redis commits this; FrogDB used to
+/// answer `-CROSSSLOT`.
+#[tokio::test]
+async fn test_dead_cross_shard_watch_commits_instead_of_crossslot() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let (absent, written) = cross_shard_key_pair(4);
+
+    let response = client.command(&["WATCH", &absent]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    client.command(&["MULTI"]).await;
+    client.command(&["SET", &written, "v"]).await;
+
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => {
+            assert_eq!(results.len(), 1, "one queued command");
+            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+        }
+        other => panic!("a dead cross-shard watch must not CROSSSLOT, got {other:?}"),
+    }
+    let response = client.command(&["GET", &written]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("v"))));
+
+    server.shutdown().await;
+}
+
+// FM-TXN-020
+/// The safety half of the same rule: the dead watch's shard is *not* folded into
+/// the target, so the version check has to reach it on a round-trip of its own.
+/// Another client creating the watched key before `EXEC` breaks the CAS, and
+/// missing it would be a silent WATCH false negative — the shape FM-TXN-020
+/// exists to forbid.
+#[tokio::test]
+async fn test_dead_cross_shard_watch_still_aborts_when_the_key_is_created() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+    let (absent, written) = cross_shard_key_pair(4);
+
+    let response = client1.command(&["WATCH", &absent]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Another client creates the watched-nonexistent key on its own shard.
+    client2.command(&["SET", &absent, "raced"]).await;
+
+    client1.command(&["MULTI"]).await;
+    client1.command(&["SET", &written, "v"]).await;
+
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Bulk(None),
+        "creating the watched key must abort the CAS even with its shard unfolded"
+    );
+    // The batch never ran.
+    let response = client1.command(&["GET", &written]).await;
+    assert_eq!(response, Response::Bulk(None));
 
     server.shutdown().await;
 }

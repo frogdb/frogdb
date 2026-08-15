@@ -18,8 +18,11 @@ use frogdb_core::{
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_txn::{
     Deferral, ShardTxnReply, TransactionOutcome, TransactionTarget, TxnHost, TxnSummary,
-    execute_transaction, handle_exec,
+    WatchedKey, execute_transaction, handle_exec,
 };
+
+/// The shard [`MockTxnHost`] reports as its own.
+const MOCK_SHARD: usize = 7;
 
 // ---------------------------------------------------------------------------
 // Test host
@@ -122,7 +125,7 @@ struct MockTxnHost {
 impl Default for MockTxnHost {
     fn default() -> Self {
         Self {
-            shard_id: 7,
+            shard_id: MOCK_SHARD,
             conn_id: 42,
             recorder: RecordingMetricsRecorder::default(),
             deferrals: HashMap::new(),
@@ -224,6 +227,30 @@ impl TxnHost for MockTxnHost {
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/// A watched key on the mock host's own shard — which is also the fallback
+/// target for a queue that folds no key, so a watch built this way rides with
+/// the batch instead of taking a round-trip of its own.
+fn watched(key: &'static [u8], version: u64, live_at_watch: bool) -> WatchedKey {
+    watched_on(MOCK_SHARD, key, version, live_at_watch)
+}
+
+/// A watched key on an explicit shard, as [`TransactionState::take`] records it.
+fn watched_on(
+    shard_id: usize,
+    key: &'static [u8],
+    version: u64,
+    live_at_watch: bool,
+) -> WatchedKey {
+    WatchedKey {
+        shard_id,
+        entry: WatchEntry {
+            key: Bytes::from_static(key),
+            version,
+            live_at_watch,
+        },
+    }
+}
 
 fn cmd(name: &'static str) -> ParsedCommand {
     ParsedCommand::new(
@@ -421,11 +448,7 @@ async fn watch_aborted_answers_nil() {
         ..Default::default()
     };
     let mut s = summary(vec![cmd("SET")]);
-    s.watches = vec![WatchEntry {
-        key: Bytes::from_static(b"k"),
-        version: 3,
-        live_at_watch: true,
-    }];
+    s.watches = vec![watched(b"k", 3, true)];
 
     let (outcome, responses) = execute_transaction(&mut host, s).await;
 
@@ -445,11 +468,7 @@ async fn a_watched_slot_that_left_this_node_aborts_the_watch() {
         ..Default::default()
     };
     let mut s = summary(vec![cmd("PING")]);
-    s.watches = vec![WatchEntry {
-        key: Bytes::from_static(b"k"),
-        version: 3,
-        live_at_watch: true,
-    }];
+    s.watches = vec![watched(b"k", 3, true)];
 
     let (outcome, responses) = execute_transaction(&mut host, s).await;
 
@@ -472,11 +491,7 @@ async fn a_queue_redirect_outranks_the_watched_slot_abort() {
         ..Default::default()
     };
     let mut s = summary(vec![cmd("SET")]);
-    s.watches = vec![WatchEntry {
-        key: Bytes::from_static(b"k"),
-        version: 3,
-        live_at_watch: true,
-    }];
+    s.watches = vec![watched(b"k", 3, true)];
 
     let (outcome, responses) = execute_transaction(&mut host, s).await;
 
@@ -785,11 +800,7 @@ async fn an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip() {
         ..Default::default()
     };
     let mut s = summary(vec![cmd("CONFIG")]);
-    s.watches = vec![WatchEntry {
-        key: Bytes::from_static(b"k"),
-        version: 1,
-        live_at_watch: true,
-    }];
+    s.watches = vec![watched(b"k", 1, true)];
 
     let (outcome, responses) = execute_transaction(&mut host, s).await;
 
@@ -819,11 +830,7 @@ async fn a_genuinely_empty_queue_with_watches_still_takes_the_shard_round_trip()
         ..Default::default()
     };
     let mut s = summary(vec![]);
-    s.watches = vec![WatchEntry {
-        key: Bytes::from_static(b"k"),
-        version: 1,
-        live_at_watch: true,
-    }];
+    s.watches = vec![watched(b"k", 1, true)];
 
     let (outcome, responses) = execute_transaction(&mut host, s).await;
 
@@ -848,11 +855,7 @@ async fn a_genuinely_empty_queue_with_a_clean_watch_commits_an_empty_array() {
     // rather than `CommittedEmpty`, both labelled `committed`, FM-TXN-046).
     let mut host = MockTxnHost::default();
     let mut s = summary(vec![]);
-    s.watches = vec![WatchEntry {
-        key: Bytes::from_static(b"k"),
-        version: 1,
-        live_at_watch: true,
-    }];
+    s.watches = vec![watched(b"k", 1, true)];
 
     let (outcome, responses) = execute_transaction(&mut host, s).await;
 
@@ -865,6 +868,113 @@ async fn a_genuinely_empty_queue_with_a_clean_watch_commits_an_empty_array() {
         }),
         "the version check is taken whether or not the watch turns out dirty: {:?}",
         host.effects
+    );
+}
+
+// FM-TXN-020
+#[tokio::test]
+async fn a_dead_watch_off_the_target_gets_its_own_version_check() {
+    // The create-if-absent CAS across shards: `WATCH counter` (absent, shard 3)
+    // plus a queued write on shard 7. `take` leaves shard 3 unfolded, so the
+    // batch commits instead of `-CROSSSLOT`ing — but the watch is still
+    // version-checked, on shard 3, because only shard 3 keeps the slot stamp
+    // that a creation of `counter` would bump. The target's own round trip
+    // carries no foreign entries.
+    let mut host = MockTxnHost::default();
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Single(MOCK_SHARD);
+    s.watches = vec![watched_on(3, b"counter", 5, false)];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(only(responses), Response::Array(vec![Response::ok()]));
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            // The off-target watch's own check, before the batch.
+            Effect::ShardRoundTrip {
+                target_shard: 3,
+                commands: 0
+            },
+            Effect::ShardRoundTrip {
+                target_shard: MOCK_SHARD,
+                commands: 1
+            },
+        ]
+    );
+}
+
+// FM-TXN-020
+#[tokio::test]
+async fn a_dirtied_off_target_watch_aborts_before_the_batch_runs() {
+    // The safety half of the unfolded dead watch: another client created
+    // `counter` on shard 3 during the MULTI window, so shard 3's version check
+    // fails. The abort has to land *before* the target shard runs anything —
+    // there is no rollback to undo a batch that already committed.
+    let mut host = MockTxnHost {
+        shard_replies: VecDeque::from([ShardTxnReply::Replied(TransactionResult::WatchAborted)]),
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Single(MOCK_SHARD);
+    s.watches = vec![watched_on(3, b"counter", 5, false)];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::WatchAborted);
+    assert_eq!(only(responses), Response::null());
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            Effect::ShardRoundTrip {
+                target_shard: 3,
+                commands: 0
+            },
+        ],
+        "the batch must never reach its own shard"
+    );
+}
+
+// FM-TXN-020
+#[tokio::test]
+async fn off_target_watches_are_grouped_one_round_trip_per_shard_in_shard_order() {
+    // Two dead watches on one foreign shard and one on another: two extra round
+    // trips, not three, and in shard order — the watch set comes out of a
+    // `HashMap`, so anything derived from its iteration order would make the
+    // sequence vary run to run.
+    let mut host = MockTxnHost::default();
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Single(MOCK_SHARD);
+    s.watches = vec![
+        watched_on(5, b"c", 1, false),
+        watched_on(2, b"a", 1, false),
+        watched_on(5, b"d", 1, false),
+        watched_on(MOCK_SHARD, b"local", 1, true),
+    ];
+
+    let (outcome, _) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            Effect::ShardRoundTrip {
+                target_shard: 2,
+                commands: 0
+            },
+            Effect::ShardRoundTrip {
+                target_shard: 5,
+                commands: 0
+            },
+            Effect::ShardRoundTrip {
+                target_shard: MOCK_SHARD,
+                commands: 1
+            },
+        ]
     );
 }
 

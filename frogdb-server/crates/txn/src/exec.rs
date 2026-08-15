@@ -16,7 +16,7 @@ use frogdb_protocol::{ParsedCommand, Response};
 use tracing::debug;
 
 use crate::host::{Deferral, ShardTxnReply, TxnHost};
-use crate::state::{TransactionTarget, TxnSummary};
+use crate::state::{TransactionTarget, TxnSummary, WatchedKey};
 use frogdb_core::clock;
 
 /// How a transaction ended. Every exit of [`execute_transaction`] names its
@@ -241,7 +241,8 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     // CAS*: nothing here can observe the new owner's writes to that key, so the
     // watch is by definition broken. The client's ordinary retry loop re-issues
     // WATCH, which now answers `-MOVED` and sends it to the owner.
-    if !watches.is_empty() && !host.watched_slots_still_local(&watches, asking) {
+    let watch_entries: Vec<WatchEntry> = watches.iter().map(|w| w.entry.clone()).collect();
+    if !watch_entries.is_empty() && !host.watched_slots_still_local(&watch_entries, asking) {
         debug!(
             conn_id = host.conn_id(),
             "Transaction aborted: a watched key's slot is no longer served here"
@@ -277,11 +278,12 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     }
 
     // Get target shard. Taking the summary folds both queued-command keys and
-    // every live watched shard into the transaction target at EXEC time, so
-    // `None` here means there were neither keys nor watches to fold — fall
-    // back to this connection's own shard. A watch set spanning shards
-    // promotes the target to `Multi` and is CROSSSLOT-rejected below, so a
-    // non-empty watch set never resolves to `None`.
+    // every *live* watched shard into the transaction target at EXEC time, so
+    // `None` here means there were no keys and no live watches to fold — fall
+    // back to this connection's own shard. A set of live watches spanning
+    // shards promotes the target to `Multi` and is CROSSSLOT-rejected below;
+    // dead watches never promote it and may well sit on some other shard, which
+    // is what the off-target round-trips below exist for.
     // A `Multi` target is a cross-slot transaction: resolve() returns the
     // CROSSSLOT reply from the redirect seam. `None` falls back to this
     // connection's shard; `Single` routes directly.
@@ -292,19 +294,42 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         Err(crossslot) => return (TransactionOutcome::CrossSlot, vec![crossslot]),
     };
 
+    // Route each watch's version check to the shard that can answer it.
+    //
+    // The target shard's watches ride with the batch, so its CAS and its
+    // commands are one atomic shard step. A watch on any *other* shard is here
+    // only because `take` declined to fold its shard, and `take` declines only
+    // for a dead watch (`live_at_watch = false`): every live watched shard
+    // folds, so a live watch elsewhere would already have CROSSSLOT-rejected at
+    // `resolve()` above (FM-TXN-020).
+    //
+    // Those dead watches still have to be checked. A watched-nonexistent key
+    // that another client *created* during the MULTI window breaks the CAS, and
+    // only its own shard holds the slot version that says so — the target shard
+    // never maintains a stamp for a slot it does not own, so asking it would
+    // answer from an unrelated counter. Hence one extra watch-only round-trip
+    // per off-target shard, taken before the batch so a broken CAS cannot leave
+    // the target's commands committed behind it.
+    let (target_watches, off_target_watches) = partition_watches(watches, target_shard);
+    for (shard, entries) in off_target_watches {
+        if let Err((outcome, reply)) = run_shard_transaction(host, shard, vec![], entries).await {
+            return (outcome, vec![reply]);
+        }
+    }
+
     // Execute shard commands (may be empty if all commands are connection-level)
     let shard_results = if shard_commands.is_empty() {
         // No shard commands, but watches still need a shard round-trip
         // (with an empty command list) to be checked and cleared.
-        if !watches.is_empty()
+        if !target_watches.is_empty()
             && let Err((outcome, reply)) =
-                run_shard_transaction(host, target_shard, vec![], watches).await
+                run_shard_transaction(host, target_shard, vec![], target_watches).await
         {
             return (outcome, vec![reply]);
         }
         vec![]
     } else {
-        match run_shard_transaction(host, target_shard, shard_commands, watches).await {
+        match run_shard_transaction(host, target_shard, shard_commands, target_watches).await {
             Ok(results) => results,
             Err((outcome, reply)) => return (outcome, vec![reply]),
         }
@@ -358,6 +383,32 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     let mut result = vec![Response::Array(final_results)];
     result.extend(deferred_pushes);
     (TransactionOutcome::Committed, result)
+}
+
+/// Split the watch set into the target shard's entries and every other shard's,
+/// one group per shard.
+///
+/// Groups are ordered by shard id, not by watch order: the watch set arrives
+/// from a `HashMap`, so anything derived from its iteration order would make
+/// the round-trip sequence vary run to run.
+fn partition_watches(
+    watches: Vec<WatchedKey>,
+    target_shard: usize,
+) -> (Vec<WatchEntry>, Vec<(usize, Vec<WatchEntry>)>) {
+    let mut target = Vec::new();
+    let mut off_target: Vec<(usize, Vec<WatchEntry>)> = Vec::new();
+    for WatchedKey { shard_id, entry } in watches {
+        if shard_id == target_shard {
+            target.push(entry);
+            continue;
+        }
+        match off_target.iter_mut().find(|(shard, _)| *shard == shard_id) {
+            Some((_, entries)) => entries.push(entry),
+            None => off_target.push((shard_id, vec![entry])),
+        }
+    }
+    off_target.sort_by_key(|(shard, _)| *shard);
+    (target, off_target)
 }
 
 /// One shard round-trip for EXEC: hand the batch to the host and map every

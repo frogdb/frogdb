@@ -1114,6 +1114,7 @@ impl ConnectionState {
 mod tests {
     use super::*;
     use frogdb_core::WatchEntry;
+    use frogdb_txn::WatchedKey;
 
     fn state() -> ConnectionState {
         ConnectionState::new(1, "127.0.0.1:0".parse().unwrap(), false)
@@ -1380,10 +1381,13 @@ mod tests {
         assert!(!summary.exec_abort);
         assert_eq!(
             summary.watches,
-            vec![WatchEntry {
-                key: Bytes::from_static(b"k"),
-                version: 7,
-                live_at_watch: true,
+            vec![WatchedKey {
+                shard_id: 2,
+                entry: WatchEntry {
+                    key: Bytes::from_static(b"k"),
+                    version: 7,
+                    live_at_watch: true,
+                },
             }]
         );
         assert!(matches!(summary.target, TransactionTarget::Single(2)));

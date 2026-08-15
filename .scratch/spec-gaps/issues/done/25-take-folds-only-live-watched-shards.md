@@ -1,6 +1,6 @@
 # 25: `take` folds only *live* watched shards — dead watches stop forcing Multi
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

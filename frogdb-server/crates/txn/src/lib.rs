@@ -27,4 +27,6 @@ mod state;
 
 pub use exec::{TransactionOutcome, execute_transaction, handle_exec, record_transaction_metrics};
 pub use host::{Deferral, ShardTxnReply, TxnHost};
-pub use state::{TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary};
+pub use state::{
+    TransactionState, TransactionTarget, TxnError, TxnMetrics, TxnSummary, WatchedKey,
+};

@@ -122,6 +122,21 @@ pub enum TxnError {
     Nested,
 }
 
+/// A watched key together with the shard that owns it.
+///
+/// The shard stays connection-side bookkeeping — [`WatchEntry`] is what the
+/// shard itself sees — but EXEC needs it to send each watch's version check to
+/// the shard that can actually answer it. A watch whose shard was not folded
+/// into the target (a dead watch, see [`TransactionState::take`]) is checked on
+/// its own shard rather than on the batch's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedKey {
+    /// Shard owning the key, resolved at WATCH time.
+    pub shard_id: usize,
+    /// The entry handed to that shard at EXEC.
+    pub entry: WatchEntry,
+}
+
 /// Snapshot of a transaction captured atomically by EXEC.
 ///
 /// Taking the summary leaves the connection's transaction state clean, so the
@@ -130,8 +145,8 @@ pub enum TxnError {
 pub struct TxnSummary {
     /// Queued commands, in submission order.
     pub queue: Vec<ParsedCommand>,
-    /// Watched keys with their watch-time version and liveness.
-    pub watches: Vec<WatchEntry>,
+    /// Watched keys with their watch-time version, liveness, and owning shard.
+    pub watches: Vec<WatchedKey>,
     /// Target shard(s) folded from the queued commands and watches.
     pub target: TransactionTarget,
     /// Whether a command failed during queuing (EXEC must abort).
@@ -282,8 +297,19 @@ impl TransactionState {
         // false-negative commit), while an UNWATCH inside MULTI that cleared the
         // watches contributes nothing, leaving no stale fold to spuriously
         // CROSSSLOT an otherwise single-shard EXEC.
-        for &(shard_id, _, _) in self.watches.values() {
-            self.slots.fold_shard(shard_id);
+        //
+        // Only *live* watches fold. A watch taken on a key that did not exist
+        // (`live_at_watch = false`) has no data on its shard to be atomic with:
+        // the only way to break it is to *create* the key, which bumps that
+        // shard's slot version, and EXEC checks that version on the watch's own
+        // shard whether or not it was folded (`exec.rs`, off-target watch
+        // round-trips). Folding it anyway would `-CROSSSLOT` the canonical
+        // create-if-absent CAS — `WATCH counter` (absent, shard B) plus a
+        // queued write on shard A — which the spec says must commit.
+        for &(shard_id, _, live_at_watch) in self.watches.values() {
+            if live_at_watch {
+                self.slots.fold_shard(shard_id);
+            }
         }
         let txn = std::mem::take(self);
         Some(TxnSummary {
@@ -291,10 +317,13 @@ impl TransactionState {
             watches: txn
                 .watches
                 .into_iter()
-                .map(|(key, (_, version, live_at_watch))| WatchEntry {
-                    key,
-                    version,
-                    live_at_watch,
+                .map(|(key, (shard_id, version, live_at_watch))| WatchedKey {
+                    shard_id,
+                    entry: WatchEntry {
+                        key,
+                        version,
+                        live_at_watch,
+                    },
                 })
                 .collect(),
             target: txn.slots.target,
@@ -355,6 +384,8 @@ mod tests {
     // FM-TXN-020
     #[test]
     fn cross_shard_watch_set_folds_to_multi_at_take() {
+        // Both watches are *live*: they name real data on two shards, and the
+        // transaction cannot be atomic with respect to both.
         let mut t = TransactionState::default();
         t.watch_key(Bytes::from_static(b"a"), 0, 11, true);
         t.watch_key(Bytes::from_static(b"b"), 1, 22, true);
@@ -364,6 +395,57 @@ mod tests {
         let summary = t.take(false).expect("in transaction");
         assert!(matches!(summary.target, TransactionTarget::Multi(_)));
         assert!(summary.target.resolve().is_err(), "Multi → CROSSSLOT");
+    }
+
+    // FM-TXN-020
+    #[test]
+    fn a_dead_watch_does_not_fold_its_shard_into_the_target() {
+        // The canonical create-if-absent CAS, cross-shard: `WATCH counter` with
+        // `counter` absent (shard 1), then a queued write on shard 0. A dead
+        // watch has no data on its shard to be atomic with — the only way to
+        // break it is to *create* the key, which bumps that shard's slot version
+        // and is caught by EXEC's own round-trip to it. Folding it would
+        // `-CROSSSLOT` a transaction Redis commits.
+        let mut t = TransactionState::default();
+        t.watch_key(Bytes::from_static(b"counter"), 1, 7, false);
+        t.begin().expect("MULTI after WATCH");
+        t.fold_shard(0);
+
+        let summary = t.take(false).expect("in transaction");
+        assert!(
+            matches!(summary.target, TransactionTarget::Single(0)),
+            "a dead watch must not promote the target, got {:?}",
+            summary.target
+        );
+        // The watch is still carried, tagged with the shard EXEC has to check it
+        // on — unfolded is not unchecked.
+        assert_eq!(summary.watches.len(), 1, "the dead watch is still carried");
+        assert_eq!(summary.watches[0].shard_id, 1);
+        assert!(!summary.watches[0].entry.live_at_watch);
+        assert!(summary.target.resolve().is_ok(), "Single → no CROSSSLOT");
+    }
+
+    // FM-TXN-020
+    #[test]
+    fn one_live_watch_still_folds_alongside_a_dead_one() {
+        // Liveness is decided per watch, not per set: the dead watch on shard 2
+        // contributes nothing, the live one on shard 1 still promotes the
+        // single-shard target to `Multi`. Pins both directions of the filter.
+        let mut t = TransactionState::default();
+        t.watch_key(Bytes::from_static(b"live"), 1, 11, true);
+        t.watch_key(Bytes::from_static(b"dead"), 2, 22, false);
+        t.begin().expect("MULTI after WATCH");
+        t.fold_shard(0);
+
+        let summary = t.take(false).expect("in transaction");
+        match &summary.target {
+            TransactionTarget::Multi(shards) => {
+                assert!(shards.contains(&0), "the queued command's shard");
+                assert!(shards.contains(&1), "the live watch's shard");
+                assert!(!shards.contains(&2), "the dead watch's shard must not fold");
+            }
+            other => panic!("expected Multi from the live watch, got {other:?}"),
+        }
     }
 
     // FM-TXN-050
@@ -380,11 +462,11 @@ mod tests {
         let summary = t.take(false).expect("in transaction");
         assert_eq!(summary.watches.len(), 1, "one entry per watched key");
         assert_eq!(
-            summary.watches[0].version, 11,
+            summary.watches[0].entry.version, 11,
             "the first WATCH's version snapshot wins"
         );
         assert!(
-            summary.watches[0].live_at_watch,
+            summary.watches[0].entry.live_at_watch,
             "the first WATCH's liveness observation wins"
         );
 
@@ -395,7 +477,7 @@ mod tests {
         t.begin().expect("MULTI after UNWATCH + WATCH");
         let summary = t.take(false).expect("in transaction");
         assert_eq!(
-            summary.watches[0].version, 44,
+            summary.watches[0].entry.version, 44,
             "UNWATCH lets the next WATCH take a fresh snapshot"
         );
     }
