@@ -156,25 +156,23 @@ impl ConnectionHandler {
             return Err(Response::error("ERR Internal error: invalid shard"));
         };
 
-        if sender
-            .send(BlockingMsg::BlockWait {
-                conn_id: self.state.id,
-                keys: keys.to_vec(),
-                op,
-                response_tx,
-                deadline,
-                protocol_version: self.state.protocol_version,
-            })
-            .await
-            .is_err()
-        {
-            return Err(Response::error("ERR Internal error: shard unreachable"));
-        }
+        let conn_id = self.state.id;
+        mirror_blocked_then_register(&self.admin.client_registry, conn_id, async {
+            sender
+                .send(BlockingMsg::BlockWait {
+                    conn_id,
+                    keys: keys.to_vec(),
+                    op,
+                    response_tx,
+                    deadline,
+                    protocol_version: self.state.protocol_version,
+                })
+                .await
+                .map_err(|_| ())
+        })
+        .await?;
 
         self.state.begin_block(target_shard, keys.to_vec());
-        self.admin
-            .client_registry
-            .update_blocked_state(self.state.id, true);
 
         Ok(response_rx)
     }
@@ -474,6 +472,114 @@ async fn reconcile_ack(
         // being delivered to nobody.
         Ok(UnregisterAck::AlreadyServed) => response_rx.await.ok(),
         Ok(UnregisterAck::Unregistered) | Err(_) => None,
+    }
+}
+
+/// Set the registry's blocked mirror, then hand the wait to the shard.
+///
+/// The order is the point. `register` awaits — a full shard channel parks it —
+/// and the connection is committed to blocking from the moment it is called, so
+/// mirroring afterwards left a window in which the client was genuinely parked
+/// while `CLIENT UNBLOCK` saw no [`ClientFlags::BLOCKED`](frogdb_core::ClientFlags)
+/// and silently answered `0`: a reply that says "there was nothing to unblock"
+/// about a client that is about to block for its full timeout.
+///
+/// Inverting the window is safe. An UNBLOCK landing between the mirror and the
+/// registration sets the unblock signal, which the coordinator observes as soon
+/// as it starts waiting; the wait then unwinds through the same `cleanup_wait`
+/// path as any other unblock, and its `UnregisterWait` is ordered behind this
+/// `BlockWait` on the shard channel either way. The cost is a signal arriving
+/// marginally early — which the wait is built to absorb — against a `CLIENT
+/// UNBLOCK` that lies about having done nothing.
+async fn mirror_blocked_then_register(
+    registry: &frogdb_core::ClientRegistry,
+    conn_id: u64,
+    register: impl Future<Output = Result<(), ()>>,
+) -> Result<(), Response> {
+    registry.update_blocked_state(conn_id, true);
+    if register.await.is_err() {
+        // No wait exists, so the mirror must not claim one: a flag left set here
+        // makes the connection blocked-but-not-waiting, and every later UNBLOCK
+        // would signal a wait that never runs.
+        registry.update_blocked_state(conn_id, false);
+        registry.reset_unblock(conn_id);
+        return Err(Response::error("ERR Internal error: shard unreachable"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod registration_window_tests {
+    use std::future::{pending, ready};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    use frogdb_core::ClientRegistry;
+
+    use super::*;
+
+    fn registry_with_client(id: u64) -> (Arc<ClientRegistry>, frogdb_core::ClientHandle) {
+        let registry = Arc::new(ClientRegistry::new());
+        let addr: SocketAddr = "127.0.0.1:6379".parse().expect("a literal socket address");
+        let handle = registry.register(id, addr, None);
+        (registry, handle)
+    }
+
+    // FM-BLOCKING-003
+    /// `CLIENT UNBLOCK` must not answer `0` about a client that is in the middle
+    /// of blocking.
+    ///
+    /// The registration is not instantaneous: handing `BlockWait` to the shard
+    /// awaits, and a full shard channel parks it there. With the registry mirror
+    /// set only after that send returned, an UNBLOCK arriving inside the window
+    /// found no `BLOCKED` flag and replied `0` — "no such blocked client" — for
+    /// a client that then blocked for its whole timeout. The operator's next
+    /// move is to believe the reply.
+    ///
+    /// Pre-fix this test fails at the last assertion with `false`.
+    #[tokio::test(start_paused = true)]
+    async fn client_unblock_inside_the_registration_window_finds_the_client_blocked() {
+        let (registry, _handle) = registry_with_client(7);
+        assert!(
+            !registry.unblock(7, UnblockMode::Timeout),
+            "a connection that has not started blocking is genuinely not blocked"
+        );
+
+        // A registration whose send never completes: the window, held open.
+        let parked = mirror_blocked_then_register(&registry, 7, pending::<Result<(), ()>>());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), parked)
+                .await
+                .is_err(),
+            "the registration is still parked in its send — this is the window"
+        );
+
+        assert!(
+            registry.unblock(7, UnblockMode::Timeout),
+            "an UNBLOCK inside the registration window must signal the wait, not report nothing to do"
+        );
+    }
+
+    // FM-BLOCKING-003
+    /// The inverted window must not leak: a registration that *failed* leaves no
+    /// wait behind, so the mirror it set has to come back down. Otherwise the
+    /// connection reads as blocked forever and every later UNBLOCK signals a
+    /// wait that will never run.
+    #[tokio::test]
+    async fn a_failed_registration_clears_the_mirror_it_set() {
+        let (registry, _handle) = registry_with_client(7);
+
+        let err = mirror_blocked_then_register(&registry, 7, ready(Err(())))
+            .await
+            .expect_err("an unreachable shard must surface as an error reply");
+        assert!(
+            matches!(&err, Response::Error(msg) if msg.ends_with(b"shard unreachable")),
+            "got {err:?}"
+        );
+        assert!(
+            !registry.unblock(7, UnblockMode::Timeout),
+            "a wait that never registered must not leave the connection looking blocked"
+        );
     }
 }
 
