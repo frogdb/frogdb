@@ -111,6 +111,10 @@ struct MockTxnHost {
     deferrals: HashMap<String, Deferral>,
     queue_has_writes: bool,
     rate_limit: Option<RateLimitExceeded>,
+    /// How many times the batch limiter was asked to charge this transaction.
+    /// `try_acquire_batch` takes `&self` and so cannot push an [`Effect`]; this
+    /// counter is what lets a test assert that a doomed EXEC spent nothing.
+    charges: std::sync::atomic::AtomicUsize,
     /// One verdict per `validate_queued_batch` call; exhausted = `None`.
     validate_verdicts: VecDeque<Option<Response>>,
     /// One verdict per `watched_slots_still_local` call (false = a watched
@@ -135,6 +139,7 @@ impl Default for MockTxnHost {
             deferrals: HashMap::new(),
             queue_has_writes: false,
             rate_limit: None,
+            charges: std::sync::atomic::AtomicUsize::new(0),
             validate_verdicts: VecDeque::new(),
             watched_slots_local: VecDeque::new(),
             paused: false,
@@ -143,6 +148,13 @@ impl Default for MockTxnHost {
             server_wide_reply: Response::Integer(0),
             effects: Vec::new(),
         }
+    }
+}
+
+impl MockTxnHost {
+    /// How many times the batch limiter was charged for this transaction.
+    fn charges(&self) -> usize {
+        self.charges.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -169,6 +181,8 @@ impl TxnHost for MockTxnHost {
     }
 
     fn try_acquire_batch(&self, _queue: &[ParsedCommand]) -> Result<(), RateLimitExceeded> {
+        self.charges
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match self.rate_limit {
             Some(exceeded) => Err(exceeded),
             None => Ok(()),
@@ -369,8 +383,47 @@ async fn cross_slot_when_the_queue_folded_to_more_than_one_shard() {
         error_text(&only(responses)).starts_with("CROSSSLOT"),
         "cross-slot EXEC must answer the redirect seam's CROSSSLOT"
     );
-    // Validation ran (standalone said "serve local"), but nothing was executed.
-    assert_eq!(host.effects, vec![Effect::Validate { asking: false }]);
+    // Nothing was validated, charged, paused on, or executed: `resolve()` is
+    // pure and runs first, so a batch that can never be served costs nothing.
+    assert!(host.effects.is_empty(), "effects: {:?}", host.effects);
+    assert_eq!(host.charges(), 0);
+}
+
+// FM-TXN-019
+#[tokio::test]
+async fn a_cross_slot_exec_is_refused_without_charging_the_rate_limiter() {
+    // The limiter is the shared resource a doomed batch must not be able to
+    // drain: a client whose every EXEC spans two slots can never execute
+    // anything, so letting each attempt spend tokens would starve the clients
+    // that can. Same principle as FM-TXN-016's no-charge-on-abort.
+    //
+    // The limiter here is armed to *deny*, which pins the ordering rather than
+    // merely the counter: before the fix `try_acquire_batch` ran first and this
+    // EXEC answered `RateLimited`.
+    let mut host = MockTxnHost {
+        rate_limit: Some(RateLimitExceeded::Commands),
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Multi(vec![0, 1]);
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::CrossSlot);
+    assert!(error_text(&only(responses)).starts_with("CROSSSLOT"));
+    assert_eq!(
+        host.charges(),
+        0,
+        "a cross-slot EXEC must not reach the batch limiter at all"
+    );
+
+    // The counter is not vacuous: a servable batch does charge exactly once.
+    let mut servable = MockTxnHost::default();
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Single(MOCK_SHARD);
+    let (outcome, _) = execute_transaction(&mut servable, s).await;
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(servable.charges(), 1);
 }
 
 // FM-TXN-022

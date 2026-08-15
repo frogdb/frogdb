@@ -160,10 +160,10 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 
 | Field | Value |
 | --- | --- |
-| Precondition | `txn.exec_abort = false`; `host.try_acquire_batch(queue)` returns `Err` |
-| Postcondition | no shard round-trip, no pause wait, no validation call; `outcome = RateLimited`; reply names the exhausted dimension |
-| Source | `frogdb-server/crates/txn/src/exec.rs:150` |
-| Rulings | — |
+| Precondition | `txn.exec_abort = false`; `target.resolve()` answered a servable shard (a `Multi` target answers `-CROSSSLOT` *before* the limiter is asked — FM-TXN-019); `host.try_acquire_batch(queue)` returns `Err` |
+| Postcondition | no shard round-trip, no pause wait, no validation call; `outcome = RateLimited`; reply names the exhausted dimension. **Both orderings around this charge are deliberate.** `target.resolve()` sits *above* it: resolution is pure computation over the already-parsed queue (no I/O, no await, no host state), and a batch that can never be served must not be able to drain a limiter shared with clients that can — the same no-charge-for-a-doomed-batch rule as TR-TXN-012's poisoned EXEC. The `CLIENT PAUSE` wait (TR-TXN-016) stays *below* it, and below the CROSSSLOT gate: erroring out of a pause window would change what a pause is, while a doomed transaction waiting one out costs nothing but its own latency. |
+| Source | `frogdb-server/crates/txn/src/exec.rs:177` (`target.resolve()`, above the charge), `:185` (`try_acquire_batch`), `:249` (`wait_if_paused`, below it) |
+| Rulings | [issue 26](../.scratch/spec-gaps/issues/done/26-distsys-review-minors-sweep.md) MIN-14 — resolve hoisted above the limiter charge; the pause wait's position is unchanged |
 
 ## TR-TXN-014 — EXEC of an empty, unwatched queue
 
@@ -178,7 +178,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 
 | Field | Value |
 | --- | --- |
-| Precondition | cluster mode; `txn.exec_abort = false`; rate limiter and empty-queue gates passed |
+| Precondition | cluster mode; `txn.exec_abort = false`; the CROSSSLOT, rate-limiter and empty-queue gates all passed (in that order — a cross-slot batch is refused before any verdict is taken, FM-TXN-019) |
 | Postcondition | `conn.pending_slot_fence` stamped iff the verdict is `Serve` on a single owned slot; a redirecting verdict sets `outcome = Redirected` and stops execution (no shard round-trip, no pause wait) |
 | Source | `frogdb-server/crates/txn/src/exec.rs:199`, `frogdb-server/crates/server/src/connection/guards.rs:1030` (`validate_queued_batch`), `:1043` (`validate_queued_batch_inner`) |
 | Rulings | [issue 09](../.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) — residual TOCTOU window between this verdict and the shard apply (see TR-TXN-020) |
@@ -545,9 +545,10 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Trigger | `EXEC` whose queued commands' keys fold to `TransactionTarget::Multi` — different slots in cluster mode, different shards in standalone. |
 | Observable | Exactly `-CROSSSLOT Keys in request don't hash to the same slot`, a bare error frame. |
 | NOT observable | `-EXECABORT` (the queue was well-formed; each command queued fine); an array; any command executing on either shard; a cross-shard transaction "succeeding" through the VLL path — transactions are deliberately denied the cross-shard atomicity single ops get. VLL's continuation lock already buys cross-shard *mutual exclusion* for a whole batch; what is missing is *undo*: nothing on a shard that already committed part of a cross-shard batch knows how to unwind that piece if a later shard in the same batch fails. That per-shard undo is a missing mechanism, not a structural impossibility — see the follow-up, [issue 29](../.scratch/spec-gaps/issues/open/29-cross-shard-transaction-per-shard-undo.md). |
-| Invariant | `TransactionTarget::resolve` maps `Multi` to the redirect seam's `crossslot()` unconditionally, without consulting any config; the wire text has exactly one owner (`frogdb_types::redirect::CROSSSLOT_MSG`). |
+| Invariant | `TransactionTarget::resolve` maps `Multi` to the redirect seam's `crossslot()` unconditionally, without consulting any config; the wire text has exactly one owner (`frogdb_types::redirect::CROSSSLOT_MSG`). The resolution runs as the algorithm's second gate, immediately after the poisoned-queue check and **above** the rate limiter, the empty-queue fast path, the slot validator and the pause barrier (`exec.rs:177`): it is pure computation over the already-parsed queue, so a batch that can never be served spends no limiter tokens (TR-TXN-013) and records no host effect at all. Consequently `-CROSSSLOT` outranks `-MOVED`, `RateLimited` and `WatchAborted` for a batch that is both cross-slot and something else — the co-location violation is the answer the client can act on. |
 | Outcome variant | `TransactionOutcome::CrossSlot` (label `crossslot`) |
-| Forced by | `cross_slot_when_the_queue_folded_to_more_than_one_shard`, `test_multi_exec_two_single_key_commands_different_slots_defers_crossslot_to_exec`, `test_multi_cross_shard_plain_keys_crossslot_default_config`, `transaction_target_resolve_maps_multi_to_crossslot`, `fold_keys_promotes_on_slot_mismatch_in_cluster_mode`, `batch_spanning_two_slots_is_crossslot` |
+| Forced by | `cross_slot_when_the_queue_folded_to_more_than_one_shard`, `a_cross_slot_exec_is_refused_without_charging_the_rate_limiter`, `test_multi_exec_two_single_key_commands_different_slots_defers_crossslot_to_exec`, `test_multi_cross_shard_plain_keys_crossslot_default_config`, `transaction_target_resolve_maps_multi_to_crossslot`, `fold_keys_promotes_on_slot_mismatch_in_cluster_mode`, `batch_spanning_two_slots_is_crossslot` |
+| Rulings | [issue 26](../.scratch/spec-gaps/issues/done/26-distsys-review-minors-sweep.md) MIN-14 — the resolution is hoisted above the rate limiter so a doomed batch charges nothing; the pause barrier stays below it (TR-TXN-013) |
 | Bug refs | [issue 29](../.scratch/spec-gaps/issues/open/29-cross-shard-transaction-per-shard-undo.md) — per-shard undo, the missing piece behind this refusal |
 
 ## FM-TXN-020 — A cross-shard WATCH set alone forces CROSSSLOT

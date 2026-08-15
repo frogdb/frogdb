@@ -155,6 +155,32 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         );
     }
 
+    // Resolve the target shard *before* anything is spent on this batch.
+    //
+    // Taking the summary folds both queued-command keys and every *live*
+    // watched shard into the transaction target at EXEC time, so `None` here
+    // means there were no keys and no live watches to fold — fall back to this
+    // connection's own shard. A set of live watches spanning shards promotes
+    // the target to `Multi`, and `resolve()` maps that to the CROSSSLOT reply
+    // from the redirect seam. `Single` routes directly.
+    //
+    // This is pure computation over already-parsed queued commands: no I/O, no
+    // await, no host state touched. Running it ahead of the rate limiter is
+    // what makes a CROSSSLOT-doomed EXEC cost nothing — it can never be served,
+    // so charging tokens for it would let a client that cannot execute anything
+    // exhaust the budget of clients that can. Same principle as FM-TXN-016's
+    // no-charge-on-abort.
+    //
+    // The `CLIENT PAUSE` wait deliberately stays *below*: erroring out of a
+    // pause window would change what a pause is (see TR-TXN-004), and a doomed
+    // transaction waiting one out costs nothing but its own latency.
+    let target_shard = match target.resolve() {
+        Ok(TransactionTarget::None) => host.shard_id(),
+        Ok(TransactionTarget::Single(shard)) => shard,
+        Ok(TransactionTarget::Multi(_)) => unreachable!("resolve() maps Multi to Err"),
+        Err(crossslot) => return (TransactionOutcome::CrossSlot, vec![crossslot]),
+    };
+
     // Rate limit check for batch: consume N commands + total bytes
     if let Err(exceeded) = host.try_acquire_batch(&queue) {
         let msg = match exceeded {
@@ -286,23 +312,10 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         }
     }
 
-    // Get target shard. Taking the summary folds both queued-command keys and
-    // every *live* watched shard into the transaction target at EXEC time, so
-    // `None` here means there were no keys and no live watches to fold — fall
-    // back to this connection's own shard. A set of live watches spanning
-    // shards promotes the target to `Multi` and is CROSSSLOT-rejected below;
-    // dead watches never promote it and may well sit on some other shard, which
-    // is what the off-target round-trips below exist for.
-    // A `Multi` target is a cross-slot transaction: resolve() returns the
-    // CROSSSLOT reply from the redirect seam. `None` falls back to this
-    // connection's shard; `Single` routes directly.
-    let target_shard = match target.resolve() {
-        Ok(TransactionTarget::None) => host.shard_id(),
-        Ok(TransactionTarget::Single(shard)) => shard,
-        Ok(TransactionTarget::Multi(_)) => unreachable!("resolve() maps Multi to Err"),
-        Err(crossslot) => return (TransactionOutcome::CrossSlot, vec![crossslot]),
-    };
-
+    // `target_shard` was resolved at the top, before the rate limiter — dead
+    // watches never promote the target and may well sit on some other shard,
+    // which is what the off-target round-trips below exist for.
+    //
     // Route each watch's version check to the shard that can answer it.
     //
     // The target shard's watches ride with the batch, so its CAS and its
