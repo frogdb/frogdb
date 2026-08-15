@@ -57,6 +57,15 @@ pub struct RegisterRefused {
     pub message: &'static str,
 }
 
+/// Where an inserted waiter goes in each of its keys' FIFO deques.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    /// A first registration: behind everyone already waiting on the key.
+    Tail,
+    /// A waiter going back to the position it was popped from (retry).
+    Head,
+}
+
 /// Refusal text for the shard-wide blocked-connection bound.
 pub const MAX_BLOCKED_CONNECTIONS_ERR: &str = "ERR max blocked connections limit reached";
 
@@ -171,6 +180,22 @@ impl ShardWaitQueue {
     /// so a refusal leaves the queue exactly as it found it — no partial
     /// registration under the keys checked before the offending one.
     pub fn register(&mut self, entry: WaitEntry) -> Result<(), RegisterRefused> {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.insert(entry, seq, Placement::Tail)
+    }
+
+    /// Shared body of [`Self::register`] and [`Self::requeue_retry`]: admission
+    /// bounds, slab allocation, and the per-key/per-connection indexes.
+    ///
+    /// `seq` is supplied by the caller because a retry keeps the ordinal it was
+    /// first stamped with, and only a first registration is journalled.
+    fn insert(
+        &mut self,
+        entry: WaitEntry,
+        seq: u64,
+        placement: Placement,
+    ) -> Result<(), RegisterRefused> {
         // Check global limit
         if self.max_blocked_connections > 0 && self.waiter_count >= self.max_blocked_connections {
             return Err(RegisterRefused {
@@ -197,12 +222,9 @@ impl ShardWaitQueue {
         let conn_id = entry.conn_id;
         let keys = entry.keys.clone();
 
-        let seq = self.next_seq;
-        self.next_seq += 1;
-
         // Journal the registration at the moment it happens (test builds only).
         #[cfg(feature = "wait-queue-log")]
-        {
+        if placement == Placement::Tail {
             let op = blocking_op_name(&entry.op);
             for key in &keys {
                 if self.registration_log.len() >= MAX_REGISTRATION_LOG {
@@ -233,10 +255,11 @@ impl ShardWaitQueue {
 
         // Index by each key
         for key in &keys {
-            self.waiters_by_key
-                .entry(key.clone())
-                .or_default()
-                .push_back(slot_idx);
+            let waiters = self.waiters_by_key.entry(key.clone()).or_default();
+            match placement {
+                Placement::Tail => waiters.push_back(slot_idx),
+                Placement::Head => waiters.push_front(slot_idx),
+            }
         }
 
         // Index by connection ID
@@ -503,6 +526,21 @@ impl ShardWaitQueue {
         key: &Bytes,
         kind: WaiterKind,
     ) -> Option<WaitEntry> {
+        self.pop_oldest_waiter_of_kind_with_seq(key, kind)
+            .map(|(entry, _seq)| entry)
+    }
+
+    /// [`Self::pop_oldest_waiter_of_kind`], also returning the popped waiter's
+    /// registration ordinal.
+    ///
+    /// The satisfaction driver needs the ordinal so a waiter that turns out to
+    /// be unsatisfiable can go back into the queue as its *old* self rather than
+    /// as a fresh registration — see [`Self::requeue_retry`].
+    pub fn pop_oldest_waiter_of_kind_with_seq(
+        &mut self,
+        key: &Bytes,
+        kind: WaiterKind,
+    ) -> Option<(WaitEntry, u64)> {
         // Find the position of the first matching waiter in the per-key deque.
         let found_pos = {
             let waiters = self.waiters_by_key.get(key)?;
@@ -555,7 +593,25 @@ impl ShardWaitQueue {
             self.waiters_by_key.remove(key);
         }
 
-        Some(entry)
+        Some((entry, self.seq_by_slot[idx]))
+    }
+
+    /// Put a popped waiter back, exactly where and as old as it was
+    /// (`specs/blocking.md` TR-BLOCKING-023).
+    ///
+    /// The satisfaction driver pops a waiter before it can know whether the op
+    /// is really satisfiable; when it is not, the waiter must go on waiting
+    /// rather than be answered. `seq` is the ordinal the pop returned, so the
+    /// waiter keeps its place in the slot-drain order, and it is pushed at the
+    /// *head* of each key's deque, which is where the pop took it from: it was
+    /// the oldest waiter of its kind, and only waiters of other kinds — which do
+    /// not compete with it — can sit ahead of it. That makes a retry invisible
+    /// to per-key FIFO wake order.
+    ///
+    /// Deliberately not journalled: the retried waiter registered once, and a
+    /// second record would make the exact-FIFO checker judge one client as two.
+    pub fn requeue_retry(&mut self, entry: WaitEntry, seq: u64) -> Result<(), RegisterRefused> {
+        self.insert(entry, seq, Placement::Head)
     }
 
     /// Returns true if `entry.op` is compatible with the given `kind`.

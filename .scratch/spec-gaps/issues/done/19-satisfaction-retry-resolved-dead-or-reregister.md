@@ -1,6 +1,6 @@
 # 19: `Satisfaction::Retry` — proven dead (`unreachable!()`) or re-registers; never a silent nil
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -61,13 +61,48 @@ Investigation first, then one of two fixes; either way the silent-nil path dies:
 - [Issue 16](16-deny-blocking-context-returns-op-aware-nil.md): sibling wrong-shape
   family (bare `Null` where an op-aware reply belongs).
 
-## Acceptance criteria
+## Reachability verdict: REACHABLE (via `StreamSatisfaction`), by construction
 
-- [ ] Reachability verdict documented with evidence
-- [ ] Dead → `unreachable!()`; reachable → re-register with original deadline
-- [ ] Silent-nil path removed in both branches
-- [ ] Row landed; `just lint-spec` green; forcing test per branch
+Re-derived per producer arm after issue 13 landed:
 
-## Blocked by
+- `StreamSatisfaction::check_key` answers *does the key exist and hold a stream*;
+  `satisfy` asks *does it hold entries this waiter has not read*. The gap is real and
+  reachable two ways, both now covered by tests:
+  - a plain `XREAD BLOCK 0 STREAMS s <id>` parked on an id beyond the stream's tail —
+    any later XADD below that id makes `check_key` say `Yes` and `read_after` return
+    empty (`a_stream_waiter_the_new_entry_does_not_reach_stays_parked`);
+  - an `XREADGROUP` whose single new entry an earlier waiter in the *same* satisfaction
+    pass already consumed — `check_key` still says `Yes` because the stream is non-empty
+    (the `_ => Satisfaction::Retry` after `read_group_entries`).
+- The list/zset `None`/`is_empty` arms would need `check_key`'s non-emptiness answer to
+  be stale between the check and the pop, which the shard's serial thread forbids. They
+  are left returning `Retry` — under the new semantics that is a safe re-park, not a
+  wrong answer — rather than converted to a panic on an argument about scheduling.
+- The three per-family `_ =>` kind-mismatch arms are provably dead:
+  `pop_oldest_waiter_of_kind(kind)` filters through `entry_matches_kind`, which is
+  exactly the op set each strategy matches. These are now `unreachable!()`.
 
-None — can start immediately (coordinate with issue 13 if in flight).
+Because the verdict is *reachable*, the ruled shape is branch 3: re-register, never a
+reply.
+
+## What landed
+
+- TR-BLOCKING-023 + FM-BLOCKING-013: a popped-but-unsatisfiable waiter stays parked
+  with its original deadline, registration ordinal and deque position; nothing is sent
+  and the channel is not dropped.
+- `drive_satisfaction_body` collects retried waiters and requeues them at a single exit,
+  *before* any stream drain the pass triggers (a drain-first order would strand a
+  retried waiter on a key the pass just declared unusable). The drain arms became
+  `break`s carrying the `KeyReady` so there is one exit path.
+- `ShardWaitQueue::requeue_retry(entry, seq)` + `pop_oldest_waiter_of_kind_with_seq`:
+  head-insertion with the original ordinal, and deliberately not journalled, so the
+  exact-FIFO checker does not see one client as two. `register`/`requeue_retry` share a
+  private `insert(entry, seq, Placement)`.
+- The interim `Satisfaction::Retry => timeout_reply()` (a timeout the client never asked
+  for, and before that a dropped channel = shard death) is gone.
+- Forcing tests in `frogdb-core` (`shard::blocking::tests`), all four proven failing
+  against the interim silent-nil arm:
+  `a_stream_waiter_the_new_entry_does_not_reach_stays_parked`,
+  `a_retried_stream_waiter_is_served_by_a_later_write`,
+  `a_retried_waiter_keeps_its_deque_position_and_ordinal`,
+  `a_retried_waiter_is_still_covered_by_a_wrong_type_drain`.

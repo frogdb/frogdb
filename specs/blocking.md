@@ -284,6 +284,16 @@ rather than naming one that doesn't force the behavior.
 | Forced by | unit-level (frogdb-server, `blocking/coordinator.rs`): `client_kill_while_parked_ends_the_connection`, `response_beats_a_kill_in_the_same_poll`; integration: `client_kill_terminates_a_parked_client_and_releases_its_waiter` |
 | Rulings | [issue 13](../.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (CRIT-5: before this row the coordinator had no kill branch at all, so `CLIENT KILL` reported success and did nothing, forever) |
 
+## TR-BLOCKING-023 — a woken waiter's op has nothing to read (`Satisfaction::Retry`)
+
+| Field | Value |
+| --- | --- |
+| Precondition | A write makes the key ready for the parked waiter's *kind* (`check_key` = `Yes`), the waiter is popped, and its op then produces nothing: a blocking `XREAD` whose `after_id` the stream has not reached yet, or an `XREADGROUP` whose only new entry an earlier waiter in the same satisfaction pass already consumed. Reachable only from `StreamSatisfaction`, whose readiness question (does the key hold a stream?) is weaker than its serve question (does it hold entries *this* waiter has not read?); the list/zset arms would need `check_key`'s non-emptiness answer to be stale, which the shard's serial thread forbids. |
+| Postcondition | The waiter goes back into the queue unchanged and stays parked: same `response_tx` (nothing is sent — no nil, no error, and the channel is not dropped, which would read as shard death, FM-BLOCKING-004), same deadline, same registration ordinal, and at the head of each of its keys' deques, i.e. the position it was popped from — so per-key FIFO wake order and slot-drain order are both unchanged, and a later write can still serve it. The satisfaction pass continues with the next waiter; the requeue happens once the pass ends, so a waiter cannot be popped and re-popped forever within one pass. A pass that ends in a stream drain (TR-BLOCKING-019/022) requeues *first*, so the drain covers the retried waiter rather than leaving it parked on a key it just declared unusable. |
+| Source | `shard/blocking.rs` (`drive_satisfaction_body`'s `Satisfaction::Retry` arm, `requeue_retried_waiters`); `shard/wait_queue.rs` (`pop_oldest_waiter_of_kind_with_seq`, `requeue_retry`, `Placement::Head`) |
+| Forced by | `a_stream_waiter_the_new_entry_does_not_reach_stays_parked`, `a_retried_stream_waiter_is_served_by_a_later_write`, `a_retried_waiter_keeps_its_deque_position_and_ordinal`, `a_retried_waiter_is_still_covered_by_a_wrong_type_drain` |
+| Rulings | [issue 19](../.scratch/spec-gaps/issues/done/19-satisfaction-retry-resolved-dead-or-reregister.md) (reachability settled *reachable* — the stream arms; the previous behavior answered an op-aware nil, i.e. a timeout the client never asked for. The three per-family `_ =>` kind-mismatch arms are proven dead — `pop_oldest_waiter_of_kind` filters on the same op set the strategy matches — and are now `unreachable!()` rather than a silent `Retry`) |
+
 ## How to read a row
 
 Fields as in [txn.md](txn.md#how-to-read-a-row). `Outcome variant`
@@ -460,6 +470,18 @@ rows:
 | Bug refs | [issue 13](../.scratch/spec-gaps/issues/done/13-blocking-wait-becomes-a-run-loop-state.md) (distsys-review CRIT-5) |
 
 ---
+
+## FM-BLOCKING-013 — the waking write says nothing this waiter can read
+
+| Field | Value |
+|---|---|
+| Trigger | The satisfaction pass pops this waiter because its key became ready for the kind, then its op yields no data — a blocking `XREAD` parked on an `after_id` past the stream's tail, or an `XREADGROUP` whose new entry an earlier waiter in the same pass consumed. |
+| Observable | Nothing: the client stays blocked, and a later write that *does* produce data for it serves it normally, with the original deadline still governing the timeout. |
+| NOT observable | A nil (or any other reply) delivered at the moment of the unrelated write — a timeout the client never asked for and cannot distinguish from a real one; a closed response channel, which the coordinator reads as shard death (FM-BLOCKING-004); the waiter losing its FIFO position to waiters registered after it. |
+| Invariant | A popped-but-unsatisfied waiter is put back with its registration ordinal and deque position, and the requeue happens before any drain the same pass triggers, so no waiter is stranded on a key the pass has already declared unusable. |
+| Outcome variant | none while retried — the wait resolves later through its own transition (serve, timeout, unblock, drain, kill, disconnect) |
+| Forced by | `a_stream_waiter_the_new_entry_does_not_reach_stays_parked`, `a_retried_stream_waiter_is_served_by_a_later_write`, `a_retried_waiter_keeps_its_deque_position_and_ordinal`, `a_retried_waiter_is_still_covered_by_a_wrong_type_drain` |
+| Bug refs | [issue 19](../.scratch/spec-gaps/issues/done/19-satisfaction-retry-resolved-dead-or-reregister.md) (MAJ-16: `Satisfaction::Retry` was an unrowed resolution — originally the entry was dropped with its channel, later an op-aware nil; both answer a client that asked to keep waiting) |
 
 ## Redis deviations
 

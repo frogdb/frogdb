@@ -331,21 +331,28 @@ impl ShardWorker {
         // the deadline fast-path below depend on how long the *earlier* iterations took, so
         // two runs that differ only in scheduling could skip a different set of waiters.
         let now = Instant::now();
+        // Waiters this pass popped but could not satisfy (TR-BLOCKING-023).
+        // They cannot go back into the queue inside the loop — the key still
+        // looks ready, so the loop would pop the same waiter forever — and they
+        // must go back *before* any drain below, or a drain would leave them
+        // parked on a key it just declared unusable. Hence: collect here, requeue
+        // at the single exit, drain after that.
+        let mut retried: Vec<(WaitEntry, u64)> = Vec::new();
+        let mut drain: Option<KeyReady> = None;
         while self.wait_queue.has_waiters_for_kind(key, kind) {
             match strat.check_key(&mut self.store, key) {
                 KeyReady::No => break,
-                KeyReady::DrainNoGroup => {
-                    self.drain_stream_waiters_with_error(key);
-                    return;
-                }
-                KeyReady::DrainWrongType => {
-                    self.drain_stream_waiters_wrongtype(key);
-                    return;
+                ready @ (KeyReady::DrainNoGroup | KeyReady::DrainWrongType) => {
+                    drain = Some(ready);
+                    break;
                 }
                 KeyReady::Yes => {}
             }
 
-            let Some(entry) = self.wait_queue.pop_oldest_waiter_of_kind(key, kind) else {
+            let Some((entry, seq)) = self
+                .wait_queue
+                .pop_oldest_waiter_of_kind_with_seq(key, kind)
+            else {
                 break;
             };
 
@@ -379,15 +386,18 @@ impl ShardWorker {
             }
 
             match strat.satisfy(&mut self.store, key, &entry) {
-                // Nothing was consumed, but the waiter has already been popped
-                // out of the queue, so it must still be answered rather than
-                // dropped — see the FM-BLOCKING-004 note above. The final
-                // taxonomy of this arm (proven dead, or re-register with the
-                // original deadline) is spec-gaps issue 19; until then the
-                // op-aware nil at least keeps the shape right and the channel
-                // meaning intact.
+                // The key was ready for the *kind*, but not for this particular
+                // waiter's op — a stream waiter whose `after_id` the new entries
+                // do not reach, or an XREADGROUP whose new entry an earlier
+                // waiter in this same pass already consumed. Nothing was
+                // consumed and nothing about the client changed, so it goes on
+                // waiting with its original deadline (TR-BLOCKING-023). It must
+                // never be answered here: a nil would be a timeout the client
+                // never asked for, and dropping the entry would close the
+                // channel, which the coordinator reads as shard death
+                // (FM-BLOCKING-004).
                 Satisfaction::Retry => {
-                    let _ = entry.response_tx.send(entry.op.timeout_reply());
+                    retried.push((entry, seq));
                     continue;
                 }
                 Satisfaction::Reject(reply) => self.complete_blocked_waiter(entry, reply),
@@ -454,6 +464,39 @@ impl ShardWorker {
                 }
             }
         }
+
+        self.requeue_retried_waiters(retried);
+
+        match drain {
+            Some(KeyReady::DrainNoGroup) => self.drain_stream_waiters_with_error(key),
+            Some(KeyReady::DrainWrongType) => self.drain_stream_waiters_wrongtype(key),
+            _ => {}
+        }
+    }
+
+    /// Put every waiter this satisfaction pass could not satisfy back into the
+    /// queue, unchanged (`specs/blocking.md` TR-BLOCKING-023).
+    ///
+    /// A refusal can only come from an admission bound, and the queue is at most
+    /// as full as it was when these waiters were admitted, so it is not expected
+    /// — but the entry owns the client's channel, so it is answered with the
+    /// refusal text (FM-BLOCKING-006) rather than dropped.
+    fn requeue_retried_waiters(&mut self, retried: Vec<(WaitEntry, u64)>) {
+        if retried.is_empty() {
+            return;
+        }
+        // Oldest first, so the head-insertions leave the deque in its original
+        // order rather than reversing this pass's retries.
+        for (entry, seq) in retried.into_iter().rev() {
+            if let Err(refused) = self.wait_queue.requeue_retry(entry, seq) {
+                self.complete_blocked_waiter(refused.entry, Response::error(refused.message));
+            }
+        }
+        BlockedClients::set(
+            self.observability.metrics(),
+            self.wait_queue.waiter_count() as f64,
+            &self.shard_id().to_string(),
+        );
     }
 
     /// Send a response to a blocked client and record metrics.
@@ -644,8 +687,19 @@ enum Satisfaction {
         /// commits — a restored (undelivered) pop ships nothing.
         propagate: Option<SynthesizedCommand>,
     },
-    /// The key is no longer satisfiable for this waiter (it lost a race to an
-    /// earlier waiter that emptied the key); drop the waiter and re-loop.
+    /// The key was ready for the waiter's *kind* but produced nothing for this
+    /// particular waiter, so it stays parked: the driver puts it back where it
+    /// came from, with its deadline and registration ordinal intact, and moves
+    /// on to the next one (`specs/blocking.md` TR-BLOCKING-023).
+    ///
+    /// Reachable only from [`StreamSatisfaction`], whose `check_key` answers a
+    /// question (does the key exist and hold a stream?) weaker than the one
+    /// `satisfy` asks (does it hold entries *this* waiter has not read?): a
+    /// waiter parked on an `after_id` beyond the stream's tail, or an
+    /// XREADGROUP whose single new entry an earlier waiter in the same pass has
+    /// already taken. The list/zset arms return it only where `check_key`'s
+    /// non-emptiness answer would have to be stale, which cannot happen on the
+    /// shard's serial thread — they are re-park-safe rather than load-bearing.
     Retry,
     /// A terminal reply that consumed nothing (WRONGTYPE, NOGROUP); deliver it
     /// and drop the waiter without touching the stored value.
@@ -963,13 +1017,12 @@ impl WaiterSatisfaction for ListSatisfaction {
                     }),
                 }
             }
-            _ => {
-                debug_assert!(
-                    false,
-                    "pop_oldest_waiter_of_kind(List) returned non-list op"
-                );
-                Satisfaction::Retry
-            }
+            // Unreachable: `pop_oldest_waiter_of_kind(List)` filters on
+            // `entry_matches_kind`, which is the exact op set matched above, so
+            // this strategy is never handed another family's op. Fail-stop
+            // rather than fall back — a silent reply here would answer the
+            // wrong client with the wrong shape.
+            other => unreachable!("pop_oldest_waiter_of_kind(List) returned {other:?}"),
         }
     }
 }
@@ -1126,13 +1179,12 @@ impl WaiterSatisfaction for ZsetSatisfaction {
                     }),
                 }
             }
-            _ => {
-                debug_assert!(
-                    false,
-                    "pop_oldest_waiter_of_kind(SortedSet) returned non-zset op"
-                );
-                Satisfaction::Retry
-            }
+            // Unreachable: `pop_oldest_waiter_of_kind(SortedSet)` filters on
+            // `entry_matches_kind`, which is the exact op set matched above, so
+            // this strategy is never handed another family's op. Fail-stop
+            // rather than fall back — a silent reply here would answer the
+            // wrong client with the wrong shape.
+            other => unreachable!("pop_oldest_waiter_of_kind(SortedSet) returned {other:?}"),
         }
     }
 }
@@ -1249,13 +1301,12 @@ impl WaiterSatisfaction for StreamSatisfaction {
                     _ => Satisfaction::Retry,
                 }
             }
-            _ => {
-                debug_assert!(
-                    false,
-                    "pop_oldest_waiter_of_kind(Stream) returned non-stream op"
-                );
-                Satisfaction::Retry
-            }
+            // Unreachable: `pop_oldest_waiter_of_kind(Stream)` filters on
+            // `entry_matches_kind`, which is the exact op set matched above, so
+            // this strategy is never handed another family's op. Fail-stop
+            // rather than fall back — a silent reply here would answer the
+            // wrong client with the wrong shape.
+            other => unreachable!("pop_oldest_waiter_of_kind(Stream) returned {other:?}"),
         }
     }
 }
@@ -1884,6 +1935,167 @@ mod tests {
             ),
             "the surviving XREAD waiter is served by the recreating XADD"
         );
+    }
+
+    // ---- Retried waiters (TR-BLOCKING-023 / FM-BLOCKING-013) --------------
+    //
+    // `check_key` for streams asks a weaker question than `satisfy` does: the
+    // key holds a stream, but not necessarily entries *this* waiter has not
+    // read. The waiter is popped and then produces nothing; it must go back to
+    // waiting rather than be answered.
+
+    /// Park an XREAD waiter for `conn_id` reading everything after `after_ms-0`.
+    fn park_xread_after(
+        worker: &mut ShardWorker,
+        key: &Bytes,
+        conn_id: u64,
+        after_ms: u64,
+    ) -> oneshot::Receiver<Response> {
+        let (tx, rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(WaitEntry {
+                conn_id,
+                keys: vec![key.clone()],
+                op: BlockingOp::XRead {
+                    after_ids: vec![crate::types::StreamId::new(after_ms, 0)],
+                    count: None,
+                },
+                response_tx: tx,
+                deadline: None,
+                protocol_version: ProtocolVersion::default(),
+            })
+            .unwrap();
+        rx
+    }
+
+    /// Append `<ms>-0` to the stream at `key`, creating it if needed, then run
+    /// the satisfaction pass the real XADD path would run.
+    fn xadd_and_wake(worker: &mut ShardWorker, key: &Bytes, ms: u64) {
+        if worker.store.get_hot(key).is_none() {
+            worker.store.set(key.clone(), Value::stream());
+        }
+        worker
+            .store
+            .get_mut(key)
+            .and_then(|v| v.as_stream_mut())
+            .expect("key must hold a stream")
+            .add(
+                crate::types::StreamIdSpec::Explicit(crate::types::StreamId::new(ms, 0)),
+                vec![(Bytes::from_static(b"f"), Bytes::from_static(b"1"))],
+            )
+            .unwrap();
+        worker.try_satisfy_stream_waiters(key);
+    }
+
+    // TR-BLOCKING-023
+    // FM-BLOCKING-013
+    /// The forcing test: an unrelated write makes the key "ready" for stream
+    /// waiters, but its entry is older than what this waiter asked for. Before
+    /// the fix the popped waiter was answered with an op-aware nil — a timeout
+    /// the client never asked for; it must simply stay parked.
+    #[test]
+    fn a_stream_waiter_the_new_entry_does_not_reach_stays_parked() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+
+        let mut rx = park_xread_after(&mut worker, &key, 1, 5);
+        xadd_and_wake(&mut worker, &key, 2);
+
+        assert!(
+            matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "a waiter the new entry does not reach must be neither answered nor \
+             have its channel closed"
+        );
+        assert!(
+            worker
+                .wait_queue
+                .has_waiters_for_kind(&key, WaiterKind::Stream),
+            "the unsatisfied waiter must be back in the queue"
+        );
+    }
+
+    // TR-BLOCKING-023
+    // FM-BLOCKING-013
+    /// A retried waiter is a full queue member: the next write that *does*
+    /// reach its `after_id` serves it.
+    #[test]
+    fn a_retried_stream_waiter_is_served_by_a_later_write() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+
+        let mut rx = park_xread_after(&mut worker, &key, 1, 5);
+        xadd_and_wake(&mut worker, &key, 2);
+        xadd_and_wake(&mut worker, &key, 6);
+
+        assert!(
+            matches!(
+                rx.try_recv()
+                    .expect("the retried waiter must now be served"),
+                Response::Array(_)
+            ),
+            "the write past the waiter's after_id serves it"
+        );
+    }
+
+    // TR-BLOCKING-023
+    // FM-BLOCKING-013
+    /// A retry is invisible to ordering: the waiter returns to the head of the
+    /// key's deque with the ordinal it registered under, so neither per-key
+    /// FIFO wake order nor the slot-drain order (TR-BLOCKING-018) sees it move.
+    #[test]
+    fn a_retried_waiter_keeps_its_deque_position_and_ordinal() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+
+        // conns 1 and 3 ask for more than the write will deliver; conn 2 is
+        // served by it and leaves.
+        let _first = park_xread_after(&mut worker, &key, 1, 5);
+        let mut served = park_xread_after(&mut worker, &key, 2, 0);
+        let _third = park_xread_after(&mut worker, &key, 3, 5);
+
+        xadd_and_wake(&mut worker, &key, 2);
+        assert!(served.try_recv().is_ok(), "conn 2's read is satisfied");
+
+        let dump = worker.wait_queue.dump();
+        let (_, waiters) = dump
+            .iter()
+            .find(|(k, _)| k == &key)
+            .expect("the retried waiters are still parked on the key");
+        let seen: Vec<(u64, u64)> = waiters
+            .iter()
+            .map(|w| (w.conn_id, w.registration_seq))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![(1, 0), (3, 2)],
+            "retried waiters keep their registration order, ordinals and position"
+        );
+    }
+
+    // TR-BLOCKING-023
+    // FM-BLOCKING-013
+    /// A requeued waiter is covered by everything a freshly registered one is —
+    /// in particular the wrong-type drain (TR-BLOCKING-022), so a retry can
+    /// never be the way a waiter ends up stranded on an unusable key.
+    #[test]
+    fn a_retried_waiter_is_still_covered_by_a_wrong_type_drain() {
+        let (mut worker, _msg_tx, _conn_tx) = build_worker();
+        let key = Bytes::from_static(b"st");
+
+        let mut rx = park_xread_after(&mut worker, &key, 1, 5);
+        xadd_and_wake(&mut worker, &key, 2);
+
+        worker.store.set(key.clone(), Value::string("notastream"));
+        worker.try_satisfy_stream_waiters(&key);
+
+        match rx.try_recv().expect("the requeued waiter must be drained") {
+            Response::Error(bytes) => assert_eq!(
+                &bytes[..],
+                b"WRONGTYPE Operation against a key holding the wrong kind of value"
+            ),
+            other => panic!("expected WRONGTYPE, got {other:?}"),
+        }
     }
 
     // ---- Lost-element timeout race (the scoped correctness flag) ----------
