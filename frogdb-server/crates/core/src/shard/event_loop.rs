@@ -1373,6 +1373,83 @@ mod effect_tests {
             "FieldsExpired counted once"
         );
     }
+
+    /// TR-BLOCKING-020's precondition is *gated*: the 100 ms waiter-timeout
+    /// branch only exists while `timer_sweeps_enabled()` holds, and a driven
+    /// run turns it off and delivers the sweep as a `DriveTick(WaiterTimeout)`
+    /// message instead (determinism audit R6). Reading the row without the
+    /// gate, a maintainer concludes the GC backstop is always armed — and
+    /// every deterministic/turmoil run is a counterexample.
+    ///
+    /// This is also the row's isolation the coordinator can never give: no
+    /// `BlockingWaitCoordinator` exists here, so the sweep is the *only*
+    /// authority that can resolve the expired waiter. Both halves of the
+    /// postcondition are pinned — the op-aware `timeout_reply()` on
+    /// `response_tx` and the `BlockedTimeoutTotal` increment — plus the entry
+    /// leaving the queue.
+    #[tokio::test]
+    async fn a_driven_run_gates_off_the_waiter_sweep_timer_and_sweeps_from_the_drive_tick() {
+        use crate::shard::message::{ShardMessage, TickKind};
+        use crate::shard::wait_queue::WaitEntry;
+        use crate::types::BlockingOp;
+        use frogdb_protocol::ProtocolVersion;
+        use tokio::sync::oneshot;
+        use tokio::time::{Duration, Instant};
+
+        let recorder = Arc::new(RecordingRecorder::default());
+        let (mut worker, _msg_tx, _conn_tx) = build_worker(recorder.clone());
+
+        // Production: the timer branch is live. Driven: it is gated off, and
+        // whoever set the flag owes the shard a `DriveTick` instead.
+        assert!(
+            worker.timer_sweeps_enabled(),
+            "an undriven worker keeps the 100 ms waiter-timeout branch armed"
+        );
+        worker.set_driven_ticks(true);
+        assert!(
+            !worker.timer_sweeps_enabled(),
+            "a driven run must suppress the timer branch TR-BLOCKING-020 names"
+        );
+
+        let (response_tx, response_rx) = oneshot::channel();
+        worker
+            .wait_queue
+            .register(WaitEntry {
+                conn_id: 7,
+                keys: vec![Bytes::from_static(b"k")],
+                op: BlockingOp::BLPop,
+                response_tx,
+                // Already elapsed, so only a sweep can resolve it.
+                deadline: Some(Instant::now() - Duration::from_millis(1)),
+                protocol_version: ProtocolVersion::default(),
+            })
+            .expect("registration is within the queue's bounds");
+        assert_eq!(worker.wait_queue.waiter_count(), 1);
+
+        // The suppressed timer never fires; the queued tick is what runs.
+        assert!(
+            !worker
+                .dispatch_message(ShardMessage::DriveTick(TickKind::WaiterTimeout))
+                .await,
+            "a drive tick must never signal shutdown"
+        );
+
+        assert_eq!(
+            worker.wait_queue.waiter_count(),
+            0,
+            "the driven tick must reclaim the expired entry"
+        );
+        assert_eq!(
+            response_rx.await,
+            Ok(Response::NullArray),
+            "the GC sweep answers with BLPOP's op-aware timeout reply, never a drop"
+        );
+        assert_eq!(
+            recorder.counter_value("frogdb_blocked_timeout_total"),
+            Some(1),
+            "the sweep counts the timeout it resolved"
+        );
+    }
 }
 
 #[cfg(test)]
