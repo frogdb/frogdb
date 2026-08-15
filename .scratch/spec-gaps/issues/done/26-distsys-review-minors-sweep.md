@@ -1,6 +1,6 @@
 # 26: Distsys-review minors sweep (persistence + txn)
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
