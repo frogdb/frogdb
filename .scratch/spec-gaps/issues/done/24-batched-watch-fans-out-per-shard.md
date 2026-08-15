@@ -1,6 +1,6 @@
 # 24: Batched WATCH fans out per shard — argument packing stops changing semantics
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

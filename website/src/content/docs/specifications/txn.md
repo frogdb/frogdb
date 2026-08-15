@@ -31,11 +31,11 @@ entirely. See [vll.md](/specifications/vll/#state-space) for that state.
 
 | Variable | Authoritative field | Writer(s) | Persistence | Survives restart |
 |---|---|---|---|---|
-| `txn.queue` | `TransactionState.queue: Option<Vec<ParsedCommand>>` (`state.rs:164`; `None` = no open transaction), read via the `queued_commands()` accessor (`state.rs:190`) | `begin`/`push_queued_command`/`take`/`discard`/`clear` (`frogdb-txn/src/state.rs`) | connection-local, in-memory | No |
+| `txn.queue` | `TransactionState.queue: Option<Vec<ParsedCommand>>` (`state.rs:179`; `None` = no open transaction), read via the `queued_commands()` accessor (`state.rs:205`) | `begin`/`push_queued_command`/`take`/`discard`/`clear` (`frogdb-txn/src/state.rs`) | connection-local, in-memory | No |
 | `txn.watches` | `TransactionState`'s watch map (key → `(shard_id, version_at_watch, live_at_watch)`) | `watch_key`/`unwatch_all`/`take`/`discard`/`clear` | connection-local, in-memory | No |
-| `txn.slots.target` | `TxnSlotAccumulator.target: TransactionTarget` (`None → Single(shard) → Multi`, `state.rs:17-25`), folded via `fold_keys`/`fold_shard` | `fold_keys` (invoked via `ConnectionState::fold_transaction_keys`, a sibling call after `push_queued_command`, not part of it — `guards.rs:626,629`) on every queued command's keys; **also** `fold_shard` on every *live* watched shard, folded by `take` before it resolves the target (`state.rs:285-287`, the mechanism behind FM-TXN-020); reset by `begin`/`take`/`discard`/`clear` | connection-local, in-memory | No |
+| `txn.slots.target` | `TxnSlotAccumulator.target: TransactionTarget` (`None → Single(shard) → Multi`, `state.rs:17-25`), folded via `fold_keys`/`fold_shard` | `fold_keys` (invoked via `ConnectionState::fold_transaction_keys`, a sibling call after `push_queued_command`, not part of it — `guards.rs:626,629`) on every queued command's keys; **also** `fold_shard` on every *live* watched shard, folded by `take` before it resolves the target (`state.rs:309-313`, the mechanism behind FM-TXN-020); reset by `begin`/`take`/`discard`/`clear` | connection-local, in-memory | No |
 | `txn.exec_abort` | `TransactionState`'s poison flag | set by `abort`; read/reset by `take` | connection-local, in-memory | No |
-| `txn.queued_errors` | rejection messages accumulated while `txn.exec_abort = true` (`state.rs:177`, pushed by `abort` at `:226`, cleared by `begin` at `:208`) — write-only: no accessor reads it and it is not carried into `TxnSummary` | `abort` | connection-local, in-memory | No |
+| `txn.queued_errors` | rejection messages accumulated while `txn.exec_abort = true` (`state.rs:192`, pushed by `abort` at `:241`, cleared by `begin` at `:223`) — write-only: no accessor reads it and it is not carried into `TxnSummary` | `abort` | connection-local, in-memory | No |
 | `txn.start_time` | timestamp stamped at `begin` | `begin`, read by `record_transaction_metrics` | connection-local, in-memory | No |
 | `conn.asking` | `ConnectionState.asking: bool` (`connection/state.rs:476`) — one-shot `ASKING` flag | set by `ASKING`; read without consuming via `is_asking()` (used by `WATCH`'s slot probe, `guards.rs:792`); read-without-clearing via `take_asking()` while `in_transaction()` (`state.rs:811-816`), so a single `ASKING` before `MULTI` covers every queued command and the EXEC-time re-validation; cleared by direct assignment (`self.asking = false`) at the three transaction-exit sites — `take_transaction` (`state.rs:743-747`), `discard_transaction` (`:758-762`), `clear_transaction` (`:767-770`) — none of which call `take_asking()` | connection-local, in-memory | No |
 | `conn.pending_slot_fence` | `ConnectionHandler.pending_slot_fence: Option<SlotFence>` (`connection.rs:172`) | `TxnHost::validate_queued_batch`'s impl (`connection/transaction.rs:184`) for the batch case; the per-command `ClusterSlotValidation` stage (`dispatch.rs:595`); cleared on handoff (`dispatch.rs:383`) | connection-local, in-memory | No |
@@ -59,8 +59,8 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Field | Value |
 | --- | --- |
 | Precondition | `txn.queue = None` |
-| Postcondition | `txn.queue = Some([])`; `txn.slots.target`, `txn.exec_abort`, `txn.queued_errors` reset to `None`/`false`/`[]`; `txn.start_time = Some(now)`; **`txn.watches` unchanged** — MULTI does not reset the watch set, so a preceding `WATCH` stays armed through the block (`state.rs:200` doc comment: "Existing watches are preserved (WATCH before MULTI)") |
-| Source | `frogdb-server/crates/txn/src/state.rs:201` (`TransactionState::begin`) |
+| Postcondition | `txn.queue = Some([])`; `txn.slots.target`, `txn.exec_abort`, `txn.queued_errors` reset to `None`/`false`/`[]`; `txn.start_time = Some(now)`; **`txn.watches` unchanged** — MULTI does not reset the watch set, so a preceding `WATCH` stays armed through the block (`state.rs:215` doc comment: "Existing watches are preserved (WATCH before MULTI)") |
+| Source | `frogdb-server/crates/txn/src/state.rs:216` (`TransactionState::begin`) |
 | Rulings | — |
 
 ## TR-TXN-002 — MULTI while already open is rejected
@@ -69,7 +69,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.queue = Some(_)` |
 | Postcondition | all `txn.*` fields unchanged; reply `-ERR MULTI calls can not be nested` |
-| Source | `frogdb-server/crates/txn/src/state.rs:201` (`begin` returns `Err` without mutating state) |
+| Source | `frogdb-server/crates/txn/src/state.rs:216` (`begin` returns `Err` without mutating state) |
 | Rulings | — |
 
 ## TR-TXN-003 — A well-formed command is queued
@@ -78,7 +78,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.queue = Some(q)`; `txn.exec_abort = false`; command passes registry lookup, arity, ACL/key/channel checks |
 | Postcondition | `txn.queue = Some(q ++ [cmd])`; `txn.slots.target` folded with `cmd`'s keys; reply `+QUEUED` |
-| Source | `frogdb-server/crates/server/src/connection/guards.rs:544` (`queue_command`), `frogdb-server/crates/txn/src/state.rs:215` (`push_queued_command`), `:234` (`fold_keys`) |
+| Source | `frogdb-server/crates/server/src/connection/guards.rs:544` (`queue_command`), `frogdb-server/crates/txn/src/state.rs:230` (`push_queued_command`), `:249` (`fold_keys`) |
 | Rulings | — |
 
 ## TR-TXN-004 — A rejected command poisons the queue
@@ -87,7 +87,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.queue = Some(_)`; command fails registry lookup, arity, `try_queue_in_transaction`'s slot check, or a `run_pre_checks` gate, in order: NOAUTH → READONLY → MISCONF (`guards.rs:296`) → self-fence → NOREPLICAS → NOADMIN (`guards.rs:355`) → ACL → pubsub-mode (CLUSTERDOWN is not a `run_pre_checks` gate — it is `validate_cluster_slots`, already covered by `try_queue_in_transaction`'s slot check above) |
 | Postcondition | `txn.exec_abort = true`; `txn.queued_errors` gains the rejection message; `txn.queue` unchanged (the rejected command is never pushed); reply is the gate's own error, not `+QUEUED` |
-| Source | `frogdb-server/crates/server/src/connection/guards.rs:513` (`try_queue_in_transaction`), `:544` (`queue_command`), `frogdb-server/crates/server/src/connection/dispatch.rs:482` (`PreChecks` stage calls `abort_transaction` while a transaction is open), `frogdb-server/crates/txn/src/state.rs:223` (`abort`) |
+| Source | `frogdb-server/crates/server/src/connection/guards.rs:513` (`try_queue_in_transaction`), `:544` (`queue_command`), `frogdb-server/crates/server/src/connection/dispatch.rs:482` (`PreChecks` stage calls `abort_transaction` while a transaction is open), `frogdb-server/crates/txn/src/state.rs:238` (`abort`) |
 | Rulings | [issue 06](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/06-script-writes-pass-shard-write-seam.md) — a script's undeclared runtime write bypasses this *queue-time* gate entirely; it is admitted at the shard write seam instead (TR-TXN-022, FM-TXN-051) |
 
 ## TR-TXN-005 — DISCARD closes an open transaction
@@ -96,7 +96,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.queue = Some(_)` |
 | Postcondition | `txn.queue = None`; `txn.watches = {}`; `txn.slots.target = None`; `txn.exec_abort = false`; `txn.queued_errors = []`; `conn.asking` cleared; reply `+OK` |
-| Source | `frogdb-server/crates/txn/src/state.rs:309` (`discard`), `frogdb-server/crates/server/src/connection/state.rs:758-762` (`discard_transaction`, direct `self.asking = false`) |
+| Source | `frogdb-server/crates/txn/src/state.rs:338` (`discard`), `frogdb-server/crates/server/src/connection/state.rs:758-762` (`discard_transaction`, direct `self.asking = false`) |
 | Rulings | — |
 
 ## TR-TXN-006 — DISCARD without an open transaction
@@ -105,7 +105,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.queue = None` |
 | Postcondition | all `txn.*`/`conn.asking` unchanged; reply `-ERR DISCARD without MULTI` |
-| Source | `frogdb-server/crates/txn/src/state.rs:309` (`discard` returns `None`) |
+| Source | `frogdb-server/crates/txn/src/state.rs:338` (`discard` returns `None`) |
 | Rulings | — |
 
 ## TR-TXN-007 — WATCH registers a key (first-watch-wins)
@@ -113,9 +113,9 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Field | Value |
 | --- | --- |
 | Precondition | `txn.queue = None`; key's slot is locally served |
-| Postcondition | `txn.watches[key]` set to `(shard_id, version_at_watch, live_at_watch)` **iff** `key ∉ txn.watches`; if already present, unchanged (`entry().or_insert`); reply `+OK` |
-| Source | `frogdb-server/crates/txn/src/state.rs:258` (`watch_key`), `frogdb-server/crates/server/src/connection/transaction_conn_command.rs:263` (`handle_watch`) |
-| Rulings | [issue 10](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/10-txn-vll-advisory-sweep.md) — the three-case staleness fold this snapshot feeds at EXEC (see TR-TXN-017) |
+| Postcondition | `txn.watches[key]` set to `(shard_id, version_at_watch, live_at_watch)` **iff** `key ∉ txn.watches`; if already present, unchanged (`entry().or_insert`); reply `+OK`. Each key is registered under *its own* shard: a multi-key `WATCH` whose keys span internal shards is accepted and fans the version probe out, one `GetVersion` per distinct shard (ascending shard order), so `WATCH a b` builds exactly the watch set `WATCH a` then `WATCH b` builds — argument packing never changes semantics. Any co-location refusal is the cluster slot verdict (FM-TXN-048), never an internal-shard one |
+| Source | `frogdb-server/crates/txn/src/state.rs:273` (`watch_key`), `frogdb-server/crates/server/src/connection/transaction_conn_command.rs:263` (`handle_watch`, per-shard fan-out) |
+| Rulings | [issue 10](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/10-txn-vll-advisory-sweep.md) — the three-case staleness fold this snapshot feeds at EXEC (see TR-TXN-017); [issue 24](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/24-batched-watch-fans-out-per-shard.md) — the per-shard fan-out that dropped `handle_watch`'s internal-shard co-location pre-check |
 
 ## TR-TXN-008 — WATCH inside MULTI is rejected
 
@@ -132,7 +132,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | any `txn.watches` |
 | Postcondition | `txn.watches = {}`; reply `+OK` |
-| Source | `frogdb-server/crates/txn/src/state.rs:265` (`unwatch_all`) |
+| Source | `frogdb-server/crates/txn/src/state.rs:280` (`unwatch_all`) |
 | Rulings | — |
 
 ## TR-TXN-010 — RESET / QUIT clears the transaction unconditionally
@@ -141,7 +141,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | any state |
 | Postcondition | `txn.queue = None`; `txn.watches = {}`; `txn.slots.target = None`; `txn.exec_abort = false`; `txn.queued_errors = []`; `conn.asking` cleared; queued commands never run |
-| Source | `frogdb-server/crates/txn/src/state.rs:320` (`clear`) |
+| Source | `frogdb-server/crates/txn/src/state.rs:349` (`clear`) |
 | Rulings | — |
 
 ## TR-TXN-011 — ASKING set before MULTI stays sticky through the block
@@ -150,7 +150,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `conn.asking = true`; `txn.queue = None`, then MULTI opens (TR-TXN-001) |
 | Postcondition | `conn.asking` is read, not consumed, by every queue/EXEC step inside the transaction (`take_asking()` short-circuits to a plain read while `in_transaction()`); when the transaction itself is taken, `take_transaction` (EXEC), `discard_transaction` (DISCARD) or `clear_transaction` (RESET) each set `conn.asking = false` by direct assignment — none of them call `take_asking()` a second time |
-| Source | `frogdb-server/crates/server/src/connection/state.rs:811` (`take_asking`), `:826` (`is_asking`), `:743-747` (`take_transaction`'s direct clear), `frogdb-server/crates/txn/src/state.rs:275` (`TransactionState::take`, the `frogdb-txn`-owned half of the same operation) |
+| Source | `frogdb-server/crates/server/src/connection/state.rs:811` (`take_asking`), `:826` (`is_asking`), `:743-747` (`take_transaction`'s direct clear), `frogdb-server/crates/txn/src/state.rs:290` (`TransactionState::take`, the `frogdb-txn`-owned half of the same operation) |
 | Rulings | — |
 
 ## TR-TXN-012 — EXEC on a poisoned transaction
@@ -171,15 +171,14 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Source | `frogdb-server/crates/txn/src/exec.rs:150` |
 | Rulings | — |
 
-## TR-TXN-014 — EXEC of an empty queue (today: watch set not consulted)
+## TR-TXN-014 — EXEC of an empty, unwatched queue
 
 | Field | Value |
 | --- | --- |
-| Precondition | `txn.exec_abort = false`; rate limiter passes; `txn.queue = Some([])` — the guard is a bare `queue.is_empty()` and does not read `txn.watches` |
-| Postcondition | no shard round-trip; `outcome = CommittedEmpty`; reply `*0` — regardless of whether `txn.watches = {}` or non-empty |
-| Source | `frogdb-server/crates/txn/src/exec.rs:159` |
-| Rulings | — |
-| Pending | [issue 11](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/11-exec-fast-path-ignores-watch-set.md) — the ruled/correct precondition additionally requires `txn.watches = {}`; a genuinely-empty queue with a live, non-empty watch set takes this fast path today and commits without the shard round-trip LOCKED `FM-TXN-034`'s NOT observable forbids ("a silent WATCH false negative") |
+| Precondition | `txn.exec_abort = false`; rate limiter passes; `txn.queue = Some([])` **and** `txn.watches = {}` — the guard reads both, so a watched empty queue does not qualify |
+| Postcondition | no shard round-trip; `outcome = CommittedEmpty`; reply `*0`. With `txn.watches ≠ {}` the fast path is not taken: the EXEC falls through to the ordinary gates and reaches the watch-only shard round-trip (`exec.rs:321-331`), so the CAS is version-checked (FM-TXN-034) — `outcome = WatchAborted` and a nil reply if it is dirty, `outcome = Committed` and `*0` if it is clean |
+| Source | `frogdb-server/crates/txn/src/exec.rs:169` |
+| Rulings | [issue 11](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/11-exec-fast-path-ignores-watch-set.md) — built: the empty-queue fast path consults the watch set, matching Redis's `execCommand`, which tests `CLIENT_DIRTY_CAS` before queue length |
 
 ## TR-TXN-015 — EXEC-time slot re-validation (pre-pause verdict)
 
@@ -187,7 +186,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | cluster mode; `txn.exec_abort = false`; rate limiter and empty-queue gates passed |
 | Postcondition | `conn.pending_slot_fence` stamped iff the verdict is `Serve` on a single owned slot; a redirecting verdict sets `outcome = Redirected` and stops execution (no shard round-trip, no pause wait) |
-| Source | `frogdb-server/crates/txn/src/exec.rs:189`, `frogdb-server/crates/server/src/connection/guards.rs:1030` (`validate_queued_batch`), `:1043` (`validate_queued_batch_inner`) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:199`, `frogdb-server/crates/server/src/connection/guards.rs:1030` (`validate_queued_batch`), `:1043` (`validate_queued_batch_inner`) |
 | Rulings | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) — residual TOCTOU window between this verdict and the shard apply (see TR-TXN-020) |
 
 ## TR-TXN-016 — Pause wait and post-pause re-validation
@@ -195,8 +194,8 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Field | Value |
 | --- | --- |
 | Precondition | the pre-pause verdict (TR-TXN-015) did not redirect; `host.queue_has_writes(queue) = true` |
-| Postcondition | `wait_if_paused` blocks iff a pause barrier covers the batch's pinned slot; if it blocked, `validate_queued_batch` runs a **second** time against the post-pause topology and *that* verdict governs; a redirect here sets `outcome = Redirected` and stops execution; if it did *not* redirect, the watch-set liveness check (TR-TXN-017) that follows is evaluated against this same post-pause topology, not the pre-pause one — the `watched_slots_still_local` gate (`exec.rs:234`) sits below this wait, so a watched slot that migrates during the pause is caught here rather than missed |
-| Source | `frogdb-server/crates/txn/src/exec.rs:199-215`, `frogdb-server/crates/server/src/connection/lifecycle.rs:553` (`wait_if_paused_for_transaction`), `:440` (`pause_active_for_batch`) |
+| Postcondition | `wait_if_paused` blocks iff a pause barrier covers the batch's pinned slot; if it blocked, `validate_queued_batch` runs a **second** time against the post-pause topology and *that* verdict governs; a redirect here sets `outcome = Redirected` and stops execution; if it did *not* redirect, the watch-set liveness check (TR-TXN-017) that follows is evaluated against this same post-pause topology, not the pre-pause one — the `watched_slots_still_local` gate (`exec.rs:245`) sits below this wait, so a watched slot that migrates during the pause is caught here rather than missed |
+| Source | `frogdb-server/crates/txn/src/exec.rs:213-227`, `frogdb-server/crates/server/src/connection/lifecycle.rs:553` (`wait_if_paused_for_transaction`), `:440` (`pause_active_for_batch`) |
 | Rulings | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) — ruled: the watch set, not only the queue, must be covered by this second verdict (see TR-TXN-017) |
 
 ## TR-TXN-017 — Watch-set liveness check at EXEC (three-case staleness fold)
@@ -205,7 +204,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.watches ≠ {}`; the queue-side verdict (TR-TXN-015/016) did not already redirect |
 | Postcondition | (RULED) for each `(key, shard_id, version_at_watch, live_at_watch)` in `txn.watches`: (i) key absent at WATCH, since created — version checked normally, and a version mismatch aborts the CAS exactly as an ordinary watched write would; (ii) key present but already logically expired at WATCH (`live_at_watch = false`) — never aborts on this key; (iii) key live at WATCH, since expired — the expiry itself dirties the key and the CAS aborts. If a watched key's slot is no longer locally served, `outcome = WatchAborted` regardless of version. On any dirty case, `outcome = WatchAborted`, reply nil |
-| Source | `frogdb-server/crates/txn/src/exec.rs:234` (`watched_slots_still_local` gate), `frogdb-server/crates/server/src/connection/transaction.rs:190`, `frogdb-server/crates/server/src/connection/guards.rs:809` (`watched_slots_still_local`) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:245` (`watched_slots_still_local` gate), `frogdb-server/crates/server/src/connection/transaction.rs:190`, `frogdb-server/crates/server/src/connection/guards.rs:809` (`watched_slots_still_local`) |
 | Rulings | [issue 10](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/10-txn-vll-advisory-sweep.md) |
 | Pending | [issue 10](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/10-txn-vll-advisory-sweep.md) — FM-TXN-033/050 do not yet state the three cases explicitly (dangling "gap-4" reference); this row anticipates the fold once the issue lands |
 
@@ -215,7 +214,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.exec_abort = false`; all prior gates passed |
 | Postcondition | `txn.slots.target = None` → target shard = `host.shard_id()`; `= Single(s)` → target shard = `s`; `= Multi(_)` → `outcome = CrossSlot`, reply `-CROSSSLOT …`, no shard round-trip |
-| Source | `frogdb-server/crates/txn/src/exec.rs:278` (`target.resolve()`) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:290` (`target.resolve()`) |
 | Rulings | — |
 
 ## TR-TXN-019 — Cross-shard MULTI is refused at EXEC
@@ -224,7 +223,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.slots.target = Multi(_)` — the queued commands' keys fold to more than one shard, **or** the watch set alone does (a cross-shard watch set promotes an otherwise single-shard target, see FM-TXN-020 / TR-TXN-026) |
 | Postcondition | `outcome = CrossSlot`; reply `-CROSSSLOT …`; no VLL continuation is ever requested for a `frogdb-txn`-owned transaction — this is why txn.md's state space carries no continuation/gather-phase variables (see [vll.md](/specifications/vll/#state-space)); `exec.rs` has zero `vll`/`continuation` occurrences, and `target.resolve()` maps `Multi` to the CROSSSLOT redirect before any shard round-trip, let alone VLL |
-| Source | `frogdb-server/crates/txn/src/exec.rs:278` (`target.resolve()` maps `Multi` to `Err`) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:290` (`target.resolve()` maps `Multi` to `Err`) |
 | Rulings | [issue 10](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/10-txn-vll-advisory-sweep.md) — Finding A4: the rationale names "no cross-shard rollback story" as inherent when the missing piece is per-shard undo, not structural impossibility; reword pending. This row's Postcondition disagrees with `FM-VLL-002`'s Trigger (a protected FM row, not touched by this draft), which still describes a cross-shard MULTI taking a continuation lock — `vll.md`'s own Scope paragraph was brought into agreement with this row under a sibling fix, leaving `FM-VLL-002` as the one remaining stale site, on the wrap-up list |
 
 ## TR-TXN-020 — Routing-epoch carry closes the probe/apply window (RULED, not yet built)
@@ -233,7 +232,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | cluster mode; the EXEC-time verdict (TR-TXN-015/016) resolved to a local serve from one routing-epoch snapshot taken once per EXEC |
 | Postcondition | (RULED) the shard message carries the routing epoch observed at that verdict; the shard refuses the apply if its own epoch has since advanced (CockroachDB lease shape); on refusal the coordinator retries validation (re-enters TR-TXN-015) rather than committing on a stale verdict |
-| Source | `frogdb-server/crates/txn/src/exec.rs:278-298` (today: one snapshot, no epoch carried to the shard — the window `.scratch/replication-cluster-rework/issues/02` names) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:290-311` (today: one snapshot, no epoch carried to the shard — the window `.scratch/replication-cluster-rework/issues/02` names) |
 | Rulings | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) |
 | Pending | [issue 09](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/open/09-routing-epoch-carry-and-watch-recheck.md) — no epoch is carried on the shard message today; the window is real and unclosed |
 
@@ -243,7 +242,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | target resolved to a single shard (TR-TXN-018); `txn.queue` partitioned into `shard_commands`/`deferred` via `host.deferral_of` |
 | Postcondition | on `Replied(Success(results))`, results merge with deferred commands' results by original queue index, `outcome = Committed`, one array reply in queue order; on `Replied(WatchAborted)` → `outcome = WatchAborted`, nil; on `Replied(Error(e))` → `outcome = Error`, bare `e`; on `Unavailable` → `outcome = Error`, `-ERR shard unavailable`; on `Dropped` → `outcome = Error`, `-ERR shard dropped request` |
-| Source | `frogdb-server/crates/txn/src/exec.rs:358` (`run_shard_transaction`), `:259` (`deferral_of`) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:419` (`run_shard_transaction`), `:270` (`deferral_of`) |
 | Rulings | — |
 
 ## TR-TXN-022 — A script's runtime write inside a transaction passes the shard write seam
@@ -261,7 +260,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `key ∈ txn.watches` already (no intervening UNWATCH/DISCARD/EXEC/RESET); `WATCH key` issued again |
 | Postcondition | `txn.watches[key]` unchanged (second snapshot discarded); reply `+OK`; a following EXEC's abort decision is governed by the *first* watch's snapshot |
-| Source | `frogdb-server/crates/txn/src/state.rs:258` (`watch_key`, `entry().or_insert`) |
+| Source | `frogdb-server/crates/txn/src/state.rs:273` (`watch_key`, `entry().or_insert`) |
 | Rulings | — |
 
 ## TR-TXN-024 — A read-only batch skips the pause barrier entirely
@@ -270,7 +269,7 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.exec_abort = false`; `host.queue_has_writes(queue) = false` |
 | Postcondition | `wait_if_paused` is never called; exactly one `validate_queued_batch` call governs the whole EXEC |
-| Source | `frogdb-server/crates/txn/src/exec.rs:199-207` |
+| Source | `frogdb-server/crates/txn/src/exec.rs:213-221` |
 | Rulings | — |
 
 ## TR-TXN-025 — EXEC without MULTI
@@ -279,26 +278,35 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | --- | --- |
 | Precondition | `txn.queue = None` (never opened, or already consumed by a prior EXEC/DISCARD/RESET) |
 | Postcondition | `take()` returns `None`; `handle_exec` short-circuits before `execute_transaction` is ever entered; no outcome metric recorded; `txn.watches` untouched; reply `-ERR EXEC without MULTI` |
-| Source | `frogdb-server/crates/txn/src/state.rs:276` (`take`, `self.queue.as_ref()?`), `frogdb-server/crates/server/src/connection/state.rs:743-747` (`take_transaction` returns `None`) |
+| Source | `frogdb-server/crates/txn/src/state.rs:291` (`take`, `self.queue.as_ref()?`), `frogdb-server/crates/server/src/connection/state.rs:743-747` (`take_transaction` returns `None`) |
 | Rulings | — |
 
 ## TR-TXN-026 — A cross-shard watch set alone forces CROSSSLOT
 
 | Field | Value |
 | --- | --- |
-| Precondition | `txn.watches` spans more than one shard (e.g. `WATCH {a}x` then `WATCH {b}y`); the queued commands' own keys, if any, all target a single shard |
-| Postcondition | `take`'s watch fold (`state.rs:285-287`) promotes `txn.slots.target` from `Single`/`None` to `Multi` before it is resolved; TR-TXN-019 then applies: `outcome = CrossSlot`, reply `-CROSSSLOT …` |
-| Source | `frogdb-server/crates/txn/src/state.rs:285-287` (`take`'s watch-shard fold) |
-| Rulings | — |
+| Precondition | the **live** watches in `txn.watches` span more than one shard (e.g. `WATCH {a}x` then `WATCH {b}y`, both keys present at WATCH time); the queued commands' own keys, if any, all target a single shard |
+| Postcondition | `take`'s watch fold (`state.rs:309-313`) promotes `txn.slots.target` from `Single`/`None` to `Multi` before it is resolved; TR-TXN-019 then applies: `outcome = CrossSlot`, reply `-CROSSSLOT …`. Watches that were dead at WATCH time (`live_at_watch = false`) are skipped by the fold and cannot produce this outcome — they take TR-TXN-028 instead |
+| Source | `frogdb-server/crates/txn/src/state.rs:309-313` (`take`'s watch-shard fold, guarded by `live_at_watch`) |
+| Rulings | [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/25-take-folds-only-live-watched-shards.md) |
 
 ## TR-TXN-027 — A watched, all-deferred queue still runs the watch-set version check
 
 | Field | Value |
 | --- | --- |
 | Precondition | `txn.queue = Some(q)` where `q` is non-empty but every command is connection-level or server-wide (`host.deferral_of` returns `Some` for all of them, so `shard_commands` is empty); `txn.watches ≠ {}` |
-| Postcondition | unlike TR-TXN-014's genuinely-empty-queue fast path, this queue is non-empty so the early `queue.is_empty()` return is not taken; the watch set still forces a shard round-trip with an empty command list (`exec.rs:286-295`) so the CAS is checked and cleared even though no shard command runs |
-| Source | `frogdb-server/crates/txn/src/exec.rs:286-295` (empty `shard_commands`, non-empty `watches` branch) |
+| Postcondition | unlike TR-TXN-014's genuinely-empty-queue fast path, this queue is non-empty so the early `queue.is_empty()` return is not taken; the watch set still forces a shard round-trip with an empty command list (`exec.rs:321-331`) so the CAS is checked and cleared even though no shard command runs |
+| Source | `frogdb-server/crates/txn/src/exec.rs:321-331` (empty `shard_commands`, non-empty `watches` branch) |
 | Rulings | — |
+
+## TR-TXN-028 — A dead watch off the target shard gets its own round-trip
+
+| Field | Value |
+| --- | --- |
+| Precondition | `txn.watches` holds at least one entry whose `shard_id ≠ target_shard` — reachable only for `live_at_watch = false` entries, since every live watched shard folds into the target (TR-TXN-026) and a live watch elsewhere would already have CROSSSLOTted at `resolve()` |
+| Postcondition | EXEC partitions the watch set by shard (`exec.rs:394-412`). The target shard's watches ride with the batch — its CAS and its commands stay one atomic shard step. Each other shard gets one watch-only round-trip (empty command list), grouped one per shard in ascending shard order, issued **before** the batch runs so a broken CAS cannot leave the target's commands committed behind it; any of them reporting a dirty watch ends the EXEC with `outcome = WatchAborted`, reply nil, and no command executed. The off-target check is not atomic with the target's commit: a write to an off-target watched slot landing between the two is not seen (a bounded WATCH false-negative window that only dead watches can enter) |
+| Source | `frogdb-server/crates/txn/src/exec.rs:313-318` (partition + pre-batch off-target round-trips), `:394-412` (`partition_watches`), `frogdb-server/crates/txn/src/state.rs:125-138` (`WatchedKey` carries the owning shard into `TxnSummary`) |
+| Rulings | [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/25-take-folds-only-live-watched-shards.md) |
 
 ## How to read a row
 
@@ -556,9 +564,10 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Trigger | `WATCH {a}x` + `WATCH {b}y` (different shards), then a transaction whose *queued commands* all target a single shard. |
 | Observable | `-CROSSSLOT …` at `EXEC`, not a commit. |
 | NOT observable | A commit that version-checked only the command-target shard and ignored the other watched shard — a silent WATCH false negative (this was a real bug; the regression is pinned in the generated-workload suite). |
-| Invariant | `take` folds every *live* watched shard into the target before resolving, so the watch set can promote a `Single` target to `Multi`. Unwatched/stale shards must not (FM-TXN-013). |
+| Invariant | `take` folds every *live* watched shard into the target before resolving, so the watch set can promote a `Single` target to `Multi`. Unwatched/stale shards must not (FM-TXN-013). A *dead* watch (`live_at_watch = false`) does not fold — the create-if-absent CAS commits cross-shard rather than CROSSSLOTting — but its shard still gets its own watch-only round-trip at EXEC (TR-TXN-028), so the unfolded shard is version-checked rather than ignored. |
 | Outcome variant | `TransactionOutcome::CrossSlot` (label `crossslot`) |
-| Forced by | `cross_shard_watch_set_folds_to_multi_at_take`, `take_transaction_folds_cross_shard_watch_set_to_multi` |
+| Forced by | `cross_shard_watch_set_folds_to_multi_at_take`, `take_transaction_folds_cross_shard_watch_set_to_multi`, `a_dead_watch_does_not_fold_its_shard_into_the_target`, `one_live_watch_still_folds_alongside_a_dead_one`, `a_dead_watch_off_the_target_gets_its_own_version_check`, `a_dirtied_off_target_watch_aborts_before_the_batch_runs`, `off_target_watches_are_grouped_one_round_trip_per_shard_in_shard_order`, `test_dead_cross_shard_watch_commits_instead_of_crossslot`, `test_dead_cross_shard_watch_still_aborts_when_the_key_is_created`, `test_batched_live_cross_shard_watch_defers_crossslot_to_exec` |
+| Rulings | [issue 25](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/25-take-folds-only-live-watched-shards.md) — the fold filters on `live_at_watch` (code matches the row, which already said *live*); dead watches route to their own shard |
 | Bug refs | `.scratch/replication-cluster-rework/issues/04` (done — WATCH keys are slot-validated at WATCH time, FM-TXN-048, and the watch set is re-checked at EXEC, FM-TXN-049; deliberately *not* folded into the queue's `BatchKeys`, which would CROSSSLOT a legitimate two-slot watch set) |
 
 ## FM-TXN-021 — allow-cross-slot-standalone does not relax transactions
@@ -722,11 +731,11 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Field | Value |
 |---|---|
 | Trigger | `WATCH k`, then a transaction whose queue is empty of shard commands — either genuinely empty or entirely connection-level/server-wide (`CONFIG GET`, `KEYS`, …). |
-| Observable | The nil abort if the watched key changed; the deferred commands' replies in an array if it did not. |
-| NOT observable | An empty-queue fast path that skips the shard round-trip and commits a transaction whose CAS precondition was already broken — a silent WATCH false negative. |
+| Observable | The nil abort if the watched key changed; the deferred commands' replies in an array if it did not (`*0` when the queue was genuinely empty). |
+| NOT observable | An empty-queue fast path that skips the shard round-trip and commits a transaction whose CAS precondition was already broken — a silent WATCH false negative. The `queue.is_empty()` fast path (TR-TXN-014) is therefore conjoined with `watches.is_empty()`: it stays reachable only for an empty *and* unwatched queue. |
 | Invariant | The shard round-trip is taken with an empty command list whenever the watch set is non-empty; it is skipped only when there is nothing to run *and* nothing to check. |
 | Outcome variant | `TransactionOutcome::WatchAborted` / `Committed` |
-| Forced by | `an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip`, `test_watch_with_only_connection_level_commands_abort`, `test_watch_with_only_connection_level_commands_success` |
+| Forced by | `an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip`, `a_genuinely_empty_queue_with_watches_still_takes_the_shard_round_trip`, `a_genuinely_empty_queue_with_a_clean_watch_commits_an_empty_array`, `test_watch_with_only_connection_level_commands_abort`, `test_watch_with_only_connection_level_commands_success`, `test_watch_then_empty_multi_exec_aborts_when_the_key_was_written` |
 | Bug refs | none |
 
 ## FM-TXN-035 — EXEC commits
@@ -903,10 +912,11 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 |---|---|
 | Trigger | Cluster mode: `WATCH {S}k` while this node owns slot `S`, then `S` changes hands (a migration completes, the slot is reassigned, or it is left unassigned), then `MULTI` … `EXEC` — including a `MULTI` whose queued body names no key of its own (`PING`, `INFO`, …). |
 | Observable | The nil abort (`*-1`), exactly as if a writer had touched `{S}k`: `TransactionOutcome::WatchAborted`, label `watch_aborted`. The client's ordinary retry loop re-issues `WATCH`, which now answers `-MOVED` (FM-TXN-048) and sends it to the owner. |
-| NOT observable | The batch committing because the queue folded no key of the departed slot — the CAS decision would be taken against this node's stale, no-longer-owned copy of `{S}k` while the real owner serves writes to it, an undetectable WATCH false negative. Also **not** observable: a `-CROSSSLOT` for a watch set legitimately spanning two slots this node owns (only the *queue* is co-location-constrained, FM-TXN-019 — watch sets are not), nor a `-MOVED` naming a slot the queued batch never touches. |
+| NOT observable | The batch committing because the queue folded no key of the departed slot — the CAS decision would be taken against this node's stale, no-longer-owned copy of `{S}k` while the real owner serves writes to it, an undetectable WATCH false negative. Also **not** observable: a `-CROSSSLOT` for a watch set legitimately spanning two slots this node owns (only the *queue* is co-location-constrained, FM-TXN-019 — watch sets are not), nor a `-MOVED` naming a slot the queued batch never touches. That refusal is equally not observable at WATCH time on *internal-shard* grounds: `WATCH a b` with `a` and `b` on different internal shards is accepted and probed per shard (TR-TXN-007), so a batching client cannot fail where a one-key-per-call client succeeds. |
 | Invariant | EXEC re-checks every watched key's slot through the same seam the queue uses — `route_with_snapshot` on one snapshot — and requires a local-serve arm (`LocalServe` / `LocalServeMigrating` / `AcceptImporting`). An *open* migration stays serviceable on purpose: `MIGRATE`'s delete on the source bumps the watched key's version, so the ordinary version check already fires; only losing the slot outright makes that version unobservable. The queue's own verdict (FM-TXN-022/025, `validate_queued_batch`) is taken first, so a redirect the batch itself earns outranks the abort. |
 | Outcome variant | `TransactionOutcome::WatchAborted` (label `watch_aborted`) |
-| Forced by | `a_watched_slot_that_left_this_node_aborts_the_watch`, `a_queue_redirect_outranks_the_watched_slot_abort`, `watch_slot_locally_served_accepts_an_open_migration`, `watch_slot_locally_served_rejects_a_slot_owned_elsewhere`, `test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch` |
+| Forced by | `a_watched_slot_that_left_this_node_aborts_the_watch`, `a_queue_redirect_outranks_the_watched_slot_abort`, `watch_slot_locally_served_accepts_an_open_migration`, `watch_slot_locally_served_rejects_a_slot_owned_elsewhere`, `test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch`, `test_batched_cross_shard_watch_is_not_crossslot`, `test_batched_cross_shard_watch_probes_each_key_on_its_own_shard` |
+| Rulings | [issue 24](https://github.com/frogdb/frogdb/blob/main/.scratch/spec-gaps/issues/done/24-batched-watch-fans-out-per-shard.md) — the batched-WATCH pre-check that produced the forbidden `-CROSSSLOT` is gone |
 | Bug refs | `.scratch/replication-cluster-rework/issues/04` (done — these tests are its outcome) |
 
 ## FM-TXN-050 — Re-WATCHing an already-watched key keeps the first snapshot

@@ -41,7 +41,6 @@ use frogdb_protocol::Response;
 use tokio::sync::oneshot;
 
 use crate::connection::ConnectionHandler;
-use crate::slot_migration::SlotValidator;
 
 /// Build a `CommandSpec` for a transaction command. All five share the
 /// `ConnectionLevel(Transaction)` strategy, no WAL, and no keyspace event; they
@@ -282,51 +281,74 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
         return Response::error("ERR wrong number of arguments for 'watch' command");
     }
 
-    // All watched keys must live on one shard. The validator owns the loop and
-    // the CROSSSLOT rejection. Arity (>= 1 arg) was checked above, so `Ok(None)`
-    // is unreachable.
-    let shard = match SlotValidator::same_shard(args, num_shards) {
-        Ok(Some(shard)) => shard,
-        Ok(None) => {
-            return Response::error("ERR wrong number of arguments for 'watch' command");
+    // A watch set is *not* co-location-constrained. Only the queued batch is
+    // (FM-TXN-019): a watch names a CAS precondition, not work to run
+    // atomically, so `WATCH a b` must mean exactly what `WATCH a` then
+    // `WATCH b` means — semantics cannot depend on how a client packs its
+    // arguments. Cluster-mode slot ownership is a separate verdict, already
+    // taken in the `TransactionControl` stage (`validate_watch_slots`,
+    // FM-TXN-048).
+    //
+    // So group the keys by owning shard and probe each shard for its own keys.
+    // A shard only maintains slot versions for the slots it owns; asking one
+    // shard about another's key would answer from an unrelated counter and
+    // register a CAS that never fires.
+    let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
+    for (i, key) in args.iter().enumerate() {
+        let shard = frogdb_core::shard_for_key(key, num_shards);
+        match groups.iter_mut().find(|(s, _)| *s == shard) {
+            Some((_, indices)) => indices.push(i),
+            None => groups.push((shard, vec![i])),
         }
-        Err(crossslot) => return crossslot,
-    };
+    }
+    groups.sort_by_key(|(shard, _)| *shard);
 
-    // Get the current version from the shard. Pass the watched keys so the
+    // Get the current version from each shard. Pass the watched keys so the
     // shard lazily purges any that are ALREADY expired (aligning physical to
     // logical state) before snapshotting the version — without bumping it. This
     // records an already-stale key as a "nonexistent" watch, so a later EXEC
     // does not treat its (already-due) removal as a modification, while a key
     // still live here that expires during the window is caught at EXEC (F3).
-    let (response_tx, response_rx) = oneshot::channel();
-    if shard_senders[shard]
-        .send(CoreMsg::GetVersion {
-            keys: args.to_vec(),
-            response_tx,
-        })
-        .await
-        .is_err()
-    {
-        return Response::error("ERR shard unavailable");
-    }
-    let (versions, live_flags) = match response_rx.await {
-        Ok(reply) => reply,
-        Err(_) => return Response::error("ERR shard dropped request"),
-    };
+    //
+    // Every probe completes before anything is recorded: a shard that fails
+    // mid-fan-out must leave no half-built watch set behind, which would be a
+    // CAS the client believes covers keys it never got a version for.
+    let mut probed: Vec<(usize, usize, u64, bool)> = Vec::new();
+    for (shard, indices) in groups {
+        let keys: Vec<Bytes> = indices.iter().map(|&i| args[i].clone()).collect();
+        let (response_tx, response_rx) = oneshot::channel();
+        if shard_senders[shard]
+            .send(CoreMsg::GetVersion { keys, response_tx })
+            .await
+            .is_err()
+        {
+            return Response::error("ERR shard unavailable");
+        }
+        let (versions, live_flags) = match response_rx.await {
+            Ok(reply) => reply,
+            Err(_) => return Response::error("ERR shard dropped request"),
+        };
 
-    // Both reply vectors align with `args` (one entry per watched key, in
-    // order). `versions[i]` is key `i`'s per-slot WATCH version (proposal 18 —
-    // slot-granular, so distinct-slot keys get distinct versions rather than one
-    // shared shard version); `live_flags[i]` reports whether the key was live
-    // (present and unexpired) at watch time — the `wk->expired` inverse EXEC
-    // needs to distinguish a live-then-expired watch (must abort) from an
-    // already-stale one (must not). Enforce the length invariant: a shard reply
-    // whose vectors do not match the watched-key count is a protocol bug, not a
-    // watch we can safely record.
-    if versions.len() != args.len() || live_flags.len() != args.len() {
-        return Response::error("ERR shard returned malformed WATCH version reply");
+        // Both reply vectors align with the keys this shard was sent (one entry
+        // per watched key, in order). `versions[i]` is key `i`'s per-slot WATCH
+        // version (proposal 18 — slot-granular, so distinct-slot keys get
+        // distinct versions rather than one shared shard version);
+        // `live_flags[i]` reports whether the key was live (present and
+        // unexpired) at watch time — the `wk->expired` inverse EXEC needs to
+        // distinguish a live-then-expired watch (must abort) from an
+        // already-stale one (must not). Enforce the length invariant: a shard
+        // reply whose vectors do not match the watched-key count is a protocol
+        // bug, not a watch we can safely record.
+        if versions.len() != indices.len() || live_flags.len() != indices.len() {
+            return Response::error("ERR shard returned malformed WATCH version reply");
+        }
+        for ((&i, version), live_at_watch) in indices.iter().zip(versions).zip(live_flags) {
+            probed.push((i, shard, version, live_at_watch));
+        }
     }
+    // Record in argument order, so first-watch-wins below sees the keys in the
+    // order the client named them rather than in shard order.
+    probed.sort_by_key(|&(i, ..)| i);
     // The shard is *not* folded into the transaction target here: WATCH always
     // precedes MULTI (WATCH inside MULTI errors), and MULTI resets the
     // accumulator, so any fold recorded now would be discarded. The watch set's
@@ -335,10 +357,11 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
     // A key already in the watch set keeps its earlier snapshot: `watch_key` is
     // first-watch-wins, matching Redis' `watchForKey`, which no-ops on an
     // already-watched key. The version probe above is still taken for the
-    // whole argument list — it is one round-trip for the batch and it is what
-    // lazily purges already-expired keys — only the recording is guarded.
-    for ((key, version), live_at_watch) in args.iter().zip(versions).zip(live_flags) {
-        state.watch_key(key.clone(), shard, version, live_at_watch);
+    // whole argument list — it is one round-trip per shard the batch touches
+    // and it is what lazily purges already-expired keys — only the recording is
+    // guarded.
+    for (i, shard, version, live_at_watch) in probed {
+        state.watch_key(args[i].clone(), shard, version, live_at_watch);
     }
 
     Response::ok()

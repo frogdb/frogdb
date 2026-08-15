@@ -559,6 +559,101 @@ async fn test_dead_cross_shard_watch_still_aborts_when_the_key_is_created() {
     server.shutdown().await;
 }
 
+// FM-TXN-049
+/// One `WATCH` naming keys on two different internal shards must be accepted.
+/// Watch sets are not co-location-constrained (only the queued batch is), so a
+/// client that batches its watches cannot be refused where a client issuing one
+/// `WATCH` per key succeeds. FrogDB used to answer `-CROSSSLOT` here, in every
+/// mode, from an internal-shard pre-check.
+#[tokio::test]
+async fn test_batched_cross_shard_watch_is_not_crossslot() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let (first, second) = cross_shard_key_pair(4);
+
+    let response = client.command(&["WATCH", &first, &second]).await;
+    assert_eq!(
+        response,
+        Response::Simple(Bytes::from("OK")),
+        "a watch set spanning internal shards must be accepted"
+    );
+
+    // Neither watched key exists, so neither folds its shard into the target
+    // (FM-TXN-020) and the EXEC commits.
+    client.command(&["MULTI"]).await;
+    client.command(&["SET", &first, "v"]).await;
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Array(results) => assert_eq!(results.len(), 1, "the queued SET ran"),
+        other => panic!("batched cross-shard WATCH must reach a normal EXEC, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+// FM-TXN-049
+/// The batched path must build the *same* watch set the sequential path builds,
+/// which means each key's version is probed on the shard that owns it. Probing
+/// both keys on one shard would register the second key against a version
+/// counter its own shard never moves — a CAS that silently never fires.
+#[tokio::test]
+async fn test_batched_cross_shard_watch_probes_each_key_on_its_own_shard() {
+    let server = TestServer::start_standalone().await;
+    let mut watcher = server.connect().await;
+    let mut writer = server.connect().await;
+    let (first, second) = cross_shard_key_pair(4);
+
+    // Both keys are absent, so neither folds its shard into the target
+    // (FM-TXN-020) and the EXEC below is a single-shard batch on `first`'s
+    // shard — `second`'s watch is checked by a round-trip of its own.
+    let response = watcher.command(&["WATCH", &first, &second]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Dirty only the second key — the one whose shard is not the batch's target.
+    writer.command(&["SET", &second, "created"]).await;
+
+    watcher.command(&["MULTI"]).await;
+    watcher.command(&["SET", &first, "v"]).await;
+    let response = watcher.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Bulk(None),
+        "the second key's watch must have been taken on its own shard"
+    );
+
+    server.shutdown().await;
+}
+
+// FM-TXN-020
+/// Packing does not change EXEC semantics either: two *live* watched keys on
+/// different shards still resolve to `Multi` and CROSSSLOT at EXEC — the same
+/// answer two sequential `WATCH`es produce — but the refusal comes from EXEC,
+/// not from `WATCH`.
+#[tokio::test]
+async fn test_batched_live_cross_shard_watch_defers_crossslot_to_exec() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+    let (first, second) = cross_shard_key_pair(4);
+    client.command(&["SET", &first, "seed"]).await;
+    client.command(&["SET", &second, "seed"]).await;
+
+    let response = client.command(&["WATCH", &first, &second]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    client.command(&["MULTI"]).await;
+    client.command(&["SET", &first, "v"]).await;
+    let response = client.command(&["EXEC"]).await;
+    match response {
+        Response::Error(text) => assert!(
+            String::from_utf8_lossy(&text).starts_with("CROSSSLOT"),
+            "live cross-shard watch set must CROSSSLOT at EXEC, got {text:?}"
+        ),
+        other => panic!("expected a CROSSSLOT error at EXEC, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
 // FM-TXN-036
 #[tokio::test]
 async fn test_transaction_with_error() {
