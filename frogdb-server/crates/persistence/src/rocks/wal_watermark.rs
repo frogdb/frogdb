@@ -30,9 +30,25 @@
 //! clean recovery. Under-reporting is the safe failure mode; a false "you lost
 //! data" alarm is not.
 //!
-//! The file holds a single decimal `u64`. A torn or garbage file parses to
-//! `None` and is treated as "no watermark" — again, a miss rather than a false
-//! alarm.
+//! ## Body integrity (why this holds on any filesystem)
+//!
+//! The temp-write + rename keeps the *directory entry* atomic, but that alone
+//! does not make the body atomic: rename ordering versus the data write is a
+//! filesystem policy, not a POSIX guarantee. ext4's `auto_da_alloc` heuristic
+//! flushes the replaced file's data before the rename commits; XFS, btrfs and
+//! ext4 mounted `data=writeback` make no such promise, and FrogDB's
+//! Kubernetes-primary deployment means the operator, not FrogDB, picks the
+//! filesystem. A crash can therefore leave the renamed file holding a torn
+//! prefix or a run of zeroes.
+//!
+//! So the body carries its own integrity check rather than depending on a
+//! named mount option: [`FORMAT_TAG`], the decimal sequence, and an xxh3-64 of
+//! the sequence text. [`read`] recomputes the digest and yields `None` on any
+//! mismatch, so a torn, zero-filled, truncated or otherwise corrupt body — and
+//! equally a body written by an older, unchecksummed build — is treated as *no
+//! watermark* rather than as a bogus sequence. That keeps the failure mode
+//! pointed the safe way on every filesystem: a missed detection, never a false
+//! "you lost data" alarm.
 
 use std::path::{Path, PathBuf};
 
@@ -46,19 +62,54 @@ use tracing::{debug, warn};
 /// cleanup never touches it.
 pub(crate) const FILE_NAME: &str = "frogdb_wal_watermark";
 
+/// Leading token of the watermark body. Bumping it retires every previously
+/// written file the safe way: an unrecognised tag reads back as `None`.
+const FORMAT_TAG: &str = "frogdb-wal-watermark-v1";
+
 /// Absolute path of the watermark file for a RocksDB directory.
 fn watermark_path(db_dir: &Path) -> PathBuf {
     db_dir.join(FILE_NAME)
 }
 
-/// Read the persisted watermark, or `None` if absent/unreadable/garbage.
+/// Digest of the decimal sequence text, as it appears in the body.
+///
+/// Not a cryptographic MAC: nothing here defends against a *forged* watermark
+/// (an attacker with write access to the database directory owns the data
+/// itself). It defends against the accident — a torn tail, a zero-filled
+/// block, a truncated write — that a rename alone does not exclude.
+fn digest(seq_text: &str) -> u64 {
+    xxhash_rust::xxh3::xxh3_64(seq_text.as_bytes())
+}
+
+/// Serialise the on-disk body for `seq`: tag, decimal sequence, digest.
+fn encode(seq: u64) -> String {
+    let seq_text = seq.to_string();
+    format!("{FORMAT_TAG} {seq_text} {:016x}\n", digest(&seq_text))
+}
+
+/// Parse a body written by [`encode`], or `None` if it is not intact.
+fn decode(raw: &str) -> Option<u64> {
+    let mut fields = raw.trim().split_whitespace();
+    let (tag, seq_text, checksum) = (fields.next()?, fields.next()?, fields.next()?);
+    if fields.next().is_some() || tag != FORMAT_TAG {
+        return None;
+    }
+    // Verify before parsing: a corrupt body must never reach the comparison in
+    // `detect_and_reset`, whatever it happens to spell.
+    if u64::from_str_radix(checksum, 16).ok()? != digest(seq_text) {
+        return None;
+    }
+    seq_text.parse::<u64>().ok()
+}
+
+/// Read the persisted watermark, or `None` if absent/unreadable/corrupt.
 ///
 /// Every failure mode collapses to `None`: a missing file (fresh database), an
-/// unreadable file, or a non-numeric body all mean "no trustworthy prior
-/// watermark", which suppresses detection rather than risking a false alarm.
+/// unreadable file, an unrecognised format tag, or a body whose digest does not
+/// match all mean "no trustworthy prior watermark", which suppresses detection
+/// rather than risking a false alarm.
 pub(crate) fn read(db_dir: &Path) -> Option<u64> {
-    let raw = std::fs::read_to_string(watermark_path(db_dir)).ok()?;
-    raw.trim().parse::<u64>().ok()
+    decode(&std::fs::read_to_string(watermark_path(db_dir)).ok()?)
 }
 
 /// Persist `seq` as the new watermark via an atomic temp-write + rename.
@@ -68,11 +119,12 @@ pub(crate) fn read(db_dir: &Path) -> Option<u64> {
 /// docs on why a watermark that lags after a crash is the safe direction.
 pub(crate) fn write(db_dir: &Path, seq: u64) -> std::io::Result<()> {
     let final_path = watermark_path(db_dir);
-    // Same-directory temp so the rename is a single-filesystem atomic swap; a
-    // crash mid-write leaves either the old file or the new one, never a torn
-    // body that could parse to a bogus (possibly huge) sequence.
+    // Same-directory temp so the rename is a single-filesystem atomic swap: the
+    // directory entry flips whole. The *body* is guarded by its own checksum,
+    // because whether the data lands before the rename is a filesystem policy
+    // and not something FrogDB gets to assume (see the module docs).
     let tmp_path = db_dir.join(format!("{FILE_NAME}.tmp"));
-    std::fs::write(&tmp_path, seq.to_string())?;
+    std::fs::write(&tmp_path, encode(seq))?;
     std::fs::rename(&tmp_path, &final_path)
 }
 
@@ -180,9 +232,9 @@ mod tests {
     const COUNTER: &str = "frogdb_wal_recovery_dropped_records_total";
 
     // FM-PERSISTENCE-035
-    /// The watermark is a plain decimal `u64` in a file whose name no RocksDB
-    /// cleanup pattern matches, and every unreadable form of it means "no
-    /// watermark" rather than a bogus one.
+    /// The watermark is a tagged, checksummed decimal `u64` in a file whose
+    /// name no RocksDB cleanup pattern matches, and every unreadable form of it
+    /// means "no watermark" rather than a bogus one.
     #[test]
     fn the_watermark_file_round_trips_and_degrades_to_none() {
         let tmp = TempDir::new().unwrap();
@@ -191,8 +243,8 @@ mod tests {
         write(tmp.path(), 4_294_967_296).unwrap();
         assert_eq!(
             std::fs::read_to_string(tmp.path().join(FILE_NAME)).unwrap(),
-            "4294967296",
-            "the body is the decimal sequence, nothing else"
+            format!("{FORMAT_TAG} 4294967296 {:016x}\n", digest("4294967296")),
+            "the body is the format tag, the decimal sequence, and its digest"
         );
         assert_eq!(read(tmp.path()), Some(4_294_967_296));
         assert!(
@@ -204,6 +256,108 @@ mod tests {
         assert_eq!(read(tmp.path()), None, "garbage parses as absent");
         std::fs::write(tmp.path().join(FILE_NAME), "-5").unwrap();
         assert_eq!(read(tmp.path()), None, "so does a negative");
+    }
+
+    // FM-PERSISTENCE-035
+    /// A watermark body that did not survive the crash intact must read back as
+    /// *absent*, never as a sequence.
+    ///
+    /// The temp-write + rename makes the directory entry atomic, but not the
+    /// body: only ext4's `auto_da_alloc` heuristic orders the data write ahead
+    /// of the rename, and XFS, btrfs and ext4 `data=writeback` do not. Since
+    /// operators pick the filesystem, the body carries a digest instead of
+    /// inheriting a mount option's promise. Every shape a half-landed write can
+    /// leave behind is exercised here directly, because no filesystem this test
+    /// can run on would produce them on demand.
+    ///
+    /// The direction matters more than the detection: a corrupt body that
+    /// happened to parse as a large sequence would make `detect_and_reset`
+    /// report a data loss that never occurred — the false alarm the whole
+    /// watermark design exists to avoid.
+    #[test]
+    fn a_torn_or_corrupt_watermark_body_reads_as_absent_not_as_a_sequence() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        write(tmp.path(), 900).unwrap();
+        let intact = std::fs::read_to_string(&path).unwrap();
+
+        // A tail lost to a partial write: every truncation of a good body. The
+        // bound stops at the trailing newline, which carries no content — a
+        // body missing only that is not torn.
+        for cut in 0..intact.trim_end().len() {
+            std::fs::write(&path, &intact[..cut]).unwrap();
+            assert_eq!(
+                read(tmp.path()),
+                None,
+                "a body truncated to {cut} bytes must not read as a watermark"
+            );
+        }
+
+        // A block the filesystem allocated but never filled.
+        std::fs::write(&path, vec![0u8; intact.len()]).unwrap();
+        assert_eq!(
+            read(tmp.path()),
+            None,
+            "a zero-filled body is not a sequence"
+        );
+
+        // A digit flipped in place: same length, same shape, wrong content.
+        // Without the checksum this is the false alarm — it parses cleanly as a
+        // watermark 8100 sequences above the truth.
+        let flipped = intact.replacen("900", "9000000", 1);
+        std::fs::write(&path, &flipped).unwrap();
+        assert_eq!(
+            flipped.trim().split_whitespace().nth(1),
+            Some("9000000"),
+            "the corruption really did land in the sequence field"
+        );
+        assert_eq!(
+            read(tmp.path()),
+            None,
+            "a sequence the digest does not cover must never reach the comparison"
+        );
+
+        // A file from an older build, or a future format: unrecognised, absent.
+        std::fs::write(&path, "900").unwrap();
+        assert_eq!(read(tmp.path()), None, "an untagged legacy body is absent");
+        std::fs::write(
+            &path,
+            format!("frogdb-wal-watermark-v2 900 {:016x}\n", digest("900")),
+        )
+        .unwrap();
+        assert_eq!(read(tmp.path()), None, "an unknown format tag is absent");
+
+        // And the intact body still reads — the guard rejects damage, not data.
+        std::fs::write(&path, &intact).unwrap();
+        assert_eq!(read(tmp.path()), Some(900));
+    }
+
+    // FM-PERSISTENCE-035
+    /// A corrupt watermark suppresses the alarm rather than raising a false
+    /// one, and the very next recovery re-baselines the file back to a body
+    /// that reads.
+    #[test]
+    fn a_corrupt_watermark_suppresses_detection_and_re_baselines() {
+        let tmp = TempDir::new().unwrap();
+        let metrics = RecordingRecorder::default();
+        write(tmp.path(), 500).unwrap();
+        // Damage the digest, leaving a sequence far above what recovery reached.
+        let corrupt = std::fs::read_to_string(tmp.path().join(FILE_NAME))
+            .unwrap()
+            .replacen("500", "50000", 1);
+        std::fs::write(tmp.path().join(FILE_NAME), corrupt).unwrap();
+
+        assert_eq!(
+            detect_and_reset(tmp.path(), 480, &metrics),
+            0,
+            "an unreadable watermark is 'no watermark', not a 49520-record loss"
+        );
+        assert!(metrics.calls().is_empty(), "and it raises nothing at all");
+        assert_eq!(
+            read(tmp.path()),
+            Some(480),
+            "the corrupt body is replaced by a readable baseline"
+        );
     }
 
     // FM-PERSISTENCE-035

@@ -1251,7 +1251,14 @@ struct PageCacheWal {
 
 impl PageCacheWal {
     fn spawn(mode: DurabilityMode) -> Self {
-        let state = Arc::new(Mutex::new(PageCacheState::default()));
+        Self::spawn_sharing(mode, Arc::new(Mutex::new(PageCacheState::default())))
+    }
+
+    /// A second flush thread over an *already shared* [`PageCacheState`]: two
+    /// shards' flush engines, each with its own durability mode, committing
+    /// into one WAL file — the multi-writer shape TR-PERSISTENCE-010(b)'s
+    /// group-commit assumption is about.
+    fn spawn_sharing(mode: DurabilityMode, state: Arc<Mutex<PageCacheState>>) -> Self {
         let sink = PageCacheSink {
             staged: Vec::new(),
             state: Arc::clone(&state),
@@ -1701,6 +1708,104 @@ fn empty_flush_advances_neither_sequence() {
         "an empty flush is not an fsync"
     );
     wal.stop();
+}
+
+// FM-PERSISTENCE-002
+/// TR-PERSISTENCE-010(b): a `Sync`-mode commit records the watermark in-line
+/// because its own commit fsynced the WAL through this batch's sequence. With
+/// one WAL file behind several shards' flush engines, that claim is only true
+/// if a `sync = true` commit can never be absorbed into — and downgraded by —
+/// a concurrent `sync = false` one. Upstream RocksDB guarantees exactly that:
+/// `write_thread.cc::EnterAsBatchGroupLeader` refuses to admit a follower whose
+/// sync flag differs from the leader's, so a mismatched-flag write starts its
+/// own group. This test is the regression guard on that assumption — a RocksDB
+/// upgrade that relaxed the rule would break the durable-ack path silently.
+///
+/// Two claims, both about the flag the seam actually sees:
+///   * per-commit flag integrity — every `Sync`-mode commit is `true` and every
+///     `Async`-mode commit is `false`, however they interleave, so the counts
+///     match the two engines' commit counts exactly; and
+///   * the durability that flag stands for — a crash after the interleaving
+///     drops no write the `Sync` engine acked.
+#[test]
+fn concurrent_mixed_flag_commits_never_downgrade_a_sync_mode_write() {
+    const ALTERNATIONS: u32 = 8;
+    const RACING: u32 = 40;
+
+    let state = Arc::new(Mutex::new(PageCacheState::default()));
+    let mut sync_wal = PageCacheWal::spawn_sharing(DurabilityMode::Sync, Arc::clone(&state));
+    let mut async_wal = PageCacheWal::spawn_sharing(DurabilityMode::Async, Arc::clone(&state));
+    // Every key the sync engine acks; a crash may drop none of them.
+    let mut synced_keys = Vec::new();
+
+    // Phase 1 — deterministic alternation. `flush()` blocks until its commit
+    // lands, so the commit order at the shared sink is exactly unsynced,
+    // synced, unsynced, ... : each sync commit directly follows an unsynced one
+    // and must still carry its own flag.
+    for i in 0..ALTERNATIONS {
+        async_wal.put(&key(i), b"async");
+        async_wal.flush();
+        let k = key(1000 + i);
+        sync_wal.put(&k, b"sync");
+        sync_wal.flush();
+        synced_keys.push(k);
+    }
+    assert_eq!(
+        state.lock().unwrap().commit_syncs,
+        (0..ALTERNATIONS)
+            .flat_map(|_| [false, true])
+            .collect::<Vec<_>>(),
+        "an unsynced commit must not pull the sync commit behind it down with it"
+    );
+
+    // Phase 2 — the same two engines racing, with no ordering imposed.
+    let racer = std::thread::spawn(move || {
+        for i in 0..RACING {
+            async_wal.put(&key(2000 + i), b"async");
+            async_wal.flush();
+        }
+        async_wal
+    });
+    for i in 0..RACING {
+        let k = key(3000 + i);
+        sync_wal.put(&k, b"sync");
+        sync_wal.flush();
+        synced_keys.push(k);
+    }
+    let async_wal = racer
+        .join()
+        .expect("the racing async writer must not panic");
+
+    let flags = state.lock().unwrap().commit_syncs.clone();
+    let expected = (ALTERNATIONS + RACING) as usize;
+    assert_eq!(
+        flags.len(),
+        expected * 2,
+        "each engine commits once per flush and never on another engine's behalf"
+    );
+    assert_eq!(
+        flags.iter().filter(|&&s| s).count(),
+        expected,
+        "no sync commit was swallowed by a concurrent unsynced one: {flags:?}"
+    );
+    assert_eq!(
+        flags.iter().filter(|&&s| !s).count(),
+        expected,
+        "and no unsynced commit was silently upgraded either: {flags:?}"
+    );
+
+    // Stop the async engine first so its flush thread cannot commit into the
+    // page cache after the crash point is chosen.
+    async_wal.stop();
+    let recovered = sync_wal.crash_and_recover();
+    for k in &synced_keys {
+        assert_eq!(
+            recovered.get(k).map(Vec::as_slice),
+            Some(b"sync".as_slice()),
+            "a Sync-mode acked write vanished in the crash: {}",
+            String::from_utf8_lossy(k)
+        );
+    }
 }
 
 // FM-PERSISTENCE-013
