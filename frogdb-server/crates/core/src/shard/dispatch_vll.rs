@@ -11,8 +11,9 @@ impl ShardWorker {
                 mode,
                 operation,
                 ready_tx,
+                wound_tx,
             } => {
-                self.handle_vll_lock_request(txid, keys, mode, operation, ready_tx)
+                self.handle_vll_lock_request(txid, keys, mode, operation, ready_tx, wound_tx)
                     .await;
             }
             VllMsg::VllExecute { txid, response_tx } => {

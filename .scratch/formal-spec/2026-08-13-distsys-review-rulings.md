@@ -194,7 +194,7 @@ incl. whether ignoring the crates' locked status changes the call — it does no
 status is process cost paid equally by both options; the driver is architectural).
 Wound-wait is a local lock-table change preserving shared-nothing async scatter; the
 sequencer adds an ordering point to the multi-shard hot path. Filed as
-[spec-gaps issue 14](../spec-gaps/issues/open/14-sca-wound-wait-restores-acyclicity.md)
+[spec-gaps issue 14](../spec-gaps/issues/done/14-sca-wound-wait-restores-acyclicity.md)
 (ready-for-agent); rides the implementation wave. Liveness proviso recorded in the
 issue: a wounded txn's retry keeps its original txid (age-based priority), else
 starvation. Partially moots MAJ-20's timeout-only exit for this cycle class.

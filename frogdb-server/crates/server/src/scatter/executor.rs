@@ -30,6 +30,12 @@ use super::ScatterGatherStrategy;
 use crate::server::next_txid;
 use crate::vll_adapter::{MetricsRecorderSink, ShardSenderSink};
 
+/// How many times a scatter re-runs after being wounded before the client is
+/// told to retry itself. Matches the cross-shard script path's bound
+/// (`connection::scripting::eval::MAX_WOUND_RETRIES`) — same protocol, same
+/// answer about who owns the next attempt.
+const MAX_WOUND_RETRIES: u32 = 3;
+
 /// Executor for scatter-gather operations using VLL coordination.
 pub struct ScatterGatherExecutor {
     /// Shard message senders.
@@ -85,20 +91,6 @@ impl ScatterGatherExecutor {
             txid,
         );
 
-        let participants: Vec<ScatterParticipant<frogdb_core::ScatterOp>> = partition
-            .shard_keys
-            .iter()
-            .map(|(&shard_id, keys)| ScatterParticipant {
-                shard_id,
-                keys: keys.clone(),
-                operation: partition
-                    .shard_operations
-                    .get(&shard_id)
-                    .cloned()
-                    .unwrap_or_else(|| strategy.scatter_op()),
-            })
-            .collect();
-
         #[cfg(feature = "turmoil")]
         let sink = ShardSenderSink::with_chaos(
             Arc::clone(&self.shard_senders),
@@ -109,17 +101,54 @@ impl ScatterGatherExecutor {
         let metrics = MetricsRecorderSink(Arc::clone(&self.metrics_recorder));
         let coordinator = VllCoordinator::new(sink, metrics);
 
-        let request = ScatterRequest {
-            txid,
-            mode: strategy.lock_mode(),
-            participants,
-            timeout: self.timeout.max(DEFAULT_LOCK_ACQUISITION_TIMEOUT),
-            command: command_name,
-        };
+        // Wound-wait retry loop. A wound means an older transaction wanted a
+        // lock this one held; every participant has already been aborted, so
+        // the retry is a fresh round — under the **same txid**, which is the
+        // seniority the next collision is decided on. Minting a new txid here
+        // would hand that seniority away and let every later arrival wound
+        // this transaction again, forever. Attempts are bounded: past the
+        // bound the client owns the next try.
+        let mut outcome = None;
+        for _ in 0..=MAX_WOUND_RETRIES {
+            let participants: Vec<ScatterParticipant<frogdb_core::ScatterOp>> = partition
+                .shard_keys
+                .iter()
+                .map(|(&shard_id, keys)| ScatterParticipant {
+                    shard_id,
+                    keys: keys.clone(),
+                    operation: partition
+                        .shard_operations
+                        .get(&shard_id)
+                        .cloned()
+                        .unwrap_or_else(|| strategy.scatter_op()),
+                })
+                .collect();
 
-        let outcome = match coordinator.scatter(request).await {
-            Ok(outcome) => outcome,
-            Err(err) => return self.scatter_error_to_response(err, txid),
+            let request = ScatterRequest {
+                txid,
+                mode: strategy.lock_mode(),
+                participants,
+                timeout: self.timeout.max(DEFAULT_LOCK_ACQUISITION_TIMEOUT),
+                command: command_name,
+            };
+
+            match coordinator.scatter(request).await {
+                Ok(ok) => {
+                    outcome = Some(ok);
+                    break;
+                }
+                Err(err) if err.is_wound() => continue,
+                Err(err) => return self.scatter_error_to_response(err, txid),
+            }
+        }
+        let Some(outcome) = outcome else {
+            warn!(
+                conn_id = self.conn_id,
+                txid,
+                retries = MAX_WOUND_RETRIES,
+                "scatter wounded on every attempt"
+            );
+            return Response::error("BUSY wounded by an older transaction; retry");
         };
 
         let mut shard_results: HashMap<usize, HashMap<Bytes, Response>> =
@@ -199,6 +228,16 @@ impl ScatterGatherExecutor {
                     "scatter-gather outcome is ambiguous: execute was dispatched to every shard"
                 );
                 Response::error("ERR VLL execution timeout; outcome unknown")
+            }
+            ScatterError::Wounded { shard_id } => {
+                // Only reachable if the retry loop above stops handling wounds
+                // — kept exhaustive so a future error surface change cannot
+                // silently turn a retryable wound into a generic failure.
+                warn!(
+                    conn_id = self.conn_id,
+                    txid, shard_id, "scatter wounded by an older transaction"
+                );
+                Response::error("BUSY wounded by an older transaction; retry")
             }
         }
     }

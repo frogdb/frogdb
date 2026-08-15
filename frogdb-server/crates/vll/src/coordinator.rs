@@ -16,10 +16,13 @@
 //! reply is awaited — acquisition is pipelined across transactions, not
 //! serialized — so sorted order cannot by itself stop two transactions from
 //! each winning a different shard. What stops it is the shards' priority rule
-//! on the global `txid` order: on the continuation lock, an older transaction
-//! *wounds* a younger claim rather than being refused by it, so of any two
-//! colliding transactions the older one is guaranteed to finish. Refusing both
-//! (the pre-wound-wait behavior) is deadlock-free but not livelock-free.
+//! on the global `txid` order, applied on both locks: an older transaction
+//! *wounds* a younger claim rather than being refused by (continuation lock)
+//! or parked behind (SCA lock table) it, so of any two colliding transactions
+//! the older one is guaranteed to finish. Refusing both (the pre-wound-wait
+//! behavior on the continuation lock) is deadlock-free but not livelock-free;
+//! parking behind a younger holder (the pre-wound-wait behavior on the SCA
+//! path) is not even deadlock-free.
 //!
 //! See [`VllCoordinator::scatter`] and
 //! [`VllCoordinator::acquire_continuation_and_run`].
@@ -112,6 +115,20 @@ pub enum ScatterError {
         applied: Vec<usize>,
         unknown: Vec<usize>,
     },
+    /// An older transaction needs a lock this one was granted on `shard_id`,
+    /// and this transaction is the younger of the two. Every participant has
+    /// been aborted; the caller retries — **keeping its txid**, which is the
+    /// seniority the next round is decided on.
+    Wounded { shard_id: usize },
+}
+
+impl ScatterError {
+    /// Whether retrying this scatter can make progress. Only a wound can, and
+    /// only under the original txid — a retry that mints a fresh (higher) txid
+    /// hands its seniority away and can be wounded again forever.
+    pub fn is_wound(&self) -> bool {
+        matches!(self, ScatterError::Wounded { .. })
+    }
 }
 
 impl std::fmt::Display for ScatterError {
@@ -138,6 +155,9 @@ impl std::fmt::Display for ScatterError {
                     "VLL result timeout on shard {shard_id}; effects unknown on shards {unknown:?}"
                 )
             }
+            ScatterError::Wounded { shard_id } => {
+                write!(f, "wounded by an older transaction on shard {shard_id}")
+            }
         }
     }
 }
@@ -160,7 +180,8 @@ pub struct ContinuationGuard {
     revocations: RevocationWatch,
 }
 
-/// The set of per-shard revocation receivers a continuation holder listens on.
+/// The set of per-shard revocation receivers one transaction listens on —
+/// a continuation holder's revocations, or a scatter's wound notices.
 ///
 /// A revocation can arrive from *any* participating shard at *any* point
 /// between acquisition and release, so it cannot be awaited shard-by-shard the
@@ -322,6 +343,15 @@ where
     ///
     /// On any failure the coordinator aborts every shard still holding
     /// locks. `command` is used solely for metric labels.
+    ///
+    /// Phase 2 is also the wound window: while this transaction waits on one
+    /// shard it is holding grants on the others, and an older transaction that
+    /// wants one of them says so on the wound channel. That gives
+    /// [`ScatterError::Wounded`], which the caller must retry **under the same
+    /// txid** — a retry that mints a fresh, higher txid gives up its seniority
+    /// and can be wounded again by every later arrival. The window closes
+    /// before phase 3: past the first `VllExecute` there is nothing left to
+    /// cancel, so a late wound finds nobody listening.
     pub async fn scatter(
         &self,
         request: ScatterRequest<S::Operation>,
@@ -332,9 +362,15 @@ where
         // Phase 1: Dispatch lock requests, tracking ready receivers.
         let mut ready_rxs: Vec<(usize, oneshot::Receiver<ShardReadyResult>)> =
             Vec::with_capacity(shard_count);
+        // Wound notices from every participant. A shard fires one when an
+        // *older* transaction needs a lock this one has been granted; it can
+        // arrive from any participant while this coordinator is still waiting
+        // on the others, so it is watched as a set rather than per shard.
+        let mut wounds = RevocationWatch::default();
 
         for participant in request.participants {
             let (ready_tx, ready_rx) = oneshot::channel();
+            let (wound_tx, wound_rx) = oneshot::channel();
 
             if let Err(err) = self
                 .sink
@@ -345,6 +381,7 @@ where
                     request.mode,
                     participant.operation,
                     ready_tx,
+                    wound_tx,
                 )
                 .await
             {
@@ -354,15 +391,32 @@ where
             }
 
             ready_rxs.push((participant.shard_id, ready_rx));
+            wounds.push(participant.shard_id, wound_rx);
         }
 
         // Every participant received a lock request; from here on failures
         // abort by real shard id.
         let shard_ids: Vec<usize> = ready_rxs.iter().map(|(id, _)| *id).collect();
 
-        // Phase 2: Wait for every shard to report ready.
+        // Phase 2: Wait for every shard to report ready — or for an older
+        // transaction to wound this one.
+        //
+        // The wound race belongs to this phase alone. Between being told
+        // `Ready` and being sent `VllExecute`, this transaction holds granted
+        // locks on shards it is no longer doing anything for: that is the only
+        // window where it can be part of a wait cycle, and the only window
+        // where giving way costs nothing but a retry.
         for (shard_id, ready_rx) in ready_rxs {
-            match tokio::time::timeout(request.timeout, ready_rx).await {
+            let ready = tokio::select! {
+                biased;
+                (wounded_by, _reason) = wounds.next() => {
+                    self.abort_shards(&shard_ids, request.txid).await;
+                    self.record_outcome(request.command, "wounded", start, shard_count);
+                    return Err(ScatterError::Wounded { shard_id: wounded_by });
+                }
+                ready = tokio::time::timeout(request.timeout, ready_rx) => ready,
+            };
+            match ready {
                 Ok(Ok(ShardReadyResult::Ready)) => {}
                 Ok(Ok(ShardReadyResult::Failed(error))) => {
                     self.abort_shards(&shard_ids, request.txid).await;
@@ -381,6 +435,13 @@ where
                 }
             }
         }
+
+        // Past the wound window: from here the round is committed to running,
+        // and dropping the receivers is what says so. A shard that tries to
+        // wound this transaction now finds nobody listening and waits for it
+        // to finish instead — which it will, since it is no longer waiting on
+        // anyone.
+        drop(wounds);
 
         // Phase 3: Dispatch VllExecute requests.
         //
@@ -712,6 +773,7 @@ mod tests {
             _mode: LockMode,
             _operation: Self::Operation,
             ready_tx: oneshot::Sender<ShardReadyResult>,
+            _wound_tx: oneshot::Sender<VllError>,
         ) -> Result<(), ShardSinkError> {
             {
                 let mut send_cb = self.on_lock_send.lock().await;
@@ -1306,6 +1368,7 @@ mod tests {
                 _mode: LockMode,
                 _operation: Self::Operation,
                 _ready_tx: oneshot::Sender<ShardReadyResult>,
+                _wound_tx: oneshot::Sender<VllError>,
             ) -> Result<(), ShardSinkError> {
                 unreachable!("this harness only exercises continuation locks")
             }
@@ -1405,6 +1468,235 @@ mod tests {
             start.elapsed() < Duration::from_millis(10),
             "priority resolved the collision; no drain ({CONTINUATION_DRAIN_TIMEOUT:?}) or \
              acquisition ({timeout:?}) timeout was involved, but {:?} elapsed",
+            start.elapsed()
+        );
+    }
+
+    /// End-to-end wound-wait on the *scatter* path, over real shard state
+    /// machines.
+    ///
+    /// Two cross-shard writes touch the same two shards and win them in
+    /// opposite orders: txn 50 holds shard 0 and wants shard 1, txn 20 holds
+    /// shard 1 and wants shard 0. Without wound-wait each request parks behind
+    /// the other's grant — a wait-for cycle — and neither moves until the
+    /// phase-2 acquisition timeout fires on both, aborting both. With it the
+    /// older transaction (txid 20) wounds the younger, the younger unwinds
+    /// through its ordinary abort path, and its retry — **under the same
+    /// txid** — gets through behind the winner.
+    ///
+    /// Time is paused: the assertion that essentially no virtual time passes
+    /// is what proves priority resolved this and not the timeout.
+    // FM-VLL-010, LV-VLL-002
+    #[tokio::test(start_paused = true)]
+    async fn opposite_shard_orders_resolve_by_seniority_instead_of_deadlocking() {
+        use crate::VllShardState;
+        use tokio::sync::{Mutex, mpsc};
+
+        enum ShardMsg {
+            Lock {
+                txid: u64,
+                keys: Vec<Bytes>,
+                mode: LockMode,
+                ready_tx: oneshot::Sender<ShardReadyResult>,
+                wound_tx: oneshot::Sender<VllError>,
+            },
+            Execute {
+                txid: u64,
+                response_tx: oneshot::Sender<u32>,
+            },
+            Abort {
+                txid: u64,
+            },
+        }
+
+        /// A shard worker in miniature: owns a real [`VllShardState`] and
+        /// serves the three SCA messages, executing and releasing exactly as
+        /// `frogdb-core`'s shard does.
+        fn spawn_shard() -> mpsc::UnboundedSender<ShardMsg> {
+            let (tx, mut rx) = mpsc::unbounded_channel::<ShardMsg>();
+            tokio::spawn(async move {
+                let mut state: VllShardState<()> = VllShardState::default();
+                while let Some(msg) = rx.recv().await {
+                    match msg {
+                        ShardMsg::Lock {
+                            txid,
+                            keys,
+                            mode,
+                            ready_tx,
+                            wound_tx,
+                        } => {
+                            state.enqueue_lock_request(txid, keys, mode, (), ready_tx, wound_tx);
+                        }
+                        ShardMsg::Execute { txid, response_tx } => {
+                            if let Some(op) = state.dequeue_for_execution(txid) {
+                                let _ = response_tx.send(txid as u32);
+                                state.release_after_execution(op.txid, &op.keys);
+                            }
+                        }
+                        ShardMsg::Abort { txid } => state.abort(txid),
+                    }
+                }
+            });
+            tx
+        }
+
+        /// Holds one shard's lock request back until the test opens the gate,
+        /// so each transaction reaches the other's shard only after that shard
+        /// is already held. The gate is consumed on first use — a retry runs
+        /// ungated.
+        struct GatedSink {
+            shards: Vec<mpsc::UnboundedSender<ShardMsg>>,
+            gate: Mutex<Option<(usize, oneshot::Receiver<()>)>>,
+        }
+
+        impl ShardSink for GatedSink {
+            type Operation = ();
+            type Response = u32;
+
+            async fn send_lock_request(
+                &self,
+                shard_id: usize,
+                txid: u64,
+                keys: Vec<Bytes>,
+                mode: LockMode,
+                _operation: Self::Operation,
+                ready_tx: oneshot::Sender<ShardReadyResult>,
+                wound_tx: oneshot::Sender<VllError>,
+            ) -> Result<(), ShardSinkError> {
+                let gate = {
+                    let mut held = self.gate.lock().await;
+                    match held.as_ref() {
+                        Some((gated, _)) if *gated == shard_id => held.take().map(|(_, rx)| rx),
+                        _ => None,
+                    }
+                };
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+                self.shards[shard_id]
+                    .send(ShardMsg::Lock {
+                        txid,
+                        keys,
+                        mode,
+                        ready_tx,
+                        wound_tx,
+                    })
+                    .map_err(|_| ShardSinkError {
+                        shard_id,
+                        reason: "shard channel closed",
+                    })
+            }
+
+            async fn send_execute(
+                &self,
+                shard_id: usize,
+                txid: u64,
+                response_tx: oneshot::Sender<Self::Response>,
+            ) -> Result<(), ShardSinkError> {
+                self.shards[shard_id]
+                    .send(ShardMsg::Execute { txid, response_tx })
+                    .map_err(|_| ShardSinkError {
+                        shard_id,
+                        reason: "shard channel closed",
+                    })
+            }
+
+            async fn send_abort(&self, shard_id: usize, txid: u64) {
+                let _ = self.shards[shard_id].send(ShardMsg::Abort { txid });
+            }
+
+            async fn send_continuation_lock(
+                &self,
+                _shard_id: usize,
+                _txid: u64,
+                _conn_id: u64,
+                _ready_tx: oneshot::Sender<ShardReadyResult>,
+                _release_rx: oneshot::Receiver<()>,
+                _revoke_tx: oneshot::Sender<VllError>,
+            ) -> Result<(), ShardSinkError> {
+                unreachable!("this harness only exercises scatter locks")
+            }
+        }
+
+        let shards = vec![spawn_shard(), spawn_shard()];
+        let (open_younger, younger_gate) = oneshot::channel();
+        let (open_older, older_gate) = oneshot::channel();
+        let younger = VllCoordinator::new(
+            GatedSink {
+                shards: shards.clone(),
+                gate: Mutex::new(Some((1, younger_gate))),
+            },
+            NoopMetricsSink,
+        );
+        let older = VllCoordinator::new(
+            GatedSink {
+                shards: shards.clone(),
+                gate: Mutex::new(Some((0, older_gate))),
+            },
+            NoopMetricsSink,
+        );
+
+        let timeout = Duration::from_secs(4);
+        let request = |txid: u64, order: [usize; 2]| ScatterRequest {
+            txid,
+            mode: LockMode::Write,
+            participants: order
+                .into_iter()
+                .map(|shard_id| ScatterParticipant {
+                    shard_id,
+                    keys: vec![Bytes::from(format!("key{shard_id}"))],
+                    operation: (),
+                })
+                .collect(),
+            timeout,
+            command: "MSET",
+        };
+
+        let start = tokio::time::Instant::now();
+
+        // Each transaction dispatches to its own shard first, then blocks at
+        // the gate before reaching the other's.
+        let younger_run = async {
+            let wound = younger
+                .scatter(request(50, [0, 1]))
+                .await
+                .expect_err("the younger transaction gives way");
+            assert!(wound.is_wound(), "wounds are retryable: {wound}");
+            assert!(
+                matches!(wound, ScatterError::Wounded { shard_id: 0 }),
+                "wounded on the shard the older transaction wanted: {wound:?}"
+            );
+            // Liveness, the whole point: the retry keeps the *original* txid.
+            // A fresh, higher txid could be wounded again by every later
+            // arrival, forever.
+            younger.scatter(request(50, [0, 1])).await
+        };
+        let older_run = async { older.scatter(request(20, [1, 0])).await };
+        let opener = async {
+            // Both requests are parked on their gates by the time this runs:
+            // under paused time the sleep only advances once the runtime is
+            // otherwise idle.
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let _ = open_younger.send(());
+            let _ = open_older.send(());
+        };
+
+        let (younger_retry, older_result, ()) = tokio::join!(younger_run, older_run, opener);
+
+        let older_ok = older_result.expect("the older transaction wins");
+        assert_eq!(older_ok.responses.len(), 2);
+        assert!(
+            older_ok.responses.iter().all(|&(_, txid)| txid == 20),
+            "the winner's own execute ran on both shards: {:?}",
+            older_ok.responses
+        );
+        let younger_ok = younger_retry.expect("the wounded transaction makes progress on retry");
+        assert_eq!(younger_ok.responses.len(), 2);
+
+        assert!(
+            start.elapsed() < Duration::from_millis(10),
+            "priority resolved the collision; the phase-2 acquisition timeout ({timeout:?}) was \
+             not involved, but {:?} elapsed",
             start.elapsed()
         );
     }

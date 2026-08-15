@@ -39,6 +39,7 @@ impl ShardSink for ChannelSink {
         mode: LockMode,
         operation: Self::Operation,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) -> Result<(), ShardSinkError> {
         self.senders[shard_id]
             .send(VllMsg::VllLockRequest {
@@ -47,6 +48,7 @@ impl ShardSink for ChannelSink {
                 mode,
                 operation,
                 ready_tx,
+                wound_tx,
             })
             .await
             .map_err(|_| ShardSinkError {
@@ -138,6 +140,7 @@ impl ShardSink for FaultSink {
         mode: LockMode,
         operation: Self::Operation,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) -> Result<(), ShardSinkError> {
         if self.fail_lock.contains(&shard_id) {
             return Err(ShardSinkError {
@@ -146,7 +149,7 @@ impl ShardSink for FaultSink {
             });
         }
         self.inner
-            .send_lock_request(shard_id, txid, keys, mode, operation, ready_tx)
+            .send_lock_request(shard_id, txid, keys, mode, operation, ready_tx, wound_tx)
             .await
     }
 
@@ -176,9 +179,10 @@ impl ShardSink for FaultSink {
         conn_id: u64,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         release_rx: oneshot::Receiver<()>,
+        revoke_tx: oneshot::Sender<VllError>,
     ) -> Result<(), ShardSinkError> {
         self.inner
-            .send_continuation_lock(shard_id, txid, conn_id, ready_tx, release_rx)
+            .send_continuation_lock(shard_id, txid, conn_id, ready_tx, release_rx, revoke_tx)
             .await
     }
 }

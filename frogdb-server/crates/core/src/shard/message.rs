@@ -769,6 +769,9 @@ pub enum VllMsg {
         operation: ScatterOp,
         /// Channel to notify coordinator when ready.
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        /// Back-channel the shard fires when an older transaction needs a
+        /// lock this op has been granted (wound-wait).
+        wound_tx: oneshot::Sender<VllError>,
     },
 
     /// VLL execute - execute a previously locked operation.

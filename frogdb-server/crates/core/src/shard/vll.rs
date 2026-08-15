@@ -16,10 +16,11 @@ impl ShardWorker {
         mode: LockMode,
         operation: ScatterOp,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) {
         let outcome = self
             .vll
-            .enqueue_lock_request(txid, keys, mode, operation, ready_tx);
+            .enqueue_lock_request(txid, keys, mode, operation, ready_tx, wound_tx);
         if let Some(depth) = outcome.queue_depth_warning {
             tracing::warn!(
                 shard_id = self.identity.shard_id(),
@@ -117,6 +118,13 @@ mod tests {
     use crate::store::Store;
     use crate::vll::{ContinuationEvent, LockMode, ShardReadyResult, VllError};
 
+    /// A wound sender whose receiver is already gone — these tests are about
+    /// the continuation lock, not wound-wait, and a send on it fails
+    /// harmlessly, the same shape as a coordinator that has already given up.
+    fn dead_wound() -> oneshot::Sender<VllError> {
+        oneshot::channel().0
+    }
+
     fn test_worker() -> ShardWorker {
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_, conn_rx) = mpsc::channel(16);
@@ -160,6 +168,7 @@ mod tests {
                 LockMode::Write,
                 ScatterOp::MGet,
                 sca_ready_tx,
+                dead_wound(),
             )
             .await;
         assert!(matches!(sca_ready_rx.await, Ok(ShardReadyResult::Ready)));
@@ -241,6 +250,7 @@ mod tests {
                 LockMode::Write,
                 write_op(),
                 sca_ready_tx,
+                dead_wound(),
             )
             .await;
         assert!(
@@ -283,6 +293,7 @@ mod tests {
                 LockMode::Write,
                 write_op(),
                 sca_ready_tx2,
+                dead_wound(),
             )
             .await;
         assert!(matches!(sca_ready_rx2.await, Ok(ShardReadyResult::Ready)));

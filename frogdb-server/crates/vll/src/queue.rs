@@ -30,6 +30,12 @@ pub struct VllPendingOp<O: Debug = ()> {
     pub enqueued_at: Instant,
     /// Channel to notify coordinator when ready.
     pub ready_tx: Option<oneshot::Sender<ShardReadyResult>>,
+    /// Back-channel to this op's coordinator, used once the op has been told
+    /// `Ready` and `ready_tx` is spent: an older transaction that finds this
+    /// op holding a lock it needs *wounds* it here. Taken when it fires, so a
+    /// repeated wound (every `try_advance_pending_locks` pass retries the
+    /// grant) notifies once.
+    pub wound_tx: Option<oneshot::Sender<VllError>>,
 }
 
 impl<O: Debug> VllPendingOp<O> {
@@ -39,6 +45,7 @@ impl<O: Debug> VllPendingOp<O> {
         keys: Vec<Bytes>,
         operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) -> Self {
         Self {
             txid,
@@ -47,6 +54,7 @@ impl<O: Debug> VllPendingOp<O> {
             state: PendingOpState::Pending,
             enqueued_at: Instant::now(),
             ready_tx: Some(ready_tx),
+            wound_tx: Some(wound_tx),
         }
     }
 
@@ -54,6 +62,24 @@ impl<O: Debug> VllPendingOp<O> {
     pub fn mark_ready(&mut self) -> Option<oneshot::Sender<ShardReadyResult>> {
         self.state = PendingOpState::Ready;
         self.ready_tx.take()
+    }
+
+    /// Tell this op's coordinator an older transaction wants what it holds.
+    ///
+    /// The notice is **advisory**: nothing is released here. The shard cannot
+    /// free a granted op's locks on its own — the coordinator may already have
+    /// dispatched `VllExecute` to sibling shards, and a shard-side release
+    /// would let this shard refuse work the siblings are applying, i.e. a
+    /// partial write with nothing to roll it back. So the victim's own
+    /// coordinator unwinds through the ordinary abort path, which is what
+    /// actually releases the locks. A notice that arrives too late (the
+    /// coordinator has stopped listening) is simply dropped and the victim
+    /// finishes normally. Returns whether anyone was listening.
+    pub fn wound(&mut self) -> bool {
+        match self.wound_tx.take() {
+            Some(tx) => tx.send(VllError::Wounded).is_ok(),
+            None => false,
+        }
     }
 
     /// Get the age of this operation.
@@ -184,7 +210,14 @@ mod tests {
 
     fn make_test_op(txid: u64) -> VllPendingOp {
         let (ready_tx, _ready_rx) = oneshot::channel();
-        VllPendingOp::new(txid, vec![Bytes::from_static(b"key1")], (), ready_tx)
+        let (wound_tx, _wound_rx) = oneshot::channel();
+        VllPendingOp::new(
+            txid,
+            vec![Bytes::from_static(b"key1")],
+            (),
+            ready_tx,
+            wound_tx,
+        )
     }
 
     #[test]
@@ -263,6 +296,25 @@ mod tests {
             op.age() >= std::time::Duration::from_millis(1),
             "age must measure elapsed time since enqueue, got {:?}",
             op.age()
+        );
+    }
+
+    /// The wound back-channel is the shard's only way to tell a granted op's
+    /// coordinator to give way, and every `try_advance_pending_locks` pass
+    /// re-runs the grant that fires it — so it has to be take-once.
+    // FM-VLL-010
+    #[test]
+    fn wounding_an_op_notifies_its_coordinator_exactly_once() {
+        let (ready_tx, _ready_rx) = oneshot::channel();
+        let (wound_tx, mut wound_rx) = oneshot::channel();
+        let mut op =
+            VllPendingOp::new(7, vec![Bytes::from_static(b"key1")], (), ready_tx, wound_tx);
+
+        assert!(op.wound(), "the coordinator is listening");
+        assert!(matches!(wound_rx.try_recv(), Ok(VllError::Wounded)));
+        assert!(
+            !op.wound(),
+            "a second wound must not re-signal a coordinator already told to give way"
         );
     }
 

@@ -44,6 +44,12 @@ pub trait ShardSink: Send + Sync {
     type Response: Send + 'static;
 
     /// Send a VLL lock request.
+    ///
+    /// `wound_tx` is the shard's back-channel for this op once its locks are
+    /// granted: it fires [`VllError::Wounded`] when an *older* transaction
+    /// needs one of them. Without it the older transaction would have to wait
+    /// for a younger one, and two multi-shard transactions that win shards in
+    /// opposite orders would deadlock until both timed out.
     fn send_lock_request(
         &self,
         shard_id: usize,
@@ -52,6 +58,7 @@ pub trait ShardSink: Send + Sync {
         mode: LockMode,
         operation: Self::Operation,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) -> impl Future<Output = Result<(), ShardSinkError>> + Send;
 
     /// Send a VLL execute request, with a oneshot channel for the response.

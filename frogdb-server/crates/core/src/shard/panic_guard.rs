@@ -513,6 +513,7 @@ mod isolation_tests {
                 LockMode::Write,
                 ScatterOp::Del,
                 ready_tx,
+                oneshot::channel().0,
             )
             .await;
         assert!(matches!(ready_rx.await, Ok(ShardReadyResult::Ready)));
@@ -544,6 +545,7 @@ mod isolation_tests {
                 LockMode::Write,
                 ScatterOp::Exists,
                 ready_tx,
+                oneshot::channel().0,
             )
             .await;
         assert!(

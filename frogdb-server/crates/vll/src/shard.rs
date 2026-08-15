@@ -17,7 +17,7 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use super::lock_table::LockTable;
+use super::lock_table::{GrantOutcome, LockTable};
 use super::queue::{ContinuationLock, TransactionQueue, VllPendingOp};
 use super::types::{LockMode, PendingOpState, ShardReadyResult, VllError};
 
@@ -166,6 +166,11 @@ impl<O: Debug> VllShardState<O> {
     /// waiting for the queue to drain ([`Self::request_continuation_lock`]):
     /// admitting new work would keep the queue non-empty and starve the drain
     /// until its deadline.
+    ///
+    /// `wound_tx` is this request's back-channel for the *other* direction:
+    /// once its locks are granted, an older transaction that needs one of them
+    /// wounds this op here (see [`VllPendingOp::wound`] and
+    /// [`GrantOutcome::WoundYounger`]).
     pub fn enqueue_lock_request(
         &mut self,
         txid: u64,
@@ -173,6 +178,7 @@ impl<O: Debug> VllShardState<O> {
         mode: LockMode,
         operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) -> EnqueueOutcome {
         if self.continuation_held_or_pending() {
             let _ = ready_tx.send(ShardReadyResult::Failed(VllError::ShardBusy));
@@ -197,7 +203,7 @@ impl<O: Debug> VllShardState<O> {
 
         lock_table.declare(&keys, txid, mode);
 
-        let pending_op = VllPendingOp::new(txid, keys.clone(), operation, ready_tx);
+        let pending_op = VllPendingOp::new(txid, keys.clone(), operation, ready_tx, wound_tx);
         if let Err(_e) = tx_queue.enqueue(pending_op) {
             lock_table.release(&keys, txid);
             return EnqueueOutcome {
@@ -214,17 +220,42 @@ impl<O: Debug> VllShardState<O> {
         }
     }
 
+    /// Advance one pending op: grant if it can be granted, wound the younger
+    /// holders standing in its way if it cannot.
+    ///
+    /// **Wound-wait on the SCA path.** A grant refused by a *younger* holder
+    /// (`GrantOutcome::WoundYounger`) is the one refusal that inverts the txid
+    /// order, and inverted edges are what let two multi-shard transactions
+    /// deadlock when they win shards in opposite orders. So the older
+    /// requester stays pending and the younger holders are told to give way.
+    /// The notice is advisory — see [`VllPendingOp::wound`] for why the shard
+    /// must not release a victim's locks itself — so this call grants nothing;
+    /// the requester is granted from the drain point the victim's own abort
+    /// produces. A victim already dequeued for execution is beyond wounding
+    /// and is simply waited for: it holds no cross-shard wait edge of its own,
+    /// so it always finishes.
     fn try_acquire_for(lock_table: &mut LockTable, tx_queue: &mut TransactionQueue<O>, txid: u64) {
-        let Some(op) = tx_queue.get_mut(txid) else {
-            return;
+        let keys = match tx_queue.get_mut(txid) {
+            Some(op) if op.state == PendingOpState::Pending => op.keys.clone(),
+            _ => return,
         };
-        if op.state != PendingOpState::Pending {
-            return;
-        }
-        if lock_table.try_grant(&op.keys, txid)
-            && let Some(ready_tx) = op.mark_ready()
-        {
-            let _ = ready_tx.send(ShardReadyResult::Ready);
+
+        match lock_table.try_grant(&keys, txid) {
+            GrantOutcome::Granted => {
+                if let Some(op) = tx_queue.get_mut(txid)
+                    && let Some(ready_tx) = op.mark_ready()
+                {
+                    let _ = ready_tx.send(ShardReadyResult::Ready);
+                }
+            }
+            GrantOutcome::Blocked => {}
+            GrantOutcome::WoundYounger(victims) => {
+                for victim in victims {
+                    if let Some(op) = tx_queue.get_mut(victim) {
+                        op.wound();
+                    }
+                }
+            }
         }
     }
 
@@ -679,12 +710,24 @@ mod tests {
         oneshot::channel().0
     }
 
+    /// The SCA path's equivalent: a wound sender nobody is listening on, for
+    /// the tests that are not about wound-wait.
+    fn dead_wound() -> oneshot::Sender<VllError> {
+        oneshot::channel().0
+    }
+
     #[tokio::test]
     async fn enqueue_acquires_when_no_contention() {
         let mut state: VllShardState<()> = VllShardState::default();
         let (rt, rr) = channels();
-        let outcome =
-            state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        let outcome = state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(!outcome.enqueue_failed);
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
     }
@@ -694,11 +737,25 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt1, rr1) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt1);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt1,
+            dead_wound(),
+        );
         assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
 
         let (rt2, mut rr2) = channels();
-        state.enqueue_lock_request(2, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt2);
+        state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt2,
+            dead_wound(),
+        );
         // Second writer must wait — the channel should not yet have a value.
         assert!(rr2.try_recv().is_err());
 
@@ -713,11 +770,25 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt1, rr1) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt1);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt1,
+            dead_wound(),
+        );
         assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
 
         let (rt2, mut rr2) = channels();
-        state.enqueue_lock_request(2, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt2);
+        state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt2,
+            dead_wound(),
+        );
         assert!(rr2.try_recv().is_err());
 
         state.abort(1);
@@ -731,13 +802,34 @@ mod tests {
 
         // #1 holds the lock; #2 and #3 queue behind it.
         let (rt1, rr1) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt1);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt1,
+            dead_wound(),
+        );
         assert!(matches!(rr1.await, Ok(ShardReadyResult::Ready)));
 
         let (rt2, mut rr2) = channels();
-        state.enqueue_lock_request(2, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt2);
+        state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt2,
+            dead_wound(),
+        );
         let (rt3, mut rr3) = channels();
-        state.enqueue_lock_request(3, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt3);
+        state.enqueue_lock_request(
+            3,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt3,
+            dead_wound(),
+        );
         assert!(rr2.try_recv().is_err());
         assert!(rr3.try_recv().is_err());
 
@@ -768,8 +860,14 @@ mod tests {
         // rejected with ShardBusy, not silently enqueued (which would let
         // it interleave with the continuation owner's commands).
         let (rt, rr) = channels();
-        let outcome =
-            state.enqueue_lock_request(51, vec![Bytes::from_static(b"k")], LockMode::Read, (), rt);
+        let outcome = state.enqueue_lock_request(
+            51,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Read,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(outcome.enqueue_failed);
         assert!(matches!(
             rr.await,
@@ -806,7 +904,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (cont_rt1, mut cont_rr1) = channels();
@@ -844,7 +949,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
         assert_eq!(state.queue_depth(), 1, "op stays queued until it executes");
 
@@ -884,7 +996,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (cont_rt, cont_rr) = channels();
@@ -916,8 +1035,14 @@ mod tests {
 
         // The barrier is lifted: this shard takes SCA work again.
         let (rt2, rr2) = channels();
-        let outcome =
-            state.enqueue_lock_request(2, vec![Bytes::from_static(b"j")], LockMode::Write, (), rt2);
+        let outcome = state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"j")],
+            LockMode::Write,
+            (),
+            rt2,
+            dead_wound(),
+        );
         assert!(!outcome.enqueue_failed);
         assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
     }
@@ -933,7 +1058,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         // Op is out of the queue and executing on the host.
@@ -962,7 +1094,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (cont_rt, mut cont_rr) = channels();
@@ -983,7 +1122,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (cont_rt, cont_rr) = channels();
@@ -1005,8 +1151,14 @@ mod tests {
 
         // And the shard is immediately usable again.
         let (rt2, rr2) = channels();
-        let outcome =
-            state.enqueue_lock_request(2, vec![Bytes::from_static(b"j")], LockMode::Write, (), rt2);
+        let outcome = state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"j")],
+            LockMode::Write,
+            (),
+            rt2,
+            dead_wound(),
+        );
         assert!(!outcome.enqueue_failed);
         assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
     }
@@ -1020,7 +1172,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (cont_rt, mut cont_rr) = channels();
@@ -1030,8 +1189,14 @@ mod tests {
 
         // A second connection's SCA request arrives while the drain is pending.
         let (rt2, rr2) = channels();
-        let outcome =
-            state.enqueue_lock_request(2, vec![Bytes::from_static(b"j")], LockMode::Read, (), rt2);
+        let outcome = state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"j")],
+            LockMode::Read,
+            (),
+            rt2,
+            dead_wound(),
+        );
         assert!(outcome.enqueue_failed);
         assert_eq!(outcome.queue_depth_warning, None);
         assert!(matches!(
@@ -1059,7 +1224,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
         let dequeued = state.dequeue_for_execution(1).expect("op 1 ready");
         state.release_after_execution(dequeued.txid, &dequeued.keys);
@@ -1119,6 +1291,7 @@ mod tests {
             LockMode::Write,
             (),
             rt2,
+            dead_wound(),
         );
         assert!(!outcome.enqueue_failed);
         assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
@@ -1175,7 +1348,14 @@ mod tests {
     async fn parked_continuation_deadline_survives_cancellation() {
         let mut state: VllShardState<()> = VllShardState::default();
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (cont_rt, cont_rr) = channels();
@@ -1221,6 +1401,7 @@ mod tests {
                 LockMode::Write,
                 (),
                 rt,
+                dead_wound(),
             );
             assert!(!outcome.enqueue_failed);
         }
@@ -1234,6 +1415,7 @@ mod tests {
             LockMode::Write,
             (),
             rt,
+            dead_wound(),
         );
         assert_eq!(outcome.queue_depth_warning, None);
 
@@ -1245,6 +1427,7 @@ mod tests {
             LockMode::Write,
             (),
             rt,
+            dead_wound(),
         );
         assert_eq!(
             outcome.queue_depth_warning,
@@ -1261,14 +1444,26 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::with_max_queue_depth(1);
 
         let (rt, rr) = channels();
-        let outcome =
-            state.enqueue_lock_request(1, vec![Bytes::from_static(b"a")], LockMode::Write, (), rt);
+        let outcome = state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"a")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(!outcome.enqueue_failed);
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (rt2, rr2) = channels();
-        let outcome =
-            state.enqueue_lock_request(2, vec![Bytes::from_static(b"b")], LockMode::Write, (), rt2);
+        let outcome = state.enqueue_lock_request(
+            2,
+            vec![Bytes::from_static(b"b")],
+            LockMode::Write,
+            (),
+            rt2,
+            dead_wound(),
+        );
         assert!(outcome.enqueue_failed);
         assert!(matches!(
             rr2.await,
@@ -1291,8 +1486,14 @@ mod tests {
         assert!(matches!(cont_rr.await, Ok(ShardReadyResult::Ready)));
 
         let (rt, rr) = channels();
-        let outcome =
-            state.enqueue_lock_request(1, vec![Bytes::from_static(b"a")], LockMode::Write, (), rt);
+        let outcome = state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"a")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(outcome.enqueue_failed);
         assert!(matches!(
             rr.await,
@@ -1361,7 +1562,14 @@ mod tests {
         let mut state: VllShardState<()> = VllShardState::default();
 
         let (rt, rr) = channels();
-        state.enqueue_lock_request(1, vec![Bytes::from_static(b"k")], LockMode::Write, (), rt);
+        state.enqueue_lock_request(
+            1,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Write,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
 
         let (rt_young, rr_young) = channels();
@@ -1491,6 +1699,138 @@ mod tests {
         assert_eq!(state.continuation_lock_owner(), None);
     }
 
+    /// Wound-wait on the SCA path. An older request that finds a younger
+    /// holder in its way notifies that holder instead of parking behind it —
+    /// parking is what closes the wait-for cycle when two multi-shard
+    /// transactions win shards in opposite orders.
+    ///
+    /// The wound is advisory: the shard releases nothing on its own, because
+    /// the victim may already have a phase-3 execute in flight. The victim's
+    /// coordinator unwinds through the ordinary abort path, and only that
+    /// abort hands the lock over.
+    // FM-VLL-010
+    #[tokio::test]
+    async fn an_older_sca_request_wounds_the_younger_holder_in_its_way() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        let key = Bytes::from_static(b"k");
+
+        let (rt_young, rr_young) = channels();
+        let (wound_tx_young, wound_rx_young) = oneshot::channel();
+        state.enqueue_lock_request(
+            50,
+            vec![key.clone()],
+            LockMode::Write,
+            (),
+            rt_young,
+            wound_tx_young,
+        );
+        assert!(matches!(rr_young.await, Ok(ShardReadyResult::Ready)));
+
+        let (rt_old, mut rr_old) = channels();
+        state.enqueue_lock_request(
+            20,
+            vec![key.clone()],
+            LockMode::Write,
+            (),
+            rt_old,
+            dead_wound(),
+        );
+
+        assert_eq!(
+            wound_rx_young.await,
+            Ok(VllError::Wounded),
+            "the younger holder is told to give way"
+        );
+        assert!(
+            rr_old.try_recv().is_err(),
+            "wounding is advisory: the shard does not hand the lock over itself"
+        );
+
+        // What the victim's coordinator does with the notice.
+        state.abort(50);
+        assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+    }
+
+    /// The mirror case: a younger arrival parks behind an older holder without
+    /// wounding it. That edge points from younger to older, which is the txid
+    /// order, so it cannot take part in a cycle.
+    // FM-VLL-010
+    #[tokio::test]
+    async fn a_younger_sca_request_waits_without_wounding_the_older_holder() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        let key = Bytes::from_static(b"k");
+
+        let (rt_old, rr_old) = channels();
+        let (wound_tx_old, mut wound_rx_old) = oneshot::channel();
+        state.enqueue_lock_request(
+            20,
+            vec![key.clone()],
+            LockMode::Write,
+            (),
+            rt_old,
+            wound_tx_old,
+        );
+        assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+
+        let (rt_young, mut rr_young) = channels();
+        state.enqueue_lock_request(
+            50,
+            vec![key.clone()],
+            LockMode::Write,
+            (),
+            rt_young,
+            dead_wound(),
+        );
+
+        assert!(rr_young.try_recv().is_err(), "the younger request parks");
+        assert!(
+            wound_rx_old.try_recv().is_err(),
+            "seniority is never wounded"
+        );
+    }
+
+    /// A victim past the point of no return is not wounded. Once the op has
+    /// been dequeued for execution its writes may already be landing, and a
+    /// wound the coordinator acted on would ask it to abort work it can no
+    /// longer take back. The older request waits for the release instead.
+    // FM-VLL-010
+    #[tokio::test]
+    async fn an_executing_op_is_not_wounded() {
+        let mut state: VllShardState<()> = VllShardState::default();
+        let key = Bytes::from_static(b"k");
+
+        let (rt_young, rr_young) = channels();
+        let (wound_tx_young, mut wound_rx_young) = oneshot::channel();
+        state.enqueue_lock_request(
+            50,
+            vec![key.clone()],
+            LockMode::Write,
+            (),
+            rt_young,
+            wound_tx_young,
+        );
+        assert!(matches!(rr_young.await, Ok(ShardReadyResult::Ready)));
+        let dequeued = state.dequeue_for_execution(50).expect("op 50 ready");
+
+        let (rt_old, mut rr_old) = channels();
+        state.enqueue_lock_request(
+            20,
+            vec![key.clone()],
+            LockMode::Write,
+            (),
+            rt_old,
+            dead_wound(),
+        );
+        assert!(
+            wound_rx_young.try_recv().is_err(),
+            "an op already executing is beyond wounding"
+        );
+        assert!(rr_old.try_recv().is_err());
+
+        state.release_after_execution(dequeued.txid, &dequeued.keys);
+        assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+    }
+
     #[test]
     fn diagnostic_snapshots_reflect_state() {
         let mut state: VllShardState<()> = VllShardState::default();
@@ -1499,7 +1839,14 @@ mod tests {
         assert!(state.intent_snapshots().is_empty());
 
         let (rt, _rr) = channels();
-        state.enqueue_lock_request(5, vec![Bytes::from_static(b"k")], LockMode::Read, (), rt);
+        state.enqueue_lock_request(
+            5,
+            vec![Bytes::from_static(b"k")],
+            LockMode::Read,
+            (),
+            rt,
+            dead_wound(),
+        );
         assert_eq!(state.queue_depth(), 1);
         let snaps: Vec<_> = state.iter_pending_ops().collect();
         assert_eq!(snaps.len(), 1);

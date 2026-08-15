@@ -1,6 +1,6 @@
 # 14: SCA lock table — wound-wait on rule-2 conflicts restores wait-graph acyclicity
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 

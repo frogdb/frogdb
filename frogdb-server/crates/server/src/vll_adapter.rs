@@ -70,6 +70,7 @@ impl ShardSink for ShardSenderSink {
         mode: LockMode,
         operation: Self::Operation,
         ready_tx: oneshot::Sender<ShardReadyResult>,
+        wound_tx: oneshot::Sender<VllError>,
     ) -> Result<(), ShardSinkError> {
         #[cfg(feature = "turmoil")]
         if let Some(chaos) = &self.chaos {
@@ -100,6 +101,7 @@ impl ShardSink for ShardSenderSink {
             mode,
             operation,
             ready_tx,
+            wound_tx,
         };
 
         match self.senders[shard_id].send(msg).await {
