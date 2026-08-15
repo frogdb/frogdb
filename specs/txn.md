@@ -165,15 +165,14 @@ exists today. IDs are stable once assigned; do not renumber on edit.
 | Source | `frogdb-server/crates/txn/src/exec.rs:150` |
 | Rulings | — |
 
-## TR-TXN-014 — EXEC of an empty queue (today: watch set not consulted)
+## TR-TXN-014 — EXEC of an empty, unwatched queue
 
 | Field | Value |
 | --- | --- |
-| Precondition | `txn.exec_abort = false`; rate limiter passes; `txn.queue = Some([])` — the guard is a bare `queue.is_empty()` and does not read `txn.watches` |
-| Postcondition | no shard round-trip; `outcome = CommittedEmpty`; reply `*0` — regardless of whether `txn.watches = {}` or non-empty |
-| Source | `frogdb-server/crates/txn/src/exec.rs:159` |
-| Rulings | — |
-| Pending | [issue 11](../.scratch/spec-gaps/issues/open/11-exec-fast-path-ignores-watch-set.md) — the ruled/correct precondition additionally requires `txn.watches = {}`; a genuinely-empty queue with a live, non-empty watch set takes this fast path today and commits without the shard round-trip LOCKED `FM-TXN-034`'s NOT observable forbids ("a silent WATCH false negative") |
+| Precondition | `txn.exec_abort = false`; rate limiter passes; `txn.queue = Some([])` **and** `txn.watches = {}` — the guard reads both, so a watched empty queue does not qualify |
+| Postcondition | no shard round-trip; `outcome = CommittedEmpty`; reply `*0`. With `txn.watches ≠ {}` the fast path is not taken: the EXEC falls through to the ordinary gates and reaches the watch-only shard round-trip (`exec.rs:295-304`), so the CAS is version-checked (FM-TXN-034) — `outcome = WatchAborted` and a nil reply if it is dirty, `outcome = Committed` and `*0` if it is clean |
+| Source | `frogdb-server/crates/txn/src/exec.rs:161` |
+| Rulings | [issue 11](../.scratch/spec-gaps/issues/done/11-exec-fast-path-ignores-watch-set.md) — built: the empty-queue fast path consults the watch set, matching Redis's `execCommand`, which tests `CLIENT_DIRTY_CAS` before queue length |
 
 ## TR-TXN-015 — EXEC-time slot re-validation (pre-pause verdict)
 
@@ -716,11 +715,11 @@ Deviations from Redis are called out inline and collected in [Redis deviations](
 | Field | Value |
 |---|---|
 | Trigger | `WATCH k`, then a transaction whose queue is empty of shard commands — either genuinely empty or entirely connection-level/server-wide (`CONFIG GET`, `KEYS`, …). |
-| Observable | The nil abort if the watched key changed; the deferred commands' replies in an array if it did not. |
-| NOT observable | An empty-queue fast path that skips the shard round-trip and commits a transaction whose CAS precondition was already broken — a silent WATCH false negative. |
+| Observable | The nil abort if the watched key changed; the deferred commands' replies in an array if it did not (`*0` when the queue was genuinely empty). |
+| NOT observable | An empty-queue fast path that skips the shard round-trip and commits a transaction whose CAS precondition was already broken — a silent WATCH false negative. The `queue.is_empty()` fast path (TR-TXN-014) is therefore conjoined with `watches.is_empty()`: it stays reachable only for an empty *and* unwatched queue. |
 | Invariant | The shard round-trip is taken with an empty command list whenever the watch set is non-empty; it is skipped only when there is nothing to run *and* nothing to check. |
 | Outcome variant | `TransactionOutcome::WatchAborted` / `Committed` |
-| Forced by | `an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip`, `test_watch_with_only_connection_level_commands_abort`, `test_watch_with_only_connection_level_commands_success` |
+| Forced by | `an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip`, `a_genuinely_empty_queue_with_watches_still_takes_the_shard_round_trip`, `a_genuinely_empty_queue_with_a_clean_watch_commits_an_empty_array`, `test_watch_with_only_connection_level_commands_abort`, `test_watch_with_only_connection_level_commands_success`, `test_watch_then_empty_multi_exec_aborts_when_the_key_was_written` |
 | Bug refs | none |
 
 ## FM-TXN-035 — EXEC commits

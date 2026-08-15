@@ -155,8 +155,18 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         return (TransactionOutcome::RateLimited, vec![Response::error(msg)]);
     }
 
-    // Handle empty transaction
-    if queue.is_empty() {
+    // Handle empty transaction — but only when it is also *unwatched*.
+    //
+    // An empty queue with a live watch set still has a CAS precondition to
+    // check: `WATCH k`, another client writes `k`, `MULTI; EXEC` with nothing
+    // queued. Returning `*0` here would commit a transaction whose watch was
+    // already broken — the silent WATCH false negative FM-TXN-034 forbids.
+    // Conjoining `watches.is_empty()` lets that case fall through to the
+    // watch-only shard round-trip below, which version-checks and clears the
+    // set exactly as an all-deferred queue's does. Redis reaches the same
+    // answer from the other side: `execCommand` tests `CLIENT_DIRTY_CAS`
+    // before it looks at the queue length.
+    if queue.is_empty() && watches.is_empty() {
         return (
             TransactionOutcome::CommittedEmpty,
             vec![Response::Array(vec![])],

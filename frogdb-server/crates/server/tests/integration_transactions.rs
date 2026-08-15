@@ -704,6 +704,44 @@ async fn test_watch_with_only_connection_level_commands_abort() {
     server.shutdown().await;
 }
 
+// FM-TXN-034
+/// The genuinely-empty arm of the same rule: `WATCH k`, another client writes
+/// `k`, then `MULTI; EXEC` with *nothing* queued at all. The empty-queue fast
+/// path used to skip the shard round-trip and answer `*0` — a committed
+/// transaction whose CAS precondition was already broken. Redis's `execCommand`
+/// checks `CLIENT_DIRTY_CAS` before queue length and answers nil; so do we.
+#[tokio::test]
+async fn test_watch_then_empty_multi_exec_aborts_when_the_key_was_written() {
+    let server = TestServer::start_standalone().await;
+    let mut client1 = server.connect().await;
+    let mut client2 = server.connect().await;
+
+    client1.command(&["SET", "watched_key", "initial"]).await;
+    let response = client1.command(&["WATCH", "watched_key"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Another client dirties the watch before EXEC.
+    client2.command(&["SET", "watched_key", "modified"]).await;
+
+    let response = client1.command(&["MULTI"]).await;
+    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+    // Nothing queued, but the CAS still has to be answered.
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(
+        response,
+        Response::Bulk(None),
+        "an empty EXEC on a dirtied watch must abort, not commit `*0`"
+    );
+
+    // The watch set was consumed either way: a fresh empty EXEC now commits.
+    client1.command(&["MULTI"]).await;
+    let response = client1.command(&["EXEC"]).await;
+    assert_eq!(response, Response::Array(vec![]));
+
+    server.shutdown().await;
+}
+
 /// Extract a RESP2 flat map/array's key names (even indices), in order.
 fn resp2_flat_keys(resp: &Response) -> Vec<Vec<u8>> {
     match resp {

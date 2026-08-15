@@ -1,6 +1,6 @@
 # EXEC's empty-queue fast path ignores the watch set — silent WATCH false negative
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

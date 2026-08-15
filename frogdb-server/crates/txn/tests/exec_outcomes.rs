@@ -805,6 +805,69 @@ async fn an_all_deferred_queue_with_watches_still_takes_the_shard_round_trip() {
     );
 }
 
+// FM-TXN-034
+#[tokio::test]
+async fn a_genuinely_empty_queue_with_watches_still_takes_the_shard_round_trip() {
+    // `WATCH k`, another client writes `k`, then `MULTI; EXEC` with nothing
+    // queued at all. The empty-queue fast path must not fire: the CAS
+    // precondition is already broken, and answering `*0` would be a committed
+    // transaction whose watch was silently ignored. Redis's `execCommand`
+    // tests `CLIENT_DIRTY_CAS` *before* it looks at the queue length for
+    // exactly this reason.
+    let mut host = MockTxnHost {
+        shard_replies: VecDeque::from([ShardTxnReply::Replied(TransactionResult::WatchAborted)]),
+        ..Default::default()
+    };
+    let mut s = summary(vec![]);
+    s.watches = vec![WatchEntry {
+        key: Bytes::from_static(b"k"),
+        version: 1,
+        live_at_watch: true,
+    }];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::WatchAborted);
+    assert_eq!(only(responses), Response::null());
+    assert!(
+        host.effects.contains(&Effect::ShardRoundTrip {
+            target_shard: 7,
+            commands: 0
+        }),
+        "an empty but watched EXEC still needs the version check: {:?}",
+        host.effects
+    );
+}
+
+// FM-TXN-034
+#[tokio::test]
+async fn a_genuinely_empty_queue_with_a_clean_watch_commits_an_empty_array() {
+    // The other half of the same guard: taking the round-trip must not change
+    // what a *clean* watched empty EXEC replies. It is still `*0` — only the
+    // outcome variant differs from the unwatched fast path (`Committed`
+    // rather than `CommittedEmpty`, both labelled `committed`, FM-TXN-046).
+    let mut host = MockTxnHost::default();
+    let mut s = summary(vec![]);
+    s.watches = vec![WatchEntry {
+        key: Bytes::from_static(b"k"),
+        version: 1,
+        live_at_watch: true,
+    }];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(only(responses), Response::Array(vec![]));
+    assert!(
+        host.effects.contains(&Effect::ShardRoundTrip {
+            target_shard: 7,
+            commands: 0
+        }),
+        "the version check is taken whether or not the watch turns out dirty: {:?}",
+        host.effects
+    );
+}
+
 // FM-TXN-038
 #[tokio::test]
 async fn an_all_deferred_queue_without_watches_skips_the_shard_entirely() {
