@@ -387,11 +387,14 @@ mod tests {
         let younger = key(b"younger");
 
         // Key `older` is held by a lower txid; key `younger` by a higher one.
-        table.declare(&[older.clone()], 1, LockMode::Write);
-        assert_eq!(table.try_grant(&[older.clone()], 1), GrantOutcome::Granted);
-        table.declare(&[younger.clone()], 9, LockMode::Write);
+        table.declare(std::slice::from_ref(&older), 1, LockMode::Write);
         assert_eq!(
-            table.try_grant(&[younger.clone()], 9),
+            table.try_grant(std::slice::from_ref(&older), 1),
+            GrantOutcome::Granted
+        );
+        table.declare(std::slice::from_ref(&younger), 9, LockMode::Write);
+        assert_eq!(
+            table.try_grant(std::slice::from_ref(&younger), 9),
             GrantOutcome::Granted
         );
 

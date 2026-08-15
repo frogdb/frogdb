@@ -30,6 +30,26 @@ impl std::fmt::Display for ShardSinkError {
 
 impl std::error::Error for ShardSinkError {}
 
+/// One shard's share of a scatter's lock request, as handed to
+/// [`ShardSink::send_lock_request`].
+///
+/// The channels travel with the keys because they are what the shard answers
+/// on: `ready_tx` carries the grant, `wound_tx` the shard's back-channel for
+/// taking it away again once granted — it fires [`VllError::Wounded`] when an
+/// *older* transaction needs one of these keys. Without that channel the
+/// older transaction would have to wait for a younger one, and two
+/// multi-shard transactions that win shards in opposite orders would deadlock
+/// until both timed out.
+#[derive(Debug)]
+pub struct LockRequest<O> {
+    pub txid: u64,
+    pub keys: Vec<Bytes>,
+    pub mode: LockMode,
+    pub operation: O,
+    pub ready_tx: oneshot::Sender<ShardReadyResult>,
+    pub wound_tx: oneshot::Sender<VllError>,
+}
+
 /// Per-shard sink used by the VLL coordinator.
 ///
 /// Each method dispatches one VLL message to a specific shard. The host's
@@ -43,22 +63,11 @@ pub trait ShardSink: Send + Sync {
     /// Response payload returned by [`Self::send_execute`].
     type Response: Send + 'static;
 
-    /// Send a VLL lock request.
-    ///
-    /// `wound_tx` is the shard's back-channel for this op once its locks are
-    /// granted: it fires [`VllError::Wounded`] when an *older* transaction
-    /// needs one of them. Without it the older transaction would have to wait
-    /// for a younger one, and two multi-shard transactions that win shards in
-    /// opposite orders would deadlock until both timed out.
+    /// Send a VLL lock request — see [`LockRequest`] for what it carries.
     fn send_lock_request(
         &self,
         shard_id: usize,
-        txid: u64,
-        keys: Vec<Bytes>,
-        mode: LockMode,
-        operation: Self::Operation,
-        ready_tx: oneshot::Sender<ShardReadyResult>,
-        wound_tx: oneshot::Sender<VllError>,
+        request: LockRequest<Self::Operation>,
     ) -> impl Future<Output = Result<(), ShardSinkError>> + Send;
 
     /// Send a VLL execute request, with a oneshot channel for the response.

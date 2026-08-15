@@ -7,11 +7,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bytes::Bytes;
 use frogdb_core::{
     MetricsRecorder, PartialResult, ScatterOp, ShardReadyResult, ShardSender, VllMsg,
 };
-use frogdb_vll::{LockMode, MetricsSink, ShardSink, ShardSinkError, VllError};
+use frogdb_vll::{LockRequest, MetricsSink, ShardSink, ShardSinkError, VllError};
 use tokio::sync::oneshot;
 
 #[cfg(feature = "turmoil")]
@@ -65,13 +64,17 @@ impl ShardSink for ShardSenderSink {
     async fn send_lock_request(
         &self,
         shard_id: usize,
-        txid: u64,
-        keys: Vec<Bytes>,
-        mode: LockMode,
-        operation: Self::Operation,
-        ready_tx: oneshot::Sender<ShardReadyResult>,
-        wound_tx: oneshot::Sender<VllError>,
+        request: LockRequest<Self::Operation>,
     ) -> Result<(), ShardSinkError> {
+        let LockRequest {
+            txid,
+            keys,
+            mode,
+            operation,
+            ready_tx,
+            wound_tx,
+        } = request;
+
         #[cfg(feature = "turmoil")]
         if let Some(chaos) = &self.chaos {
             if chaos.is_shard_unavailable(shard_id) {

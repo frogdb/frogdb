@@ -45,7 +45,7 @@ use tokio::sync::oneshot;
 // The timer's clock, not the OS clock — see the note in `queue.rs`.
 use tokio::time::Instant;
 
-use crate::traits::{MetricsSink, ShardSink, ShardSinkError};
+use crate::traits::{LockRequest, MetricsSink, ShardSink, ShardSinkError};
 use crate::{LockMode, ShardReadyResult, VllError};
 
 /// Default timeout used when the caller does not supply one explicitly.
@@ -386,12 +386,14 @@ where
                 .sink
                 .send_lock_request(
                     participant.shard_id,
-                    request.txid,
-                    participant.keys,
-                    request.mode,
-                    participant.operation,
-                    ready_tx,
-                    wound_tx,
+                    LockRequest {
+                        txid: request.txid,
+                        keys: participant.keys,
+                        mode: request.mode,
+                        operation: participant.operation,
+                        ready_tx,
+                        wound_tx,
+                    },
                 )
                 .await
             {
@@ -729,6 +731,8 @@ mod tests {
         Arc<Mutex<Box<dyn FnMut(usize, u64) -> Result<u32, ShardSinkError> + Send>>>;
     type DispatchCallback =
         Arc<Mutex<Box<dyn FnMut(usize, u64) -> Result<(), ShardSinkError> + Send>>>;
+    /// Revocation senders paired with the shard that handed each one over.
+    type RevokeSenders = Arc<Mutex<Vec<(usize, oneshot::Sender<VllError>)>>>;
 
     /// Test sink that records every call and lets each test script the
     /// shard responses (ready / failed / dropped) and execute outcomes.
@@ -751,7 +755,7 @@ mod tests {
         // Revocation senders the coordinator handed over with each
         // continuation-lock request. A test fires one to model a shard taking
         // the lock back (wound / SCRIPT KILL / hold cap).
-        revoke_txs: Arc<Mutex<Vec<(usize, oneshot::Sender<VllError>)>>>,
+        revoke_txs: RevokeSenders,
         // Release receivers handed to the sink by continuation-lock
         // acquisition. The coordinator holds the paired sender inside the
         // guard and fires it on release, so tests can observe whether a
@@ -786,20 +790,15 @@ mod tests {
         async fn send_lock_request(
             &self,
             shard_id: usize,
-            txid: u64,
-            _keys: Vec<Bytes>,
-            _mode: LockMode,
-            _operation: Self::Operation,
-            ready_tx: oneshot::Sender<ShardReadyResult>,
-            _wound_tx: oneshot::Sender<VllError>,
+            request: LockRequest<Self::Operation>,
         ) -> Result<(), ShardSinkError> {
             {
                 let mut send_cb = self.on_lock_send.lock().await;
-                send_cb(shard_id, txid)?;
+                send_cb(shard_id, request.txid)?;
             }
             let mut cb = self.on_lock.lock().await;
-            let result = cb(shard_id, txid);
-            let _ = ready_tx.send(result);
+            let result = cb(shard_id, request.txid);
+            let _ = request.ready_tx.send(result);
             Ok(())
         }
 
@@ -1246,7 +1245,7 @@ mod tests {
             Duration::from_secs(1),
             // Work that never finishes on its own: only the revocation can end
             // this call.
-            || std::future::pending::<u32>(),
+            std::future::pending::<u32>,
         );
 
         let (outcome, ()) = tokio::join!(running, revoker);
@@ -1381,12 +1380,7 @@ mod tests {
             async fn send_lock_request(
                 &self,
                 _shard_id: usize,
-                _txid: u64,
-                _keys: Vec<Bytes>,
-                _mode: LockMode,
-                _operation: Self::Operation,
-                _ready_tx: oneshot::Sender<ShardReadyResult>,
-                _wound_tx: oneshot::Sender<VllError>,
+                _request: LockRequest<Self::Operation>,
             ) -> Result<(), ShardSinkError> {
                 unreachable!("this harness only exercises continuation locks")
             }
@@ -1574,13 +1568,16 @@ mod tests {
             async fn send_lock_request(
                 &self,
                 shard_id: usize,
-                txid: u64,
-                keys: Vec<Bytes>,
-                mode: LockMode,
-                _operation: Self::Operation,
-                ready_tx: oneshot::Sender<ShardReadyResult>,
-                wound_tx: oneshot::Sender<VllError>,
+                request: LockRequest<Self::Operation>,
             ) -> Result<(), ShardSinkError> {
+                let LockRequest {
+                    txid,
+                    keys,
+                    mode,
+                    ready_tx,
+                    wound_tx,
+                    ..
+                } = request;
                 let gate = {
                     let mut held = self.gate.lock().await;
                     match held.as_ref() {
@@ -1757,17 +1754,12 @@ mod tests {
         async fn send_lock_request(
             &self,
             shard_id: usize,
-            _txid: u64,
-            _keys: Vec<Bytes>,
-            _mode: LockMode,
-            _operation: Self::Operation,
-            ready_tx: oneshot::Sender<ShardReadyResult>,
-            _wound_tx: oneshot::Sender<VllError>,
+            request: LockRequest<Self::Operation>,
         ) -> Result<(), ShardSinkError> {
             let delay = self.ready_stagger * (shard_id as u32 + 1);
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
-                let _ = ready_tx.send(ShardReadyResult::Ready);
+                let _ = request.ready_tx.send(ShardReadyResult::Ready);
             });
             Ok(())
         }

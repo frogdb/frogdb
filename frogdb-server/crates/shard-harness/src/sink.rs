@@ -8,8 +8,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use bytes::Bytes;
-use frogdb_vll::{LockMode, ShardReadyResult, ShardSink, ShardSinkError, VllError};
+use frogdb_vll::{LockRequest, ShardReadyResult, ShardSink, ShardSinkError, VllError};
 use tokio::sync::oneshot;
 
 use frogdb_core::shard::types::PartialResult;
@@ -34,21 +33,16 @@ impl ShardSink for ChannelSink {
     async fn send_lock_request(
         &self,
         shard_id: usize,
-        txid: u64,
-        keys: Vec<Bytes>,
-        mode: LockMode,
-        operation: Self::Operation,
-        ready_tx: oneshot::Sender<ShardReadyResult>,
-        wound_tx: oneshot::Sender<VllError>,
+        request: LockRequest<Self::Operation>,
     ) -> Result<(), ShardSinkError> {
         self.senders[shard_id]
             .send(VllMsg::VllLockRequest {
-                txid,
-                keys,
-                mode,
-                operation,
-                ready_tx,
-                wound_tx,
+                txid: request.txid,
+                keys: request.keys,
+                mode: request.mode,
+                operation: request.operation,
+                ready_tx: request.ready_tx,
+                wound_tx: request.wound_tx,
             })
             .await
             .map_err(|_| ShardSinkError {
@@ -135,12 +129,7 @@ impl ShardSink for FaultSink {
     async fn send_lock_request(
         &self,
         shard_id: usize,
-        txid: u64,
-        keys: Vec<Bytes>,
-        mode: LockMode,
-        operation: Self::Operation,
-        ready_tx: oneshot::Sender<ShardReadyResult>,
-        wound_tx: oneshot::Sender<VllError>,
+        request: LockRequest<Self::Operation>,
     ) -> Result<(), ShardSinkError> {
         if self.fail_lock.contains(&shard_id) {
             return Err(ShardSinkError {
@@ -148,9 +137,7 @@ impl ShardSink for FaultSink {
                 reason: "injected lock dispatch failure",
             });
         }
-        self.inner
-            .send_lock_request(shard_id, txid, keys, mode, operation, ready_tx, wound_tx)
-            .await
+        self.inner.send_lock_request(shard_id, request).await
     }
 
     async fn send_execute(
