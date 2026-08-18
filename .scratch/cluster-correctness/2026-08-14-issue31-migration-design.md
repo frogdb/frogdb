@@ -1,7 +1,84 @@
-# Slot migration redesign — source-authoritative-until-commit (v30)
+# Slot migration redesign — source-authoritative-until-commit (v31)
 
-Status: revision 30 — **candidate, UNSOUND-pending**: not approved, and not
-claimed sound until a review round finds nothing structural. Review v30 (of
+Status: revision 31 — **candidate, UNSOUND-pending**: not approved, and not
+claimed sound until a review round finds nothing structural. Review v31 (of
+revision 30) found **0 CRITICAL** / 2 MAJOR / 2 MINOR — a **ninth**
+consecutive zero-CRITICAL round, and the **twenty-second** rung of the fix-text
+ladder (stated once, as a list, at the v22 entry below). Nothing structural
+moved again: no settled ruling was touched, no LOCKED row was edited, the
+record-binding conjunct (V20-C1) and its four-artefact witness stand as revision
+28 left them, and §0's two-write clearing rule stands as revision 29 left it.
+**The sweep's mechanism passed a second time, and its naming passed for the
+first time**: all six recorded commands re-derived their published totals at all
+four layers, and the named-site ↔ hit-line correspondence — the check that had
+failed three rounds running — held exhaustively across both parts and both
+`(a)`/`(b)` lists. **Both MAJORs are in one organ**: part **(ii-b)** of the
+sweep table and the V30 changelog's summary of it, and both are false claims
+about this document's own content — the family the last four rounds have found,
+now one layer further in.
+**V31-M1 (MAJOR)** — part (ii-b) said the **revision-24 changelog block**'s
+V24-M3 entry "quotes the withdrawn premise inside the entry that withdraws it".
+It does not. That entry states the **corrected** fact — "neither mandated
+sequence restarts the stage counter" — in the same negated construction as §0's
+bullet listed immediately above it, and the list's own header called all three
+of its entries statements of the corrected fact. So one list said both things
+about one site. This is not a wording slip:
+quotation-inside-a-withdrawal is a **disposition-bearing** category here — it is
+the stated ground of family A's blast-radius revision-20 `(a)` and of family C's
+`(a)` class — so attributing it to a site whose text falsifies it is a false
+disposition claim in the one table whose whole purpose is that dispositions be
+checkable against text. The entry now says what the site does, the V30
+changelog's repetition of the false half is corrected with it, and a **genuine**
+instance of the construction is named in its place.
+**V31-M2 (MAJOR)** — the V30 changelog claimed part (ii) "enumerates **in
+full**". Part **(ii-a)** did; part **(ii-b)** did not. (ii-b) asserted "three"
+statements of the corrected fact in a spelling no family carries, found by
+**reading**; eleven further live sites sat in the same normative or model-level
+register — §0's gate-1 wipe-sequence derivation (**the site the rest of the
+document defers to**), §0's two-write clearing rule, §0's necessity
+re-derivation, harmlessness paragraph, (β)-path re-derivation and
+retired-enumeration paragraph, the record-binding row, two *Quint* paragraphs,
+the *Testing* forcing-test producer, and the gate-1 V24-M3 sweep passage.
+Family D requires `restarts`; these spell
+it `restart`/`restarting`/`restarted`, invert it, or change the subject to the
+**generation**. An exemplar set presented as an enumeration is the exact
+disposition the revision-30 hardening was adopted to retire, and it survived
+because the half of part (ii) that was still a reading exercise was described as
+if the subtraction covered it. **(ii-b) is mechanised the way (ii-a) already
+was** (**V31-F0**): family D's residue has two classes, each gets a **recorded
+command** run at the same four layers, and (ii-b) is **`loose − strict`** — the
+subject-and-inflection class by subtraction (its pattern contains family D's as
+a leading alternation, so containment holds by construction), the inverted class
+by whole-set enumeration (its pattern does not contain family D's, so no
+subtraction is claimed). The entire difference is enumerated, with the meta
+occurrences disposed **as a class** by the `(m)` rule exactly as part (i)
+disposes its own. The other five families' residue classes are **probed**, with
+the probe recorded beside the result, rather than asserted empty — one probe
+(family D's inverted class) turned up a site no revision had held, and one
+turned up a hit in an unrelated sense, which is what probing is for. The residue
+claim is restated as what the mechanism supports: the phrase families are a
+**filter**, and this is the **measured** size of what they filter out.
+Minors, both applied: **m1** the V30 block named **neither recorded
+deviation** — the `folded` command's space squeeze and family E's bounded
+wildcard — while asserting the hardening in a form that family E's own published
+numbers contradict (folded **11** below occurrences **12**); both deviations are
+now named in that block with a pointer to the rule that states them in full, and
+the "every occurrence beyond `occurrences` is a site the line command cannot
+see" claim carries its exception, so a reader auditing revision 30 from its
+changelog is not stranded; **m2** family **F** called the *Transitions*
+paragraph "gate 1's counter-survives re-derivation" while families **A** and
+**D** call the same paragraph "the deleted-write re-derivation" — gate 1's
+derivation is a different passage, in §0 — so family F now uses A and D's name;
+the correspondence itself was intact and did not change.
+**No revision-30 disposition is overturned by this revision.** Every part (i)
+disposition stands; part (ii-b) gains sites and gains a mechanism, and the three
+history-block sites revision 30 dispositioned by reading keep their `(c)`,
+`(c)` and `(a)`.
+**The cumulative blast radius is unchanged by this revision** — still five rows
+Amended across six declared amendments carrying seven invariant deltas, none
+performed here. **No LOCKED spec file is edited by this revision.**
+
+Dated 2026-08-18. Review v30 (of
 revision 29) found **0 CRITICAL** / 3 MAJOR / 5 MINOR — an **eighth**
 consecutive zero-CRITICAL round, and the **twenty-first** rung of the fix-text
 ladder (stated once, as a list, at the v22 entry below). Nothing structural
@@ -56,7 +133,8 @@ exercise into arithmetic. **(1) Four recorded commands per family, not one** —
 `lines` (as before), `occurrences` (same corpus, counting unit the match, which
 isolates multiplicity and names no new site), `folded` (inline markup deleted,
 newlines folded, spaces squeezed — **every** occurrence it finds beyond
-`occurrences` is a site the line command cannot see, and each is enumerated in
+`occurrences` is a site the line command cannot see, **except where a bounded
+wildcard merges two line-matches into one**, and each is enumerated in
 part (ii) as a subtraction), and `non-meta` (**(2)**, the second hardening:
 the two meta regions deleted by `sed`, so `(m)` is `lines − non-meta` rather
 than a classification, and the count is **stable under rewording of this
@@ -65,6 +143,20 @@ revision 29's family D moved by one for that reason alone). Part (ii) is now in
 two halves: **(ii-a)** the mechanical folded-minus-occurrence delta, and
 **(ii-b)** the residue no recorded command reaches — which is still not empty,
 and is the honest form of the incompleteness claim.
+**Two deviations are recorded with the rule, and both are named here so a
+reader auditing this revision from its changelog is not stranded** (**V31-m1**,
+which found this block naming neither): **(d1)** the `folded` command squeezes
+runs of spaces (`tr -s ' '`) — **required**, not cosmetic, because this file is
+indented and an unsqueezed fold leaves a wrapped phrase separated by the next
+line's indent and therefore finds nothing; **(d2)** family **E**'s folded
+pattern **bounds** its wildcard to at most eighty characters, because `-o` over
+a single folded line makes an unbounded wildcard greedy across the whole file —
+and the consequence is that family E's folded number comes in **below** its
+occurrence count (**11 against 12** in this revision), since one bounded
+leftmost-longest match can swallow a following one. That is the exception to
+"every occurrence beyond `occurrences` is a site the line command cannot see":
+where it bites, the family entry locates the merge and shows both halves are
+`(m)`. Both deviations are stated in full at the rule.
 
 Minors, all applied: **m1** the rule's "**the two** such sites" live-claim
 sentence, falsified by family F's third live-claim site, replaced by the rule
@@ -72,10 +164,18 @@ that decides where a live-claim site is listed — patterns **miss** it → part
 (ii), patterns **catch** it → dispositioned in part (i) — with the `(m)`
 arithmetic recording the exception so the region count still re-derives; **m2**
 three further sites the patterns miss added to part (ii-b) (§0's normative "so
-neither restarts the stage counter", the v24 changelog's quotation of the
-withdrawn premise, and the Quint state bullet's "Neither mandated wipe sequence
-restarts the real counter") — with the folded command now mechanical, part (ii)
-enumerates **in full** rather than by exemplar; **m3** every "§1" anchor that
+neither restarts the stage counter", the v24 changelog block's V24-M3 entry
+**stating the corrected fact** in the *stage*-qualified spelling family D does
+not carry, and the Quint state bullet's "Neither mandated wipe sequence
+restarts the real counter") — with the folded command now mechanical, part
+**(ii-a)** enumerates **in full** rather than by exemplar. **Both halves of that
+sentence were wrong as revision 30 wrote them, and are corrected here by
+V31-M1 and V31-M2**: revision 30 described the v24 site as "the v24 changelog's
+quotation of the withdrawn premise", which the site's own text falsifies — it
+states the negation, not the premise — and it claimed the whole of part (ii)
+enumerated in full while **(ii-b)** was still three exemplars found by reading,
+missing **eleven** further live sites in the same register (and one hit in an
+unrelated sense). **m3** every "§1" anchor that
 pointed at a section that is not §1 re-anchored by heading text actually present
 in the file (*Transitions*, *Replicated migration record*, *Spec / impl blast
 radius*); **m4** V29-m6's replacement pointer, which named a "history-entry
@@ -220,7 +320,7 @@ count: **A 54 = 47/6/1, B 2 = 1/1/0, C 10 = 9/1/0, D 8 = 6/0/2, E 3 = 2/1/0,
 F 10 = 3/7/0**. (**Superseded in revision 29 — V29-M1/V29-M2**: not one of these
 six counts re-derived, and the `1` in family A's `(c)` column was a repaired
 normative site. The counts are kept here as the revision-28 claim, marked; the
-live table is revision 30's, run against revision 30 with its commands recorded.
+live table is revision 31's, run against revision 31 with its commands recorded.
 **Superseded in full, and the deletion is recorded rather than implied** —
 **V30-m5**: revision 28's *per-site* disposition list, which named its sites by
 line number (`doc:1482-1485`, `doc:3394-3397`, …), was not marked and carried
@@ -731,7 +831,7 @@ v17 = **eighth**, v18 = **ninth**, v19 = **tenth**, v20 = **eleventh**,
 v21 = **twelfth**, v22 = **thirteenth** (this entry), v23 = **fourteenth**,
 v24 = **fifteenth**, v25 = **sixteenth**, v26 = **seventeenth**,
 v27 = **eighteenth**, v28 = **nineteenth**, v29 = **twentieth**,
-v30 = **twenty-first**. The rungs
+v30 = **twenty-first**, v31 = **twenty-second**. The rungs
 through v20 are stated by their own entries; v21 is the rung the old ladder
 skipped, because that entry describes the pattern in its own words — "both
 MAJORs are **completeness** failures in revision 20's own fix text" — without
@@ -745,7 +845,7 @@ rungs above the pre-correction v22 ordinal, so inheriting it re-imported the
 error the correction removed. v28 is the **nineteenth** rung and v29 the
 **twentieth**, per the list. (The separate **zero-CRITICAL** ladder is a
 different count and is correct as stated: v26 fourth, v28 sixth, v29 seventh,
-v30 eighth.)
+v30 eighth, v31 ninth.)
 **Revision 21's shape is retained in full and is not what failed**: the
 staging-refusal `stage-counter-untrusted` state, gate 3 (d) arm 5's reply and
 its commutation claim, the reply-token totality rule, the fail-closed recovery
@@ -3660,8 +3760,8 @@ when it is not):
         one. Where that happens the family entry says so and enumerates the
         evaded site directly, which is the honest form: a number that under-reads
         is only safe when the thing it under-reads is named.
-     4. **non-meta** — `sed '3571,3909d;1,1217d' $F | grep -c -i -E '<P>'`, where
-        `3571,3909` is this rule-and-table block's line range and `1217` is the
+     4. **non-meta** — `sed '3671,4201d;1,1317d' $F | grep -c -i -E '<P>'`, where
+        `3671,4201` is this rule-and-table block's line range and `1317` is the
         last line above the `## Problem` header — i.e. the two regions the `(m)`
         class is defined by, deleted. **`(m)` = lines − non-meta**, up to the
         live-claim exception above, so the meta class is a **subtraction rather
@@ -3672,15 +3772,33 @@ when it is not):
         one below its predecessor for exactly that reason. **The recorded `sed`
         range must be updated by any revision that moves this block**, and the
         check that it was is that `(m)` still equals `lines − non-meta`.
-     **Range check**: `3571` is this rule's opening sentence, `3909` its last.
-     **Part (i) — revision 30's sweep, run against revision 30**, i.e. against
+     **A fifth command, per *residue class* rather than per family** (**V31-M2**
+     — revision 30 made (ii-a) mechanical and left (ii-b) an enumeration from
+     memory, which is the disposition this whole rule exists to retire, and it
+     was wrong again the round it was written). Where a family's residue class
+     is **non-empty**, that family gains a second, deliberately **looser**
+     pattern, run at the same four layers **plus a fifth**: `folded ∩ non-meta`,
+     the folded command run over the `sed`-stripped corpus. The fifth exists
+     because the residue is measured at the **folded** layer, and a folded
+     number split into meta and non-meta by eye is the same unaudited move this
+     rule replaces; with the fifth layer the split is `folded(loose) −
+     folded(strict)` against `folded∩non-meta(loose) − folded∩non-meta(strict)`,
+     both from commands. The looser pattern must **contain**
+     the family's own as a leading alternation, so its hit set contains the
+     family's **by construction** and `loose − strict` is a **subtraction**, not
+     a second reading exercise. That subtraction **is** part (ii-b). Where a
+     family's residue class is empty, no second command is added, but the
+     **probe that established it is recorded** beside the family, because
+     "empty" asserted is exactly the claim this rule refuses to accept.
+     **Range check**: `3671` is this rule's opening sentence, `4201` its last.
+     **Part (i) — revision 31's sweep, run against revision 31**, i.e. against
      this file after every edit of this revision, from the repository root with
      `F=.scratch/cluster-correctness/2026-08-14-issue31-migration-design.md`.
      Format: family: **lines = (a)/(b)/(c)/(m)**, then **occ / folded /
      non-meta**, then every non-`(a)` hit.
      - **(A)** `out-of-band` / `out of band` — `grep -c -i -E 'out-of-band|out of
-       band' $F` → **80 = 39/13/0/28**; occ **96** / folded
-       **99** / non-meta **52**. Thirteen `(b)` **lines** across seven
+       band' $F` → **81 = 39/13/0/29**; occ **97** / folded
+       **100** / non-meta **52**. Thirteen `(b)` **lines** across seven
        **sites** — the counting unit is the line, and one site (§0's scope
        declaration) carries the phrase on seven of them, which is why the `(b)`
        line count exceeds the site count: **§0's scope declaration**, which
@@ -3710,7 +3828,7 @@ when it is not):
        vehicle), or quote a superseded claim inside its own marker — the
        **blast-radius revision-20 row note** among them (V30-m4: it quotes the
        claim V24-M3 withdrew inside its own withdrawal marker, and no earlier
-       table said which disposition it holds); the 28
+       table said which disposition it holds); the 29
        `(m)`s are this rule, this table (including part (ii)) and the history
        blocks' records of the findings above.
      - **(B)** `restored out of band` — `grep -c -i -E 'restored out of band' $F`
@@ -3736,8 +3854,8 @@ when it is not):
      - **(D)** `the wipe restarts` / `restarts the counter` / `restarts its
        counter` / `restarts the node-local` — `grep -c -i -E 'the wipe
        restarts|restarts the counter|restarts its counter|restarts the
-       node-local' $F` → **16 = 4/0/0/12**; occ **21** / folded
-       **28** / non-meta **4**. No defective site **among the grep
+       node-local' $F` → **18 = 4/0/0/14**; occ **24** / folded
+       **33** / non-meta **4**. No defective site **among the grep
        hits**: the 4 `(a)`s all state the corrected fact, or quote the false
        one inside the passage that corrects it, and they are, one hit line each
        (**V30-m4** — revisions 28-29 named a "forcing-test section's producer"
@@ -3789,11 +3907,15 @@ when it is not):
        revision 28 (V28-m12) from the absolute to "touches neither the identity
        store nor its counter", where the phrase now survives **only inside the
        note recording its own repair**: §0's wipe-sequence bullet, the
-       staged-flip and record-binding fence-freshness rows, **gate 1's
-       counter-survives re-derivation** in *Transitions* (the V28-m12 note —
+       staged-flip and record-binding fence-freshness rows, the
+       **deleted-write re-derivation** in *Transitions* (the V28-m12 note —
        **V30-M3**: revisions 28-29 named "the v24 changelog entry" here, and the
        v24 block contains **no hit of this family**, while this site was the
-       unnamed fifth), and the forcing-test section's producer paragraph.
+       unnamed fifth; **V31-m2** — revision 30 then named the site "gate 1's
+       counter-survives re-derivation", which is a **different passage**, in §0,
+       and is not this hit: families A and D name this paragraph the
+       **deleted-write re-derivation**, and this family now names it the same
+       way), and the forcing-test section's producer paragraph.
        **Revision 28
        reported seven `(b)`s against a review that named three**; five carry the
        phrase forward in their repair notes and are countable here, and the
@@ -3836,17 +3958,20 @@ when it is not):
      - **(C)** `+1`, **wrap**, not normative: the **revision-28 changelog
        block**'s V28-F0 restatement of the six families breaks at `below ⏎ a
        value` — **`(m)`**.
-     - **(D)** `+7`, all **wrap**, two of them normative. **Gate 3 (d)'s V28-m2
+     - **(D)** `+9`, all **wrap**, two of them normative. **Gate 3 (d)'s V28-m2
        note** — "neither mandated wipe restarts the ⏎ counter" — **`(a)`**,
        correct as written; this is the site revision 29 published as its
        evidence that the families are a filter and not a proof, and then left
        to an unrun fold. The **V24-M3 sweep narrative**'s quotation of the
        deleted-write argument in *Transitions* — "the wipe path that restarts
        the ⏎ counter" — **`(a)`**, it quotes the withdrawn premise inside the
-       paragraph that withdraws it. The remaining five are self-quotation:
+       paragraph that withdraws it. The remaining **seven** are self-quotation:
        the rule's phrase-family list, family D's own recorded command line
-       (which breaks three times, because it is the longest pattern), and part
-       (ii)'s closing note about the gate 3 (d) site — **`(m)`**.
+       (which breaks three times, because it is the longest pattern), part
+       (ii-b)'s record of the `Ps` pattern (which **contains** this family's
+       pattern, so it necessarily breaks here too), part (ii-b)'s **(D-i)**
+       quotation of the gate 3 (d) note, and part (ii)'s closing note about the
+       same site — **`(m)`**.
      - **(E)** `−1`, and the sign is the recorded deviation rather than a
        missing site. The fold **does** find family E's evaded site — §0's
        **V28-M2 marker-deletion note**, which quotes the withdrawn reason as
@@ -3867,35 +3992,197 @@ when it is not):
        **`(a)`**, correct as written, and already narrowed by V28-m12. The
        second is the **revision-28 changelog block**'s V28-F0 family list,
        breaking at `touches no ⏎ filesystem` — **`(m)`**.
-     **(ii-b) — sites no recorded command catches, found by reading.** This is
-     what is left once (ii-a) is mechanical, and it is still not empty: the
-     phrase families remain a **filter, not a proof**, and the evidence is that
-     three normative or model-level statements of the corrected fact use a
-     spelling no family carries.
+     **(ii-b) — the residue, measured rather than remembered** (**V31-M2** —
+     revision 30 wrote that "three normative or model-level statements of the
+     corrected fact use a spelling no family carries", found by **reading**, and
+     the V30 changelog then claimed part (ii) "enumerates in full". Part (ii-a)
+     did; part (ii-b) did not. **Nine** further live sites sat in the same
+     normative or model-level register in spellings no family carries, and
+     **two** more surfaced when the inverted class was **probed** — eleven. An
+     exemplar set presented as an enumeration is precisely the disposition this
+     rule exists to retire, and it failed here in the revision that adopted the
+     hardening.) Part (ii-b) is now a **measurement**, like (ii-a). Family **D**
+     is the one family with a non-empty residue, and it has **two** residue
+     classes; each gets a recorded command, and the other five families' probes
+     are recorded at the end.
+     **(D-s) — the subject-and-inflection class**: the corrected fact spelled
+     with another inflection (`restart`, `restarting`, `restarted`) or with
+     another subject (the **generation**). Recorded command, run from the
+     repository root against this file at the same four layers as every family,
+     **plus a fifth** the subtraction needs — `folded ∩ non-meta`, the folded
+     command run over the `sed`-stripped corpus, which is what makes the meta
+     split of a folded count command-derived rather than eyeballed. Write `Ps`
+     for the pattern `the wipe restarts|restarts the counter|restarts its
+     counter|restarts the node-local|restart[a-z]* (the |its |a |real
+     |node-local |stage )*counter|generation restarts` — one line, wrapped here
+     for width exactly as family D's own command line is. `grep -c -i -E '<Ps>'
+     $F` → **47**; occ **54** / folded **71** / non-meta **14** / folded non-meta
+     **20**. Family **D** at the same five: **18** / **24** / **33** / **4** / **6**.
+     `Ps` **contains family D's pattern as its leading alternation**, so its hit
+     set contains family D's by construction and every layer subtracts cleanly.
+     That is what makes this a **subtraction** rather than a second reading
+     exercise, and it is the property the looser pattern is chosen for.
+     **(ii-b)'s first half is `Ps − D` at the folded layer** — the only layer
+     that sees both the residue and the line-wrapped part of it:
+     **71 − 33 = 38 occurrences**. They decompose two ways, and each
+     decomposition is a check on the enumeration below. By **visibility**:
+     line-command-visible **30** (`occ(Ps) − occ(D)` = 54 − 24) **+**
+     wrap-hidden **8** (`(folded − occ)(Ps) − (folded − occ)(D)` = 17 − 9)
+     **= 38**. By **region**: meta **24** **+** non-meta **14**
+     (`folded∩non-meta(Ps) − folded∩non-meta(D)` = 20 − 6) **= 38**.
+     **The 14 non-meta occurrences, across eleven sites, enumerated in full:**
      - *(a)* **§0's `stage-counter-untrusted` bullet** — "so neither restarts
-       the stage counter", stated normatively as one of the load-bearing
-       statements of the fact V24-M3 corrected. Missed by family D on the
-       *stage*-qualified spelling; correct as written (V30-m2).
-     - *(a)* the **revision-24 changelog block**'s V24-M3 entry — "restarts the
-       stage counter", quoting the withdrawn premise inside the entry that
-       withdraws it. Missed on the same spelling; correct as written (V30-m2).
-     - *(a)* the **Quint model's state bullet** — "Neither mandated wipe sequence
-       restarts the real counter", stating the corrected fact about the `wipe`
-       action's declared over-approximation. Missed on the same spelling;
-       correct as written (V30-m2).
+       the stage counter": the normative statement, missed by family D on the
+       *stage*-qualified spelling (V30-m2).
+     - *(a)* **§0's gate-1 wipe-sequence derivation** — "the wipe does not
+       destroy the node-local identity store, and therefore does not restart the
+       stage counter", **wrapped** at the line break as well as spelled with the
+       bare infinitive. **This is the site the rest of the document defers to**
+       ("stated at gate 1"), and no recorded command had ever seen it.
+     - *(a)* **§0's V20-C1 necessity re-derivation** — "that later record would
+       be minted from a restarted counter": the hazard in the counterfactual
+       voice.
+     - *(a)* **§0's two-write clearing rule** — **four** occurrences: the
+       necessity trace's *restarted counter* named in the V29-M4 marker; "what
+       licenses *restarting the counter*"; "a restarted counter is unsafe only
+       if some live operand still carries an id at or above the restarted
+       value"; and "writing the counter alone would restart the counter while
+       the node still refuses every mint". These are **not** contrary claims:
+       the restart they license is this design's own clearing write
+       `stage_counter = 0`, not anything a wipe does. Untouched by this
+       revision.
+     - *(a)* **§0's (β)-path re-derivation** — "across the single-member in-band
+       wipe the generation restarts": the **generation** subject, which (β)
+       genuinely does restart.
+     - *(a)* **§0's harmlessness paragraph** — "the restarted counter is
+       harmless and the node stages normally": the same licensed-clearing sense.
+     - *(a)* **the record-binding conjunct's fence-freshness row** — "across the
+       (β) single-member in-band wipe the generation restarts": the same
+       generation subject, and the ground of the row's canonical-generation
+       declaration.
+     - *(a)* **the Quint model's state bullet** — "Neither mandated wipe sequence
+       restarts the real counter", about the `wipe` action's relabelled
+       composite (V30-m2).
+     - *(a)* **the Quint model's composite-witness sentence** — "restarting the
+       counter **without** entering the untrusted state": the effect of the
+       modelled composite, not of the mandated wipe.
+     - *(a)* **the *Quint rework* section's kill re-examination** — "the
+       mandated wipe sequences do not restart the counter", **wrapped**; the
+       **same section** as the state bullet above, which is how a reading of the
+       section missed it.
+     - *(a)* **the *Testing* section's forcing-test producer paragraph** — "the
+       mandated wipe sequences do not restart the node-local stage counter",
+       **wrapped**.
+     **The 24 meta occurrences are disposed as a class** by the `(m)`
+     rule — this rule's own pattern strings, this table's quotations of the
+     sites just listed, and the dated history blocks' records of the same
+     findings (the v23, v24, v29 and v30 blocks) — **except one, which states a
+     live claim and therefore takes a disposition of its own**: *(a)* the
+     **revision-24 changelog block**'s V24-M3 entry, "revision 23 discovered
+     that neither mandated sequence **restarts the stage counter**" — **stating
+     the corrected fact in the entry that establishes it**, in the
+     *stage*-qualified spelling family D does not carry (**V31-M1** — revision
+     30 described this site as "quoting the withdrawn premise inside the entry
+     that withdraws it", which the site's own text falsifies: the withdrawn
+     premise is *that the wipe restarts the counter*, and the entry never states
+     it — it states the negation, in the same construction as §0's bullet listed
+     above it, which is what this list's own header called all three of its
+     entries. The construction revision 30 named is real and
+     **disposition-bearing** — it is the stated ground of family A's
+     blast-radius revision-20 `(a)` and of family C's `(a)` class — which is why
+     attributing it to a site that does not carry it is a false disposition
+     claim in the one table whose purpose is that dispositions be checkable
+     against text, and not a wording slip. A genuine instance of the
+     construction is the live-claim rule above, quoting revision 29's superseded
+     "the two such sites" sentence inside the paragraph that replaces it.)
+     **(D-i) — the inverted and other-object class**: `restarts` with its
+     subject in front of it, which no `restarts …` pattern can reach. Recorded
+     command, with `Pi` written for the pattern `(counter|generation|wipe)
+     restarts`: `grep -c -i -E '<Pi>' $F` → **28**; occ **28** / folded **31** /
+     non-meta **5** / folded non-meta **7**.
+     `Pi` does **not** contain family D's pattern — the two overlap in text but
+     neither decomposition refines the other, so a subtraction would not be a
+     set difference and is not claimed. Its hit set is therefore enumerated
+     **whole**: **24 meta + 7 non-meta = 31**, the non-meta half being the
+     recorded fifth layer rather than a reading.
+     The 7 non-meta occurrences, across **six** sites, are:
+     - *(a)* **§0's gate-1 V24-M3 sweep passage** — **two** occurrences: "the
+       mandated wipe restarts the counter" (the `admitted_stage` writer cell)
+       and, **wrapped**, "Across the mandated wipe the counter restarts" (the
+       adoption-fence row). Both are false sites the passage quotes in order to
+       sweep them, and each quotation carries its own correction. **New in
+       revision 31**: no earlier revision's part (ii) held this site, because no
+       recorded command reached the inverted spelling and reading did not find
+       it.
+     - *(a)* **§0's retired-enumeration paragraph** — "a node-local counter the
+       TR-CLUSTER-005 rejoin wipe restarts", the V28-M10 sentence's **quotation
+       of the revision-20 changelog entry** listed as `(c)` below. It sits four
+       lines above this rule's opening sentence and is therefore **non-meta by
+       the recorded boundary**, which is the honest place for it: it states what
+       the history entry asserts, in order to say the entry is now marked.
+       **New in revision 31**, on the same grounds as the site above it.
+     - *(a)* **gate 3 (d)'s V28-m2 note** — "neither mandated wipe restarts the
+       counter". **Already carried**: it is family D's wrapped hit,
+       dispositioned in **(ii-a)**.
+     - *(a)* **§0's (β)-path re-derivation** and *(a)* **the record-binding
+       conjunct's fence-freshness row** — the two "the generation restarts"
+       occurrences. **Already carried** by `Ps`, dispositioned above.
+     - *(a)* **the drain machinery's observation bound** (*Slot handoff*,
+       V6-C2/M4 with V7-C3) — "the counter restarts at 0 when
+       `ConfirmSlotHandoffDrained` applies". **A different counter entirely**:
+       the leader-observation counter of the draining sub-states, not the
+       node-local stage counter. The **unrelated sense**, out of this family's
+       scope exactly as family C's non-defective hits are.
+     **The 24 meta occurrences of `Pi` are disposed as a class** by the
+     `(m)` rule, **except the three history-block sites that keep or state a
+     claim** — revision 30 dispositioned these three by reading, and the
+     dispositions stand:
      - *(c)* the **revision-20 changelog block**'s V20-C1 entry — "a node-local
        counter the TR-CLUSTER-005 rejoin **wipe restarts**" — keeps its wrong
        premise and carries the *premise withdrawn by V24-M3* marker (V28-M10).
-       Missed by `the wipe restarts` (the phrase is "rejoin wipe restarts").
      - *(c)* the **revision-23 changelog block**'s entry — this document's dozen
        "the **counter restarts** across the wipe" claims called *conservative
        rather than wrong* — keeps its overturned verdict and carries the *verdict
-       overturned by V24-M3* marker (V28-M10). Missed by `restarts the counter`
-       (the spelling is inverted).
+       overturned by V24-M3* marker (V28-M10).
      - *(a)* the **revision-25 changelog block**'s V25-M2 entry — "the
        single-member in-band **wipe restarts** the registration generation" — a
        different subject (the **generation**, which (β) genuinely does restart)
        and correct as written.
+     **The other five families' residue classes are probed, not assumed** — the
+     step that keeps "empty" from becoming the next remembered claim. Each probe
+     is run over the **folded** stream and compared against the family's folded
+     count:
+     - **(A)** `out[- ]?of[- ]?band` → **100**, identical to family A's folded
+       **100**. **Empty residue**: the optional-separator forms are exactly what
+       the family's two alternatives already carry, and no third form occurs.
+     - **(B)** `restor[a-z]* .{0,24}out[- ]of[- ]band` → **11** against family
+       B's folded **8**. The **three** extras are: this table's own description
+       of the v21 markup-split site, `(m)`; **this bullet's own** quotation of
+       the blast-radius phrase, `(m)`; and *Spec / impl blast radius*'s
+       "restoring a directory out of band" — **already carried by family A**, on
+       whose hit line it sits. Nothing uncarried.
+     - **(C)** `below (a|the|any|some) [a-z -]{0,24}(value|id|ids)|already
+       (spent|floored|issued|minted)` → **32** against family C's folded **29**.
+       The **three** extras are all one phrase — "below a **spent** value" — in
+       the v21 changelog block, in this table's quotation of it, and in **this
+       bullet's own** quotation: all three `(m)`, in the head region or in this
+       block.
+     - **(E)** `in-protocol operand` → **12**, against family E's folded **11**
+       — and here the comparison must be made against the family's **occ 12**
+       instead, because E's folded number is the one the bounded wildcard
+       depresses (deviation **(d2)**), so a raw folded-against-folded reading
+       would manufacture a residue that is really the merge. Of the twelve, four
+       are not family-E hits: the (ii-a) quotation of the wrapped site, `(m)`;
+       **this bullet's** pattern string and its quotation, both `(m)`; and the
+       **counter-statement** sense — "An in-protocol operand demonstrably
+       survives" in §0's `FutureLayout` derivation — which asserts the opposite
+       of the withdrawn reason and is out of the family's scope. Nothing
+       uncarried.
+     - **(F)** `touch[a-z]* (neither|no) (filesystem|file system)|opens no file`
+       → **17** against family F's folded **14**. The **three** extras are all
+       the second alternative: family F's own entry above, verifying the apply
+       arm; **this bullet's** pattern string; and this bullet's quotation, "which
+       opens no file — verified in the tree". All three `(m)`.
      **Gate 3 (d)'s V28-m2 note** — "neither mandated **wipe restarts the**
        counter", correct as written and missed on line layout alone — was
        revision 29's fourth part-(ii) site and is now in **(ii-a)**, because the
@@ -3905,8 +4192,13 @@ when it is not):
        a second wrapped site (§0's marker-deletion note, family E) came to be
        named in a family entry as a hit it was not. The obligation is discharged:
        the fold is a recorded command, and the class it exposes is a subtraction.
-       What survives as evidence is **(ii-b)**: folding and markup-stripping
-       cannot reach a site the pattern does not spell.
+       **What survives as evidence is (ii-b), and it is no longer a reading**:
+       folding and markup-stripping cannot reach a site the pattern does not
+       **spell**, so the residue is reached by *widening the pattern* and
+       subtracting. The phrase families are still a **filter, not a proof** —
+       but the size of what they filter out is now a published number with a
+       command beside it, and the honest form of the incompleteness claim is
+       that measurement rather than a list of exemplars.
      **No rule in this design depends on
      the counter restarting**, and none may be added that does: a rule that
      needed a counter reset would need a writer that deletes the store, which
