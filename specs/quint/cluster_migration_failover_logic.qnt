@@ -20,7 +20,29 @@
 // (handoff barrier arm/release). Per-definition comments carry the ruling/amendment or
 // the redesign extension (`ext-N`) each encodes; the model-wide header lives in
 // cluster_migration_failover.qnt.
+//
+// Single responsibility: the pure, state-argument-taking half of the model.
+//   Belongs here:     `can<Transition>` admission guards, `apply<Transition>` postcondition
+//                     updates, the `is*`/`has*`/`*Ok` predicates they are built from, and
+//                     the small shared helpers — every one a `pure def` over explicitly
+//                     passed state.
+//   Does NOT belong:  `var` declarations, `action`s, frame keepers, `init`/`step`
+//                     (cluster_migration_failover_machine.qnt); invariants, witnesses and
+//                     `run` tests (cluster_migration_failover.qnt); type and constant
+//                     declarations (the two `*types` modules).
+//
+// Naming convention (shared with cluster_admission_logic.qnt):
+//   `can<Transition>` — the admission guard of the machine action of the same name. One
+//                       per admissible transition; the action's job is then "check
+//                       `can*`, write `apply*`".
+//   `apply<X>`        — a pure postcondition update returning the new value(s).
+//   `is*` / `has*`    — a standalone state predicate, reusable in several guards.
+//   `*Ok`             — a named *conjunct* of a larger admission guard (`fenceOk`,
+//                       `beltOk`, `identityOrderOk`, `demotionFenceOk`), never a guard in
+//                       its own right.
+//   `*Of` / `*sOf`    — a derived set or projection (`movedSlotsOf`, `replicasOf`, ...).
 module cluster_migration_failover_logic {
+  import cluster_common_types.* from "./cluster_common_types"
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
 
   // The bundle `applyFailoverCommon` (and the demotion transitions that share its
@@ -48,6 +70,37 @@ module cluster_migration_failover_logic {
   pure def ownsAnySlot(slotMap: SlotId -> Option[NodeId], n: NodeId): bool =
     SLOTS.exists(s => slotMap.get(s) == Some(n))
 
+  // ---------------------------------------------------------------------------
+  // Node-shape predicates — the three phrases nearly every guard below is built out of.
+  // Named once so a guard reads as spec prose ("a live primary that still owns a slot")
+  // rather than as an open-coded conjunction repeated a dozen times, and so a change to
+  // what "live primary" means is one edit rather than a sweep.
+  // ---------------------------------------------------------------------------
+
+  // A current member holding the Primary role. The single most-repeated phrase in the
+  // model: it is the shape `Complete` requires of its target (V6-C2/V10-C3), the shape
+  // every release action requires of its acting source (V11-C1), the shape `beltOk` and
+  // `canDemoteNode` require of the node being demoted, and the shape `shardPrimary` walks
+  // for.
+  pure def isLivePrimary(allNodes: NodeId -> NodeState, n: NodeId): bool =
+    allNodes.get(n).member and allNodes.get(n).role == Primary
+
+  // A live primary that still owns at least one slot — the shape a failover/demotion has
+  // something to *move*, and the arming precondition of the failover fence.
+  pure def isSlotOwningPrimary(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                               n: NodeId): bool =
+    isLivePrimary(allNodes, n) and ownsAnySlot(slotMap, n)
+
+  // `succ` is a current member, a Replica, and parented at `p` — the *shard relationship*
+  // both `beltOk` and `canDemoteNode` require of a successor. Checking it directly is
+  // V9-C1's rule: a cross-shard successor is refused at admission, never derived by a
+  // post-write `shardPrimary` walk.
+  pure def isInShardReplicaOf(allNodes: NodeId -> NodeState, succ: NodeId, p: NodeId): bool = and {
+    allNodes.get(succ).member,
+    allNodes.get(succ).role == Replica,
+    allNodes.get(succ).parent == Some(p),
+  }
+
   // The slots a failover/demotion of `old` moves — the set the graceful barrier must
   // have covered (TR-CLUSTER-018's "Ownership barrier armed over the moved slots").
   pure def movedSlotsOf(slotMap: SlotId -> Option[NodeId], old: NodeId): Set[SlotId] =
@@ -67,9 +120,9 @@ module cluster_migration_failover_logic {
   // that is a live primary. `retargetSlotResidue` (ext-12) is level-triggered on this
   // being a live primary other than the entry's current `source`.
   pure def shardPrimary(allNodes: NodeId -> NodeState, n: NodeId): Option[NodeId] =
-    if (allNodes.get(n).member and allNodes.get(n).role == Primary) Some(n)
+    if (isLivePrimary(allNodes, n)) Some(n)
     else match allNodes.get(n).parent {
-      | Some(p) => if (allNodes.get(p).member and allNodes.get(p).role == Primary) Some(p) else None
+      | Some(p) => if (isLivePrimary(allNodes, p)) Some(p) else None
       | None => None
     }
 
@@ -148,6 +201,17 @@ module cluster_migration_failover_logic {
   pure def canAct(allNodes: NodeId -> NodeState, n: NodeId): bool =
     allNodes.get(n).member and allNodes.get(n).booted
 
+  // ext-11's target-side escapes, named because every target-driven action repeats them:
+  // `silent` is the alive-but-unable-to-*act* mirror (it may not propose a replicated
+  // report at all), and `cannot_apply` additionally stops it ingesting locally. Two names
+  // rather than one because `reportTargetIngest` is gated by only the first — a target that
+  // cannot apply may still truthfully report what it already holds.
+  pure def canTargetAct(allNodes: NodeId -> NodeState, t: NodeId): bool =
+    canAct(allNodes, t) and not(allNodes.get(t).silent)
+
+  pure def canTargetApply(allNodes: NodeId -> NodeState, t: NodeId): bool =
+    canTargetAct(allNodes, t) and not(allNodes.get(t).cannot_apply)
+
   // ext-10 (V8-C1): the join gate. A node whose main keyspace is non-empty is refused —
   // with the self-cleanse gone, an untracked stale copy must never enter the membership.
   pure def canMeetNode(allNodes: NodeId -> NodeState, n: NodeId): bool = and {
@@ -167,7 +231,7 @@ module cluster_migration_failover_logic {
     allNodes.get(n).member and (
       if (role == Primary) parent == None
       else match parent {
-        | Some(p) => p != n and allNodes.get(p).member and allNodes.get(p).role == Primary
+        | Some(p) => p != n and isLivePrimary(allNodes, p)
         | None => true
       }
     )
@@ -206,7 +270,7 @@ module cluster_migration_failover_logic {
   // ext-18: an `Ordering` refusal against an **absent stored identity** (arm 4b) and a
   // `Membership` refusal (arm 5) are the design's declared *terminal* classes — the ones
   // that must clear the record, drop the fence and pay the client.
-  pure def refusalIsTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
+  pure def isRefusalTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
     class == Membership or (class == Ordering and stored == None)
 
   // ext-18: the paired record-binding conjunct. A refusal is disposed against the
@@ -217,7 +281,7 @@ module cluster_migration_failover_logic {
 
   // ext-18: the clearing clause, level-triggered — enabled whenever the record's staged
   // registration no longer matches the live cell (or the node has left the membership).
-  pure def recordIsStale(ns: NodeState): bool =
+  pure def isRecordStale(ns: NodeState): bool =
     match ns.record {
       | Some(rec) => ns.registration_seq != Some(rec.staged_reg_seq) or not(ns.member)
       | None => false
@@ -230,11 +294,11 @@ module cluster_migration_failover_logic {
   // TR-CLUSTER-008, ruled (issue 16): refused outright while a migration is open for
   // the slot — no mutation-while-migrating. Extended for ext-12: a slot carrying a
   // residue entry is likewise not re-assignable until the entry is cleared.
-  pure def canAssignSlot(migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
-                         target: NodeState, s: SlotId): bool = and {
+  pure def canAssignSlot(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
+                         res: SlotId -> Option[Residue], s: SlotId, n: NodeId): bool = and {
     migs.get(s) == None,
     res.get(s) == None,
-    target.member,
+    allNodes.get(n).member,
   }
 
   // TR-CLUSTER-009, same ruled precondition as TR-CLUSTER-008 (issue 16).
@@ -250,14 +314,14 @@ module cluster_migration_failover_logic {
   // (`source_gone`/`target_gone`) entry blocks `Begin` exactly as an unmarked one does
   // (V7's kept-entry semantics; `witnessBeginRefusedOverResidue` is its witness).
   // No target-role precondition — see the main file's header note on why.
-  pure def canBeginMigration(slotMap: SlotId -> Option[NodeId], migs: SlotId -> Option[Migration],
-                             res: SlotId -> Option[Residue], targetNode: NodeState,
+  pure def canBeginMigration(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                             migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
                              s: SlotId, source: NodeId, target: NodeId): bool = and {
     slotMap.get(s) == Some(source),
     migs.get(s) == None,
     res.get(s) == None,
     source != target,
-    targetNode.member,
+    allNodes.get(target).member,
   }
 
   pure def newMigration(id: MigrationId, source: NodeId, target: NodeId,
@@ -349,7 +413,7 @@ module cluster_migration_failover_logic {
   //   - the target being a Primary (ext-12/V10-C3 — dropping this conjunct and demoting
   //     the target mid-Draining lands a slot on a Replica).
   // No wall-clock `barrier_ms` window appears anywhere in this guard.
-  pure def canComplete(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
+  pure def canCompleteMigration(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
                        s: SlotId, attempt: int, countReplicas: bool): bool =
     match migs.get(s) {
       | Some(m) => and {
@@ -357,8 +421,7 @@ module cluster_migration_failover_logic {
           m.attempt > 0,
           m.phase == Draining,
           m.fenced,
-          allNodes.get(m.target).member,
-          allNodes.get(m.target).role == Primary,
+          isLivePrimary(allNodes, m.target),
           match m.drained_pos {
             | Some(d) => and {
                 d.run_id == m.source_log.run_id,
@@ -379,11 +442,10 @@ module cluster_migration_failover_logic {
   // serving-primary guard — the acting source must still own the slot and still be a
   // Primary. Dropping it from either release action and scheduling it after a demotion
   // apply executes held writes on a demoted source (forked history).
-  pure def servingPrimary(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+  pure def isServingPrimary(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                           m: Migration, s: SlotId): bool = and {
     slotMap.get(s) == Some(m.source),
-    allNodes.get(m.source).member,
-    allNodes.get(m.source).role == Primary,
+    isLivePrimary(allNodes, m.source),
   }
 
   // TR-CLUSTER-014, ruled (issue 17): the prepared attempt exists with matching stamp;
@@ -392,7 +454,7 @@ module cluster_migration_failover_logic {
   pure def canAbortHandoff(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                            migs: SlotId -> Option[Migration], s: SlotId, attempt: int): bool =
     match migs.get(s) {
-      | Some(m) => and { m.attempt == attempt, m.attempt > 0, servingPrimary(allNodes, slotMap, m, s) }
+      | Some(m) => and { m.attempt == attempt, m.attempt > 0, isServingPrimary(allNodes, slotMap, m, s) }
       | None => false
     }
 
@@ -400,10 +462,10 @@ module cluster_migration_failover_logic {
   // nothing to stream back — Cancel simply removes the record (the target's shadow is
   // discarded separately by `discardShadow`, whose guard is §5's stated predicate).
   // ext-3 stamps it with the attempt so a stale cancel is refused.
-  pure def canCancel(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+  pure def canCancelMigration(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                      migs: SlotId -> Option[Migration], s: SlotId, attempt: int): bool =
     match migs.get(s) {
-      | Some(m) => m.attempt == attempt and servingPrimary(allNodes, slotMap, m, s)
+      | Some(m) => m.attempt == attempt and isServingPrimary(allNodes, slotMap, m, s)
       | None => false
     }
 
@@ -417,17 +479,17 @@ module cluster_migration_failover_logic {
   // The **narrowed** reset (V5-M1): only *actual* ingest progress resets the counter.
   // v4's "(or `drained_pos` unset)" arm is gone — it made a source that never proposes
   // `Confirm` (`sourceCannotDrain`) wedge the counter forever.
-  pure def observedProgress(m: Migration): bool =
+  pure def hasObservedProgress(m: Migration): bool =
     match m.last_observation {
       | Some(p) => m.target_copy.pos > p
       | None => true
     }
 
   pure def applyReconcileTick(m: Migration): Migration =
-    if (observedProgress(m)) { ...m, observations: 0, last_observation: Some(m.target_copy.pos) }
+    if (hasObservedProgress(m)) { ...m, observations: 0, last_observation: Some(m.target_copy.pos) }
     else { ...m, observations: m.observations + 1 }
 
-  pure def abortableByBound(m: Migration): bool = m.observations >= observationBound(m)
+  pure def isAbortableByBound(m: Migration): bool = m.observations >= observationBound(m)
 
   // ---------------------------------------------------------------------------
   // ext-7/ext-8/ext-12: keyspace, shadow, residue.
@@ -558,34 +620,55 @@ module cluster_migration_failover_logic {
   // substituted by an empty candidate).
   pure def beltOk(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                   old: NodeId, succ: NodeId, requireSynced: bool): bool = and {
-    allNodes.get(old).member,
-    allNodes.get(old).role == Primary,
-    ownsAnySlot(slotMap, old),
-    allNodes.get(succ).member,
-    allNodes.get(succ).role == Replica,
-    allNodes.get(succ).parent == Some(old),
+    isSlotOwningPrimary(allNodes, slotMap, old),
+    isInShardReplicaOf(allNodes, succ, old),
     not(requireSynced) or allNodes.get(succ).synced,
+  }
+
+  // The fence-and-belt admission every failover path shares, named so the three failover
+  // actions differ only by what they add: `failoverGraceful` adds the drain/parity barrier
+  // (`barrierCoversMovedSlots`), `failoverAuto` the FAIL flag, `failoverForced` nothing but
+  // `requireSynced: false`. The `defects.fence` ghost deliberately does NOT go through this
+  // predicate — it recomputes `fenceOk` itself, so a mutant weakening the guard is still
+  // caught (see `inv_last_failover_fenced`).
+  pure def canApplyFailover(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                            old: NodeId, succ: NodeId, requireSynced: bool,
+                            obsEpoch: int, obsRole: RoleTag): bool = and {
+    beltOk(allNodes, slotMap, old, succ, requireSynced),
+    fenceOk(allNodes.get(old), allNodes.get(old).epoch_own, obsEpoch, obsRole),
+  }
+
+  // Issue 26, ruled: the graceful path's extra conjunct — the drain/parity barrier must be
+  // armed over **every slot about to move**, not merely armed. Both halves matter: an empty
+  // fence would satisfy `subseteq` vacuously whenever the old primary owns no slots.
+  pure def barrierCoversMovedSlots(slotMap: SlotId -> Option[NodeId], fence: Set[SlotId],
+                                   old: NodeId): bool = and {
+    fence != Set(),
+    movedSlotsOf(slotMap, old).subseteq(fence),
   }
 
   // ext-12 (V6-C3/V9-C1): `demoteNode`'s own precondition. The successor is checked for
   // the **shard relationship** directly (a cross-shard `new_primary_id` is refused at
   // admission, never derived by a post-write `shard_primary` walk).
   pure def canDemoteNode(allNodes: NodeId -> NodeState, n: NodeId, succ: NodeId): bool = and {
-    allNodes.get(n).member,
-    allNodes.get(n).role == Primary,
+    isLivePrimary(allNodes, n),
     n != succ,
-    allNodes.get(succ).member,
-    allNodes.get(succ).role == Replica,
-    allNodes.get(succ).parent == Some(n),
+    isInShardReplicaOf(allNodes, succ, n),
   }
 
   // ext-12 (V7-m7 + V8-C6): the successor-less demotion — role -> Replica, `primary_id`
   // -> None, no promotion in the step — with the **whole-refusal** when the node still
   // owns slots (there is no successor to re-home them to, and leaving them assigned to a
   // node about to become a Replica would violate `inv_slots_only_assigned_to_primaries`).
-  pure def canDemoteNodeExternal(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId], n: NodeId): bool = and {
-    allNodes.get(n).member,
-    allNodes.get(n).role == Primary,
+  pure def canDemoteNodeExternal(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                                 n: NodeId): bool = and {
+    isLivePrimary(allNodes, n),
     not(ownsAnySlot(slotMap, n)),
   }
+
+  // TR-CLUSTER-024/025's arming precondition, named for symmetry with the failover guards
+  // it feeds: only a live primary that still owns slots has a drain/parity barrier to arm.
+  pure def canArmFailoverFence(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                               n: NodeId): bool =
+    isSlotOwningPrimary(allNodes, slotMap, n)
 }

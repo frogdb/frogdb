@@ -4,15 +4,23 @@
 // emptiness gates TR-CLUSTER-005's amended MEET refusal, and the per-node record the
 // TR-CLUSTER-035 reset hazard leaves residue in.
 //
-// No state variables and no logic live here — see cluster_admission.qnt (the runnable
-// main model) for the full "Rows modeled" header and the four-file layout note.
+// Single responsibility: the *shape* of this model's state and the constants that bound
+// it — nothing that reads or writes state.
+//   Belongs here:     type declarations, sizing constants (`NODES`).
+//   Does NOT belong:  `var`s, guards, updates, invariants, witnesses, tests. Guards and
+//                     updates live in cluster_admission_logic.qnt; the `var` and the
+//                     actions in cluster_admission_machine.qnt; everything checkable in
+//                     cluster_admission.qnt (the runnable main model, which also carries
+//                     the full "Rows modeled" header and the layout note).
+//   Shared with the migration model: `NodeId` and `Option` come from
+//                     cluster_common_types.qnt. Anything below is admission-specific by
+//                     construction — if a definition here ever becomes genuinely identical
+//                     to a migration one, it moves to the common module rather than being
+//                     copied.
 module cluster_admission_types {
-  type NodeId = int
-  type ClusterId = int
+  import cluster_common_types.* from "./cluster_common_types"
 
-  // Local Option — see the deviations note in cluster_admission.qnt's header for why
-  // this isn't basicSpells'.
-  type Option[a] = Some(a) | None
+  type ClusterId = int
 
   // The persisted, node-local bootstrap-vs-join decision (state-space row
   // "Bootstrap-vs-join intent"): written once at the first mode decision, never
@@ -35,5 +43,8 @@ module cluster_admission_types {
     raft_origin: Option[ClusterId],
   }
 
+  // This model's node universe — a bounded-checking sizing knob, deliberately NOT shared
+  // with the migration model even though the two agree on 4 today (see
+  // cluster_common_types.qnt's "does not belong here" note).
   pure val NODES: Set[NodeId] = Set(1, 2, 3, 4)
 }

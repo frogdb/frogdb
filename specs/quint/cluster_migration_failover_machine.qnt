@@ -22,7 +22,56 @@
 // Frame discipline: Quint requires every action to assign every variable, so the
 // "keeper" actions below (`keepGraph`, `keepMigAll`, ...) name the unchanged groups.
 // Each action lists exactly the keepers for what it does not write; nothing is implicit.
+// Two frames recur often enough to be named from the *written* side instead —
+// `nodesOnly` and `migrationsOnly` — and two multi-variable postconditions likewise
+// (`releaseHoldRegion`, `releaseLocalFence`); all four are defined with the keepers and
+// expand to exactly the assignments they replace.
+//
+// Single responsibility: the wiring — which variables each transition writes, and which
+// nondeterministic choices `step` offers.
+//   Belongs here:     `var` declarations, `init`, frame keepers, one `action` per modeled
+//                     transition, `stutter`, `step`, and the `step` candidate-set values.
+//   Does NOT belong:  guard or update *logic* — an action here should read as "check
+//                     `can*`, write `apply*`", with any new multi-conjunct condition given
+//                     a name in cluster_migration_failover_logic.qnt rather than open-coded
+//                     here; invariants, witnesses and `run` tests
+//                     (cluster_migration_failover.qnt); types and constants (the two
+//                     `*types` modules). This module must never declare a `val inv_*` —
+//                     scripts/quint-models.sh would promote the file to a runnable main
+//                     model, which it is not.
+//
+// Navigation — the sections below, in file order. Adding an action means picking the
+// section its family already lives in rather than appending at the end:
+//   State / Frame keepers / Shared barrier postconditions / Init / Shared derived values
+//   Membership and identity      — meetNode, removeNode, resetCluster, setRole,
+//                                  reportRunIdentity, loseIncarnationCounter,
+//                                  attestReplicaSynced
+//   Pending-transition record    — stageFlip, observeRefusal, clearStaleRecord,
+//                                  completeAdoption
+//   Slot map                     — assignSlot, removeSlot
+//   Migration lifecycle          — beginMigration, prepareHandoff
+//   Handoff barrier / hold       — feedBuffer, disconnectFeed, localReleaseOnCapBreach,
+//                                  selfFenceRelease
+//   Stream and target ingest     — sourceWrite, applyAtTarget, makeTargetDurable,
+//                                  reportTargetIngest
+//   Target-side replicas         — feedTargetReplica, reportReplicaAck,
+//                                  attachTargetReplica, detachTargetReplica,
+//                                  crashDuringShadowSection
+//   Migration lifecycle (cont.)  — confirmDrained, coverageBatch, batchFault,
+//                                  reconcileTick, boundAbort, completeMigration,
+//                                  abortHandoff, cancelMigration
+//   Shadow, promotion, rollback  — relabelShadow, reportPromoted, failPromotion,
+//                                  discardShadow
+//   Reaper and residue arms      — reapSlots, clearSlotResidue, retargetSlotResidue
+//   Roles, failover, demotion    — markNodeFailed, markNodeRecovered, armFailoverFence,
+//                                  failoverGraceful, failoverAuto, failoverForced,
+//                                  demoteNode, demoteNodeExternal
+//   Restarts and run re-minting  — sourceRestart, targetRestart, sourceFailover
+//   Escape flags and knobs       — setSourceCannotApply, setSourceCannotDrain,
+//                                  setTargetSilent, setCountedReplicasKnob
+//   step
 module cluster_migration_failover_machine {
+  import cluster_common_types.* from "./cluster_common_types"
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
   import cluster_migration_failover_logic.* from "./cluster_migration_failover_logic"
 
@@ -107,6 +156,46 @@ module cluster_migration_failover_machine {
   // checker requires both arms to update the same variables, so "this case is not
   // enabled" has to be spelled with the full frame attached.
   action nope = all { false, keepGraph, keepMigAll, keepBar, keepAux, keepCtl }
+
+  // The two frames named from the *written* side rather than the kept side, because a
+  // third of the actions below use one of them verbatim. `nodesOnly(m)` is exactly
+  // "`nodes' = m` and nothing else changes"; `migrationsOnly(m)` likewise for the
+  // migration map. Spelling them once keeps the frame discipline above intact (the
+  // expansion is still explicit, just written down in one place) and makes "which
+  // variables does this transition touch?" answerable from the action's first line.
+  action nodesOnly(m: NodeId -> NodeState): bool = all {
+    nodes' = m,
+    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+  }
+
+  action migrationsOnly(m: SlotId -> Option[Migration]): bool = all {
+    migrations' = m,
+    keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shared postconditions over the barrier/hold variables.
+  // ---------------------------------------------------------------------------
+
+  // The full teardown of slot `s`'s hold region at source `src`: the barrier is disarmed,
+  // the feed's disconnected mark cleared, the source's held writes for the slot released
+  // and its buffered bytes dropped. Shared verbatim by every action that *resolves* the
+  // handoff — `completeMigration`, `abortHandoff`, `cancelMigration`, `boundAbort`.
+  action releaseHoldRegion(s: SlotId, src: NodeId): bool = all {
+    barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)),
+                  disconnected: barriers.disconnected.exclude(Set(s)) },
+    held' = held.set(src, held.get(src).exclude(Set(s))),
+    feed_bytes' = feed_bytes.set(s, 0),
+  }
+
+  // The *local* release (ext-2/ext-11): the source drops its own fence and empties the
+  // whole hold region, but the feed's `disconnected` mark is deliberately NOT cleared —
+  // nothing reconnected it. Shared by `localReleaseOnCapBreach` and `selfFenceRelease`.
+  action releaseLocalFence(s: SlotId, src: NodeId): bool = all {
+    barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)) },
+    held' = held.set(src, held.get(src).exclude(Set(s))),
+    feed_bytes' = feed_bytes.set(s, 0),
+  }
 
   // ---------------------------------------------------------------------------
   // Init.
@@ -266,8 +355,7 @@ module cluster_migration_failover_machine {
   // TR-CLUSTER-004.
   action setRole(n: NodeId, role: RoleTag, parent: Option[NodeId]): bool = all {
     canSetRole(nodes, n, role, parent),
-    nodes' = nodes.set(n, writeParentPointer(nodes.get(n), role, parent, false, None, None)),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, writeParentPointer(nodes.get(n), role, parent, false, None, None))),
   }
 
   // ext-15: the kind-stamped identity report. The Boot arm lifts the boot-ordering
@@ -300,7 +388,7 @@ module cluster_migration_failover_machine {
         else match ns.record {
           | Some(rec) => refusals.union(Set({
               node: n, stage_id: rec.stage_id, reg_seq: rec.staged_reg_seq,
-              class: cls, terminal: refusalIsTerminal(ns.stored_identity, cls) }))
+              class: cls, terminal: isRefusalTerminal(ns.stored_identity, cls) }))
           | None => refusals
         },
       keepSlots, keepMigAll, keepBar, keepHistory, keepSpent, keepDefects, keepCoverage, keepCtl,
@@ -312,8 +400,7 @@ module cluster_migration_failover_machine {
   // trace the `Ordering` disposition arms exist for.
   action loseIncarnationCounter(n: NodeId): bool = all {
     nodes.get(n).incarnation > 0,
-    nodes' = nodes.set(n, { ...nodes.get(n), incarnation: 0, identity_seq: 0 }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), incarnation: 0, identity_seq: 0 })),
   }
 
   // ext-16: the replica's attestation that it holds the shard's data, fenced on the
@@ -325,8 +412,7 @@ module cluster_migration_failover_machine {
     nodes.get(n).parent == Some(obsPrimary),
     nodes.get(n).parent_seq == obsParentSeq,
     nodes.get(n).registration_seq == Some(obsRegSeq),
-    nodes' = nodes.set(n, { ...nodes.get(n), synced: true }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), synced: true })),
   }
 
   // ---------------------------------------------------------------------------
@@ -343,12 +429,11 @@ module cluster_migration_failover_machine {
       ns.record == None,
       upstream != n,
       rs >= 0,
-      nodes' = nodes.set(n, {
+      nodesOnly(nodes.set(n, {
         ...ns, stage_counter: ns.stage_counter + 1, node_fenced: true, reply_emitted: false,
         record: Some({ kind: Demotion, upstream: upstream, stage_id: ns.stage_counter + 1,
                        staged_reg_seq: rs, adopted: false }),
-      }),
-      keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+      })),
     }
   }
 
@@ -380,9 +465,8 @@ module cluster_migration_failover_machine {
   // longer matches the live cell is cleared, the fence dropped and the client paid,
   // without waiting for a reply that will never come.
   action clearStaleRecord(n: NodeId): bool = all {
-    recordIsStale(nodes.get(n)),
-    nodes' = nodes.set(n, { ...nodes.get(n), record: None, node_fenced: false, reply_emitted: true }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    isRecordStale(nodes.get(n)),
+    nodesOnly(nodes.set(n, { ...nodes.get(n), record: None, node_fenced: false, reply_emitted: true })),
   }
 
   // ext-18: the staged flip lands only after the replicated admission stamped it.
@@ -390,8 +474,7 @@ module cluster_migration_failover_machine {
     val ns = nodes.get(n)
     all {
       match ns.record { | Some(rec) => rec.adopted | None => false },
-      nodes' = nodes.set(n, { ...ns, record: None, node_fenced: false, reply_emitted: true }),
-      keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+      nodesOnly(nodes.set(n, { ...ns, record: None, node_fenced: false, reply_emitted: true })),
     }
   }
 
@@ -402,7 +485,7 @@ module cluster_migration_failover_machine {
   // Assignment also gives the node the copy — the model has no separate "load the slot"
   // step, and without it no residue entry would ever be reapable.
   action assignSlot(s: SlotId, n: NodeId): bool = all {
-    canAssignSlot(migrations, residue, nodes.get(n), s),
+    canAssignSlot(nodes, migrations, residue, s, n),
     slots' = slots.set(s, Some(n)),
     nodes' = nodes.set(n, { ...nodes.get(n), keys: nodes.get(n).keys.union(Set(s)) }),
     keepMigAll, keepBar, keepAux, keepCtl,
@@ -422,7 +505,7 @@ module cluster_migration_failover_machine {
   // orphan from a pre-reset epoch, say) is discarded and re-minted under the new
   // migration id and the current reset epoch — an orphan must never wedge the ingest.
   action beginMigration(s: SlotId, source: NodeId, target: NodeId): bool = all {
-    canBeginMigration(slots, migrations, residue, nodes.get(target), s, source, target),
+    canBeginMigration(nodes, slots, migrations, residue, s, source, target),
     canAct(nodes, source),
     canAct(nodes, target),
     migrations' = migrations.set(s, Some(newMigration(ctl.next_mig, source, target,
@@ -457,6 +540,10 @@ module cluster_migration_failover_machine {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Handoff barrier and hold buffer (ext-2/ext-11).
+  // ---------------------------------------------------------------------------
+
   // TR-CLUSTER-033: the hold buffer fills while the barrier is armed.
   action feedBuffer(s: SlotId): bool = all {
     barrierArmed(s),
@@ -480,11 +567,9 @@ module cluster_migration_failover_machine {
       | Some(m) => all {
           barrierArmed(s),
           feed_bytes.get(s) > HOLD_BYTE_CAP,
-          servingPrimary(nodes, slots, m, s),
+          isServingPrimary(nodes, slots, m, s),
           migrations' = migrations.set(s, Some({ ...m, fenced: false })),
-          barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)) },
-          held' = held.set(m.source, held.get(m.source).exclude(Set(s))),
-          feed_bytes' = feed_bytes.set(s, 0),
+          releaseLocalFence(s, m.source),
           keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
         }
       | None => nope
@@ -498,13 +583,15 @@ module cluster_migration_failover_machine {
           barrierArmed(s),
           nodes.get(m.source).cannot_apply,
           migrations' = migrations.set(s, Some({ ...m, fenced: false })),
-          barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)) },
-          held' = held.set(m.source, held.get(m.source).exclude(Set(s))),
-          feed_bytes' = feed_bytes.set(s, 0),
+          releaseLocalFence(s, m.source),
           keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
         }
       | None => nope
     }
+
+  // ---------------------------------------------------------------------------
+  // Stream and target ingest (ext-1/ext-5).
+  // ---------------------------------------------------------------------------
 
   // ext-1: a write on the source advances its run-tagged log high-water and records the
   // position in the slot's history under the run that minted it.
@@ -515,7 +602,7 @@ module cluster_migration_failover_machine {
           all {
             not(m.fenced),
             canAct(nodes, m.source),
-            servingPrimary(nodes, slots, m, s),
+            isServingPrimary(nodes, slots, m, s),
             migrations' = migrations.set(s, Some({ ...m, source_log: p })),
             stream_history' = stream_history.set(s, stream_history.get(s).union(Set(p))),
             keepGraph, keepShadow, keepResidue, keepBar,
@@ -529,12 +616,9 @@ module cluster_migration_failover_machine {
   action applyAtTarget(s: SlotId): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          canAct(nodes, m.target),
-          not(nodes.get(m.target).silent),
-          not(nodes.get(m.target).cannot_apply),
+          canTargetApply(nodes, m.target),
           m.target_applied < m.source_log.pos,
-          migrations' = migrations.set(s, Some({ ...m, target_applied: m.target_applied + 1 })),
-          keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+          migrationsOnly(migrations.set(s, Some({ ...m, target_applied: m.target_applied + 1 }))),
         }
       | None => nope
     }
@@ -545,8 +629,7 @@ module cluster_migration_failover_machine {
     match migrations.get(s) {
       | Some(m) => all {
           m.target_durable < m.target_applied,
-          migrations' = migrations.set(s, Some({ ...m, target_durable: m.target_applied })),
-          keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+          migrationsOnly(migrations.set(s, Some({ ...m, target_durable: m.target_applied }))),
         }
       | None => nope
     }
@@ -560,16 +643,18 @@ module cluster_migration_failover_machine {
       | Some(m) => {
           val cur = nodes.get(m.target).run_id
           all {
-            canAct(nodes, m.target),
-            not(nodes.get(m.target).silent),
-            migrations' = migrations.set(s, Some({ ...m, target_copy:
+            canTargetAct(nodes, m.target),
+            migrationsOnly(migrations.set(s, Some({ ...m, target_copy:
               if (cur == m.target_copy.run_id) { run_id: cur, pos: max2(m.target_copy.pos, m.target_durable) }
-              else { run_id: cur, pos: m.target_durable } })),
-            keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+              else { run_id: cur, pos: m.target_durable } }))),
           }
         }
       | None => nope
     }
+
+  // ---------------------------------------------------------------------------
+  // Target-side replicas (ext-6/ext-14).
+  // ---------------------------------------------------------------------------
 
   // ext-6: a counted replica of the target ingests one more record of the shadow.
   action feedTargetReplica(n: NodeId): bool = {
@@ -583,8 +668,7 @@ module cluster_migration_failover_machine {
           })
         | None => false
       },
-      nodes' = nodes.set(n, { ...ns, replica_copy: ns.replica_copy + 1 }),
-      keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+      nodesOnly(nodes.set(n, { ...ns, replica_copy: ns.replica_copy + 1 })),
     }
   }
 
@@ -593,9 +677,8 @@ module cluster_migration_failover_machine {
     match migrations.get(s) {
       | Some(m) => all {
           nodes.get(n).member, nodes.get(n).counted, nodes.get(n).parent == Some(m.target),
-          migrations' = migrations.set(s, Some({ ...m,
-            target_replica_ack: max2(m.target_replica_ack, nodes.get(n).replica_copy) })),
-          keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+          migrationsOnly(migrations.set(s, Some({ ...m,
+            target_replica_ack: max2(m.target_replica_ack, nodes.get(n).replica_copy) }))),
         }
       | None => nope
     }
@@ -605,29 +688,29 @@ module cluster_migration_failover_machine {
   action attachTargetReplica(n: NodeId, t: NodeId): bool = all {
     n != t,
     nodes.get(n).member,
-    nodes.get(t).member,
-    nodes.get(t).role == Primary,
+    isLivePrimary(nodes, t),
     not(nodes.get(n).counted),
-    nodes' = nodes.set(n, { ...writeParentPointer(nodes.get(n), Replica, Some(t), false, None, None),
-                            counted: true, replica_copy: 0, install_incomplete: false }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...writeParentPointer(nodes.get(n), Replica, Some(t), false, None, None),
+                            counted: true, replica_copy: 0, install_incomplete: false })),
   }
 
   // ext-14: detaching it. With the knob on and *zero* counted replicas, `Complete`'s
   // guard is false — not vacuously true (V5-M3).
   action detachTargetReplica(n: NodeId): bool = all {
     nodes.get(n).counted,
-    nodes' = nodes.set(n, { ...nodes.get(n), counted: false }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), counted: false })),
   }
 
   // ext-6 (V5-M4): a replica crash mid-section leaves an install without its completion
   // marker. It must be discarded and re-requested at boot, never promoted.
   action crashDuringShadowSection(n: NodeId): bool = all {
     nodes.get(n).counted,
-    nodes' = nodes.set(n, { ...nodes.get(n), install_incomplete: true }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), install_incomplete: true })),
   }
+
+  // ---------------------------------------------------------------------------
+  // Migration lifecycle, continued: seal, batches, commit and the two aborts.
+  // ---------------------------------------------------------------------------
 
   // TR-CLUSTER-012. ext-3: the proposal carries its own attempt stamp, so a *stale*
   // confirm (one minted under an earlier `prepareHandoff`) is proposable and refused.
@@ -637,9 +720,8 @@ module cluster_migration_failover_machine {
           val p = { run_id: nodes.get(m.source).run_id, pos: m.source_log.pos }
           all {
             canConfirmDrained(nodes, migrations, s, att, p),
-            servingPrimary(nodes, slots, m, s),
-            migrations' = applyConfirmDrained(migrations, s, p),
-            keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+            isServingPrimary(nodes, slots, m, s),
+            migrationsOnly(applyConfirmDrained(migrations, s, p)),
           }
         }
       | None => nope
@@ -650,9 +732,7 @@ module cluster_migration_failover_machine {
   action coverageBatch(s: SlotId): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          canAct(nodes, m.target),
-          not(nodes.get(m.target).silent),
-          not(nodes.get(m.target).cannot_apply),
+          canTargetApply(nodes, m.target),
           migrations' = migrations.set(s, Some({ ...m, target_applied: m.source_log.pos })),
           coverage' = { ...coverage, emptyBatch: coverage.emptyBatch or m.target_applied == m.source_log.pos },
           keepGraph, keepShadow, keepResidue, keepBar,
@@ -667,8 +747,7 @@ module cluster_migration_failover_machine {
     match migrations.get(s) {
       | Some(m) => all {
           m.target_applied > m.target_durable,
-          migrations' = migrations.set(s, Some({ ...m, target_applied: m.target_durable })),
-          keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+          migrationsOnly(migrations.set(s, Some({ ...m, target_applied: m.target_durable }))),
         }
       | None => nope
     }
@@ -678,8 +757,7 @@ module cluster_migration_failover_machine {
   action reconcileTick(s: SlotId): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          migrations' = migrations.set(s, Some(applyReconcileTick(m))),
-          keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
+          migrationsOnly(migrations.set(s, Some(applyReconcileTick(m)))),
         }
       | None => nope
     }
@@ -689,12 +767,9 @@ module cluster_migration_failover_machine {
   action boundAbort(s: SlotId): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          abortableByBound(m),
+          isAbortableByBound(m),
           migrations' = migrations.set(s, None),
-          barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)),
-                        disconnected: barriers.disconnected.exclude(Set(s)) },
-          held' = held.set(m.source, held.get(m.source).exclude(Set(s))),
-          feed_bytes' = feed_bytes.set(s, 0),
+          releaseHoldRegion(s, m.source),
           keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
         }
       | None => nope
@@ -706,9 +781,10 @@ module cluster_migration_failover_machine {
   action completeMigration(s: SlotId, att: int): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          canComplete(nodes, migrations, s, att, ctl.count_replicas),
-          // `defects.admission` is recomputed here *independently* of `canComplete`, from
-          // the record's own drained evidence — the invariant is only mutation-sensitive
+          canCompleteMigration(nodes, migrations, s, att, ctl.count_replicas),
+          // `defects.admission` is recomputed here *independently* of
+          // `canCompleteMigration`, from the record's own drained evidence — the
+          // invariant is only mutation-sensitive
           // if the witness never reuses the guard it is supposed to police.
           defects' = { ...defects, admission: defects.admission or not(
             match m.drained_pos {
@@ -725,10 +801,7 @@ module cluster_migration_failover_machine {
           residue' = residue.set(s, Some({ mig: m.id, source: m.source, target: m.target,
                                            promoted: false, source_gone: false, target_gone: false })),
           keepShadow,
-          barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)),
-                        disconnected: barriers.disconnected.exclude(Set(s)) },
-          held' = held.set(m.source, held.get(m.source).exclude(Set(s))),
-          feed_bytes' = feed_bytes.set(s, 0),
+          releaseHoldRegion(s, m.source),
           ctl' = { ...ctl, epoch: ctl.epoch + 1, prev_epoch: ctl.epoch },
           keepHistory, keepRefusals, keepSpent, keepCoverage,
         }
@@ -742,10 +815,7 @@ module cluster_migration_failover_machine {
           canAbortHandoff(nodes, slots, migrations, s, att),
           migrations' = migrations.set(s, Some({ ...m, attempt: 0, fenced: false, phase: Streaming,
                                                  drained_pos: None })),
-          barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)),
-                        disconnected: barriers.disconnected.exclude(Set(s)) },
-          held' = held.set(m.source, held.get(m.source).exclude(Set(s))),
-          feed_bytes' = feed_bytes.set(s, 0),
+          releaseHoldRegion(s, m.source),
           keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
         }
       | None => nope
@@ -757,12 +827,9 @@ module cluster_migration_failover_machine {
   action cancelMigration(s: SlotId, att: int): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          canCancel(nodes, slots, migrations, s, att),
+          canCancelMigration(nodes, slots, migrations, s, att),
           migrations' = migrations.set(s, None),
-          barriers' = { ...barriers, armed: barriers.armed.exclude(Set(s)),
-                        disconnected: barriers.disconnected.exclude(Set(s)) },
-          held' = held.set(m.source, held.get(m.source).exclude(Set(s))),
-          feed_bytes' = feed_bytes.set(s, 0),
+          releaseHoldRegion(s, m.source),
           keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
         }
       | None => nope
@@ -865,28 +932,24 @@ module cluster_migration_failover_machine {
     }
 
   // ---------------------------------------------------------------------------
-  // Roles, failover and restarts.
+  // Roles, failover and demotion.
   // ---------------------------------------------------------------------------
 
   action markNodeFailed(n: NodeId): bool = all {
     nodes.get(n).member,
     not(nodes.get(n).fail),
-    nodes' = nodes.set(n, { ...nodes.get(n), fail: true }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), fail: true })),
   }
 
   action markNodeRecovered(n: NodeId): bool = all {
     nodes.get(n).fail,
-    nodes' = nodes.set(n, { ...nodes.get(n), fail: false }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), fail: false })),
   }
 
   // TR-CLUSTER-024/025's arming step: the fence is single-shot and is consumed by the
   // next failover apply.
   action armFailoverFence(n: NodeId): bool = all {
-    nodes.get(n).member,
-    nodes.get(n).role == Primary,
-    ownsAnySlot(slots, n),
+    canArmFailoverFence(nodes, slots, n),
     barriers' = { ...barriers, failover_fence: SLOTS.filter(s => slots.get(s) == Some(n)) },
     keepGraph, keepMigAll, keepHeld, keepFeed, keepAux, keepCtl,
   }
@@ -896,11 +959,9 @@ module cluster_migration_failover_machine {
   action failoverGraceful(old: NodeId, succ: NodeId, obsEpoch: int, obsRole: RoleTag): bool = {
     val v = applyFailoverCommon(currentView, old, succ)
     all {
-      beltOk(nodes, slots, old, succ, true),
-      fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole),
+      canApplyFailover(nodes, slots, old, succ, true, obsEpoch, obsRole),
       // Issue 26, ruled: armed over **every slot about to move**, not merely armed.
-      barriers.failover_fence != Set(),
-      movedSlotsOf(slots, old).subseteq(barriers.failover_fence),
+      barrierCoversMovedSlots(slots, barriers.failover_fence, old),
       applyView(v),
       keepShadow, keepHistory, keepRefusals, keepSpent,
       // Both ghosts are recomputed from the *outcome*, not from the guards above.
@@ -923,8 +984,7 @@ module cluster_migration_failover_machine {
     val v = applyFailoverCommon(currentView, old, succ)
     all {
       nodes.get(old).fail,
-      beltOk(nodes, slots, old, succ, true),
-      fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole),
+      canApplyFailover(nodes, slots, old, succ, true, obsEpoch, obsRole),
       applyView(v),
       keepShadow, keepHistory, keepRefusals, keepSpent,
       defects' = { ...defects,
@@ -944,8 +1004,7 @@ module cluster_migration_failover_machine {
   action failoverForced(old: NodeId, succ: NodeId, obsEpoch: int, obsRole: RoleTag): bool = {
     val v = applyFailoverCommon(currentView, old, succ)
     all {
-      beltOk(nodes, slots, old, succ, false),
-      fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole),
+      canApplyFailover(nodes, slots, old, succ, false, obsEpoch, obsRole),
       applyView(v),
       keepShadow, keepHistory, keepRefusals, keepSpent,
       defects' = { ...defects,
@@ -981,10 +1040,9 @@ module cluster_migration_failover_machine {
       else acc)
     all {
       canDemoteNodeExternal(nodes, slots, n),
-      nodes' = detached.set(n, writeParentPointer(detached.get(n), Replica, None, false, None, None)),
       // Residue entries naming the demoted node keep pointing at it and are recovered
       // level-triggered by `retargetSlotResidue` — there is no successor to re-home to.
-      keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+      nodesOnly(detached.set(n, writeParentPointer(detached.get(n), Replica, None, false, None, None))),
     }
   }
 
@@ -1052,20 +1110,17 @@ module cluster_migration_failover_machine {
 
   action setSourceCannotApply(n: NodeId, v: bool): bool = all {
     nodes.get(n).cannot_apply != v,
-    nodes' = nodes.set(n, { ...nodes.get(n), cannot_apply: v }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), cannot_apply: v })),
   }
 
   action setSourceCannotDrain(n: NodeId, v: bool): bool = all {
     nodes.get(n).cannot_drain != v,
-    nodes' = nodes.set(n, { ...nodes.get(n), cannot_drain: v }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), cannot_drain: v })),
   }
 
   action setTargetSilent(n: NodeId, v: bool): bool = all {
     nodes.get(n).silent != v,
-    nodes' = nodes.set(n, { ...nodes.get(n), silent: v }),
-    keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
+    nodesOnly(nodes.set(n, { ...nodes.get(n), silent: v })),
   }
 
   action setCountedReplicasKnob(v: bool): bool = all {

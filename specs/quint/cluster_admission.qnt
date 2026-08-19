@@ -60,8 +60,9 @@
 //     `None` is reserved below for `Option`'s own constructor, and Quint sum-type
 //     constructors share one flat namespace.
 //   - `member_of: Option[ClusterId]` is a small local `Option` sum type (`Some`/`None`)
-//     defined by this model (in cluster_admission_types.qnt) rather than imported from
-//     `basicSpells.qnt`, so the model depends on no external spells library.
+//     declared in cluster_common_types.qnt — shared with the migration model, but still
+//     model-local in the sense that matters: no dependency on `basicSpells.qnt` or any
+//     other external spells library.
 //
 // Hardened after adversarial (mutation-tested) review — two ghost/history fields were
 // added, both beyond the brief's literal field list, because the four required
@@ -86,10 +87,11 @@
 //     independently originated elsewhere, even after `repurpose` has erased the
 //     `intent`/`member_of` evidence of that origin.
 //
-// Model layout (this model is split across four files under specs/quint/; the split is
-// purely structural — same state space, same actions, same invariants, same tests as
-// the single-file original):
-//   cluster_admission_types.qnt   — types + constants, no state
+// Model layout (this model is split across four files under specs/quint/, over one shared
+// vocabulary module; the split is purely structural — same state space, same actions, same
+// invariants, same tests as the single-file original):
+//   cluster_common_types.qnt      — `NodeId`/`Option`, shared with the migration model
+//   cluster_admission_types.qnt   — this model's types + sizing constants, no state
 //   cluster_admission_logic.qnt   — pure guards/updates over explicit state arguments
 //                                   (unit-testable in isolation)
 //   cluster_admission_machine.qnt — the `nodes` variable + `init`/actions/`step`
@@ -97,10 +99,21 @@
 //                                   `val inv_*` invariants, `run` tests
 // The satellite modules are imported with plain `import M.* from "./M"`, which shares one
 // instance of the machine's state variables (it does not instantiate a copy the way a
-// const-parameterised `import M(c = ...)` would). `just quint-check` typechecks every
+// const-parameterised `import M(c = ...)` would). `import` is NOT transitive, so each file
+// imports the vocabulary module it uses directly. `just quint-check` typechecks every
 // file; `just quint-run`/`quint-verify-*` only drive the main models (scripts/quint-models.sh
-// derives that set from "declares at least one `val inv_*`").
+// derives that set from "declares at least one `val inv_*`" — which is why the satellite
+// modules must never declare one).
+//
+// Single responsibility of THIS file: everything a checker can *check*.
+//   Belongs here:     witnesses (`val witness*`), invariants (`val inv_*`, grouped by
+//                     family below), `run` tests, and the model-wide header above.
+//   Does NOT belong:  `var`s or actions (cluster_admission_machine.qnt), guards/updates
+//                     (cluster_admission_logic.qnt), types/constants (the two `*types`
+//                     modules). Adding a new check should be one `val inv_*` under the
+//                     matching family heading, and nothing else.
 module cluster_admission {
+  import cluster_common_types.* from "./cluster_common_types"
   import cluster_admission_types.* from "./cluster_admission_types"
   import cluster_admission_machine.* from "./cluster_admission_machine"
 
@@ -126,8 +139,17 @@ module cluster_admission {
     })
 
   // ---------------------------------------------------------------------------
-  // Invariants — the ruled admission-window safety properties.
+  // Invariants — the ruled admission-window safety properties, grouped by family so a new
+  // check is one `val inv_*` under the heading it belongs to. `scripts/quint-invariants.sh`
+  // discovers them by grepping this file for `val inv_*`, so the grouping is navigational
+  // only — nothing enumerates the families.
+  //
+  //   Leadership / usurpation — who may claim to be an externally routable leader.
+  //   Identity / restart      — what a restart may and may not re-derive.
+  //   Admission / absorption  — what a MEET may fold in.
   // ---------------------------------------------------------------------------
+
+  // --- Leadership / usurpation -----------------------------------------------
 
   // TR-CLUSTER-029: a joining node must never be an externally routable leader, full
   // stop — `applyMeetJoiner` deliberately never grants leadership to the folded-in
@@ -153,6 +175,8 @@ module cluster_admission {
       (n1 != n2 and a.routable_leader and b.routable_leader) implies a.member_of != b.member_of
     }))
 
+  // --- Identity / restart ----------------------------------------------------
+
   // TR-CLUSTER-028/029 amendment: after `restart`, a node's operative mode is exactly
   // its persisted `intent`, never re-derived from the current `configured_bootstrap` —
   // checked as the two behavioral consequences that a config-driven re-decision would
@@ -175,6 +199,8 @@ module cluster_admission {
         ns.decision_epoch <= 1,
       }
     })
+
+  // --- Admission / absorption ------------------------------------------------
 
   // TR-CLUSTER-005 amendment: `meet` never folds in a node whose Raft state carries a
   // foreign provenance — the foreign-state-absorption refusal. `raft_origin` is set

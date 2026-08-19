@@ -164,10 +164,12 @@
 //   .scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md
 //   .scratch/cluster-correctness/2026-08-14-issue31-migration-design.md  (AUTHORITY)
 //
-// Model layout (this model is split across four files under specs/quint/; the split is
+// Model layout (this model is split across five files under specs/quint/; the split is
 // purely structural — same state space, same actions, same invariants, same tests as a
 // single-file original would have):
-//   cluster_migration_failover_types.qnt   — types + constants, no state
+//   cluster_common_types.qnt               — `NodeId`/`Option`, shared with the admission
+//                                            model; owned by neither
+//   cluster_migration_failover_types.qnt   — this model's types + sizing constants, no state
 //   cluster_migration_failover_logic.qnt   — pure guards/updates/helpers over explicit
 //                                            state arguments (unit-testable in isolation)
 //   cluster_migration_failover_machine.qnt — `var` declarations + `init`/actions/`step`
@@ -175,10 +177,22 @@
 //                                            witnesses, `val inv_*` invariants, `run` tests
 // The satellite modules are imported with plain `import M.* from "./M"`, which shares one
 // instance of the machine's state variables (it does not instantiate a copy the way a
-// const-parameterised `import M(c = ...)` would). `just quint-check` typechecks every
-// file; `just quint-run`/`quint-verify-*` only drive the main models (scripts/quint-models.sh
-// derives that set from "declares at least one `val inv_*`").
+// const-parameterised `import M(c = ...)` would). Quint's `import M.*` is NOT transitive,
+// so every file that names `NodeId`/`Option` imports cluster_common_types itself — which
+// is also why only this file may declare an invariant: `just quint-check` typechecks every
+// file, while `just quint-run`/`quint-verify-*` drive only the main models, and
+// scripts/quint-models.sh derives that set from "declares at least one `val inv_*`" — a
+// satellite that grew one would be promoted to a runnable model it cannot be.
+//
+// Single responsibility of THIS file: everything checkable — nothing that the checker
+// reads as part of the system under check.
+//   Belongs here:     witnesses (`witness*` reachability values), state invariants
+//                     (`inv_*`), `run` tests, and the model-wide prose header above.
+//   Does NOT belong:  `var`s, `init`, actions or `step` (…_machine.qnt); guards and updates
+//                     (…_logic.qnt); types and sizing constants (…_types.qnt,
+//                     cluster_common_types.qnt).
 module cluster_migration_failover {
+  import cluster_common_types.* from "./cluster_common_types"
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
   import cluster_migration_failover_logic.* from "./cluster_migration_failover_logic"
   import cluster_migration_failover_machine.* from "./cluster_migration_failover_machine"
@@ -218,7 +232,15 @@ module cluster_migration_failover {
   //   to be a member primary at the commit point (V6-C2), and that conjunct is modeled.
 
   // ---------------------------------------------------------------------------
-  // Witnesses.
+  // Witnesses — reachability values, in the same families as the invariants below.
+  //   Migration lifecycle  — witnessMigrationInFlight, witnessHandoffDrainedNotComplete
+  //   Failover             — witnessGracefulFailoverPrunedMigration,
+  //                          witnessForcedFailoverDemoted, witnessFailoverDuringOpenMigration
+  //   Barrier and hold     — witnessFeedDisconnected
+  //   Membership           — witnessNodeRemoved
+  //   Residue and reaper   — witnessResiduePending
+  // A witness backed by a `coverage.*` ghost is set inside the action's own execution, so
+  // it cannot be satisfied by a state that merely looks like the behaviour happened.
   // ---------------------------------------------------------------------------
 
   val witnessMigrationInFlight: bool =
@@ -265,8 +287,25 @@ module cluster_migration_failover {
     })
 
   // ---------------------------------------------------------------------------
-  // Invariants.
+  // Invariants, grouped by family. A new check is one `inv_*` value added under the
+  // family it belongs to — `just quint-run` picks it up automatically
+  // (scripts/quint-invariants.sh scrapes the names out of this file).
+  //
+  //   Ownership and handoff  — who owns a slot, who may be an endpoint, and the
+  //                            minting/distinctness of handoff stamps.
+  //   Epoch and reset        — the cluster epoch's domination and monotonicity claims.
+  //   Fencing and demotion   — the per-object fence and the drain/parity barrier every
+  //                            failover-shaped transition must pass, plus the
+  //                            demote-don't-remove postcondition.
+  //   Commit admission       — what CompleteSlotMigration is allowed to admit.
+  //   Residue and reaper     — reserved: the ext-7/ext-12 properties land in Q2.
+  //   Identity and run       — reserved: the ext-15/ext-18 properties land in Q2.
+  //
+  // Every ghost-backed member of these families reads a `defects.*` flag that its action
+  // recomputes from its own *outcome*, independent of the guard — see each note below.
   // ---------------------------------------------------------------------------
+
+  // --- Ownership and handoff -------------------------------------------------
 
   // INV-REF-1: every assigned slot's owner exists as a current member. This model does
   // not claim the owner holds the Primary role — see the header for why.
@@ -312,6 +351,8 @@ module cluster_migration_failover {
   // makes a post-`ResetCluster` re-mint of seq 1 lawful while a genuine reuse is not.
   val inv_handoff_seq_never_reused: bool = not(defects.seqReuse)
 
+  // --- Epoch and reset -------------------------------------------------------
+
   // INV-EPOCH-1/2: the cluster epoch dominates every node's own epoch; a nonzero node
   // epoch is unique among current Primaries.
   val inv_epoch_monotone: bool = and {
@@ -327,6 +368,8 @@ module cluster_migration_failover {
   // action carries `prev_epoch` forward from the state it fired in (see the machine's
   // `keepCtl`), so this compares consecutive states.
   val inv_epoch_never_decreases: bool = ctl.epoch >= ctl.prev_epoch
+
+  // --- Fencing, barrier and demotion -----------------------------------------
 
   // Issue 20, ruled: no failover-shaped transition — planned, automatic, forced, the
   // source-failover variant, or the administrative `demoteNode` — ever leaves the old
@@ -346,11 +389,13 @@ module cluster_migration_failover {
   // `defects.barrier`, recomputed independent of the guard.
   val inv_graceful_failover_barriered: bool = not(defects.barrier)
 
+  // --- Commit admission ------------------------------------------------------
+
   // Issue 17, ruled, reworked for the redesign: CompleteSlotMigration never admits
   // without a sealed drain — a `Draining` record whose drained position was minted by the
   // same run as the source log it drained, and a target copy that covers it. Checked via
   // `defects.admission`, recomputed inside `completeMigration` from the record's own
-  // evidence rather than from `canComplete`.
+  // evidence rather than from `canCompleteMigration`.
   val inv_complete_requires_drained: bool = not(defects.admission)
 
   // DELETED with the rework — `inv_feed_hold_bounded` (`feed_bytes <= HOLD_BYTE_CAP`).
@@ -619,7 +664,7 @@ module cluster_migration_failover {
   // the target no longer has, and `Complete` must refuse it rather than trust a position
   // from a forked history. (The mirror case at the *source* — a source restart under an
   // already-sealed drain — is NOT refused by this model; see the header's ambiguity note
-  // in the Q1 report: `canComplete` compares the drained position's run against the
+  // in the Q1 report: `canCompleteMigration` compares the drained position's run against the
   // record's own source-log run, both of which a restart leaves untouched.)
   run completeRefusesCrossRunTargetCopyTest: bool = {
     init

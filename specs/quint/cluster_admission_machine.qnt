@@ -7,7 +7,17 @@
 //
 // Guards and updates themselves live in cluster_admission_logic.qnt; the model-wide
 // header (rows modeled, deviations, hardening notes) lives in cluster_admission.qnt.
+//
+// Single responsibility: the wiring — which variables each transition writes, and which
+// nondeterministic choices `step` offers.
+//   Belongs here:     `var` declarations, `init`, one `action` per modeled transition,
+//                     `stutter`, `step`, and the deterministic `*As` variants tests drive.
+//   Does NOT belong:  guard/update logic (cluster_admission_logic.qnt) — an action here
+//                     should read as "check `can*`, write `apply*`"; invariants, witnesses
+//                     and `run` tests (cluster_admission.qnt); types and constants
+//                     (cluster_admission_types.qnt, cluster_common_types.qnt).
 module cluster_admission_machine {
+  import cluster_common_types.* from "./cluster_common_types"
   import cluster_admission_types.* from "./cluster_admission_types"
   import cluster_admission_logic.* from "./cluster_admission_logic"
 

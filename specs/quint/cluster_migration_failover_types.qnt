@@ -14,9 +14,23 @@
 //
 // No state variables and no logic live here — see cluster_migration_failover.qnt (the
 // runnable main model) for the full "Rows modeled" header, the deliberately-not-modeled
-// list, and the four-file layout note.
+// list, and the layout note.
+//
+// Single responsibility: the *shape* of this model's state and the constants that bound
+// it — nothing that reads or writes state.
+//   Belongs here:     type declarations, sizing constants (`NODES`, `SLOTS`,
+//                     `HOLD_BYTE_CAP`, the ext-4 observation bounds).
+//   Does NOT belong:  `var`s, guards, updates, invariants, witnesses, tests. Guards and
+//                     updates live in cluster_migration_failover_logic.qnt; the `var`s and
+//                     the actions in cluster_migration_failover_machine.qnt; everything
+//                     checkable in cluster_migration_failover.qnt.
+//   Shared with the admission model: `NodeId` and `Option` come from
+//                     cluster_common_types.qnt. Everything below is migration-specific by
+//                     construction — the two models' `NodeState` records share a name and
+//                     nothing else, and are deliberately not unified.
 module cluster_migration_failover_types {
-  type NodeId = int
+  import cluster_common_types.* from "./cluster_common_types"
+
   type SlotId = int
   // ext-8/ext-12: migrations are identified, because a shadow and a residue entry both
   // name the migration they belong to and must be distinguishable from a *later*
@@ -27,10 +41,6 @@ module cluster_migration_failover_types {
   // fence in this model reads it for *freshness* (that job belongs to `registration_seq`
   // and `parent_seq`), only for same-run/cross-run discrimination.
   type RunId = int
-
-  // Local Option — see cluster_admission.qnt's header for why this isn't basicSpells'
-  // (kept model-local rather than pulled from the standard spells library).
-  type Option[a] = Some(a) | None
 
   type RoleTag = Primary | Replica
 
@@ -214,6 +224,9 @@ module cluster_migration_failover_types {
     draining_bound: int,
   }
 
+  // This model's node/slot universes — bounded-checking sizing knobs, deliberately NOT
+  // shared with the admission model even though the two agree on 4 nodes today (see
+  // cluster_common_types.qnt's "does not belong here" note).
   pure val NODES: Set[NodeId] = Set(1, 2, 3, 4)
   pure val SLOTS: Set[SlotId] = Set(1, 2, 3, 4)
   pure val HOLD_BYTE_CAP: int = 6

@@ -9,7 +9,21 @@
 // as the residue hazard that gate exists to repel). Per-definition comments below carry
 // the full ruling/amendment rationale; the model-wide header lives in
 // cluster_admission.qnt.
+//
+// Single responsibility: the pure, state-argument-taking half of the model.
+//   Belongs here:     `can<Transition>` admission guards, `apply<Transition>` postcondition
+//                     updates, and the helpers they share — every one a `pure def` over
+//                     explicitly-passed state.
+//   Does NOT belong:  `var` declarations, `action`s, frame keepers, `init`/`step`
+//                     (cluster_admission_machine.qnt); invariants, witnesses and `run`
+//                     tests (cluster_admission.qnt); type/constant declarations
+//                     (cluster_admission_types.qnt, cluster_common_types.qnt).
+//
+// Naming convention (shared with the migration model's logic module):
+//   `can<Transition>`   — the admission guard of the action of the same name.
+//   `apply<Transition>` — that action's pure postcondition update.
 module cluster_admission_logic {
+  import cluster_common_types.* from "./cluster_common_types"
   import cluster_admission_types.* from "./cluster_admission_types"
 
   // ---------------------------------------------------------------------------
