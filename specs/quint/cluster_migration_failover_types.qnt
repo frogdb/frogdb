@@ -187,11 +187,6 @@ module cluster_migration_failover_types {
     promoted: bool,
     source_gone: bool,
     target_gone: bool,
-    // How many promotion attempts have failed on this entry. A failed promotion leaves
-    // the entry in place (nothing but `clearSlotResidue` removes one), so without this
-    // counter a promotion that fails forever is indistinguishable from one that has not
-    // been tried — and unboundable. Q2's bound reads it.
-    promotion_failures: int,
   }
 
   type Migration = {

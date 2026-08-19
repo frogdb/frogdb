@@ -62,7 +62,8 @@
 //                                  abortHandoff, cancelMigration
 //   Shadow, promotion, rollback  — relabelShadow, reportPromoted, failPromotion,
 //                                  discardShadow
-//   Reaper and residue arms      — reapSlots, clearSlotResidue, retargetSlotResidue
+//   Reaper and residue arms      — reapSlots, clearSlotResidue, retargetSlotResidue,
+//                                  rehomeOrphanSlot
 //   Roles, failover, demotion    — markNodeFailed, markNodeRecovered, armFailoverFence,
 //                                  failoverGraceful, failoverAuto, failoverForced,
 //                                  demoteNode, demoteNodeExternal
@@ -387,14 +388,31 @@ module cluster_migration_failover_machine {
   // guard; the Demotion arm is the one that *writes role and parent* (V7-C1) and is
   // fenced on the observed role/epoch (V8-C2). A refusal mints a `Refusal` carrying the
   // record pair, classified by the first failing conjunct in the declared order.
-  action reportRunIdentity(n: NodeId, kind: TransitionKind, obsRole: RoleTag, obsEpoch: int): bool = {
+  //
+  // `replay: true` is the reordered/replayed proposal — a report minted earlier in the
+  // boot, carrying the `(incarnation, identity_seq)` pair the replicated cell already
+  // holds. It fails the ordering conjunct and is refused.
+  //
+  // ext-15 (V10-M1), the replicated form of "a source restart aborts the migration":
+  // applying a run-identity **field write** takes every open migration this node
+  // *sources*, and pays the release events those records owed (barrier, held region,
+  // buffered feed) exactly as `cancelMigration` would. The cancel binds to the field
+  // write — `identityWritten`, an actual change of the stored triple — and never to mere
+  // admission, so a topology-only re-proposal at equality (and any refused report, replay
+  // included) cancels nothing. It is also what the physical `sourceRestart` deliberately
+  // does **not** do: the record dies when the boot report applies, not when the process
+  // dies.
+  action reportRunIdentity(n: NodeId, kind: TransitionKind, obsRole: RoleTag, obsEpoch: int,
+                           replay: bool): bool = {
     val ns = nodes.get(n)
     val inc = ns.incarnation
-    val seq = ns.identity_seq + 1
+    val seq = if (replay) ns.identity_seq else ns.identity_seq + 1
     val cls = refusalClassOf(nodes, n, kind, inc, seq, obsRole, obsEpoch)
     val admitted = cls == Whole
-    val stamped = { ...ns, identity_seq: seq,
-                    stored_identity: Some({ inc: inc, seq: seq, run_id: ns.run_id }) }
+    val identity = { inc: inc, seq: seq, run_id: ns.run_id }
+    val identityWritten = admitted and ns.stored_identity != Some(identity)
+    val cancelled = if (identityWritten) slotsSourcedBy(migrations, n) else Set()
+    val stamped = { ...ns, identity_seq: seq, stored_identity: Some(identity) }
     all {
       // A Demotion report only exists against a staged record.
       kind == Boot or (match ns.record { | Some(rec) => rec.kind == Demotion | None => false }),
@@ -416,7 +434,12 @@ module cluster_migration_failover_machine {
               class: cls, terminal: isRefusalTerminal(ns.stored_identity, cls) }))
           | None => refusals
         },
-      keepSlots, keepMigAll, keepBar, keepHistory, keepSpent, keepDefects, keepCoverage, keepCtl,
+      migrations' = if (identityWritten) cancelledBySource(migrations, n) else migrations,
+      barriers' = { ...barriers, armed: barriers.armed.exclude(cancelled),
+                    disconnected: barriers.disconnected.exclude(cancelled) },
+      held' = held.set(n, held.get(n).exclude(cancelled)),
+      feed_bytes' = SLOTS.fold(feed_bytes, (acc, s) => if (cancelled.contains(s)) acc.set(s, 0) else acc),
+      keepSlots, keepShadow, keepResidue, keepHistory, keepSpent, keepDefects, keepCoverage, keepCtl,
     }
   }
 
@@ -829,8 +852,7 @@ module cluster_migration_failover_machine {
           nodes' = nodes.set(m.target, { ...nodes.get(m.target), epoch_own: ctl.epoch + 1 }),
           migrations' = migrations.set(s, None),
           residue' = residue.set(s, Some({ mig: m.id, source: m.source, target: m.target,
-                                           promoted: false, source_gone: false, target_gone: false,
-                                           promotion_failures: 0 })),
+                                           promoted: false, source_gone: false, target_gone: false })),
           keepShadow,
           releaseHoldRegion(s, m.source),
           ctl' = { ...ctl, epoch: ctl.epoch + 1, prev_epoch: ctl.epoch },
@@ -905,21 +927,16 @@ module cluster_migration_failover_machine {
   // (which never stopped being authoritative) and the staged copy goes; the **entry
   // stays with `promoted == false`**. Scheduled between `relabelShadow` and
   // `reportPromoted` this is the rollback-wins-the-race trace: the re-label is reversed
-  // and nothing was ever served.
+  // and nothing was ever served. `canFailPromotion` is what keeps the rollback from
+  // landing the slot on a source that has since departed or been demoted.
   action failPromotion(s: SlotId): bool =
     match residue.get(s) {
       | Some(r) => all {
-          not(r.promoted),
+          canFailPromotion(nodes, residue, s),
           slots' = slots.set(s, Some(r.source)),
           shadow' = shadow.set(s, None),
-          // ext-12 (ruled Q6): the entry counts its failed attempts. A rollback is not a
-          // terminal state — `relabelShadow`/`reportPromoted` may be retried — so without
-          // a counter on the entry itself a repeatedly-failing promotion is
-          // indistinguishable from one that was never attempted, and the operator arms
-          // have nothing to key an escalation on.
-          residue' = residue.set(s, Some({ ...r, promotion_failures: r.promotion_failures + 1 })),
           coverage' = { ...coverage, promotionRolledBack: true },
-          keepNodes, keepMigrations, keepBar,
+          keepNodes, keepMigrations, keepResidue, keepBar,
           keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
         }
       | None => nope
@@ -964,6 +981,37 @@ module cluster_migration_failover_machine {
               keepGraph, keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
             }
           | None => nope
+        }
+      | None => nope
+    }
+
+  // ext-12 (V7-M6): the orphan re-home arm — the recovery action for a `promoted` entry
+  // whose target has departed. `dest` selects the disposition (see `canRehomeOrphanSlot`):
+  // back to the source, which removes the entry outright, or on to another live primary,
+  // which clears `target_gone` and hands the entry back to the ordinary reap-then-clear
+  // path. The removing branch is the one place other than `clearSlotResidue` that deletes
+  // an entry, and it is an *operator arm* deleting an entry the ordinary path provably
+  // cannot reach (the reaper defers on `target_gone` forever), which is why ext-12's
+  // single-remover rule is not weakened by it.
+  action rehomeOrphanSlot(s: SlotId, dest: NodeId): bool =
+    match residue.get(s) {
+      | Some(r) => all {
+          canRehomeOrphanSlot(nodes, residue, s, dest),
+          slots' = slots.set(s, Some(dest)),
+          residue' =
+            if (dest == r.source) residue.set(s, None)
+            else residue.set(s, Some({ ...r, target: dest, target_gone: false })),
+          // The new target takes the copy with the slot: an entry that still says
+          // `promoted` must name a target that physically holds what it serves, and the
+          // source's copy is still there to be handed over (this arm never fires after
+          // the reaper, which defers on `target_gone`). The transfer itself — the
+          // operator re-seeding the new primary — is deliberately not modelled step by
+          // step; only its outcome is. Nothing is *deleted* here, so the reaper stays
+          // the model's only member-keyspace deleter.
+          nodes' =
+            if (dest == r.source) nodes
+            else nodes.set(dest, { ...nodes.get(dest), keys: nodes.get(dest).keys.union(Set(s)) }),
+          keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
         }
       | None => nope
     }
@@ -1097,23 +1145,19 @@ module cluster_migration_failover_machine {
     install_incomplete: false,
   }
 
-  // Ruled Q2: the restart breaks the seal on every migration this node sources. The hold
-  // is gone (`held`), so the barrier that stood for it is disarmed and the buffered feed
-  // reset; the record's `fenced`/`phase`/`drained_pos`/`attempt` are rewound to match.
-  // Without this the record kept advertising a hold that no longer existed, and a
-  // completion could be admitted on evidence produced by a dead run.
-  action sourceRestart(n: NodeId): bool = {
-    val touched = slotsSourcedBy(migrations, n)
-    all {
-      nodes.get(n).member,
-      nodes' = nodes.set(n, restarted(nodes.get(n), ctl.next_run)),
-      migrations' = unsealedBySource(migrations, n),
-      held' = held.set(n, Set()),
-      barriers' = { ...barriers, armed: barriers.armed.exclude(touched) },
-      feed_bytes' = SLOTS.mapBy(s => if (touched.contains(s)) 0 else feed_bytes.get(s)),
-      ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch },
-      keepSlots, keepShadow, keepResidue, keepAux,
-    }
+  // The physical restart, and **only** that: the replicated migration record is
+  // deliberately untouched here. "A source restart aborts the migration" is a *replicated*
+  // rule in the design, and its trigger is the boot report's run-identity field write
+  // (`reportRunIdentity`), not the process death — which is also why the window between
+  // the two (physically restarted, boot report not yet applied) is a declared, reachable
+  // state rather than one this action papers over. The node's own volatile hold region
+  // goes with the process.
+  action sourceRestart(n: NodeId): bool = all {
+    nodes.get(n).member,
+    nodes' = nodes.set(n, restarted(nodes.get(n), ctl.next_run)),
+    held' = held.set(n, Set()),
+    ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch },
+    keepSlots, keepMigAll, keepBarriers, keepFeed, keepAux,
   }
 
   // The target's restart additionally rolls its ingest back to the durable point — the
@@ -1134,11 +1178,10 @@ module cluster_migration_failover_machine {
   // postcondition *and* a fresh run at the successor, so a position minted before the
   // failover and one minted after are distinguishable.
   //
-  // Ruled Q1(b): the open migration **survives**, re-homed onto the successor, instead of
-  // being pruned with the old primary. The successor inherits the slot, so the migration
-  // is still the cluster's intent; only the old primary's evidence dies with it. This is
-  // what makes ext-5's own scenario reachable — a stale position minted before the
-  // failover meeting a live record minted after it.
+  // The migration is **pruned**, by the same shared postcondition every other failover
+  // path uses (TR-CLUSTER-018/FM-CLUSTER-036, release events paid per FM-CLUSTER-087).
+  // A successor inherits the slot; it never inherits the migration and never inherits the
+  // barrier — FM-CLUSTER-104 stays same-node-only. Re-migrating is a fresh `Begin`.
   action sourceFailover(old: NodeId, succ: NodeId): bool = {
     val v = applyFailoverCommon(currentView, old, succ)
     all {
@@ -1146,7 +1189,7 @@ module cluster_migration_failover_machine {
       migrationSourcesOf(migrations).contains(old),
       nodes' = v.nodes.set(succ, { ...v.nodes.get(succ), run_id: ctl.next_run }),
       slots' = v.slots,
-      migrations' = rehomedMigrations(migrations, old, succ, ctl.next_run),
+      migrations' = v.migrations,
       residue' = v.residue,
       barriers' = { armed: v.armed, failover_fence: Set(), disconnected: v.disconnected },
       feed_bytes' = v.feed_bytes,
@@ -1231,7 +1274,7 @@ module cluster_migration_failover_machine {
       removeNode(n1, flag, true),
       resetCluster(n1),
       setRole(n1, role, if (role == Primary) None else Some(n2)),
-      reportRunIdentity(n1, kind, obsRole, obsEpoch),
+      reportRunIdentity(n1, kind, obsRole, obsEpoch, flag),
       loseIncarnationCounter(n1),
       attestReplicaSynced(n2, n1, obsSeq, obsReg),
       // ext-18 record lifecycle
@@ -1269,6 +1312,7 @@ module cluster_migration_failover_machine {
       reapSlots(n1),
       clearSlotResidue(s),
       retargetSlotResidue(s),
+      rehomeOrphanSlot(s, n2),
       // replicas
       attachTargetReplica(n2, n1),
       detachTargetReplica(n2),

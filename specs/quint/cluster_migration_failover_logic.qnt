@@ -145,53 +145,26 @@ module cluster_migration_failover_logic {
       }
     )
 
-  // Slots whose migration names `node` as its **source**.
+  // Slots whose migration names `node` as its **source** — the set ext-15's identity
+  // field write cancels (see `cancelledBySource`), and the set whose hold region that
+  // cancel has to release.
   pure def slotsSourcedBy(migs: SlotId -> Option[Migration], node: NodeId): Set[SlotId] =
     SLOTS.filter(s => match migs.get(s) {
       | Some(m) => m.source == node
       | None => false
     })
 
-  // ext-1/ext-2 (V4-C2, ruled Q2): a source restart **breaks the seal**. The hold, the
-  // barrier and the drain evidence are all volatile source-local state; the record's
-  // `fenced`/`phase`/`drained_pos`/`attempt` describe a hold that no longer exists after
-  // the process comes back, so they are rewound to the pre-prepare shape. The attempt
-  // counter itself is never rewound — a fresh `PrepareHandoff` mints a *new* stamp, which
-  // is what makes a post-restart completion distinguishable from a pre-restart one.
-  pure def unsealedBySource(migs: SlotId -> Option[Migration], node: NodeId): SlotId -> Option[Migration] =
+  // ext-15 (V10-M1), the replicated form of "a source restart aborts the migration":
+  // applying a run-identity **field write** for a node that is the *source* of any open
+  // migration cancels those migrations. Positions are denominated in the source's own
+  // history, so its incarnation change invalidates them. The cancel binds to the field
+  // write itself, never to mere admission — a re-proposal at equality changes no identity
+  // and cancels nothing, which is why the caller computes the write/no-write distinction
+  // rather than calling this on every admitted report.
+  pure def cancelledBySource(migs: SlotId -> Option[Migration], node: NodeId): SlotId -> Option[Migration] =
     SLOTS.fold(migs, (acc, s) =>
       match migs.get(s) {
-        | Some(m) =>
-          if (m.source == node)
-            acc.set(s, Some({ ...m, attempt: 0, fenced: false, phase: Streaming, drained_pos: None }))
-          else acc
-        | None => acc
-      }
-    )
-
-  // ext-5 (ruled Q1(b)): a source failover **re-homes** the migration onto the successor
-  // rather than dropping it. The successor inherits the slot, so the migration it was
-  // sourcing is still the cluster's intent; what it must *not* inherit is the old
-  // primary's evidence. The record is re-homed with the successor's fresh run tag and the
-  // seal broken, so the handoff has to be re-prepared and re-drained from scratch.
-  // Every piece of *evidence* is dropped with the old primary — the re-homed record is
-  // indistinguishable from a fresh `Begin` apart from its identity (and hence its
-  // shadow), so the successor must re-prepare, re-stream and re-drain. A slot whose
-  // target is the successor itself cannot be re-homed (source would equal target) and is
-  // pruned by the common postcondition instead.
-  pure def rehomedMigrations(migs: SlotId -> Option[Migration], old: NodeId, succ: NodeId,
-                             succRun: RunId): SlotId -> Option[Migration] =
-    SLOTS.fold(prunedMigrations(migs, old), (acc, s) =>
-      match migs.get(s) {
-        | Some(m) =>
-          if (m.source == old and m.target != old and m.target != succ)
-            acc.set(s, Some({ ...m, source: succ, attempt: 0, fenced: false, phase: Streaming,
-                              drained_pos: None, prepare_run: succRun,
-                              source_log: { run_id: succRun, pos: 0 },
-                              target_copy: { ...m.target_copy, pos: 0 },
-                              target_applied: 0, target_durable: 0, target_replica_ack: 0,
-                              observations: 0, last_observation: None }))
-          else acc
+        | Some(m) => if (m.source == node) acc.set(s, None) else acc
         | None => acc
       }
     )
@@ -457,12 +430,30 @@ module cluster_migration_failover_logic {
   pure def countedReplicasOf(allNodes: NodeId -> NodeState, t: NodeId): Set[NodeId] =
     NODES.filter(n => allNodes.get(n).member and allNodes.get(n).counted and allNodes.get(n).parent == Some(t))
 
+  // `Complete`'s `record.run_id == nodes[record.source].run_identity` conjunct: the run
+  // the record's own log tag was minted under must still be the source's **replicated**
+  // identity. Deliberately read off `stored_identity` and not off the node's live
+  // `run_id`: the window in which a source has physically restarted but its boot report
+  // has not yet applied is a *declared* one — the replicated field still says the old run,
+  // so `Complete` may still admit there. What closes the window is the field write itself
+  // (`cancelledBySource`), which takes the record; this conjunct is belt-and-braces over
+  // it, catching the record whose tag was minted under a run the replicated cell has since
+  // moved off. A node with no stored identity has no run to match, so it is refused.
+  pure def sourceRunIdentityOk(allNodes: NodeId -> NodeState, m: Migration): bool =
+    match allNodes.get(m.source).stored_identity {
+      | Some(st) => st.run_id == m.source_log.run_id
+      | None => false
+    }
+
   // TR-CLUSTER-013, ruled (issue 17) + ext-1/2/3/5/12/14. Admitted on:
   //   - the attempt stamp matching (ext-3),
   //   - the phase being Draining (ext-3, `inv_complete_requires_draining_phase`),
   //   - the source still being sealed (ext-2, `inv_complete_requires_fenced_source`),
   //   - the target holding the drained position, compared **within one tag space**
   //     (ext-1/V4-C2) and attested by the target's **current** run (ext-5/V8-C3),
+  //   - the record's own source-log tag still being the source's replicated run identity
+  //     (`sourceRunIdentityOk` — the design's `record.run_id ==
+  //     nodes[record.source].run_identity`),
   //   - the counted target replicas holding it too when the knob is on (ext-14),
   //   - the target being a Primary (ext-12/V10-C3 — dropping this conjunct and demoting
   //     the target mid-Draining lands a slot on a Replica).
@@ -476,17 +467,13 @@ module cluster_migration_failover_logic {
           m.phase == Draining,
           m.fenced,
           isLivePrimary(allNodes, m.target),
+          // The design's `record.run_id == nodes[record.source].run_identity`.
+          sourceRunIdentityOk(allNodes, m),
           match m.drained_pos {
             | Some(d) => and {
-                // Ruled Q2. The drain's evidence must have been produced by the run the
-                // source is *still* on. A restart or a failover between the seal and the
-                // commit re-mints the run, and a seal taken by a process that no longer
-                // exists is not evidence — the commit has to be re-earned through a fresh
-                // Prepare/Confirm rather than ridden across the discontinuity. Comparing
-                // the drained position against the *record's* stored source-log tag
-                // (which a restart leaves untouched) does not catch this; comparing it
-                // against the node's live run does.
-                d.run_id == allNodes.get(m.source).run_id,
+                // ext-1 (V4-C2): the drain's position and the log it drained are compared
+                // within **one** tag space — the record's own.
+                d.run_id == m.source_log.run_id,
                 m.target_copy.run_id == allNodes.get(m.target).run_id,
                 m.target_copy.pos >= d.pos,
                 // ext-14: the optional durability conjunct exists iff the migration's
@@ -573,6 +560,20 @@ module cluster_migration_failover_logic {
       },
     })
 
+  // ext-12: the rollback arm's own guard. A rollback hands the slot **back to the entry's
+  // source**, so it is admissible only while that source is still a live primary: rolling
+  // back onto a departed source lands an assigned slot on a non-member (INV-REF-1,
+  // `inv_slot_owner_valid`), and onto a demoted one it lands a slot on a Replica. When the
+  // source has left or been demoted the entry's recovery is `retargetSlotResidue`, which
+  // re-homes it onto the shard's current primary first — which is exactly why the
+  // level-triggered source arm exists.
+  pure def canFailPromotion(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue],
+                            s: SlotId): bool =
+    match res.get(s) {
+      | Some(r) => not(r.promoted) and isLivePrimary(allNodes, r.source)
+      | None => false
+    }
+
   // ext-8: §5's stated predicate — a shadow may be discarded only when no live record
   // and no residue entry claim it. Reverting the residue half is what makes
   // `inv_owner_serves_promoted_slot` fail on discard-before-promote.
@@ -600,6 +601,29 @@ module cluster_migration_failover_logic {
       | Some(r) => match shardPrimary(allNodes, r.source) {
           | Some(p) => p != r.source
           | None => false
+        }
+      | None => false
+    }
+
+  // ext-12 (V7-M6): the **orphan re-home arm** — the recovery action of
+  // `inv_slot_copy_survives_until_owned_and_served`. A `promoted` entry whose target has
+  // departed (`target_gone`) names a slot whose owner is gone and which the reaper is
+  // deliberately deferring on, so the entry is an orphan: nothing else in the model can
+  // resolve it. Its two dispositions are the design's, and `dest` selects between them:
+  //   - `dest == r.source` — re-assign the slot back to the source, which is refused unless
+  //     the source is still a live primary **still physically holding the copy** (that
+  //     copy is the whole point of the re-home; the reaper may have taken it before the
+  //     target left). The entry then has nothing left to track and is removed.
+  //   - any other live primary — re-assign the slot there and clear `target_gone`, which
+  //     is what puts the entry back on the ordinary reap-then-clear path.
+  pure def canRehomeOrphanSlot(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue],
+                               s: SlotId, dest: NodeId): bool =
+    match res.get(s) {
+      | Some(r) => and {
+          r.promoted,
+          r.target_gone,
+          isLivePrimary(allNodes, dest),
+          dest == r.source implies allNodes.get(r.source).keys.contains(s),
         }
       | None => false
     }

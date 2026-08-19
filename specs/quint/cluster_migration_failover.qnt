@@ -37,9 +37,11 @@
 //     replaced by the first-class `shadow: SlotId -> Option[ShadowTag]` (ext-8).
 //   - `residue: SlotId -> Option[Residue]` (ext-12): written by `completeMigration` with
 //     **every** field initialized, marked (never removed) by `removeNode`, re-homed by
-//     `retargetSlotResidue`, removed only by `clearSlotResidue`. It is what carries the
-//     "who still holds a copy of this slot, and has the new owner attested yet?"
-//     question past the commit point.
+//     `retargetSlotResidue`, removed by `clearSlotResidue` — or, for the one state the
+//     ordinary path provably cannot reach (a `promoted` entry whose target has departed,
+//     which the reaper defers on forever), by the operator's orphan re-home arm
+//     `rehomeOrphanSlot` (ext-12, V7-M6). It is what carries the "who still holds a copy
+//     of this slot, and has the new owner attested yet?" question past the commit point.
 //   - promotion is **split in two** (ext-8): `relabelShadow` is the target's local flip,
 //     `reportPromoted` the replicated attestation. `failPromotion` rolls ownership back
 //     to the source in between. The gap between the two is where the rollback-wins trace
@@ -66,6 +68,13 @@
 //     assignments and takes **all** migrations. Only SOFT is modelled — HARD's re-key and
 //     epoch zeroing is FM-CLUSTER-010's documented non-monotonicity, and encoding it
 //     would falsify `inv_epoch_never_decreases` by design rather than by defect.
+//   - a source restart aborts its migrations through the **replicated** path, never
+//     locally (ext-15, V10-M1): `sourceRestart` itself touches no record; the cancel
+//     binds to the run-identity **field write**, so it is `reportRunIdentity` — and only
+//     an arm of it that actually changes the stored identity — that takes every open
+//     migration the reporting node sources (paying the same release events a prune does).
+//     A replayed or equal-identity report is a refused no-op and cancels nothing, and a
+//     topology-only re-proposal at equality changes no identity either.
 //   - role/parent (`primary_id`) are modelled variables with a declared writer set
 //     (ext-15/16/17): every writer goes through `writeParentPointer`, which bumps the
 //     parenting token `parent_seq` and rewrites its three companions in the same step.
@@ -111,8 +120,13 @@
 //   TR-CLUSTER-013 — CompleteSlotMigration, ruled (issue 17): admitted on the log-ordered
 //     conjuncts only — matching attempt, `Draining`, a sealed source, a same-run drained
 //     position, a target copy that covers it and is attested under the target's *current*
-//     run, and — iff the migration's own captured `require_replica_ack` parameter says so
-//     (ext-14) — a counted replica ack. No wall-clock `barrier_ms` window.
+//     run, the record's own minted run tag still matching the source's **replicated**
+//     run identity, and — iff the migration's own captured `require_replica_ack`
+//     parameter says so (ext-14) — a counted replica ack. No wall-clock `barrier_ms`
+//     window. The replicated-identity conjunct is belt-and-braces over the field-write
+//     cancel above: it deliberately reads the *stored* identity, so the design-accepted
+//     window in which a source has physically restarted but its boot report has not yet
+//     applied still admits `Complete`.
 //     Falsifiable independent of the guard via the `defects.admission` ghost.
 //   TR-CLUSTER-014 — AbortSlotHandoff, ruled (issue 17): log-ordered admission, no
 //     wall-clock window; the migration itself survives, only the handoff is released.
@@ -456,8 +470,7 @@ module cluster_migration_failover {
         // The source is still a holder; the residue entry says so, un-attested.
         nodes.get(1).keys.contains(1),
         residue.get(1) == Some({ mig: 1, source: 1, target: 4, promoted: false,
-                                 source_gone: false, target_gone: false,
-                                 promotion_failures: 0 }),
+                                 source_gone: false, target_gone: false }),
         // The target does NOT hold the slot in its own keyspace yet.
         not(nodes.get(4).keys.contains(1)),
       })
@@ -505,6 +518,27 @@ module cluster_migration_failover {
         not(nodes.get(4).keys.contains(1)),
         match residue.get(1) { | Some(r) => not(r.promoted) | None => false },
       })
+  }
+
+  // (a2b) Regression, found by the random walk at 8000x60 (it predates this revision):
+  // the rollback hands the slot back to the entry's **source**, so it must be refused once
+  // that source has departed — otherwise it lands an assigned slot on a non-member and
+  // falsifies INV-REF-1. The entry's recovery in that state is `retargetSlotResidue`, not
+  // a rollback.
+  run failPromotionRefusedAfterSourceDepartedTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(relabelShadow(1))
+      // Force is needed: node 1 still owns the other three slots.
+      .then(removeNode(1, true, false))
+      .expect(and {
+        not(nodes.get(1).member),
+        match residue.get(1) { | Some(r) => r.source_gone and not(r.promoted) | None => false },
+      })
+      .then(failPromotion(1).fail())
   }
 
   // (a3) An outstanding residue entry blocks the next migration over the same slot, and
@@ -691,14 +725,13 @@ module cluster_migration_failover {
       .then(completeMigration(1, 1).fail())
   }
 
-  // (c4, ruled Q2) ext-1/ext-2/ext-5, the mirror case at the **source**. A restart at the
-  // source breaks the seal: the hold it was keeping is gone with the process, so the
-  // barrier is disarmed and the record's `fenced`/`phase`/`drained_pos`/`attempt` are
-  // rewound. `Complete` is then refused twice over — the stamp no longer matches, and
-  // `canCompleteMigration` additionally requires the drain's evidence to have been
-  // produced by the run the source is *still* on. Without the run conjunct a re-prepare
-  // after the restart could resurrect a drain sealed by a dead run.
-  run completeRefusesAfterSourceRestartTest: bool = {
+  // (c4) ext-15 (V10-M1), the mirror case at the **source**, in the two steps the design
+  // separates. The physical restart leaves the replicated record alone — sealed, drained,
+  // stamp intact, barrier still armed. What kills it is the **boot report's field write**:
+  // the arriving identity differs from the stored one, so applying it takes every
+  // migration this node sources and pays the release events they owed. `Complete` is then
+  // unreachable for that record because there is no record.
+  run sourceBootReportCancelsMigrationTest: bool = {
     init
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
@@ -707,63 +740,156 @@ module cluster_migration_failover {
       .then(sourceRestart(1))
       .expect(and {
         nodes.get(1).run_id == 5,
-        not(barrierArmed(1)),
+        not(nodes.get(1).booted),
+        // Untouched by the restart itself: still the same sealed, drained record, still
+        // behind an armed barrier.
+        barrierArmed(1),
         match migrations.get(1) {
-          | Some(m) => and { m.attempt == 0, not(m.fenced), m.phase == Streaming,
-                             m.drained_pos == None, m.source_log.run_id == 1 }
+          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining,
+                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
+                             m.source_log.run_id == 1 }
           | None => false
         },
+      })
+      .then(reportRunIdentity(1, Boot, Primary, 0, false))
+      .expect(and {
+        // The field write landed: a new identity carrying the new run.
+        nodes.get(1).stored_identity == Some({ inc: 1, seq: 2, run_id: 5 }),
+        // ...and it took the record with it, releasing the barrier and the hold region.
+        migrations.get(1) == None,
+        not(barrierArmed(1)),
+        held.get(1) == Set(),
+        feed_bytes.get(1) == 0,
+        // A cancel, not a commit: ownership never moved and no residue was written.
+        slots.get(1) == Some(1),
+        residue.get(1) == None,
       })
       .then(completeMigration(1, 1).fail())
   }
 
-  // (c4b, ruled Q2) The other half of the same ruling: breaking the seal must not *wedge*
-  // the migration. Once the source is back and has re-reported its identity, a fresh
-  // Prepare/Confirm re-earns the commit under the new run — the evidence is rebuilt, not
-  // resurrected.
-  run sourceRestartHandoffCanBeReEarnedTest: bool = {
+  // (c4b) The other side of the same ruling: the cancel binds to the **field write**, so a
+  // replayed report from earlier in the same boot — carrying the `(incarnation,
+  // identity_seq)` pair the cell already holds — is a refused no-op that cancels nothing.
+  // The trace then walks straight through the design-accepted window: the source has
+  // physically restarted, but its boot report has not applied, so the replicated identity
+  // still names the run the record was minted under and `Complete` still admits. Closing
+  // that window is deliberately NOT this model's behaviour.
+  run replayedReportCancelsNothingTest: bool = {
     init
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(reportTargetIngest(1))
       .then(sourceRestart(1))
-      .then(reportRunIdentity(1, Boot, Primary, 0))
-      .then(prepareHandoff(1))
-      .then(confirmDrained(1, 2))
-      .expect(match migrations.get(1) {
-        | Some(m) => m.drained_pos == Some({ run_id: 5, pos: 0 })
-        | None => false
+      .then(reportRunIdentity(1, Boot, Primary, 0, true))
+      .expect(and {
+        // Refused: the cell is untouched, so no identity was written...
+        nodes.get(1).stored_identity == Some({ inc: 1, seq: 1, run_id: 1 }),
+        nodes.get(1).identity_seq == 1,
+        not(nodes.get(1).booted),
+        // ...and nothing was cancelled.
+        match migrations.get(1) {
+          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining }
+          | None => false
+        },
+        barrierArmed(1),
       })
-      .then(completeMigration(1, 2))
-      .expect(slots.get(1) == Some(4))
+      .then(completeMigration(1, 1))
+      .expect(and { slots.get(1) == Some(4), residue.get(1) != None })
   }
 
-  // (c5, ruled Q1(b)) ext-5: a failover at the source does not take the migration with it.
-  // The successor inherits the slot, so it inherits the migration too — re-homed, with a
-  // fresh run tag and the seal broken, so nothing the dead primary attested carries over.
-  run sourceFailoverRehomesMigrationTest: bool = {
+  // (c5) TR-CLUSTER-018/FM-CLUSTER-036: a failover naming the **source** aborts the
+  // migration. The successor inherits the slot; it never inherits the migration and never
+  // inherits the barrier (FM-CLUSTER-104 stays same-node-only), and the release events the
+  // record owed are paid by the prune (FM-CLUSTER-087). Re-migrating is a fresh `Begin`.
+  run sourceFailoverPrunesMigrationTest: bool = {
     init
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
+      .expect(and { barrierArmed(1), held.get(1) == Set(1) })
       .then(sourceFailover(1, 2))
       .expect(and {
         slots.get(1) == Some(2),
         nodes.get(2).role == Primary,
         nodes.get(2).run_id == 5,
-        match migrations.get(1) {
-          | Some(m) => and { m.source == 2, m.target == 4, m.attempt == 0, not(m.fenced),
-                             m.phase == Streaming, m.drained_pos == None,
-                             m.source_log.run_id == 5 }
+        nodes.get(1).role == Replica,
+        nodes.get(1).member,
+        // Pruned, with every release event paid.
+        migrations.get(1) == None,
+        not(barrierArmed(1)),
+        held.get(1) == Set(),
+        held.get(2) == Set(),
+        feed_bytes.get(1) == 0,
+        // Nothing the dead primary attested survives as a commit: no residue, and the
+        // target's staged copy is left to `discardShadow`.
+        residue.get(1) == None,
+        shadow.get(1) != None,
+        coverage.failoverDuringOpenMigration,
+      })
+      // The handoff cannot be resumed at the successor — there is no record to prepare,
+      // so re-migrating means a fresh `Begin` (once `discardShadow` has taken the
+      // orphaned staged copy, exactly as in `gracefulFailoverDrainedNotCompleteTest`).
+      .then(prepareHandoff(1).fail())
+  }
+
+  // (c6) ext-12 (V7-M6): the orphan re-home arm, disposition one — back to the source.
+  // The promotion was attested and the target then departed, so the reaper is deferring
+  // forever on `target_gone` and nothing on the ordinary path can resolve the entry. The
+  // operator re-assigns the slot to the source that still physically holds the copy; the
+  // entry has nothing left to track and goes with the re-home.
+  run orphanRehomeToSourceTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(relabelShadow(1))
+      .then(reportPromoted(1))
+      .then(removeNode(4, true, false))
+      .expect(and {
+        slots.get(1) == None,
+        match residue.get(1) { | Some(r) => r.promoted and r.target_gone | None => false },
+        nodes.get(1).keys.contains(1),
+      })
+      .then(rehomeOrphanSlot(1, 1))
+      .expect(and {
+        slots.get(1) == Some(1),
+        residue.get(1) == None,
+        nodes.get(1).keys.contains(1),
+      })
+  }
+
+  // (c7) ext-12 (V7-M6): the orphan re-home arm, disposition two — on to another live
+  // primary. The entry survives with `target_gone` cleared and the new target named, which
+  // is exactly what puts it back on the ordinary reap-then-clear path.
+  run orphanRehomeToAnotherPrimaryTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(relabelShadow(1))
+      .then(reportPromoted(1))
+      .then(removeNode(4, true, false))
+      // A second live primary to re-home onto (2 and 3 start as replicas of 1).
+      .then(setRole(2, Primary, None))
+      .then(rehomeOrphanSlot(1, 2))
+      .expect(and {
+        slots.get(1) == Some(2),
+        nodes.get(2).keys.contains(1),
+        match residue.get(1) {
+          | Some(r) => and { r.source == 1, r.target == 2, r.promoted, not(r.target_gone) }
           | None => false
         },
-        not(barrierArmed(1)),
+        // The source still holds its copy — the re-home is not itself a reap.
+        nodes.get(1).keys.contains(1),
       })
-      // The re-homed record is a live migration again: it can be re-prepared and driven
-      // to a commit by the successor.
-      .then(prepareHandoff(1))
-      .then(completeMigration(1, 2).fail())
+      // Back on the ordinary path: reap the source's copy, then clear the entry.
+      .then(reapSlots(1))
+      .expect(not(nodes.get(1).keys.contains(1)))
+      .then(clearSlotResidue(1))
+      .expect(residue.get(1) == None)
   }
 
   // (d) Forced failover mid-migration -> demote path, not removal.
@@ -932,7 +1058,7 @@ module cluster_migration_failover {
         SLOTS.forall(s => slots.get(s) == None),
       })
       .then(meetNode(2))
-      .then(reportRunIdentity(2, Boot, Primary, 0))
+      .then(reportRunIdentity(2, Boot, Primary, 0, false))
       .then(assignSlot(2, 4))
       .then(beginMigration(2, 4, 2, false))
       .then(prepareHandoff(2))
