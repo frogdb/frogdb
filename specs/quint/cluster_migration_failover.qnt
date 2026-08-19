@@ -3,147 +3,158 @@
 //
 // Models the issue-15/16/17/19/20/26 defect class: slot migrations interleaved with
 // failovers, and the ruled (target) semantics that close it, plus TR-CLUSTER-003's
-// (issue 20 amendment) eviction fence. Modeled from specs/cluster.md's RULED rows and
-// the issue rulings/amendments below — not today's code (the per-object epoch/role
-// fence, the log-ordered handoff barrier, the drain/parity barrier and the
-// demote-not-remove postcondition for `force: true` are none of them implemented yet;
-// `commands.rs:442` still removes `old_primary_id` outright under `force: true`).
+// (issue 20 amendment) eviction fence. Modeled from specs/cluster.md's RULED rows, the
+// issue rulings/amendments below, and — for everything about the migration protocol
+// itself — the issue-31 redesign
+// (`.scratch/cluster-correctness/2026-08-14-issue31-migration-design.md`), which is
+// AUTHORITY over this model wherever the two disagree. Not modeled from today's code:
+// the per-object epoch/role fence, the log-ordered handoff barrier, the drain/parity
+// barrier, the demote-not-remove postcondition for `force: true` and the whole
+// source-authoritative-until-commit protocol are none of them implemented yet.
 //
 // This is one Raft state machine: the model is the *applied* sequence of committed
 // commands, with no network/consensus modeling — openraft's total order is assumed,
 // exactly the `apply_command` boundary task 3's quint-connect harness drives.
 //
+// ---------------------------------------------------------------------------
+// The issue-31 rework (this revision): what changed and why.
+// ---------------------------------------------------------------------------
+//
+// The superseded model encoded issue 15's *repatriation* design: ownership moved to the
+// target at `Complete`, and a Cancel/Abort after the handoff drained had to stream the
+// provisionally-moved data back to the source before applying clean (`repatriating`,
+// `completeRepatriation`, `provisional_target`, `inv_abort_repatriates`).
+//
+// The redesign supersedes that outright (MAJ-5): the migration is
+// **source-authoritative-until-commit**. The target's copy is a *shadow* until its
+// promotion is attested, the source keeps its own copy — and its authority — the whole
+// time, and so there is never anything to stream back. Structurally:
+//   - `repatriating` / `completeRepatriation` / `inv_abort_repatriates` /
+//     `inv_repatriating_well_formed` / the `cancelling` record field: DELETED. Cancel
+//     and Abort now simply resolve the record; the target's staged copy is cleaned up by
+//     the separately schedulable `discardShadow`.
+//   - `provisional_target` (a ghost that existed only to make repatriation falsifiable):
+//     replaced by the first-class `shadow: SlotId -> Option[ShadowTag]` (ext-8).
+//   - `residue: SlotId -> Option[Residue]` (ext-12): written by `completeMigration` with
+//     **every** field initialized, marked (never removed) by `removeNode`, re-homed by
+//     `retargetSlotResidue`, removed only by `clearSlotResidue`. It is what carries the
+//     "who still holds a copy of this slot, and has the new owner attested yet?"
+//     question past the commit point.
+//   - promotion is **split in two** (ext-8): `relabelShadow` is the target's local flip,
+//     `reportPromoted` the replicated attestation. `failPromotion` rolls ownership back
+//     to the source in between. The gap between the two is where the rollback-wins trace
+//     lives.
+//   - `reapSlots` (ext-7) is the model's **only** deleter of a member's keyspace entry
+//     (V8-C1), gated on the promotion attestation and deferred while the target has
+//     departed. Every node now carries its own `keys: Set[SlotId]`, distinct from the
+//     slot *ownership* map.
+//   - the handoff sequence is re-keyed by reset epoch (ext-10): `spent: Set[{epoch,
+//     seq}]`, so a `ResetCluster` that rewinds the counter makes a re-mint
+//     distinguishable from a reuse.
+//   - the migration record carries the attempt stamp (ext-3), the run tags (ext-1), the
+//     target's applied/durable/replica-ack positions (ext-5/ext-6/ext-14) and the
+//     observation counter with its confirm-time reset (ext-4); `fenced` (the source's
+//     own seal, ext-2) is tracked separately from `phase`.
+//   - role/parent (`primary_id`) are modelled variables with a declared writer set
+//     (ext-15/16/17): every writer goes through `writeParentPointer`, which bumps the
+//     parenting token `parent_seq` and rewrites its three companions in the same step.
+//   - the node-local, crash-durable pending-transition record (ext-18) and the refusal /
+//     disposition machinery around it are modelled state.
+//
+// Q1 scope note: this revision reworks STATE and ACTIONS, ports the surviving invariants
+// and rewrites the tests. The redesign's *new* invariants and witnesses (the
+// `inv_no_serve_before_attestation` / `inv_member_keyspace_is_tracked` /
+// `inv_no_orphan_shadow_blocks_ingest` family) are phase Q2 and are deliberately not
+// written here yet — but every field they read already exists in the state.
+//
 // Rows modeled:
 //   TR-CLUSTER-003 — RemoveNode, ruled + amended (issue 20): refused unless the node is
 //     already demoted off every slot it owns and out of the primary role, unless
 //     `force` bypasses the fence; the postcondition prunes slot/migration entries naming
-//     it and detaches its replicas' parent pointer either way. This is what makes "Node
-//     membership" a genuinely two-way variable in this model (see the `defects` ghost
-//     below for why that matters).
+//     it and detaches its replicas' parent pointer either way. Reworked per ext-12: a
+//     departure **marks** residue entries naming the node (`source_gone`/`target_gone`)
+//     rather than removing them — mark-don't-remove — and it never deletes the node's
+//     keyspace.
 //   TR-CLUSTER-004 — SetRole: role/parent-pointer transition, gated by issue 14's ruled
 //     precondition (a Replica's parent must name an existing Primary). The row's ruled
 //     text carries no slot-ownership or migration-target precondition, and neither does
 //     `commands.rs`'s `SetRole` arm (checked directly: it validates only node/parent
-//     existence) — so this model does not add one either. A prior revision of this file
-//     added `not(ownsAnySlot(...))`/`not(isMigrationTarget(...))` guards here, justified
-//     by a misreading of INV-SLOT-1 (see the INV-SLOT-1 note below); removed per the
-//     counterexample protocol once traced to no ruled or Hard-tier basis.
+//     existence) — so this model does not add one either.
 //   TR-CLUSTER-008/009 — AssignSlots/RemoveSlots, gated by issue 16's ruled
-//     open-migration refusal (no mutation-while-migrating). Same note as SetRole: the
-//     ruled text and `commands.rs`'s `AssignSlots` arm carry no target-role
-//     precondition, so this model no longer invents one.
+//     open-migration refusal (no mutation-while-migrating), extended by ext-12 to refuse
+//     while a residue entry is outstanding.
 //   TR-CLUSTER-010 — BeginSlotMigration: opens a migration naming the slot's current
-//     owner as source. Same note: no target-role precondition in the ruled text or
-//     `commands.rs`'s `BeginSlotMigration` arm.
-//   TR-CLUSTER-011 — PrepareSlotHandoff: mints a monotone `seq` from the handoff
-//     counter, arms the write barrier at the source only (TR-CLUSTER-034). The ruled row
-//     text's only precondition is that the migration exists with matching
-//     source/target — it does not require the absence of a live handoff. A prior
-//     revision added that requirement anyway, which made the supersede path
-//     (FM-CLUSTER-085) and TR-CLUSTER-012's stale-seq refusal structurally unreachable;
-//     removed, so re-preparing over a live handoff now mints a fresh seq and supersedes
-//     it, and the old seq is thereafter correctly refused by Confirm/Complete/Abort.
-//   TR-CLUSTER-012 — ConfirmSlotHandoffDrained: marks the prepared handoff drained;
-//     does not itself move ownership. Stale-seq refusal is now reachable (see above).
-//   TR-CLUSTER-013 — CompleteSlotMigration, ruled (issue 17): admitted purely on
-//     matching-seq-and-drained, no wall-clock `barrier_ms` admission window. Falsifiable
-//     independent of the guard via the `defects.admission` ghost (see below).
+//     owner as source, and (ext-10) performs the Begin-time **discard-then-ingest** of
+//     any shadow the slot still carried, so an orphan shadow from a previous reset epoch
+//     can never wedge the next ingest.
+//   TR-CLUSTER-011 — PrepareSlotHandoff: mints a monotone attempt stamp from the handoff
+//     counter, spends it under the current reset epoch, seals the source (ext-2's
+//     `fenced`) and arms the write barrier at the source only (TR-CLUSTER-034). Its only
+//     precondition is that the migration exists — re-preparing over a live handoff
+//     supersedes it (FM-CLUSTER-085), which is what makes the stale-attempt refusal
+//     reachable.
+//   TR-CLUSTER-012 — ConfirmSlotHandoffDrained: seals the drain, moving the record from
+//     `Streaming` to `Draining` and recording the run-tagged position it drained at
+//     (ext-1). It does not itself move ownership, and (ext-4, V7-C3) it resets the
+//     observation counter so the post-seal bound is not consumed pre-seal.
+//   TR-CLUSTER-013 — CompleteSlotMigration, ruled (issue 17): admitted on the log-ordered
+//     conjuncts only — matching attempt, `Draining`, a sealed source, a same-run drained
+//     position, a target copy that covers it and is attested under the target's *current*
+//     run, and (knob) a counted replica ack. No wall-clock `barrier_ms` window.
+//     Falsifiable independent of the guard via the `defects.admission` ghost.
 //   TR-CLUSTER-014 — AbortSlotHandoff, ruled (issue 17): log-ordered admission, no
 //     wall-clock window; the migration itself survives, only the handoff is released.
-//   TR-CLUSTER-015 — CancelSlotMigration, ruled + amended (issue 15): abort is a real
-//     rollback that repatriates — any data provisionally moved to the target while the
-//     handoff was drained streams back to the source before the migration record is
-//     removed. The amendment's own wording ("streams ... back to the source *before*
-//     the Abort applies clean") states a real ordering, not an atomicity claim, so this
-//     model represents it as two separately-observable phases: `cancelMigration`/
-//     `abortHandoff` open a `repatriating` phase (releasing the barrier immediately but
-//     leaving the provisional-target/feed-bytes residue and, for Cancel, the migration
-//     record itself in place) and a new `completeRepatriation` action later resolves it.
-//     The amendment's closing CRDB analogy ("the keyspace never stays split") is about
-//     *slot ownership* never splitting mid-move — already true here by construction
-//     (ownership never moves before `completeMigration`; see `provisional_target`'s own
-//     declaration comment) — not a claim that the rollback itself is instantaneous, so
-//     giving the rollback an observable in-progress phase does not contradict it.
+//   TR-CLUSTER-015 — CancelSlotMigration, **reworked by the redesign**: with the source
+//     authoritative until commit there is nothing to stream back, so Cancel removes the
+//     record in one step. Issue 15's repatriation ordering is superseded (see above).
 //   TR-CLUSTER-016 — Replica-feed hold during an armed barrier, amended (issue 17):
-//     bounded by a byte cap on buffered frames, not by the deleted wall-clock deadline;
-//     breaching the cap disconnects the held session. Modeled as a single atomic
-//     transition (arrival-that-breaches immediately disconnects, in the same step,
-//     rather than a separate reactive action) — see "Deliberately not modeled" for why.
+//     bounded by a byte cap on buffered frames, not by the deleted wall-clock deadline.
+//     Reworked per ext-2/ext-11: the breach is a **separate, local** action
+//     (`localReleaseOnCapBreach`) that drops the source's own fence and empties the whole
+//     hold region — not an arrival that atomically disconnects itself. That is why the
+//     old `inv_feed_hold_bounded` is gone (see the invariant notes below).
 //   TR-CLUSTER-017/018 — Planned (graceful) `CLUSTER FAILOVER`: TR-CLUSTER-018's
-//     per-object epoch/role fence (issue 19, amended) plus the belt (refuse no-op
-//     moves), applied only once TR-CLUSTER-017's ruled (issue 26) drain/parity barrier
-//     is armed. The barrier is modeled explicitly: `failover_fence: Set[SlotId]`,
-//     armed by `armFailoverFence(old)` over every slot `old` currently owns, and
-//     required — as a real guard, plus an independently recomputed `defects.barrier`
-//     ghost that does not depend on the guard existing — before `failoverGraceful` may
-//     apply to any of those slots. The fence is single-shot: every action other than
-//     `armFailoverFence` clears it, so arming and swapping must be back-to-back with
-//     nothing else observed in between (a deliberate simplification of the real
-//     drain/parity wait, which this model does not carry replication offsets to state
-//     more precisely — see "Deliberately not modeled").
+//     per-object epoch/role fence (issue 19, amended) plus the belt (refuse no-op moves
+//     and unsynced candidates — ext-16), applied only once TR-CLUSTER-017's ruled (issue
+//     26) drain/parity barrier is armed over every slot about to move. The barrier is
+//     single-shot: every action other than `armFailoverFence` clears it.
 //   TR-CLUSTER-019 — Automatic failover proposal: same fence/belt shape as
-//     TR-CLUSTER-018 (including the per-object fence — `commands.rs`'s guard on this
-//     path is identical), gated on the old primary's FAIL flag being latched,
-//     asynchronous (no drain/parity wait — issue 26's ruled cost of async PSYNC, so
-//     `failoverAuto` does not require `failover_fence`).
+//     TR-CLUSTER-018, gated on the old primary's FAIL flag, asynchronous (no drain/parity
+//     wait — issue 26's ruled cost of async PSYNC).
 //   TR-CLUSTER-021 — Failover successor selection: modeled as its structural
-//     precondition only (`new_primary_id` is a replica of the failing primary, checked
-//     by `beltOk`); the numeric priority/offset scoring formula is out of scope (see
-//     "Deliberately not modeled").
-//   TR-CLUSTER-024/025 — MarkNodeFailed/MarkNodeRecovered: FAIL-flag transitions,
-//     including TR-CLUSTER-024's unconditional cluster-epoch bump — the reason issue
-//     19's amendment moved the failover fence off the cluster-wide epoch. Disclaimer:
-//     TR-CLUSTER-025's no-bump anti-churn property (FM-CLUSTER-014) is cited for
-//     context on `markNodeRecovered` below, not machine-checked — no invariant here
-//     asserts it, so a mutant that adds a spurious epoch bump on recovery survives.
-//   TR-CLUSTER-034 — Handoff barrier arm/release, modeled at the applied-state level
-//     as a `Set[SlotId]` rather than a `(NodeId, SlotId) -> Armed | Released` map: at
-//     most one migration (hence one source) can be open per slot at a time in this
-//     model's state shape, so the node coordinate is redundant with the slot key and
-//     dropping it loses no information. This sidesteps modeling per-node log-apply
-//     prefixes (contested area (a) in the task brief) by construction — the barrier is
-//     tracked as a pure function of the replicated migration/handoff events applied so
-//     far, not of any one node's local apply cursor, matching cluster.md's own
-//     observation (state-space row 127) that the barrier is "reconstructible in
-//     principle from the replicated migration/handoff state that drives it."
+//     precondition only (`beltOk`); the numeric priority/offset scoring formula is out of
+//     scope.
+//   TR-CLUSTER-024/025 — MarkNodeFailed/MarkNodeRecovered: FAIL-flag transitions.
+//     Disclaimer: TR-CLUSTER-025's no-bump anti-churn property (FM-CLUSTER-014) is not
+//     machine-checked here.
+//   TR-CLUSTER-033/034 — Handoff barrier arm/release and the held-write region, modeled
+//     at the applied-state level as `barriers.armed: Set[SlotId]` plus a per-node
+//     `held: NodeId -> Set[SlotId]`: at most one migration (hence one source) can be open
+//     per slot, so the node coordinate is redundant with the slot key in the barrier set,
+//     while the held set is per-node because ext-11's release property is stated over the
+//     *source's* whole hold region.
 //   TR-CLUSTER-042 — Forced (`force: true`) failover. **Deviation from this row's
 //     literal postcondition**: the row's text still says "Node membership loses
-//     `old_primary_id` outright (removed...)" — that text predates issue 20's ruling.
-//     This model applies issue 20's demote-don't-remove ruling to the forced path too,
-//     per the task brief's explicit instruction, on the reasoning issue 20's amendment
-//     itself supplies: removal is deliberately promoted to a separate, explicit, fenced
-//     admin action (TR-CLUSTER-003 above) — never an automatic consequence of a
-//     failover-shaped transition, forced or not. `inv_last_failover_demoted` encodes
-//     exactly this generalized claim (checked against a genuinely two-way `member`
-//     field now that TR-CLUSTER-003 is modeled), not TR-CLUSTER-042's stale literal
-//     text.
+//     `old_primary_id` outright" — that text predates issue 20's ruling. This model
+//     applies demote-don't-remove to the forced path too. What `force` actually drops is
+//     ext-16's *sync* gate on the candidate, not the per-object fence and not the belt.
+//     `inv_last_failover_demoted` encodes the generalized claim.
 //
 // Invariant catalog `frogdb-server/crates/cluster/src/invariants.rs`:
 //   INV-REF-1 (`check_ref_1`: every slot's owner exists as a current member) is what
-//     `inv_slot_owner_valid` below actually encodes. A prior revision of this file
-//     glossed INV-SLOT-1 as "a slot's owner, if assigned, is a live Primary" and built
-//     guards to defend that claim; `check_slot_1`'s own doc comment says otherwise —
-//     it is a key-range check ("every slot key is below CLUSTER_SLOTS"), unconditional
-//     on `SLOTS`' bound in this model by construction, and no catalog entry (Hard or
-//     documented-exception) claims a slot's owner must hold the Primary role. That
-//     claim was invented, not ruled; see the SetRole/AssignSlots/BeginSlotMigration
-//     notes above for the fix.
+//     `inv_slot_owner_valid` below encodes. No catalog entry claims a slot's owner must
+//     hold the Primary role, so this model does not guard for it.
 //   INV-MIG-1 (`check_mig_1`: a migrating slot's owner equals the migration's source,
-//     *when the slot has a recorded owner at all* — an unassigned migrating slot is
-//     exempt, per the module doc's own "What 'clean' does not claim" section).
-//   INV-HANDOFF-1/2 (`check_handoff_1/2`: the seq counter dominates every live
-//     handoff's seq; a live handoff never carries the unminted seq 0; a handoff never
-//     repeats a seq already minted — `inv_handoff_seq_never_reused` below covers the
-//     distinctness half the bare bound does not).
+//     *when the slot has a recorded owner at all*).
+//   INV-HANDOFF-1/2 (`check_handoff_1/2`: a live handoff never carries the unminted seq
+//     0, and a seq is never minted twice). The "counter dominates every live seq" half is
+//     restated as "every live attempt stamp was actually minted" — see
+//     `inv_handoff_owned`'s note for why the bare bound no longer holds once
+//     `ResetCluster` can rewind the counter under a migration that does not name the
+//     reset node.
 //   INV-EPOCH-1/2 (`check_epoch_1/2`: the cluster epoch dominates every node's own
 //     epoch; a nonzero node epoch is unique among Primaries; plus this model's own
-//     cross-step claim that the cluster epoch never decreases,
-//     `inv_epoch_never_decreases`, which the catalog's single-state checks cannot
-//     state).
-//   inv_repatriating_well_formed (this model's own, not a catalog id): a slot mid the
-//     new `repatriating` phase (added this round for I13) always still shows its
-//     provisional-target residue and never a live handoff — the phase's own structural
-//     integrity, independent of `inv_abort_repatriates`'s resolved-state claim below.
+//     cross-step claim `inv_epoch_never_decreases`).
 //
 // Issues (rulings + amendments this model encodes):
 //   .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md
@@ -151,10 +162,11 @@
 //   .scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md
 //   .scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md
 //   .scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md
+//   .scratch/cluster-correctness/2026-08-14-issue31-migration-design.md  (AUTHORITY)
 //
 // Model layout (this model is split across four files under specs/quint/; the split is
-// purely structural — same state space, same actions, same invariants, same tests as
-// the single-file original):
+// purely structural — same state space, same actions, same invariants, same tests as a
+// single-file original would have):
 //   cluster_migration_failover_types.qnt   — types + constants, no state
 //   cluster_migration_failover_logic.qnt   — pure guards/updates/helpers over explicit
 //                                            state arguments (unit-testable in isolation)
@@ -176,57 +188,34 @@ module cluster_migration_failover {
   // ---------------------------------------------------------------------------
   //
   // - TR-CLUSTER-017/026's drain/parity sub-protocol as a replication-offset state
-  //   machine: this model has no replication offsets, so "drained and at parity" is
-  //   modeled by its outward effect — an explicit, single-shot `failover_fence`
-  //   (armed by `armFailoverFence`, required by `failoverGraceful`) — rather than a
-  //   separate offset-tracking sub-protocol with its own progress states.
+  //   machine: modeled by its outward effect — an explicit, single-shot
+  //   `failover_fence` — rather than a separate offset-tracking sub-protocol.
   // - TR-CLUSTER-020: no "primary-absorbs-primary" action exists in this model. That
   //   mode is ruled removed outright (issue 19), so it is omitted rather than modeled
   //   as a disabled action.
-  // - TR-CLUSTER-021's numeric priority/offset successor-scoring formula: out of
-  //   scope. Successor selection is modeled only by its structural precondition (the
-  //   chosen `succ` must currently be a replica of the failing primary, checked by
-  //   `beltOk`), not by the scoring arithmetic that picks one replica over another.
-  // - TR-CLUSTER-014's FM-CLUSTER-086 "already gone -> no-op success" branch: not
-  //   separately modeled. `canAbortHandoff` requires a live, seq-matching handoff;
-  //   the already-resolved case (which real code accepts idempotently) is left
-  //   unmodeled rather than encoded as a vacuous no-op action.
-  // - Failover-triggered migration pruning (`applyFailoverCommon`, shared by
-  //   `failoverGraceful`/`failoverAuto`/`failoverForced`) stays an unconditional,
-  //   single-step prune — it is *not* routed through the new `repatriating` phase (see
-  //   TR-CLUSTER-015's header note). The amendment's repatriation language is scoped to
-  //   "the Abort protocol" (Cancel/AbortHandoff); a failover is a decisive, already-
-  //   atomic cutover of primary role and slot ownership, and no ruling text extends the
-  //   stream-back-before-applies-clean ordering to that path. Giving failover a wait-
-  //   for-repatriation phase would be a materially larger structural change than what
-  //   issue 15 actually rules on, so this model treats a failover's prune the same way
-  //   it always has: whatever provisional residue the pruned migration was carrying is
-  //   written off along with the migration record itself, not streamed back first.
+  // - TR-CLUSTER-021's numeric priority/offset successor-scoring formula.
+  // - TR-CLUSTER-014's FM-CLUSTER-086 "already gone -> no-op success" branch:
+  //   `canAbortHandoff` requires a live, attempt-matching handoff; the already-resolved
+  //   case (which real code accepts idempotently) is left unmodeled rather than encoded
+  //   as a vacuous no-op action.
+  // - `RunId` freshness: the run tag is deliberately opaque (equality only). No fence
+  //   here reads it for ordering — that job belongs to `registration_seq`/`parent_seq`.
+  // - Raft proposer identity: the redesign's leader-driven auto-`Complete` is modeled as
+  //   `completeMigration` itself; `reconcileTick` only advances the observation counter
+  //   and `boundAbort` is the bounded exit. The model has no notion of *which* node
+  //   proposed a command, so "the leader proposes it" is unstated rather than faked.
   // - `inv_no_stuck_handoff` (from any reachable state with an armed barrier, some
-  //   enabled action sequence releases it): this is a temporal liveness property, not
-  //   a state invariant `quint run --invariant` can check in 0.32.0. Rather than
-  //   skip it silently, it is witnessed by trajectory instead: every `run` test that
-  //   reaches an armed barrier (`gracefulFailoverArmedNotDrainedTest`,
-  //   `gracefulFailoverDrainedNotCompleteTest`, `happyMigrationTest`,
-  //   `abortRepatriatesTest`, `forcedFailoverDemotesTest`) continues on to a step
-  //   that releases it — via `completeMigration`, `abortHandoff`, `cancelMigration`,
-  //   a pruning failover, or `removeNode` — and every one of those five release paths
-  //   clears the slot from `armed_barriers` unconditionally, so no action that
-  //   resolves a migration's handoff ever leaves its barrier armed. This is a
-  //   by-construction argument over the five release actions, not a model-checked
-  //   temporal property — noted here rather than asserted as a checked invariant.
+  //   enabled action sequence releases it): a temporal liveness property, not a state
+  //   invariant `quint run --invariant` can check in 0.32.0. Witnessed by trajectory
+  //   instead: every release path (`completeMigration`, `abortHandoff`,
+  //   `cancelMigration`, `boundAbort`, `localReleaseOnCapBreach`, `selfFenceRelease`, a
+  //   pruning failover, `removeNode`) clears the slot from `barriers.armed` and empties
+  //   the source's held set unconditionally. A by-construction argument over those
+  //   actions, not a model-checked property.
   // - A slot's owner holding the Primary role: neither the ruled TR-CLUSTER-004/008/010
-  //   rows nor `commands.rs`'s `SetRole`/`AssignSlots`/`BeginSlotMigration` arms
-  //   enforce this (checked directly against the source — none of the three arms reads
-  //   the target/parent node's role before applying), and no catalog entry (Hard or
-  //   documented-exception) claims it either. This model does not add a guard the real
-  //   system does not have: a demotion can leave a slot recorded to a now-Replica
-  //   owner, and `AssignSlots`/`BeginSlotMigration` can name a Replica as a target. Not
-  //   flagged as a bug here — it is a possible real gap in FrogDB's command layer, but
-  //   fixing it is out of this model's scope (no ruling addresses it).
-  // - The numeric priority/offset scoring formula behind successor selection (already
-  //   noted above under TR-CLUSTER-021) is the only remaining out-of-scope corner of
-  //   that row; `step`'s nondet biasing (added this round for I8/I9) does not touch it.
+  //   rows nor `commands.rs`'s corresponding arms enforce it, and no catalog entry claims
+  //   it. `completeMigration` is the exception — the redesign *does* require the target
+  //   to be a member primary at the commit point (V6-C2), and that conjunct is modeled.
 
   // ---------------------------------------------------------------------------
   // Witnesses.
@@ -235,52 +224,52 @@ module cluster_migration_failover {
   val witnessMigrationInFlight: bool =
     SLOTS.exists(s => migrations.get(s) != None)
 
+  // Reworked: "drained" is now the record's `Draining` phase (ext-4), reached by
+  // `confirmDrained` sealing the drain, not a `handoff.drained` flag.
   val witnessHandoffDrainedNotComplete: bool =
     SLOTS.exists(s => match migrations.get(s) {
-      | Some(m) => match m.handoff { | Some(h) => h.drained | None => false }
+      | Some(m) => m.phase == Draining
       | None => false
     })
 
-  // Redesigned this round for I8/I9: the old predicate (`SLOTS.exists(s =>
-  // provisional_target.get(s) == None) and epoch > 0`) was vacuous — the first half is
-  // true for any never-migrated slot (true at `init`), and `epoch > 0` goes true after
-  // *any* `markNodeFailed`, unrelated to graceful failover pruning anything. Backed now
-  // by `coverage.gracefulPruned`, set only inside `failoverGraceful`'s own execution
-  // when it actually prunes a migration open on one of the slots it moves.
+  // Backed by `coverage.gracefulPruned`, set only inside `failoverGraceful`'s own
+  // execution when it actually prunes a migration open on one of the slots it moves.
   val witnessGracefulFailoverPrunedMigration: bool =
     coverage.gracefulPruned
 
-  // Redesigned this round for I8/I9: the old predicate reduced to just `epoch > 0`,
-  // since nodes 3/4 are already Replica+member at `init` — no failover needed to
-  // satisfy it. Backed now by `coverage.forcedDemotedReplica`, set only inside
-  // `failoverForced`'s own execution.
+  // Backed by `coverage.forcedDemotedReplica`, set only inside `failoverForced`'s own
+  // execution, and now specifically when the promoted candidate was *not* synced — the
+  // exact gate `force` drops (ext-16).
   val witnessForcedFailoverDemoted: bool =
     coverage.forcedDemotedReplica
 
   val witnessFeedDisconnected: bool =
-    disconnected_feed.size() > 0
+    barriers.disconnected.size() > 0
 
   val witnessNodeRemoved: bool =
     NODES.exists(n => not(nodes.get(n).member))
 
-  // Added this round for I8/I9: the composite migration x failover region the reviewer
-  // measured at 0.04-1.1% reach — any of the three failover actions firing while the
-  // old primary had an open migration naming it.
+  // The composite migration x failover region the reviewer measured at 0.04-1.1% reach —
+  // any failover-shaped action firing while the old primary had an open migration naming
+  // it.
   val witnessFailoverDuringOpenMigration: bool =
     coverage.failoverDuringOpenMigration
 
-  // Added this round for I13: the new repatriating phase is reached (a Cancel/Abort
-  // with residue has applied but the stream-back has not yet resolved).
-  val witnessRepatriationPending: bool =
-    repatriating.size() > 0
+  // Replaces `witnessRepatriationPending`: the post-commit state the redesign puts in
+  // repatriation's place — ownership has moved but the source still holds its copy and
+  // the promotion has not been attested.
+  val witnessResiduePending: bool =
+    SLOTS.exists(s => match residue.get(s) {
+      | Some(r) => not(r.promoted)
+      | None => false
+    })
 
   // ---------------------------------------------------------------------------
   // Invariants.
   // ---------------------------------------------------------------------------
 
   // INV-REF-1: every assigned slot's owner exists as a current member. This model does
-  // not claim the owner holds the Primary role — see the header's INV-SLOT-1 note for
-  // why that claim was removed (it was never a ruled or Hard-tier property).
+  // not claim the owner holds the Primary role — see the header for why.
   val inv_slot_owner_valid: bool =
     SLOTS.forall(s => match slots.get(s) {
       | Some(n) => nodes.get(n).member
@@ -289,8 +278,7 @@ module cluster_migration_failover {
 
   // INV-MIG-1: an open migration's source currently owns the slot, *or the slot is
   // currently unassigned* (check_mig_1's own `?`-early-return exempts a migrating slot
-  // with no recorded owner — see the module doc's "What 'clean' does not claim");
-  // source != target; both endpoints are members.
+  // with no recorded owner); source != target; both endpoints are members.
   val inv_migration_endpoints_valid: bool =
     SLOTS.forall(s => match migrations.get(s) {
       | Some(m) => and {
@@ -302,293 +290,354 @@ module cluster_migration_failover {
       | None => true
     })
 
-  // INV-HANDOFF-1: a live handoff's seq is minted (>= 1) and never exceeds the
-  // counter (a seq above the counter would mean the counter was rewound behind a live
-  // handoff).
+  // INV-HANDOFF-1, restated for ext-10. The catalog's bound ("the counter dominates every
+  // live seq") is no longer stateable as `m.attempt <= ctl.handoff_seq`: `ResetCluster`
+  // rewinds the counter, and it only prunes migrations naming the reset node, so a live
+  // migration elsewhere legitimately outlives the counter value that minted it. What
+  // survives the rewind is the *minting* claim — every live attempt stamp is one this
+  // model actually spent — which is what `spent` (re-keyed by reset epoch) records.
+  // The unminted-0 half is kept verbatim: a sealed source always carries a real stamp.
   val inv_handoff_owned: bool =
     SLOTS.forall(s => match migrations.get(s) {
-      | Some(m) => match m.handoff {
-          | Some(h) => h.seq >= 1 and h.seq <= handoff_seq
-          | None => true
+      | Some(m) => and {
+          m.attempt >= 1 implies spent.exists(t => t.seq == m.attempt),
+          m.fenced implies m.attempt >= 1,
         }
       | None => true
     })
 
-  // INV-HANDOFF distinctness half: no handoff seq is ever minted twice.
+  // INV-HANDOFF-2's distinctness half: no handoff sequence number is ever spent twice
+  // *under the same reset epoch*. Checked via the `defects.seqReuse` ghost, recomputed
+  // inside `prepareHandoff` against the epoch-keyed spent set — which is precisely what
+  // makes a post-`ResetCluster` re-mint of seq 1 lawful while a genuine reuse is not.
   val inv_handoff_seq_never_reused: bool = not(defects.seqReuse)
 
   // INV-EPOCH-1/2: the cluster epoch dominates every node's own epoch; a nonzero node
   // epoch is unique among current Primaries.
   val inv_epoch_monotone: bool = and {
-    epoch >= NODES.fold(0, (acc, n) => max2(acc, node_epoch.get(n))),
+    ctl.epoch >= NODES.fold(0, (acc, n) => max2(acc, nodes.get(n).epoch_own)),
     NODES.forall(n1 => NODES.forall(n2 =>
-      (n1 != n2 and nodes.get(n1).role == Primary and nodes.get(n2).role == Primary and node_epoch.get(n1) != 0)
-        implies node_epoch.get(n1) != node_epoch.get(n2)
+      (n1 != n2 and nodes.get(n1).role == Primary and nodes.get(n2).role == Primary
+        and nodes.get(n1).epoch_own != 0)
+        implies nodes.get(n1).epoch_own != nodes.get(n2).epoch_own
     )),
   }
 
-  // Cross-step half INV-EPOCH-1/2 cannot state: the cluster epoch never decreases.
-  val inv_epoch_never_decreases: bool = epoch >= prev_epoch
+  // Cross-step half INV-EPOCH-1/2 cannot state: the cluster epoch never decreases. Every
+  // action carries `prev_epoch` forward from the state it fired in (see the machine's
+  // `keepCtl`), so this compares consecutive states.
+  val inv_epoch_never_decreases: bool = ctl.epoch >= ctl.prev_epoch
 
-  // Issue 15, ruled + amended: once a slot has no live handoff *and* is not mid the
-  // `repatriating` phase (its migration was aborted/cancelled/completed and any
-  // repatriation resolved, or it never had one), no residue remains — no
-  // provisional-at-target ghost claim, and no armed barrier still names that slot.
-  // Restated this round for I13: the amendment's own ordering ("streams back to the
-  // source *before* the Abort applies clean") makes a pending-repatriation state with
-  // residue still visible a legal, ruled-for intermediate — not a violation of "abort =
-  // rollback with repatriation" but the *in-progress* half of that same claim, which is
-  // why `not(repatriating.contains(s))` is now part of the precondition rather than the
-  // claim being dropped. This is still made falsifiable by the `provisional_target`
-  // ghost field (see its declaration comment for why a plain "slot owned by source"
-  // check would be vacuous in this model's shape).
-  val inv_abort_repatriates: bool =
-    SLOTS.forall(s => {
-      val liveHandoff = match migrations.get(s) {
-        | Some(m) => m.handoff != None
-        | None => false
-      }
-      (not(liveHandoff) and not(repatriating.contains(s)))
-        implies (provisional_target.get(s) == None and not(armed_barriers.contains(s)))
-    })
-
-  // Added this round for I13: the `repatriating` phase's own structural integrity — a
-  // slot mid-phase always still shows the residue it is streaming back (so
-  // `completeRepatriation` has something real to resolve), never a live handoff (both
-  // entry points into the phase clear it, so it cannot be re-prepared/re-armed out from
-  // under the phase), and — the `None` branch below — always still has a live
-  // `Migration` record: both `cancelMigration` and `abortHandoff` only ever add a slot to
-  // `repatriating` in the same step they keep (or write) that slot's migration as
-  // `Some(...)`, so `None` while `repatriating.contains(s)` can only mean some other
-  // action clobbered the record out from under an in-flight phase — caught here rather
-  // than left as a silent gap the way a permissive `None => true` would leave it (found
-  // by mutation testing: a mutant that made `cancelMigration` clear the record
-  // unconditionally, ignoring residue, slipped past this invariant's original `None =>
-  // true` arm and past `inv_abort_repatriates` alike, since neither one asserted the
-  // record must survive while its repatriation is outstanding).
-  val inv_repatriating_well_formed: bool =
-    SLOTS.forall(s => repatriating.contains(s) implies and {
-      provisional_target.get(s) != None or feed_bytes.get(s) > 0 or disconnected_feed.contains(s),
-      match migrations.get(s) { | Some(m) => m.handoff == None | None => false },
-    })
-
-  // Issue 20, ruled: no failover — planned, automatic, or forced — ever leaves the old
+  // Issue 20, ruled: no failover-shaped transition — planned, automatic, forced, the
+  // source-failover variant, or the administrative `demoteNode` — ever leaves the old
   // primary undemoted (still a Primary), un-parented to its successor, or un-membered.
-  // Checked via the `defects.demotion` ghost, which is recomputed independently at each
-  // failover action from that action's own postcondition output — not from the guard —
-  // so a mutant that stops demoting (while everything else about the transition stays
-  // legal) is still caught even though no *guard* protects this postcondition.
+  // Checked via the `defects.demotion` ghost, which each of those actions recomputes
+  // from its own postcondition output (`demotedTo`) rather than from its guard, so a
+  // mutant that stops demoting is still caught even though no *guard* protects this.
   val inv_last_failover_demoted: bool = not(defects.demotion)
 
-  // Issue 19, amended: the per-object epoch/role fence. Checked via `defects.fence`,
-  // recomputed from the pre-action state independent of `fenceOk`'s own guard use.
+  // Issue 19, amended: the per-object epoch/role fence, on every failover path including
+  // the forced one. Checked via `defects.fence`, recomputed from the pre-action state
+  // independent of `fenceOk`'s own guard use.
   val inv_last_failover_fenced: bool = not(defects.fence)
 
   // Issue 26, ruled: `failoverGraceful` never applies without its drain/parity barrier
-  // armed over every slot it is about to move. Checked via `defects.barrier`,
-  // recomputed independent of the guard.
+  // armed over **every slot it is about to move** (not merely non-empty). Checked via
+  // `defects.barrier`, recomputed independent of the guard.
   val inv_graceful_failover_barriered: bool = not(defects.barrier)
 
-  // Issue 17, ruled: CompleteSlotMigration never admits without a matching, drained
-  // handoff. Checked via `defects.admission`, recomputed independent of `canComplete`.
+  // Issue 17, ruled, reworked for the redesign: CompleteSlotMigration never admits
+  // without a sealed drain — a `Draining` record whose drained position was minted by the
+  // same run as the source log it drained, and a target copy that covers it. Checked via
+  // `defects.admission`, recomputed inside `completeMigration` from the record's own
+  // evidence rather than from `canComplete`.
   val inv_complete_requires_drained: bool = not(defects.admission)
 
-  // TR-CLUSTER-016 amendment: the byte-cap hold is honored — no slot's buffered bytes
-  // ever exceed the cap. Meaningful now that `feedBuffer` accepts every arrival
-  // (folding the breach-disconnect branch into the same action, per the header note) —
-  // a mutant that skips the breach branch violates this directly.
-  val inv_feed_hold_bounded: bool =
-    SLOTS.forall(s => feed_bytes.get(s) <= HOLD_BYTE_CAP)
+  // DELETED with the rework — `inv_feed_hold_bounded` (`feed_bytes <= HOLD_BYTE_CAP`).
+  // The cap is no longer an atomic arrival-time bound: ext-2/ext-11 make the breach a
+  // separate, locally-scheduled release action, so a state in which the buffer sits above
+  // the cap awaiting that release is lawful and reachable. The property that replaces it
+  // is about the *held write region* emptying, not about the byte count — and it belongs
+  // to the Q2 invariant set (`inv_held_set_empty_while_latched`), which is why nothing is
+  // asserted about the cap here rather than a weakened version being left in place.
 
   // ---------------------------------------------------------------------------
   // Tests.
   // ---------------------------------------------------------------------------
 
-  // (a) Full happy migration: begin -> prepare -> confirm drained -> complete.
+  // (a) The full happy path, end to end: begin -> prepare -> confirm -> complete ->
+  // relabel -> attest -> reap. The point of the redesign is visible at the `complete`
+  // step: ownership has moved to the target, but node 1 still holds its copy of the slot
+  // and no one may take it until the promotion is attested.
   run happyMigrationTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
-      .expect(migrations.get(1) == Some({ source: 1, target: 2, handoff: None, cancelling: false }))
+      .then(beginMigration(1, 1, 4))
+      .expect(and {
+        match migrations.get(1) {
+          | Some(m) => m.source == 1 and m.target == 4 and m.attempt == 0 and m.phase == Streaming
+          | None => false
+        },
+        // ext-10: Begin ingests under the current reset epoch.
+        shadow.get(1) == Some({ mig: 1, epoch: 0 }),
+      })
       .then(prepareHandoff(1))
       .expect(and {
         barrierArmed(1),
-        match migrations.get(1) { | Some(m) => match m.handoff { | Some(h) => h.seq == 1 and not(h.drained) | None => false } | None => false },
+        held.get(1) == Set(1),
+        match migrations.get(1) { | Some(m) => m.attempt == 1 and m.fenced | None => false },
       })
       .then(confirmDrained(1, 1))
-      .expect(provisional_target.get(1) == Some(2))
+      .expect(match migrations.get(1) { | Some(m) => m.phase == Draining | None => false })
       .then(completeMigration(1, 1))
       .expect(and {
-        slots.get(1) == Some(2),
+        slots.get(1) == Some(4),
         migrations.get(1) == None,
         not(barrierArmed(1)),
-        provisional_target.get(1) == None,
+        held.get(1) == Set(),
+        // The source is still a holder; the residue entry says so, un-attested.
+        nodes.get(1).keys.contains(1),
+        residue.get(1) == Some({ mig: 1, source: 1, target: 4, promoted: false,
+                                 source_gone: false, target_gone: false }),
+        // The target does NOT hold the slot in its own keyspace yet.
+        not(nodes.get(4).keys.contains(1)),
+      })
+      .then(relabelShadow(1))
+      .expect(and { shadow.get(1) == None, not(nodes.get(4).keys.contains(1)) })
+      .then(reportPromoted(1))
+      .expect(and {
+        nodes.get(4).keys.contains(1),
+        match residue.get(1) { | Some(r) => r.promoted | None => false },
+      })
+      .then(reapSlots(1))
+      .expect(and { not(nodes.get(1).keys.contains(1)), nodes.get(4).keys.contains(1) })
+      .then(clearSlotResidue(1))
+      .expect(residue.get(1) == None)
+  }
+
+  // (a1) The core of source-authoritative-until-commit: after the commit but before the
+  // attestation, the reaper is refused — the source's copy is the only attested one.
+  run sourceKeepsCopyUntilAttestedTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .expect(nodes.get(1).keys.contains(1))
+      .then(reapSlots(1).fail())
+  }
+
+  // (a2) The rollback-wins-the-race trace the promotion split exists for: the local flip
+  // has happened, the attestation has not, and the promotion fails. Ownership returns to
+  // the source (which never stopped being authoritative), the staged copy goes, and the
+  // target never held the slot in its own keyspace at any point.
+  run promotionRollsBackToSourceTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(relabelShadow(1))
+      .then(failPromotion(1))
+      .expect(and {
+        slots.get(1) == Some(1),
+        shadow.get(1) == None,
+        nodes.get(1).keys.contains(1),
+        not(nodes.get(4).keys.contains(1)),
+        match residue.get(1) { | Some(r) => not(r.promoted) | None => false },
       })
   }
 
+  // (a3) An outstanding residue entry blocks the next migration over the same slot, and
+  // blocks the shadow discard — the entry is the record of unfinished business.
+  run residueBlocksNextMigrationTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .expect(residue.get(1) != None)
+      .then(beginMigration(1, 4, 2).fail())
+  }
+
+  run discardShadowRefusedWithResidueTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(discardShadow(1).fail())
+  }
+
+  // (a4) ext-12's mark-don't-remove plus ext-7's `target_gone` defer: the attestation has
+  // landed, so the promoted gate is satisfied — but the target has departed, and the
+  // reaper must hold off rather than delete the last remaining copy.
+  run reapDeferredWhileTargetGoneTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(relabelShadow(1))
+      .then(reportPromoted(1))
+      .then(removeNode(4, true, false))
+      .expect(and {
+        match residue.get(1) { | Some(r) => r.promoted and r.target_gone | None => false },
+        // Marked, never removed.
+        residue.get(1) != None,
+        nodes.get(1).keys.contains(1),
+      })
+      .then(reapSlots(1).fail())
+  }
+
   // (b1) Graceful failover before any handoff was ever prepared: migration open, no
-  // barrier armed yet; failover of the source still prunes the migration. The barrier
-  // (armFailoverFence) is armed immediately before the swap, per its single-shot
-  // discipline.
+  // barrier armed yet; failover of the source still prunes the migration. The barrier is
+  // armed immediately before the swap, per its single-shot discipline.
   run gracefulFailoverBeforePrepareTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(armFailoverFence(1))
       .then(failoverGraceful(1, 3, 0, Primary))
       .expect(and {
         migrations.get(1) == None,
         nodes.get(1).role == Replica,
         nodes.get(1).member,
+        nodes.get(1).parent == Some(3),
         nodes.get(3).role == Primary,
+        coverage.gracefulPruned,
       })
   }
 
   // (b1a) Without arming the barrier first, the same graceful failover is refused —
-  // TR-CLUSTER-017's ruled drain/parity precondition, now a real guard.
+  // TR-CLUSTER-017's ruled drain/parity precondition, a real guard.
   run gracefulFailoverRefusesWithoutBarrierTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(failoverGraceful(1, 3, 0, Primary).fail())
   }
 
-  // (b2) Graceful failover while the handoff is armed but not drained: the barrier
-  // must be released by the prune, not left orphaned.
+  // (b2) Graceful failover while the handoff is armed but not drained: the barrier and
+  // the source's held writes must be released by the prune, not left orphaned.
   run gracefulFailoverArmedNotDrainedTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(prepareHandoff(1))
-      .expect(barrierArmed(1))
+      .expect(and { barrierArmed(1), held.get(1) == Set(1) })
       .then(armFailoverFence(1))
       .then(failoverGraceful(1, 3, 0, Primary))
       .expect(and {
         migrations.get(1) == None,
         not(barrierArmed(1)),
+        held.get(1) == Set(),
         nodes.get(1).role == Replica,
         nodes.get(1).member,
       })
   }
 
-  // (b3) Graceful failover while the handoff is drained but not yet completed: the
-  // provisional-at-target ghost claim must also be repatriated by the prune.
+  // (b3) Graceful failover while the handoff is drained but not yet completed. Under the
+  // redesign there is nothing to stream back — ownership never moved — so the prune is a
+  // clean one-step cutover, and the target's now-orphaned shadow is cleaned up
+  // separately by `discardShadow` (which is admissible precisely because the prune left
+  // no record and no residue behind).
   run gracefulFailoverDrainedNotCompleteTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
-      .expect(provisional_target.get(1) == Some(2))
+      .expect(match migrations.get(1) { | Some(m) => m.phase == Draining | None => false })
       .then(armFailoverFence(1))
       .then(failoverGraceful(1, 3, 0, Primary))
       .expect(and {
         migrations.get(1) == None,
+        residue.get(1) == None,
         not(barrierArmed(1)),
-        provisional_target.get(1) == None,
-        nodes.get(1).role == Replica,
-        nodes.get(1).member,
+        // Ownership never moved: the slot is the successor's, not the migration
+        // target's.
+        slots.get(1) == Some(3),
+        shadow.get(1) != None,
       })
+      .then(discardShadow(1))
+      .expect(shadow.get(1) == None)
   }
 
-  // (c) Abort mid-handoff -> repatriation, without any failover involved. Restructured
-  // this round for I13: `abortHandoff` no longer clears the residue in the same step —
-  // it opens the `repatriating` phase (barrier released, migration survives, residue
-  // still visible), and a separate `completeRepatriation` resolves it. This is exactly
-  // the "cancel/abort-before-repatriation" intermediate state I13 asked to be made
-  // expressible: without the intermediate `.expect()` below, this same test collapsed
-  // Abort's rollback and its repatriation into a single, unobservable step.
-  run abortRepatriatesTest: bool = {
+  // (c) Cancel, reworked: with the source authoritative until commit, Cancel resolves the
+  // record in a single step — no repatriating phase, no residue, and the slot is still
+  // the source's.
+  run cancelAppliesInOneStepTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
-      .expect(provisional_target.get(1) == Some(2))
+      .then(cancelMigration(1, 1))
+      .expect(and {
+        migrations.get(1) == None,
+        residue.get(1) == None,
+        slots.get(1) == Some(1),
+        not(barrierArmed(1)),
+        held.get(1) == Set(),
+        // Only the target's staged copy survives, and it is discardable.
+        shadow.get(1) != None,
+      })
+      .then(discardShadow(1))
+      .expect(shadow.get(1) == None)
+  }
+
+  // (c1) Abort releases the handoff and the source's seal; the migration itself survives
+  // and can be re-prepared.
+  run abortHandoffKeepsMigrationTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
       .then(abortHandoff(1, 1))
       .expect(and {
-        // The intermediate, previously-unobservable state: Abort has applied (handoff
-        // released, barrier down) but repatriation has not yet caught up.
-        migrations.get(1) != None,
-        match migrations.get(1) { | Some(m) => m.handoff == None | None => false },
-        provisional_target.get(1) == Some(2),
+        match migrations.get(1) {
+          | Some(m) => m.attempt == 0 and not(m.fenced) and m.phase == Streaming and m.drained_pos == None
+          | None => false
+        },
         not(barrierArmed(1)),
-        repatriating.contains(1),
+        held.get(1) == Set(),
       })
-      .then(completeRepatriation(1))
-      .expect(and {
-        migrations.get(1) != None,
-        provisional_target.get(1) == None,
-        not(repatriating.contains(1)),
-      })
-  }
-
-  // Added this round for I13: Cancel (not just Abort) with residue also opens the
-  // repatriating phase — cancel-before-repatriation is now a real, distinct
-  // intermediate state (the migration record survives, marked `cancelling: true`, until
-  // `completeRepatriation` actually removes it — "the Abort applies clean," in the
-  // amendment's words).
-  run cancelBeforeRepatriationTest: bool = {
-    init
-      .then(beginMigration(1, 1, 2))
       .then(prepareHandoff(1))
-      .then(confirmDrained(1, 1))
-      .expect(provisional_target.get(1) == Some(2))
-      .then(cancelMigration(1))
-      .expect(and {
-        // Cancel has applied (barrier down) but the migration record is NOT yet
-        // removed and the residue has NOT yet streamed back — the exact intermediate
-        // state I13 asked to be expressible.
-        match migrations.get(1) { | Some(m) => m.cancelling and m.handoff == None | None => false },
-        provisional_target.get(1) == Some(2),
-        not(barrierArmed(1)),
-        repatriating.contains(1),
-      })
-      .then(completeRepatriation(1))
-      .expect(and {
-        migrations.get(1) == None,
-        provisional_target.get(1) == None,
-        not(repatriating.contains(1)),
-      })
+      .expect(match migrations.get(1) { | Some(m) => m.attempt == 2 and m.fenced | None => false })
   }
 
-  // While pending, the phase resists re-entry: a second Cancel is refused. (`.fail()`
-  // is the terminal step of a run — see cluster_admission.qnt's tests for the same
-  // discipline — so this is its own test rather than a mid-chain step.)
-  run cancelRefusedWhileRepatriatingTest: bool = {
-    init
-      .then(beginMigration(1, 1, 2))
-      .then(prepareHandoff(1))
-      .then(confirmDrained(1, 1))
-      .then(cancelMigration(1))
-      .expect(repatriating.contains(1))
-      .then(cancelMigration(1).fail())
-  }
-
-  // The no-residue case is unaffected by this round's change: cancelling a migration
-  // that never reached a drained handoff removes the record immediately, exactly as
-  // before, with no repatriating phase opened at all.
-  run cancelWithoutResidueAppliesImmediatelyTest: bool = {
-    init
-      .then(beginMigration(1, 1, 2))
-      .then(cancelMigration(1))
-      .expect(and {
-        migrations.get(1) == None,
-        not(repatriating.contains(1)),
-      })
-  }
-
-  // (c2) Re-preparing over a live handoff supersedes it (FM-CLUSTER-085): the old seq
-  // becomes stale and is thereafter refused.
+  // (c2) Re-preparing over a live handoff supersedes it (FM-CLUSTER-085): the old attempt
+  // stamp becomes stale and is thereafter refused by every attempt-checked action
+  // (ext-3).
   run prepareSupersedesLiveHandoffTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(prepareHandoff(1))
-      .expect(match migrations.get(1) { | Some(m) => match m.handoff { | Some(h) => h.seq == 1 | None => false } | None => false })
+      .expect(match migrations.get(1) { | Some(m) => m.attempt == 1 | None => false })
       .then(prepareHandoff(1))
-      .expect(match migrations.get(1) { | Some(m) => match m.handoff { | Some(h) => h.seq == 2 and not(h.drained) | None => false } | None => false })
-      // The stale seq 1 is refused by every seq-checked action.
+      .expect(match migrations.get(1) { | Some(m) => m.attempt == 2 and m.phase == Streaming | None => false })
       .then(confirmDrained(1, 1).fail())
+  }
+
+  // (c3) ext-1/ext-5: the commit's evidence is run-tagged, and a restart at the target
+  // re-mints its run — so the ingest report the record is carrying was attested by a run
+  // the target no longer has, and `Complete` must refuse it rather than trust a position
+  // from a forked history. (The mirror case at the *source* — a source restart under an
+  // already-sealed drain — is NOT refused by this model; see the header's ambiguity note
+  // in the Q1 report: `canComplete` compares the drained position's run against the
+  // record's own source-log run, both of which a restart leaves untouched.)
+  run completeRefusesCrossRunTargetCopyTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(targetRestart(4))
+      .expect(and {
+        nodes.get(4).run_id == 5,
+        match migrations.get(1) { | Some(m) => m.target_copy.run_id == 4 | None => false },
+      })
+      .then(completeMigration(1, 1).fail())
   }
 
   // (d) Forced failover mid-migration -> demote path, not removal.
   run forcedFailoverDemotesTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(prepareHandoff(1))
       .then(failoverForced(1, 3, 0, Primary))
       .expect(and {
@@ -601,64 +650,118 @@ module cluster_migration_failover {
       })
   }
 
-  // The per-object fence (issue 19, amended) refuses a stale observation: node 3's
-  // epoch has moved on (it was just promoted) since a proposal that still thinks it is
-  // at epoch 0 observed it. After `failoverForced(1, 3, ...)`, node 1 becomes node
-  // 3's replica (siblings re-parent to the new primary), so `failoverForced(3, 1, ...)`
-  // passes the belt (1 is 3's replica, 3 owns slots, 3 is Primary) but must fail the
-  // fence. (Forced, not graceful, since this test does not arm the drain/parity
-  // barrier — the fence check is what is under test here, not the barrier.)
+  // (d1) What `force` actually drops is ext-16's *sync* gate on the candidate, not the
+  // fence and not the belt: an unsynced in-shard replica is promotable by the forced path
+  // and refused by the graceful one.
+  run forcedFailoverPromotesUnsyncedTest: bool = {
+    init
+      .then(setRole(3, Replica, Some(1)))
+      .expect(not(nodes.get(3).synced))
+      .then(armFailoverFence(1))
+      .then(failoverGraceful(1, 3, 0, Primary).fail())
+  }
+
+  run forcedFailoverAcceptsUnsyncedTest: bool = {
+    init
+      .then(setRole(3, Replica, Some(1)))
+      .then(failoverForced(1, 3, 0, Primary))
+      .expect(and { nodes.get(3).role == Primary, coverage.forcedDemotedReplica })
+  }
+
+  // The per-object fence (issue 19, amended) refuses a stale observation: node 3's epoch
+  // has moved on (it was just promoted) since a proposal that still thinks it is at
+  // epoch 0 observed it. After the first swap, node 1 is node 3's replica, so the reverse
+  // proposal passes the belt but must fail the fence.
   run failoverRefusesStaleFenceTest: bool = {
     init
       .then(failoverForced(1, 3, 0, Primary))
       .expect(and {
-        node_epoch.get(3) == 1,
+        nodes.get(3).epoch_own == 1,
         nodes.get(1).role == Replica,
         nodes.get(1).parent == Some(3),
       })
-      // A stale proposal that still thinks node 3 is at epoch 0 (its value before the
-      // promotion above) must be refused by the fence, even though the belt passes.
       .then(failoverForced(3, 1, 0, Primary).fail())
   }
 
-  // TR-CLUSTER-016 amendment: byte-cap hold overflow disconnects the session rather
-  // than buffering unboundedly, in the same step as the breaching arrival.
-  run feedHoldOverflowDisconnectsTest: bool = {
+  // TR-CLUSTER-016/034 amendment + ext-2/ext-11: a hold that breaches the byte cap is
+  // released *locally* — the source drops its own seal and the whole hold region empties,
+  // while the migration record and its phase survive untouched.
+  run feedHoldCapBreachReleasesTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 4))
       .then(prepareHandoff(1))
-      .then(feedBuffer(1, 3))
-      .then(feedBuffer(1, 3))
-      .expect(and { feed_bytes.get(1) == 6, not(disconnected_feed.contains(1)) })
-      .then(feedBuffer(1, 1))
-      .expect(and { feed_bytes.get(1) == 0, disconnected_feed.contains(1) })
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .expect(and { feed_bytes.get(1) == 6, held.get(1) == Set(1) })
+      // At the cap, nothing has breached yet.
+      .then(localReleaseOnCapBreach(1).fail())
+  }
+
+  run feedHoldCapBreachReleasesFenceTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .expect(feed_bytes.get(1) == 7)
+      .then(localReleaseOnCapBreach(1))
+      .expect(and {
+        feed_bytes.get(1) == 0,
+        not(barrierArmed(1)),
+        held.get(1) == Set(),
+        // The seal drops; the phase does not.
+        match migrations.get(1) { | Some(m) => not(m.fenced) and m.phase == Streaming | None => false },
+      })
+  }
+
+  // ext-11: the alive-but-unable-to-apply latch releases the hold region too — the
+  // held set must not stay latched behind a source that cannot drain it.
+  run selfFenceReleaseEmptiesHoldTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4))
+      .then(prepareHandoff(1))
+      .then(setSourceCannotApply(1, true))
+      .then(selfFenceRelease(1))
+      .expect(and { held.get(1) == Set(), not(barrierArmed(1)) })
   }
 
   // TR-CLUSTER-003, ruled + amended (issue 20): a member still owning a slot cannot be
-  // removed without `force`. `.fail()` is the terminal step of a run (see
-  // cluster_admission.qnt's tests for the same discipline) — the positive "succeeds
-  // once demoted" continuation lives in removeNodeAfterDemotionSucceedsTest below.
+  // removed without `force`.
   run removeNodeRefusesLiveOwnerTest: bool = {
     init
-      .then(removeNode(1, false).fail())
+      .then(removeNode(1, false, false).fail())
   }
 
   // Once demoted off its slots by a graceful failover, the bare (non-forced) removal
-  // succeeds and detaches its former replica's parent pointer.
+  // succeeds. Note what it does NOT do: the departing node's keyspace is untouched —
+  // `reapSlots` is the model's only keyspace deleter (V8-C1).
   run removeNodeAfterDemotionSucceedsTest: bool = {
     init
       .then(armFailoverFence(1))
       .then(failoverGraceful(1, 3, 0, Primary))
       .expect(and { nodes.get(1).role == Replica, not(ownsAnySlot(slots, 1)) })
-      .then(removeNode(1, false))
-      .expect(and { not(nodes.get(1).member), nodes.get(4).parent == Some(2) })
+      .then(removeNode(1, false, false))
+      .expect(and {
+        not(nodes.get(1).member),
+        nodes.get(1).registration_seq == None,
+        nodes.get(1).keys == SLOTS,
+      })
   }
 
-  // TR-CLUSTER-003's `force` escape: a live owning Primary can be forcibly removed;
-  // the postcondition still prunes its slots (INV-REF-1 survives).
+  // TR-CLUSTER-003's `force` escape: a live owning Primary can be forcibly removed; the
+  // postcondition still prunes its slot ownership (INV-REF-1 survives).
   run removeNodeForceEvictsLiveOwnerTest: bool = {
     init
-      .then(removeNode(1, true))
+      .then(removeNode(1, true, false))
       .expect(and {
         not(nodes.get(1).member),
         slots.get(1) == None,
@@ -666,4 +769,31 @@ module cluster_migration_failover {
       })
   }
 
+  // ext-10: `ResetCluster` is refused while the node's keyspace is non-empty — the same
+  // gate as `meetNode`, and the reason a rejoining node can never smuggle stale copies
+  // back into the cluster.
+  run resetRefusesNonEmptyKeyspaceTest: bool = {
+    init
+      .then(resetCluster(1).fail())
+  }
+
+  // ext-10, the point of re-keying `spent` by reset epoch: after a reset rewinds the
+  // handoff counter, minting seq 1 again is a lawful *re-mint*, not a reuse — and the
+  // model can tell the two apart.
+  run resetMakesReMintDistinguishableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 2))
+      .then(prepareHandoff(1))
+      .expect(spent == Set({ epoch: 0, seq: 1 }))
+      .then(cancelMigration(1, 1))
+      .then(resetCluster(4))
+      .expect(and { ctl.reset_epoch == 1, ctl.handoff_seq == 0 })
+      .then(beginMigration(2, 1, 2))
+      .then(prepareHandoff(2))
+      .expect(and {
+        match migrations.get(2) { | Some(m) => m.attempt == 1 | None => false },
+        spent == Set({ epoch: 0, seq: 1 }, { epoch: 1, seq: 1 }),
+        not(defects.seqReuse),
+      })
+  }
 }

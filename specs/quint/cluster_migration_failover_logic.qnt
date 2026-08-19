@@ -3,18 +3,41 @@
 // (`apply*`), and the small helpers they share. Each takes the state it reads as an
 // explicit argument, so this module holds no `var` and is unit-testable in isolation.
 //
+// Reworked for the issue-31 redesign (design doc's "Quint rework" section). The
+// superseded source-side *repatriation* logic (`canCompleteRepatriation`, the
+// `cancelling` record field, the `repatriating` phase threaded through every helper) is
+// gone: the redesign is source-authoritative-until-commit, so the source simply keeps
+// its copy — and its authority — until the target's promotion is *attested*, at which
+// point `reapSlots` (ext-7/ext-12) is the only thing that may delete it.
+//
 // Rows whose ruled semantics are encoded here: TR-CLUSTER-003 (RemoveNode fence),
 // TR-CLUSTER-004 (SetRole), TR-CLUSTER-008/009 (Assign/RemoveSlots), TR-CLUSTER-010
 // (BeginSlotMigration), TR-CLUSTER-011 (PrepareSlotHandoff), TR-CLUSTER-012
 // (ConfirmSlotHandoffDrained), TR-CLUSTER-013 (CompleteSlotMigration), TR-CLUSTER-014
-// (AbortSlotHandoff), TR-CLUSTER-015 (CancelSlotMigration + repatriation),
-// TR-CLUSTER-017/018/019/042 (the shared failover postcondition, the per-object fence
-// and the belt), TR-CLUSTER-021 (successor selection's structural precondition) and
-// TR-CLUSTER-034 (handoff barrier arm/release). Per-definition comments below carry the
-// full ruling/amendment rationale; the model-wide header lives in
+// (AbortSlotHandoff), TR-CLUSTER-015 (CancelSlotMigration), TR-CLUSTER-017/018/019/042
+// (the shared failover postcondition, the per-object fence and the belt), TR-CLUSTER-021
+// (successor selection's structural precondition), TR-CLUSTER-033/035 and TR-CLUSTER-034
+// (handoff barrier arm/release). Per-definition comments carry the ruling/amendment or
+// the redesign extension (`ext-N`) each encodes; the model-wide header lives in
 // cluster_migration_failover.qnt.
 module cluster_migration_failover_logic {
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
+
+  // The bundle `applyFailoverCommon` (and the demotion transitions that share its
+  // postcondition) read and rewrite. Grouped as one record so the postcondition is a
+  // single pure function over the whole affected footprint rather than eight parallel
+  // out-parameters.
+  type ClusterView = {
+    nodes: NodeId -> NodeState,
+    slots: SlotId -> Option[NodeId],
+    migrations: SlotId -> Option[Migration],
+    residue: SlotId -> Option[Residue],
+    armed: Set[SlotId],
+    disconnected: Set[SlotId],
+    feed_bytes: SlotId -> int,
+    held: NodeId -> Set[SlotId],
+    epoch: int,
+  }
 
   // ---------------------------------------------------------------------------
   // Small pure helpers.
@@ -24,6 +47,31 @@ module cluster_migration_failover_logic {
 
   pure def ownsAnySlot(slotMap: SlotId -> Option[NodeId], n: NodeId): bool =
     SLOTS.exists(s => slotMap.get(s) == Some(n))
+
+  // The slots a failover/demotion of `old` moves — the set the graceful barrier must
+  // have covered (TR-CLUSTER-018's "Ownership barrier armed over the moved slots").
+  pure def movedSlotsOf(slotMap: SlotId -> Option[NodeId], old: NodeId): Set[SlotId] =
+    SLOTS.filter(s => slotMap.get(s) == Some(old))
+
+  // The demotion postcondition, stated *once* and read by the defect ghosts of every
+  // failover/demotion action: the old primary is a replica of the successor, still a
+  // member (issue 20: demote, don't remove), and the successor is a primary.
+  pure def demotedTo(allNodes: NodeId -> NodeState, old: NodeId, succ: NodeId): bool = and {
+    allNodes.get(old).role == Replica,
+    allNodes.get(old).parent == Some(succ),
+    allNodes.get(old).member,
+    allNodes.get(succ).role == Primary,
+  }
+
+  // The primary of `n`'s shard: itself when it is a live primary, else its parent when
+  // that is a live primary. `retargetSlotResidue` (ext-12) is level-triggered on this
+  // being a live primary other than the entry's current `source`.
+  pure def shardPrimary(allNodes: NodeId -> NodeState, n: NodeId): Option[NodeId] =
+    if (allNodes.get(n).member and allNodes.get(n).role == Primary) Some(n)
+    else match allNodes.get(n).parent {
+      | Some(p) => if (allNodes.get(p).member and allNodes.get(p).role == Primary) Some(p) else None
+      | None => None
+    }
 
   // The set of slots whose open migration names `node` on either leg (source or
   // target) — TR-CLUSTER-018/042's "Open migrations naming old_primary_id pruned"
@@ -44,29 +92,38 @@ module cluster_migration_failover_logic {
       }
     )
 
+  // ext-16/ext-17, the single funnel every `primary_id` write in this model goes
+  // through: the three companion stamps (`synced`, `admitted_stage`, `promoted_from`)
+  // are written in the same step, and the parenting token `parent_seq` is incremented in
+  // that same step (V16-C1). Keying the rule on the *parent pointer* rather than on
+  // `role` is V15-C1's correction — the two LOCKED pointer-only writers (`removeNode`'s
+  // detach and the failover sibling re-parent) escaped the role-keyed form, and both go
+  // through this function here.
+  pure def writeParentPointer(ns: NodeState, role: RoleTag, parent: Option[NodeId],
+                              synced: bool, admitted: Option[int], promotedFrom: Option[NodeId]): NodeState =
+    { ...ns, role: role, parent: parent, synced: synced, admitted_stage: admitted,
+      promoted_from: promotedFrom, parent_seq: ns.parent_seq + 1 }
+
   // ---------------------------------------------------------------------------
-  // Nondet-biasing helpers (added this round for I8/I9/I10) — narrow the candidate set
-  // `step` samples from to state-derived "currently interesting" values when that set is
-  // nonempty, falling back to the full domain otherwise. This changes only which
-  // transitions the randomized walk is *likely* to try, never which transitions are
-  // legal — no guard or postcondition depends on these. See quint-modeling's "narrower
-  // value space with fallback" pattern.
+  // Nondet-biasing helpers — narrow the candidate set `step` samples from to
+  // state-derived "currently interesting" values when that set is nonempty, falling back
+  // to the full domain otherwise. This changes only which transitions the randomized
+  // walk is *likely* to try, never which transitions are legal — no guard or
+  // postcondition depends on these. See quint-modeling's "narrower value space with
+  // fallback" pattern.
   // ---------------------------------------------------------------------------
 
-  // The set of nodes currently the source of an open migration — biases `step`'s shared
-  // `n1` toward a node a migration/handoff/failover action can actually act on, instead
-  // of `beginMigration`'s old ~25% (1-in-4 nodes) hit rate against `canBeginMigration`'s
-  // ownership conjunct.
   pure def migrationSourcesOf(migs: SlotId -> Option[Migration]): Set[NodeId] =
     SLOTS.fold(Set(), (acc, s) => match migs.get(s) {
       | Some(m) => acc.union(Set(m.source))
       | None => acc
     })
 
-  // Slots with an open migration, or mid-repatriation — biases the handoff-lifecycle
-  // nondet slot pick toward a slot those actions can actually act on.
-  pure def openMigrationSlots(migs: SlotId -> Option[Migration]): Set[SlotId] =
-    SLOTS.filter(s => migs.get(s) != None)
+  // Slots with an open migration, a shadow or a residue entry — the slots the
+  // migration-lifecycle, promotion and reaper actions can act on.
+  pure def openMigrationSlots(migs: SlotId -> Option[Migration], sh: SlotId -> Option[ShadowTag],
+                              res: SlotId -> Option[Residue]): Set[SlotId] =
+    SLOTS.filter(s => migs.get(s) != None or sh.get(s) != None or res.get(s) != None)
 
   // Current members who are a Replica of `n` — biases failover's successor pick toward
   // a value `beltOk` can actually accept, instead of an independent 1-in-4 uniform pick.
@@ -74,13 +131,7 @@ module cluster_migration_failover_logic {
     NODES.filter(m => allNodes.get(m).member and allNodes.get(m).role == Replica and allNodes.get(m).parent == Some(n))
 
   // Owners of the slots currently held in `failover_fence` — biases `step`'s shared `n1`
-  // toward the node a just-armed barrier belongs to. `armFailoverFence` is single-shot
-  // (every other action clears it — see its own comment), so firing `failoverGraceful`
-  // for the armed node requires picking that *same* `n1` on the very next step; without
-  // this bias `n1` is redrawn uniformly (or migration-source-biased) each step, making the
-  // arm-then-fire pair a near-independent double draw. Narrower-domain-with-fallback, same
-  // pattern as `migrationSourcesOf`/`replicasOf` above — legality is unaffected, since
-  // `armFailoverFence`/`failoverGraceful`'s own guards are unchanged.
+  // toward the node a just-armed barrier belongs to (the fence is single-shot).
   pure def fencedOwners(fence: Set[SlotId], slotMap: SlotId -> Option[NodeId]): Set[NodeId] =
     fence.fold(Set(), (acc, s) => match slotMap.get(s) {
       | Some(n) => acc.union(Set(n))
@@ -88,13 +139,30 @@ module cluster_migration_failover_logic {
     })
 
   // ---------------------------------------------------------------------------
-  // Functional logic (guards + updates), pure and unit-testable in isolation.
+  // Membership / identity logic.
   // ---------------------------------------------------------------------------
+
+  // ext-15's boot-ordering rule as a guard: a node proposes no other action until its
+  // boot report has been applied. (`reportRunIdentity` itself is the exception, and
+  // membership-level actions are proposed *about* a node rather than by it.)
+  pure def canAct(allNodes: NodeId -> NodeState, n: NodeId): bool =
+    allNodes.get(n).member and allNodes.get(n).booted
+
+  // ext-10 (V8-C1): the join gate. A node whose main keyspace is non-empty is refused —
+  // with the self-cleanse gone, an untracked stale copy must never enter the membership.
+  pure def canMeetNode(allNodes: NodeId -> NodeState, n: NodeId): bool = and {
+    not(allNodes.get(n).member),
+    allNodes.get(n).keys == Set(),
+  }
+
+  // ext-10 (V8-C1): the same non-empty refusal on the reset path.
+  pure def canResetCluster(allNodes: NodeId -> NodeState, n: NodeId): bool = and {
+    allNodes.get(n).member,
+    allNodes.get(n).keys == Set(),
+  }
 
   // TR-CLUSTER-004, ruled (issue 14): a Replica's parent must be a present Primary; a
   // Primary's own parent pointer must be empty (INV-REF-4's structural counterpart).
-  // No slot-ownership or migration-target precondition — see the header note on why a
-  // prior revision's extra guards here were removed.
   pure def canSetRole(allNodes: NodeId -> NodeState, n: NodeId, role: RoleTag, parent: Option[NodeId]): bool =
     allNodes.get(n).member and (
       if (role == Primary) parent == None
@@ -104,173 +172,376 @@ module cluster_migration_failover_logic {
       }
     )
 
-  pure def applySetRole(ns: NodeState, role: RoleTag, parent: Option[NodeId]): NodeState =
-    { ...ns, role: role, parent: parent }
-
   // TR-CLUSTER-003, ruled + amended (issue 20): refused unless the node is already
   // demoted off every slot it owns and out of the primary role, unless `force`
   // bypasses the fence.
   pure def canRemoveNode(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId], n: NodeId, force: bool): bool =
     allNodes.get(n).member and (force or (allNodes.get(n).role == Replica and not(ownsAnySlot(slotMap, n))))
 
+  // ext-15: `ReportRunIdentity`'s ordering conjunct — the report's (incarnation,
+  // identity_seq) pair must strictly dominate the stored one. A replayed or reordered
+  // report from earlier in the boot is refused, never a migration cancel.
+  pure def identityOrderOk(stored: Option[RunIdentity], inc: int, seq: int): bool =
+    match stored {
+      | Some(st) => inc > st.inc or (inc == st.inc and seq > st.seq)
+      | None => true
+    }
+
+  // ext-15 (V8-C2): the Demotion fence. The payload carries the role/epoch it observed;
+  // apply refuses when either has moved since. `inv_promotion_is_not_reverted_without_a_
+  // failover` is what this defends.
+  pure def demotionFenceOk(ns: NodeState, obsRole: RoleTag, obsEpoch: int): bool =
+    ns.role == obsRole and ns.epoch_own == obsEpoch
+
+  // ext-16: the refusal class is the **first failing conjunct in the declared order** —
+  // membership, then ordering, then the Demotion fence — as a committed apply outcome,
+  // so the disposition arms are guarded on a value rather than on a paraphrase.
+  pure def refusalClassOf(allNodes: NodeId -> NodeState, n: NodeId, kind: TransitionKind,
+                          inc: int, seq: int, obsRole: RoleTag, obsEpoch: int): RefusalClass =
+    if (not(allNodes.get(n).member)) Membership
+    else if (not(identityOrderOk(allNodes.get(n).stored_identity, inc, seq))) Ordering
+    else if (kind == Demotion and not(demotionFenceOk(allNodes.get(n), obsRole, obsEpoch))) Fenced
+    else Whole
+
+  // ext-18: an `Ordering` refusal against an **absent stored identity** (arm 4b) and a
+  // `Membership` refusal (arm 5) are the design's declared *terminal* classes — the ones
+  // that must clear the record, drop the fence and pay the client.
+  pure def refusalIsTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
+    class == Membership or (class == Ordering and stored == None)
+
+  // ext-18: the paired record-binding conjunct. A refusal is disposed against the
+  // record only when **both** halves of the pair match; a refusal minted for a dead
+  // stage can therefore never bind a live record minted after a forget-and-rejoin.
+  pure def refusalBinds(rec: TransitionRecord, r: Refusal): bool =
+    r.stage_id == rec.stage_id and r.reg_seq == rec.staged_reg_seq
+
+  // ext-18: the clearing clause, level-triggered — enabled whenever the record's staged
+  // registration no longer matches the live cell (or the node has left the membership).
+  pure def recordIsStale(ns: NodeState): bool =
+    match ns.record {
+      | Some(rec) => ns.registration_seq != Some(rec.staged_reg_seq) or not(ns.member)
+      | None => false
+    }
+
+  // ---------------------------------------------------------------------------
+  // Slot-map logic.
+  // ---------------------------------------------------------------------------
+
   // TR-CLUSTER-008, ruled (issue 16): refused outright while a migration is open for
-  // the slot — no mutation-while-migrating. No target-role precondition — see the
-  // header note.
-  pure def canAssignSlot(migs: SlotId -> Option[Migration], target: NodeState, s: SlotId): bool = and {
+  // the slot — no mutation-while-migrating. Extended for ext-12: a slot carrying a
+  // residue entry is likewise not re-assignable until the entry is cleared.
+  pure def canAssignSlot(migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
+                         target: NodeState, s: SlotId): bool = and {
     migs.get(s) == None,
+    res.get(s) == None,
     target.member,
   }
 
   // TR-CLUSTER-009, same ruled precondition as TR-CLUSTER-008 (issue 16).
-  pure def canRemoveSlot(migs: SlotId -> Option[Migration], s: SlotId): bool =
-    migs.get(s) == None
+  pure def canRemoveSlot(migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue], s: SlotId): bool =
+    migs.get(s) == None and res.get(s) == None
 
-  // TR-CLUSTER-010: `slot`'s current owner is `source`; no existing migration entry
-  // for `slot` (the idempotent same-source/target re-issue is not separately modeled —
-  // see "Deliberately not modeled"). No target-role precondition — see the header note.
+  // ---------------------------------------------------------------------------
+  // Migration lifecycle.
+  // ---------------------------------------------------------------------------
+
+  // TR-CLUSTER-010 + ext-12's residue guard: `slot`'s current owner is `source`, no
+  // existing migration entry, and **no residue entry over the slot** — a marked
+  // (`source_gone`/`target_gone`) entry blocks `Begin` exactly as an unmarked one does
+  // (V7's kept-entry semantics; `witnessBeginRefusedOverResidue` is its witness).
+  // No target-role precondition — see the main file's header note on why.
   pure def canBeginMigration(slotMap: SlotId -> Option[NodeId], migs: SlotId -> Option[Migration],
-                              targetNode: NodeState, s: SlotId, source: NodeId, target: NodeId): bool = and {
+                             res: SlotId -> Option[Residue], targetNode: NodeState,
+                             s: SlotId, source: NodeId, target: NodeId): bool = and {
     slotMap.get(s) == Some(source),
     migs.get(s) == None,
+    res.get(s) == None,
     source != target,
     targetNode.member,
   }
 
-  pure def applyBeginMigration(migs: SlotId -> Option[Migration], s: SlotId, source: NodeId, target: NodeId): SlotId -> Option[Migration] =
-    migs.set(s, Some({ source: source, target: target, handoff: None, cancelling: false }))
+  pure def newMigration(id: MigrationId, source: NodeId, target: NodeId,
+                        sourceRun: RunId, targetRun: RunId): Migration = {
+    id: id,
+    source: source,
+    target: target,
+    attempt: 0,
+    phase: Streaming,
+    fenced: false,
+    prepare_run: sourceRun,
+    source_log: { run_id: sourceRun, pos: 0 },
+    drained_pos: None,
+    target_copy: { run_id: targetRun, pos: 0 },
+    target_applied: 0,
+    target_durable: 0,
+    target_replica_ack: 0,
+    observations: 0,
+    last_observation: None,
+    preconfirm_bound: PRECONFIRM_OBSERVATIONS,
+    draining_bound: DRAINING_OBSERVATIONS,
+  }
 
-  // TR-CLUSTER-011: migration exists (matching source/target is not separately
-  // modeled — see "Deliberately not modeled"). No "no live handoff" precondition: the
-  // ruled row text does not carry one, and requiring it made the supersede path
-  // (FM-CLUSTER-085) and TR-CLUSTER-012's stale-seq refusal unreachable — see the
-  // header note.
-  // `not(rep.contains(s))` (added this round for I13): a slot mid-repatriation is
-  // between Cancel/Abort and its resolution — re-preparing a handoff on it would
-  // resurrect a migration that is being torn down, corrupting the phase.
-  pure def canPrepareHandoff(migs: SlotId -> Option[Migration], rep: Set[SlotId], s: SlotId): bool =
-    migs.get(s) != None and not(rep.contains(s))
+  // TR-CLUSTER-011: migration exists. No "no live handoff" precondition: the ruled row
+  // text does not carry one, and requiring it made the supersede path (FM-CLUSTER-085)
+  // and TR-CLUSTER-012's stale-seq refusal unreachable — see the header note.
+  pure def canPrepareHandoff(migs: SlotId -> Option[Migration], s: SlotId): bool =
+    migs.get(s) != None
 
-  // TR-CLUSTER-011/034: mints seq from the bumped counter, arms the barrier at the
-  // source (armed_barriers keyed by slot — see the header's TR-CLUSTER-034 note). A
-  // re-prepare over a live handoff supersedes it wholesale (the old seq becomes stale
-  // and is thereafter refused by Confirm/Complete/Abort's seq match).
-  pure def applyPrepareHandoff(migs: SlotId -> Option[Migration], armed: Set[SlotId], s: SlotId, newSeq: int): { migs: SlotId -> Option[Migration], armed: Set[SlotId] } =
+  // TR-CLUSTER-011/034 + ext-2/ext-3: mints the attempt stamp from the bumped counter,
+  // arms the barrier at the source and **seals the source** (`fenced`), which is a
+  // separate fact from `phase` — the seal is what `inv_complete_requires_fenced_source`
+  // reads and what `localReleaseOnCapBreach` can drop without touching the phase.
+  // ext-1 (V4-C2): the prepare carries the source's *current* run tag.
+  pure def applyPrepareHandoff(migs: SlotId -> Option[Migration], armed: Set[SlotId],
+                               s: SlotId, newSeq: int, sourceRun: RunId): { migs: SlotId -> Option[Migration], armed: Set[SlotId] } =
     match migs.get(s) {
-      | Some(m) => { migs: migs.set(s, Some({ ...m, handoff: Some({ seq: newSeq, drained: false }) })), armed: armed.union(Set(s)) }
+      | Some(m) => {
+          migs: migs.set(s, Some({ ...m, attempt: newSeq, fenced: true, phase: Streaming, prepare_run: sourceRun })),
+          armed: armed.union(Set(s)),
+        }
       | None => { migs: migs, armed: armed }
     }
 
-  // TR-CLUSTER-012: the prepared handoff exists and its seq matches (stale acks from a
-  // superseded attempt are refused).
-  pure def canConfirmDrained(migs: SlotId -> Option[Migration], s: SlotId, seq: int): bool =
+  // TR-CLUSTER-012 + ext-1/ext-3/ext-13: the prepared attempt matches (stale acks from a
+  // superseded attempt are refused), the source is sealed, the phase has not already
+  // sealed, and the source is able to propose the drain at all (`cannot_drain` is
+  // ext-13's alive-but-never-confirms escape). The proposed position is drawn from the
+  // same tagged space as `source_log` and carries the proposer's current run.
+  pure def canConfirmDrained(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
+                             s: SlotId, attempt: int, p: Pos): bool =
     match migs.get(s) {
-      | Some(m) => match m.handoff {
-          | Some(h) => h.seq == seq
-          | None => false
+      | Some(m) => and {
+          m.attempt == attempt,
+          m.attempt > 0,
+          m.phase == Streaming,
+          m.fenced,
+          not(allNodes.get(m.source).cannot_drain),
+          p.run_id == allNodes.get(m.source).run_id,
+          p.pos == m.source_log.pos,
         }
       | None => false
     }
 
-  // TR-CLUSTER-012 postcondition, plus the ghost "data provisionally moved to target"
-  // fact this model needs for `inv_abort_repatriates` to be non-vacuous.
-  pure def applyConfirmDrained(migs: SlotId -> Option[Migration], s: SlotId): SlotId -> Option[Migration] =
+  // TR-CLUSTER-012 postcondition + ext-4 (V7-C3): the seal **resets the observation
+  // counter** and clears `last_observation`, so the post-`Confirm` bound is not consumed
+  // by pre-seal ticks (the 30->3 collapse at stock defaults is the failure trace of
+  // reverting this).
+  pure def applyConfirmDrained(migs: SlotId -> Option[Migration], s: SlotId, p: Pos): SlotId -> Option[Migration] =
     match migs.get(s) {
-      | Some(m) => match m.handoff {
-          | Some(h) => migs.set(s, Some({ ...m, handoff: Some({ ...h, drained: true }) }))
-          | None => migs
-        }
+      | Some(m) => migs.set(s, Some({ ...m, phase: Draining, drained_pos: Some(p),
+                                      observations: 0, last_observation: None }))
       | None => migs
     }
 
-  // TR-CLUSTER-013, ruled (issue 17): admitted purely on matching-seq-and-drained — no
-  // wall-clock `barrier_ms` window appears anywhere in this guard.
-  pure def canComplete(migs: SlotId -> Option[Migration], s: SlotId, seq: int): bool =
+  // ext-14: the counted target replicas of `t`. The **empty counted set is false**, not
+  // vacuously true (V5-M3) — with the knob on and nothing counted, `Complete` must be
+  // refused and the migration must exit via the observation bound.
+  pure def countedReplicasOf(allNodes: NodeId -> NodeState, t: NodeId): Set[NodeId] =
+    NODES.filter(n => allNodes.get(n).member and allNodes.get(n).counted and allNodes.get(n).parent == Some(t))
+
+  // TR-CLUSTER-013, ruled (issue 17) + ext-1/2/3/5/12/14. Admitted on:
+  //   - the attempt stamp matching (ext-3),
+  //   - the phase being Draining (ext-3, `inv_complete_requires_draining_phase`),
+  //   - the source still being sealed (ext-2, `inv_complete_requires_fenced_source`),
+  //   - the target holding the drained position, compared **within one tag space**
+  //     (ext-1/V4-C2) and attested by the target's **current** run (ext-5/V8-C3),
+  //   - the counted target replicas holding it too when the knob is on (ext-14),
+  //   - the target being a Primary (ext-12/V10-C3 — dropping this conjunct and demoting
+  //     the target mid-Draining lands a slot on a Replica).
+  // No wall-clock `barrier_ms` window appears anywhere in this guard.
+  pure def canComplete(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
+                       s: SlotId, attempt: int, countReplicas: bool): bool =
     match migs.get(s) {
-      | Some(m) => match m.handoff {
-          | Some(h) => h.seq == seq and h.drained
-          | None => false
+      | Some(m) => and {
+          m.attempt == attempt,
+          m.attempt > 0,
+          m.phase == Draining,
+          m.fenced,
+          allNodes.get(m.target).member,
+          allNodes.get(m.target).role == Primary,
+          match m.drained_pos {
+            | Some(d) => and {
+                d.run_id == m.source_log.run_id,
+                m.target_copy.run_id == allNodes.get(m.target).run_id,
+                m.target_copy.pos >= d.pos,
+                not(countReplicas) or and {
+                  countedReplicasOf(allNodes, m.target) != Set(),
+                  m.target_replica_ack >= d.pos,
+                },
+              }
+            | None => false
+          },
         }
       | None => false
     }
 
-  // TR-CLUSTER-014, ruled (issue 17): the prepared handoff exists with matching seq;
-  // log-ordered admission, no wall-clock window. (The FM-CLUSTER-086 "already gone ->
-  // no-op success" branch is not separately modeled — see "Deliberately not modeled".)
-  // `not(rep.contains(s))` (added this round for I13, stated explicitly rather than
-  // left implicit): a slot already mid-repatriation always has `handoff == None`
-  // (both the Cancel and Abort entry points into the phase clear it), so the
-  // `Some(handoff)` match below already excludes re-entry structurally — the explicit
-  // conjunct is retained purely for readability/symmetry with `canCancel`.
-  pure def canAbortHandoff(migs: SlotId -> Option[Migration], rep: Set[SlotId], s: SlotId, seq: int): bool =
-    not(rep.contains(s)) and match migs.get(s) {
-      | Some(m) => match m.handoff {
-          | Some(h) => h.seq == seq
-          | None => false
-        }
+  // ext-15 (V11-C1)'s exit-row precedence: every held-set release action carries the
+  // serving-primary guard — the acting source must still own the slot and still be a
+  // Primary. Dropping it from either release action and scheduling it after a demotion
+  // apply executes held writes on a demoted source (forked history).
+  pure def servingPrimary(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                          m: Migration, s: SlotId): bool = and {
+    slotMap.get(s) == Some(m.source),
+    allNodes.get(m.source).member,
+    allNodes.get(m.source).role == Primary,
+  }
+
+  // TR-CLUSTER-014, ruled (issue 17): the prepared attempt exists with matching stamp;
+  // log-ordered admission, no wall-clock window. Releases the handoff only — the
+  // migration itself survives.
+  pure def canAbortHandoff(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                           migs: SlotId -> Option[Migration], s: SlotId, attempt: int): bool =
+    match migs.get(s) {
+      | Some(m) => and { m.attempt == attempt, m.attempt > 0, servingPrimary(allNodes, slotMap, m, s) }
       | None => false
     }
 
-  // TR-CLUSTER-015: any open migration (with or without a live handoff) may be
-  // cancelled. `not(rep.contains(s))` (added this round for I13): a slot already
-  // mid-repatriation cannot be re-cancelled until `completeRepatriation` resolves it.
-  pure def canCancel(migs: SlotId -> Option[Migration], rep: Set[SlotId], s: SlotId): bool =
-    migs.get(s) != None and not(rep.contains(s))
-
-  // Added this round for I13: `completeRepatriation` may resolve any slot mid-phase.
-  pure def canCompleteRepatriation(rep: Set[SlotId], s: SlotId): bool =
-    rep.contains(s)
+  // TR-CLUSTER-015, reworked: with the source authoritative until commit there is
+  // nothing to stream back — Cancel simply removes the record (the target's shadow is
+  // discarded separately by `discardShadow`, whose guard is §5's stated predicate).
+  // ext-3 stamps it with the attempt so a stale cancel is refused.
+  pure def canCancel(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                     migs: SlotId -> Option[Migration], s: SlotId, attempt: int): bool =
+    match migs.get(s) {
+      | Some(m) => m.attempt == attempt and servingPrimary(allNodes, slotMap, m, s)
+      | None => false
+    }
 
   // ---------------------------------------------------------------------------
-  // Failover logic — the postcondition shared by all three failover paths, plus the
-  // per-object fence (issue 19) and the belt they are gated by.
+  // ext-4: the observation counter and its bound.
+  // ---------------------------------------------------------------------------
+
+  pure def observationBound(m: Migration): int =
+    if (m.phase == Streaming) m.preconfirm_bound else m.draining_bound
+
+  // The **narrowed** reset (V5-M1): only *actual* ingest progress resets the counter.
+  // v4's "(or `drained_pos` unset)" arm is gone — it made a source that never proposes
+  // `Confirm` (`sourceCannotDrain`) wedge the counter forever.
+  pure def observedProgress(m: Migration): bool =
+    match m.last_observation {
+      | Some(p) => m.target_copy.pos > p
+      | None => true
+    }
+
+  pure def applyReconcileTick(m: Migration): Migration =
+    if (observedProgress(m)) { ...m, observations: 0, last_observation: Some(m.target_copy.pos) }
+    else { ...m, observations: m.observations + 1 }
+
+  pure def abortableByBound(m: Migration): bool = m.observations >= observationBound(m)
+
+  // ---------------------------------------------------------------------------
+  // ext-7/ext-8/ext-12: keyspace, shadow, residue.
+  // ---------------------------------------------------------------------------
+
+  // ext-7 + ext-12: the slots `reapSlots(n)` may delete from `n`'s keyspace — the slot
+  // has no live record, and its residue entry names `n` as source, is **promoted**
+  // (the attestation gate) and is **not** deferred by `target_gone` (V7-M6).
+  pure def reapableSlots(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
+                         res: SlotId -> Option[Residue], n: NodeId): Set[SlotId] =
+    SLOTS.filter(s => and {
+      allNodes.get(n).keys.contains(s),
+      migs.get(s) == None,
+      match res.get(s) {
+        | Some(r) => and { r.source == n, r.promoted, not(r.target_gone) }
+        | None => false
+      },
+    })
+
+  // ext-8: §5's stated predicate — a shadow may be discarded only when no live record
+  // and no residue entry claim it. Reverting the residue half is what makes
+  // `inv_owner_serves_promoted_slot` fail on discard-before-promote.
+  pure def canDiscardShadow(migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
+                            sh: SlotId -> Option[ShadowTag], s: SlotId): bool = and {
+    sh.get(s) != None,
+    migs.get(s) == None,
+    res.get(s) == None,
+  }
+
+  // ext-15 (V9-M4): `ClearSlotResidue` gains the `promoted == true` conjunct. Clearing a
+  // `promoted == false` entry drops the tracking of the source's still-authoritative
+  // copy while the rollback arm that requires the entry is still owed.
+  pure def canClearSlotResidue(res: SlotId -> Option[Residue], s: SlotId): bool =
+    match res.get(s) { | Some(r) => r.promoted | None => false }
+
+  // ext-12 (V8-C4, source arm only per V10-C4): level-triggered re-home of an entry
+  // whose `source` is no longer a primary — admissible whenever that node's shard
+  // primary is a live primary other than the entry's current source. The model carries
+  // **no target arm**: target-side totality is in-apply at `demoteNode` (V10-C4), and
+  // `residueHasAnEffectiveRemover` is what proves no level-triggered target re-home is
+  // needed while that in-apply rule is intact.
+  pure def canRetargetSlotResidue(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue], s: SlotId): bool =
+    match res.get(s) {
+      | Some(r) => match shardPrimary(allNodes, r.source) {
+          | Some(p) => p != r.source
+          | None => false
+        }
+      | None => false
+    }
+
+  // ext-12 (V7-m3): `removeNode`'s mark-don't-remove rules — `source_gone` on a source
+  // departure, `target_gone` (plus the slot-map unassign, applied by the caller) on a
+  // target departure. The entry itself is **never** removed by a membership prune.
+  pure def markResidueOnDeparture(res: SlotId -> Option[Residue], n: NodeId): SlotId -> Option[Residue] =
+    SLOTS.fold(res, (acc, s) => match res.get(s) {
+      | Some(r) =>
+          if (r.source == n) acc.set(s, Some({ ...r, source_gone: true }))
+          else if (r.target == n) acc.set(s, Some({ ...r, target_gone: true }))
+          else acc
+      | None => acc
+    })
+
+  // ext-12: the in-apply re-home a demotion (or a failover's demote arm) performs — the
+  // source arm re-points at the successor and clears the mark; the **target** arm
+  // re-points an *unpromoted* entry (V10-C4's in-apply target totality).
+  pure def retargetResidueOnDemotion(res: SlotId -> Option[Residue], old: NodeId, succ: NodeId): SlotId -> Option[Residue] =
+    SLOTS.fold(res, (acc, s) => match res.get(s) {
+      | Some(r) =>
+          if (r.source == old) acc.set(s, Some({ ...r, source: succ, source_gone: false }))
+          else if (r.target == old and not(r.promoted)) acc.set(s, Some({ ...r, target: succ, target_gone: false }))
+          else acc
+      | None => acc
+    })
+
+  // ---------------------------------------------------------------------------
+  // Failover / demotion logic — the postcondition shared by all three failover paths and
+  // by `demoteNode`, plus the per-object fence (issue 19) and the belt they are gated by.
   // ---------------------------------------------------------------------------
 
   // The single postcondition shared by the planned (TR-CLUSTER-018), automatic
   // (TR-CLUSTER-019) and forced (TR-CLUSTER-042, deviated per the header note) failover
-  // paths: ownership transfer, role swap, sibling re-parenting, epoch bump, and issue
-  // 15's migration pruning. All three differ only in their *preconditions* (see the
-  // wrapper actions below) — never in this postcondition, since the demote-don't-remove
-  // ruling now applies uniformly.
-  pure def applyFailoverCommon(
-    st: { nodes: NodeId -> NodeState, slots: SlotId -> Option[NodeId], migrations: SlotId -> Option[Migration],
-          epoch: int, node_epoch: NodeId -> int, armed_barriers: Set[SlotId], provisional_target: SlotId -> Option[NodeId],
-          feed_bytes: SlotId -> int, disconnected_feed: Set[SlotId], repatriating: Set[SlotId] },
-    old: NodeId, succ: NodeId
-  ): { nodes: NodeId -> NodeState, slots: SlotId -> Option[NodeId], migrations: SlotId -> Option[Migration],
-       epoch: int, node_epoch: NodeId -> int, armed_barriers: Set[SlotId], provisional_target: SlotId -> Option[NodeId],
-       feed_bytes: SlotId -> int, disconnected_feed: Set[SlotId], repatriating: Set[SlotId] } = {
+  // paths and by `demoteNode` (ext-12/V6-C3): ownership transfer, role swap with the
+  // three companion stamps and the parenting token (ext-16/ext-17), sibling
+  // re-parenting, epoch bump, issue 15's migration pruning, ext-12's residue re-target
+  // (the promotion writer is where the residue-removal obligation rides since V14-C1
+  // deleted the `Promotion` report arm), and the held-write release the exit rows owe.
+  pure def applyFailoverCommon(st: ClusterView, old: NodeId, succ: NodeId): ClusterView = {
     val newEpoch = st.epoch + 1
     val movedSlots = SLOTS.filter(s => st.slots.get(s) == Some(old))
     val newSlots = SLOTS.fold(st.slots, (acc, s) => if (movedSlots.contains(s)) acc.set(s, Some(succ)) else acc)
     val reparented = NODES.fold(st.nodes, (acc, n) =>
       if (n != old and n != succ and st.nodes.get(n).parent == Some(old))
-        acc.set(n, { ...acc.get(n), parent: Some(succ) })
+        acc.set(n, writeParentPointer(acc.get(n), acc.get(n).role, Some(succ), false, None, None))
       else acc
     )
-    val demoted = reparented.set(old, { ...reparented.get(old), role: Replica, parent: Some(succ) })
-    val promoted = demoted.set(succ, { ...demoted.get(succ), role: Primary, parent: None })
+    val demoted = reparented.set(old, writeParentPointer(reparented.get(old), Replica, Some(succ), false, None, None))
+    val promotedNs = writeParentPointer(demoted.get(succ), Primary, None, true, None, Some(old))
+    val promoted = demoted.set(succ, { ...promotedNs, epoch_own: newEpoch, keys: promotedNs.keys.union(movedSlots) })
     val prunedSet = slotsNaming(st.migrations, old)
     val newMigrations = prunedMigrations(st.migrations, old)
-    val newArmed = st.armed_barriers.filter(s => not(prunedSet.contains(s)))
-    val newProvisional = SLOTS.fold(st.provisional_target, (acc, s) => if (prunedSet.contains(s)) acc.set(s, None) else acc)
+    val newArmed = st.armed.filter(s => not(prunedSet.contains(s)))
     val newFeedBytes = SLOTS.fold(st.feed_bytes, (acc, s) => if (prunedSet.contains(s)) acc.set(s, 0) else acc)
-    val newDisconnected = st.disconnected_feed.filter(s => not(prunedSet.contains(s)))
-    // Failover's prune is unconditional and does not route through the `repatriating`
-    // phase (see the header's TR-CLUSTER-015 "Deliberately not modeled" note) — any
-    // pending repatriation for a slot naming `old` is written off along with the
-    // migration record itself, not left dangling.
-    val newRepatriating = st.repatriating.filter(s => not(prunedSet.contains(s)))
+    val newDisconnected = st.disconnected.filter(s => not(prunedSet.contains(s)))
+    val newHeld = NODES.fold(st.held, (acc, n) => acc.set(n, acc.get(n).exclude(prunedSet)))
     {
       nodes: promoted,
       slots: newSlots,
       migrations: newMigrations,
-      epoch: newEpoch,
-      node_epoch: st.node_epoch.set(succ, newEpoch),
-      armed_barriers: newArmed,
-      provisional_target: newProvisional,
+      residue: retargetResidueOnDemotion(st.residue, old, succ),
+      armed: newArmed,
+      disconnected: newDisconnected,
       feed_bytes: newFeedBytes,
-      disconnected_feed: newDisconnected,
-      repatriating: newRepatriating,
+      held: newHeld,
+      epoch: newEpoch,
     }
   }
 
@@ -281,26 +552,40 @@ module cluster_migration_failover_logic {
   pure def fenceOk(ns: NodeState, curEpoch: int, obsEpoch: int, obsRole: RoleTag): bool =
     obsEpoch == curEpoch and obsRole == ns.role
 
-  // The belt (retained through issue 19's amendment): refuse the move outright if the
-  // old primary is not a member and currently a Primary, owns no slots, or the new
-  // primary is not a *current member* replica of it. `old`'s role being Primary is
-  // TR-CLUSTER-017/019's own ruled precondition text ("old_primary_id ... with Node
-  // role = Primary") — stated explicitly here rather than left to be implied by
-  // `ownsAnySlot`, since this model no longer claims every slot owner is a Primary
-  // (see the header's INV-SLOT-1 note). `succ.member` is likewise stated explicitly:
-  // "new_primary_id is a replica of the failing primary" presupposes a *current*
-  // replica — `removeNode` (TR-CLUSTER-003) deliberately leaves a removed node's own
-  // stale role/parent bookkeeping untouched (only clearing *other* nodes' references
-  // to it), so without this conjunct a node removed while still a replica could later
-  // be "promoted" by a failover despite `member == false` — caught by `quint run`
-  // (inv_slot_owner_valid, inv_migration_endpoints_valid) before this conjunct was
-  // added.
-  pure def beltOk(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId], old: NodeId, succ: NodeId): bool = and {
+  // The belt (retained through issue 19's amendment), plus ext-16's **candidacy gate**:
+  // a candidate must be `synced` — a replica that has attested it holds the shard's data
+  // — unless `force: true` bypasses it (V14-C3: without the gate, a whole shard can be
+  // substituted by an empty candidate).
+  pure def beltOk(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                  old: NodeId, succ: NodeId, requireSynced: bool): bool = and {
     allNodes.get(old).member,
     allNodes.get(old).role == Primary,
     ownsAnySlot(slotMap, old),
     allNodes.get(succ).member,
     allNodes.get(succ).role == Replica,
     allNodes.get(succ).parent == Some(old),
+    not(requireSynced) or allNodes.get(succ).synced,
+  }
+
+  // ext-12 (V6-C3/V9-C1): `demoteNode`'s own precondition. The successor is checked for
+  // the **shard relationship** directly (a cross-shard `new_primary_id` is refused at
+  // admission, never derived by a post-write `shard_primary` walk).
+  pure def canDemoteNode(allNodes: NodeId -> NodeState, n: NodeId, succ: NodeId): bool = and {
+    allNodes.get(n).member,
+    allNodes.get(n).role == Primary,
+    n != succ,
+    allNodes.get(succ).member,
+    allNodes.get(succ).role == Replica,
+    allNodes.get(succ).parent == Some(n),
+  }
+
+  // ext-12 (V7-m7 + V8-C6): the successor-less demotion — role -> Replica, `primary_id`
+  // -> None, no promotion in the step — with the **whole-refusal** when the node still
+  // owns slots (there is no successor to re-home them to, and leaving them assigned to a
+  // node about to become a Replica would violate `inv_slots_only_assigned_to_primaries`).
+  pure def canDemoteNodeExternal(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId], n: NodeId): bool = and {
+    allNodes.get(n).member,
+    allNodes.get(n).role == Primary,
+    not(ownsAnySlot(slotMap, n)),
   }
 }
