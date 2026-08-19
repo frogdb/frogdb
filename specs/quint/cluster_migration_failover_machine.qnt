@@ -68,7 +68,7 @@
 //                                  demoteNode, demoteNodeExternal
 //   Restarts and run re-minting  — sourceRestart, targetRestart, sourceFailover
 //   Escape flags and knobs       — setSourceCannotApply, setSourceCannotDrain,
-//                                  setTargetSilent, setCountedReplicasKnob
+//                                  setTargetSilent
 //   step
 module cluster_migration_failover_machine {
   import cluster_common_types.* from "./cluster_common_types"
@@ -112,8 +112,6 @@ module cluster_migration_failover_machine {
     next_mig: MigrationId,
     next_reg: int,
     next_run: RunId,
-    // ext-14: the counted-replica knob. Off at init — see the main file's header.
-    count_replicas: bool,
   }
   // Ghost flags: set when the *unsafe* variant of a ruled precondition would have been
   // taken. Never read by a guard; only by invariants/witnesses.
@@ -251,7 +249,7 @@ module cluster_migration_failover_machine {
     barriers' = { armed: Set(), failover_fence: Set(), disconnected: Set() },
     spent' = Set(),
     ctl' = { handoff_seq: 0, epoch: 0, prev_epoch: 0, reset_epoch: 0, next_mig: 1,
-             next_reg: 5, next_run: 5, count_replicas: false },
+             next_reg: 5, next_run: 5 },
     defects' = { demotion: false, fence: false, barrier: false, admission: false, seqReuse: false },
     coverage' = { gracefulPruned: false, forcedDemotedReplica: false, failoverDuringOpenMigration: false,
                   promotionRolledBack: false, reaped: false, emptyBatch: false },
@@ -334,22 +332,49 @@ module cluster_migration_failover_machine {
     }
   }
 
-  // ext-10: `ResetCluster`. Rewinds the handoff counter and bumps the reset epoch, so a
-  // re-minted sequence number stays distinguishable from a reused one; gated by the same
-  // non-empty-keyspace refusal as `meetNode` (V8-C1).
-  action resetCluster(n: NodeId): bool = all {
-    canResetCluster(nodes, n),
-    nodes' = nodes.set(n, { ...nodes.get(n), member: false, registration_seq: None,
-                            stored_identity: None, booted: false, epoch_own: 0 }),
-    slots' = SLOTS.fold(slots, (acc, s) => if (slots.get(s) == Some(n)) acc.set(s, None) else acc),
-    migrations' = prunedMigrations(migrations, n),
-    // Shadows are deliberately NOT dropped: an orphan shadow minted under the previous
-    // reset epoch must be reachable, and must not wedge the next migration
-    // (`inv_no_orphan_shadow_blocks_ingest` — Begin's discard-then-ingest is what saves
-    // it).
-    keepShadow, keepResidue,
-    ctl' = { ...ctl, handoff_seq: 0, reset_epoch: ctl.reset_epoch + 1, prev_epoch: ctl.epoch },
-    keepBar, keepAux,
+  // ext-10 + TR-CLUSTER-035: `CLUSTER RESET SOFT`, gated by the same non-empty-keyspace
+  // refusal as `meetNode` (V8-C1, FM-CLUSTER-006).
+  //
+  // The direction matters and was previously modelled backwards. A reset does not evict
+  // the *resetting* node — it keeps its own `NodeInfo` (registration sequence and stored
+  // run identity carried unchanged) and deletes **every other member's cell**, leaving a
+  // one-node cluster. It also drops *all* slot assignments and takes *all* migrations,
+  // not only the ones naming this node.
+  //
+  // `handoff_seq` rewinding to 0 is the one lawful rewind in the model
+  // (FM-CLUSTER-086/100): the reset-epoch bump is what keeps a re-minted sequence number
+  // distinguishable from a reused one, which is why `spent` is keyed by reset epoch.
+  //
+  // Only SOFT is modelled. HARD additionally re-keys the node and zeroes both epochs;
+  // that is FM-CLUSTER-010's documented non-monotonicity, and encoding it here would
+  // falsify `inv_epoch_never_decreases` by design rather than by defect.
+  action resetCluster(n: NodeId): bool = {
+    val cleared = NODES.fold(nodes, (acc, m) =>
+      if (m == n) acc
+      else acc.set(m, { ...writeParentPointer(acc.get(m), acc.get(m).role, None, false, None, None),
+                        member: false, registration_seq: None, booted: false, counted: false }))
+    val departed = NODES.filter(m => m != n and nodes.get(m).member)
+    all {
+      canResetCluster(nodes, n),
+      // The resetting node stays a member with its identity intact — it keeps its own
+      // cell, so `booted` and `stored_identity` are untouched (a reset is not a restart).
+      // It becomes a parentless Primary of an empty keyspace.
+      nodes' = cleared.set(n, writeParentPointer(cleared.get(n), Primary, None, false, None, None)),
+      slots' = SLOTS.mapBy(_ => None),
+      migrations' = SLOTS.mapBy(_ => None),
+      // ext-12's mark-don't-remove still applies to everyone the reset ejected.
+      residue' = departed.fold(residue, (acc, m) => markResidueOnDeparture(acc, m)),
+      // Shadows are deliberately NOT dropped: an orphan shadow minted under the previous
+      // reset epoch must be reachable, and must not wedge the next migration
+      // (`inv_no_orphan_shadow_blocks_ingest` — Begin's discard-then-ingest is what saves
+      // it).
+      keepShadow,
+      barriers' = { armed: Set(), failover_fence: Set(), disconnected: Set() },
+      held' = NODES.mapBy(_ => Set()),
+      feed_bytes' = SLOTS.mapBy(_ => 0),
+      ctl' = { ...ctl, handoff_seq: 0, reset_epoch: ctl.reset_epoch + 1, prev_epoch: ctl.epoch },
+      keepAux,
+    }
   }
 
   // TR-CLUSTER-004.
@@ -504,12 +529,17 @@ module cluster_migration_failover_machine {
   // ext-10's Begin-time **discard-then-ingest**: whatever shadow the slot carried (an
   // orphan from a pre-reset epoch, say) is discarded and re-minted under the new
   // migration id and the current reset epoch — an orphan must never wedge the ingest.
-  action beginMigration(s: SlotId, source: NodeId, target: NodeId): bool = all {
+  // ext-14 (V6-C2): `requireReplicaAck` stands for the proposer's local
+  // `require_target_replica_ack` config at proposal time. It is nondet because two
+  // proposers may hold different values — but it is *captured* into the record here and
+  // never re-read, so the appliers cannot diverge over it.
+  action beginMigration(s: SlotId, source: NodeId, target: NodeId, requireReplicaAck: bool): bool = all {
     canBeginMigration(nodes, slots, migrations, residue, s, source, target),
     canAct(nodes, source),
     canAct(nodes, target),
     migrations' = migrations.set(s, Some(newMigration(ctl.next_mig, source, target,
-                                                      nodes.get(source).run_id, nodes.get(target).run_id))),
+                                                      nodes.get(source).run_id, nodes.get(target).run_id,
+                                                      requireReplicaAck))),
     shadow' = shadow.set(s, Some({ mig: ctl.next_mig, epoch: ctl.reset_epoch })),
     ctl' = { ...ctl, next_mig: ctl.next_mig + 1, prev_epoch: ctl.epoch },
     keepGraph, keepResidue, keepBar, keepAux,
@@ -781,7 +811,7 @@ module cluster_migration_failover_machine {
   action completeMigration(s: SlotId, att: int): bool =
     match migrations.get(s) {
       | Some(m) => all {
-          canCompleteMigration(nodes, migrations, s, att, ctl.count_replicas),
+          canCompleteMigration(nodes, migrations, s, att),
           // `defects.admission` is recomputed here *independently* of
           // `canCompleteMigration`, from the record's own drained evidence — the
           // invariant is only mutation-sensitive
@@ -799,7 +829,8 @@ module cluster_migration_failover_machine {
           nodes' = nodes.set(m.target, { ...nodes.get(m.target), epoch_own: ctl.epoch + 1 }),
           migrations' = migrations.set(s, None),
           residue' = residue.set(s, Some({ mig: m.id, source: m.source, target: m.target,
-                                           promoted: false, source_gone: false, target_gone: false })),
+                                           promoted: false, source_gone: false, target_gone: false,
+                                           promotion_failures: 0 })),
           keepShadow,
           releaseHoldRegion(s, m.source),
           ctl' = { ...ctl, epoch: ctl.epoch + 1, prev_epoch: ctl.epoch },
@@ -881,8 +912,14 @@ module cluster_migration_failover_machine {
           not(r.promoted),
           slots' = slots.set(s, Some(r.source)),
           shadow' = shadow.set(s, None),
+          // ext-12 (ruled Q6): the entry counts its failed attempts. A rollback is not a
+          // terminal state — `relabelShadow`/`reportPromoted` may be retried — so without
+          // a counter on the entry itself a repeatedly-failing promotion is
+          // indistinguishable from one that was never attempted, and the operator arms
+          // have nothing to key an escalation on.
+          residue' = residue.set(s, Some({ ...r, promotion_failures: r.promotion_failures + 1 })),
           coverage' = { ...coverage, promotionRolledBack: true },
-          keepNodes, keepMigrations, keepResidue, keepBar,
+          keepNodes, keepMigrations, keepBar,
           keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
         }
       | None => nope
@@ -1060,12 +1097,23 @@ module cluster_migration_failover_machine {
     install_incomplete: false,
   }
 
-  action sourceRestart(n: NodeId): bool = all {
-    nodes.get(n).member,
-    nodes' = nodes.set(n, restarted(nodes.get(n), ctl.next_run)),
-    held' = held.set(n, Set()),
-    ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch },
-    keepSlots, keepMigAll, keepBarriers, keepFeed, keepAux,
+  // Ruled Q2: the restart breaks the seal on every migration this node sources. The hold
+  // is gone (`held`), so the barrier that stood for it is disarmed and the buffered feed
+  // reset; the record's `fenced`/`phase`/`drained_pos`/`attempt` are rewound to match.
+  // Without this the record kept advertising a hold that no longer existed, and a
+  // completion could be admitted on evidence produced by a dead run.
+  action sourceRestart(n: NodeId): bool = {
+    val touched = slotsSourcedBy(migrations, n)
+    all {
+      nodes.get(n).member,
+      nodes' = nodes.set(n, restarted(nodes.get(n), ctl.next_run)),
+      migrations' = unsealedBySource(migrations, n),
+      held' = held.set(n, Set()),
+      barriers' = { ...barriers, armed: barriers.armed.exclude(touched) },
+      feed_bytes' = SLOTS.mapBy(s => if (touched.contains(s)) 0 else feed_bytes.get(s)),
+      ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch },
+      keepSlots, keepShadow, keepResidue, keepAux,
+    }
   }
 
   // The target's restart additionally rolls its ingest back to the durable point — the
@@ -1085,6 +1133,12 @@ module cluster_migration_failover_machine {
   // ext-5: a migration source that fails over mid-migration — the promotion
   // postcondition *and* a fresh run at the successor, so a position minted before the
   // failover and one minted after are distinguishable.
+  //
+  // Ruled Q1(b): the open migration **survives**, re-homed onto the successor, instead of
+  // being pruned with the old primary. The successor inherits the slot, so the migration
+  // is still the cluster's intent; only the old primary's evidence dies with it. This is
+  // what makes ext-5's own scenario reachable — a stale position minted before the
+  // failover meeting a live record minted after it.
   action sourceFailover(old: NodeId, succ: NodeId): bool = {
     val v = applyFailoverCommon(currentView, old, succ)
     all {
@@ -1092,7 +1146,7 @@ module cluster_migration_failover_machine {
       migrationSourcesOf(migrations).contains(old),
       nodes' = v.nodes.set(succ, { ...v.nodes.get(succ), run_id: ctl.next_run }),
       slots' = v.slots,
-      migrations' = v.migrations,
+      migrations' = rehomedMigrations(migrations, old, succ, ctl.next_run),
       residue' = v.residue,
       barriers' = { armed: v.armed, failover_fence: Set(), disconnected: v.disconnected },
       feed_bytes' = v.feed_bytes,
@@ -1123,11 +1177,12 @@ module cluster_migration_failover_machine {
     nodesOnly(nodes.set(n, { ...nodes.get(n), silent: v })),
   }
 
-  action setCountedReplicasKnob(v: bool): bool = all {
-    ctl.count_replicas != v,
-    ctl' = { ...ctl, count_replicas: v, prev_epoch: ctl.epoch },
-    keepGraph, keepMigAll, keepBar, keepAux,
-  }
+  // ext-14 (V6-C2): there is deliberately **no** action that flips a global
+  // `count_replicas` knob. The durability requirement is a captured parameter on the
+  // migration record (`Migration.require_replica_ack`), stamped once at Begin from the
+  // proposer's config. A mutable global consulted at admission time is the anti-pattern
+  // the design forbids: one applier would admit what another refuses (Raft divergence),
+  // and a mid-migration flip would silently void the conjunct the operator armed.
 
   action stutter = all { keepGraph, keepMigAll, keepBar, keepAux, keepCtl }
 
@@ -1188,7 +1243,7 @@ module cluster_migration_failover_machine {
       assignSlot(s, n1),
       removeSlot(s),
       // migration lifecycle
-      beginMigration(s, n1, n2),
+      beginMigration(s, n1, n2, flag),
       prepareHandoff(s),
       feedBuffer(s),
       disconnectFeed(s),
@@ -1236,7 +1291,6 @@ module cluster_migration_failover_machine {
       setSourceCannotApply(n1, flag),
       setSourceCannotDrain(n1, flag),
       setTargetSilent(n2, flag),
-      setCountedReplicasKnob(flag),
       stutter,
     }
   }

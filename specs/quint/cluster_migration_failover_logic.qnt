@@ -145,6 +145,57 @@ module cluster_migration_failover_logic {
       }
     )
 
+  // Slots whose migration names `node` as its **source**.
+  pure def slotsSourcedBy(migs: SlotId -> Option[Migration], node: NodeId): Set[SlotId] =
+    SLOTS.filter(s => match migs.get(s) {
+      | Some(m) => m.source == node
+      | None => false
+    })
+
+  // ext-1/ext-2 (V4-C2, ruled Q2): a source restart **breaks the seal**. The hold, the
+  // barrier and the drain evidence are all volatile source-local state; the record's
+  // `fenced`/`phase`/`drained_pos`/`attempt` describe a hold that no longer exists after
+  // the process comes back, so they are rewound to the pre-prepare shape. The attempt
+  // counter itself is never rewound — a fresh `PrepareHandoff` mints a *new* stamp, which
+  // is what makes a post-restart completion distinguishable from a pre-restart one.
+  pure def unsealedBySource(migs: SlotId -> Option[Migration], node: NodeId): SlotId -> Option[Migration] =
+    SLOTS.fold(migs, (acc, s) =>
+      match migs.get(s) {
+        | Some(m) =>
+          if (m.source == node)
+            acc.set(s, Some({ ...m, attempt: 0, fenced: false, phase: Streaming, drained_pos: None }))
+          else acc
+        | None => acc
+      }
+    )
+
+  // ext-5 (ruled Q1(b)): a source failover **re-homes** the migration onto the successor
+  // rather than dropping it. The successor inherits the slot, so the migration it was
+  // sourcing is still the cluster's intent; what it must *not* inherit is the old
+  // primary's evidence. The record is re-homed with the successor's fresh run tag and the
+  // seal broken, so the handoff has to be re-prepared and re-drained from scratch.
+  // Every piece of *evidence* is dropped with the old primary — the re-homed record is
+  // indistinguishable from a fresh `Begin` apart from its identity (and hence its
+  // shadow), so the successor must re-prepare, re-stream and re-drain. A slot whose
+  // target is the successor itself cannot be re-homed (source would equal target) and is
+  // pruned by the common postcondition instead.
+  pure def rehomedMigrations(migs: SlotId -> Option[Migration], old: NodeId, succ: NodeId,
+                             succRun: RunId): SlotId -> Option[Migration] =
+    SLOTS.fold(prunedMigrations(migs, old), (acc, s) =>
+      match migs.get(s) {
+        | Some(m) =>
+          if (m.source == old and m.target != old and m.target != succ)
+            acc.set(s, Some({ ...m, source: succ, attempt: 0, fenced: false, phase: Streaming,
+                              drained_pos: None, prepare_run: succRun,
+                              source_log: { run_id: succRun, pos: 0 },
+                              target_copy: { ...m.target_copy, pos: 0 },
+                              target_applied: 0, target_durable: 0, target_replica_ack: 0,
+                              observations: 0, last_observation: None }))
+          else acc
+        | None => acc
+      }
+    )
+
   // ext-16/ext-17, the single funnel every `primary_id` write in this model goes
   // through: the three companion stamps (`synced`, `admitted_stage`, `promoted_from`)
   // are written in the same step, and the parenting token `parent_seq` is incremented in
@@ -324,8 +375,10 @@ module cluster_migration_failover_logic {
     allNodes.get(target).member,
   }
 
+  // ext-14 (V6-C2): `requireReplicaAck` is read from the *proposer's* config exactly
+  // once, here, and stamped into the record. Every later predicate reads the field.
   pure def newMigration(id: MigrationId, source: NodeId, target: NodeId,
-                        sourceRun: RunId, targetRun: RunId): Migration = {
+                        sourceRun: RunId, targetRun: RunId, requireReplicaAck: bool): Migration = {
     id: id,
     source: source,
     target: target,
@@ -343,6 +396,7 @@ module cluster_migration_failover_logic {
     last_observation: None,
     preconfirm_bound: PRECONFIRM_OBSERVATIONS,
     draining_bound: DRAINING_OBSERVATIONS,
+    require_replica_ack: requireReplicaAck,
   }
 
   // TR-CLUSTER-011: migration exists. No "no live handoff" precondition: the ruled row
@@ -414,7 +468,7 @@ module cluster_migration_failover_logic {
   //     the target mid-Draining lands a slot on a Replica).
   // No wall-clock `barrier_ms` window appears anywhere in this guard.
   pure def canCompleteMigration(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
-                       s: SlotId, attempt: int, countReplicas: bool): bool =
+                       s: SlotId, attempt: int): bool =
     match migs.get(s) {
       | Some(m) => and {
           m.attempt == attempt,
@@ -424,10 +478,20 @@ module cluster_migration_failover_logic {
           isLivePrimary(allNodes, m.target),
           match m.drained_pos {
             | Some(d) => and {
-                d.run_id == m.source_log.run_id,
+                // Ruled Q2. The drain's evidence must have been produced by the run the
+                // source is *still* on. A restart or a failover between the seal and the
+                // commit re-mints the run, and a seal taken by a process that no longer
+                // exists is not evidence — the commit has to be re-earned through a fresh
+                // Prepare/Confirm rather than ridden across the discontinuity. Comparing
+                // the drained position against the *record's* stored source-log tag
+                // (which a restart leaves untouched) does not catch this; comparing it
+                // against the node's live run does.
+                d.run_id == allNodes.get(m.source).run_id,
                 m.target_copy.run_id == allNodes.get(m.target).run_id,
                 m.target_copy.pos >= d.pos,
-                not(countReplicas) or and {
+                // ext-14: the optional durability conjunct exists iff the migration's
+                // own captured parameter says so — never a config read at admission.
+                not(m.require_replica_ack) or and {
                   countedReplicasOf(allNodes, m.target) != Set(),
                   m.target_replica_ack >= d.pos,
                 },

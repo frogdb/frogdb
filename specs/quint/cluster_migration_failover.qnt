@@ -55,6 +55,17 @@
 //     target's applied/durable/replica-ack positions (ext-5/ext-6/ext-14) and the
 //     observation counter with its confirm-time reset (ext-4); `fenced` (the source's
 //     own seal, ext-2) is tracked separately from `phase`.
+//   - ext-14's durability requirement is a **captured parameter** on that record
+//     (`require_replica_ack`), stamped once at Begin from the proposer's config, not a
+//     mutable cluster knob read at admission time. A knob read at admission is the
+//     anti-pattern the redesign forbids: two appliers holding different config values
+//     would admit different commands off the same log (Raft divergence), and a flip
+//     mid-migration would silently void the conjunct the operator believed was armed.
+//   - TR-CLUSTER-035 is modelled in its real direction: a reset keeps the resetting
+//     node's own cell and deletes every **other** member's, drops **all** slot
+//     assignments and takes **all** migrations. Only SOFT is modelled — HARD's re-key and
+//     epoch zeroing is FM-CLUSTER-010's documented non-monotonicity, and encoding it
+//     would falsify `inv_epoch_never_decreases` by design rather than by defect.
 //   - role/parent (`primary_id`) are modelled variables with a declared writer set
 //     (ext-15/16/17): every writer goes through `writeParentPointer`, which bumps the
 //     parenting token `parent_seq` and rewrites its three companions in the same step.
@@ -100,7 +111,8 @@
 //   TR-CLUSTER-013 — CompleteSlotMigration, ruled (issue 17): admitted on the log-ordered
 //     conjuncts only — matching attempt, `Draining`, a sealed source, a same-run drained
 //     position, a target copy that covers it and is attested under the target's *current*
-//     run, and (knob) a counted replica ack. No wall-clock `barrier_ms` window.
+//     run, and — iff the migration's own captured `require_replica_ack` parameter says so
+//     (ext-14) — a counted replica ack. No wall-clock `barrier_ms` window.
 //     Falsifiable independent of the guard via the `defects.admission` ghost.
 //   TR-CLUSTER-014 — AbortSlotHandoff, ruled (issue 17): log-ordered admission, no
 //     wall-clock window; the migration itself survives, only the handoff is released.
@@ -148,10 +160,9 @@
 //     *when the slot has a recorded owner at all*).
 //   INV-HANDOFF-1/2 (`check_handoff_1/2`: a live handoff never carries the unminted seq
 //     0, and a seq is never minted twice). The "counter dominates every live seq" half is
-//     restated as "every live attempt stamp was actually minted" — see
-//     `inv_handoff_owned`'s note for why the bare bound no longer holds once
-//     `ResetCluster` can rewind the counter under a migration that does not name the
-//     reset node.
+//     strengthened to "every live attempt stamp was actually minted under the current
+//     reset epoch" — see `inv_handoff_owned`'s note for how the bare bound survives
+//     `ResetCluster`'s counter rewind.
 //   INV-EPOCH-1/2 (`check_epoch_1/2`: the cluster epoch dominates every node's own
 //     epoch; a nonzero node epoch is unique among Primaries; plus this model's own
 //     cross-step claim `inv_epoch_never_decreases`).
@@ -329,17 +340,20 @@ module cluster_migration_failover {
       | None => true
     })
 
-  // INV-HANDOFF-1, restated for ext-10. The catalog's bound ("the counter dominates every
-  // live seq") is no longer stateable as `m.attempt <= ctl.handoff_seq`: `ResetCluster`
-  // rewinds the counter, and it only prunes migrations naming the reset node, so a live
-  // migration elsewhere legitimately outlives the counter value that minted it. What
-  // survives the rewind is the *minting* claim — every live attempt stamp is one this
-  // model actually spent — which is what `spent` (re-keyed by reset epoch) records.
-  // The unminted-0 half is kept verbatim: a sealed source always carries a real stamp.
+  // INV-HANDOFF-1, in all three halves. The catalog's bound ("the counter dominates every
+  // live seq") *is* stateable as `m.attempt <= ctl.handoff_seq` even across ext-10's
+  // rewind, because `ResetCluster` takes **every** migration when it rewinds the counter
+  // (TR-CLUSTER-035) — it does not leave a live record behind carrying a stamp minted
+  // under the old counter. Alongside the bound the model states the stronger *minting*
+  // claim — every live attempt stamp is one this model actually spent under the current
+  // reset epoch — which is what `spent` (re-keyed by reset epoch) records and what makes
+  // the bound survive a rewind rather than merely coincide with it. The unminted-0 half
+  // is verbatim: a sealed source always carries a real stamp.
   val inv_handoff_owned: bool =
     SLOTS.forall(s => match migrations.get(s) {
       | Some(m) => and {
-          m.attempt >= 1 implies spent.exists(t => t.seq == m.attempt),
+          m.attempt <= ctl.handoff_seq,
+          m.attempt >= 1 implies spent.exists(t => t.epoch == ctl.reset_epoch and t.seq == m.attempt),
           m.fenced implies m.attempt >= 1,
         }
       | None => true
@@ -416,7 +430,7 @@ module cluster_migration_failover {
   // and no one may take it until the promotion is attested.
   run happyMigrationTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .expect(and {
         match migrations.get(1) {
           | Some(m) => m.source == 1 and m.target == 4 and m.attempt == 0 and m.phase == Streaming
@@ -442,7 +456,8 @@ module cluster_migration_failover {
         // The source is still a holder; the residue entry says so, un-attested.
         nodes.get(1).keys.contains(1),
         residue.get(1) == Some({ mig: 1, source: 1, target: 4, promoted: false,
-                                 source_gone: false, target_gone: false }),
+                                 source_gone: false, target_gone: false,
+                                 promotion_failures: 0 }),
         // The target does NOT hold the slot in its own keyspace yet.
         not(nodes.get(4).keys.contains(1)),
       })
@@ -463,7 +478,7 @@ module cluster_migration_failover {
   // attestation, the reaper is refused — the source's copy is the only attested one.
   run sourceKeepsCopyUntilAttestedTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(completeMigration(1, 1))
@@ -477,7 +492,7 @@ module cluster_migration_failover {
   // target never held the slot in its own keyspace at any point.
   run promotionRollsBackToSourceTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(completeMigration(1, 1))
@@ -496,17 +511,17 @@ module cluster_migration_failover {
   // blocks the shadow discard — the entry is the record of unfinished business.
   run residueBlocksNextMigrationTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(completeMigration(1, 1))
       .expect(residue.get(1) != None)
-      .then(beginMigration(1, 4, 2).fail())
+      .then(beginMigration(1, 4, 2, false).fail())
   }
 
   run discardShadowRefusedWithResidueTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(completeMigration(1, 1))
@@ -518,7 +533,7 @@ module cluster_migration_failover {
   // reaper must hold off rather than delete the last remaining copy.
   run reapDeferredWhileTargetGoneTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(completeMigration(1, 1))
@@ -539,7 +554,7 @@ module cluster_migration_failover {
   // armed immediately before the swap, per its single-shot discipline.
   run gracefulFailoverBeforePrepareTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(armFailoverFence(1))
       .then(failoverGraceful(1, 3, 0, Primary))
       .expect(and {
@@ -556,7 +571,7 @@ module cluster_migration_failover {
   // TR-CLUSTER-017's ruled drain/parity precondition, a real guard.
   run gracefulFailoverRefusesWithoutBarrierTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(failoverGraceful(1, 3, 0, Primary).fail())
   }
 
@@ -564,7 +579,7 @@ module cluster_migration_failover {
   // the source's held writes must be released by the prune, not left orphaned.
   run gracefulFailoverArmedNotDrainedTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .expect(and { barrierArmed(1), held.get(1) == Set(1) })
       .then(armFailoverFence(1))
@@ -585,7 +600,7 @@ module cluster_migration_failover {
   // no record and no residue behind).
   run gracefulFailoverDrainedNotCompleteTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .expect(match migrations.get(1) { | Some(m) => m.phase == Draining | None => false })
@@ -609,7 +624,7 @@ module cluster_migration_failover {
   // the source's.
   run cancelAppliesInOneStepTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(cancelMigration(1, 1))
@@ -630,7 +645,7 @@ module cluster_migration_failover {
   // and can be re-prepared.
   run abortHandoffKeepsMigrationTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(abortHandoff(1, 1))
@@ -651,7 +666,7 @@ module cluster_migration_failover {
   // (ext-3).
   run prepareSupersedesLiveHandoffTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .expect(match migrations.get(1) { | Some(m) => m.attempt == 1 | None => false })
       .then(prepareHandoff(1))
@@ -662,13 +677,10 @@ module cluster_migration_failover {
   // (c3) ext-1/ext-5: the commit's evidence is run-tagged, and a restart at the target
   // re-mints its run — so the ingest report the record is carrying was attested by a run
   // the target no longer has, and `Complete` must refuse it rather than trust a position
-  // from a forked history. (The mirror case at the *source* — a source restart under an
-  // already-sealed drain — is NOT refused by this model; see the header's ambiguity note
-  // in the Q1 report: `canCompleteMigration` compares the drained position's run against the
-  // record's own source-log run, both of which a restart leaves untouched.)
+  // from a forked history.
   run completeRefusesCrossRunTargetCopyTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
       .then(targetRestart(4))
@@ -679,10 +691,85 @@ module cluster_migration_failover {
       .then(completeMigration(1, 1).fail())
   }
 
+  // (c4, ruled Q2) ext-1/ext-2/ext-5, the mirror case at the **source**. A restart at the
+  // source breaks the seal: the hold it was keeping is gone with the process, so the
+  // barrier is disarmed and the record's `fenced`/`phase`/`drained_pos`/`attempt` are
+  // rewound. `Complete` is then refused twice over — the stamp no longer matches, and
+  // `canCompleteMigration` additionally requires the drain's evidence to have been
+  // produced by the run the source is *still* on. Without the run conjunct a re-prepare
+  // after the restart could resurrect a drain sealed by a dead run.
+  run completeRefusesAfterSourceRestartTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(reportTargetIngest(1))
+      .then(sourceRestart(1))
+      .expect(and {
+        nodes.get(1).run_id == 5,
+        not(barrierArmed(1)),
+        match migrations.get(1) {
+          | Some(m) => and { m.attempt == 0, not(m.fenced), m.phase == Streaming,
+                             m.drained_pos == None, m.source_log.run_id == 1 }
+          | None => false
+        },
+      })
+      .then(completeMigration(1, 1).fail())
+  }
+
+  // (c4b, ruled Q2) The other half of the same ruling: breaking the seal must not *wedge*
+  // the migration. Once the source is back and has re-reported its identity, a fresh
+  // Prepare/Confirm re-earns the commit under the new run — the evidence is rebuilt, not
+  // resurrected.
+  run sourceRestartHandoffCanBeReEarnedTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(reportTargetIngest(1))
+      .then(sourceRestart(1))
+      .then(reportRunIdentity(1, Boot, Primary, 0))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 2))
+      .expect(match migrations.get(1) {
+        | Some(m) => m.drained_pos == Some({ run_id: 5, pos: 0 })
+        | None => false
+      })
+      .then(completeMigration(1, 2))
+      .expect(slots.get(1) == Some(4))
+  }
+
+  // (c5, ruled Q1(b)) ext-5: a failover at the source does not take the migration with it.
+  // The successor inherits the slot, so it inherits the migration too — re-homed, with a
+  // fresh run tag and the seal broken, so nothing the dead primary attested carries over.
+  run sourceFailoverRehomesMigrationTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(sourceFailover(1, 2))
+      .expect(and {
+        slots.get(1) == Some(2),
+        nodes.get(2).role == Primary,
+        nodes.get(2).run_id == 5,
+        match migrations.get(1) {
+          | Some(m) => and { m.source == 2, m.target == 4, m.attempt == 0, not(m.fenced),
+                             m.phase == Streaming, m.drained_pos == None,
+                             m.source_log.run_id == 5 }
+          | None => false
+        },
+        not(barrierArmed(1)),
+      })
+      // The re-homed record is a live migration again: it can be re-prepared and driven
+      // to a commit by the successor.
+      .then(prepareHandoff(1))
+      .then(completeMigration(1, 2).fail())
+  }
+
   // (d) Forced failover mid-migration -> demote path, not removal.
   run forcedFailoverDemotesTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(failoverForced(1, 3, 0, Primary))
       .expect(and {
@@ -733,7 +820,7 @@ module cluster_migration_failover {
   // while the migration record and its phase survive untouched.
   run feedHoldCapBreachReleasesTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(feedBuffer(1))
       .then(feedBuffer(1))
@@ -748,7 +835,7 @@ module cluster_migration_failover {
 
   run feedHoldCapBreachReleasesFenceTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(feedBuffer(1))
       .then(feedBuffer(1))
@@ -772,7 +859,7 @@ module cluster_migration_failover {
   // held set must not stay latched behind a source that cannot drain it.
   run selfFenceReleaseEmptiesHoldTest: bool = {
     init
-      .then(beginMigration(1, 1, 4))
+      .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(setSourceCannotApply(1, true))
       .then(selfFenceRelease(1))
@@ -825,15 +912,29 @@ module cluster_migration_failover {
   // ext-10, the point of re-keying `spent` by reset epoch: after a reset rewinds the
   // handoff counter, minting seq 1 again is a lawful *re-mint*, not a reuse — and the
   // model can tell the two apart.
+  //
+  // The trace also pins TR-CLUSTER-035's *direction*: node 4 resets, and it is every
+  // **other** member that is ejected (node 1 among them) while node 4 keeps its own cell.
+  // Every slot is unassigned and every migration taken, not only those naming node 4 —
+  // which is why the cluster has to be rebuilt (meet, boot, assign) before a second
+  // handoff can be minted at all.
   run resetMakesReMintDistinguishableTest: bool = {
     init
-      .then(beginMigration(1, 1, 2))
+      .then(beginMigration(1, 1, 2, false))
       .then(prepareHandoff(1))
       .expect(spent == Set({ epoch: 0, seq: 1 }))
       .then(cancelMigration(1, 1))
       .then(resetCluster(4))
-      .expect(and { ctl.reset_epoch == 1, ctl.handoff_seq == 0 })
-      .then(beginMigration(2, 1, 2))
+      .expect(and {
+        ctl.reset_epoch == 1, ctl.handoff_seq == 0,
+        nodes.get(4).member, nodes.get(4).registration_seq == Some(4),
+        not(nodes.get(1).member), not(nodes.get(2).member), not(nodes.get(3).member),
+        SLOTS.forall(s => slots.get(s) == None),
+      })
+      .then(meetNode(2))
+      .then(reportRunIdentity(2, Boot, Primary, 0))
+      .then(assignSlot(2, 4))
+      .then(beginMigration(2, 4, 2, false))
       .then(prepareHandoff(2))
       .expect(and {
         match migrations.get(2) { | Some(m) => m.attempt == 1 | None => false },
