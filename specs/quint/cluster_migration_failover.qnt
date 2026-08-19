@@ -437,6 +437,22 @@ module cluster_migration_failover {
       nodes.get(n).record == None,
     })
 
+  // ext-15/ext-16 (V12-M2/V13-M1), the two-plane convergence claim: a node whose
+  // replicated cell and node-local plane had split converged again, replicated -> local,
+  // *before* its boot report proposed anything. The producing state is the one V12-M2
+  // names — a node that crashed before its failover promotion took local effect, whose
+  // old upstream the same forced failover then removed (TR-CLUSTER-042) — and the only
+  // action in the model that can leave it is `adoptReplicatedRole`, so both of the doc's
+  // mutations at it (deleting it, and narrowing the lineage guard by dropping the
+  // removed-upstream disjunct) make this unreachable. Pinned by
+  // `splitPlanesConvergeAfterCrashedPromotionTest`.
+  //
+  // The claim's *silence* half — a detached replica does not loop proposals, because the
+  // difference test counts a locally detached link as matching replicated `None` — is a
+  // claim about what is **not** enabled, so it is pinned by
+  // `detachedReplicaProposesNothingTest` rather than stated as a state predicate here.
+  val witnessSplitPlanesConverge: bool = coverage.planesConverged
+
   // ext-15's liveness claim, in the state the design says must never be mute: a member
   // that has *lost* its node-local incarnation counter (`incarnation == 0`, below every
   // pair the replicated cell can hold) still has an **admissible** next boot report. What
@@ -1194,6 +1210,296 @@ module cluster_migration_failover {
       .then(completeMigration(1, 1).fail())
   }
 
+  // ---------------------------------------------------------------------------
+  // The commit's own conjuncts, one refusal per operand (Q3 Finding 0).
+  //
+  // The random walk does not reach `completeMigration` at all at the sizings the gates
+  // use, so the commit family's invariants are vacuous under the walk and these
+  // deterministic refusals are their only oracle. Each schedule is built so that
+  // **exactly one** `canCompleteMigration` conjunct is false — every other one is
+  // asserted true in the `.expect` immediately above the refusal — so dropping that one
+  // conjunct turns exactly one of these `.fail()` steps into an enabled action.
+  // ---------------------------------------------------------------------------
+
+  // ext-1 (V4-C2): the drain tag. A source restart between `Prepare` and `Confirm` seals
+  // the record with a position minted under the **new** run while the log the record is
+  // draining is the old one — the replicated cell still says the old run (the boot report
+  // has not applied), so every other conjunct, `sourceRunIdentityOk` included, still
+  // holds. Comparing the two positions run-tag-blind admits a commit over a forked log.
+  run completeRefusesCrossRunDrainTagTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(sourceRestart(1))
+      .then(confirmDrained(1, 1))
+      .expect(and {
+        // Everything the commit reads except the tag comparison.
+        isLivePrimary(nodes, 4),
+        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
+        match migrations.get(1) {
+          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining,
+                             m.target_copy.run_id == nodes.get(4).run_id,
+                             m.drained_pos == Some({ run_id: 5, pos: 0 }),
+                             // ... and the one operand that is false: the drain was
+                             // minted under run 5, the log under run 1.
+                             m.source_log.run_id == 1 }
+          | None => false
+        },
+      })
+      .then(completeMigration(1, 1).fail())
+  }
+
+  // ext-2 (v2-C2): the seal. The cap breach releases the source's own fence and leaves
+  // the phase alone (TR-CLUSTER-034), which is the only state in the model where a
+  // `Draining`, drained record is **unsealed** — writes may resume at the source while
+  // the commit still thinks it is holding a drained log.
+  run completeRefusesUnsealedSourceTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(feedBuffer(1))
+      .then(localReleaseOnCapBreach(1))
+      .expect(and {
+        isLivePrimary(nodes, 4),
+        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
+        match migrations.get(1) {
+          | Some(m) => and { m.attempt == 1, m.phase == Draining,
+                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
+                             m.target_copy.run_id == nodes.get(4).run_id,
+                             m.target_copy.pos >= 0,
+                             // The one false operand.
+                             not(m.fenced) }
+          | None => false
+        },
+      })
+      .then(completeMigration(1, 1).fail())
+  }
+
+  // ext-3 (v2-C3): the phase. Re-preparing over a drained record supersedes the attempt
+  // and re-opens the stream — `drained_pos` survives the supersede (it is the evidence of
+  // a drain that *did* happen), so this is the state where a phase-blind commit would
+  // admit on stale drain evidence while the source is streaming again.
+  run completeRefusesResealedRecordTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(prepareHandoff(1))
+      .expect(and {
+        isLivePrimary(nodes, 4),
+        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
+        match migrations.get(1) {
+          | Some(m) => and { m.attempt == 2, m.fenced,
+                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
+                             m.source_log.run_id == 1,
+                             m.target_copy.run_id == nodes.get(4).run_id,
+                             // The one false operand.
+                             m.phase == Streaming }
+          | None => false
+        },
+      })
+      .then(completeMigration(1, 2).fail())
+  }
+
+  // ext-12 (V10-C3): the target's role. Demoting the target mid-`Draining` leaves a
+  // record whose every other conjunct still holds; committing it would hand the slot to a
+  // Replica (`inv_slots_only_assigned_to_primaries`, via `defects.replicaSlot`).
+  run completeRefusesDemotedTargetTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      // Node 1 is the only other live primary at `init` (2 and 3 are its replicas), so it
+      // is the upstream the demotion has to name; the migration is untouched by it.
+      .then(setRole(4, Replica, Some(1)))
+      .expect(and {
+        nodes.get(4).role == Replica,
+        nodes.get(4).member,
+        not(nodes.get(4).fail),
+        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
+        match migrations.get(1) {
+          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining,
+                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
+                             m.target_copy.run_id == nodes.get(4).run_id,
+                             m.target_copy.pos >= 0 }
+          | None => false
+        },
+      })
+      .then(completeMigration(1, 1).fail())
+  }
+
+  // ext-5 (V9-C2): the ingest report is drawn from the **durable** point, never from the
+  // volatile applied point. Two applies, one durability step: the report must carry 1,
+  // not 2 — the position a power-loss restart would keep. Reverting the guard reports the
+  // volatile point, and the commit then admits over a position the target can lose.
+  run targetReportIsDrawnFromDurableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(sourceWrite(1))
+      .then(sourceWrite(1))
+      .then(applyAtTarget(1))
+      .then(makeTargetDurable(1))
+      .then(applyAtTarget(1))
+      .expect(match migrations.get(1) {
+        | Some(m) => m.target_applied == 2 and m.target_durable == 1
+        | None => false
+      })
+      .then(reportTargetIngest(1))
+      .expect(match migrations.get(1) {
+        | Some(m) => m.target_copy == { run_id: 4, pos: 1 }
+        | None => false
+      })
+      // And the restart takes exactly the volatile half back.
+      .then(targetRestart(4))
+      .expect(match migrations.get(1) {
+        | Some(m) => m.target_applied == 1 and m.target_durable == 1
+        | None => false
+      })
+  }
+
+  // ext-1/ext-5 (N-C2): the restart-then-write window *within one record* — the state a
+  // run-conditioned history hole would need — is closed by two rules acting in series,
+  // and this test is what says so. A physically restarted source is not booted, so
+  // `sourceWrite` is refused (`canAct`); the only thing that lifts that guard is the boot
+  // report, whose identity field write takes every record the node sources with it. So a
+  // record never sees two runs of its own source writing into it, and `stream_history`
+  // per record is single-run by construction rather than by an asserted tag.
+  run restartedSourceCannotWriteWithinItsRecordTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(sourceWrite(1))
+      .expect(and {
+        stream_history.get(1) == Set({ run_id: 1, pos: 1 }),
+        inv_stream_history_sound,
+      })
+      .then(sourceRestart(1))
+      .expect(and {
+        nodes.get(1).run_id == 5,
+        not(nodes.get(1).booted),
+        // The record is still there — the restart alone does not take it — but the source
+        // cannot write into it.
+        migrations.get(1) != None,
+        not(canAct(nodes, 1)),
+      })
+      .then(reportRunIdentity(1, Boot, Primary, 0, false))
+      .expect(and {
+        nodes.get(1).booted,
+        // ... and the field write that lifted the guard took the record.
+        migrations.get(1) == None,
+        stream_history.get(1) == Set({ run_id: 1, pos: 1 }),
+        inv_stream_history_sound,
+      })
+      .then(sourceWrite(1).fail())
+  }
+
+  // ---------------------------------------------------------------------------
+  // ext-12 (V8-C4/V10-C4): the residue's two recovery arms, driven to the end.
+  // ---------------------------------------------------------------------------
+
+  // The **level-triggered source arm**. A bare replicated demotion of the source is the
+  // one demotion path that does not re-home the entry in-apply, so the entry is left
+  // naming a node that is no longer a primary and `retargetSlotResidue` is the verb that
+  // has to move it. (The other slots are unassigned first so the demotion does not leave
+  // a Replica owning slots.)
+  run demotedSourceResidueRetargetedTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(removeSlot(2))
+      .then(removeSlot(3))
+      .then(removeSlot(4))
+      // Node 3 leaves node 1's shard and becomes the primary node 1 is then demoted
+      // under — the entry is left naming a node that is no longer a primary.
+      .then(setRole(3, Primary, None))
+      .then(setRole(1, Replica, Some(3)))
+      .expect(and {
+        shardPrimary(nodes, 1) == Some(3),
+        canRetargetSlotResidue(nodes, residue, 1),
+        inv_residue_has_an_effective_remover,
+        match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
+      })
+      .then(retargetSlotResidue(1))
+      .expect(and {
+        match residue.get(1) {
+          | Some(r) => and { r.source == 3, not(r.source_gone), r.target == 4 }
+          | None => false
+        },
+        // The old source still physically holds the copy; it stays reachable through its
+        // shard primary, which is now the entry's source.
+        nodes.get(1).keys.contains(1),
+        not(defects.untracked),
+        inv_member_keyspace_is_tracked,
+      })
+  }
+
+  // ext-15 (V9-M4): `clearSlotResidue` is narrowed to a **promoted** entry, and this is
+  // the state that says why. While the entry is unpromoted it is the only object naming
+  // the source's copy, and the reaper is gated on `promoted` too — so clearing it here
+  // would strand that copy with no verb left able to take it. The verb refuses, and the
+  // keyspace stays tracked.
+  run unpromotedResidueNotClearableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .expect(and {
+        match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
+        nodes.get(1).keys.contains(1),
+        not(canClearSlotResidue(residue, 1)),
+        // ... and the reap-then-clear terminal state is not available either.
+        not(reapableSlots(nodes, migrations, residue, 1).contains(1)),
+        inv_member_keyspace_is_tracked,
+      })
+      .then(clearSlotResidue(1).fail())
+  }
+
+  // The **in-apply target arm** (V10-C4). An unpromoted entry whose target is demoted is
+  // re-homed onto the successor inside the demotion's own apply — there is no
+  // level-triggered target arm to catch it afterwards, which is why the entry would
+  // otherwise be left with no effective remover. The trace then runs the ordinary
+  // attest-reap-clear path to the end on the *new* target, so the arm is shown to be
+  // effective and not merely present.
+  run demotedTargetResidueRehomedInApplyTest: bool = {
+    init
+      .then(attachTargetReplica(2, 4))
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(demoteNode(4, 2))
+      .expect(and {
+        slots.get(1) == Some(2),
+        match residue.get(1) {
+          | Some(r) => and { r.target == 2, not(r.target_gone), not(r.promoted), r.source == 1 }
+          | None => false
+        },
+        inv_residue_has_an_effective_remover,
+        inv_slots_only_assigned_to_primaries,
+      })
+      .then(relabelShadow(1))
+      .then(reportPromoted(1))
+      .then(reapSlots(1))
+      .then(clearSlotResidue(1))
+      .expect(and {
+        residue.get(1) == None,
+        nodes.get(2).keys.contains(1),
+        not(nodes.get(1).keys.contains(1)),
+        not(defects.untracked),
+        not(defects.overDelete),
+        inv_member_keyspace_is_tracked,
+      })
+  }
+
   // (c4) ext-15 (V10-M1), the mirror case at the **source**, in the two steps the design
   // separates. The physical restart leaves the replicated record alone — sealed, drained,
   // stamp intact, barrier still armed. What kills it is the **boot report's field write**:
@@ -1738,16 +2044,92 @@ module cluster_migration_failover {
         | Some(m) => nodes.get(2).replica_copy < m.target_applied
         | None => false
       })
+      // ext-4 (V7-C3) / ext-14 (V8-M2): the pre-seal wait is *spent*. Four ticks — the
+      // first sees the ingest progress and resets, the next three accrue — leave the
+      // counter at the `draining_observations` bound while the migration is still healthy
+      // (the `preconfirm_observations` bound is larger, so nothing is abortable yet).
+      // Without this the seal-time reset is invisible: the counter it zeroes is already
+      // zero.
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .expect(match migrations.get(1) {
+        | Some(m) => and { m.observations == DRAINING_OBSERVATIONS, not(isAbortableByBound(m)) }
+        | None => false
+      })
       .then(feedTargetReplica(2))
       .then(reportReplicaAck(1, 2))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
+      // The seal starts the post-`Confirm` bound from zero. Reverting the reset (or the
+      // replica-ack counter reset it stands for) leaves the accrued pre-seal count in
+      // place, which is already at the bound — the abort-every-lawful-drain defect, and
+      // the reason the witness below is unreachable without it.
+      .expect(match migrations.get(1) {
+        | Some(m) => and { m.observations == 0, not(isAbortableByBound(m)), not(defects.sealCounter) }
+        | None => false
+      })
+      // The drain waits one more observation for the ack it already has; with the counter
+      // reset this is free, without it the record is abortable here.
+      .then(reconcileTick(1))
+      .expect(match migrations.get(1) { | Some(m) => not(isAbortableByBound(m)) | None => false })
       .then(completeMigration(1, 1))
       .expect(and {
         witnessKnobOnMigrationCompletes,
         slots.get(1) == Some(4),
         not(defects.replicaAck),
+        // ext-14 (V5-M3): the counted set that carried the commit was *non-empty* — the
+        // conjunct the no-replica variant below shows is not vacuous.
+        countedReplicasOf(nodes, 4) != Set(),
       })
+  }
+
+  // ext-14 (V5-M3), the empty-counted-set half of the same rule: knob on, nothing counted.
+  // `Complete` must be refused however drained the record is — an empty counted set is
+  // false, not vacuously true.
+  //
+  // The ack is **earned first** and the counted set emptied afterwards, deliberately: with
+  // no ack ever recorded the position conjunct (`target_replica_ack >= d.pos`) refuses on
+  // its own and would mask the rule under test. Here the recorded ack covers the drained
+  // position, so the emptiness of the counted set is the only thing left refusing — which
+  // is what makes reverting the rule to "vacuously true" observable at this step.
+  run replicaAckKnobRefusesEmptyCountedSetTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, true))
+      .then(sourceWrite(1))
+      .then(applyAtTarget(1))
+      .then(makeTargetDurable(1))
+      .then(reportTargetIngest(1))
+      .then(attachTargetReplica(2, 4))
+      .then(feedTargetReplica(2))
+      .then(reportReplicaAck(1, 2))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .expect(and {
+        // Every `Complete` conjunct is satisfied here, the replica pair included.
+        countedReplicasOf(nodes, 4) == Set(2),
+        canCompleteMigration(nodes, migrations, 1, 1),
+        match migrations.get(1) {
+          | Some(m) => and { m.phase == Draining, m.require_replica_ack,
+                             m.drained_pos == Some({ run_id: 1, pos: 1 }),
+                             m.target_copy.run_id == nodes.get(4).run_id,
+                             m.target_copy.pos >= 1,
+                             m.target_replica_ack >= 1 }
+          | None => false
+        },
+      })
+      .then(detachTargetReplica(2))
+      .expect(and {
+        // Only the counted set changed — the recorded ack still covers the drained point.
+        countedReplicasOf(nodes, 4) == Set(),
+        match migrations.get(1) {
+          | Some(m) => m.target_replica_ack >= 1
+          | None => false
+        },
+        not(canCompleteMigration(nodes, migrations, 1, 1)),
+      })
+      .then(completeMigration(1, 1).fail())
   }
 
   // ext-17 (V15-M4): the re-parent drops `synced` and moves the parenting token; the
@@ -1890,5 +2272,292 @@ module cluster_migration_failover {
         not(defects.disposition),
         inv_no_live_record_disposed_by_a_foreign_refusal,
       })
+  }
+
+  // ext-18 (V20-C1/V28-M6), the refusing half of the same pair — the trace the invariant
+  // above is *stated against*. The stage counter is a node-local store (`wipe`), so a
+  // forget-and-rejoin can mint a **second stage carrying the same id** under a new
+  // registration. The refusal still in flight names the dead stage's registration, so the
+  // pair refuses and the live record survives; weakening the disposition guard to the
+  // stage id alone disposes of a record the refusal was never minted for, and
+  // `last_disposition` records the mismatched pair that says so.
+  run foreignRefusalDoesNotDisposeTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(match nodes.get(3).record {
+        | Some(rec) => rec.stage_id == 1 and rec.staged_reg_seq == 3
+        | None => false
+      })
+      // The store loss goes with the departure: the counter rewinds, the record does not
+      // (ext-18 — that survival is what makes the collision expressible).
+      .then(removeNode(3, false, true))
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .expect(refusals == Set({ node: 3, stage_id: 1, reg_seq: 3,
+                                class: Membership, terminal: true }))
+      .then(clearStaleRecord(3))
+      .then(meetNode(3))
+      .expect(nodes.get(3).registration_seq == Some(5))
+      // Same stage id (the counter was wiped), different registration.
+      .then(stageFlip(3, 4))
+      .expect(match nodes.get(3).record {
+        | Some(rec) => rec.stage_id == 1 and rec.staged_reg_seq == 5
+        | None => false
+      })
+      .then(observeRefusal(3, { node: 3, stage_id: 1, reg_seq: 3,
+                                class: Membership, terminal: true }))
+      .expect(and {
+        // Not disposed: the record, the fence and the unpaid client all survive, and no
+        // disposition was recorded at all.
+        nodes.get(3).record != None,
+        nodes.get(3).node_fenced,
+        not(nodes.get(3).reply_emitted),
+        nodes.get(3).last_disposition == None,
+        not(defects.disposition),
+        inv_no_live_record_disposed_by_a_foreign_refusal,
+      })
+  }
+
+  // ext-15 (V13-C1): a record is a *single* pending obligation. A second stage toward
+  // another upstream while one is pending would let the adoption land toward B on an
+  // admission earned for A.
+  run competingStageRefusedTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(match nodes.get(3).record {
+        | Some(rec) => and { rec.upstream == 4, rec.stage_id == 1, not(rec.adopted) }
+        | None => false
+      })
+      .then(stageFlip(3, 2).fail())
+  }
+
+  // ext-16 (1) / ext-15 (V13-C1): the adoption reads the admission **stamped for its own
+  // stage**, not the bare pair (record ∧ role `Replica`). Here an unrelated replicated
+  // write puts the node in exactly that bare state — a `Replica` carrying a pending
+  // record — with no admission of its own: the flip must not land, or the keyspace would
+  // move toward the record's upstream on someone else's admission.
+  run adoptionRefusedWithoutItsOwnAdmissionTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .then(setRole(3, Replica, Some(1)))
+      .expect(and {
+        nodes.get(3).role == Replica,
+        nodes.get(3).admitted_stage == None,
+        match nodes.get(3).record {
+          | Some(rec) => and { rec.upstream == 4, not(rec.adopted) }
+          | None => false
+        },
+      })
+      .then(completeAdoption(3).fail())
+  }
+
+  // ---------------------------------------------------------------------------
+  // ext-17/V18-C1: the stale-attestation fence, one operand per trace.
+  //
+  // `attestReplicaSynced` is the only writer of the candidacy bit `beltOk` reads, so an
+  // attestation minted before a topology change and applied after it is the model's
+  // stale-evidence hazard: it re-arms candidacy over a dataset the node synced from
+  // somewhere else. The fence is three operands wide (observed primary, parenting token,
+  // registration), and each of the three traces below is built so that **exactly one** of
+  // them refuses — the other two match at apply time. Dropping any one operand from the
+  // guard therefore turns exactly one of these `.fail()` steps into an enabled action.
+  // ---------------------------------------------------------------------------
+
+  // Operand 1, the observed primary (ext-17 mutation (8), the attestation fence itself):
+  // the attestation names the primary the replica was synced from, and it is applied after
+  // a re-parent onto a different one.
+  run staleAttestationRefusedAcrossReParentTest: bool = {
+    init
+      .expect(and { nodes.get(3).parent == Some(1), nodes.get(3).parent_seq == 0, nodes.get(3).synced })
+      .then(setRole(3, Replica, Some(4)))
+      .expect(and {
+        nodes.get(3).parent == Some(4),
+        // The other two operands match the in-flight attestation exactly.
+        nodes.get(3).parent_seq == 1,
+        nodes.get(3).registration_seq == Some(3),
+        not(nodes.get(3).synced),
+      })
+      .then(attestReplicaSynced(3, 1, 1, 3).fail())
+  }
+
+  // Operand 2, the parenting token (ext-17 mutation (12), V16-C1) — the away-and-back
+  // schedule the token exists for. At apply time the *observed primary* matches again and
+  // the registration never changed, so nothing but `parent_seq` distinguishes an
+  // attestation minted before the round trip from a fresh one. Without the token the
+  // stale attestation re-arms candidacy over a dataset node 3 synced from node 4, and the
+  // next graceful failover of node 1 promotes it.
+  run staleAttestationRefusedAcrossReParentRoundTripTest: bool = {
+    init
+      .then(setRole(3, Replica, Some(4)))
+      .then(setRole(3, Replica, Some(1)))
+      .expect(and {
+        // Indistinguishable from the mint state on every operand but the token.
+        nodes.get(3).parent == Some(1),
+        nodes.get(3).registration_seq == Some(3),
+        nodes.get(3).parent_seq == 2,
+        not(nodes.get(3).synced),
+        // ...and while it is unsynced it is not a graceful-failover candidate.
+        not(canApplyFailover(nodes, slots, 1, 3, true, 0, Primary)),
+      })
+      .then(attestReplicaSynced(3, 1, 0, 3).fail())
+  }
+
+  // Operand 3, the registration (ext-17/V18-C1 mutation (13)): the node leaves the
+  // membership and rejoins between the mint and the apply. The parenting token is *not*
+  // enough here — the rejoin re-derives it, and node 3's token happens to be back at a
+  // value an in-flight attestation can carry — so the registration counter is what makes
+  // the pre-wipe attestation refusable.
+  //
+  // The boot report is part of the schedule deliberately: without it the model's
+  // boot-ordering guard (`canAct`) would refuse the attestation too and the refusal below
+  // would be over-determined rather than attributable to the registration operand.
+  run staleAttestationRefusedAcrossRejoinTest: bool = {
+    init
+      .then(removeNode(3, false, false))
+      .expect(nodes.get(3).registration_seq == None)
+      .then(meetNode(3))
+      .expect(nodes.get(3).registration_seq == Some(5))
+      .then(reportRunIdentity(3, Boot, Primary, 0, false))
+      .then(setRole(3, Replica, Some(1)))
+      .expect(and {
+        // Every other operand of the in-flight attestation matches...
+        nodes.get(3).parent == Some(1),
+        nodes.get(3).parent_seq == 2,
+        canAct(nodes, 3),
+        // ...and the registration it was minted under is gone.
+        nodes.get(3).registration_seq == Some(5),
+      })
+      .then(attestReplicaSynced(3, 1, 2, 3).fail())
+  }
+
+  // The same schedule with the run tag pinned (ext-17/V18-C1 mutation (14)): node 3 never
+  // restarts, so it rejoins carrying the **same `RunId`** it left with and its re-minted
+  // identity carries that same run. A freshness check keyed on the run tag would see no
+  // change at all across the wipe — which is the point of `RunId` being opaque and of the
+  // registration counter, not the run, being the pairing partner of the stage.
+  run staleAttestationRefusedWithRepeatedRunIdTest: bool = {
+    init
+      .expect(nodes.get(3).stored_identity == Some({ inc: 1, seq: 1, run_id: 3 }))
+      .then(removeNode(3, false, false))
+      .then(meetNode(3))
+      .then(reportRunIdentity(3, Boot, Primary, 0, false))
+      .expect(and {
+        // Same run, on both sides of the wipe: the tag distinguishes nothing.
+        nodes.get(3).run_id == 3,
+        nodes.get(3).stored_identity == Some({ inc: 1, seq: 2, run_id: 3 }),
+        nodes.get(3).registration_seq == Some(5),
+      })
+      .then(setRole(3, Replica, Some(1)))
+      .then(attestReplicaSynced(3, 1, 2, 3).fail())
+  }
+
+  // ---------------------------------------------------------------------------
+  // ext-15/ext-16: the two planes and the lineage guard.
+  // ---------------------------------------------------------------------------
+
+  // V12-M2's mute node, and the action that saves it. Node 3 crashes; while it is down a
+  // forced failover promotes it in the **replicated** plane and its old upstream is then
+  // removed (TR-CLUSTER-042). Its node-local plane still says "replica of 1", so the two
+  // planes are split and every `Demotion` report it could phrase is against a role it no
+  // longer has. `adoptReplicatedRole` converges the split before the boot report proposes.
+  //
+  // Two of the doc's mutations are pinned here: deleting the action (or making it write
+  // the wrong plane) leaves `witnessSplitPlanesConverge` unreachable, and narrowing the
+  // lineage guard to `u == None or in_shard_parent(u, n)` — dropping the removed-upstream
+  // disjunct — makes the adoption itself inadmissible in exactly this state.
+  run splitPlanesConvergeAfterCrashedPromotionTest: bool = {
+    init
+      .then(sourceRestart(3))
+      .expect(not(nodes.get(3).booted))
+      .then(failoverForced(1, 3, 0, Primary))
+      .expect(and {
+        // The replicated cell moved...
+        nodes.get(3).role == Primary,
+        nodes.get(3).parent == None,
+        nodes.get(3).promoted_from == Some(1),
+        // ...and the node-local plane did not, because the node was down.
+        nodes.get(3).local_role == Replica,
+        nodes.get(3).local_parent == Some(1),
+        identityFactsDiffer(nodes, 3),
+        // Nothing has converged yet.
+        not(witnessSplitPlanesConverge),
+      })
+      .then(removeNode(1, false, false))
+      .expect(and {
+        not(nodes.get(1).member),
+        // The removed-upstream disjunct, and only it, admits the adoption here.
+        lineageOk(nodes, 3),
+        canAdoptReplicatedRole(nodes, 3),
+      })
+      .then(adoptReplicatedRole(3))
+      .expect(and {
+        nodes.get(3).local_role == Primary,
+        nodes.get(3).local_parent == None,
+        not(identityFactsDiffer(nodes, 3)),
+        // Converged *before* the boot report proposed anything.
+        not(nodes.get(3).booted),
+        witnessSplitPlanesConverge,
+      })
+  }
+
+  // ext-16 (V14-C2): the retightening itself. Node 2 is re-parented onto a foreign primary
+  // while it is down, and its own old upstream then departs. The difference test fires —
+  // the two planes really do disagree — but the local upstream is explicable by neither
+  // an in-shard parent nor a promotion, so the adoption is refused rather than
+  // substituting a foreign lineage for node 2's own. The bare `u not in nodes` disjunct
+  // V13-M1 first carried admits it.
+  run foreignLineageAdoptionRefusedTest: bool = {
+    init
+      .then(sourceRestart(2))
+      .then(setRole(2, Replica, Some(4)))
+      .expect(and {
+        nodes.get(2).parent == Some(4),
+        nodes.get(2).local_parent == Some(1),
+      })
+      // Force: node 1 is still a slot-owning primary.
+      .then(removeNode(1, true, false))
+      .expect(and {
+        not(nodes.get(1).member),
+        nodes.get(2).promoted_from == None,
+        // The difference test is satisfied, so the refusal below is the lineage guard's
+        // and nothing else's.
+        identityFactsDiffer(nodes, 2),
+        not(lineageOk(nodes, 2)),
+        not(canAdoptReplicatedRole(nodes, 2)),
+      })
+      .then(adoptReplicatedRole(2).fail())
+  }
+
+  // `witnessSplitPlanesConverge`'s silence half (doc: "the difference test treats a
+  // locally detached link as matching replicated `primary_id == None`"). Node 3 is down
+  // when its primary is removed, so the detach writes `parent == None` into the
+  // replicated cell while node 3 still names 1 locally. The equivalence makes that a
+  // *match*: there is nothing to reconcile and nothing to adopt, and the node sits in its
+  // declared state instead of re-proposing on every observation cycle. Dropping the
+  // equivalence turns both refusals below into enabled actions — the permanent proposal
+  // loop.
+  //
+  // Silence is not muteness: the node's ordinary boot report is admissible throughout.
+  run detachedReplicaProposesNothingTest: bool = {
+    init
+      .then(sourceRestart(3))
+      .then(removeNode(1, true, false))
+      .expect(and {
+        nodes.get(3).parent == None,
+        nodes.get(3).local_parent == Some(1),
+        not(nodes.get(1).member),
+        localUpstreamMatches(nodes, 3),
+        not(identityFactsDiffer(nodes, 3)),
+        not(canReconcileIdentity(nodes, 3)),
+        not(canAdoptReplicatedRole(nodes, 3)),
+      })
+      .then(reportRunIdentity(3, Boot, Replica, 0, false))
+      .expect(and {
+        nodes.get(3).booted,
+        // Still silent on the far side of the boot report.
+        not(identityFactsDiffer(nodes, 3)),
+        not(canReconcileIdentity(nodes, 3)),
+        not(canAdoptReplicatedRole(nodes, 3)),
+      })
+      .then(reconcileIdentity(3).fail())
   }
 }

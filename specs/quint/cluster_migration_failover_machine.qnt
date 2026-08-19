@@ -173,6 +173,10 @@ module cluster_migration_failover_machine {
     healthyAborted: bool,
     // ext-14 — a `require_replica_ack` migration committed at the stock sizings.
     knobCompleted: bool,
+    // ext-15 — a node whose two planes had split converged again, replicated -> local.
+    // Written by `adoptReplicatedRole` from its own post-state (the split it was looking
+    // at is gone in the node it wrote), never from its guard.
+    planesConverged: bool,
   }
 
   // ---------------------------------------------------------------------------
@@ -259,6 +263,10 @@ module cluster_migration_failover_machine {
     admitted_stage: None,
     promoted_from: None,
     parent_seq: 0,
+    // The two planes start agreeing — every split in this model is *produced* by a
+    // replicated write landing at a node that is down.
+    local_role: role,
+    local_parent: parent,
     registration_seq: Some(reg),
     incarnation: 1,
     identity_seq: 1,
@@ -311,7 +319,7 @@ module cluster_migration_failover_machine {
                  spuriousCancel: false, staleDemote: false, disposition: false },
     coverage' = { gracefulPruned: false, forcedDemotedReplica: false, failoverDuringOpenMigration: false,
                   promotionRolledBack: false, reaped: false, emptyBatch: false,
-                  healthyAborted: false, knobCompleted: false },
+                  healthyAborted: false, knobCompleted: false, planesConverged: false },
   }
 
   // ---------------------------------------------------------------------------
@@ -364,6 +372,9 @@ module cluster_migration_failover_machine {
       nodes' = nodes.set(n, {
         ...writeParentPointer(nodes.get(n), Primary, None, false, None, None),
         member: true, fail: false, booted: false,
+        // A fresh registration is the node *presenting itself*: the two planes agree at
+        // the join by construction, so a rejoin is never a split to be adopted over.
+        local_role: Primary, local_parent: None,
         registration_seq: Some(ctl.next_reg),
       }),
       ctl' = { ...ctl, next_reg: ctl.next_reg + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
@@ -496,19 +507,27 @@ module cluster_migration_failover_machine {
     // re-mint the node's own counter takes the value it just published rather than staying
     // at the lost `0`.
     val stamped = { ...ns, incarnation: inc, identity_seq: seq, stored_identity: Some(identity) }
+    // The two post-states named once, so the ghosts below read what this step *did* rather
+    // than re-deriving it from the same guard the step was admitted by.
+    val postNodes =
+      if (not(admitted)) nodes
+      else if (kind == Boot) nodes.set(n, { ...stamped, booted: true })
+      else match ns.record {
+        | Some(rec) => nodes.set(n, {
+            ...writeParentPointer(stamped, Replica, Some(rec.upstream), false, Some(rec.stage_id), None),
+            record: Some({ ...rec, adopted: true }),
+          })
+        | None => nodes
+      }
+    val postMigs = if (cancelled == Set()) migrations else cancelledBySource(migrations, n)
+    val postStored = postNodes.get(n).stored_identity
+    // The records this step actually took (an open migration that is gone in the
+    // post-state) — the operand of the no-spurious-cancel claim.
+    val takenSlots = cancelled.filter(s => migrations.get(s) != None)
     all {
       // A Demotion report only exists against a staged record.
       kind == Boot or (match ns.record { | Some(rec) => rec.kind == Demotion | None => false }),
-      nodes' =
-        if (not(admitted)) nodes
-        else if (kind == Boot) nodes.set(n, { ...stamped, booted: true })
-        else match ns.record {
-          | Some(rec) => nodes.set(n, {
-              ...writeParentPointer(stamped, Replica, Some(rec.upstream), false, Some(rec.stage_id), None),
-              record: Some({ ...rec, adopted: true }),
-            })
-          | None => nodes
-        },
+      nodes' = postNodes,
       refusals' =
         if (admitted) refusals
         else match ns.record {
@@ -517,26 +536,36 @@ module cluster_migration_failover_machine {
               class: cls, terminal: isRefusalTerminal(ns.stored_identity, cls) }))
           | None => refusals
         },
-      migrations' = if (identityWritten) cancelledBySource(migrations, n) else migrations,
+      migrations' = postMigs,
       barriers' = { ...barriers, armed: barriers.armed.exclude(cancelled),
                     disconnected: barriers.disconnected.exclude(cancelled) },
       held' = held.set(n, held.get(n).exclude(cancelled)),
       feed_bytes' = SLOTS.fold(feed_bytes, (acc, s) => if (cancelled.contains(s)) acc.set(s, 0) else acc),
-      // ext-15's three ghosts, each recomputed here from the report's own operands rather
-      // than from `refusalClassOf`'s verdict:
-      //   `identityRegress` — an *applied* report that did not strictly dominate the cell
-      //     it overwrote (`inv_run_identity_never_regresses`);
-      //   `spuriousCancel` — records taken by a report that wrote no new identity, i.e. a
-      //     cancel bound to admission rather than to the field write
-      //     (`inv_no_spurious_cancel`);
+      // ext-15's three ghosts, each recomputed here from **this step's post-state** rather
+      // than from `refusalClassOf`'s verdict. Q3's mutation battery showed the earlier
+      // forms (`admitted and not(identityOrderOk(...))`, `cancelled != Set() and stored ==
+      // Some(identity)`) were vacuous: both antecedents were contradictions of the very
+      // guard that admitted the step, so no mutation of that guard could reach them. The
+      // forms below compare the cell the step *wrote* against the cell it *overwrote*, and
+      // the records it *took* against whether it wrote at all — so weakening the ordering
+      // conjunct (a replay applied over the live cell) or unbinding the cancel from the
+      // field write (a refused report taking records) each trips its own named property.
+      //   `identityRegress` — the identity the step left in the cell does not strictly
+      //     dominate the one it replaced (`inv_run_identity_never_regresses`);
+      //   `spuriousCancel` — records taken by a step that left the identity cell
+      //     unchanged, i.e. a cancel bound to admission (or to nothing) rather than to the
+      //     field write (`inv_no_spurious_cancel`);
       //   `staleDemote` — a Demotion arm that rewrote role and parent although the
       //     role/epoch it observed is not the pair the node holds now
       //     (`inv_promotion_is_not_reverted_without_a_failover`).
       defects' = { ...defects,
         identityRegress: defects.identityRegress
-          or (admitted and not(identityOrderOk(ns.stored_identity, inc, seq))),
+          or (postStored != ns.stored_identity and match postStored {
+            | Some(st) => not(identityOrderOk(ns.stored_identity, st.inc, st.seq))
+            | None => true
+          }),
         spuriousCancel: defects.spuriousCancel
-          or (cancelled != Set() and ns.stored_identity == Some(identity)),
+          or (takenSlots != Set() and postStored == ns.stored_identity),
         staleDemote: defects.staleDemote
           or (admitted and kind == Demotion
               and (ns.role != obsRole or ns.epoch_own != obsEpoch)),
@@ -563,6 +592,40 @@ module cluster_migration_failover_machine {
     nodes.get(n).parent_seq == obsParentSeq,
     nodes.get(n).registration_seq == Some(obsRegSeq),
     nodesOnly(nodes.set(n, { ...nodes.get(n), synced: true })),
+  }
+
+  // ---------------------------------------------------------------------------
+  // ext-15/ext-16: the two planes.
+  // ---------------------------------------------------------------------------
+
+  // The replicated -> local convergence. It writes the **node-local plane only** — it is
+  // deliberately not a `primary_id` writer, and `inv_role_written_only_by_declared_
+  // writers` is keyed on the replicated cell it never touches. It runs *before* the boot
+  // report proposes (it does not require `canAct`), which is the whole point: a node that
+  // crashed before its failover promotion took local effect would otherwise boot as a
+  // replica of a primary that no longer exists, phrase a `Demotion` report against a role
+  // it no longer has, and be refused forever.
+  action adoptReplicatedRole(n: NodeId): bool = {
+    val ns = nodes.get(n)
+    val post = { ...ns, local_role: ns.role, local_parent: ns.parent }
+    all {
+      canAdoptReplicatedRole(nodes, n),
+      nodes' = nodes.set(n, post),
+      // Recomputed from the post-state: a mutation that adopts into the wrong plane (or
+      // adopts nothing) leaves the difference test still true and sets nothing.
+      coverage' = { ...coverage, planesConverged: coverage.planesConverged
+        or (identityFactsDiffer(nodes, n) and not(identityFactsDiffer(nodes.set(n, post), n))) },
+      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
+    }
+  }
+
+  // ext-15 (V8-C6): the level-triggered re-proposal. Not a new apply path — it is
+  // `reportRunIdentity` re-phrased from *current* replicated facts, which is what makes a
+  // refused report recoverable without an operator. The kind is stamped from the record
+  // (the V7-C1 arm-selector rule), never chosen by the proposer.
+  action reconcileIdentity(n: NodeId): bool = all {
+    canReconcileIdentity(nodes, n),
+    reportRunIdentity(n, reconcileKindOf(nodes, n), nodes.get(n).role, nodes.get(n).epoch_own, false),
   }
 
   // ---------------------------------------------------------------------------
@@ -635,11 +698,17 @@ module cluster_migration_failover_machine {
     nodesOnly(nodes.set(n, { ...nodes.get(n), record: None, node_fenced: false, reply_emitted: true })),
   }
 
-  // ext-18: the staged flip lands only after the replicated admission stamped it.
+  // ext-18: the staged flip lands only after the replicated admission stamped it — and
+  // the **stamp itself** is a conjunct (ext-16 (4), V14-M1), not just the record's
+  // `adopted` flag. The two are separable exactly where the doc's mutation lives: a boot
+  // that re-minted `stageId` the way it re-mints the candidate triple would leave the
+  // record adopted while the stamp names the pre-crash stage, and the flip could never
+  // land again (`witnessStagedFlipCompletesAcrossCrash` unreachable). Reading the stamp is
+  // also what makes an admission *someone else* earned useless here (V13-C1).
   action completeAdoption(n: NodeId): bool = {
     val ns = nodes.get(n)
     all {
-      match ns.record { | Some(rec) => rec.adopted | None => false },
+      match ns.record { | Some(rec) => rec.adopted and ns.admitted_stage == Some(rec.stage_id) | None => false },
       nodesOnly(nodes.set(n, { ...ns, record: None, node_fenced: false, reply_emitted: true })),
     }
   }
@@ -1012,6 +1081,16 @@ module cluster_migration_failover_machine {
             // ext-12 (V10-C3): the commit handed the slot to a Primary
             // (`inv_slots_only_assigned_to_primaries`).
             replicaSlot: defects.replicaSlot or nodes.get(m.target).role == Replica,
+            // ext-10 per write: the commit retires the record and mints the entry that
+            // replaces it as the tracking object for the source's copy. Recomputed from
+            // the post-state maps, so a commit that hands ownership away without minting
+            // the entry that keeps the loser's copy reachable is seen here.
+            untracked: defects.untracked
+              or strandedBy(nodes, migrations, residue, nodes, slots.set(s, Some(m.target)),
+                            migrations.set(s, None),
+                            residue.set(s, Some({ mig: m.id, source: m.source, target: m.target,
+                                                  promoted: false, source_gone: false, target_gone: false })),
+                            s) != Set(),
           },
           coverage' = { ...coverage, knobCompleted: coverage.knobCompleted or m.require_replica_ack },
           slots' = slots.set(s, Some(m.target)),
@@ -1094,7 +1173,14 @@ module cluster_migration_failover_machine {
           canAct(nodes, r.target),
           residue' = residue.set(s, Some({ ...r, promoted: true })),
           nodes' = nodes.set(r.target, { ...nodes.get(r.target), keys: nodes.get(r.target).keys.union(Set(s)) }),
-          keepSlots, keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
+          // ext-10 per write: the attestation hands the target a *copy*, so the write is
+          // owed the tracking check like any other keyspace write.
+          defects' = { ...defects, untracked: defects.untracked
+            or strandedBy(nodes, migrations, residue,
+                          nodes.set(r.target, { ...nodes.get(r.target), keys: nodes.get(r.target).keys.union(Set(s)) }),
+                          slots, migrations, residue.set(s, Some({ ...r, promoted: true })), s) != Set() },
+          keepSlots, keepMigrations, keepShadow, keepBar,
+          keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
         }
       | None => nope
     }
@@ -1112,8 +1198,13 @@ module cluster_migration_failover_machine {
           slots' = slots.set(s, Some(r.source)),
           shadow' = shadow.set(s, None),
           coverage' = { ...coverage, promotionRolledBack: true },
+          // ext-10 per write: the rollback moves ownership back under the entry, so any
+          // copy it leaves unreachable is this step's doing.
+          defects' = { ...defects, untracked: defects.untracked
+            or strandedBy(nodes, migrations, residue, nodes, slots.set(s, Some(r.source)),
+                          migrations, residue, s) != Set() },
           keepNodes, keepMigrations, keepResidue, keepBar,
-          keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
+          keepHistory, keepRefusals, keepSpent, keepCtl,
         }
       | None => nope
     }
@@ -1157,7 +1248,16 @@ module cluster_migration_failover_machine {
   action clearSlotResidue(s: SlotId): bool = all {
     canClearSlotResidue(residue, s),
     residue' = residue.set(s, None),
-    keepGraph, keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
+    // ext-10 (V9-M4), recomputed per write from the *outcome*: dropping the entry retires
+    // the last tracking object that reached the source's copy. With the attestation
+    // conjunct intact the reaper was free to take that copy right up to this step, so the
+    // ordinary terminal state is clean; clearing a `promoted == false` entry retires the
+    // tracking of a copy the reaper was never allowed to take, and the rollback arm the
+    // entry was still owed goes with it (`inv_member_keyspace_is_tracked`).
+    defects' = { ...defects, untracked: defects.untracked
+      or strandedBy(nodes, migrations, residue, nodes, slots, migrations, residue.set(s, None), s) != Set() },
+    keepGraph, keepMigrations, keepShadow, keepBar,
+    keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
   }
 
   // ext-12 (V8-C4, source arm only per V10-C4).
@@ -1167,7 +1267,14 @@ module cluster_migration_failover_machine {
           | Some(p) => all {
               canRetargetSlotResidue(nodes, residue, s),
               residue' = residue.set(s, Some({ ...r, source: p, source_gone: false })),
-              keepGraph, keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
+              // ext-10 per write: the entry stops naming the old source. Its copy stays
+              // reachable only through the shard closure (`keyIsTracked`) — the re-home
+              // moves the entry to that node's own shard primary, which is the point.
+              defects' = { ...defects, untracked: defects.untracked
+                or strandedBy(nodes, migrations, residue, nodes, slots, migrations,
+                              residue.set(s, Some({ ...r, source: p, source_gone: false })), s) != Set() },
+              keepGraph, keepMigrations, keepShadow, keepBar,
+              keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
             }
           | None => nope
         }
@@ -1200,7 +1307,17 @@ module cluster_migration_failover_machine {
           nodes' =
             if (dest == r.source) nodes
             else nodes.set(dest, { ...nodes.get(dest), keys: nodes.get(dest).keys.union(Set(s)) }),
-          keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
+          // ext-10 per write: the removing branch retires the entry outright and the
+          // on-to-another-primary branch re-points it, so both are owed the check.
+          defects' = { ...defects, untracked: defects.untracked
+            or strandedBy(nodes, migrations, residue,
+                          if (dest == r.source) nodes
+                          else nodes.set(dest, { ...nodes.get(dest), keys: nodes.get(dest).keys.union(Set(s)) }),
+                          slots.set(s, Some(dest)), migrations,
+                          if (dest == r.source) residue.set(s, None)
+                          else residue.set(s, Some({ ...r, target: dest, target_gone: false })), s) != Set() },
+          keepMigrations, keepShadow, keepBar,
+          keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
         }
       | None => nope
     }
@@ -1347,6 +1464,11 @@ module cluster_migration_failover_machine {
   // identity survive **field-for-field** (ext-16/V14-M1).
   pure def restarted(ns: NodeState, newRun: RunId): NodeState = {
     ...ns, run_id: newRun, booted: false, cannot_apply: false, cannot_drain: false, silent: false,
+    // ext-15: a boot **re-derives the node's role from its own persisted state** — which
+    // is exactly the `local_role`/`local_parent` pair carried through here untouched, not
+    // the replicated cell. Papering the split over at boot (re-deriving the local plane
+    // from `role`/`parent` instead) would make `witnessSplitPlanesConverge` unreachable
+    // and would hide V12-M2's mute node rather than fix it.
     // ext-6/V5-M4: an install without its completion marker is discarded at boot.
     replica_copy: if (ns.install_incomplete) 0 else ns.replica_copy,
     install_incomplete: false,
@@ -1484,6 +1606,9 @@ module cluster_migration_failover_machine {
       reportRunIdentity(n1, kind, obsRole, obsEpoch, flag),
       loseIncarnationCounter(n1),
       attestReplicaSynced(n2, n1, obsSeq, obsReg),
+      // ext-15 two-plane convergence
+      adoptReplicatedRole(n1),
+      reconcileIdentity(n1),
       // ext-18 record lifecycle
       stageFlip(n1, n2),
       observeRefusal(n1, r),

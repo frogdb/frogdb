@@ -129,6 +129,17 @@ module cluster_migration_failover_types {
     admitted_stage: Option[int],
     promoted_from: Option[NodeId],
     parent_seq: int,
+    // --- ext-15/ext-16 the node-local plane ------------------------------------------
+    // The two planes the design separates: `role`/`parent` above are the **replicated**
+    // cell (what the cluster believes), `local_role`/`local_parent` are what the node
+    // itself believes and persists across a restart. They are equal whenever a
+    // replicated writer landed while the node was up to apply it; they split when the
+    // write lands at a node that is down (`booted == false`) — the crashed-before-its-
+    // promotion state `adoptReplicatedRole` exists to converge. Nothing but the
+    // two-plane machinery reads them: no admission fence in this model is keyed on the
+    // node-local plane (that is the point of the split).
+    local_role: RoleTag,
+    local_parent: Option[NodeId],
     // ext-17/V18-C1: minted from the cluster-level counter at every *fresh*
     // registration, deleted with the cell. `None` == no cell.
     registration_seq: Option[int],

@@ -194,7 +194,89 @@ module cluster_migration_failover_logic {
   pure def writeParentPointer(ns: NodeState, role: RoleTag, parent: Option[NodeId],
                               synced: bool, admitted: Option[int], promotedFrom: Option[NodeId]): NodeState =
     { ...ns, role: role, parent: parent, synced: synced, admitted_stage: admitted,
-      promoted_from: promotedFrom, parent_seq: ns.parent_seq + 1 }
+      promoted_from: promotedFrom, parent_seq: ns.parent_seq + 1,
+      // ext-15: the *replicated* write is the only thing this funnel is about. The
+      // node-local plane follows it in the same step only while the node is up to apply
+      // it; a write that lands while the node is down (`booted == false`) leaves the two
+      // planes split, which is the state `adoptReplicatedRole` exists to converge and the
+      // only producer of a split in this model.
+      local_role: if (ns.booted) role else ns.local_role,
+      local_parent: if (ns.booted) parent else ns.local_parent }
+
+  // ---------------------------------------------------------------------------
+  // ext-15/ext-16: the two planes and the lineage guard.
+  // ---------------------------------------------------------------------------
+
+  // The upstream half of the **difference test**. A locally-detached link — the node
+  // still names an upstream that is no longer a member — counts as *matching* a
+  // replicated `primary_id == None` (doc's "the difference test treats a locally detached
+  // link as matching replicated `None`"). Without this equivalence the detached replica
+  // re-proposes on every observation cycle: a permanent proposal loop, which is what
+  // `witnessSplitPlanesConverge`'s silence half is stated against.
+  pure def localUpstreamMatches(allNodes: NodeId -> NodeState, n: NodeId): bool = {
+    val ns = allNodes.get(n)
+    or {
+      ns.local_parent == ns.parent,
+      ns.parent == None and match ns.local_parent {
+        | Some(u) => not(allNodes.get(u).member)
+        | None => false
+      },
+    }
+  }
+
+  // The difference test itself: do the replicated topology facts differ from the node's
+  // own? While a stage is pending and unadopted the node's local intent *is* the record's
+  // target (`Replica` of `record.upstream`) — that difference is what the level-triggered
+  // re-proposal is triggered on.
+  pure def identityFactsDiffer(allNodes: NodeId -> NodeState, n: NodeId): bool = {
+    val ns = allNodes.get(n)
+    match ns.record {
+      | Some(rec) =>
+          if (rec.adopted) false
+          else ns.role != Replica or ns.parent != Some(rec.upstream)
+      | None => ns.local_role != ns.role or not(localUpstreamMatches(allNodes, n))
+    }
+  }
+
+  // ext-16 (V14-C2, retightened): the lineage guard on the replicated -> local
+  // convergence. A node may only adopt a replicated role over a local upstream that is
+  // *explicable*: no upstream at all, its own in-shard parent, or an upstream that is
+  // gone **and** is the one this node was promoted from. The bare `u not in nodes`
+  // disjunct V13-M1 first carried is unspecific: it lets a node that was re-parented onto
+  // a foreign primary adopt over that primary's departure, substituting a foreign lineage
+  // for its own.
+  pure def lineageOk(allNodes: NodeId -> NodeState, n: NodeId): bool = {
+    val ns = allNodes.get(n)
+    match ns.local_parent {
+      | None => true
+      | Some(u) => or {
+          shardPrimary(allNodes, n) == Some(u),
+          not(allNodes.get(u).member) and ns.promoted_from == Some(u),
+        }
+    }
+  }
+
+  // ext-15 (V8-C6/V12-M2): converge an *unexplained* split replicated -> local, before
+  // the `Boot` report proposes anything. Refused while a record is pending — that
+  // direction converges through the record's report and `completeAdoption` instead.
+  pure def canAdoptReplicatedRole(allNodes: NodeId -> NodeState, n: NodeId): bool = and {
+    allNodes.get(n).member,
+    allNodes.get(n).record == None,
+    identityFactsDiffer(allNodes, n),
+    lineageOk(allNodes, n),
+  }
+
+  // ext-15 (V8-C6): the level-triggered re-proposal, admissible exactly while the
+  // replicated facts differ from the node's own. Kind-stamped from the record (the
+  // V7-C1 arm-selector rule): a pending record makes it a `Demotion` re-proposal, no
+  // record makes it a `Boot` one.
+  pure def canReconcileIdentity(allNodes: NodeId -> NodeState, n: NodeId): bool = and {
+    allNodes.get(n).member,
+    identityFactsDiffer(allNodes, n),
+  }
+
+  pure def reconcileKindOf(allNodes: NodeId -> NodeState, n: NodeId): TransitionKind =
+    match allNodes.get(n).record { | Some(_) => Demotion | None => Boot }
 
   // ---------------------------------------------------------------------------
   // Nondet-biasing helpers — narrow the candidate set `step` samples from to
@@ -703,6 +785,62 @@ module cluster_migration_failover_logic {
     migs.get(s) == None,
     res.get(s) == None,
   }
+
+  // ext-10/ext-12: the three tracking objects that can reach a copy of `s` at `n` —
+  // the slot map, a live record, a residue entry. "Directly" because a replica's copy is
+  // reached through its shard primary instead (see `keyIsTracked`).
+  pure def trackedDirectly(slotMap: SlotId -> Option[NodeId], migs: SlotId -> Option[Migration],
+                           res: SlotId -> Option[Residue], n: NodeId, s: SlotId): bool = or {
+    slotMap.get(s) == Some(n),
+    match migs.get(s) { | Some(m) => m.source == n or m.target == n | None => false },
+    match res.get(s) { | Some(r) => r.source == n or r.target == n | None => false },
+  }
+
+  // ext-10: "member `n`'s copy of `s` is reached by *something*". Either the slot is
+  // unclaimed altogether (outside the redesign's claims, see `isUnclaimedSlot`), or a
+  // tracking object names `n`, or `n` is a replica whose shard primary is named — the same
+  // shard closure `shardHoldsCopy` uses, read from the other end, and load-bearing for the
+  // same reason: a replica's dataset is the shard's, so handing the shard's slot away does
+  // not strand the replica's copy. Used *per write*: every action that moves a copy or a
+  // tracking object recomputes the ghost over exactly what it wrote, so a mutation that
+  // strands a copy is observable at the step that stranded it rather than only at a state
+  // the model can also reach lawfully.
+  pure def keyIsTracked(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                        migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
+                        n: NodeId, s: SlotId): bool = or {
+    isUnclaimedSlot(slotMap, migs, res, s),
+    trackedDirectly(slotMap, migs, res, n, s),
+    match shardPrimary(allNodes, n) {
+      | Some(p) => p != n and trackedDirectly(slotMap, migs, res, p, s)
+      | None => false
+    },
+  }
+
+  // The members holding an untracked copy of `s` in the given (post-)state.
+  pure def untrackedHoldersOf(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                              migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
+                              s: SlotId): Set[NodeId] =
+    NODES.filter(n => and {
+      allNodes.get(n).member,
+      allNodes.get(n).keys.contains(s),
+      not(keyIsTracked(allNodes, slotMap, migs, res, n, s)),
+    })
+
+  // ext-10, the per-write form: which members did *this step* strand a copy of `s` at?
+  // A post-state holder no tracking object reaches counts only when the reaper could not
+  // have taken that copy in the **pre-state** either. The exclusion is what separates the
+  // ordinary terminal state — reap-then-clear, where the copy was deletable right up to
+  // the moment its entry went away, and the model leaves the two arms unordered — from the
+  // case-3 short-circuit the doc names (V9-M4): clearing an entry whose rollback arm is
+  // still owed retires the tracking of a copy the reaper was never allowed to take. It is
+  // deliberately not the acting verb's own guard: the operand is the ext-7 reaper
+  // predicate, so reverting an admission conjunct is seen through an independent object.
+  pure def strandedBy(preNodes: NodeId -> NodeState, preMigs: SlotId -> Option[Migration],
+                      preRes: SlotId -> Option[Residue], postNodes: NodeId -> NodeState,
+                      postSlots: SlotId -> Option[NodeId], postMigs: SlotId -> Option[Migration],
+                      postRes: SlotId -> Option[Residue], s: SlotId): Set[NodeId] =
+    untrackedHoldersOf(postNodes, postSlots, postMigs, postRes, s)
+      .filter(n => not(reapableSlots(preNodes, preMigs, preRes, n).contains(s)))
 
   // ext-1/ext-5: every acked write of the record's own run is covered by the target's
   // attested copy, and the attestation is the target's *current* run. Recomputed at
