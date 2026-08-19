@@ -2,8 +2,21 @@
 
 Status: ready-for-human
 
-> **IN PROGRESS** (2026-08-14): design revision 5 approved and under adversarial review in an
-> active session (branch `spec-gaps-impl`). Design doc: [2026-08-14-issue31-migration-design.md](../../2026-08-14-issue31-migration-design.md).
+> **STATUS** (2026-08-19): design complete (revision 35, adversarial-review loop closed) and the
+> Quint rework is DONE and merged to main at `ce75ec0d`: phases Q1 (state/action rework), QR
+> (modularize/DRY), Q1F (doc alignment), Q2 (37 invariants, 23 witnesses, 71+4 run tests),
+> Q3 (73-row mutation battery), Q4 (battery gap closure incl. the ext-15/16 two-plane/lineage
+> machinery; 4 honest residual misses documented in the Q4 report).
+> Design doc: [2026-08-14-issue31-migration-design.md](../../2026-08-14-issue31-migration-design.md).
+>
+> **Remaining to build**: the spec amendment + implementation campaign per the design doc's
+> `## Spec / impl blast radius — full verdicts` section (~40+ LOCKED-row rewrites/retires/adds in
+> `specs/cluster.md`, each landing spec-first with its forcing tests, plus the Rust
+> implementation). Needs decomposition into issues/waves and a human ruling on staging before
+> work starts. A dozen design-owner flags from Q2-Q4 (dead design arm 4b of `isRefusalTerminal`,
+> `inv_no_hold_during_staged_flip` semantics, wrong-detector attributions, M32 cross-shard
+> successor observable, etc.) are recorded in the Q2-Q4 reports and should be ruled during that
+> decomposition.
 > Do not start independent work on this issue or the slot-migration area.
 
 ## Origin
