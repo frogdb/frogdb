@@ -1,7 +1,50 @@
-# Slot migration redesign — source-authoritative-until-commit (v34)
+# Slot migration redesign — source-authoritative-until-commit (v35)
 
-Status: revision 34 — **candidate, UNSOUND-pending**: not approved, and not
-claimed sound until a review round finds nothing structural. Review v34 (of
+Status: revision 35 — **candidate, UNSOUND-pending**: not approved, and not
+claimed sound until a review round finds nothing structural. **This revision is
+a single-pass close-out, not a review round.** The adversarial loop on the
+anchor and residue apparatus was concluded at revision 34 by decision, with
+every recorded figure stable and every enumerated name swept at row and bullet
+granularity; **no rung is added to either ladder**, which stand where v34 left
+them — a twelfth consecutive zero-CRITICAL round and a twenty-fifth fix-text
+rung. What this revision does is close the **two soft residues revision 34
+flagged for its successor**, and nothing else: no settled ruling is touched, no
+LOCKED row is edited, no normative argument changes, and the entire diff is
+inside the sweep's rule-and-table block and this changelog.
+**V35-m1 (MINOR — residue 1 of 2)** — the eighth entry of the first residue
+command's enumeration named a structure that **contains** the ninth entry's
+site, so the two names were told apart by their quotations alone. Both entries
+now name the sentence they sit in — the same V28-M6 relabelling note, eight
+lines apart — and each records the containment, so either name resolves on its
+own. The **sibling** half of standing obligation 5 was already satisfied at
+these two entries; what was missing was resolution under **nesting**, the case
+the obligation disambiguates "by quotation or offset", now carrying both.
+**V35-m2 (MINOR — residue 2 of 2)** — family F's part-(i) list and the widened
+probe's list carried **two names for one §0 passage**, reconciled at one of the
+two mentions and nowhere else: one reconciliation away from the shape V31-M1
+was raised for. Both lists now use the single name — the one that does not
+collide with the gate-1 passage of the neighbouring name — and the superseded
+name is recorded at both mentions as history rather than as a translation a
+reader has to apply. The one remaining cross-list name pair, the producer
+paragraph in *Transitions* the two lists name differently, is left as it
+stands: it is reconciled the same way at the widened list, and re-naming it is
+a new round's work, not this close-out's.
+**No published figure moves.** This revision adds no text matching any recorded
+pattern and preserves every hit's line placement; family D, all three residue
+commands at their folded layer and the widened probe were re-run from the
+repository root against the edited file, and each figure matched what is
+published below. Both `sed` ranges shift with this changelog and with the
+rule-block edits, and are **re-derived by re-reading both ends** rather than
+carried arithmetically.
+**The anchor and residue apparatus is finalized as of this revision.** The four
+enumerations, their anchors, the recorded commands, the probes and the five
+standing obligations are closed out here; any later change to them belongs to a
+new round and carries that round's own re-derivation, not this one's.
+**The cumulative blast radius is unchanged by this revision** — still five rows
+Amended across six declared amendments carrying seven invariant deltas, none
+performed here. **No LOCKED spec file is edited by this revision.**
+
+Dated 2026-08-18. Review v34 (of
 revision 33) found **0 CRITICAL** / 2 MAJOR / 2 MINOR — a **twelfth**
 consecutive zero-CRITICAL round, and the **twenty-fifth** rung of the fix-text
 ladder (stated once, as a list, at the v22 entry below). Nothing structural
@@ -4039,8 +4082,8 @@ when it is not):
         one. Where that happens the family entry says so and enumerates the
         evaded site directly, which is the honest form: a number that under-reads
         is only safe when the thing it under-reads is named.
-     4. **non-meta** — `sed '3927,4865d;1,1573d' $F | grep -c -i -E '<P>'`, where
-        `3927,4865` is this rule-and-table block's line range and `1573` is the
+     4. **non-meta** — `sed '3970,4930d;1,1616d' $F | grep -c -i -E '<P>'`, where
+        `3970,4930` is this rule-and-table block's line range and `1616` is the
         last line above the `## Problem` header — i.e. the two regions the `(m)`
         class is defined by, deleted. **`(m)` = lines − non-meta**, up to the
         live-claim exception above, so the meta class is a **subtraction rather
@@ -4072,7 +4115,7 @@ when it is not):
      in the published number. Both are checked, not assumed: no match of any
      recorded command (the six families, `Ps`, `Pi`, `Pv`, and the probes)
      straddles a deletion boundary in the full fold, and none spans the one real
-     seam the deletions produce — `3926` joined to `4866` (the head deletion is a
+     seam the deletions produce — `3969` joined to `4931` (the head deletion is a
      **prefix** deletion and joins nothing). **The check
      re-runs whenever the fifth layer is re-derived**, which is every revision
      that moves this block, on the same footing as the range check below.
@@ -4113,11 +4156,13 @@ when it is not):
      it** (**V32-M1**): a dead branch presented as a widening re-derives the
      assumption it was written to test, so a probe's alternatives are checked to
      be **live** before its result is read.
-     **Range check**: `3927` is this rule's opening sentence, `4865` its last
-     (`4866` opens a new sentence), and `1573` is the last line above the
-     `## Problem` header. (Revision 33's range was `3858,4738d;1,1504d`; this
-     revision's head changelog added 69 lines and its rule-block edits 58, and
-     both ends were re-read rather than arithmetically carried.)
+     **Range check**: `3970` is this rule's opening sentence, `4930` its last
+     (`4931` opens a new sentence), and `1616` is the last line above the
+     `## Problem` header. (Revision 34's range was `3927,4865d;1,1573d` and
+     revision 33's `3858,4738d;1,1504d`; this revision's head changelog added 43
+     lines and its rule-block edits 22, and both ends were re-read rather than
+     arithmetically carried — the file's own line total moved by exactly the sum,
+     which is the cheap check that no third region grew.)
      **No-double-ownership check**, standing beside it and in the same
      "re-verify on change" register: any revision that widens `Ps` — or any
      future loose pattern used by subtraction — re-runs the injectivity and
@@ -4290,7 +4335,14 @@ when it is not):
        amendment entry** for V23-M2. The five `(b)`s are the sites narrowed in
        revision 28 (V28-m12) from the absolute to "touches neither the identity
        store nor its counter", where the phrase now survives **only inside the
-       note recording its own repair**: §0's wipe-sequence bullet, the
+       note recording its own repair**: §0's collision-freedom re-derivation
+       (**V35-m2** — this entry named the passage *§0's wipe-sequence bullet*
+       through revision 34 while the widened probe's list below named the same
+       passage *§0's collision-freedom re-derivation*, and the document
+       reconciled the pair at that one mention only. Both lists now carry the
+       one name; the name kept is the one that does not collide with **gate 1's
+       wipe-sequence derivation**, a different passage this document names in
+       the same breath as this one), the
        staged-flip and record-binding fence-freshness rows, the
        **deleted-write re-derivation** in *Transitions* (the V28-m12 note —
        **V30-M3**: revisions 28-29 named "the v24 changelog entry" here, and the
@@ -4516,10 +4568,19 @@ when it is not):
        clause is re-written with it — it grounded the disposition in a
        *canonical-generation* declaration, and no row of that table declares
        one.)
-     - *(a)* **the Quint model's state bullet** — "Neither mandated wipe sequence
+     - *(a)* **the Quint model's state bullet, `stageCounter`'s V28-M6
+       relabelling note — its opening premise** — "Neither mandated wipe sequence
        restarts the real counter", about the `wipe` action's relabelled
-       composite (V30-m2).
-     - *(a)* **the Quint model's composite-witness sentence** — "restarting the
+       composite (V30-m2). (**V35-m1** — through revision 34 this entry named
+       the **bullet**, which is the innermost structure only if the note inside
+       it is ignored: the note holds this hit *and* the next entry's, **eight
+       lines** lower, so the two names were told apart by their quotations
+       alone. Each entry now names the sentence it sits in and records the
+       containment — the **nesting** half of standing obligation 5, discharged
+       here by offset as well as by quotation.)
+     - *(a)* **the Quint model's composite-witness sentence** — the **closing
+       witness** of that same `stageCounter` V28-M6 relabelling note, eight
+       lines below the entry above (**V35-m1**) — "restarting the
        counter **without** entering the untrusted state": the effect of the
        modelled composite, not of the mandated wipe.
      - *(a)* **the *Quint rework* section's kill re-examination** — "the
@@ -4813,8 +4874,12 @@ when it is not):
        the narrowed claim in the form V28-m12 settled on, and each is a site
        whose text V28-m12 **changed**: the v28 changelog block records the
        narrowing at **seven** sites, and these are those seven —
-       §0's collision-freedom re-derivation (family F's entry names the same
-       bullet *§0's wipe-sequence bullet*); **gate 1's wipe-sequence
+       §0's collision-freedom re-derivation (**V35-m2** — family F's part-(i)
+       entry named this same passage *§0's wipe-sequence bullet* through
+       revision 34 and this parenthesis carried the document's only
+       reconciliation of the two names; the entry now uses this name too, so
+       the reconciliation is a record of what was, not a live translation a
+       reader has to apply); **gate 1's wipe-sequence
        derivation** — *the definitional statement of this family's live claim,
        the site the rest of the document defers to*; **gate 3 (a)'s
        fence-operand paragraph** (**V33-M3** — revision 32 listed "gate 3 (d)'s
