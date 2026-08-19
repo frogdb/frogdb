@@ -71,6 +71,21 @@ module cluster_migration_failover_logic {
     SLOTS.exists(s => slotMap.get(s) == Some(n))
 
   // ---------------------------------------------------------------------------
+  // Cross-step shadows (Q2). Quint invariants read one state, so the two properties
+  // that are about a *step* — "every write of the parent pointer moves the parenting
+  // token" (ext-17/V16-C1) and "an unpromoted residue entry never hands the target a
+  // copy" (ext-8) — need the previous state's value of the field they police. Both
+  // shadows are carried in `ctl`, the one record every action in the machine rewrites
+  // (see `keepCtl`), so no action gains a frame entry it did not already have.
+  // ---------------------------------------------------------------------------
+
+  pure def parentsOf(allNodes: NodeId -> NodeState): NodeId -> { p: Option[NodeId], seq: int } =
+    NODES.mapBy(n => { p: allNodes.get(n).parent, seq: allNodes.get(n).parent_seq })
+
+  pure def keysOf(allNodes: NodeId -> NodeState): NodeId -> Set[SlotId] =
+    NODES.mapBy(n => allNodes.get(n).keys)
+
+  // ---------------------------------------------------------------------------
   // Node-shape predicates — the three phrases nearly every guard below is built out of.
   // Named once so a guard reads as spec prose ("a live primary that still owns a slot")
   // rather than as an open-coded conjunction repeated a dozen times, and so a change to
@@ -274,6 +289,40 @@ module cluster_migration_failover_logic {
       | Some(st) => inc > st.inc or (inc == st.inc and seq > st.seq)
       | None => true
     }
+
+  // ext-15's **re-mint rule**: a node whose node-local incarnation counter was lost mints
+  // its next *fresh* boot pair **above the replicated pair** rather than at `(0, 0)`.
+  // Without it the counter-loss node is mute — every later report it can phrase is refused
+  // `Ordering` against the surviving cell — which is exactly the mute-node defect V6-M2/M3
+  // names, and `witnessNodeCanAlwaysReportIdentity` is the liveness claim it defeats.
+  //
+  // Scoped deliberately:
+  //   - **fresh mints only.** A *replay* (`replay: true`) re-proposes the pair the node
+  //     already spent and must stay refusable — that is the whole of ext-15's
+  //     "a replayed or reordered report is a refused no-op, never a cancel", pinned by
+  //     `replayedReportCancelsNothingTest`. The re-mint is not reachable from a replay.
+  //   - **only when the local counter does not already dominate.** In the ordinary case
+  //     the node's own counter is ahead of the cell and the pair is untouched, so no
+  //     existing trace shifts (`sourceBootReportCancelsMigrationTest` still mints
+  //     `{inc: 1, seq: 2}`).
+  //   - **`Boot` reports only.** A `Demotion` report is a staged flip's re-proposal, not a
+  //     boot mint; ext-18's disposition arms are guarded on the refusal it can still earn.
+  //
+  // Named as a `pure def` rather than inlined in the action because the witness reads the
+  // same function: reverting the rule to `{ inc: ns.incarnation, seq: ... }` (the doc's
+  // stated mutation, "minting `(0,0)`") makes the witness unreachable in one edit, which
+  // is the mutation test the doc asks for.
+  pure def bootMintOf(ns: NodeState, kind: TransitionKind, replay: bool): { inc: int, seq: int } = {
+    val freshSeq = if (replay) ns.identity_seq else ns.identity_seq + 1
+    if (kind != Boot or replay or identityOrderOk(ns.stored_identity, ns.incarnation, freshSeq))
+      { inc: ns.incarnation, seq: freshSeq }
+    else
+      // Above the replicated pair: a strictly greater incarnation restarts the sequence.
+      match ns.stored_identity {
+        | Some(st) => { inc: st.inc + 1, seq: 1 }
+        | None => { inc: ns.incarnation, seq: freshSeq }
+      }
+  }
 
   // ext-15 (V8-C2): the Demotion fence. The payload carries the role/epoch it observed;
   // apply refuses when either has moved since. `inv_promotion_is_not_reverted_without_a_
@@ -627,6 +676,90 @@ module cluster_migration_failover_logic {
         }
       | None => false
     }
+
+  // ---------------------------------------------------------------------------
+  // Q2 property operands. These are read by the invariants and witnesses in the main
+  // model (and by the outcome-recomputed `defects.*` ghosts); no guard reads them, so
+  // adding one changes no action's admission.
+  // ---------------------------------------------------------------------------
+
+  // ext-7/ext-12: "`q`'s shard still holds a copy of `s`" — `q` itself, or any node whose
+  // shard primary is `q`. The shard closure is load-bearing: a replica's dataset is the
+  // shard's, tracked by the replication link rather than by the slot map, and both
+  // `retargetSlotResidue` and `applyFailoverCommon` re-point an entry at a shard primary
+  // without moving the physical copy off the node that holds it.
+  pure def shardHoldsCopy(allNodes: NodeId -> NodeState, q: NodeId, s: SlotId): bool =
+    allNodes.get(q).keys.contains(s)
+      or NODES.exists(x => allNodes.get(x).keys.contains(s) and shardPrimary(allNodes, x) == Some(q))
+
+  // A slot no tracking object claims: unassigned, no live record, no residue entry.
+  // Copies of such a slot are outside the redesign's claims — `removeSlot`
+  // (`CLUSTER DELSLOTS`) and `resetCluster` both leave the operator holding exactly that,
+  // and neither is a migration writer. Declared, and flagged in the Q2 report rather than
+  // folded silently into the properties that use it.
+  pure def isUnclaimedSlot(slotMap: SlotId -> Option[NodeId], migs: SlotId -> Option[Migration],
+                           res: SlotId -> Option[Residue], s: SlotId): bool = and {
+    slotMap.get(s) == None,
+    migs.get(s) == None,
+    res.get(s) == None,
+  }
+
+  // ext-1/ext-5: every acked write of the record's own run is covered by the target's
+  // attested copy, and the attestation is the target's *current* run. Recomputed at
+  // `completeMigration` from the history and the record — deliberately not from
+  // `canCompleteMigration`'s conjuncts, so collapsing the tagged comparison into a bare
+  // integer one (mutation (1)) shows up here as a lost write rather than as a tautology.
+  // Scoped to the record's own run tag because `stream_history` outlives the record and a
+  // later migration over the same slot restarts its source-log counter at 0.
+  pure def ackedWritesCovered(allNodes: NodeId -> NodeState, hist: Set[Pos], m: Migration): bool =
+    hist.filter(p => p.run_id == m.source_log.run_id and p.pos <= m.source_log.pos)
+        .forall(p => and {
+          m.target_copy.run_id == allNodes.get(m.target).run_id,
+          m.target_copy.pos >= p.pos,
+        })
+
+  // ext-12 (V8-M6): an entry has an **effective** remover only if some verb that resolves
+  // it is admissible *in this very state* — an admissible-in-principle verb whose own
+  // admission is false here is not a remover. The disjuncts are the design's own list.
+  pure def hasEffectiveRemover(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                               res: SlotId -> Option[Residue], s: SlotId): bool =
+    match res.get(s) {
+      | Some(r) => or {
+          // the entry is promoted: `ClearSlotResidue` is admissible now,
+          canClearSlotResidue(res, s),
+          // the rollback arm,
+          canFailPromotion(allNodes, res, s),
+          // the level-triggered re-home onto the source's shard primary,
+          canRetargetSlotResidue(allNodes, res, s),
+          // the orphan arm,
+          NODES.exists(d => canRehomeOrphanSlot(allNodes, res, s, d)),
+          // or the attestation path: the target still owns the slot and is a member, so
+          // `relabelShadow`/`reportPromoted` drive the entry to `promoted` and the first
+          // disjunct then applies. Membership rather than `canAct` on purpose — an
+          // unbooted target's boot report is itself always admissible (ext-15).
+          and { not(r.promoted), slotMap.get(s) == Some(r.target), allNodes.get(r.target).member },
+          // or the entry is marked, and the design hands marked entries to its operator
+          // arms. The model carries one such arm (`rehomeOrphanSlot`, the disjunct above)
+          // and no arm at all for an *unpromoted* doubly-marked entry — the design resolves
+          // that one with `ClearSlotResidue`'s "no effective automatic remover" admission,
+          // which this model does not carry (V9-M4 narrowed `canClearSlotResidue` to
+          // `promoted` and no escape arm was modelled). Admitted here as a declared
+          // terminal disjunct and flagged in the Q2 report.
+          r.source_gone,
+          r.target_gone,
+        }
+      | None => true
+    }
+
+  // ext-12 (V8-C6): does the slot map hand a slot to `n` while `n` holds the Replica
+  // role? Recomputed on the *post-state* view inside the writers the redesign owns
+  // (`completeMigration`, the failover/demotion family) and scoped to the nodes that
+  // step touched — a whole-map scan would latch a violation some *other* writer left
+  // behind. See the ghost's note in the machine module for why `setRole` is deliberately
+  // out of its scope.
+  pure def replicaOwnsSlot(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                           n: NodeId): bool =
+    allNodes.get(n).role == Replica and ownsAnySlot(slotMap, n)
 
   // ext-12 (V7-m3): `removeNode`'s mark-don't-remove rules — `source_gone` on a source
   // departure, `target_gone` (plus the slot-map unassign, applied by the caller) on a

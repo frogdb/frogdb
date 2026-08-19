@@ -113,10 +113,53 @@ module cluster_migration_failover_machine {
     next_mig: MigrationId,
     next_reg: int,
     next_run: RunId,
+    // Q2 cross-step shadows (see `parentsOf`/`keysOf` in the logic module). A Quint
+    // invariant reads one state, so the two properties that are about a *step* —
+    // ext-17's "every write of the parent pointer moves the parenting token" and ext-8's
+    // "an unpromoted residue entry never hands the target a copy" — read the previous
+    // state's value here. Carried in `ctl` because `ctl` is the one record every action
+    // already rewrites, so no action gains a frame entry.
+    prev_parents: NodeId -> { p: Option[NodeId], seq: int },
+    prev_keys: NodeId -> Set[SlotId],
   }
   // Ghost flags: set when the *unsafe* variant of a ruled precondition would have been
-  // taken. Never read by a guard; only by invariants/witnesses.
-  var defects: { demotion: bool, fence: bool, barrier: bool, admission: bool, seqReuse: bool }
+  // taken. Never read by a guard; only by invariants/witnesses. Each is recomputed inside
+  // the action that could take the unsafe variant, from that action's own *outcome* or
+  // from state the guard does not consult, so mutating the guard shows up here.
+  var defects: {
+    demotion: bool, fence: bool, barrier: bool, admission: bool, seqReuse: bool,
+    // ext-1/ext-5 — an acked write not covered by the target's attested copy at commit.
+    ackLoss: bool,
+    // ext-2 — a commit admitted against an unfenced source.
+    fencedAdmit: bool,
+    // ext-3 — a commit admitted against a record still in `Streaming`.
+    phaseAdmit: bool,
+    // ext-6/ext-14 — a knob-on commit admitted without a counted replica at the position.
+    replicaAck: bool,
+    // ext-12 (V8-C6/V10-C3) — the slot map handed a slot to a Replica.
+    replicaSlot: bool,
+    // ext-4 — the observation counter reached its bound on a tick that saw progress.
+    boundAbort: bool,
+    // ext-4 (V7-C3) — the seal left the post-seal counter non-zero.
+    sealCounter: bool,
+    // ext-7 — the reaper deleted the last member-held copy of a slot.
+    overDelete: bool,
+    // ext-8 — a shadow discarded out from under a residue entry.
+    discard: bool,
+    // ext-10 — a node entered the membership holding copies.
+    untracked: bool,
+    // ext-15 (V11-C1) — a hold-region release scheduled after the source stopped serving.
+    demotedExec: bool,
+    // ext-15 — an admitted report that did not strictly dominate the stored identity.
+    identityRegress: bool,
+    // ext-15 — a report that cancelled records without writing a new identity.
+    spuriousCancel: bool,
+    // ext-15 (V8-C2) — a Demotion arm applied against a stale observed role/epoch.
+    staleDemote: bool,
+    // ext-18 (V21) — a terminal refusal observed against its own record that left the
+    // record, the fence or the reply undisposed.
+    disposition: bool,
+  }
   // Coverage ghosts: set when a behaviour the witnesses care about actually happened.
   var coverage: {
     gracefulPruned: bool,
@@ -125,6 +168,11 @@ module cluster_migration_failover_machine {
     promotionRolledBack: bool,
     reaped: bool,
     emptyBatch: bool,
+    // ext-4 — a pre-`Confirm` migration whose target still had records to ingest was
+    // aborted by the bound (the calibration obligation `preconfirm_observations` carries).
+    healthyAborted: bool,
+    // ext-14 — a `require_replica_ack` migration committed at the stock sizings.
+    knobCompleted: bool,
   }
 
   // ---------------------------------------------------------------------------
@@ -150,7 +198,7 @@ module cluster_migration_failover_machine {
   action keepAux = all { keepHistory, keepRefusals, keepSpent, keepDefects, keepCoverage }
   // `prev_epoch` shadows the epoch of the previous state in *every* step, which is what
   // `inv_epoch_never_decreases` compares against.
-  action keepCtl = ctl' = { ...ctl, prev_epoch: ctl.epoch }
+  action keepCtl = ctl' = { ...ctl, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) }
   // The disabled arm of a `match` whose other arm is a full transition: Quint's effect
   // checker requires both arms to update the same variables, so "this case is not
   // enabled" has to be spelled with the full frame attached.
@@ -250,10 +298,20 @@ module cluster_migration_failover_machine {
     barriers' = { armed: Set(), failover_fence: Set(), disconnected: Set() },
     spent' = Set(),
     ctl' = { handoff_seq: 0, epoch: 0, prev_epoch: 0, reset_epoch: 0, next_mig: 1,
-             next_reg: 5, next_run: 5 },
-    defects' = { demotion: false, fence: false, barrier: false, admission: false, seqReuse: false },
+             next_reg: 5, next_run: 5,
+             // The shadows start at the initial nodes map, so the very first step is
+             // compared against `init` rather than against a placeholder.
+             prev_parents: Map(1 -> { p: None, seq: 0 }, 2 -> { p: Some(1), seq: 0 },
+                               3 -> { p: Some(1), seq: 0 }, 4 -> { p: None, seq: 0 }),
+             prev_keys: Map(1 -> SLOTS, 2 -> Set(), 3 -> Set(), 4 -> Set()) },
+    defects' = { demotion: false, fence: false, barrier: false, admission: false, seqReuse: false,
+                 ackLoss: false, fencedAdmit: false, phaseAdmit: false, replicaAck: false,
+                 replicaSlot: false, boundAbort: false, sealCounter: false, overDelete: false,
+                 discard: false, untracked: false, demotedExec: false, identityRegress: false,
+                 spuriousCancel: false, staleDemote: false, disposition: false },
     coverage' = { gracefulPruned: false, forcedDemotedReplica: false, failoverDuringOpenMigration: false,
-                  promotionRolledBack: false, reaped: false, emptyBatch: false },
+                  promotionRolledBack: false, reaped: false, emptyBatch: false,
+                  healthyAborted: false, knobCompleted: false },
   }
 
   // ---------------------------------------------------------------------------
@@ -279,7 +337,7 @@ module cluster_migration_failover_machine {
     barriers' = { armed: v.armed, failover_fence: Set(), disconnected: v.disconnected },
     feed_bytes' = v.feed_bytes,
     held' = v.held,
-    ctl' = { ...ctl, epoch: v.epoch, prev_epoch: ctl.epoch },
+    ctl' = { ...ctl, epoch: v.epoch, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
   }
 
   // ---------------------------------------------------------------------------
@@ -290,15 +348,28 @@ module cluster_migration_failover_machine {
   // makes `inv_member_keyspace_is_tracked` hold once the self-cleanse is gone. The fresh
   // registration mints a new `registration_seq` (ext-17/V18-C1), which is what strands
   // any record staged under the previous one.
-  action meetNode(n: NodeId): bool = all {
-    canMeetNode(nodes, n),
-    nodes' = nodes.set(n, {
-      ...writeParentPointer(nodes.get(n), Primary, None, false, None, None),
-      member: true, fail: false, booted: false,
-      registration_seq: Some(ctl.next_reg),
-    }),
-    ctl' = { ...ctl, next_reg: ctl.next_reg + 1, prev_epoch: ctl.epoch },
-    keepSlots, keepMigAll, keepBar, keepAux,
+  action meetNode(n: NodeId): bool = {
+    // Recomputed from the *outcome*: which slots does the node that just entered the
+    // membership hold a copy of that no tracking object reaches it through? A fresh
+    // registration names the joiner in nothing, so any copy of a still-claimed slot is
+    // stranded the moment the join lands. Independent of `canMeetNode`'s phrasing, so
+    // reverting the gate (or replacing it with a self-cleanse) surfaces here.
+    val stranded = SLOTS.filter(s => and {
+      nodes.get(n).keys.contains(s),
+      not(isUnclaimedSlot(slots, migrations, residue, s)),
+      slots.get(s) != Some(n),
+    })
+    all {
+      canMeetNode(nodes, n),
+      nodes' = nodes.set(n, {
+        ...writeParentPointer(nodes.get(n), Primary, None, false, None, None),
+        member: true, fail: false, booted: false,
+        registration_seq: Some(ctl.next_reg),
+      }),
+      ctl' = { ...ctl, next_reg: ctl.next_reg + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
+      defects' = { ...defects, untracked: defects.untracked or stranded != Set() },
+      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepCoverage,
+    }
   }
 
   // TR-CLUSTER-003 + ext-12's mark-don't-remove + ext-17's detach. `wipe` additionally
@@ -373,8 +444,12 @@ module cluster_migration_failover_machine {
       barriers' = { armed: Set(), failover_fence: Set(), disconnected: Set() },
       held' = NODES.mapBy(_ => Set()),
       feed_bytes' = SLOTS.mapBy(_ => 0),
-      ctl' = { ...ctl, handoff_seq: 0, reset_epoch: ctl.reset_epoch + 1, prev_epoch: ctl.epoch },
-      keepAux,
+      ctl' = { ...ctl, handoff_seq: 0, reset_epoch: ctl.reset_epoch + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
+      // The reset's half of `inv_member_keyspace_is_tracked`'s ghost, recomputed from the
+      // outcome: the reset drops *every* slot assignment, so a resetting node that keeps
+      // copies keeps them with nothing left to track them by.
+      defects' = { ...defects, untracked: defects.untracked or nodes.get(n).keys != Set() },
+      keepHistory, keepRefusals, keepSpent, keepCoverage,
     }
   }
 
@@ -405,14 +480,22 @@ module cluster_migration_failover_machine {
   action reportRunIdentity(n: NodeId, kind: TransitionKind, obsRole: RoleTag, obsEpoch: int,
                            replay: bool): bool = {
     val ns = nodes.get(n)
-    val inc = ns.incarnation
-    val seq = if (replay) ns.identity_seq else ns.identity_seq + 1
+    // ext-15's re-mint rule (see `bootMintOf`): a fresh boot mint is proposed *above* the
+    // replicated pair when the node's own counter no longer dominates it, so a node that
+    // lost its incarnation counter is never mute. Replays and `Demotion` re-proposals are
+    // untouched, which is what keeps the `Ordering` refusal reachable.
+    val mint = bootMintOf(ns, kind, replay)
+    val inc = mint.inc
+    val seq = mint.seq
     val cls = refusalClassOf(nodes, n, kind, inc, seq, obsRole, obsEpoch)
     val admitted = cls == Whole
     val identity = { inc: inc, seq: seq, run_id: ns.run_id }
     val identityWritten = admitted and ns.stored_identity != Some(identity)
     val cancelled = if (identityWritten) slotsSourcedBy(migrations, n) else Set()
-    val stamped = { ...ns, identity_seq: seq, stored_identity: Some(identity) }
+    // `incarnation` follows the mint: in the ordinary case it is already `inc`, and after a
+    // re-mint the node's own counter takes the value it just published rather than staying
+    // at the lost `0`.
+    val stamped = { ...ns, incarnation: inc, identity_seq: seq, stored_identity: Some(identity) }
     all {
       // A Demotion report only exists against a staged record.
       kind == Boot or (match ns.record { | Some(rec) => rec.kind == Demotion | None => false }),
@@ -439,7 +522,26 @@ module cluster_migration_failover_machine {
                     disconnected: barriers.disconnected.exclude(cancelled) },
       held' = held.set(n, held.get(n).exclude(cancelled)),
       feed_bytes' = SLOTS.fold(feed_bytes, (acc, s) => if (cancelled.contains(s)) acc.set(s, 0) else acc),
-      keepSlots, keepShadow, keepResidue, keepHistory, keepSpent, keepDefects, keepCoverage, keepCtl,
+      // ext-15's three ghosts, each recomputed here from the report's own operands rather
+      // than from `refusalClassOf`'s verdict:
+      //   `identityRegress` — an *applied* report that did not strictly dominate the cell
+      //     it overwrote (`inv_run_identity_never_regresses`);
+      //   `spuriousCancel` — records taken by a report that wrote no new identity, i.e. a
+      //     cancel bound to admission rather than to the field write
+      //     (`inv_no_spurious_cancel`);
+      //   `staleDemote` — a Demotion arm that rewrote role and parent although the
+      //     role/epoch it observed is not the pair the node holds now
+      //     (`inv_promotion_is_not_reverted_without_a_failover`).
+      defects' = { ...defects,
+        identityRegress: defects.identityRegress
+          or (admitted and not(identityOrderOk(ns.stored_identity, inc, seq))),
+        spuriousCancel: defects.spuriousCancel
+          or (cancelled != Set() and ns.stored_identity == Some(identity)),
+        staleDemote: defects.staleDemote
+          or (admitted and kind == Demotion
+              and (ns.role != obsRole or ns.epoch_own != obsEpoch)),
+      },
+      keepSlots, keepShadow, keepResidue, keepHistory, keepSpent, keepCoverage, keepCtl,
     }
   }
 
@@ -490,22 +592,38 @@ module cluster_migration_failover_machine {
   // `last_disposition` is the auxiliary history the foreign-disposal invariant reads.
   action observeRefusal(n: NodeId, r: Refusal): bool = {
     val ns = nodes.get(n)
+    // Does this observation *dispose* of the record? Only when both halves of the pair
+    // bind and the class is one of the declared terminal ones.
+    val disposes = match ns.record {
+      | Some(rec) => refusalBinds(rec, r) and r.terminal
+      | None => false
+    }
+    val disp = match ns.record {
+      | Some(rec) => Some({ refusal_stage_id: r.stage_id, refusal_reg_seq: r.reg_seq,
+                            record_stage_id: rec.stage_id, record_reg_seq: rec.staged_reg_seq })
+      | None => None
+    }
+    // `last_disposition` is written on a step that disposes and on no other (ext-18's
+    // stated writer rule). Q1 wrote it on every observation carrying a record, including
+    // non-binding ones, which made `inv_no_live_record_disposed_by_a_foreign_refusal`
+    // false of every observation of a foreign refusal — the very reading the invariant
+    // exists to refute. Realigned to the doc here.
+    val post =
+      if (disposes) { ...ns, record: None, node_fenced: false, reply_emitted: true, last_disposition: disp }
+      else ns
     all {
       refusals.contains(r),
       r.node == n,
-      match ns.record {
-        | Some(rec) => {
-            val disp = Some({ refusal_stage_id: r.stage_id, refusal_reg_seq: r.reg_seq,
-                              record_stage_id: rec.stage_id, record_reg_seq: rec.staged_reg_seq })
-            nodes' = nodes.set(n,
-              if (refusalBinds(rec, r) and r.terminal)
-                { ...ns, record: None, node_fenced: false, reply_emitted: true, last_disposition: disp }
-              else { ...ns, last_disposition: disp })
-          }
-        | None => nodes' = nodes
-      },
+      nodes' = nodes.set(n, post),
       refusals' = refusals.exclude(Set(r)),
-      keepSlots, keepMigAll, keepBar, keepHistory, keepSpent, keepDefects, keepCoverage, keepCtl,
+      // ext-18 (V21): recomputed from the post-state, so turning any disposition arm into
+      // a silent no-op leaves the record, the fence or the reply undisposed and trips.
+      defects' = { ...defects, disposition: defects.disposition or (disposes and not(and {
+        post.record == None,
+        not(post.node_fenced),
+        post.reply_emitted,
+      })) },
+      keepSlots, keepMigAll, keepBar, keepHistory, keepSpent, keepCoverage, keepCtl,
     }
   }
 
@@ -564,7 +682,7 @@ module cluster_migration_failover_machine {
                                                       nodes.get(source).run_id, nodes.get(target).run_id,
                                                       requireReplicaAck))),
     shadow' = shadow.set(s, Some({ mig: ctl.next_mig, epoch: ctl.reset_epoch })),
-    ctl' = { ...ctl, next_mig: ctl.next_mig + 1, prev_epoch: ctl.epoch },
+    ctl' = { ...ctl, next_mig: ctl.next_mig + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
     keepGraph, keepResidue, keepBar, keepAux,
   }
 
@@ -585,7 +703,7 @@ module cluster_migration_failover_machine {
             held' = held.set(m.source, held.get(m.source).union(Set(s))),
             spent' = spent.union(Set(token)),
             defects' = { ...defects, seqReuse: defects.seqReuse or spent.contains(token) },
-            ctl' = { ...ctl, handoff_seq: newSeq, prev_epoch: ctl.epoch },
+            ctl' = { ...ctl, handoff_seq: newSeq, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
             keepGraph, keepShadow, keepResidue, keepFeed, keepHistory, keepRefusals, keepCoverage,
           }
         }
@@ -771,10 +889,20 @@ module cluster_migration_failover_machine {
     match migrations.get(s) {
       | Some(m) => {
           val p = { run_id: nodes.get(m.source).run_id, pos: m.source_log.pos }
+          val sealedMigs = applyConfirmDrained(migrations, s, p)
           all {
             canConfirmDrained(nodes, migrations, s, att, p),
             isServingPrimary(nodes, slots, m, s),
-            migrationsOnly(applyConfirmDrained(migrations, s, p)),
+            migrations' = sealedMigs,
+            // ext-4 (V7-C3), recomputed from the sealed record: the post-seal counter
+            // starts from zero, so no pre-`Confirm` observation is ever spent against
+            // `draining_observations` (`inv_draining_bound_counts_post_seal_observations`).
+            defects' = { ...defects, sealCounter: defects.sealCounter or (match sealedMigs.get(s) {
+              | Some(sm) => sm.observations != 0
+              | None => true
+            }) },
+            keepGraph, keepShadow, keepResidue, keepBar,
+            keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
           }
         }
       | None => nope
@@ -809,8 +937,20 @@ module cluster_migration_failover_machine {
   // ingest progress since the last observation clears the counter.
   action reconcileTick(s: SlotId): bool =
     match migrations.get(s) {
-      | Some(m) => all {
-          migrationsOnly(migrations.set(s, Some(applyReconcileTick(m)))),
+      | Some(m) => {
+          val ticked = applyReconcileTick(m)
+          all {
+            migrations' = migrations.set(s, Some(ticked)),
+            // ext-4's liveness pair (v2-C4/N-M6), recomputed from the tick's own outcome:
+            // the counter must never *reach* its bound on a tick that saw ingest progress
+            // since the last observation. Dropping the reset makes a steadily progressing
+            // migration accrue to the bound and trips this
+            // (`inv_progressing_migration_never_aborts`).
+            defects' = { ...defects, boundAbort: defects.boundAbort
+              or (hasObservedProgress(m) and isAbortableByBound(ticked)) },
+            keepGraph, keepShadow, keepResidue, keepBar,
+            keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
+          }
         }
       | None => nope
     }
@@ -823,7 +963,13 @@ module cluster_migration_failover_machine {
           isAbortableByBound(m),
           migrations' = migrations.set(s, None),
           releaseHoldRegion(s, m.source),
-          keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
+          // ext-4: the calibration obligation `preconfirm_observations` carries — a
+          // pre-`Confirm` migration whose target still had records to ingest was taken by
+          // the bound (`witnessHealthyDrainAbortedByBound`).
+          coverage' = { ...coverage, healthyAborted: coverage.healthyAborted
+            or (m.phase == Streaming and m.target_applied < m.source_log.pos) },
+          keepGraph, keepShadow, keepResidue,
+          keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
         }
       | None => nope
     }
@@ -839,15 +985,35 @@ module cluster_migration_failover_machine {
           // `canCompleteMigration`, from the record's own drained evidence — the
           // invariant is only mutation-sensitive
           // if the witness never reuses the guard it is supposed to police.
-          defects' = { ...defects, admission: defects.admission or not(
-            match m.drained_pos {
-              | Some(d) => and {
-                  m.phase == Draining,
-                  d.run_id == m.source_log.run_id,
-                  m.target_copy.pos >= d.pos,
-                }
-              | None => false
-            }) },
+          defects' = { ...defects,
+            admission: defects.admission or not(
+              match m.drained_pos {
+                | Some(d) => and {
+                    m.phase == Draining,
+                    d.run_id == m.source_log.run_id,
+                    m.target_copy.pos >= d.pos,
+                  }
+                | None => false
+              }),
+            // ext-1/ext-5: every acked write of the record's run is covered by the copy
+            // the target attested under its *current* run (`inv_no_acked_write_lost`).
+            ackLoss: defects.ackLoss or not(ackedWritesCovered(nodes, stream_history.get(s), m)),
+            // ext-2: the source was still sealed (`inv_complete_requires_fenced_source`).
+            fencedAdmit: defects.fencedAdmit or not(m.fenced),
+            // ext-3: the record had already sealed (`inv_complete_requires_draining_phase`).
+            phaseAdmit: defects.phaseAdmit or m.phase != Draining,
+            // ext-6/ext-14: with the knob on, a *non-empty* counted replica set held the
+            // drained position — an empty set is false, not vacuously true (V5-M3)
+            // (`inv_target_replicas_hold_committed_slot`).
+            replicaAck: defects.replicaAck or (m.require_replica_ack and not(and {
+              countedReplicasOf(nodes, m.target) != Set(),
+              match m.drained_pos { | Some(d) => m.target_replica_ack >= d.pos | None => false },
+            })),
+            // ext-12 (V10-C3): the commit handed the slot to a Primary
+            // (`inv_slots_only_assigned_to_primaries`).
+            replicaSlot: defects.replicaSlot or nodes.get(m.target).role == Replica,
+          },
+          coverage' = { ...coverage, knobCompleted: coverage.knobCompleted or m.require_replica_ack },
           slots' = slots.set(s, Some(m.target)),
           nodes' = nodes.set(m.target, { ...nodes.get(m.target), epoch_own: ctl.epoch + 1 }),
           migrations' = migrations.set(s, None),
@@ -855,8 +1021,8 @@ module cluster_migration_failover_machine {
                                            promoted: false, source_gone: false, target_gone: false })),
           keepShadow,
           releaseHoldRegion(s, m.source),
-          ctl' = { ...ctl, epoch: ctl.epoch + 1, prev_epoch: ctl.epoch },
-          keepHistory, keepRefusals, keepSpent, keepCoverage,
+          ctl' = { ...ctl, epoch: ctl.epoch + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
+          keepHistory, keepRefusals, keepSpent,
         }
       | None => nope
     }
@@ -869,7 +1035,13 @@ module cluster_migration_failover_machine {
           migrations' = migrations.set(s, Some({ ...m, attempt: 0, fenced: false, phase: Streaming,
                                                  drained_pos: None })),
           releaseHoldRegion(s, m.source),
-          keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
+          // ext-15 (V11-C1): a release of the hold region executes writes at the source,
+          // so it is owed the serving-primary check. Recomputed here from the slot map and
+          // the source's role (`inv_no_execution_after_demotion`).
+          defects' = { ...defects, demotedExec: defects.demotedExec
+            or not(and { slots.get(s) == Some(m.source), isLivePrimary(nodes, m.source) }) },
+          keepGraph, keepShadow, keepResidue,
+          keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
         }
       | None => nope
     }
@@ -883,7 +1055,11 @@ module cluster_migration_failover_machine {
           canCancelMigration(nodes, slots, migrations, s, att),
           migrations' = migrations.set(s, None),
           releaseHoldRegion(s, m.source),
-          keepGraph, keepShadow, keepResidue, keepAux, keepCtl,
+          // ext-15 (V11-C1), as in `abortHandoff` above.
+          defects' = { ...defects, demotedExec: defects.demotedExec
+            or not(and { slots.get(s) == Some(m.source), isLivePrimary(nodes, m.source) }) },
+          keepGraph, keepShadow, keepResidue,
+          keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
         }
       | None => nope
     }
@@ -946,7 +1122,14 @@ module cluster_migration_failover_machine {
   action discardShadow(s: SlotId): bool = all {
     canDiscardShadow(migrations, residue, shadow, s),
     shadow' = shadow.set(s, None),
-    keepGraph, keepMigrations, keepResidue, keepBar, keepAux, keepCtl,
+    // ext-8: the shadow is the copy the target will be promoted onto, so discarding one a
+    // residue entry still claims means the slot the new owner ends up serving was thrown
+    // away (`inv_owner_serves_promoted_slot`). Recomputed from the residue map, which the
+    // relabel/discard pair alone cannot be told apart by afterwards: both leave
+    // `shadow[s] == None`.
+    defects' = { ...defects, discard: defects.discard or residue.get(s) != None },
+    keepGraph, keepMigrations, keepResidue, keepBar,
+    keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
   }
 
   // ---------------------------------------------------------------------------
@@ -961,7 +1144,13 @@ module cluster_migration_failover_machine {
       reap != Set(),
       nodes' = nodes.set(n, { ...nodes.get(n), keys: nodes.get(n).keys.exclude(reap) }),
       coverage' = { ...coverage, reaped: true },
-      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
+      // ext-7, recomputed from the *outcome* rather than from `reapableSlots`: no reaped
+      // slot may be one no other member still holds — deleting a last copy is the
+      // over-deletion `inv_node_keeps_slots_it_owns` forbids. Reverting the attestation
+      // gate reaps ahead of `reportPromoted`, when the target holds nothing yet.
+      defects' = { ...defects, overDelete: defects.overDelete or reap.exists(s =>
+        not(NODES.exists(x => and { x != n, nodes.get(x).member, nodes.get(x).keys.contains(s) }))) },
+      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepCtl,
     }
   }
 
@@ -1055,7 +1244,9 @@ module cluster_migration_failover_machine {
         fence: defects.fence
           or not(fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole)),
         barrier: defects.barrier
-          or not(movedSlotsOf(slots, old).subseteq(barriers.failover_fence)) },
+          or not(movedSlotsOf(slots, old).subseteq(barriers.failover_fence)),
+        replicaSlot: defects.replicaSlot
+          or replicaOwnsSlot(v.nodes, v.slots, old) or replicaOwnsSlot(v.nodes, v.slots, succ) },
       coverage' = { ...coverage,
         gracefulPruned: coverage.gracefulPruned or slotsNaming(migrations, old) != Set(),
         failoverDuringOpenMigration:
@@ -1075,7 +1266,9 @@ module cluster_migration_failover_machine {
       defects' = { ...defects,
         demotion: defects.demotion or not(demotedTo(v.nodes, old, succ)),
         fence: defects.fence
-          or not(fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole)) },
+          or not(fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole)),
+        replicaSlot: defects.replicaSlot
+          or replicaOwnsSlot(v.nodes, v.slots, old) or replicaOwnsSlot(v.nodes, v.slots, succ) },
       coverage' = { ...coverage,
         failoverDuringOpenMigration:
           coverage.failoverDuringOpenMigration or migrationSourcesOf(migrations).contains(old) },
@@ -1095,7 +1288,9 @@ module cluster_migration_failover_machine {
       defects' = { ...defects,
         demotion: defects.demotion or not(demotedTo(v.nodes, old, succ)),
         fence: defects.fence
-          or not(fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole)) },
+          or not(fenceOk(nodes.get(old), nodes.get(old).epoch_own, obsEpoch, obsRole)),
+        replicaSlot: defects.replicaSlot
+          or replicaOwnsSlot(v.nodes, v.slots, old) or replicaOwnsSlot(v.nodes, v.slots, succ) },
       coverage' = { ...coverage,
         forcedDemotedReplica: coverage.forcedDemotedReplica or not(nodes.get(succ).synced),
         failoverDuringOpenMigration:
@@ -1112,7 +1307,13 @@ module cluster_migration_failover_machine {
       canDemoteNode(nodes, n, succ),
       applyView(v),
       keepShadow, keepHistory, keepRefusals, keepSpent, keepCoverage,
-      defects' = { ...defects, demotion: defects.demotion or not(demotedTo(v.nodes, n, succ)) },
+      defects' = { ...defects,
+        demotion: defects.demotion or not(demotedTo(v.nodes, n, succ)),
+        // ext-12 (V8-C6): the demoted node must not still own slots afterwards, and the
+        // successor it handed them to must be a Primary. Recomputed on the post-state
+        // view, scoped to the two nodes this step wrote.
+        replicaSlot: defects.replicaSlot
+          or replicaOwnsSlot(v.nodes, v.slots, n) or replicaOwnsSlot(v.nodes, v.slots, succ) },
     }
   }
 
@@ -1123,11 +1324,17 @@ module cluster_migration_failover_machine {
       if (m != n and acc.get(m).parent == Some(n))
         acc.set(m, writeParentPointer(acc.get(m), acc.get(m).role, None, false, None, None))
       else acc)
+    val post = detached.set(n, writeParentPointer(detached.get(n), Replica, None, false, None, None))
     all {
       canDemoteNodeExternal(nodes, slots, n),
       // Residue entries naming the demoted node keep pointing at it and are recovered
       // level-triggered by `retargetSlotResidue` — there is no successor to re-home to.
-      nodesOnly(detached.set(n, writeParentPointer(detached.get(n), Replica, None, false, None, None))),
+      nodes' = post,
+      // ext-12 (V8-C6): there is no successor here, so the whole refusal on a
+      // slot-owning node is the *only* thing keeping the demoted node off the slot map.
+      // Reverting it lands a slot on a Replica, and this ghost sees it.
+      defects' = { ...defects, replicaSlot: defects.replicaSlot or replicaOwnsSlot(post, slots, n) },
+      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepCoverage, keepCtl,
     }
   }
 
@@ -1156,7 +1363,7 @@ module cluster_migration_failover_machine {
     nodes.get(n).member,
     nodes' = nodes.set(n, restarted(nodes.get(n), ctl.next_run)),
     held' = held.set(n, Set()),
-    ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch },
+    ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
     keepSlots, keepMigAll, keepBarriers, keepFeed, keepAux,
   }
 
@@ -1170,7 +1377,7 @@ module cluster_migration_failover_machine {
       | None => acc
     }),
     held' = held.set(n, Set()),
-    ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch },
+    ctl' = { ...ctl, next_run: ctl.next_run + 1, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
     keepSlots, keepShadow, keepResidue, keepBarriers, keepFeed, keepAux,
   }
 
@@ -1194,7 +1401,7 @@ module cluster_migration_failover_machine {
       barriers' = { armed: v.armed, failover_fence: Set(), disconnected: v.disconnected },
       feed_bytes' = v.feed_bytes,
       held' = v.held,
-      ctl' = { ...ctl, epoch: v.epoch, prev_epoch: ctl.epoch, next_run: ctl.next_run + 1 },
+      ctl' = { ...ctl, epoch: v.epoch, prev_epoch: ctl.epoch, prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes), next_run: ctl.next_run + 1 },
       keepShadow, keepHistory, keepRefusals, keepSpent,
       defects' = { ...defects, demotion: defects.demotion or not(demotedTo(v.nodes, old, succ)) },
       coverage' = { ...coverage, failoverDuringOpenMigration: true },

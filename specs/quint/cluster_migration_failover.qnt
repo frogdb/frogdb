@@ -258,14 +258,32 @@ module cluster_migration_failover {
 
   // ---------------------------------------------------------------------------
   // Witnesses — reachability values, in the same families as the invariants below.
-  //   Migration lifecycle  — witnessMigrationInFlight, witnessHandoffDrainedNotComplete
+  //   Migration lifecycle  — witnessMigrationInFlight, witnessHandoffDrainedNotComplete,
+  //                          witnessDrainingHeldForKTicks, witnessHealthyDrainAbortedByBound,
+  //                          witnessKnobOnMigrationCompletes, witnessCompleteEnabledOnQuietSlot,
+  //                          witnessEmptyCoverageBatchIsANoOp
   //   Failover             — witnessGracefulFailoverPrunedMigration,
-  //                          witnessForcedFailoverDemoted, witnessFailoverDuringOpenMigration
-  //   Barrier and hold     — witnessFeedDisconnected
-  //   Membership           — witnessNodeRemoved
-  //   Residue and reaper   — witnessResiduePending
+  //                          witnessForcedFailoverDemoted, witnessFailoverDuringOpenMigration,
+  //                          witnessResyncedReplicaBecomesCandidate
+  //   Barrier and hold     — witnessFeedDisconnected, witnessFenceClears
+  //   Membership           — witnessNodeRemoved, witnessNonEmptyJoinRefused,
+  //                          witnessNonEmptyResetRefused
+  //   Residue and reaper   — witnessResiduePending, witnessBeginRefusedOverResidue
+  //   Identity and run     — witnessStagedFlipCompletesAcrossCrash,
+  //                          witnessNodeCanAlwaysReportIdentity
+  //   Declared unreachable — witnessDrainingWedgedBeforeConfirm,
+  //                          witnessDrainingWedgedWithCompletableToken
   // A witness backed by a `coverage.*` ghost is set inside the action's own execution, so
   // it cannot be satisfied by a state that merely looks like the behaviour happened.
+  //
+  // The last family is stated **because it is unreachable**: each of those two values is a
+  // state a superseded revision of the design could reach and the adopted narrowing
+  // forbids. Writing them down makes the narrowing checkable — reverting the narrowing
+  // makes the witness reachable — instead of leaving it as a claim in a comment. Each
+  // carries its own note saying which revert would reach it.
+  //
+  // Every other witness here is **reachable**, and each is pinned by a deterministic `run`
+  // test in the witness-reachability block at the end of the test section.
   // ---------------------------------------------------------------------------
 
   val witnessMigrationInFlight: bool =
@@ -311,6 +329,179 @@ module cluster_migration_failover {
       | None => false
     })
 
+  // --- Q2 witnesses ----------------------------------------------------------
+
+  // ext-4: the drain is *held* across observation ticks — sealed record, hold region
+  // still armed, and the post-seal counter has accrued observations without reaching its
+  // bound. At the stock `draining_observations = 3` that is K = 2: one more tick without
+  // progress abandons the drain, so this is precisely the "still holding, not yet
+  // abandoned" state the bound exists to bound.
+  val witnessDrainingHeldForKTicks: bool =
+    SLOTS.exists(s => match migrations.get(s) {
+      | Some(m) => and {
+          m.phase == Draining,
+          barrierArmed(s),
+          m.observations >= DRAINING_OBSERVATIONS - 1,
+          not(isAbortableByBound(m)),
+        }
+      | None => false
+    })
+
+  // ext-4, backed by `coverage.healthyAborted`: a *lawfully progressing-in-principle*
+  // pre-`Confirm` migration — its target still had records to ingest — taken by the
+  // pre-seal bound. The calibration obligation `preconfirm_observations` carries is a
+  // reachable behaviour, not a hypothetical.
+  val witnessHealthyDrainAbortedByBound: bool = coverage.healthyAborted
+
+  // ext-14 (V8-m4), backed by `coverage.knobCompleted`: a `require_replica_ack`
+  // migration that *commits* at the stock sizings. The knob has to be satisfiable, or
+  // the durability conjunct is a liveness bug rather than a safety gate.
+  val witnessKnobOnMigrationCompletes: bool = coverage.knobCompleted
+
+  // ext-9 (N-C5): `Complete`'s guard holds on a slot that never took a write — the quiet
+  // slot, where no traffic drives the drain and the coverage batch is the only advance.
+  val witnessCompleteEnabledOnQuietSlot: bool =
+    SLOTS.exists(s => match migrations.get(s) {
+      | Some(m) => canCompleteMigration(nodes, migrations, s, m.attempt)
+                     and stream_history.get(s) == Set()
+      | None => false
+    })
+
+  // ext-9 (V4-M1), backed by `coverage.emptyBatch`: a zero-advance coverage batch was
+  // admitted as a no-op rather than refused.
+  val witnessEmptyCoverageBatchIsANoOp: bool = coverage.emptyBatch
+
+  // ext-10 (V8-C1): the join gate's refusal state — a non-member still physically
+  // holding copies. `meetNode` is refused here, which is what keeps an untracked stale
+  // copy out of the membership now that the self-cleanse is gone.
+  val witnessNonEmptyJoinRefused: bool =
+    NODES.exists(n => not(nodes.get(n).member) and nodes.get(n).keys != Set())
+
+  // ext-10 (V8-C1): the same refusal on the reset path, in its non-trivial form — a
+  // member holding copies of slots it does **not** own (the state a demotion leaves
+  // behind). `canResetCluster` is false here; the initial state, where the holder is also
+  // the owner, would satisfy a bare "member with a non-empty keyspace".
+  val witnessNonEmptyResetRefused: bool =
+    NODES.exists(n => and {
+      nodes.get(n).member,
+      nodes.get(n).keys != Set(),
+      not(ownsAnySlot(slots, n)),
+      not(canResetCluster(nodes, n)),
+    })
+
+  // ext-12: `Begin` refused over a slot carrying a residue entry — stated as "every other
+  // Begin conjunct holds for some endpoint pair, and the proposal is still refused", so
+  // it cannot be satisfied by a state where Begin was refused for an unrelated reason.
+  val witnessBeginRefusedOverResidue: bool =
+    SLOTS.exists(s => and {
+      residue.get(s) != None,
+      migrations.get(s) == None,
+      NODES.exists(src => NODES.exists(t => and {
+        slots.get(s) == Some(src),
+        src != t,
+        nodes.get(t).member,
+        not(canBeginMigration(nodes, slots, migrations, residue, s, src, t)),
+      })),
+    })
+
+  // ext-16/ext-18 (V14-M1): the staged flip whose *adoption* survived the crash. The
+  // record is stamped `adopted` by the replicated admission and the node has since
+  // restarted (its boot report is owed again), so `completeAdoption` still fires after
+  // the crash. Mutation (4) — a restart that does not preserve the record field-for-field
+  // — makes this state unreachable.
+  val witnessStagedFlipCompletesAcrossCrash: bool =
+    NODES.exists(n => and {
+      not(nodes.get(n).booted),
+      match nodes.get(n).record { | Some(rec) => rec.adopted | None => false },
+    })
+
+  // ext-17 (V15-M4): a replica that lost `synced` to a re-parent and re-earned it by
+  // attestation is a promotable candidate again — `parent_seq > 0` is the token proving
+  // the pointer really was rewritten, so this is not the initial state's free `synced`.
+  val witnessResyncedReplicaBecomesCandidate: bool =
+    NODES.exists(n => and {
+      nodes.get(n).role == Replica,
+      nodes.get(n).synced,
+      nodes.get(n).parent_seq > 0,
+      match nodes.get(n).parent { | Some(p) => isLivePrimary(nodes, p) | None => false },
+    })
+
+  // ext-18 (V28-m3): the fence *clears* — a node that a staged flip fenced is unfenced,
+  // its record is gone and its client has been paid. The design's step **bound** on this
+  // (three steps from the enabling state) is a property of a run, not of a state, so it
+  // is pinned by `fenceClearsWithinThreeStepsTest` rather than stated here.
+  val witnessFenceClears: bool =
+    NODES.exists(n => and {
+      not(nodes.get(n).node_fenced),
+      nodes.get(n).reply_emitted,
+      nodes.get(n).record == None,
+    })
+
+  // ext-15's liveness claim, in the state the design says must never be mute: a member
+  // that has *lost* its node-local incarnation counter (`incarnation == 0`, below every
+  // pair the replicated cell can hold) still has an **admissible** next boot report. What
+  // makes it admissible is the re-mint rule — `bootMintOf` proposes *above* the replicated
+  // pair rather than at the lost `(0, 0)`. The witness reads that same function, so the
+  // doc's mutation ("reverting the re-mint rule, minting `(0,0)`") is one edit in
+  // `bootMintOf` and makes this state unreachable: every report the node can phrase is
+  // then refused `Ordering` against the surviving cell, which is the mute-node defect.
+  //
+  // `stored_identity != None` is part of the claim, not scenery: with no cell at all
+  // `identityOrderOk` is vacuously true and the witness would hold without the rule.
+  val witnessNodeCanAlwaysReportIdentity: bool =
+    NODES.exists(n => {
+      val ns = nodes.get(n)
+      val mint = bootMintOf(ns, Boot, false)
+      and {
+        ns.member,
+        ns.incarnation == 0,
+        ns.stored_identity != None,
+        refusalClassOf(nodes, n, Boot, mint.inc, mint.seq, ns.role, ns.epoch_own) == Whole,
+      }
+    })
+
+  // --- Declared-unreachable witnesses ----------------------------------------
+  //
+  // Two, and both are unreachable **because the doc says they must be**: each names a
+  // state a superseded revision of the design could reach and the adopted narrowing
+  // forbids. Each carries the single revert that makes it reachable again, which is the
+  // mutation test the doc asks for. Nothing here is a model gap.
+
+  // ext-13 (V5-M1): the wedged pre-`Confirm` drain the design says the **narrowed**
+  // observation reset removes. A source that never proposes `Confirm` (`cannot_drain`)
+  // sits in `Streaming` with `drained_pos == None` forever; under v4's reset — which had
+  // an "(or `drained_pos` unset)" arm — every tick reset the counter, so the bound never
+  // fired and the migration wedged. `hasObservedProgress` no longer reads `drained_pos`,
+  // so the conjunction below (no progress observed, yet the tick would still reset the
+  // counter) is false by construction. Restoring the v4 arm makes it reachable.
+  val witnessDrainingWedgedBeforeConfirm: bool =
+    SLOTS.exists(s => match migrations.get(s) {
+      | Some(m) => and {
+          m.phase == Streaming,
+          m.drained_pos == None,
+          nodes.get(m.source).cannot_drain,
+          not(hasObservedProgress(m)),
+          applyReconcileTick(m).observations == 0,
+        }
+      | None => false
+    })
+
+  // ext-13's post-seal mirror, and the sharper of the two: a record whose `Complete` is
+  // *already admissible* and whose hold region is still latched, with the target silent
+  // — the shape where a counter that never advances would hold client writes forever.
+  // Same contradiction, same single revert reaches it.
+  val witnessDrainingWedgedWithCompletableToken: bool =
+    SLOTS.exists(s => match migrations.get(s) {
+      | Some(m) => and {
+          canCompleteMigration(nodes, migrations, s, m.attempt),
+          held.get(m.source) != Set(),
+          nodes.get(m.target).silent,
+          not(hasObservedProgress(m)),
+          applyReconcileTick(m).observations == 0,
+        }
+      | None => false
+    })
+
   // ---------------------------------------------------------------------------
   // Invariants, grouped by family. A new check is one `inv_*` value added under the
   // family it belongs to — `just quint-run` picks it up automatically
@@ -323,8 +514,17 @@ module cluster_migration_failover {
   //                            failover-shaped transition must pass, plus the
   //                            demote-don't-remove postcondition.
   //   Commit admission       — what CompleteSlotMigration is allowed to admit.
-  //   Residue and reaper     — reserved: the ext-7/ext-12 properties land in Q2.
-  //   Identity and run       — reserved: the ext-15/ext-18 properties land in Q2.
+  //   Drain bounds           — ext-4's observation counter: what it may abort and what it
+  //                            is allowed to count.
+  //   Barrier and hold       — ext-2/ext-11/ext-15: the hold region's latch and the
+  //                            serving-primary rule every release of it owes.
+  //   Stream and history     — ext-1/ext-5: what the slot's log may contain and what a
+  //                            commit is allowed to lose.
+  //   Residue and reaper     — ext-7/ext-8/ext-12: who may hold a copy, who may delete
+  //                            one, what a residue entry guarantees, and what the shadow
+  //                            owes the ingest.
+  //   Identity and run       — ext-15/ext-17/ext-18: the replicated identity's ordering,
+  //                            the parenting token, and the record's disposal rules.
   //
   // Every ghost-backed member of these families reads a `defects.*` flag that its action
   // recomputes from its own *outcome*, independent of the guard — see each note below.
@@ -433,6 +633,275 @@ module cluster_migration_failover {
   // is about the *held write region* emptying, not about the byte count — and it belongs
   // to the Q2 invariant set (`inv_held_set_empty_while_latched`), which is why nothing is
   // asserted about the cap here rather than a weakened version being left in place.
+
+  // ext-2: the commit never admits against an **unfenced** source. Separate from the
+  // phase conjunct below on purpose (ext-3): the seal and the phase are two facts, and
+  // `localReleaseOnCapBreach`/`selfFenceRelease` drop the first without touching the
+  // second. Ghost recomputed inside `completeMigration` from `m.fenced`.
+  val inv_complete_requires_fenced_source: bool = not(defects.fencedAdmit)
+
+  // ext-3: and never against a record still in `Streaming`. The stale-`Confirm` refusal
+  // is what keeps the two apart; this is its safety consequence.
+  val inv_complete_requires_draining_phase: bool = not(defects.phaseAdmit)
+
+  // ext-6/ext-14 (V5-M3): with `require_replica_ack` captured on the record, the commit
+  // admits only against a **non-empty** counted replica set that holds the drained
+  // position. An empty set is false, not vacuously true — which is the whole mutation the
+  // ghost polices (it is recomputed from `countedReplicasOf` and the drained position, not
+  // from `canCompleteMigration`).
+  val inv_target_replicas_hold_committed_slot: bool = not(defects.replicaAck)
+
+  // ext-12 (V8-C6/V10-C3): the slot map never hands a slot to a node holding the Replica
+  // role — checked at the redesign's own writers (the commit, the three failovers and
+  // both demotions), each recomputing the ghost on its **post-state** view and scoped to
+  // the nodes it wrote. Deliberately not a whole-state invariant: `canSetRole` lawfully
+  // demotes a slot-owning node today (TR-CLUSTER-004 carries no such conjunct and no
+  // catalog row claims one), so a state-wide form would fail on an operator action this
+  // model is not reworking. Flagged as a declared scope narrowing in the Q2 report.
+  val inv_slots_only_assigned_to_primaries: bool = not(defects.replicaSlot)
+
+  // --- Drain bounds ----------------------------------------------------------
+
+  // ext-4 (v2-C4/N-M6): a migration that keeps making ingest progress is never abandoned
+  // by the observation bound. Checked via `defects.boundAbort`, recomputed inside
+  // `reconcileTick` from the tick's own outcome — dropping the counter reset makes a
+  // steadily progressing migration accrue to the bound and trips it.
+  val inv_progressing_migration_never_aborts: bool = not(defects.boundAbort)
+
+  // ext-4 (V7-C3). COINED (the doc states the property in prose at the `Confirm` reset
+  // without naming it): the post-seal bound counts **post-seal** observations only —
+  // `confirmDrained` zeroes the counter, so no pre-`Confirm` observation is ever spent
+  // against `draining_observations`. Checked via `defects.sealCounter`, recomputed from
+  // the sealed record rather than from the guard.
+  val inv_draining_bound_counts_post_seal_observations: bool = not(defects.sealCounter)
+
+  // --- Barrier and hold ------------------------------------------------------
+
+  // ext-11, the *level* form of the design's "the held set empties while the latch
+  // holds": a slot sits in some node's held region only while its barrier is still
+  // armed. That is what makes a release action for it enabled — `selfFenceRelease`
+  // (latched source) and `localReleaseOnCapBreach` (cap breach) are both guarded on
+  // `barrierArmed`, and every action that disarms a barrier empties the held region for
+  // that slot in the same step. The eventually-empties form is a liveness property Quint
+  // invariants cannot state; this is the safety half of it, and the narrowing is
+  // declared rather than silent (Q2 report).
+  val inv_held_set_empty_while_latched: bool =
+    NODES.forall(n => held.get(n).forall(s => barrierArmed(s)))
+
+  // ext-15 (V11-C1): no release of a hold region executes writes at a source that has
+  // stopped serving the slot. Checked via `defects.demotedExec`, recomputed inside
+  // `abortHandoff`/`cancelMigration` from the slot map and the source's role, so dropping
+  // `isServingPrimary` from either release path surfaces here as a forked history rather
+  // than as a missing guard.
+  val inv_no_execution_after_demotion: bool = not(defects.demotedExec)
+
+  // --- Stream and history ----------------------------------------------------
+
+  // ext-1/ext-5: no acked write is lost at the commit — every position of the record's
+  // own run that the slot's log ever produced is covered by the copy the target attested
+  // **under its current run**. Checked via `defects.ackLoss`, recomputed inside
+  // `completeMigration` from `stream_history` and the record, independent of the guard:
+  // collapsing the tagged comparison into a bare integer one (mutation (1)) shows up here
+  // as a lost write instead of as a tautology.
+  val inv_no_acked_write_lost: bool = not(defects.ackLoss)
+
+  // ext-1: the slot's history is hole-free — every recorded position but the first has
+  // its predecessor in the history, so no write vanished between two acked ones.
+  //
+  // Narrowed, deliberately, to the *position numbering* and not to the run tags: a second
+  // migration over the same slot restarts `source_log` at 0, and a source that restarts
+  // mid-record keeps counting from where the record was (`sourceWrite` stamps the source's
+  // **current** run onto `m.source_log.pos + 1`). Both make a per-run hole-freedom claim —
+  // and any "every entry is below the live record's high-water" claim — false by
+  // construction rather than by defect. Declared in the Q2 report.
+  val inv_stream_history_sound: bool =
+    SLOTS.forall(s => stream_history.get(s).forall(p => and {
+      p.pos >= 1,
+      p.pos == 1 or stream_history.get(s).exists(q => q.pos == p.pos - 1),
+    }))
+
+  // --- Residue and reaper ----------------------------------------------------
+
+  // ext-8, the redesign's central claim: the target never *serves* the slot before its
+  // promotion is attested. `relabelShadow` is the local flip and writes nothing into the
+  // target's main keyspace; only `reportPromoted` does, and it flips the entry to
+  // `promoted` in the same step. Stated across the step (`ctl.prev_keys`) so that a copy
+  // the target already held before the entry existed — lawful: nothing but the reaper
+  // deletes a keyspace entry, so a former owner keeps its copy indefinitely — is exempt,
+  // while a copy that *appeared* under an unpromoted entry is not.
+  val inv_no_serve_before_attestation: bool =
+    SLOTS.forall(s => match residue.get(s) {
+      | Some(r) => or {
+          r.promoted,
+          not(nodes.get(r.target).keys.contains(s)),
+          ctl.prev_keys.get(r.target).contains(s),
+        }
+      | None => true
+    })
+
+  // ext-12, source-authoritative-until-commit's other half: while an entry is
+  // unpromoted, the source's shard still physically holds the copy — the reaper's
+  // attestation gate is what guarantees it. The shard closure matters because a
+  // demotion/failover re-points the entry at a shard primary without moving the copy off
+  // the node that holds it.
+  //
+  // The `source_gone` disjunct is a declared narrowing (Q2 report): once the entry is
+  // *marked*, ext-12 hands it to the operator arms, and a departure that also detaches
+  // the holder from the shard leaves the copy tracked by nothing this model can walk to.
+  val inv_source_keeps_its_copy_until_promotion_attested: bool =
+    SLOTS.forall(s => match residue.get(s) {
+      | Some(r) => r.promoted or r.source_gone or shardHoldsCopy(nodes, r.source, s)
+      | None => true
+    })
+
+  // ext-7/ext-12: a slot any tracking object still claims — assigned, or carrying a
+  // residue entry — is physically held by *someone*. The reaper is the model's only
+  // deleter and it is gated on the attestation, so the last copy of a claimed slot can
+  // never be taken.
+  //
+  // Narrowed to "some node", not "some member" (Q2 report): `removeNode` deliberately
+  // leaves a departing node's keyspace intact (V8-C1 — the self-cleanse is gone), so the
+  // holder of a still-claimed copy is lawfully a non-member for as long as the operator
+  // arms take to resolve the entry.
+  val inv_slot_copy_survives_until_owned_and_served: bool =
+    SLOTS.forall(s =>
+      (slots.get(s) != None or residue.get(s) != None)
+        implies NODES.exists(q => nodes.get(q).keys.contains(s)))
+
+  // ext-12 (V8-M6). RENAMED from the doc's `residueHasAnEffectiveRemover` to the `inv_`
+  // prefix the run script scrapes (scripts/quint-invariants.sh) — an unprefixed name
+  // would never enter `just quint-run`. Every residue entry has some verb that resolves
+  // it admissible **in this very state**: an admissible-in-principle verb whose own guard
+  // is false here is not a remover. See `hasEffectiveRemover` for the disjunct list and
+  // for the two marked-entry terminal disjuncts, which are declared weakenings.
+  val inv_residue_has_an_effective_remover: bool =
+    SLOTS.forall(s => hasEffectiveRemover(nodes, slots, residue, s))
+
+  // ext-12: no second migration is ever opened over a slot whose residue entry is still
+  // outstanding — the state form of `canBeginMigration`'s residue conjunct, and what
+  // keeps a stale entry from being silently re-used by the next record.
+  val inv_begin_refuses_slot_with_residue: bool =
+    SLOTS.forall(s => residue.get(s) != None implies migrations.get(s) == None)
+
+  // ext-7: the reaper never deletes the last member-held copy of a slot. Checked via
+  // `defects.overDelete`, recomputed inside `reapSlots` from the outcome rather than
+  // from `reapableSlots` — reverting the attestation gate reaps ahead of
+  // `reportPromoted`, when the target holds nothing yet, and this sees it.
+  val inv_node_keeps_slots_it_owns: bool = not(defects.overDelete)
+
+  // ext-8: a shadow is never discarded out from under a residue entry that still claims
+  // it — the copy the new owner will serve. Checked via `defects.discard`, recomputed
+  // from the residue map inside `discardShadow`, because the relabel/discard pair cannot
+  // be told apart afterwards (both leave `shadow[s] == None`).
+  val inv_owner_serves_promoted_slot: bool = not(defects.discard)
+
+  // ext-10 (V8-C1): no member holds a copy that no tracking object reaches. Stated in its
+  // **gate** form — the ghost is recomputed at the two entry points that could admit an
+  // untracked copy (`meetNode`'s join, `resetCluster`'s wholesale unassign) from their own
+  // outcomes. A state-wide form would be false by design: `removeSlot` (`CLUSTER
+  // DELSLOTS`) lawfully leaves an operator holding an unclaimed copy, and neither it nor
+  // the departing-node case is a migration writer. Declared in the Q2 report.
+  val inv_member_keyspace_is_tracked: bool = not(defects.untracked)
+
+  // ext-8/ext-10: an open record's shadow is the one **it** minted, under the current
+  // reset epoch — Begin's discard-then-ingest re-mints whatever the slot carried, so an
+  // orphan shadow from a pre-reset epoch can never wedge the next migration's ingest.
+  val inv_no_orphan_shadow_blocks_ingest: bool =
+    SLOTS.forall(s => match migrations.get(s) {
+      | Some(m) => match shadow.get(s) {
+          | Some(t) => t.mig == m.id and t.epoch == ctl.reset_epoch
+          | None => true
+        }
+      | None => true
+    })
+
+  // ext-9. COINED (the doc states it as "neither the batch nor the fault discards the
+  // shadow" without naming a property): an open record always has its shadow. A batch
+  // fault rolls the volatile applied point back to the durable one and touches nothing
+  // else, so no ingest-side fault can strand a record with nothing to promote.
+  val inv_open_migration_keeps_its_shadow: bool =
+    SLOTS.forall(s => migrations.get(s) != None implies shadow.get(s) != None)
+
+  // --- Identity and run ------------------------------------------------------
+
+  // ext-15: an *applied* run-identity report always strictly dominated the cell it
+  // overwrote. Checked via `defects.identityRegress`, recomputed inside
+  // `reportRunIdentity` from the report's own operands rather than from
+  // `refusalClassOf`'s verdict.
+  val inv_run_identity_never_regresses: bool = not(defects.identityRegress)
+
+  // ext-15 (V10-M1): records are taken by the identity **field write**, never by mere
+  // admission — a topology-only re-proposal at equality cancels nothing. Checked via
+  // `defects.spuriousCancel`.
+  val inv_no_spurious_cancel: bool = not(defects.spuriousCancel)
+
+  // ext-15 (V8-C2): a `Demotion` arm never rewrites role and parent against an observed
+  // role/epoch the node no longer holds — the fence that keeps a freshly promoted node
+  // from being demoted back by a report minted before its promotion. Checked via
+  // `defects.staleDemote`.
+  val inv_promotion_is_not_reverted_without_a_failover: bool = not(defects.staleDemote)
+
+  // ext-18 (V21): a terminal refusal observed against its **own** record disposes of all
+  // three obligations in the same step — the record cleared, the fence dropped, the
+  // client paid. Checked via `defects.disposition`, recomputed from the post-state, so
+  // turning any one arm into a silent no-op trips it.
+  val inv_every_terminal_refusal_has_a_disposition: bool = not(defects.disposition)
+
+  // ext-18 (V28-M6): no live record is ever disposed of by a **foreign** refusal. Read
+  // off `last_disposition`, the auxiliary history `observeRefusal` writes on a step that
+  // disposes and on no other: both halves of the (stage_id, registration_seq) pair must
+  // have matched. Dropping either half of `refusalBinds` lets a refusal minted for a dead
+  // stage clear a record minted after a forget-and-rejoin, and that shows up here.
+  val inv_no_live_record_disposed_by_a_foreign_refusal: bool =
+    NODES.forall(n => match nodes.get(n).last_disposition {
+      | Some(d) => d.refusal_stage_id == d.record_stage_id
+                     and d.refusal_reg_seq == d.record_reg_seq
+      | None => true
+    })
+
+  // ext-17 (V16-C1): the parent pointer is only ever written through the single funnel
+  // that also moves the parenting token. Stated across the step against `ctl.prev_parents`:
+  // a pointer that changed without `parent_seq` strictly increasing is a write that
+  // bypassed `writeParentPointer` — i.e. a writer the design did not declare.
+  val inv_role_written_only_by_declared_writers: bool =
+    NODES.forall(n =>
+      nodes.get(n).parent != ctl.prev_parents.get(n).p
+        implies nodes.get(n).parent_seq > ctl.prev_parents.get(n).seq)
+
+  // ext-17 (V18-C1): every live registration cell was minted from the cluster counter —
+  // no cell carries a generation the cluster has not issued, which is what makes
+  // `staged_reg_seq` a usable pairing partner for a stage id.
+  val inv_registration_gen_monotone: bool =
+    NODES.forall(n => match nodes.get(n).registration_seq {
+      | Some(r) => r < ctl.next_reg
+      | None => true
+    })
+
+  // ---------------------------------------------------------------------------
+  // Stated in the doc, NOT stated here — with the reachable counter-state each one is
+  // pinned by, because a property that is false of the model must be a test, not a
+  // weakened invariant.
+  //
+  // - `inv_no_replica_without_a_primary_pointer`: withdrawn by ext-17 (V15-C3) itself —
+  //   `removeNode`'s detach writes `parent == None` at a Replica, a lawful state.
+  // - `inv_abort_repatriates`: deleted with repatriation (MAJ-5).
+  // - `inv_no_hold_during_staged_flip`: **false of this model**. `prepareHandoff` latches
+  //   the hold region on the source, and `stageFlip` is admissible on that same node
+  //   (it requires only membership and no live record), so a pending flip coexisting with
+  //   a non-empty held set is reachable in two steps — see
+  //   `stagedFlipLeavesHoldRegionTest`. Flagged as a design/model gap in the Q2 report
+  //   rather than encoded as a weakened invariant: closing it means a new conjunct on
+  //   `stageFlip` (or on `prepareHandoff`), which is an action-semantics change this
+  //   phase does not own.
+  // - `inv_no_record_outlives_its_registration`: its strict form is unsatisfiable by
+  //   construction, and its guarded form is a tautology. The record is node-local and
+  //   crash-durable, so it deliberately survives the loss of its registration cell
+  //   (ext-18) — that gap is precisely what `clearStaleRecord` exists to close, and that
+  //   clause is separately schedulable, so the gap state is reachable
+  //   (`recordOutlivesRegistrationTest`). Adding "…or the clearing clause is enabled" as
+  //   a disjunct restates `isRecordStale`, whose definition is exactly the negation of
+  //   the pairing — a vacuous invariant, which the brief forbids.
+  // ---------------------------------------------------------------------------
 
   // ---------------------------------------------------------------------------
   // Tests.
@@ -1066,6 +1535,360 @@ module cluster_migration_failover {
         match migrations.get(2) { | Some(m) => m.attempt == 1 | None => false },
         spent == Set({ epoch: 0, seq: 1 }, { epoch: 1, seq: 1 }),
         not(defects.seqReuse),
+      })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Witness reachability.
+  //
+  // Every witness above except the two **declared-unreachable** ones is pinned here by a
+  // deterministic trace that ends in a state satisfying it. A witness with no such trace
+  // is a modelling gap, not a passing spec, so the mapping is one-to-one and exhaustive:
+  //
+  //   witnessMigrationInFlight                  -> migrationInFlightReachableTest
+  //   witnessEmptyCoverageBatchIsANoOp          -> quietSlotWitnessesReachableTest
+  //   witnessHandoffDrainedNotComplete          -> quietSlotWitnessesReachableTest
+  //   witnessCompleteEnabledOnQuietSlot         -> quietSlotWitnessesReachableTest
+  //   witnessResiduePending                     -> residueWitnessesReachableTest
+  //   witnessBeginRefusedOverResidue            -> residueWitnessesReachableTest
+  //   witnessGracefulFailoverPrunedMigration    -> gracefulPruneWitnessReachableTest
+  //   witnessForcedFailoverDemoted              -> forcedDemotionWitnessReachableTest
+  //   witnessFailoverDuringOpenMigration        -> failoverDuringOpenMigrationReachableTest
+  //   witnessFeedDisconnected                   -> feedDisconnectedWitnessReachableTest
+  //   witnessNodeRemoved                        -> departedHolderWitnessesReachableTest
+  //   witnessNonEmptyJoinRefused                -> departedHolderWitnessesReachableTest
+  //   witnessNonEmptyResetRefused               -> demotedHolderResetRefusedReachableTest
+  //   witnessDrainingHeldForKTicks              -> drainingHeldForKTicksReachableTest
+  //   witnessHealthyDrainAbortedByBound         -> healthyDrainAbortedByBoundReachableTest
+  //   witnessKnobOnMigrationCompletes           -> replicaAckKnobCompletesReachableTest
+  //   witnessResyncedReplicaBecomesCandidate    -> resyncedReplicaIsCandidateReachableTest
+  //   witnessNodeCanAlwaysReportIdentity        -> lostCounterStillReportsReachableTest
+  //   witnessStagedFlipCompletesAcrossCrash     -> stagedFlipSurvivesCrashReachableTest
+  //   witnessFenceClears                        -> fenceClearsWithinThreeStepsTest
+  //
+  // The trailing three tests pin the states the "Stated in the doc, NOT stated here" block
+  // cites, plus the antecedent of `inv_no_live_record_disposed_by_a_foreign_refusal` —
+  // an invariant over `last_disposition` is vacuous until some step writes one.
+  // ---------------------------------------------------------------------------
+
+  run migrationInFlightReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .expect(witnessMigrationInFlight)
+  }
+
+  // ext-9 (N-C5/V4-M1): the quiet slot. No write is ever proposed, so the coverage batch
+  // is the only thing that could advance the target — and it advances it by nothing. The
+  // batch is admitted as a no-op (it does not discard the shadow), the drain still seals,
+  // and `Complete` is enabled over an empty stream history.
+  run quietSlotWitnessesReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(coverageBatch(1))
+      .expect(and {
+        witnessEmptyCoverageBatchIsANoOp,
+        // The batch is a no-op *and* leaves the staged copy alone.
+        shadow.get(1) != None,
+        stream_history.get(1) == Set(),
+      })
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .expect(and {
+        witnessHandoffDrainedNotComplete,
+        witnessCompleteEnabledOnQuietSlot,
+      })
+  }
+
+  // ext-12: the post-commit window. The entry is outstanding and unpromoted, and `Begin`
+  // over the same slot is refused with every other conjunct satisfiable (node 4 owns the
+  // slot now, and 1/2/3 are all members that could be a target).
+  run residueWitnessesReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .expect(and { witnessResiduePending, witnessBeginRefusedOverResidue })
+  }
+
+  run gracefulPruneWitnessReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(armFailoverFence(1))
+      .then(failoverGraceful(1, 3, 0, Primary))
+      .expect(witnessGracefulFailoverPrunedMigration)
+  }
+
+  // ext-16: the candidate is *unsynced* (the re-parent in step one dropped the flag), so
+  // this is the gate `force` drops rather than an incidental demotion.
+  run forcedDemotionWitnessReachableTest: bool = {
+    init
+      .then(setRole(3, Replica, Some(1)))
+      .expect(not(nodes.get(3).synced))
+      .then(failoverForced(1, 3, 0, Primary))
+      .expect(witnessForcedFailoverDemoted)
+  }
+
+  run failoverDuringOpenMigrationReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(sourceFailover(1, 2))
+      .expect(witnessFailoverDuringOpenMigration)
+  }
+
+  run feedDisconnectedWitnessReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(disconnectFeed(1))
+      .expect(witnessFeedDisconnected)
+  }
+
+  // ext-10 (V8-C1): `removeNode` leaves the departing node's keyspace intact — the
+  // self-cleanse is gone — so the join gate is what keeps those copies out on the way back
+  // in. Both witnesses name that one state.
+  run departedHolderWitnessesReachableTest: bool = {
+    init
+      .then(removeNode(1, true, false))
+      .expect(and {
+        witnessNodeRemoved,
+        witnessNonEmptyJoinRefused,
+        not(canMeetNode(nodes, 1)),
+      })
+      .then(meetNode(1).fail())
+  }
+
+  // ext-10 (V8-C1), the non-trivial half: a **member** holding copies of slots it no
+  // longer owns. An administrative demotion produces exactly that (the copies do not move
+  // with the ownership), and `ResetCluster` is refused there.
+  run demotedHolderResetRefusedReachableTest: bool = {
+    init
+      .then(demoteNode(1, 2))
+      .expect(and {
+        witnessNonEmptyResetRefused,
+        nodes.get(1).member,
+        nodes.get(1).keys == SLOTS,
+        not(ownsAnySlot(slots, 1)),
+      })
+      .then(resetCluster(1).fail())
+  }
+
+  // ext-4: the seal resets the counter (V7-C3), so the three ticks below are all
+  // post-seal. The first sees `last_observation` unset and records the position; the next
+  // two see no advance and accrue. At `draining_observations = 3` that leaves the drain
+  // held one tick short of the bound — still holding, not yet abandoned.
+  run drainingHeldForKTicksReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .expect(match migrations.get(1) { | Some(m) => m.observations == 0 | None => false })
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .expect(and {
+        witnessDrainingHeldForKTicks,
+        match migrations.get(1) { | Some(m) => m.observations == DRAINING_OBSERVATIONS - 1 | None => false },
+        not(defects.boundAbort),
+      })
+  }
+
+  // ext-4's calibration obligation: the migration below is healthy — the source wrote, and
+  // the target still has that record to ingest — and the pre-`Confirm` bound takes it
+  // anyway because the target never applied. `preconfirm_observations` is the only thing
+  // sizing how much of that is tolerated, so the state has to be reachable to be
+  // calibrated against.
+  run healthyDrainAbortedByBoundReachableTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(sourceWrite(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .then(reconcileTick(1))
+      .expect(and {
+        match migrations.get(1) {
+          | Some(m) => and { m.phase == Streaming, isAbortableByBound(m), m.target_applied < m.source_log.pos }
+          | None => false
+        },
+        not(defects.boundAbort),
+      })
+      .then(boundAbort(1))
+      .expect(and { witnessHealthyDrainAbortedByBound, migrations.get(1) == None })
+  }
+
+  // ext-14 (V8-m4): the replica-ack knob is satisfiable at the stock sizings. Node 2 is
+  // attached to the target and counted; it lags the target's applied point for a while
+  // (the healthy, progressing case) and catches up before the commit, which is what the
+  // `Complete` conjunct reads. Stamped `true` at `Begin` and never re-read from config.
+  run replicaAckKnobCompletesReachableTest: bool = {
+    init
+      .then(attachTargetReplica(2, 4))
+      .then(beginMigration(1, 1, 4, true))
+      .expect(match migrations.get(1) { | Some(m) => m.require_replica_ack | None => false })
+      .then(sourceWrite(1))
+      .then(applyAtTarget(1))
+      .then(makeTargetDurable(1))
+      .then(reportTargetIngest(1))
+      .expect(match migrations.get(1) {
+        // Lagging but progressing: the counted replica is behind the target's own copy.
+        | Some(m) => nodes.get(2).replica_copy < m.target_applied
+        | None => false
+      })
+      .then(feedTargetReplica(2))
+      .then(reportReplicaAck(1, 2))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .expect(and {
+        witnessKnobOnMigrationCompletes,
+        slots.get(1) == Some(4),
+        not(defects.replicaAck),
+      })
+  }
+
+  // ext-17 (V15-M4): the re-parent drops `synced` and moves the parenting token; the
+  // attestation earns it back. `parent_seq > 0` is what tells this apart from the free
+  // `synced` every node starts with.
+  run resyncedReplicaIsCandidateReachableTest: bool = {
+    init
+      .then(attachTargetReplica(2, 4))
+      .expect(and {
+        not(nodes.get(2).synced),
+        nodes.get(2).parent_seq == 1,
+        nodes.get(2).parent == Some(4),
+      })
+      .then(attestReplicaSynced(2, 4, 1, 2))
+      .expect(witnessResyncedReplicaBecomesCandidate)
+  }
+
+  // ext-15: the node whose incarnation counter was lost is **not** mute. `bootMintOf`
+  // proposes above the surviving replicated cell, the report is admitted `Whole`, and the
+  // node's own counter takes the value it just published. Reverting the re-mint rule to a
+  // literal `(0, 0)` makes the first expectation false — the mutation the doc names.
+  run lostCounterStillReportsReachableTest: bool = {
+    init
+      .then(loseIncarnationCounter(4))
+      .expect(and {
+        witnessNodeCanAlwaysReportIdentity,
+        nodes.get(4).incarnation == 0,
+        nodes.get(4).stored_identity == Some({ inc: 1, seq: 1, run_id: 4 }),
+      })
+      .then(reportRunIdentity(4, Boot, Primary, 0, false))
+      .expect(and {
+        nodes.get(4).stored_identity == Some({ inc: 2, seq: 1, run_id: 4 }),
+        nodes.get(4).incarnation == 2,
+        nodes.get(4).booted,
+        refusals == Set(),
+        not(defects.identityRegress),
+      })
+  }
+
+  // ext-16/ext-18 (V14-M1): the record survives the crash **field-for-field**, `adopted`
+  // included, so the flip the replicated admission already stamped still lands after the
+  // restart. A restart that dropped the flag would leave the node fenced with nothing that
+  // can clear it.
+  run stagedFlipSurvivesCrashReachableTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(and { nodes.get(3).node_fenced, not(nodes.get(3).reply_emitted) })
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .expect(match nodes.get(3).record { | Some(rec) => rec.adopted | None => false })
+      .then(sourceRestart(3))
+      .expect(and { witnessStagedFlipCompletesAcrossCrash, not(nodes.get(3).booted) })
+      .then(completeAdoption(3))
+      .expect(and {
+        nodes.get(3).record == None,
+        not(nodes.get(3).node_fenced),
+        nodes.get(3).reply_emitted,
+      })
+  }
+
+  // ext-18 (V28-m3): the fence the staged flip raises is cleared inside a three-step
+  // window — stage, admit, adopt — with the client paid in the same step that drops it.
+  // The design's bound is a property of the run, which is why it is a test and not a
+  // state invariant.
+  run fenceClearsWithinThreeStepsTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(and {
+        nodes.get(3).node_fenced,
+        nodes.get(3).record != None,
+        not(nodes.get(3).reply_emitted),
+      })
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .then(completeAdoption(3))
+      .expect(and {
+        witnessFenceClears,
+        not(nodes.get(3).node_fenced),
+        nodes.get(3).reply_emitted,
+        nodes.get(3).record == None,
+      })
+  }
+
+  // The counter-state for `inv_no_hold_during_staged_flip` (see the block above): the
+  // prepare latches the hold region on node 1, and `stageFlip` is admissible on that same
+  // node, so a pending flip coexists with a non-empty held set. Reachable in three steps —
+  // hence a test rather than an invariant.
+  run stagedFlipLeavesHoldRegionTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .expect(held.get(1) == Set(1))
+      .then(stageFlip(1, 4))
+      .expect(and {
+        held.get(1) == Set(1),
+        nodes.get(1).record != None,
+        nodes.get(1).node_fenced,
+      })
+  }
+
+  // The counter-state for `inv_no_record_outlives_its_registration`: the record is
+  // node-local and crash-durable, so it deliberately outlives the registration cell it was
+  // staged under. `clearStaleRecord` is the level-triggered clause that closes the gap,
+  // and it is separately schedulable — which is exactly why the gap state is reachable.
+  run recordOutlivesRegistrationTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .then(removeNode(3, false, false))
+      .expect(and {
+        nodes.get(3).record != None,
+        nodes.get(3).registration_seq == None,
+        isRecordStale(nodes.get(3)),
+      })
+      .then(clearStaleRecord(3))
+      .expect(and {
+        nodes.get(3).record == None,
+        not(nodes.get(3).node_fenced),
+        nodes.get(3).reply_emitted,
+      })
+  }
+
+  // ext-18 (V21/V28-M6): the antecedent of `inv_no_live_record_disposed_by_a_foreign_
+  // refusal`. `last_disposition` is written on a disposing step and on no other, so the
+  // invariant is vacuous until some trace reaches a terminal refusal bound to its own
+  // record. This is that trace: the node leaves the membership with a record still staged,
+  // its next `Demotion` report is refused `Membership` (a declared terminal class), and
+  // observing that refusal disposes of all three obligations at once.
+  run terminalRefusalDisposesRecordTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .then(removeNode(3, false, false))
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .expect(refusals == Set({ node: 3, stage_id: 1, reg_seq: 3,
+                                class: Membership, terminal: true }))
+      .then(observeRefusal(3, { node: 3, stage_id: 1, reg_seq: 3,
+                                class: Membership, terminal: true }))
+      .expect(and {
+        nodes.get(3).last_disposition != None,
+        nodes.get(3).record == None,
+        not(nodes.get(3).node_fenced),
+        nodes.get(3).reply_emitted,
+        not(defects.disposition),
+        inv_no_live_record_disposed_by_a_foreign_refusal,
       })
   }
 }
