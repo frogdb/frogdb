@@ -1,5 +1,10 @@
 # T1 blocked item — arm 4b of `isRefusalTerminal` is NOT dead in the design doc
 
+> **RULED 2026-08-20 (R2, campaign ledger): option 1 — model the narrowing.**
+> `identityOrderOk` becomes kind-sensitive (false for `kind = Demotion` against `None`),
+> arm 4b goes live in the model with a forcing run test, the doc stays as written, and the
+> 2026-08-19 "delete arm 4b" ruling is withdrawn.
+
 Date: 2026-08-19. Raised by the W1 task that applies the
 [2026-08-19 campaign rulings](2026-08-19-quint-completeness-campaign.md) to the cluster
 migration/failover Quint model. Five of the six ruled changes landed; this one stopped under

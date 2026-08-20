@@ -115,3 +115,75 @@ rejected.
   harness rebuild and the remaining 8 design-owner flags ride with it.
 - Persistence/txn/blocking models (later phases per §7); representation-level failure
   modes (may never earn a model, per §3).
+
+---
+
+## 2026-08-20 post-execution rulings (design owner)
+
+The campaign executed 2026-08-19/20 (all 15 tasks; commits `75ca5def`…`4b22a62e` + the
+harness-coverage follow-up). Six questions surfaced by the execution were put to the design
+owner on 2026-08-20 and ruled as follows. Each ruling follows spec-first order where it
+touches a LOCKED row (row → failing/forcing test → fix).
+
+### R1 — Issue 41 (chained-demotion copy-claim family): repoint + tighten guard
+
+Both sub-roots are fixed, matching Redis/Valkey semantics:
+
+- **Demotion/adoption repoints dependants.** The demotion family (`stageFlip` /
+  `adoptReplicatedRole` / `setRole`) re-parents a demoted primary's replicas at the new
+  primary. Chained (`1→4→3`) and cyclic/primary-less (`1↔4`) topologies become unreachable;
+  the one-hop `shardPrimary` closure stays sound as-is.
+- **`canRetargetSlotResidue` demands physical holding.** A residue entry only re-homes onto
+  a node whose own `keys` contain the slot — never onto a derivative (closure-edge) holder.
+
+Then: model fixed per both, steering re-landed (revert `9c5d6f17`), steered walk clean at
+500x40 across seeds with all four family invariants restored, battery rows added for the
+new guard/effect, M37 discard rows re-checked (per issue 41's acceptance list). Issue 41
+moves to ready-for-agent.
+
+### R2 — Arm 4b of `isRefusalTerminal`: model the V18-M1 narrowing
+
+Option 1 of `t1-blocked.md`. `identityOrderOk` becomes kind-sensitive — false for
+`kind = Demotion` against an absent stored cell — making arm 4b (`Ordering ∧ stored ==
+None`, the terminal clearing arm) live in the model with a forcing run test. The design doc
+stays as written; the 2026-08-19 "delete arm 4b" ruling is **withdrawn** (its premise was a
+model gap, not a dead doc arm).
+
+### R3 — FM-CLUSTER-097 vs ending-drain: amend the row
+
+Ruling 1 of `t9b-blocked.md`. FM-CLUSTER-097's Observable gains an explicit
+"unless the link is ending" clause: a session that has already classified its departure
+(`SourceClosed`/`SourceLagged`) drains what it already accepted past the barrier floor —
+dropping the tail is strictly worse for a replica about to reconnect and PSYNC from its own
+offset. The row must also state the protection that makes this safe: **a departing replica
+is not a promotion candidate for the slot under handoff** (this closes the
+Graceful-disarm ⊕ delivered-tail combination with FM-REPLICATION-062). The model's
+`isEnding(ss)` carve-out in `inv_no_ship_inside_barrier_window` stays, now ruling-backed;
+`closeInsideWindowDrainsThenEndsGracefulTest` remains the pin.
+
+### R4 — Fullsync checkpoint-cut reading: offset-addressed skip
+
+The overlap stays structural and harmless **by construction**: replay is offset-addressed
+and the replica skips frames at or below its applied offset, so re-delivery is a no-op.
+FM-REPLICATION-004/001 stand; issue-24 amendment point 2 narrows to what it actually
+forces — the persisted offset commits atomically with the write it names. The skip rule is
+stated in a spec row and modeled (the model's `coverage.reapplied` record becomes the
+witness that the skip is exercised).
+
+### R5 — FM-REPLICATION-004 overshipped-tail residue: truncate above claim
+
+New replica-side rule (new row): on accepting a partial resync under a changed history
+(the replid2 window), the replica discards/truncates everything above its claimed offset
+before splicing — Raft-style divergence truncation. The residue class (a forked position
+the new history never reaches) is removed by construction. Forcing test + model action
+required; `overshippedTailMeetsFailoverTest` / `coverage.forkedTailReplaced` extend to pin
+the truncation.
+
+### R6 — I09: widen `inv_identity_pair_monotone`
+
+Ruled on operator expectation: the `(generation, offset)` identity pair is an
+operator-facing total order — later observation ≥ earlier, lexicographically, across ANY
+step into Primary (promotion included). The issue-24 pairing row is amended to state
+gen-domination on promotion as a guarantee (promotion mints a strictly greater
+generation), the invariant's `prev.primary` antecedent is dropped, and a forcing test
+pins the promotion step. Battery row I09 flips to caught-by-construction.

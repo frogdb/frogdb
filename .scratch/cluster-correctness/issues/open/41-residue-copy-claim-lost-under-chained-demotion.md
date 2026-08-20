@@ -1,6 +1,12 @@
 # 41: Residue copy-claim lost under chained demotion (one-hop shard closure)
 
-Status: ready-for-human
+Status: ready-for-agent
+
+**RULED 2026-08-20 (R1, campaign ledger): repoint + tighten guard — both sub-roots.**
+Demotion/adoption repoints a demoted primary's dependants at the new primary
+(Redis/Valkey semantics; chained and cyclic primary-less topologies become unreachable,
+one-hop `shardPrimary` stays as-is), AND `canRetargetSlotResidue` only re-homes onto a
+node that physically holds the slot. See the acceptance list below for the landing order.
 
 Found 2026-08-19 by the quint-completeness campaign's walk-steering task (T5): steering the
 migration-model walks toward deep protocol states surfaced a reproducible violation of
@@ -68,7 +74,8 @@ command in `t5-blocked.md`.
 
 ## Acceptance
 
-- [ ] Ruling between the two sub-root fixes recorded here
+- [x] Ruling between the two sub-root fixes recorded here (2026-08-20: both — repoint
+      dependants on demotion + physical-holder retarget guard)
 - [ ] Model fixed per the ruling
 - [ ] Steering re-landed (revert `9c5d6f17`); steered walk clean at 500x40 across seeds
       with all four invariants restored

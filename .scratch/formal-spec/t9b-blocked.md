@@ -1,6 +1,12 @@
 # T9b — spec/seam divergence: a link that ends inside a barrier window drains past the floor
 
-Status: **NEEDS A RULING.** Not blocking: the phase-3 feed-gate model
+> **RULED 2026-08-20 (R3, campaign ledger): ruling 1 — amend the row.** FM-CLUSTER-097's
+> Observable gains an "unless the link is ending" clause plus the protection that a
+> departing replica is not a promotion candidate for the slot under handoff (closes the
+> Graceful-disarm + delivered-tail combination with FM-REPLICATION-062). The model's
+> `isEnding` carve-out stays, now ruling-backed.
+
+Status: **RULED — was: NEEDS A RULING.** Not blocking: the phase-3 feed-gate model
 (`specs/quint/replication_feed_gate*.qnt`) is complete, green, and committed. It models the
 seam's behaviour faithfully and *discloses* the divergence at the invariant rather than
 picking a side silently. Nothing here should be "fixed" by weakening the invariant.
