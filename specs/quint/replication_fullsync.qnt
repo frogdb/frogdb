@@ -105,6 +105,13 @@
 // The rule is **model-only today**: the Rust `+CONTINUE` accept
 // (`replica/connection.rs:300`) shifts the replication id and resumes, and
 // discards nothing.
+//
+// R5 governs the partial-resync **accept** and nothing else. `applyPromote`
+// does not truncate, so a node promoted while holding an overshipped tail still
+// carries positions above its own `recv`; that path is
+// `promotedOvershipDoesNotServeForkedTailTest`, and it stays governed by the
+// serve-side properties (a promoted node does not serve above its head), not by
+// the truncation rule.
 module replication_fullsync {
   import cluster_common_types.* from "./cluster_common_types"
   import lib_option.* from "./lib_option"

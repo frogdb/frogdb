@@ -835,3 +835,120 @@ python3 run_battery.py M49             # mutate, run both oracles, restore, veri
    is lexicographic. Widening it is a *ruling* question (issue-24 wrote the antecedent deliberately),
    so it is raised, not taken.
 
+
+---
+
+## Addendum — 2026-08-20: rulings R4 / R5 / R6
+
+**Authority**: `.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`, § "2026-08-20
+post-execution rulings" — R4 (checkpoint-cut overlap), R5 (overshipped-tail residue), R6
+(`inv_identity_pair_monotone` widening). Model + spec changes landed at commit `a2334b00`.
+
+This section is **append-only**. Nothing recorded above is rewritten: row I09's original entry and
+its honest-miss analysis stand as the record of what was observed *before* the ruling; the flip is
+recorded here.
+
+| | after gap closure | after R4/R5/R6 |
+|---|---:|---:|
+| invariants | 28 | 30 |
+| witnesses | 16 | 17 |
+| `run` tests | 38 | 38 |
+
+New invariants: `inv_reapply_is_a_noop`, `inv_no_forked_tail_above_the_claim`.
+New witness: `witnessOvershipTruncated`.
+New coverage ghost: `coverage.overshipTruncated` (replaces `coverage.forkedTailReplaced`, whose
+behaviour R5 forbids). New defect ghosts: `defects.forkedTailApplied`, `defects.reapplyChangedData`,
+`defects.replayRegressedApplied`.
+Widened invariant: `inv_identity_pair_monotone` — antecedent `(prev.primary and cur.role == Primary)`
+→ `(cur.role == Primary)`.
+
+### Pre-registered rows
+
+Protocol identical to the passes above: exactly one textual site per row (replacement count asserted
+== 1), `quint typecheck` → `quint test` → `quint run --max-samples=4000 --max-steps=40` over all 30
+invariants for seeds `0x1`/`0x2`/`0x3`, per-invariant bisection only on the first red seed, restore
+from a pristine copy and `cmp`-verify byte-identity before the next row. Final line of the driver:
+`ALL RESTORED CLEAN`, re-verified afterwards against both `pristine/` and `HEAD`.
+
+| id | site | mutation | expectation | verdict | caught by |
+|---|---|---|---|---|---|
+| R5-1 | `_logic`: `truncateAboveClaim` — the truncation itself | `if (claim < d.length()) d.slice(0, claim) else d` → `d` | R5's rule deleted: the forked tail survives the accept | **CAUGHT-T + CAUGHT-P** | `overshippedTailMeetsFailoverTest`; seed 0x1: `inv_no_forked_tail_above_the_claim` |
+| R5-2 | `_logic`: `truncateAboveClaim` — the cut is at the claim, not one above | `d.slice(0, claim) else d` → `d.slice(0, claim + 1) else d` | off-by-one: one forked position is kept | **CAUGHT-T + CAUGHT-P** | `overshippedTailMeetsFailoverTest`; seed 0x1: `inv_no_forked_tail_above_the_claim` |
+| R5-3 | `_machine`: `psyncRequestAs` — the accept calls the truncation | `data: if (arm == PartialGrant) truncateAboveClaim(rn.data, rn.applied) else rn.data,` → `data: rn.data,` | step-unwiring: the rule exists but the accept never applies it | **CAUGHT-T + CAUGHT-P** | `overshippedTailMeetsFailoverTest`; seed 0x1: `inv_no_forked_tail_above_the_claim` |
+| R4-1 | `_logic`: `applyFrameToData` — a replayed frame writes its own id | `d.replaceAt(k - 1, w)` → `d.replaceAt(k - 1, NO_HISTORY)` | re-delivery stops being a no-op: replay corrupts the position it re-writes | **CAUGHT-T + CAUGHT-P** | `writeDuringTransferSurvivesTest`; seed 0x1: `inv_reapply_is_a_noop`, `inv_no_acked_write_lost_across_fullsync` |
+| R4-2 | `_machine`: `applyFrameAt` — the next frame is one above applied | `val k = rn.applied + 1` → `val k = rn.applied` | replay regresses below the applied head | **CAUGHT-T + CAUGHT-P** | `writeDuringTransferSurvivesTest`, `overshippedTailMeetsFailoverTest`; seed 0x1: all 30 invariants |
+| R6-1 | `_machine`: `promoteAs` — promotion mints a fresh generation | `applyPromote(nn, ctl.next_gen)` → `applyPromote(nn, nn.replid)` | promotion reuses its generation, so the offset rewind is no longer dominated | **CAUGHT-T + CAUGHT-P** | `promotionMidSyncTest`, `partialResyncViaReplid2WindowTest`, `windowCheckedAtAppliedTest`; seed 0x1: `inv_identity_pair_monotone` + 4 others |
+| R6-2 | main: `inv_identity_pair_monotone` — restore the dropped antecedent | `(cur.role == Primary)` → `(prev.primary and cur.role == Primary)` | pre-registered N/A: re-narrowing an invariant is a weakening, so nothing can go red | **N/A** (green, as pre-registered) | — |
+
+R4-2 going red on every invariant is expected and blunt — regressing the apply index breaks the
+model's basic offset arithmetic. It is retained as the step-unwiring row for the R4 pair; R4-1 is the
+one that isolates the no-op property, and it is the row that proves `inv_reapply_is_a_noop` is not
+vacuous.
+
+R6-2 carries no information on its own — it is the mirror of I09 and is recorded so the pair
+R6-1/R6-2 stands as the tightness record: the property is enforced by R6-1, and re-narrowing it costs
+nothing observable, which is exactly why the widening had to be a ruling rather than a sampling
+result.
+
+### I09 is superseded by the ruling
+
+R6 rules that the `(generation, offset)` pair is an operator-facing total order across **any** step
+into Primary, promotion included. The widened form is now the shipped invariant, so I09's mutation
+(drop the `prev.primary` antecedent) *is* the model. Its pass-1 **MISSED** verdict was a correct
+observation — the mutation is behaviour-preserving — and it is superseded here rather than rewritten.
+Follow-up 3 ("I09's tightness") is **closed**: the ruling was taken, not the sampling result, and
+R6-1 supplies the forcing test the original analysis said was missing.
+
+Scope note: the widening does **not** claim that `ReplicationId` bytes carry an order. Rust's
+`generate_replication_id()` (`frogdb-server/crates/replication/src/state.rs:485`) mints 40 random hex
+characters with no ordering relation. R6's gen-domination is scoped in `specs/replication.md`
+TR-REPLICATION-021 to the succession chain (`master_replid2`/`second_repl_offset` →
+`master_replid`/`master_repl_offset`); the model's `Generation` is an ordered abstraction of that
+chain, not of the id.
+
+### R4 — what `inv_reapply_is_a_noop` does and does not carry
+
+`inv_reapply_is_a_noop` is falsifiable in the model (R4-1 kills it) because a write's value is a
+`WriteId`, and re-applying the same id at the same position is literally idempotent. The Rust system
+does not have that property in general: post-execution propagation is verbatim
+(`frogdb-server/crates/core/src/shard/post_execution.rs:87-111` — "everything else propagates
+verbatim", asserted deterministic, *not* idempotent), so a re-executed `INCR`/`LPUSH`/`APPEND` frame
+changes the keyspace. The offset-addressed skips R4 names are real but **sender-side**
+(`RingBuffer::extract_backlog`'s `cmd.offset > start`, `FeedSequencer::buffer`'s `frame.sequence >
+self.resume_offset`) and keyed on the offset the replica *claimed*; the checkpoint-cut overship sits
+strictly *above* that claim, and `apply.rs::consume_frames` has no replica-side offset skip at all.
+
+The invariant is therefore an **abstraction guard**, not a proof of the Rust behaviour: it pins that
+the model never smuggles a mutation into the reapply path, and the header block in
+`replication_fullsync.qnt` records what the write-log abstraction cannot carry. FM-REPLICATION-001's
+"deliberate non-guarantees" bullet was corrected in the same commit to name the real mechanism
+instead of asserting idempotence. **This is a partial counterexample to R4's premise and is raised
+for re-ruling, not resolved here.**
+
+### R5's boundaries
+
+`truncateAboveClaim` and `inv_no_forked_tail_above_the_claim` are model-side only:
+`replica/connection.rs:300-316` accepts `PsyncArm::Continue` by shifting the replication id and
+streaming, discarding nothing. The spec row naming the model is **TR-REPLICATION-034**, marked
+*Not implemented* with `Pending | R5`. Two boundaries are recorded rather than closed:
+
+1. **The promotion path is outside R5.** `applyPromote` does not truncate;
+   `promotedOvershipDoesNotServeForkedTailTest` (M68) drives a node to Primary holding a dataset of
+   length 2 with `recv = applied = 1`, and that residue survives the ruling untouched. R5 covers the
+   partial-resync *accept*, not promotion. Noted in the model header.
+2. **"Truncate above the claim" has no in-place form for a keyspace.** A replica cannot undo applied
+   commands whose inverses it does not hold. The honest implementations are to refuse the partial arm
+   when the replica's received head is above its claim, or to pair the trailer offset with the data
+   the payload actually carries — recorded in TR-REPLICATION-034's Rulings cell.
+
+### Follow-ups this addendum adds
+
+4. **TR-REPLICATION-034 has no implementation.** Landing R5 in Rust needs one of the two options in
+   its Rulings cell plus a tagged forcing test in `frogdb-replication`; the row stays *Not
+   implemented* until then.
+5. **R4's premise needs re-ruling.** The overship range sits above the claimed offset, so the
+   sender-side skips do not cover it, and verbatim propagation makes re-execution non-idempotent for
+   counter/append commands. Either the skip must become replica-side and offset-addressed against
+   the *applied* head, or the checkpoint cut must not overship.
+6. **The promotion-path residue (boundary 1) is unruled.** Whether a promoted node should truncate
+   above its own `recv` is the same question R5 answered for the accept path, and it is open.
