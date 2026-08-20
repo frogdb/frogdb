@@ -1,6 +1,6 @@
 # 37: Promotion validity bound — offset-unknown candidates rank last, staleness bounded logically
 
-Status: ready-for-agent
+Status: done
 
 ## Origin
 
@@ -62,13 +62,35 @@ wall-clock gating of state transitions. FrogDB bounds staleness **logically**:
   path deliberately bypasses validity — the TR row must scope the bound to automatic
   promotion only.
 
-## Acceptance criteria
+## Resolution
 
-- [ ] FM-CLUSTER-056 amended; new FM/TR rows; `just lint-spec` green
-- [ ] Two-tier candidate set in code; lag bound live-mutable
-- [ ] Forcing tests fail pre-fix, pass post-fix
-- [ ] `just mutants-diff` on frogdb-cluster (locked, 0.80) triaged
+Landed together with [issue 42](42-departing-replica-promotion-eligibility-under-handoff.md),
+so the two rules' wording was reconciled once. Selection is now **filter → tier → bound →
+score** (TR-CLUSTER-021), with this issue owning the tier and bound halves.
 
-## Blocked by
+**Spec.** TR-CLUSTER-021 rewritten around the four stages. FM-CLUSTER-056 narrowed to the
+scored tier — it no longer claims an offset-unknown candidate is merely scored worst. New
+**FM-CLUSTER-105** ("an undetermined offset is a tier, not a score") carries the tiering,
+the availability floor, and the bound's abandon-don't-fall-through behavior. New
+**TR-CLUSTER-043** carries the bound itself, including why it is spelled in offset bytes
+rather than Redis's disconnection seconds and why the forced paths never consult it.
 
-None — can start immediately.
+**Code.** `CandidateProbe` replaces the offset-or-0 sentinel with `offset: Option<u64>`;
+`SelectionPolicy` carries the bound; `select_failover_target` tiers on
+"was an offset determined at all" and gates the scored tier on
+`cluster-promotion-max-lag-bytes`, read live off `ClusterRuntimeFlags` at selection time.
+The `max_offset` reference point folds over *every* determined offset, including a
+priority-0 replica's — that node's fresher data is real data loss even though it can never
+be the successor.
+
+A latent defect surfaced on the way: `compute_replica_score` used `saturating_sub` for the
+lag term but plain `*` and `+` around it, so a large offset spread panicked in debug. The
+whole formula is saturating now, with an assertion pinning it.
+
+**Forcing tests** (all in `frogdb-cluster-runtime`, the mutated crate):
+`an_offset_unknown_candidate_never_outranks_a_determined_one`,
+`blind_candidates_are_promotable_when_nobody_has_an_offset`,
+`the_blind_tier_orders_by_priority_then_node_id`,
+`the_lag_bound_disqualifies_a_candidate_from_automatic_promotion`,
+`an_emptied_scored_tier_abandons_rather_than_falling_through_to_the_blind_tier`,
+`a_zero_lag_bound_disqualifies_nobody`, `the_lag_bound_is_live`.
