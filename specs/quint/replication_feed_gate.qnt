@@ -434,6 +434,7 @@ module replication_feed_gate {
         sessions.get(1).cause == Some(ReceiverLagged),
         departure_record == Some(Lost),
         coverage.laggedDisconnect,
+        coverage.lostEnd,
       })
 
   // A granted replay puts `(0, 2]` on the wire once; the live stream redelivers those same
@@ -498,6 +499,13 @@ module replication_feed_gate {
         departure_record == Some(Graceful),
         coverage.endingDrainedPastBarrierFloor,
         not(defects.gracefulEndDroppedFrames),
+        // The carve-out is *reached* here — barrier 1 is still armed on floor 0 and the wire
+        // is at 1 — so this is the gated statement that the disclosed divergence is what the
+        // invariant tolerates. Sampled runs do not reach this state (the witness sits at 0
+        // traces), so without this line the carve-out could be deleted with no oracle
+        // noticing. If the FM-CLUSTER-097 ruling removes the carve-out, this expectation is
+        // the alarm the file header promises.
+        inv_no_ship_inside_barrier_window,
       })
 
   // Issue 22: the kick departs `Superseded` and writes nothing.
@@ -593,4 +601,226 @@ module replication_feed_gate {
         sessions.get(2).stage == Holding,
         coverage.bothSessionsHeld,
       })
+
+  // ===========================================================================
+  // Gap-closure tests (T9c mutation battery, lifecycle step 5). Each pins a fact the
+  // battery found unpinned: the row ids in the comments are the mutations these kill.
+  // See .scratch/formal-spec/2026-08-19-feed-gate-battery.md.
+  // ===========================================================================
+
+  // A clean close is not something a session may decide on its own (G09), and it may not
+  // decide it while frames it has not consumed are still in the channel (G10). Nor is a
+  // `Lost` disconnect available to a session that has not actually been overrun (G12).
+  run closeAndLagGuardsRefuseAHealthySessionTest: bool =
+    init
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      // Caught up and idle, but the source is open: there is nothing to call a clean end.
+      .expect(and {
+        sessions.get(1).cursor == live,
+        not(canSourceClosed(sessions.get(1), source_closed, live)),
+      })
+      .then(writeFrame)
+      .expect(and {
+        not(canSourceClosed(sessions.get(1), source_closed, live)),
+        not(canSourceLagged(sessions.get(1), live)),
+      })
+      .then(closeSource)
+      .expect(not(canSourceClosed(sessions.get(1), source_closed, live)))
+      .then(receiveFrame(1))
+      .then(consultGate(1))
+      .then(confirmSentAs(1, false))
+      .expect(and {
+        sessions.get(1).cursor == live,
+        canSourceClosed(sessions.get(1), source_closed, live),
+      })
+
+  // Once the receiver is further behind than the channel is deep the frames are gone: the
+  // intake is refused (G05) and the lagged disconnect is the only honest transition.
+  run channelOverrunRefusesIntakeTest: bool =
+    init
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(writeFrame)
+      .expect(and {
+        live - sessions.get(1).cursor > CHANNEL_CAP,
+        not(canReceiveFrame(sessions.get(1), live)),
+        canSourceLagged(sessions.get(1), live),
+      })
+
+  // A session with a frame on the wire is not classified out from under it: the lagged
+  // disconnect waits for the send to come back (G11), which is what keeps the in-flight
+  // frame from being replaced and lost. And a session that has sent nothing cannot report
+  // a failed send (G14).
+  run midSendSessionIsNotClassifiedOutFromUnderItsFrameTest: bool =
+    init
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      .then(handoffReplayedAs(2, 0, Some(8)))
+      .then(writeFrame)
+      .then(receiveFrame(1))
+      .then(consultGate(1))
+      .expect(sessions.get(1).stage == Sending)
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(writeFrame)
+      .expect(and {
+        live - sessions.get(1).cursor > CHANNEL_CAP,
+        not(canSourceLagged(sessions.get(1), live)),
+        sessions.get(2).stage == Receiving,
+        not(canSendFailed(sessions.get(2))),
+      })
+
+  // Supersession is newest-wins and only newest (G19), a session that is gone displaces
+  // nobody (G16), and a session ACKs only while it is streaming — not during the handoff
+  // replay (G22) and not after it has ended (G23).
+  run supersessionAndAckGuardsTest: bool =
+    init
+      .expect(not(canAck(sessions.get(1))))
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      .then(handoffReplayedAs(2, 0, Some(7)))
+      .expect(and {
+        canAck(sessions.get(1)),
+        not(canSupersede(sessions.get(1), sessions.get(2))),
+        canSupersede(sessions.get(2), sessions.get(1)),
+      })
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(sourceLagged(2))
+      .expect(and {
+        sessions.get(2).stage == Ended,
+        not(canSupersede(sessions.get(2), sessions.get(1))),
+        not(canAck(sessions.get(2))),
+      })
+
+  // FM-REPLICATION-062's other half: a session entering streaming clears the node's
+  // last-departure cell (M13), so a predecessor's `Lost` record does not fence the
+  // successor's primary.
+  run enteringStreamingClearsTheFenceCellTest: bool =
+    init
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(sourceLagged(1))
+      .expect(departure_record == Some(Lost))
+      .then(handoffReplayedAs(2, 0, Some(8)))
+      .expect(departure_record == None)
+
+  // The graceful path writes its record too (M26) — the case with nothing buffered, where
+  // the classification and the end are the same step.
+  run gracefulCloseRecordsItsDepartureTest: bool =
+    init
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      .then(closeSource)
+      .then(sourceClosed(1))
+      .expect(and {
+        sessions.get(1).stage == Ended,
+        sessions.get(1).ending == Some(Graceful),
+        sessions.get(1).cause == Some(ClosedByPeer),
+        departure_record == Some(Graceful),
+        coverage.gracefulEnd,
+        not(defects.gracefulEndDroppedFrames),
+      })
+
+  // The floor a barrier records is the live offset at arm time — not zero, not the end of
+  // the backlog (M01, M02) — an armed barrier is not re-armed onto a higher floor (M03),
+  // and the overlapping-hold coverage means what it says (M08).
+  run barrierFloorIsTheLiveOffsetAtArmTimeTest: bool =
+    init
+      .then(writeFrame)
+      .then(armBarrier(1))
+      .expect(and {
+        armed.get(1) == Some(1),
+        not(coverage.overlappingHold),
+      })
+      .then(writeFrame)
+      .then(armBarrier(2))
+      .expect(and {
+        armed.get(1) == Some(1),
+        armed.get(2) == Some(2),
+        coverage.overlappingHold,
+      })
+      // `.fail()` is the terminal step of the trace (see the quint-lang tests guideline):
+      // re-arming an already-armed barrier is refused.
+      .then(armBarrier(1).fail())
+
+  // Coverage that would be spuriously true if the ghosts were widened: a hold that held
+  // nothing back is not `heldFrame` (M21), one session holding is not the node-wide case
+  // (M22), and a wakeup that finds an empty buffer drained nothing (M24).
+  run emptyBufferHoldLatchesNoCoverageTest: bool =
+    init
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(handoffReplayedAs(1, 2, Some(7)))
+      .then(armBarrier(1))
+      .then(receiveFrame(1))
+      .expect(and { coverage.handoffDeduped, sessions.get(1).held == List() })
+      .then(consultGate(1))
+      .expect(and {
+        sessions.get(1).stage == Holding,
+        not(coverage.heldFrame),
+        not(coverage.bothSessionsHeld),
+      })
+      .then(releaseBarrier(1))
+      .then(observeRelease(1))
+      .expect(not(coverage.drainedOnRelease))
+
+  // The disclosed carve-out's boundary is strict (M34): a frame that was already written
+  // when the barrier armed sits *at* the floor, and shipping it on the way out is ordinary
+  // draining, not a drain past the window.
+  run drainAtTheFloorIsNotADivergenceTest: bool =
+    init
+      .then(handoffReplayedAs(1, 0, Some(7)))
+      .then(writeFrame)
+      .then(armBarrier(1))
+      .expect(armed.get(1) == Some(1))
+      .then(receiveFrame(1))
+      .then(consultGate(1))
+      .expect(sessions.get(1).stage == Holding)
+      .then(closeSource)
+      .then(sourceClosed(1))
+      .expect(sessions.get(1).in_flight == Some(1))
+      .then(confirmSentAs(1, false))
+      .expect(and {
+        sessions.get(1).stage == Ended,
+        sessions.get(1).sent == List(1),
+        not(coverage.endingDrainedPastBarrierFloor),
+      })
+
+  // TR-REPLICATION-033: the acked offset is a high-water mark, not the last number the
+  // replica said (E33). A late or reordered ACK below the watermark leaves it alone — and
+  // that is an ordinary ACK, neither ignored nor clamped.
+  run ackWatermarkNeverRetreatsTest: bool =
+    init
+      .then(writeFrame)
+      .then(writeFrame)
+      .then(handoffReplayedAs(1, 2, Some(7)))
+      .then(replicaAck(1))
+      .expect(sessions.get(1).acked == 2)
+      .then(replicaAckAs(1, 1))
+      .expect(and {
+        sessions.get(1).acked == 2,
+        ignored_acks == 0,
+        not(defects.clampedAck),
+      })
+
+  // A closed source produces no more frames (M09).
+  run closedSourceAcceptsNoMoreWritesTest: bool =
+    init
+      .then(writeFrame)
+      .then(closeSource)
+      .expect(live == 1)
+      // `.fail()` is the terminal step: the backlog does not grow after the close.
+      .then(writeFrame.fail())
+
+  // The granted replay cannot claim offsets the primary never wrote (M12). The sampled
+  // form (`handoffReplayed`) picks `r` from `0.to(live)` and so cannot reach past the head
+  // on its own — this is the gated statement that the *guard*, not the sampler, is what
+  // forbids it.
+  run handoffCannotReplayPastTheLiveHeadTest: bool =
+    init
+      .expect(live == 0)
+      // `.fail()` is the terminal step: the replay is refused, not clamped.
+      .then(handoffReplayedAs(1, 1, Some(7)).fail())
 }
