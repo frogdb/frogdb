@@ -187,3 +187,19 @@ step into Primary (promotion included). The issue-24 pairing row is amended to s
 gen-domination on promotion as a guarantee (promotion mints a strictly greater
 generation), the invariant's `prev.primary` antecedent is dropped, and a forcing test
 pins the promotion step. Battery row I09 flips to caught-by-construction.
+
+### R7 — R4 residue: replica-side skip at-or-below the applied head
+
+R4's harmless-by-construction premise was half false: the offset-addressed skip is
+sender-side only, keyed on the replica's *claimed* offset (`ring_buffer.rs` backlog
+extraction, `feed_sequencer.rs` resume buffer). The checkpoint cut captures
+`snapshot_offset` before the cut, so the payload deliberately overships *above* the
+claim — a range no sender-side skip covers — and the replica's `consume_frames` applies
+verbatim with no dedup; propagation is non-idempotent (`INCR`/`LPUSH`/`APPEND`).
+
+Ruling (2026-08-20): **replica-side skip** — the replica ignores frames at or below its
+applied head. Receiver-authoritative dedup, Raft-style; covers this hole and any future
+sender-side accounting bug. New failure-mode row + forcing test in `frogdb-replication`;
+FM-REPLICATION-001's corrected non-guarantee bullet (landed `a2334b00`) upgrades to a
+guarantee once the row lands; model's `inv_reapply_is_a_noop` graduates from abstraction
+guard to modeled behavior. Tracked as replication-correctness issue 34.
