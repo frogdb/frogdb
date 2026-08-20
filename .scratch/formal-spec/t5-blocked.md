@@ -122,3 +122,34 @@ quint run specs/quint/cluster_migration_failover.qnt \
   --invariants inv_source_keeps_its_copy_until_promotion_attested \
   --out-itf=/tmp/cex.itf.json
 ```
+
+## Addendum 2 — R1 built, steering **not** re-landed (2026-08-20)
+
+R1 ruled both sub-roots and both are built (`d1e15ab2`, tests in `cc4a917b`): demotion
+repoints dependants at the demoted node's new upstream in every Primary -> Replica writer,
+and `canRetargetSlotResidue` demands physical holding. Two companion rules the fix's own
+counterexamples forced landed with it — the staged-flip adoption now obeys TR-CLUSTER-004's
+"a Replica's parent is a live Primary" (without it a demotion parks the node in a headless
+shard: a parent cycle pre-repoint, a parentless Replica post-repoint), and
+`residueFollowsDemotion` moves an entry's `source` with the copy when the demoted node no
+longer holds it.
+
+**The steering was deliberately left parked.** `9c5d6f17` stands; the re-land was measured
+and rejected, not skipped:
+
+- With R1 applied and the steering reverted back in, the four-invariant steered walk at
+  500x40 is **9/16 seed x invariant cells red** (was 13/16 before R1) across seeds
+  2/777/12345/20260819. `inv_slot_copy_survives_until_owned_and_served` — the M37
+  escalation, tracking-loss into modelled copy-loss — is clean on all four seeds; the other
+  three still violate. Per-seed table in issue 41.
+- Landing the steering in that state makes `just quint-run` (random seed, whole directory)
+  stochastically red: measured 1-2 red in 6 runs at the PR-lane budget (200x20), against
+  8/8 and 10/10 green without it. That is a flaky gate, not a finding.
+
+The three residual roots are attributed with traces in issue 41 and are **all pre-existing
+and outside R1's ruled items**: `retargetResidueOnDemotion`'s target arm naming a successor
+that serves before attesting; its source arm re-homing onto a derivative holder (the same
+defect R1 fixed for `canRetargetSlotResidue`, in the failover path); and a demoted-but-still-
+holding source losing `canFailPromotion` while the tightened retarget guard correctly
+refuses. Re-land the steering after those are ruled and fixed — that is now issue 41's only
+open acceptance box.

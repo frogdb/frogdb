@@ -4,6 +4,10 @@
 > `identityOrderOk` becomes kind-sensitive (false for `kind = Demotion` against `None`),
 > arm 4b goes live in the model with a forcing run test, the doc stays as written, and the
 > 2026-08-19 "delete arm 4b" ruling is withdrawn.
+>
+> **BUILT 2026-08-20 in `91a3c6e0`** — see [Resolution](#resolution--option-1-built-2026-08-20-91a3c6e0)
+> at the end of this file. One residual gap remains (the absent cell is still unreachable in
+> the model's state space), recorded there.
 
 Date: 2026-08-19. Raised by the W1 task that applies the
 [2026-08-19 campaign rulings](2026-08-19-quint-completeness-campaign.md) to the cluster
@@ -100,3 +104,41 @@ Pick one:
 
 Option 1 is the smaller change and the one the model gap points at; it is *not* what the
 2026-08-19 ledger ruled, so it needs a ruling before anyone builds it.
+
+## Resolution — option 1 built, 2026-08-20 (`91a3c6e0`)
+
+R2 was ruled option 1 and is implemented. **This item is closed**; the residual state-space
+gap below is a separate, smaller question.
+
+- `identityOrderOk` takes the `TransitionKind` and its absent-operand arm is
+  `| None => kind != Demotion`. The kind is threaded through every caller (`bootMintOf`,
+  `refusalClassOf`, the `identityRegress` ghost); `bootMintOf` is behaviourally unchanged
+  because its call already sits behind `kind == Boot`.
+- `refusalClassOf` therefore returns `Ordering` for a Demotion report against an absent
+  cell, so `isRefusalTerminal`'s arm 4b is live in the classifier rather than dead by
+  construction. The design doc was **not** edited, and the 2026-08-19 "delete arm 4b"
+  ruling is withdrawn — the comment at `isRefusalTerminal` now cites R2 and this file
+  instead of the withdrawn ruling.
+- Forcing test: `demotionAgainstAbsentCellIsTerminalTest` asserts both halves (class is
+  `Ordering`, and it is terminal) plus two controls — a `Boot` report against the same
+  absent cell is `Whole` (the kind scope), and an `Ordering` refusal against a *present*
+  cell stays non-terminal (4b is the absent-cell case alone).
+- Mutation battery rows **R2-1** (revert the arm to `| None => true`) and **R2-2** (invert
+  the kind scope to `| None => kind != Boot`) are both CAUGHT-T by that test; see the
+  2026-08-20 addendum in
+  [`issue31-quint-q4-report.md`](../cluster-correctness/quint-rework-reports/issue31-quint-q4-report.md).
+
+### Residual gap: the absent cell is not a reachable state in this model
+
+Nothing in the migration model ever clears `stored_identity` — `init` mints
+`Some({inc: 1, seq: 1, ...})` for every node, `meetNode` sets `booted: false` but keeps the
+cell, `restarted` keeps it, and `resetCluster` explicitly leaves `booted`/`stored_identity`
+alone. So the forcing test classifies over a **constructed view** (`nodes.set(3, {...ns,
+stored_identity: None})`) rather than a walked-to state, and no invariant can observe arm 4b
+along a trace.
+
+That is a gap in the *state space*, not in the rule: the doc's absent cell is the
+lost-replicated-identity case (a node whose cell was never written, or was lost with the
+store). Modelling an arm that can produce it — a forget-the-replicated-identity step, or a
+`meetNode` variant that admits a node with no cell — is a separate ruling, and it is what
+would let V19-M1's wedge exit be checked end-to-end instead of asserted pointwise.

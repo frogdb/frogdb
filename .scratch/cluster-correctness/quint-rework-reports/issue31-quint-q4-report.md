@@ -375,3 +375,62 @@ backups and `git diff --stat -- specs/quint/cluster_migration_failover*` is empt
 
 Final baseline, unmutated: `quint test` → **77 passing, 0 failing**; the 40-invariant walk at
 500×20 → `[ok] No violation found`.
+
+## Addendum — 2026-08-20 rows for the R1/R2 rulings
+
+R1 (issue 41: demotion repoints dependants; `canRetargetSlotResidue` demands physical
+holding) landed in `d1e15ab2` with two companion rules the counterexamples forced, and R2
+(kind-scoped absent-operand ordering arm) landed in `91a3c6e0`. Eleven rows below: nine new,
+plus the two M37 rows re-run against the fixed claim semantics as issue 41 asked. Row ids are
+R1-*/R2-* because these mechanisms did not exist in the Q3 numbering.
+
+Detectors per row: `quint test` (all run tests) and the 40-invariant walk at 500x20 on seeds
+2 and 777, escalated to 2000x40 seed 3 whenever both were silent.
+
+| Row | Mutation (single exact replacement) | Verdict | Evidence |
+|---|---|---|---|
+| R1-1a | drop the repoint from `setRole`'s demotion arm (`val base = nodes`) | **CAUGHT-T** | `retargetRefusedOntoNonHoldingPrimaryTest`, `residueFollowsDemotedSourceTest` fail; walk silent to 2000x40 |
+| R1-1b | drop the repoint from the `reportRunIdentity` Demotion arm | **CAUGHT-T** | `adoptionRepointsDependantsTest` fails; walk silent to 2000x40 |
+| R1-1c | drop the repoint from `attachTargetReplica` | **CAUGHT-T** | `attachTargetReplicaRepointsDependantsTest` fails; walk silent to 2000x40 |
+| R1-2 | weaken `canRetargetSlotResidue` back to `p != r.source` (closure-edge holder allowed) | **CAUGHT-T** | `retargetRefusedOntoNonHoldingPrimaryTest` fails; walk silent to 2000x40 |
+| R1-3 | delete the `isLivePrimary(nodes, rec.upstream)` conjunct from the staged-flip adoption guard | **CAUGHT-T** | `demotionRefusedOntoNonPrimaryUpstreamTest` fails; walk silent to 2000x40 |
+| R1-4a | neuter `residueFollowsDemotion` (`if (true) res` — the claim never follows) | **CAUGHT-T** | `residueFollowsDemotedSourceTest` fails; walk silent to 2000x40 |
+| R1-4b | drop both post-state conjuncts, moving the claim unconditionally (`if (r.source == n)`) | **CAUGHT-T** | `demotedSourceResidueRetargetedTest`, `retargetRefusedOntoNonHoldingPrimaryTest` fail; walk silent to 2000x40 |
+| R2-1 | revert the absent-operand arm to `\| None => true` | **CAUGHT-T** | `demotionAgainstAbsentCellIsTerminalTest` fails; walk silent to 2000x40 |
+| R2-2 | invert the kind scope (`\| None => kind != Boot`) | **CAUGHT-T** | same test fails on its `Boot` control; walk silent to 2000x40 |
+| M37a | hoist the discard from `completeAdoption` into `stageFlip` (re-run) | **CAUGHT-T** (unchanged) | `adoptionDiscardsUnclaimedCopyTest` fails; walk silent — R1's claim-follows rule does not mask it |
+| M37b | unexempted discard at adoption (`keys: Set()`) (re-run) | **CAUGHT-P+T** (unchanged) | invariant violated at 500x20 on both seeds; `assignSlotDuringStagedFlipKeepsCopyTest` fails |
+
+**Two rows initially MISSED, and what was added.** R1-1b and R1-1c survived the first pass
+with *no* failing test and a silent walk to 2000x40: the chained-replica topology those
+deletions re-open is precisely what the flat walk does not sample, which is issue 41's own
+finding, and no existing test looked at the dependants of a node demoted through the adoption
+or attach path. `adoptionRepointsDependantsTest` and `attachTargetReplicaRepointsDependantsTest`
+were added (`cc4a917b`) and both rows now die deterministically. No invariant was weakened.
+
+**Walk blindness is the theme, not an accident.** Eight of the nine new rows are CAUGHT-T with
+a silent walk. The states these mutations re-open (chained/cyclic replica topologies, a claim
+resting on a closure edge) are the ones issue 41 showed the *unsteered* walk does not reach —
+0/10 seeds at 2000x40 before steering, 8/8 under it. Until the steering question is settled
+(see the issue-41 addendum in `t5-blocked.md`), deterministic tests are the honest detector
+for this family, which is why every row above has one.
+
+**No counterexample-protocol trigger from the battery itself.** The unmutated model violated
+no detector at any budget run here.
+
+### Repro and hygiene
+
+Same commands as the previous addendum, scoped to `cluster_migration_failover.qnt`. Every
+mutation was applied and reverted by an exact string replacement from a scratch backup;
+`shasum` of the three migration `.qnt` files matches the backups after each row, and
+`git status --short -- specs/quint/` is empty.
+
+### Counts after `cc4a917b`
+
+| | 2026-08-20 (`2eb66e35`) | 2026-08-20 (`cc4a917b`) |
+|---|---|---|
+| `val inv_*` (auto-discovered) | 40 | 40 |
+| run tests, migration model | 77 | **84** |
+
+Baseline, unmutated: `quint test` -> 84 passing, 0 failing; `just quint-check` green; the
+40-invariant walk at 500x20 clean on seeds 2 and 777.
