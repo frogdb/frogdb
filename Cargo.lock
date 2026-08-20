@@ -1966,6 +1966,7 @@ dependencies = [
  "frogdb-protocol",
  "frogdb-types",
  "hex",
+ "itf",
  "parking_lot",
  "proptest",
  "rand 0.10.0",

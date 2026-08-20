@@ -36,3 +36,7 @@ proptest.workspace = true
 # Dev-only: the models drive production decision functions, they are not part
 # of the shipped crate.
 stateright.workspace = true
+# Trace-differential conformance against the feed-gate Quint model
+# (tests/quint_conformance.rs): decodes the ITF traces the `quint` CLI emits.
+# Same version the cluster crate pins for its own conformance harness.
+itf = "0.4.0"
