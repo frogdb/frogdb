@@ -90,6 +90,16 @@ pub struct AppliedOffset {
     /// Woken when [`Self::diverged`] is latched, so the connection's streaming
     /// loop can park on it as a `select!` branch instead of polling.
     divergence: Arc<tokio::sync::Notify>,
+    /// How many frames this node has ignored because its applied head already
+    /// covered them (FM-REPLICATION-065). Node-wide and cumulative: the
+    /// per-stint tally lives on `ConsumeStats`, and this is what makes the same
+    /// evidence readable while a stint is still running.
+    ///
+    /// Deliberately **not** cleared by [`Self::reset_pair`]: a full resync
+    /// replaces the history, not the record that this node was re-sent data it
+    /// already held. Every increment is a sender-side accounting bug, so the
+    /// number is only ever interesting as a total.
+    skipped: Arc<AtomicU64>,
 }
 
 impl AppliedOffset {
@@ -107,6 +117,7 @@ impl AppliedOffset {
             epoch: Arc::new(AtomicU64::new(0)),
             diverged: Arc::new(AtomicU64::new(NO_DIVERGENCE)),
             divergence: Arc::new(tokio::sync::Notify::new()),
+            skipped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -212,6 +223,16 @@ impl AppliedOffset {
     /// is in flight: every apply is awaited before the next frame is claimed.
     pub fn landed(&self) -> u64 {
         self.landed.load(Ordering::Acquire)
+    }
+
+    /// How many frames this node has ignored as already covered by its applied
+    /// head, since the process started (FM-REPLICATION-065).
+    ///
+    /// Cumulative across resyncs, stints and role changes: the count is
+    /// evidence about the *sender*, and a resync does not undo it. Non-zero
+    /// means some primary re-shipped a range this node had already applied.
+    pub fn skipped(&self) -> u64 {
+        self.skipped.load(Ordering::Acquire)
     }
 
     /// Open a replica applying stint and hand out the token the frame consumer
@@ -460,6 +481,37 @@ impl ReplicaApplyStint {
     /// The history epoch the node is on right now.
     pub fn epoch(&self) -> u64 {
         self.offset.epoch()
+    }
+
+    /// Whether the applied head already covers a frame ending at `end_offset`.
+    ///
+    /// The receiver half of FM-REPLICATION-065's dedup. A frame spans
+    /// `(end_offset - stream_advance(), end_offset]` (FM-REPLICATION-031), so
+    /// the head covers *all* of it exactly when `end_offset <= current()` —
+    /// inclusive, because a frame ending precisely at the head is the common
+    /// re-delivery, and strictly nothing of it is new. A frame ending above the
+    /// head is not covered even when its span starts below one; the honest
+    /// answer there is to apply it, and the overship that produces that shape is
+    /// TR-REPLICATION-034's to remove.
+    ///
+    /// Read outside the gate on purpose. The only writers of the applied head
+    /// during a replica stint are this stint's own [`Self::claim`] (single
+    /// consumer, no self-race) and [`AppliedOffset::reset_pair`], which bumps
+    /// the epoch under the gate — so a frame that races a resync is refused
+    /// [`Claim::Stale`] whichever side of the reset this read lands on.
+    pub fn covers(&self, end_offset: u64) -> bool {
+        end_offset <= self.current()
+    }
+
+    /// Record one frame ignored as already covered, and return the node-wide
+    /// running total.
+    ///
+    /// Returns the total so the caller can log it without reading the counter
+    /// back — and so the increment happens outside the `tracing` macro, whose
+    /// fields are not evaluated when the event is disabled. A counter that moved
+    /// only at a given log level would be worse than no counter.
+    pub fn record_skip(&self) -> u64 {
+        self.offset.skipped.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 

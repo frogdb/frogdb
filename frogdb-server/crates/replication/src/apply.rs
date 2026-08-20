@@ -288,6 +288,12 @@ pub struct ConsumeStats {
     /// claim because the history they arrived on has ended — plus the open
     /// group dropped with them.
     pub discarded: u64,
+    /// Frames ignored because this node's applied head already covered their
+    /// whole byte span (FM-REPLICATION-065). Always evidence of a sender-side
+    /// accounting bug — a healthy primary never re-ships a range the replica
+    /// claimed — which is why it is a disposition of its own rather than part of
+    /// `discarded`.
+    pub skipped: u64,
 }
 
 /// Consume replication frames from the primary and apply them, honoring the
@@ -297,6 +303,9 @@ pub struct ConsumeStats {
 /// 1. stops if the node was promoted to primary;
 /// 1. drops any frame stamped with a history this node has replaced (see
 ///    [`StreamedFrame`]), along with the group it belonged to;
+/// 1. ignores any frame whose whole byte span the applied head already covers
+///    ([`ReplicaApplyStint::covers`], FM-REPLICATION-065) — counted, logged,
+///    and neither parsed nor claimed;
 /// 2. parses each frame's RESP payload;
 /// 3. handles control commands inline (`REPLCONF` skipped; `FROGDB.FINALIZE`
 ///    updates the replica's `active_version` — never shard-routed);
@@ -371,6 +380,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
     let mut frames_processed: u64 = 0;
     let mut errors: u64 = 0;
     let mut discarded: u64 = 0;
+    let mut skipped: u64 = 0;
     let mut pending: Option<PendingTxn> = None;
 
     while let Some(StreamedFrame { epoch, frame }) = frame_rx.recv().await {
@@ -404,6 +414,44 @@ pub async fn consume_frames<A: ReplicaApplier>(
         if pending.as_ref().is_some_and(|txn| txn.epoch != epoch) {
             discarded += 1;
             pending = None;
+        }
+
+        // The frame is current, and this node has already applied every byte of
+        // it: the primary re-shipped a range the replica's head covers. Ignore
+        // it outright — before the parse, before any claim. Re-applying would
+        // re-execute a verbatim-propagated command (`INCR`, `LPUSH`, `APPEND`)
+        // against a keyspace that already holds its effect, and claiming its
+        // bytes would push this node's offset past the primary's.
+        //
+        // Receiver-authoritative: the address is the head this node actually
+        // holds, not the offset it once told a primary about, so the rule holds
+        // against any sender-side accounting bug rather than the ones the
+        // sender-side filters (`primary/ring_buffer.rs`, `feed_sequencer.rs`)
+        // already know to look for.
+        //
+        // `pending` is deliberately untouched: the head only moves at `EXEC`, by
+        // the whole group's byte total, so it never falls strictly inside a
+        // group's span — a re-delivered group is covered frame by frame, and a
+        // frame in a group being applied is never covered.
+        //
+        // The rule is spec'd as FM-REPLICATION-065.
+        if stint.covers(frame.sequence) {
+            skipped += 1;
+            // Counted outside the `warn!` — a `tracing` macro does not evaluate
+            // its fields when the event is disabled, which would make the
+            // counter depend on log level.
+            let skipped_total = stint.record_skip();
+            tracing::warn!(
+                shard = frame.shard_id,
+                sequence = frame.sequence,
+                applied = stint.current(),
+                epoch = epoch,
+                skipped_total,
+                "Primary re-sent a frame this replica has already applied; \
+                 ignoring it. The replica's offset is unchanged — this is a \
+                 sender-side resume/accounting bug, not a replica one."
+            );
+            continue;
         }
 
         /// Claim `$bytes` for the frame in hand and act on the verdict: apply it,
@@ -645,6 +693,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
         frames_processed = frames_processed,
         errors = errors,
         discarded = discarded,
+        skipped = skipped,
         oversized_groups_abandoned = txn_bound.abandoned(),
         "Replica frame consumer shutting down"
     );
@@ -653,6 +702,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
         frames_processed,
         errors,
         discarded,
+        skipped,
     }
 }
 
@@ -739,6 +789,46 @@ mod tests {
         ReplicationFrame::new_on_shard(seq, shard, serialize_command_to_resp(name, &args))
     }
 
+    /// A stream position, so a test's frames carry the sequences the primary
+    /// would have stamped on them.
+    ///
+    /// `frame_on` takes an ordinal because that is what reads well at a call
+    /// site, but a frame's `sequence` is the stream offset *after* its payload
+    /// (FM-REPLICATION-031), and the replica ignores anything its applied head
+    /// already covers (FM-REPLICATION-065). Ordinals would therefore fall under
+    /// the head as soon as the first frame applied, and every frame after it
+    /// would be skipped instead of applied. Stamping cumulatively puts the two
+    /// counters in the one coordinate system the rule is stated in — and, since
+    /// the head only ever advances by the frames that actually applied, keeps
+    /// every frame of a test strictly above it.
+    #[derive(Default)]
+    struct Wire {
+        offset: u64,
+    }
+
+    impl Wire {
+        /// A stream already at `offset` — the head a resync install or a rewind
+        /// left behind.
+        fn at(offset: u64) -> Self {
+            Self { offset }
+        }
+
+        fn stamp(&mut self, mut frame: ReplicationFrame) -> ReplicationFrame {
+            self.offset += frame.stream_advance();
+            frame.sequence = self.offset;
+            frame
+        }
+
+        fn stamp_all(&mut self, frames: Vec<ReplicationFrame>) -> Vec<ReplicationFrame> {
+            frames.into_iter().map(|f| self.stamp(f)).collect()
+        }
+    }
+
+    /// [`Wire::stamp_all`] over a run that starts at offset 0.
+    fn stamped(frames: Vec<ReplicationFrame>) -> Vec<ReplicationFrame> {
+        Wire::default().stamp_all(frames)
+    }
+
     // The consume loop takes the applier by value, so the test harness shares
     // the recording `MockApplier` through an `Arc` and inspects it afterwards.
     #[derive(Clone, Default)]
@@ -792,7 +882,7 @@ mod tests {
         bound: Arc<ReplicaTxnBound>,
     ) -> (u64, AppliedOffset, ConsumeStats) {
         let (tx, rx) = mpsc::channel(1024);
-        for f in frames {
+        for f in stamped(frames) {
             tx.send(live(f)).await.unwrap();
         }
         drop(tx);
@@ -928,7 +1018,10 @@ mod tests {
             .await
         });
 
-        tx.send(live(frame_on(0, 1, "DEL", &["k"]))).await.unwrap();
+        let mut wire = Wire::default();
+        tx.send(live(wire.stamp(frame_on(0, 1, "DEL", &["k"]))))
+            .await
+            .unwrap();
         while !applied.has_diverged() {
             tokio::task::yield_now().await;
         }
@@ -937,7 +1030,10 @@ mod tests {
         // consumer is untouched throughout.
         assert!(offsets.reset_to(0), "the rewind must be accepted");
         assert!(offsets.reset_to(5_000), "the install must be accepted");
-        let fresh = frame_on(0, 1, "SET", &["new", "1"]);
+        // The install moved the head to 5_000, so the new history's first frame
+        // is stamped from there — a frame still carrying the old history's
+        // position would be one the head already covers (FM-REPLICATION-065).
+        let fresh = Wire::at(5_000).stamp(frame_on(0, 1, "SET", &["new", "1"]));
         let received = offsets.frame_advance(&fresh);
         tx.send(StreamedFrame::new(applied.epoch(), fresh))
             .await
@@ -960,7 +1056,8 @@ mod tests {
         // the socket (received offset already advanced) but never applied must
         // NOT be counted, or a promotion freezes its window over a hole.
         let (tx, rx) = mpsc::channel(64);
-        let applied_frame = frame_on(0, 1, "SET", &["a", "1"]);
+        let mut wire = Wire::default();
+        let applied_frame = wire.stamp(frame_on(0, 1, "SET", &["a", "1"]));
         let applied_bytes = applied_frame.stream_advance();
 
         let flag = Arc::new(AtomicBool::new(true));
@@ -990,7 +1087,7 @@ mod tests {
         // stops with that frame consumed but never applied — exactly the state a
         // real promotion leaves the 10k-deep frame channel in.
         flag.store(false, Ordering::Release);
-        tx.send(live(frame_on(0, 2, "SET", &["b", "2"])))
+        tx.send(live(wire.stamp(frame_on(0, 2, "SET", &["b", "2"]))))
             .await
             .unwrap();
         drop(tx);
@@ -1063,6 +1160,7 @@ mod tests {
                 frames_processed: 2,
                 errors: 3,
                 discarded: 0,
+                skipped: 0,
             }
         );
         assert_eq!(
@@ -1141,6 +1239,7 @@ mod tests {
                 frames_processed: 2,
                 errors: 1,
                 discarded: 0,
+                skipped: 0,
             },
             "two control commands applied; the abandoned group is the one error"
         );
@@ -1163,7 +1262,7 @@ mod tests {
         let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
 
         let (tx, rx) = mpsc::channel(16);
-        for f in frames {
+        for f in stamped(frames) {
             tx.send(live(f)).await.unwrap();
         }
         drop(tx);
@@ -1192,6 +1291,7 @@ mod tests {
                 frames_processed: 2,
                 errors: 0,
                 discarded: 0,
+                skipped: 0,
             },
             "an absorbed FINALIZE is a frame processed, not one stepped over"
         );
@@ -1268,6 +1368,7 @@ mod tests {
                 frames_processed: 0,
                 errors: 1,
                 discarded: 2,
+                skipped: 0,
             },
             "the breach is one error, nothing applies, and every frame after it \
              is dropped with the history the breach ended"
@@ -1401,14 +1502,21 @@ mod tests {
         let (tx, rx) = mpsc::channel(64);
 
         // Decoded under the old history, still queued when the link drops.
-        tx.send(live(frame_on(0, 1, "SET", &["old", "1"])))
-            .await
-            .unwrap();
+        tx.send(live(Wire::default().stamp(frame_on(
+            0,
+            1,
+            "SET",
+            &["old", "1"],
+        ))))
+        .await
+        .unwrap();
 
         // The retry is granted a full resync: the installed dataset moves both
         // heads and starts a new history.
         assert!(offsets.reset_to(5_000), "the reset must be accepted");
-        let fresh = frame_on(0, 1, "DEL", &["new"]);
+        // Stamped from the position the install left: the new history's stream
+        // continues above 5_000, not from 1.
+        let fresh = Wire::at(5_000).stamp(frame_on(0, 1, "DEL", &["new"]));
         // As the decode loop does: the received head moves when the frame is
         // read off the socket, the applied head only when it is claimed.
         let received = offsets.frame_advance(&fresh);
@@ -1429,6 +1537,7 @@ mod tests {
                 frames_processed: 1,
                 errors: 0,
                 discarded: 1,
+                skipped: 0,
             },
             "the frame of the replaced history is dropped, not stepped over or applied"
         );
@@ -1454,10 +1563,10 @@ mod tests {
         let (stint, offsets, applied) = resyncable();
         let (tx, rx) = mpsc::channel(64);
 
-        for frame in [
+        for frame in stamped(vec![
             frame_on(3, 1, "MULTI", &[]),
             frame_on(3, 2, "SET", &["old", "1"]),
-        ] {
+        ]) {
             tx.send(live(frame)).await.unwrap();
         }
 
@@ -1468,7 +1577,10 @@ mod tests {
         // replica never saw opened. Neither may touch the group the resync
         // voided — the bare command is a group of one on its own tagged shard,
         // and the `EXEC` closes nothing.
-        let fresh = [frame_on(1, 1, "DEL", &["new"]), frame_on(1, 2, "EXEC", &[])];
+        let fresh = Wire::at(5_000).stamp_all(vec![
+            frame_on(1, 1, "DEL", &["new"]),
+            frame_on(1, 2, "EXEC", &[]),
+        ]);
         let fresh_bytes: u64 = fresh.iter().map(|f| f.stream_advance()).sum();
         for frame in fresh {
             tx.send(StreamedFrame::new(epoch, frame)).await.unwrap();
@@ -1487,6 +1599,7 @@ mod tests {
                 frames_processed: 1,
                 errors: 1,
                 discarded: 2,
+                skipped: 0,
             },
             "both frames of the replaced history are dropped, and the EXEC that \
              closes nothing is stepped over"
@@ -1526,7 +1639,9 @@ mod tests {
 
         // The old history's last frame opens a group; the link drops before
         // anything closes it.
-        tx.send(live(frame_on(3, 1, "MULTI", &[]))).await.unwrap();
+        tx.send(live(Wire::default().stamp(frame_on(3, 1, "MULTI", &[]))))
+            .await
+            .unwrap();
         // Restored capacity means the frame was received, and the arm that opens
         // a group does not await, so by the time this task is polled again the
         // group is open.
@@ -1536,7 +1651,7 @@ mod tests {
 
         // The retry is answered +FULLRESYNC: a new dataset, a new history.
         assert!(offsets.reset_to(5_000), "the install must be accepted");
-        let fresh = frame_on(1, 1, "SET", &["new", "1"]);
+        let fresh = Wire::at(5_000).stamp(frame_on(1, 1, "SET", &["new", "1"]));
         let fresh_bytes = fresh.stream_advance();
         tx.send(StreamedFrame::new(applied.epoch(), fresh))
             .await
@@ -1555,6 +1670,7 @@ mod tests {
                 frames_processed: 1,
                 errors: 0,
                 discarded: 1,
+                skipped: 0,
             },
             "the group the resync voided must be counted as dropped"
         );
@@ -1575,13 +1691,13 @@ mod tests {
         let (stint, _offsets, applied) = resyncable();
         let (tx, rx) = mpsc::channel(64);
 
-        let frames = [
+        let frames = stamped(vec![
             frame_on(2, 1, "MULTI", &[]),
             frame_on(2, 2, "SET", &["a", "1"]),
             // --- link drops here; the retry is granted +CONTINUE ---
             frame_on(2, 3, "SET", &["b", "2"]),
             frame_on(2, 4, "EXEC", &[]),
-        ];
+        ]);
         let total: u64 = frames.iter().map(|f| f.stream_advance()).sum();
         let epoch = applied.epoch();
         for frame in frames {
@@ -1649,7 +1765,8 @@ mod tests {
         let applied = AppliedOffset::detached(0);
         let (tx, _applier, gate, entered, consumer) = parked_consumer(&applied);
 
-        let in_flight = frame_on(0, 1, "SET", &["a", "1"]);
+        let mut wire = Wire::default();
+        let in_flight = wire.stamp(frame_on(0, 1, "SET", &["a", "1"]));
         let in_flight_bytes = in_flight.stream_advance();
         tx.send(live(in_flight)).await.unwrap();
         entered.notified().await;
@@ -1686,7 +1803,7 @@ mod tests {
         let applied = AppliedOffset::detached(0);
         let (tx, _applier, _gate, _entered, consumer) = parked_consumer(&applied);
 
-        let getack = frame_on(0, 1, "REPLCONF", &["GETACK", "*"]);
+        let getack = Wire::default().stamp(frame_on(0, 1, "REPLCONF", &["GETACK", "*"]));
         let bytes = getack.stream_advance();
         tx.send(live(getack)).await.unwrap();
 
@@ -1705,7 +1822,8 @@ mod tests {
         let applied = AppliedOffset::detached(0);
         let (tx, applier, gate, entered, consumer) = parked_consumer(&applied);
 
-        let in_flight = frame_on(0, 1, "SET", &["a", "1"]);
+        let mut wire = Wire::default();
+        let in_flight = wire.stamp(frame_on(0, 1, "SET", &["a", "1"]));
         let in_flight_bytes = in_flight.stream_advance();
         tx.send(live(in_flight)).await.unwrap();
         // Wait until the apply is genuinely in flight (parked inside the gate).
@@ -1720,7 +1838,7 @@ mod tests {
 
         // Let the in-flight apply finish, then offer another frame.
         gate.add_permits(1);
-        tx.send(live(frame_on(0, 2, "SET", &["b", "2"])))
+        tx.send(live(wire.stamp(frame_on(0, 2, "SET", &["b", "2"]))))
             .await
             .unwrap();
         drop(tx);
@@ -1747,7 +1865,8 @@ mod tests {
         let applied = AppliedOffset::detached(0);
         let (tx, applier, gate, entered, consumer) = parked_consumer(&applied);
 
-        let in_flight = frame_on(0, 1, "SET", &["a", "1"]);
+        let mut wire = Wire::default();
+        let in_flight = wire.stamp(frame_on(0, 1, "SET", &["a", "1"]));
         let in_flight_bytes = in_flight.stream_advance();
         tx.send(live(in_flight)).await.unwrap();
         entered.notified().await;
@@ -1756,7 +1875,7 @@ mod tests {
         let _next = applied.begin_replica_stint();
 
         gate.add_permits(1);
-        tx.send(live(frame_on(0, 2, "SET", &["b", "2"])))
+        tx.send(live(wire.stamp(frame_on(0, 2, "SET", &["b", "2"]))))
             .await
             .unwrap();
         drop(tx);
@@ -1768,5 +1887,253 @@ mod tests {
             "the retired consumer applies nothing after the stint changed"
         );
         assert_eq!(applied.current(), in_flight_bytes);
+    }
+
+    // ---- a frame the applied head already covers is ignored (issue 34) ----
+
+    /// Hand `frames` to a consumer on the history `applied` is currently on,
+    /// run it to channel close, and report what applied plus the loop's tally.
+    ///
+    /// Unlike `drive`, the frames are stamped by the caller — these tests are
+    /// about *which* stream position a frame carries, so they cannot delegate
+    /// the stamping.
+    async fn replay(
+        frames: Vec<ReplicationFrame>,
+        stint: ReplicaApplyStint,
+        applied: &AppliedOffset,
+    ) -> (Vec<(u16, Vec<String>)>, ConsumeStats) {
+        let (tx, rx) = mpsc::channel(64);
+        let epoch = applied.epoch();
+        for frame in frames {
+            tx.send(StreamedFrame::new(epoch, frame)).await.unwrap();
+        }
+        drop(tx);
+        consume_counted(rx, stint).await
+    }
+
+    fn incr() -> Vec<String> {
+        vec!["INCR".to_string()]
+    }
+
+    /// The hole this rule closes: dedup used to be the sender's alone, keyed on
+    /// the offset the replica *claimed*, so any resume computed against a wrong
+    /// offset re-executed the range — and propagation is verbatim, so a re-sent
+    /// `INCR` counted twice.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn a_frame_at_or_below_the_applied_head_is_skipped() {
+        let (stint, _offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let first = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let second = wire.stamp(frame_on(0, 2, "INCR", &["n"]));
+        let head = wire.offset;
+
+        // Both apply; then the primary re-ships the first, which now ends
+        // strictly below this node's head.
+        let (groups, stats) = replay(vec![first.clone(), second, first], stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(0, incr()), (0, incr())],
+            "the re-sent INCR reached a shard a second time"
+        );
+        assert_eq!(
+            stats.skipped, 1,
+            "the re-sent frame must be counted as skipped"
+        );
+        assert_eq!(stats.frames_processed, 2);
+        assert_eq!(stats.errors, 0, "a re-delivery is not an error");
+        assert_eq!(
+            stats.discarded, 0,
+            "a re-delivery is not a replaced history"
+        );
+        assert_eq!(
+            applied.current(),
+            head,
+            "a skipped frame's bytes were claimed, pushing the offset past the primary's"
+        );
+    }
+
+    /// The boundary the rule turns on: a frame ending *exactly* at the head is
+    /// wholly covered — `<=`, not `<`. This is the common re-delivery, the one
+    /// a resume off the replica's own claim produces.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn a_frame_ending_exactly_at_the_applied_head_is_skipped() {
+        let (stint, _offsets, applied) = resyncable();
+        let only = Wire::default().stamp(frame_on(0, 1, "INCR", &["n"]));
+        let head = only.sequence;
+
+        let (groups, stats) = replay(vec![only.clone(), only], stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(0, incr())],
+            "the frame ending at the head applied twice"
+        );
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(applied.current(), head);
+    }
+
+    /// The other side of the boundary, and the limit of what this rule claims:
+    /// coverage is of the *whole* span. A frame ending above the head is applied
+    /// even when its span starts below one — the replica cannot tell from an
+    /// offset that part of it is already in its keyspace, and the overship that
+    /// produces that shape is TR-REPLICATION-034's to remove, not this rule's.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn a_frame_ending_above_the_applied_head_is_applied() {
+        let (stint, _offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let first = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let head = wire.offset;
+
+        // Ends one byte above the head, so its span starts well below it.
+        let mut straddling = frame_on(0, 2, "INCR", &["n"]);
+        straddling.sequence = head + 1;
+
+        let (groups, stats) = replay(vec![first, straddling], stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(0, incr()), (0, incr())],
+            "a frame reaching above the head must still be applied"
+        );
+        assert_eq!(stats.skipped, 0, "only whole-span coverage skips");
+        assert_eq!(stats.frames_processed, 2);
+    }
+
+    /// A skip touches nothing: neither offset moves, no divergence is admitted,
+    /// and the loop keeps going — the link is healthy, and the next frame above
+    /// the head applies normally.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn a_skipped_frame_neither_claims_nor_lands() {
+        let (stint, _offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let first = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let after = wire.stamp(frame_on(0, 2, "SET", &["k", "v"]));
+        let head = wire.offset;
+
+        let (groups, stats) = replay(vec![first.clone(), first, after], stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(0, incr()), (0, vec!["SET".to_string()])],
+            "the frame after a skipped one must still apply — a skip is not a stop"
+        );
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(applied.current(), head, "a skip moved the claimed head");
+        assert_eq!(applied.landed(), head, "a skip moved the landed head");
+        assert!(
+            !applied.has_diverged(),
+            "a re-delivery is a sender bug, not this node's divergence"
+        );
+    }
+
+    /// A re-delivered `MULTI … EXEC` is covered frame by frame: the head only
+    /// moves at `EXEC`, by the whole group's byte total, so it never falls
+    /// strictly inside a group — the whole group is skipped, and no half of it
+    /// is ever handed to a shard.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn a_re_delivered_group_is_skipped_frame_by_frame() {
+        let (stint, _offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let group = wire.stamp_all(vec![
+            frame_on(2, 1, "MULTI", &[]),
+            frame_on(2, 2, "INCR", &["n"]),
+            frame_on(2, 3, "INCR", &["m"]),
+            frame_on(2, 4, "EXEC", &[]),
+        ]);
+        let head = wire.offset;
+
+        let mut frames = group.clone();
+        frames.extend(group);
+        let (groups, stats) = replay(frames, stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(2, vec!["INCR".to_string(), "INCR".to_string()])],
+            "the re-delivered group reached a shard a second time"
+        );
+        assert_eq!(
+            stats.skipped, 4,
+            "every frame of the re-delivered group is skipped"
+        );
+        assert_eq!(stats.errors, 0, "no half-group, so no EXEC without MULTI");
+        assert_eq!(applied.current(), head);
+    }
+
+    /// The evidence a skip leaves: a per-stint tally for whoever owns the
+    /// stint, and a node-wide total readable while the stint is still running.
+    /// The node-wide one is cumulative on purpose — a resync replaces the
+    /// history, not the record that some primary re-shipped applied data.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn skipped_frames_are_counted_on_the_stats_and_the_node() {
+        let (stint, offsets, applied) = resyncable();
+        assert_eq!(applied.skipped(), 0, "nothing has been skipped yet");
+
+        let mut wire = Wire::default();
+        let first = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let second = wire.stamp(frame_on(0, 2, "INCR", &["m"]));
+
+        let (_groups, stats) = replay(
+            vec![first.clone(), second.clone(), first, second],
+            stint,
+            &applied,
+        )
+        .await;
+
+        assert_eq!(stats.skipped, 2, "the stint's own tally");
+        assert_eq!(applied.skipped(), 2, "the node-wide total");
+
+        assert!(offsets.reset_to(9_000), "the install must be accepted");
+        assert_eq!(
+            applied.skipped(),
+            2,
+            "a resync replaced the history, not the evidence that data was re-shipped"
+        );
+    }
+
+    /// Ordering between the two "do not apply this" checks: a frame stamped with
+    /// a history this node has replaced is dropped *with that history*, even
+    /// when the new head happens to cover its position. Counting it as a
+    /// duplicate instead would credit the old primary's frame to the new
+    /// history's accounting.
+    // FM-REPLICATION-065
+    #[tokio::test]
+    async fn a_replaced_history_is_discarded_before_the_skip_is_considered() {
+        let (stint, offsets, applied) = resyncable();
+        let stale_epoch = applied.epoch();
+        // The install moves the head far above where the old history's frame
+        // sits, so both checks would fire on it.
+        assert!(offsets.reset_to(9_000), "the install must be accepted");
+        assert_ne!(
+            applied.epoch(),
+            stale_epoch,
+            "the install starts a new history"
+        );
+
+        let stale = Wire::default().stamp(frame_on(0, 1, "INCR", &["n"]));
+        let (tx, rx) = mpsc::channel(64);
+        tx.send(StreamedFrame::new(stale_epoch, stale))
+            .await
+            .unwrap();
+        drop(tx);
+        let (groups, stats) = consume_counted(rx, stint).await;
+
+        assert!(
+            groups.is_empty(),
+            "a replaced history's frame reached a shard"
+        );
+        assert_eq!(
+            stats.discarded, 1,
+            "it belongs to the history it was stamped with"
+        );
+        assert_eq!(stats.skipped, 0, "it is not this history's duplicate");
+        assert_eq!(applied.skipped(), 0);
+        assert_eq!(applied.current(), 9_000, "the install's head is untouched");
     }
 }
