@@ -128,6 +128,21 @@
 //! push an input into a session the seam has already ended, so a future model change that
 //! enabled such a pair would fail here loudly instead of being absorbed by the fallback.
 //!
+//! # Guard runs: the model's `.fail()` steps
+//!
+//! Several of the mutation battery's gap-closure runs are *pure guard* tests — their point is
+//! that an action is refused, not that a state moves (`.then(armBarrier(1).fail())`,
+//! `.then(writeFrame.fail())`, `.then(handoffReplayedAs(1, 1, Some(7)).fail())`). quint records
+//! such a step as an ITF state carrying `mbt::actionTaken` and **no model variables at all**,
+//! because the guard held and there is no successor state to write down.
+//!
+//! The replay treats that shape, and only that shape, as a refusal: nothing is fed (there is no
+//! post-state to recover an argument from), the step is tallied in `Exercised::refused` so the
+//! test can require that the run actually reached its refusal, and the step is asserted to be
+//! the trace's last — quint only permits `.fail()` terminally, so a variable-free state anywhere
+//! else means the projection stopped matching the model and stays a hard failure. A state with
+//! *some* variables but not others is likewise a hard failure, never a silent refusal.
+//!
 //! # FM-CLUSTER-097 carve-out (pending ruling)
 //!
 //! A link that ends inside an armed barrier window drains its held buffer past the barrier
@@ -254,23 +269,63 @@ struct SessionQ {
 }
 
 /// One ITF state: the model variables this harness reads, plus the action that produced it.
+///
+/// The variables are `Option` for one reason only, and it is not tolerance for a drifted
+/// projection: quint records a terminal `.fail()` step as a state carrying `mbt::actionTaken`
+/// and *nothing else* — the action was refused, so there is no successor state to write down.
+/// [`FeedStateQ::refused`] is the only place that shape is accepted, and it rejects a state
+/// that carries some variables but not others.
 #[derive(Debug, Clone, Deserialize)]
 struct FeedStateQ {
-    sessions: BTreeMap<i64, SessionQ>,
+    sessions: Option<BTreeMap<i64, SessionQ>>,
     /// `Some(floor)` = armed. The node-wide gate is held iff any entry is armed — the
     /// model's `gateHeld`, and the answer the real driver gets from `decide_hold`.
-    armed: BTreeMap<i64, QOpt<i64>>,
+    armed: Option<BTreeMap<i64, QOpt<i64>>>,
     #[serde(rename = "mbt::actionTaken")]
     action: String,
 }
 
 impl FeedStateQ {
+    /// Whether this state is quint's record of a refused action (a `.fail()` step): every
+    /// model variable absent. A state that carries some but not all of them is a projection
+    /// that stopped matching the model, and is a hard failure rather than a silent refusal.
+    fn refused(&self) -> bool {
+        match (self.sessions.is_none(), self.armed.is_none()) {
+            (true, true) => true,
+            (false, false) => false,
+            _ => panic!(
+                "model state after `{}` carries some model variables but not others; only a \
+                 refused (`.fail()`) step is variable-free, so this is a projection that no \
+                 longer matches the model — fix the projection, do not widen it",
+                self.action
+            ),
+        }
+    }
+
+    fn sessions(&self) -> &BTreeMap<i64, SessionQ> {
+        assert!(
+            !self.refused(),
+            "model state after `{}` is a refused step; it has no sessions to read",
+            self.action
+        );
+        self.sessions.as_ref().expect("checked by `refused`")
+    }
+
     fn gate_held(&self) -> bool {
-        self.armed.values().any(|slot| !slot.is_none())
+        assert!(
+            !self.refused(),
+            "model state after `{}` is a refused step; it has no barriers to read",
+            self.action
+        );
+        self.armed
+            .as_ref()
+            .expect("checked by `refused`")
+            .values()
+            .any(|slot| !slot.is_none())
     }
 
     fn session(&self, id: i64) -> &SessionQ {
-        self.sessions
+        self.sessions()
             .get(&id)
             .unwrap_or_else(|| panic!("model trace has no session {id}"))
     }
@@ -465,6 +520,10 @@ struct Exercised {
     sends: usize,
     ends: usize,
     kicks: usize,
+    /// Steps the model *refused* (`.fail()`): the guard held, so no `FeedInput` exists and
+    /// nothing moved. Counted so a pure-guard run can assert it actually reached its refusal
+    /// instead of passing on an empty replay.
+    refused: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -493,7 +552,7 @@ struct Replay<'a> {
 impl<'a> Replay<'a> {
     fn new(label: &'a str, initial: &FeedStateQ) -> Self {
         let sessions = initial
-            .sessions
+            .sessions()
             .keys()
             .map(|&id| {
                 let sequencer = FeedSequencer::new();
@@ -555,7 +614,7 @@ impl<'a> Replay<'a> {
     /// The single session whose projected record differs between `pre` and `post`.
     fn changed_session(&self, step: usize, pre: &FeedStateQ, post: &FeedStateQ) -> i64 {
         let changed: Vec<i64> = post
-            .sessions
+            .sessions()
             .iter()
             .filter(|(id, after)| pre.session(**id) != *after)
             .map(|(id, _)| *id)
@@ -571,7 +630,7 @@ impl<'a> Replay<'a> {
     }
 
     fn assert_no_session_moved(&self, step: usize, pre: &FeedStateQ, post: &FeedStateQ) {
-        for (id, after) in &post.sessions {
+        for (id, after) in post.sessions() {
             assert_eq!(
                 pre.session(*id),
                 after,
@@ -584,7 +643,7 @@ impl<'a> Replay<'a> {
 
     /// Every session's seam answer and held-buffer depth, against the model's post-state.
     fn check(&self, step: usize, state: &FeedStateQ) {
-        for (id, model) in &state.sessions {
+        for (id, model) in state.sessions() {
             let seam = &self.sessions[id];
             if seam.kicked {
                 assert_eq!(
@@ -630,6 +689,24 @@ impl<'a> Replay<'a> {
             let pre = &states[step - 1];
             let post = &states[step];
             let action = post.action.as_str();
+
+            // A guard-only run's terminal `.then(<action>.fail())`: quint writes the action
+            // name and no model variables, because the guard refused it and there is no
+            // successor state. There is nothing to feed — the model already made the
+            // assertion — but the step is counted so a pure-guard test can require it. quint
+            // only permits `.fail()` as the last step of a run, which is asserted here so a
+            // variable-free state anywhere else stays a hard failure.
+            if post.refused() {
+                assert_eq!(
+                    step,
+                    states.len() - 1,
+                    "{}: step {step} (`{action}`) recorded no model state but is not the last \
+                     step; only a terminal `.fail()` may be variable-free",
+                    self.label,
+                );
+                self.exercised.refused += 1;
+                continue;
+            }
 
             if ENV_ACTIONS.contains(&action) || ACK_ACTIONS.contains(&action) {
                 self.assert_no_session_moved(step, pre, post);
@@ -746,7 +823,7 @@ fn replay_run(name: &str) -> Exercised {
 /// Every `run` in the model, and the test below that replays it. `run_test_coverage`
 /// asserts this list is exactly the model's — a new model run that nothing replays is a
 /// hole, and a deleted one must not linger here.
-const REPLAYED_RUNS: [&str; 11] = [
+const REPLAYED_RUNS: [&str; 23] = [
     "holdThenDrainTest",
     "barrierWhileHeldTest",
     "laggedOverrunDisconnectTest",
@@ -758,6 +835,20 @@ const REPLAYED_RUNS: [&str; 11] = [
     "sendFailedAbandonsBufferTest",
     "lagBreachEndsAtTheFrameTest",
     "nodeWideHoldTest",
+    // Gap-closure runs added by the T9c feed-gate mutation battery
+    // (`.scratch/formal-spec/2026-08-19-feed-gate-battery.md`, commit `2b1f6c90`).
+    "closeAndLagGuardsRefuseAHealthySessionTest",
+    "channelOverrunRefusesIntakeTest",
+    "midSendSessionIsNotClassifiedOutFromUnderItsFrameTest",
+    "supersessionAndAckGuardsTest",
+    "enteringStreamingClearsTheFenceCellTest",
+    "gracefulCloseRecordsItsDepartureTest",
+    "barrierFloorIsTheLiveOffsetAtArmTimeTest",
+    "emptyBufferHoldLatchesNoCoverageTest",
+    "drainAtTheFloorIsNotADivergenceTest",
+    "ackWatermarkNeverRetreatsTest",
+    "closedSourceAcceptsNoMoreWritesTest",
+    "handoffCannotReplayPastTheLiveHeadTest",
 ];
 
 /// A frame that arrives while a barrier is armed waits, and reaches the wire only once the
@@ -844,6 +935,147 @@ fn node_wide_hold() {
     assert!(exercised.held >= 2, "{exercised:?}");
 }
 
+// ---------------------------------------------------------------------------
+// Gap-closure runs (T9c mutation battery, `.scratch/formal-spec/2026-08-19-feed-gate-battery.md`,
+// commit `2b1f6c90`). The model's own comments name the mutation rows each one kills; what is
+// added here is the seam half — every one of them replays through the real `FeedSequencer`, so
+// a fact the battery pinned model-side is also pinned against the code.
+// ---------------------------------------------------------------------------
+
+/// G09/G10/G12: a clean close is not a session's own decision, is unavailable while frames it
+/// has not consumed are still in the channel, and a `Lost` disconnect is unavailable to a
+/// session nobody overran. The session drains to the head and only then is the close honest —
+/// which is the part with a seam trace: one frame all the way to the wire, no end.
+#[test]
+fn close_and_lag_guards_refuse_a_healthy_session() {
+    let exercised = replay_run("closeAndLagGuardsRefuseAHealthySessionTest");
+    assert!(exercised.sends == 1 && exercised.ends == 0, "{exercised:?}");
+}
+
+/// G05: once the receiver is further behind than the channel is deep the frames are gone, so
+/// the intake is refused and the lagged disconnect is the only honest transition. The seam
+/// side is the absence: the backlog grows past `CHANNEL_CAP` and no frame is ever fed.
+#[test]
+fn channel_overrun_refuses_intake() {
+    let exercised = replay_run("channelOverrunRefusesIntakeTest");
+    assert!(
+        exercised.inputs == 1 && exercised.sends == 0 && exercised.ends == 0,
+        "{exercised:?}"
+    );
+}
+
+/// G11/G14: a session with a frame on the wire is not classified out from under it (the
+/// lagged disconnect waits for the send to come back, which is what keeps the in-flight frame
+/// from being replaced and lost), and a session that has sent nothing cannot report a failed
+/// send. The seam holds the frame in `Send` across three further writes.
+#[test]
+fn mid_send_session_is_not_classified_out_from_under_its_frame() {
+    let exercised = replay_run("midSendSessionIsNotClassifiedOutFromUnderItsFrameTest");
+    assert!(exercised.sends == 1 && exercised.ends == 0, "{exercised:?}");
+}
+
+/// G16/G19/G22/G23 (issue 22): supersession is newest-wins and only newest, a session that is
+/// gone displaces nobody, and a session ACKs only while it is streaming. Every supersession
+/// here is refused by a guard, so the kick is never taken — the one thing that does happen is
+/// the overrun disconnect.
+#[test]
+fn supersession_and_ack_guards() {
+    let exercised = replay_run("supersessionAndAckGuardsTest");
+    assert!(exercised.ends == 1 && exercised.kicks == 0, "{exercised:?}");
+}
+
+/// M13, FM-REPLICATION-062's other half: a session entering streaming clears the node's
+/// last-departure cell, so a predecessor's `Lost` record does not fence the successor's
+/// primary. The successor's handoff is fed to its own sequencer after the first has ended.
+#[test]
+fn entering_streaming_clears_the_fence_cell() {
+    let exercised = replay_run("enteringStreamingClearsTheFenceCellTest");
+    assert!(
+        exercised.ends == 1 && exercised.inputs >= 3,
+        "{exercised:?}"
+    );
+}
+
+/// M26: the graceful path writes its departure record too — the case with nothing buffered,
+/// where the classification and the end are the same step, so the seam ends `Graceful`
+/// without ever reaching the wire.
+#[test]
+fn graceful_close_records_its_departure() {
+    let exercised = replay_run("gracefulCloseRecordsItsDepartureTest");
+    assert!(exercised.ends == 1 && exercised.sends == 0, "{exercised:?}");
+}
+
+/// M01/M02/M03/M08: the floor a barrier records is the live offset at arm time — not zero,
+/// not the end of the backlog — and an armed barrier is not re-armed onto a higher floor. The
+/// re-arm is the model's terminal `.fail()`, so the seam is never stepped at all.
+#[test]
+fn barrier_floor_is_the_live_offset_at_arm_time() {
+    let exercised = replay_run("barrierFloorIsTheLiveOffsetAtArmTimeTest");
+    assert!(
+        exercised.refused == 1 && exercised.inputs == 0,
+        "{exercised:?}"
+    );
+}
+
+/// M21/M22/M24: a hold that held nothing back is not `heldFrame`, one session holding is not
+/// the node-wide case, and a wakeup that finds an empty buffer drained nothing. The seam
+/// parks in `ReceiveOrRelease` on an empty buffer and leaves it without shipping anything —
+/// the dedup (FM-REPLICATION-015) is what kept the buffer empty.
+#[test]
+fn empty_buffer_hold_latches_no_coverage() {
+    let exercised = replay_run("emptyBufferHoldLatchesNoCoverageTest");
+    assert!(exercised.held == 1 && exercised.sends == 0, "{exercised:?}");
+}
+
+/// M34: the FM-CLUSTER-097 carve-out's boundary is strict. A frame already written when the
+/// barrier armed sits *at* the floor, so shipping it on the way out is ordinary draining, not
+/// a drain past the window — the near-miss twin of
+/// [`close_inside_window_drains_then_ends_graceful`], and the seam takes the same path.
+#[test]
+fn drain_at_the_floor_is_not_a_divergence() {
+    let exercised = replay_run("drainAtTheFloorIsNotADivergenceTest");
+    assert!(
+        exercised.held == 1 && exercised.sends == 1 && exercised.ends == 1,
+        "{exercised:?}"
+    );
+}
+
+/// E33, TR-REPLICATION-033: the acked offset is a high-water mark, not the last number the
+/// replica said, so a late or reordered ACK below the watermark leaves it alone — and that is
+/// an ordinary ACK, neither ignored nor clamped. Asserted here as the seam-side claim that
+/// ACK ingest is not a feed decision: no projected field moves.
+#[test]
+fn ack_watermark_never_retreats() {
+    let exercised = replay_run("ackWatermarkNeverRetreatsTest");
+    assert!(
+        exercised.inputs == 1 && exercised.ends == 0,
+        "{exercised:?}"
+    );
+}
+
+/// M09: a closed source produces no more frames. Pure environment guard — the backlog refuses
+/// to grow after the close, and no session is ever stepped.
+#[test]
+fn closed_source_accepts_no_more_writes() {
+    let exercised = replay_run("closedSourceAcceptsNoMoreWritesTest");
+    assert!(
+        exercised.refused == 1 && exercised.inputs == 0,
+        "{exercised:?}"
+    );
+}
+
+/// M12: the granted replay cannot claim offsets the primary never wrote. The refusal is the
+/// *guard*, not the sampler — so no `FeedInput::HandoffReplayed` is ever built, and the
+/// sequencer stays in the handoff lane awaiting a release it will never be offered.
+#[test]
+fn handoff_cannot_replay_past_the_live_head() {
+    let exercised = replay_run("handoffCannotReplayPastTheLiveHeadTest");
+    assert!(
+        exercised.refused == 1 && exercised.inputs == 0,
+        "{exercised:?}"
+    );
+}
+
 /// Sampled traces of the model's own `step` relation, replayed through the same projection.
 ///
 /// The named runs above pin the canonical sequences; this lane is the interleaving fuzz —
@@ -864,6 +1096,7 @@ fn sampled_traces() {
         total.sends += exercised.sends;
         total.ends += exercised.ends;
         total.kicks += exercised.kicks;
+        total.refused += exercised.refused;
     }
     assert!(
         total.inputs >= 80 && total.consult_gate > 0 && total.sends > 0 && total.ends > 0,
