@@ -40,6 +40,16 @@ module cluster_admission_machine {
   // could take the unsafe variant, from that action's own outcome rather than from the
   // guard, so weakening the update shows up here. (Same convention as the migration
   // model's `defects` record.)
+  //
+  // Mutating a recompute itself (blanking it to `false`, or dropping one of its disjuncts)
+  // is undetectable by construction, and deliberately so: these are *detectors*, and in the
+  // ruled model neither ever trips, so removing a detector removes nothing observable. They
+  // earn their keep by what they catch in the mutated model — rows A23 (config-driven
+  // `intent` rewrite) and A24 (identity remint) of
+  // .scratch/formal-spec/2026-08-19-admission-battery.md, where each fires as designed. The
+  // battery records the corresponding self-mutations (A48, A49) as MISSED with this
+  // analysis rather than papering over them; killing one needs a compound mutation
+  // (detector + the defect it detects), which is outside the one-edit battery discipline.
   var defects: {
     // cluster.md:129 / issue-03 repurpose ruling — `restart`, the one action that reads
     // config (and, since the node-id extension, the one that can see a brand-new id),
@@ -155,6 +165,17 @@ module cluster_admission_machine {
     keepDefects,
   }
 
+  // Unwiring an action from `step` (rows A57/A58 of
+  // .scratch/formal-spec/2026-08-19-admission-battery.md) is invisible to both automated
+  // oracles: the `run` tests call the actions directly, so they stay green, and every
+  // `inv_*` is a state predicate over reachable states — dropping a verb only *shrinks* the
+  // reachable set, which no safety invariant can be falsified by. The observable is
+  // reachability: `quint run --witnesses` drops the corresponding witness to 0 traces
+  // (`witnessRepurposedHazard` for `repurpose`, `witnessJoinedViaMeet` for `meet`,
+  // confirmed at 4000x40). That lane is run by hand today — `just quint-run` checks the
+  // invariants only — so this is a documented detection hole, not a closed one; closing it
+  // means either gating witness counts in the runner or a temporal operator the simulator
+  // does not have (same structural limit as the migration model's row M22).
   action step: bool = {
     nondet n = NODES.oneOf()
     nondet m = NODES.oneOf()

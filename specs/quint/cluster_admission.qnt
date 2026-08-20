@@ -329,6 +329,27 @@ module cluster_admission {
       (ns.member_of != None and ns.raft_origin != None) implies (ns.raft_origin == ns.member_of)
     })
 
+  // A structural fact of this model, asserted rather than assumed: a node that claims
+  // membership in a cluster always carries non-empty Raft state (`applyBoot`'s bootstrap
+  // branch and `applyMeetJoiner` are the only two writers of `member_of != None`, and both
+  // write a non-empty `raft` in the same step; `applyRepurpose` clears the claim without
+  // touching `raft`).
+  //
+  // It is here as the tripwire for the mutation battery's two structurally-unobservable
+  // rows (.scratch/formal-spec/2026-08-19-admission-battery.md, rows A40 and A50): dropping
+  // `canRepurpose`'s `raft != Empty` conjunct, and dropping `meet`'s `n != m`, are both
+  // undetectable *because* this holds — the first conjunct is implied by the one beside it,
+  // and a self-MEET is disabled by `canMeet`'s surviving conjuncts contradicting each other
+  // (`member_of != None` forces `raft != Empty`, which refuses `raft == Empty`). Asserting
+  // the fact turns that honest-miss argument into a checked one: if a later change makes an
+  // empty-Raft member reachable, this fails *before* the two redundant conjuncts silently
+  // become load-bearing with nothing forcing them.
+  val inv_member_carries_raft_state: bool =
+    NODES.forall(n => {
+      val ns = nodes.get(n)
+      ns.member_of != None implies ns.raft != Empty
+    })
+
   // ---------------------------------------------------------------------------
   // Tests.
   // ---------------------------------------------------------------------------
@@ -358,6 +379,10 @@ module cluster_admission {
           not(n2.routable_leader),
           n2.raft != Empty,
           n2.intent == Join,
+          // Both shapes this trace exists to reach, asserted here so every witness in the
+          // model has a deterministic forcing test (the other four are asserted below).
+          witnessBootstrapped,
+          witnessJoinedViaMeet,
         }
       )
   }
@@ -370,11 +395,23 @@ module cluster_admission {
   run issue25UsurpationUnreachableTest: bool = {
     init
       .then(bootAs(2, false, false))
-      .expect(nodes.get(2).intent == Join and not(nodes.get(2).routable_leader))
+      .expect(
+        val n2 = nodes.get(2)
+        // `decision_epoch == 1` pins the join branch's own bump (battery row A20): without
+        // it, only the bootstrap branch's bump is forced by any test, and the "decided at
+        // most once, ever" ghost would be half-dead — an upper-bound invariant cannot see a
+        // branch that stops counting.
+        all { n2.intent == Join, not(n2.routable_leader), n2.decision_epoch == 1 }
+      )
       .then(restartAs(2, true, false))
       .expect(
         val n2 = nodes.get(2)
-        all { n2.intent == Join, not(n2.routable_leader), n2.raft == Empty }
+        // `configured_bootstrap` is the premise of this whole trace, asserted rather than
+        // assumed (battery row A29): the flipped knob really did land in the node's state,
+        // so `intent == Join` below is a *decision* that survived a contradicting config,
+        // not a restart that quietly ignored the config read.
+        all { n2.intent == Join, n2.configured_bootstrap, not(n2.routable_leader),
+              n2.raft == Empty }
       )
       .then(all {
         assert(inv_no_usurper),
@@ -421,7 +458,11 @@ module cluster_admission {
       .then(repurpose(3))
       .expect(
         val n3 = nodes.get(3)
-        all { n3.intent == Join, n3.member_of == None, n3.raft != Empty }
+        // The provenance fingerprint is part of the residue the reset leaves behind
+        // (battery row A45): a reset that erased `raft_origin` while leaving `raft` would
+        // leave `inv_meet_no_absorption` with nothing to recognize the foreign state by.
+        all { n3.intent == Join, n3.member_of == None, n3.raft != Empty,
+              n3.raft_origin == n3.effective_id }
       )
       .then(all {
         assert(witnessRepurposedHazard),
@@ -540,7 +581,11 @@ module cluster_admission {
       .then(restartAs(3, false, false))
       .expect(
         val n3 = nodes.get(3)
-        all { n3.intent == Bootstrap, n3.effective_id == Some(FRESH_ID_BASE + 1),
+        // `not(configured_bootstrap)` pins the premise (battery row A29): the knob really
+        // is off in this node's state, so `intent == Bootstrap` beside it is the persisted
+        // decision outliving a contradicting config read, not a restart that never read one.
+        all { n3.intent == Bootstrap, not(n3.configured_bootstrap),
+              n3.effective_id == Some(FRESH_ID_BASE + 1),
               inv_intent_write_once, inv_identity_survives_id_churn }
       )
       .then(repurpose(3))
@@ -555,6 +600,91 @@ module cluster_admission {
           n3.effective_id == Some(FRESH_ID_BASE + 1),
           inv_intent_write_once,
         }
+      )
+  }
+
+  // ---------------------------------------------------------------------------
+  // Refusal traces added by the mutation battery's gap-closure pass
+  // (.scratch/formal-spec/2026-08-19-admission-battery.md, lifecycle step 5). Each one
+  // forces exactly one guard conjunct that no earlier oracle could see, named in its
+  // comment by the battery row it kills.
+  // ---------------------------------------------------------------------------
+
+  // Row A22 — `canRestart`'s `intent != Undecided`. A durable record that has never booted
+  // has no process to restart: `restart` models a *re*boot, and admitting it before the
+  // first boot would hand a never-started node an `effective_id` (and so satisfy MEET's
+  // physicality conjunct) without ever passing through the one action that decides the
+  // bootstrap-vs-join mode. Nothing downstream notices — the node just looks like a booted
+  // Undecided node forever — so the refusal has to be pinned here.
+  run restartRefusedBeforeFirstBootTest: bool = {
+    init
+      .then(bootAs(1, true, false))
+      .expect(
+        val n4 = nodes.get(4)
+        all { n4.intent == Undecided, n4.effective_id == None }
+      )
+      // `.fail()` is the terminal step: n4 has never booted, so there is nothing to restart.
+      .then(restartAs(4, true, false).fail())
+  }
+
+  // Row A32 — `canMeet`'s `nNode.member_of != None`. `CLUSTER MEET` is issued *at* a
+  // cluster: a node that belongs to none has no cluster to fold the target into, and
+  // admitting the transition anyway would write the inviter's own non-membership onto the
+  // target. Both nodes here are lawful joiners (booted, empty Raft, physically present), so
+  // the only conjunct that can refuse is the inviter's membership — the discrimination
+  // `meetRefusesForeignRaftStateTest` (Raft state) and `meetRefusesUnbootedNodeTest`
+  // (physicality) leave uncovered.
+  run meetRefusedFromNonMemberTest: bool = {
+    init
+      .then(bootAs(1, false, false))
+      .then(bootAs(2, false, false))
+      .expect(
+        val n1 = nodes.get(1)
+        val n2 = nodes.get(2)
+        all { n1.member_of == None, n2.effective_id != None, n2.raft == Empty }
+      )
+      // `.fail()` is the terminal step: n1 is in no cluster, so there is nothing to fold
+      // n2 into — even though n2 satisfies both of the other two conjuncts.
+      .then(meet(1, 2).fail())
+  }
+
+  // Row A39 — `canRepurpose`'s `member_of != None`. A `CLUSTER RESET` against a node that
+  // is already unclaimed is not a transition this model has: the reset's postcondition is
+  // "reduce membership to just this node", and there is no membership left to reduce. The
+  // trace reaches the one state where that conjunct refuses *alone* — the residue state,
+  // where `raft != Empty` still holds — so it discriminates the two conjuncts.
+  run repurposeRefusedOnUnclaimedNodeTest: bool = {
+    init
+      .then(bootAs(3, true, false))
+      .then(repurpose(3))
+      .expect(
+        val n3 = nodes.get(3)
+        all { n3.member_of == None, n3.raft != Empty }
+      )
+      // `.fail()` is the terminal step: n3 is already unclaimed; only the membership
+      // conjunct can refuse here, since the Raft-residue conjunct is satisfied.
+      .then(repurpose(3).fail())
+  }
+
+  // Row A02 — `configuredIdFor`'s `Some(e) => Some(e)` arm. Pinning `cluster-node-id` at a
+  // node that is already running fixes the id it is *running under*, not one re-derived
+  // from its durable record: the knob's whole purpose (state-space row "This node's own
+  // id") is to stop the id from moving, so a pin that itself renames the node would defeat
+  // it. `configuredIdStableAcrossRestartTest` cannot see this — it pins at a first boot,
+  // where the running id and the record key coincide by construction.
+  run pinAdoptsRunningIdTest: bool = {
+    init
+      .then(bootAs(1, true, false))
+      .expect(
+        val n1 = nodes.get(1)
+        all { n1.effective_id == Some(FRESH_ID_BASE), n1.configured_id == None }
+      )
+      // The operator adds the knob to an already-running node.
+      .then(restartAs(1, true, true))
+      .expect(
+        val n1 = nodes.get(1)
+        all { n1.configured_id == Some(FRESH_ID_BASE), n1.effective_id == Some(FRESH_ID_BASE),
+              n1.id_mints == 1, inv_configured_id_stable }
       )
   }
 }
