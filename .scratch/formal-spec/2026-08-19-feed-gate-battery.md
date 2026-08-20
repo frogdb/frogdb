@@ -38,8 +38,9 @@ count is therefore `MISSED`, and its closure is a run test that asserts the cove
 
 ## Mechanics (discipline actually followed)
 
-Rows are defined in `scratchpad/t9c/rows.py` and executed by `scratchpad/t9c/run_battery.py`.
-Per row:
+Rows are defined in `.scratch/formal-spec/battery-drivers/t9c/rows.py` and executed by
+`.scratch/formal-spec/battery-drivers/t9c/run_battery.py` (committed alongside this report; see
+the README there for how to re-run). Per row:
 
 1. every file is restored from a pristine pre-battery copy, then the row's **single exact
    text replacement** is applied to that pristine copy (never on top of another mutation).
@@ -69,9 +70,9 @@ were never invoked.
 **Where each row ran.** Rows G01–M40 were executed against the working tree by
 `run_battery.py` under exactly the discipline above. The tail rows (M41–M50, I01–I08, P1–P8)
 and the whole of pass 2 were executed by `run_battery_sb.py` / `run_battery_p2.py`, which run
-the identical mutation and oracle protocol against a *copy* of the model
-(`scratchpad/t9c/sandbox_p1` and `sandbox_p2`: the four model files plus the three modules they
-import, nothing else). Same quint binary, same budgets, same per-row restore. Two reasons:
+the identical mutation and oracle protocol against a *copy* of the model (a scratch directory
+holding the four model files plus the three modules they import, nothing else; the scripts'
+`SPEC`/`BACKUP` constants name it). Same quint binary, same budgets, same per-row restore. Two reasons:
 the working tree is shared with other agents mid-battery, and a copy lets the second half of
 the battery run concurrently with the first. The one row this changes nothing for is the
 `git diff` check — a sandbox row cannot dirty the tree at all.
@@ -354,7 +355,7 @@ of the CI gate, so every row below is now killed by the *gate*, not merely by a 
 `CAUGHT-T+P`), and one further row (M30) that pass 1 caught only through a witness is now caught
 by the gate. Nothing was weakened to make a row pass.
 
-Every closure was written against a sandbox copy of the model (`scratchpad/t9c/sandbox`, seeded
+Every closure was written against a sandbox copy of the model (a scratch directory seeded
 from the `f7234770` files plus the shared `lib_*`/`cluster_common_types` modules) so the working
 tree was never mutated for closure development while the battery was still running. Each closure
 was then re-checked by re-applying its target mutation to the *closed* model and confirming the
