@@ -62,9 +62,19 @@ module replication_fullsync_machine {
     spliceGap: bool,
     // A streamed frame landed with different content on a position at or below
     // the offset the grant claims agreement on — two histories disagreeing
-    // inside the window they both assert. Above that offset the same shape is
-    // the overshipped tail being corrected; see `coverage.forkedTailReplaced`.
+    // inside the window they both assert.
     spliceDiverged: bool,
+    // R5 (2026-08-20 ruling): a streamed frame landed with different content on
+    // a position *above* the grant's claim — a forked tail that survived into
+    // the splice. Before the ruling this was lawful correction and lived in
+    // `coverage`; `truncateAboveClaim` now removes the class at accept time, so
+    // reaching it means the truncation did not happen.
+    forkedTailApplied: bool,
+    // R4 (2026-08-20 ruling): re-delivery of a position the replica already
+    // holds must be a no-op. Latches if a `Reapplied` landing changed the data.
+    reapplyChangedData: bool,
+    // R4: the applied position never regresses on a frame landing.
+    replayRegressedApplied: bool,
     // FM-REPLICATION-012 / -014: a partial grant issued below the armed floor.
     grantBelowFloor: bool,
     // FM-REPLICATION-013: a partial grant issued over a history the primary
@@ -83,10 +93,10 @@ module replication_fullsync_machine {
   var coverage: {
     overshipped: bool,
     reapplied: bool,
-    // A frame overwrote a position the replica held from a *replaced* history —
-    // the FM-REPLICATION-004 overshipped tail meeting a failover. Lawful (see
-    // `classifyApply`), tracked so the interaction cannot go silent.
-    forkedTailReplaced: bool,
+    // R5: a partial-resync accept dropped at least one position the replica
+    // held above its claim — the FM-REPLICATION-004 overshipped tail being
+    // discarded before the splice rather than overwritten after it.
+    overshipTruncated: bool,
     spliceAbandoned: bool,
     partialViaSecondary: bool,
     evictionForcedFull: bool,
@@ -186,10 +196,11 @@ module replication_fullsync_machine {
         ackAboveHead: false, ackWrittenOnIgnore: false, cutBelowGrant: false,
         spliceGap: false, spliceDiverged: false, grantBelowFloor: false,
         grantForeignHistory: false, tornIdentity: false, restartOffsetTorn: false,
-        supersededDeparture: false,
+        supersededDeparture: false, forkedTailApplied: false,
+        reapplyChangedData: false, replayRegressedApplied: false,
       },
       coverage' = {
-        overshipped: false, reapplied: false, forkedTailReplaced: false,
+        overshipped: false, reapplied: false, overshipTruncated: false,
         spliceAbandoned: false,
         partialViaSecondary: false, evictionForcedFull: false, ackIgnored: false,
         superseded: false, settleDiscardedFrames: false,
@@ -267,6 +278,12 @@ module replication_fullsync_machine {
       // with it: the replica resumes from what it applied, not what it received.
       recv: if (arm == PartialGrant) rn.applied else 0,
       applied: if (arm == PartialGrant) rn.applied else 0,
+      // R5: divergence truncation at the accept. A partial grant asserts
+      // agreement only up to the claimed offset, so anything the replica holds
+      // above it is discarded here rather than being left to be overwritten (or
+      // not) by whatever the granting history happens to write next. The full
+      // arm needs no rule: the trailer install replaces the dataset wholesale.
+      data: if (arm == PartialGrant) truncateAboveClaim(rn.data, rn.applied) else rn.data,
     }
     val nodesPost = nodes.set(r, rPost)
     all {
@@ -297,6 +314,8 @@ module replication_fullsync_machine {
         evictionForcedFull: latch(coverage.evictionForcedFull,
           arm == FullSnapshot and degradedByFloor(pn, rn)),
         superseded: latch(coverage.superseded, victims.size() > 0),
+        overshipTruncated: latch(coverage.overshipTruncated,
+          arm == PartialGrant and rn.data.length() > rn.applied),
       },
     }
   }
@@ -417,14 +436,21 @@ module replication_fullsync_machine {
       keepCtl,
       defects' = { ...defects,
         spliceGap: latch(defects.spliceGap, outcome == Gapped),
-        // Divergence is only a defect inside the window the grant claims. See
-        // `classifyApply`.
+        // Divergence inside the window the grant claims. See `classifyApply`.
         spliceDiverged: latch(defects.spliceDiverged,
-          outcome == Diverged and k <= s.resume_offset) },
+          outcome == Diverged and k <= s.resume_offset),
+        // R5: divergence *above* the claim. Unreachable once the accept
+        // truncates, which is exactly what makes this a falsifiable pin.
+        forkedTailApplied: latch(defects.forkedTailApplied,
+          outcome == Diverged and k > s.resume_offset),
+        // R4: a re-delivered position must land as a no-op, and the applied
+        // position must not move backwards on a landing.
+        reapplyChangedData: latch(defects.reapplyChangedData,
+          outcome == Reapplied and applyFrameToData(rn.data, k, w) != rn.data),
+        replayRegressedApplied: latch(defects.replayRegressedApplied,
+          k <= rn.applied) },
       coverage' = { ...coverage,
         reapplied: latch(coverage.reapplied, outcome == Reapplied),
-        forkedTailReplaced: latch(coverage.forkedTailReplaced,
-          outcome == Diverged and k > s.resume_offset),
         tailApplied: latch(coverage.tailApplied, true) },
     }
   }

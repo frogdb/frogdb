@@ -156,20 +156,20 @@ module replication_fullsync_logic {
   // `Reapplied` is the overlap FM-REPLICATION-001 declares a deliberate
   // non-guarantee: the checkpoint may carry writes past the granted offset, and
   // the backlog replay then re-ships them ("re-applies a tail it already holds").
-  // This model treats it as *lawful but tracked* — see the coverage ghost and
-  // the discrepancy note in the main module, because issue-24's atomic-pairing
-  // amendment calls the same offset-below-data shape non-idempotent for
-  // INCR/LPUSH/APPEND. The model deliberately takes neither side: it records the
-  // overlap and asserts only the two shapes both readings agree are wrong.
+  // R4 (2026-08-20) rules the re-landing a no-op, which in this model's
+  // unit-write log it is by construction — `applyFrameToData` overwrites a
+  // position with the identical write id. `defects.reapplyChangedData` makes
+  // that construction falsifiable rather than incidental. See the discrepancy
+  // note in the main module for the half of R4 the log abstraction cannot carry.
   //
   // `Diverged` is read against the *window the grant claims*, which is why the
   // caller pairs it with the session's resume offset. At or below that offset
   // both sides assert they hold the same history, so different content there is
-  // a defect. Above it, differing content is the FM-REPLICATION-004 overshipped
-  // tail — payload data the replica installed past the granted offset — being
-  // corrected by the replay of a history that has since replaced it. See
-  // `coverage.forkedTailReplaced` (pinned by `overshippedTailMeetsFailoverTest`)
-  // and the residue note in the main module.
+  // a defect (`defects.spliceDiverged`). Above it the shape is the
+  // FM-REPLICATION-004 overshipped tail — payload data the replica installed
+  // past the granted offset. R5 (2026-08-20) removes that class at the accept
+  // (`truncateAboveClaim`), so reaching it is now also a defect
+  // (`defects.forkedTailApplied`, pinned by `overshippedTailMeetsFailoverTest`).
   pure def classifyApply(d: List[WriteId], k: Offset, w: WriteId): ApplyOutcome =
     if (k == d.length() + 1) Appended
     else if (k > d.length() + 1) Gapped
@@ -181,7 +181,15 @@ module replication_fullsync_logic {
   // that as a no-op would be a fidelity bug: it would leave the replica showing
   // a replaced history's content at a position the live history has since
   // rewritten, and every downstream property would read that as divergence.
-  pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId] =
+  // R5 (2026-08-20 ruling): Raft-style divergence truncation on a partial-resync
+// accept. Everything strictly above the offset the replica claims is dropped
+// before the splice, so a position the replica holds but does not claim can
+// never survive into a history that will not overwrite it. The claimed prefix
+// is untouched — it is what the grant asserts agreement on.
+pure def truncateAboveClaim(d: List[WriteId], claim: Offset): List[WriteId] =
+  if (claim < d.length()) d.slice(0, claim) else d
+
+pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId] =
     if (k == d.length() + 1) d.append(w) else d.replaceAt(k - 1, w)
 
   // --- ACK ingest (TR-REPLICATION-018, issue-21 ruling) ---

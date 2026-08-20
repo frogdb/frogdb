@@ -35,6 +35,8 @@
 //   TR-REPLICATION-021  uncleanRestartMintsFreshIdTest, inv_restart_pairs_offset
 //   TR-REPLICATION-022  inv_one_session_per_announced_identity,
 //                       inv_superseded_records_no_departure
+//   TR-REPLICATION-034  inv_no_forked_tail_above_the_claim (R5, model-only)
+//   FM-REPLICATION-001  inv_reapply_is_a_noop (R4)
 //   FM-REPLICATION-004  inv_payload_covers_grant, inv_applied_covered_by_data
 //   FM-REPLICATION-005  inv_splice_continuity
 //   FM-REPLICATION-012  spliceOverEvictedRangeFailsTest
@@ -56,33 +58,53 @@
 //   INV-SESSION-1       inv_link_points_at_a_live_session
 //   INV-SESSION-2       inv_one_session_per_announced_identity
 //
-// **Recorded discrepancy, deliberately left unasserted.** FM-REPLICATION-004
+// **R4 (2026-08-20 ruling) — the checkpoint-cut overlap is offset-addressed.**
+// The discrepancy this block used to record is ruled. FM-REPLICATION-004
 // declares the safe direction structural — `snapshot_offset <= payload data` —
-// and FM-REPLICATION-001 lists the resulting overlap as a deliberate
-// non-guarantee ("re-applies a tail it already holds, which is idempotent for
-// the replicated write stream"). Issue-24's amendment point 2 makes the opposite
-// claim about the *same* shape: an offset biased low relative to the data it
-// names gives non-idempotent replay (INCR/LPUSH/APPEND applied twice), which is
-// why the persisted offset must commit in the same atomic unit as the write it
-// names. The model records the overlap (`coverage.reapplied`) and asserts only
-// the outcomes both readings agree are wrong: a gap, and a divergent position
-// *inside the window the grant claims*. Resolving which reading governs the
-// checkpoint cut is a design ruling, not a modelling choice.
+// FM-REPLICATION-001 lists the resulting overlap as a deliberate non-guarantee,
+// and R4 rules the overlap harmless *by construction*: replay is
+// offset-addressed, so a frame at or below the offset the replica claims is
+// never delivered, and re-delivery is a no-op. FM-REPLICATION-004/001 stand;
+// issue-24's amendment point 2 narrows to what it actually forces — the
+// persisted offset commits atomically with the write it names
+// (`inv_restart_pairs_offset`). The model asserts the licensed half:
+// `inv_reapply_is_a_noop` makes the no-op falsifiable rather than incidental,
+// and `coverage.reapplied` (`witnessReappliedOverlap`, pinned deterministically
+// by `writeDuringTransferSurvivesTest`) is the witness that the overlap is
+// exercised at all.
 //
-// **The overshipped tail across a failover.** The same overship has a second
-// consequence the rows do not speak to. A replica that installs a payload
-// covering more than its granted offset holds writes its own offset does not
-// claim. If the primary's history is replaced before the replay reconciles that
-// tail — a lossy restart, a promotion — the replica is still inside the failover
-// window at its *claimed* offset and is granted a partial resync, and the new
-// history's frames then land on positions the old history wrote. Overwriting
-// them is the correction, not the damage, so the model records it
-// (`coverage.forkedTailReplaced`, pinned by `overshippedTailMeetsFailoverTest`)
-// and does not treat it as divergence. What the model cannot see, because a
-// unit-write log is not a keyspace, is residue: a forked position the *new*
-// history never reaches, which no reconnect will ever ask for again. Whether
-// FM-REPLICATION-004's structural overship needs a matching rule on the replica
-// side is an open question for the spec, not something this model decides.
+// *What the abstraction carries, and what it does not.* The skip rule R4 names
+// is real and already specced — it is FM-REPLICATION-015's sequence dedup
+// (`frame.sequence <= resume_offset`) plus FM-REPLICATION-012's contiguity
+// check on the extraction — but it is enforced on the *sender*, against the
+// offset the replica claimed, so it covers positions at or below that claim.
+// The checkpoint-cut overship sits strictly *above* the claim, and this model's
+// unit-write log makes its re-landing a no-op because a position is overwritten
+// with the identical write id. A keyspace under verbatim propagation
+// (`replication_forms`, `core/src/shard/post_execution.rs:87` — "everything else
+// propagates verbatim") does not have that property, and FM-REPLICATION-015's
+// own not-observable says so: re-applying a boundary command "for a
+// non-idempotent replicated command ... is corruption, not a no-op". The model
+// therefore asserts the no-op it can see and records here that the overship
+// range's re-execution is *not* covered by the sender-side skip; see the
+// campaign ledger's R4 follow-up.
+//
+// **R5 (2026-08-20 ruling) — the overshipped tail is truncated above the claim.**
+// A replica that installs a payload covering more than its granted offset holds
+// writes its own offset does not claim. If the primary's history is replaced
+// before the replay reconciles that tail — a lossy restart, a promotion — the
+// replica is still inside the failover window at its *claimed* offset and is
+// granted a partial resync. R5 rules that the accept discards everything above
+// the claim before splicing (Raft-style divergence truncation,
+// `truncateAboveClaim`), which removes by construction both the overwrite and
+// the residue class the model previously could not see: a forked position the
+// *new* history never reaches, which no reconnect would ever ask for again.
+// What was tracked as lawful correction is now forbidden
+// (`inv_no_forked_tail_above_the_claim`), and `coverage.overshipTruncated`
+// records the drop. `overshippedTailMeetsFailoverTest` pins the whole sequence.
+// The rule is **model-only today**: the Rust `+CONTINUE` accept
+// (`replica/connection.rs:300`) shifts the replication id and resumes, and
+// discards nothing.
 module replication_fullsync {
   import cluster_common_types.* from "./cluster_common_types"
   import lib_option.* from "./lib_option"
@@ -128,6 +150,22 @@ module replication_fullsync {
   val inv_splice_continuity: bool =
     not(defects.spliceGap) and not(defects.spliceDiverged)
 
+  // R4: re-delivery of a position the replica already holds is a no-op, and a
+  // frame landing never moves the applied position backwards. The first half is
+  // what makes FM-REPLICATION-004's structural overship harmless in the model's
+  // write-log abstraction; the second is the ordering the offset addressing
+  // rests on. Both are true by construction of `applyFrameToData`/`applyFrameAt`
+  // — the ghosts exist so a mutation of either cannot pass silently.
+  val inv_reapply_is_a_noop: bool =
+    not(defects.reapplyChangedData) and not(defects.replayRegressedApplied)
+
+  // R5: no frame ever lands on a divergent position *above* the offset its
+  // grant claims. The partial-resync accept truncates the replica's data to its
+  // claim (`truncateAboveClaim`), so a forked tail cannot survive into the
+  // splice to be overwritten — or, worse, to be left as residue the new history
+  // never reaches.
+  val inv_no_forked_tail_above_the_claim: bool = not(defects.forkedTailApplied)
+
   // --- Partial-resync soundness ---
 
   // A `+CONTINUE` is granted only over history the primary can actually serve:
@@ -146,16 +184,26 @@ module replication_fullsync {
   // The recovered offset commits with the data it names.
   val inv_restart_pairs_offset: bool = not(defects.restartOffsetTorn)
 
-  // A primary's (generation, live offset) pair never regresses lexicographically:
-  // writes raise the offset at a fixed generation, and every event that lowers
-  // the offset mints a strictly greater generation in the same step. A restart
-  // that keeps its id while rewinding its offset — the issue-24 defect — breaks
-  // this immediately.
+  // The (generation, live offset) pair never regresses lexicographically across
+  // *any* step into Primary: writes raise the offset at a fixed generation, and
+  // every event that lowers the offset mints a strictly greater generation in
+  // the same step. A restart that keeps its id while rewinding its offset — the
+  // issue-24 defect — breaks this immediately.
+  //
+  // R6 (2026-08-20 ruling) dropped the `prev.primary` antecedent this carried
+  // until battery row I09. The pair is an *operator-facing* total order — a
+  // later observation is never below an earlier one — so a promotion is inside
+  // the order, not exempt from it: `applyPromote` rewinds `recv` to `applied`
+  // but mints a strictly greater generation in the same step, so gen-domination
+  // carries the pair forward (`promotionMidSyncTest` pins exactly that shape:
+  // offset 3 -> 2 under gen 1 -> 2). Widening also removes the shadow's
+  // `primary` flag from the invariant's reach, which is why
+  // `inv_primary_role_is_terminal` keeps it honest on its own.
   val inv_identity_pair_monotone: bool =
     NODES.forall(n => {
       val prev = ctl.prev_pair.get(n)
       val cur = nodes.get(n)
-      (prev.primary and cur.role == Primary)
+      (cur.role == Primary)
         implies identityPairOk(prev.gen, prev.off, cur.replid, cur.recv)
     })
 
@@ -326,6 +374,7 @@ module replication_fullsync {
   val witnessFullSyncStreaming: bool = coverage.fullSyncStreaming
   val witnessWriteDuringTransfer: bool = coverage.overshipped
   val witnessReappliedOverlap: bool = coverage.reapplied
+  val witnessOvershipTruncated: bool = coverage.overshipTruncated
   val witnessTailApplied: bool = coverage.tailApplied
   val witnessPartialViaSecondary: bool = coverage.partialViaSecondary
   val witnessEvictionForcedFullResync: bool = coverage.evictionForcedFull
@@ -403,6 +452,10 @@ module replication_fullsync {
         inv_no_acked_write_lost_across_fullsync,
         inv_splice_continuity,
         inv_applied_covered_by_data,
+        // R4: the deterministic floor under `witnessReappliedOverlap`. The
+        // re-landing of offset 2 — already in the payload — changed nothing,
+        // and the applied position advanced rather than regressing.
+        inv_reapply_is_a_noop,
       }))
 
   // 3. A replica promoted mid-sync freezes the inherited history at what it
@@ -435,6 +488,17 @@ module replication_fullsync {
         ctl.prev_pair.get(2) == { gen: FIRST_GEN, off: 3, primary: false },
         coverage.settleDiscardedFrames,
         inv_replid_offset_paired,
+        // R6's forcing pin. This is the step the widened
+        // `inv_identity_pair_monotone` newly reaches: the predecessor was a
+        // *replica* (`primary: false`), and the promotion rewinds the offset
+        // (3 -> 2), so the pair advances only because the generation strictly
+        // dominates (1 -> 2). Assert the domination directly as well, so a
+        // mutation that kept the offset ordering by minting an equal generation
+        // is caught here and not merely by the invariant's lexicographic form.
+        lexGt((nodes.get(2).replid, nodes.get(2).recv),
+              (ctl.prev_pair.get(2).gen, ctl.prev_pair.get(2).off)),
+        nodes.get(2).replid > ctl.prev_pair.get(2).gen,
+        nodes.get(2).recv < ctl.prev_pair.get(2).off,
         inv_identity_pair_monotone,
         inv_second_offset_not_above_live,
         inv_failover_window_whole,
@@ -642,23 +706,26 @@ module replication_fullsync {
         inv_identity_pair_monotone,
       }))
 
-  // The FM-REPLICATION-004 overshipped tail meeting a failover, pinned
-  // deterministically because the random walk reaches it in roughly 0.2% of
-  // traces at 4000x40 and not at all at the gate's depth — it needs an overship,
-  // a lossy restart, and a re-grant of the *same* replica, in that order, before
-  // the replay has reconciled the tail. There is deliberately no
-  // `witness*` for it: a witness the gate reads as 0 would be indistinguishable
-  // from dead behaviour.
+  // The FM-REPLICATION-004 overshipped tail meeting a failover, and R5's
+  // truncation removing it. Pinned deterministically because the random walk
+  // reaches the shape in roughly 0.2% of traces at 4000x40 and not at all at the
+  // gate's depth — it needs an overship, a lossy restart, and a re-grant of the
+  // *same* replica, in that order, before the replay has reconciled the tail.
   //
   // The shape: replica 2 installs a payload covering offset 2 while its granted
   // offset is 1, so it holds a write its own offset does not claim. Primary 1
   // then restarts having recovered only offset 1, mints a new history, and
   // writes a *different* write at offset 2. The replica is inside the failover
-  // window at offset 1, so it is granted a partial resync and the replay
-  // overwrites the forked position. That overwrite is lawful — it is the
-  // correction, not the damage — so it lands in `coverage`, not `defects`, and
-  // the replica ends agreeing with the live history over its whole claimed
-  // prefix.
+  // window at offset 1, so it is granted a partial resync.
+  //
+  // R5 (2026-08-20) rules what happens next. Before the ruling the forked
+  // position survived the accept and was overwritten by the replay — lawful
+  // correction, tracked in `coverage`, and silent about the residue case where
+  // the new history never reaches that position at all. Now the accept
+  // truncates to the claim, so the fork is gone *before* the splice: the replay
+  // appends rather than overwriting, `inv_no_forked_tail_above_the_claim` holds,
+  // and no position the new history will not reach can be left behind.
+  // `coverage.overshipTruncated` records the drop.
   run overshippedTailMeetsFailoverTest =
     init
       .then(writeOnPrimaryAs(1))
@@ -680,15 +747,21 @@ module replication_fullsync {
         sessions.get(2).arm == PartialGrant,
         sessions.get(2).grant_offset == 1,
         coverage.partialViaSecondary,
-        // The fork is real before the replay reconciles it: position 2 carries
-        // the replaced history's write, not the live one's.
-        not(prefixAgrees(nodes.get(2).data, nodes.get(1).data, 2)),
+        // R5: the accept dropped the forked position rather than leaving it for
+        // the replay. The replica now holds exactly what it claims.
+        coverage.overshipTruncated,
+        nodes.get(2).data.length() == 1,
+        nodes.get(2).applied == 1,
+        prefixAgrees(nodes.get(2).data, nodes.get(1).data, nodes.get(2).applied),
       }))
       .then(spliceStreamAt(2))
       .then(receiveFrameAt(2))
       .then(applyFrameAt(2))
       .then(check(and {
-        coverage.forkedTailReplaced,
+        // The new history's offset 2 *appended* — there was nothing left above
+        // the claim to overwrite, so the forked-tail defect never latches.
+        inv_no_forked_tail_above_the_claim,
+        nodes.get(2).data == nodes.get(1).data,
         inv_splice_continuity,
         inv_no_acked_write_lost_across_fullsync,
         prefixAgrees(nodes.get(2).data, nodes.get(1).data, nodes.get(2).applied),
