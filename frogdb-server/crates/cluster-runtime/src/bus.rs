@@ -62,6 +62,26 @@ pub type BusTlsHandshake = std::pin::Pin<
     >,
 >;
 
+/// The replica-link half of a `HealthProbe` answer, as a seam.
+///
+/// A failover decision has to know whether a candidate's inbound replication
+/// stream is attached and past PSYNC (FM-CLUSTER-106). The session's *source*
+/// end lives on the primary that just failed, so the only reachable end is the
+/// candidate itself — and the candidate is already being asked for its offset.
+/// The bus therefore asks the node one narrow question rather than depending on
+/// `frogdb-server`'s `RoleManager`; the blanket impl below makes every
+/// [`frogdb_core::RoleController`] one of these for free.
+pub trait ReplicaLinkState: Send + Sync {
+    /// Whether this node's inbound replication stream is attached past PSYNC.
+    fn master_link_up(&self) -> bool;
+}
+
+impl<T: frogdb_core::RoleController> ReplicaLinkState for T {
+    fn master_link_up(&self) -> bool {
+        frogdb_core::RoleController::master_link_up(self)
+    }
+}
+
 /// The consensus half of the bus, as a seam.
 ///
 /// The bus itself services only [`BusRpc`]; everything else is consensus traffic
@@ -97,6 +117,9 @@ pub struct ClusterBusContext<R = Arc<ClusterRaft>> {
     pub num_shards: usize,
     pub node_id: NodeId,
     pub replication_offset: Arc<AtomicU64>,
+    /// The inbound-link state this node reports on a `HealthProbe`, read at
+    /// answer time so the reply is never a boot-time snapshot.
+    pub replica_link: Arc<dyn ReplicaLinkState>,
     /// The node-wide cluster-bus packet counters, shared with the outbound
     /// direction (`ClusterNetworkFactory::bus_stats`) so `CLUSTER INFO` reports
     /// one pair for the whole bus.
@@ -336,6 +359,7 @@ async fn handle_bus_rpc<R: BusRaftHandler>(
         BusRpc::HealthProbe => ClusterRpcResponse::HealthProbeResponse {
             node_id: ctx.node_id,
             replication_offset: ctx.replication_offset.load(Ordering::Acquire),
+            replica_link_up: ctx.replica_link.master_link_up(),
         },
     }
 }
@@ -412,8 +436,27 @@ mod tests {
         }
     }
 
+    /// A link state fixed at construction, standing in for the node's
+    /// `RoleManager` in a bus that has no replication machinery.
+    struct FixedLink(bool);
+
+    impl ReplicaLinkState for FixedLink {
+        fn master_link_up(&self) -> bool {
+            self.0
+        }
+    }
+
     /// A plaintext bus context reporting `node_id` / `offset` on a health probe.
     fn test_context(node_id: NodeId, offset: u64) -> Arc<ClusterBusContext<RecordingRaft>> {
+        test_context_with_link(node_id, offset, true)
+    }
+
+    /// As [`test_context`], with the reported inbound-link state chosen.
+    fn test_context_with_link(
+        node_id: NodeId,
+        offset: u64,
+        link_up: bool,
+    ) -> Arc<ClusterBusContext<RecordingRaft>> {
         Arc::new(ClusterBusContext {
             raft: RecordingRaft::default(),
             // A health probe never reaches the shards; the pub/sub arms that do
@@ -422,6 +465,7 @@ mod tests {
             num_shards: 0,
             node_id,
             replication_offset: Arc::new(AtomicU64::new(offset)),
+            replica_link: Arc::new(FixedLink(link_up)),
             bus_stats: Arc::new(ClusterBusStats::new()),
             tls: None,
         })
@@ -535,7 +579,7 @@ mod tests {
 
         assert_eq!(
             peer.health_probe().await.expect("probe must be answered"),
-            (42, 9_001),
+            (42, 9_001, true),
             "the probe answers from the context, unconditionally"
         );
 
@@ -551,6 +595,35 @@ mod tests {
         );
 
         server.abort();
+    }
+
+    /// The probe answer carries the node's *live* inbound-link state, not a
+    /// constant: a failover decision reads it to tell a replica that is still
+    /// attached from one whose session has ended (FM-CLUSTER-106).
+    // FM-CLUSTER-106
+    #[tokio::test]
+    async fn the_health_probe_reports_this_nodes_inbound_link_state() {
+        for link_up in [true, false] {
+            let listener = tcp_listener_reusable("127.0.0.1:0".parse::<SocketAddr>().unwrap())
+                .await
+                .expect("binding an ephemeral port must succeed");
+            let addr = listener.local_addr().unwrap();
+            let ctx = test_context_with_link(5, 1_234, link_up);
+            let server = tokio::spawn(run(listener, ctx));
+
+            let factory = ClusterNetworkFactory::new();
+            assert_eq!(
+                factory
+                    .connect(5, addr)
+                    .health_probe()
+                    .await
+                    .expect("probe must be answered"),
+                (5, 1_234, link_up),
+                "the bus reports whatever the link seam says"
+            );
+
+            server.abort();
+        }
     }
 
     /// A peer that simply goes away ends the connection with `Ok`, so the accept

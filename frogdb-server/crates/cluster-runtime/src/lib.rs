@@ -32,7 +32,7 @@ pub mod handoff_barrier;
 pub mod migration_events;
 pub mod pubsub;
 
-pub use bus::{ClusterBusContext, run as run_cluster_bus};
+pub use bus::{ClusterBusContext, ReplicaLinkState, run as run_cluster_bus};
 pub use failure_detector::{
     DetectorRaft, FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };

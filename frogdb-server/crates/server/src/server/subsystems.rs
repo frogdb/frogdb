@@ -351,6 +351,11 @@ impl Server {
                     .shared_replication_offset
                     .clone()
                     .unwrap_or_else(|| Arc::new(AtomicU64::new(0))),
+                // The same handle INFO's `master_link_status` reads, so a peer
+                // scoring this node for promotion (FM-CLUSTER-106) and an
+                // operator reading INFO cannot disagree about the link.
+                replica_link: Arc::new(self.role_manager_handle.clone())
+                    as Arc<dyn crate::cluster::ReplicaLinkState>,
                 // Both bus directions accumulate into the network factory's
                 // counter pair, which is what `CLUSTER INFO` reads.
                 bus_stats: self

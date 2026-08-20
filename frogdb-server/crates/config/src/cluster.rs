@@ -110,6 +110,20 @@ pub struct ClusterConfigSection {
     #[serde(default = "default_replica_priority")]
     #[param(mutable)]
     pub replica_priority: u32,
+
+    /// Automatic-promotion staleness bound, in replication-offset bytes behind
+    /// the freshest candidate. `0` (the default) disqualifies nobody.
+    ///
+    /// Redis spells this bound in disconnection *seconds*
+    /// (`cluster-replica-validity-factor`); FrogDB spells it in offset lag so
+    /// no wall clock gates a promotion. Forced failover
+    /// (`CLUSTER FAILOVER FORCE`/`TAKEOVER`) never consults it.
+    //
+    // Live seam: `select_failover_target` reads it through
+    // `ClusterRuntimeFlags` at selection time (TR-CLUSTER-043).
+    #[serde(default)]
+    #[param(mutable, name = "cluster-promotion-max-lag-bytes")]
+    pub promotion_max_lag_bytes: u64,
 }
 
 pub const DEFAULT_CLUSTER_BUS_ADDR: &str = "127.0.0.1:16379";
@@ -173,6 +187,7 @@ impl Default for ClusterConfigSection {
             fail_threshold: default_fail_threshold(),
             self_fence_on_quorum_loss: default_self_fence_on_quorum_loss(),
             replica_priority: default_replica_priority(),
+            promotion_max_lag_bytes: 0,
         }
     }
 }

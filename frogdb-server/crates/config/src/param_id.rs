@@ -164,6 +164,7 @@ param_id_enum! {
         ClusterAutoFailover => "cluster-auto-failover",
         ClusterSelfFenceOnQuorumLoss => "cluster-self-fence-on-quorum-loss",
         ReplicaPriority => "replica-priority",
+        ClusterPromotionMaxLagBytes => "cluster-promotion-max-lag-bytes",
         // Status thresholds (`StatusThresholds`), re-read per `/status` report.
         StatusMemoryWarningPercent => "status-memory-warning-percent",
         StatusConnectionWarningPercent => "status-connection-warning-percent",

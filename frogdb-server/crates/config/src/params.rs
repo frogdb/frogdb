@@ -533,6 +533,17 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // flag, deliberately unreachable from CONFIG and the config file. ---
         rows.push(pick(PersistenceConfig::PARAMS, "require-existing-data"));
 
+        // --- cluster-correctness issue 37 (distsys-review MAJ-9): the
+        // automatic-promotion staleness bound, appended last so the golden
+        // snapshot's first 123 rows stay byte-identical. Live-mutable:
+        // `select_failover_target` reads it off `ClusterRuntimeFlags` at
+        // selection time, so a SET steers the very next promotion this node
+        // decides (TR-CLUSTER-043). ---
+        rows.push(pick(
+            ClusterConfigSection::PARAMS,
+            "cluster-promotion-max-lag-bytes",
+        ));
+
         rows
     });
 
@@ -1420,6 +1431,13 @@ mod tests {
             mutable: false,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "cluster-promotion-max-lag-bytes",
+            section: Some("cluster"),
+            field: Some("promotion-max-lag-bytes"),
+            mutable: true,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1463,8 +1481,9 @@ mod tests {
         // spelling; the derived row at position 14 was renamed in place to
         // `min-replicas-max-lag-ms`, adding no row of its own), giving 122.
         // Issue 11 (the wrong-data-dir guard) appended the immutable
-        // `require-existing-data`, giving 123.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 123);
+        // `require-existing-data`, giving 123. Cluster-correctness issue 37
+        // appended the mutable `cluster-promotion-max-lag-bytes`, giving 124.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 124);
     }
 
     #[test]

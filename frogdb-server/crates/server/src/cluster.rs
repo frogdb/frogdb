@@ -12,7 +12,7 @@
 //! (`crate::commands::cluster`) stay in the server: both are coupled to a live
 //! connection's routing and dispatch.
 
-pub use frogdb_cluster_runtime::bus::{self, ClusterBusContext};
+pub use frogdb_cluster_runtime::bus::{self, ClusterBusContext, ReplicaLinkState};
 pub use frogdb_cluster_runtime::failure_detector::{
     self, FailureDetector, FailureDetectorConfig, spawn_failure_detector_task,
 };

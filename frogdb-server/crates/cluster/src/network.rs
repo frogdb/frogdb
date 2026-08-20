@@ -170,6 +170,12 @@ pub enum ClusterRpcResponse {
     HealthProbeResponse {
         node_id: NodeId,
         replication_offset: u64,
+        /// Whether this node's inbound replication stream is attached and past
+        /// PSYNC (the fact INFO renders as `master_link_status`). Self-reported
+        /// because the answering node is the only end of that session the
+        /// prober can still reach when the primary is the one that failed
+        /// (FM-CLUSTER-106).
+        replica_link_up: bool,
     },
     /// Error response.
     Error(String),
@@ -406,14 +412,16 @@ impl ClusterNetwork {
         &self.bus_stats
     }
 
-    /// Send a lightweight health probe to query a node's replication offset.
-    pub async fn health_probe(&self) -> Result<(NodeId, u64), ClusterError> {
+    /// Send a lightweight health probe to query a node's replication offset
+    /// and inbound-link state.
+    pub async fn health_probe(&self) -> Result<(NodeId, u64, bool), ClusterError> {
         let request = BusRpc::HealthProbe.into();
         match self.send_rpc(request).await? {
             ClusterRpcResponse::HealthProbeResponse {
                 node_id,
                 replication_offset,
-            } => Ok((node_id, replication_offset)),
+                replica_link_up,
+            } => Ok((node_id, replication_offset, replica_link_up)),
             _ => Err(ClusterError::NetworkError(
                 "unexpected response type for health probe".to_string(),
             )),
@@ -1167,6 +1175,7 @@ mod tests {
         let resp = ClusterRpcResponse::HealthProbeResponse {
             node_id: 42,
             replication_offset: 1000,
+            replica_link_up: true,
         };
         let bytes = postcard::to_allocvec(&resp).unwrap();
         let decoded: ClusterRpcResponse = postcard::from_bytes(&bytes).unwrap();
@@ -1207,6 +1216,7 @@ mod tests {
             ClusterRpcResponse::HealthProbeResponse {
                 node_id: 7,
                 replication_offset: 99,
+                replica_link_up: true,
             },
             &stats,
         )
@@ -1278,6 +1288,7 @@ mod tests {
             ClusterRpcResponse::HealthProbeResponse {
                 node_id: 7,
                 replication_offset: 99,
+                replica_link_up: true,
             },
             &stats,
         )
@@ -1430,6 +1441,7 @@ mod tests {
         let confused = forward_write_answered_with(ClusterRpcResponse::HealthProbeResponse {
             node_id: 7,
             replication_offset: 99,
+            replica_link_up: true,
         })
         .await
         .expect_err("an answer to another question is not a commit");

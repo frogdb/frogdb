@@ -611,8 +611,12 @@ impl<R: DetectorRaft> FailureDetector<R> {
             return;
         }
 
-        // Query each replica's replication offset via HealthProbe RPC
-        let mut replica_offsets: Vec<(NodeId, u64)> = Vec::new();
+        // Probe each replica: its replication offset and whether its inbound
+        // link is still attached. A probe that learned nothing records `None`
+        // for both — a sentinel offset would be laundered into a score
+        // (FM-CLUSTER-105) and an assumed-up link would defeat the handoff
+        // filter (FM-CLUSTER-106).
+        let mut probes: Vec<CandidateProbe> = Vec::new();
         for replica in &replicas {
             let net = self
                 .network_factory
@@ -623,48 +627,65 @@ impl<R: DetectorRaft> FailureDetector<R> {
             )
             .await
             {
-                Ok(Ok((_nid, offset))) => replica_offsets.push((replica.id, offset)),
+                Ok(Ok((_nid, offset, link_up))) => probes.push(CandidateProbe {
+                    node_id: replica.id,
+                    offset: Some(offset),
+                    link_up: Some(link_up),
+                }),
                 _ => {
                     tracing::warn!(
                         replica_id = replica.id,
                         "Could not query replica offset for scoring"
                     );
-                    replica_offsets.push((replica.id, 0)); // Unreachable gets worst offset
+                    probes.push(CandidateProbe {
+                        node_id: replica.id,
+                        offset: None,
+                        link_up: None,
+                    });
                 }
             }
         }
 
-        let max_offset = replica_offsets.iter().map(|(_, o)| *o).max().unwrap_or(0);
+        // The handoff predicate comes from the replicated migrations map, so
+        // every node computing this selection sees the same answer; the only
+        // local input is the lease comparison every reader of a prepared record
+        // already performs.
+        let policy = SelectionPolicy {
+            under_handoff: owns_slot_under_handoff(
+                &snapshot,
+                failed_node_id,
+                crate::handoff_barrier::handoff_now_ms(),
+            ),
+            max_lag_bytes: self.flags.promotion_max_lag_bytes(),
+        };
 
-        // Score and select best replica (lowest score wins). Priorities are
-        // resolved through `effective_priority`, so this node's own candidacy
-        // follows the live `cluster-replica-priority` atomic rather than the
-        // value it published at boot.
-        let new_primary = match select_failover_target(&replicas, &replica_offsets, &|n| {
+        // Select the successor: filter, then tier, then bound, then score
+        // (TR-CLUSTER-021). Priorities are resolved through
+        // `effective_priority`, so this node's own candidacy follows the live
+        // `cluster-replica-priority` atomic rather than the value it published
+        // at boot.
+        let new_primary = match select_failover_target(&replicas, &probes, policy, &|n| {
             self.effective_priority(n)
         }) {
             Some(node) => node,
             None => {
                 tracing::warn!(
                     node_id = failed_node_id,
-                    "Primary failed but all replicas have priority 0 (never-promote)"
+                    under_handoff = policy.under_handoff,
+                    max_lag_bytes = policy.max_lag_bytes,
+                    "Primary failed but no replica is an eligible promotion candidate"
                 );
                 return;
             }
         };
 
-        let replica_offset = offset_of(new_primary.id, &replica_offsets);
-
         tracing::info!(
             failed_primary = failed_node_id,
             new_primary = new_primary.id,
-            replica_offset = replica_offset,
-            max_offset = max_offset,
-            score = compute_replica_score(
-                self.effective_priority(new_primary),
-                replica_offset,
-                max_offset
-            ),
+            // `None` = the successor came from the last-resort tier: nobody's
+            // offset was determined, so there is no lag to report.
+            replica_offset = offset_of(new_primary.id, &probes),
+            under_handoff = policy.under_handoff,
             "Triggering automatic failover with lag-based scoring"
         );
 
@@ -769,13 +790,84 @@ impl<R: DetectorRaft> FailureDetector<R> {
     }
 }
 
-/// Replication offset recorded for `node_id`; unqueried nodes score as 0 (worst).
-fn offset_of(node_id: NodeId, offsets: &[(NodeId, u64)]) -> u64 {
-    offsets
-        .iter()
-        .find(|(id, _)| *id == node_id)
-        .map(|(_, o)| *o)
-        .unwrap_or(0)
+/// What one HealthProbe learned about a candidate replica.
+///
+/// Both fields are `Option` because "the probe failed" is a distinct answer
+/// from any value the probe could have returned. An unknown offset is a
+/// promotion *tier*, not a score of zero (FM-CLUSTER-105); an unknown link
+/// state reads as departed, so the handoff filter is fail-closed on its own
+/// error path (FM-CLUSTER-106).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CandidateProbe {
+    /// The replica the probe was addressed to.
+    node_id: NodeId,
+    /// The replica's replication offset, or `None` if the probe learned nothing.
+    offset: Option<u64>,
+    /// Whether the replica reports its inbound link attached and past PSYNC,
+    /// or `None` if the probe learned nothing.
+    link_up: Option<bool>,
+}
+
+/// The node-local policy inputs one selection applies (TR-CLUSTER-021).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SelectionPolicy {
+    /// Whether any slot the successor would inherit is under a live prepared
+    /// handoff, which arms the departing-replica filter (FM-CLUSTER-106).
+    under_handoff: bool,
+    /// `cluster-promotion-max-lag-bytes`, read live at selection time.
+    /// `0` disqualifies nobody (TR-CLUSTER-043).
+    max_lag_bytes: u64,
+}
+
+/// Whether any slot `primary` owns carries a live prepared handoff at `now_ms`.
+///
+/// Promotion is whole-node — one successor inherits every slot the failing
+/// primary owned — so the slot-scoped rule of FM-CLUSTER-106 is enforced at
+/// node granularity. Ownership, not the migration's endpoints, is what decides:
+/// a slot this primary is *importing* is still owned elsewhere and is not the
+/// successor's to inherit. An expired prepared record reads as absent here
+/// exactly as it does everywhere else.
+fn owns_slot_under_handoff(
+    snapshot: &frogdb_core::cluster::ClusterSnapshot,
+    primary: NodeId,
+    now_ms: u64,
+) -> bool {
+    snapshot.migrations.values().any(|m| {
+        snapshot.slot_assignment.get(&m.slot) == Some(&primary)
+            && m.live_handoff_at(now_ms).is_some()
+    })
+}
+
+/// The probe record for `node_id`, if one was taken.
+fn probe_of(node_id: NodeId, probes: &[CandidateProbe]) -> Option<&CandidateProbe> {
+    probes.iter().find(|p| p.node_id == node_id)
+}
+
+/// The *determined* replication offset for `node_id`. `None` when the probe
+/// learned nothing, or when no probe was taken at all — never a sentinel.
+fn offset_of(node_id: NodeId, probes: &[CandidateProbe]) -> Option<u64> {
+    probe_of(node_id, probes).and_then(|p| p.offset)
+}
+
+/// Whether `node_id` reports its inbound replication link attached past PSYNC.
+///
+/// Anything short of an explicit "up" — an explicit "down", or a probe that
+/// learned nothing — is departed, because this is the only end of the feed
+/// session a prober can still reach once the source has failed.
+fn link_attached(node_id: NodeId, probes: &[CandidateProbe]) -> bool {
+    probe_of(node_id, probes).and_then(|p| p.link_up) == Some(true)
+}
+
+/// The reference point every scored candidate's lag is measured from: the
+/// maximum over *determined* offsets (FM-CLUSTER-056).
+///
+/// Folded over every probe, not only the eligible candidates': a never-promote
+/// replica still holds the writes it acked, so it is the honest answer to "how
+/// far behind the freshest surviving copy is this candidate". An undetermined
+/// offset contributes nothing — a sentinel folded in as a *maximum* would move
+/// the point every other candidate is judged against.
+fn lag_reference_point(probes: &[CandidateProbe]) -> Option<u64> {
+    probes.iter().filter_map(|p| p.offset).max()
 }
 
 /// Compute a failover score for a replica. Lower score = better candidate.
@@ -793,33 +885,80 @@ fn compute_replica_score(priority: u32, replica_offset: u64, max_offset: u64) ->
     if priority == 0 {
         return u64::MAX;
     }
-    (priority as u64) * 100_000 + max_offset.saturating_sub(replica_offset) * 1_000
+    // Saturating throughout: a candidate ahead of the reference point must not
+    // underflow the lag term into a wraparound, and a lag large enough to
+    // overflow the weighting is already "as bad as it gets" — wrapping it would
+    // turn the worst candidate into the best one.
+    (priority as u64).saturating_mul(100_000).saturating_add(
+        max_offset
+            .saturating_sub(replica_offset)
+            .saturating_mul(1_000),
+    )
 }
 
-/// Pick the promotion target among `replicas`: lowest score wins, ties broken by
-/// node id for determinism. Never-promote candidates (effective priority 0) are
-/// excluded outright.
+/// Pick the promotion target among `replicas`: **filter, then tier, then bound,
+/// then score** (TR-CLUSTER-021).
+///
+/// 1. *Eligibility filter* — effective priority 0 is excluded outright
+///    (FM-CLUSTER-057), and under a live handoff so is any candidate that does
+///    not report its inbound link attached (FM-CLUSTER-106).
+/// 2. *Tiering* — candidates whose offset the probe determined form the scored
+///    tier; the rest form the last-resort tier, reached only when the scored
+///    tier's *input* is empty (FM-CLUSTER-105).
+/// 3. *Bound* — a scored candidate lagging by more than `max_lag_bytes` is
+///    disqualified from automatic promotion (TR-CLUSTER-043).
+/// 4. *Score* — `priority * 100_000 + lag * 1_000`, ties by node id
+///    (FM-CLUSTER-056/058).
 ///
 /// `priority_of` resolves each candidate's *effective* priority, so a caller can
 /// override its own entry with a live config value. Pure: no Raft, no clock, no
 /// sockets — the whole selection policy is unit-testable.
 fn select_failover_target<'a>(
     replicas: &[&'a NodeInfo],
-    offsets: &[(NodeId, u64)],
+    probes: &[CandidateProbe],
+    policy: SelectionPolicy,
     priority_of: &dyn Fn(&NodeInfo) -> u32,
 ) -> Option<&'a NodeInfo> {
-    let max_offset = offsets.iter().map(|(_, o)| *o).max().unwrap_or(0);
-    replicas
+    // (1) Eligibility.
+    let eligible: Vec<&'a NodeInfo> = replicas
         .iter()
         .copied()
         .filter(|r| priority_of(r) != 0)
-        .min_by(|a, b| {
-            let score_a =
-                compute_replica_score(priority_of(a), offset_of(a.id, offsets), max_offset);
-            let score_b =
-                compute_replica_score(priority_of(b), offset_of(b.id, offsets), max_offset);
+        .filter(|r| !policy.under_handoff || link_attached(r.id, probes))
+        .collect();
+
+    // (2) Tiering: the scored tier is the eligible candidates whose offset the
+    // probe determined. Whether anything survives the *bound* below is a
+    // different question, and deliberately not one the tier gate asks — an
+    // emptied scored tier abandons the failover rather than handing it down.
+    let scored: Vec<(&'a NodeInfo, u64)> = eligible
+        .iter()
+        .copied()
+        .filter_map(|r| offset_of(r.id, probes).map(|offset| (r, offset)))
+        .collect();
+
+    let Some(max_offset) = lag_reference_point(probes).filter(|_| !scored.is_empty()) else {
+        // Last-resort tier: no offset term to rank on, so priority then id.
+        return eligible.into_iter().min_by(|a, b| {
+            priority_of(a)
+                .cmp(&priority_of(b))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+    };
+
+    scored
+        .into_iter()
+        // (3) Bound.
+        .filter(|(_, offset)| {
+            policy.max_lag_bytes == 0 || max_offset.saturating_sub(*offset) <= policy.max_lag_bytes
+        })
+        // (4) Score.
+        .min_by(|(a, offset_a), (b, offset_b)| {
+            let score_a = compute_replica_score(priority_of(a), *offset_a, max_offset);
+            let score_b = compute_replica_score(priority_of(b), *offset_b, max_offset);
             score_a.cmp(&score_b).then_with(|| a.id.cmp(&b.id))
         })
+        .map(|(r, _)| r)
 }
 
 impl<R: DetectorRaft> QuorumChecker for FailureDetector<R> {
@@ -1322,12 +1461,39 @@ mod tests {
         node
     }
 
+    /// A probe that came back: both facts determined.
+    fn probe(node_id: NodeId, offset: u64, link_up: bool) -> CandidateProbe {
+        CandidateProbe {
+            node_id,
+            offset: Some(offset),
+            link_up: Some(link_up),
+        }
+    }
+
+    /// A probe that learned nothing — the peer refused, or it timed out.
+    fn blind(node_id: NodeId) -> CandidateProbe {
+        CandidateProbe {
+            node_id,
+            offset: None,
+            link_up: None,
+        }
+    }
+
+    /// Probes for an ordinary candidate set: every offset determined, every
+    /// link attached.
+    fn healthy(offsets: &[(NodeId, u64)]) -> Vec<CandidateProbe> {
+        offsets
+            .iter()
+            .map(|&(id, offset)| probe(id, offset, true))
+            .collect()
+    }
+
     /// Score a node by its published priority — the pre-seam behavior these
     /// formula tests pin.
-    fn score_of(node: &NodeInfo, max_offset: u64, offsets: &[(NodeId, u64)]) -> u64 {
+    fn score_of(node: &NodeInfo, max_offset: u64, probes: &[CandidateProbe]) -> u64 {
         compute_replica_score(
             node.replica_priority,
-            offset_of(node.id, offsets),
+            offset_of(node.id, probes).expect("the formula tests supply every offset"),
             max_offset,
         )
     }
@@ -1336,7 +1502,7 @@ mod tests {
     #[test]
     fn test_compute_replica_score_priority_zero_excluded() {
         let node = make_node(10, 0);
-        let offsets = vec![(10, 1000u64)];
+        let offsets = healthy(&[(10, 1000)]);
         assert_eq!(score_of(&node, 1000, &offsets), u64::MAX);
     }
 
@@ -1345,7 +1511,7 @@ mod tests {
     fn test_compute_replica_score_lower_priority_is_better() {
         let node_a = make_node(10, 50);
         let node_b = make_node(11, 100);
-        let offsets = vec![(10, 1000u64), (11, 1000)];
+        let offsets = healthy(&[(10, 1000), (11, 1000)]);
         let score_a = score_of(&node_a, 1000, &offsets);
         let score_b = score_of(&node_b, 1000, &offsets);
         assert!(score_a < score_b, "Lower priority should give lower score");
@@ -1356,7 +1522,7 @@ mod tests {
     fn test_compute_replica_score_higher_offset_is_better() {
         let node_a = make_node(10, 100);
         let node_b = make_node(11, 100);
-        let offsets = vec![(10, 900u64), (11, 500)];
+        let offsets = healthy(&[(10, 900), (11, 500)]);
         let max_offset = 1000;
         let score_a = score_of(&node_a, max_offset, &offsets);
         let score_b = score_of(&node_b, max_offset, &offsets);
@@ -1371,7 +1537,7 @@ mod tests {
     fn test_compute_replica_score_equal_scores_tiebreak_by_node_id() {
         let node_a = make_node(10, 100);
         let node_b = make_node(11, 100);
-        let offsets = vec![(10, 1000u64), (11, 1000)];
+        let offsets = healthy(&[(10, 1000), (11, 1000)]);
         let score_a = score_of(&node_a, 1000, &offsets);
         let score_b = score_of(&node_b, 1000, &offsets);
         assert_eq!(score_a, score_b, "Same priority and offset = same score");
@@ -1382,7 +1548,7 @@ mod tests {
     #[test]
     fn test_compute_replica_score_formula() {
         let node = make_node(10, 100);
-        let offsets = vec![(10, 800u64)];
+        let offsets = healthy(&[(10, 800)]);
         let max_offset = 1000;
         let score = score_of(&node, max_offset, &offsets);
         // priority * 100_000 + lag * 1_000
@@ -1390,16 +1556,46 @@ mod tests {
         assert_eq!(score, 10_200_000);
     }
 
+    /// The lag term saturates: a candidate *ahead* of the reference point (one
+    /// that acked a frame between the fold and its own probe) must score as
+    /// zero lag, never wrap to an astronomically stale one.
     // FM-CLUSTER-056
     #[test]
-    fn test_compute_replica_score_no_offset_found() {
-        let node = make_node(10, 100);
-        let offsets: Vec<(NodeId, u64)> = vec![]; // Node not in offsets list
-        let max_offset = 1000;
-        let score = score_of(&node, max_offset, &offsets);
-        // offset defaults to 0, so lag = 1000
-        // 100 * 100_000 + 1000 * 1_000 = 10_000_000 + 1_000_000 = 11_000_000
-        assert_eq!(score, 11_000_000);
+    fn test_compute_replica_score_lag_term_saturates() {
+        assert_eq!(compute_replica_score(100, 1_000, 1_000), 10_000_000);
+        assert_eq!(
+            compute_replica_score(100, 1_500, 1_000),
+            10_000_000,
+            "ahead of the reference point is zero lag, not underflow"
+        );
+        assert_eq!(
+            compute_replica_score(100, 0, u64::MAX),
+            u64::MAX,
+            "a lag too large to weight is the worst score, not a wrapped one"
+        );
+    }
+
+    /// The reference point is folded over *determined* offsets only, so an
+    /// unreachable peer cannot move the point every other candidate is judged
+    /// against. It is folded over *every* probe, though — a never-promote
+    /// replica still holds the writes a candidate would be dropping.
+    // FM-CLUSTER-056
+    #[test]
+    fn the_lag_reference_point_ignores_undetermined_offsets() {
+        assert_eq!(
+            lag_reference_point(&[probe(10, 500, true), blind(11)]),
+            Some(500)
+        );
+        assert_eq!(
+            lag_reference_point(&[blind(10), blind(11)]),
+            None,
+            "nothing determined means there is no reference point at all"
+        );
+        assert_eq!(
+            lag_reference_point(&[probe(10, 500, true), probe(11, 9_000, false)]),
+            Some(9_000),
+            "a departed replica's acked writes still count as data that exists"
+        );
     }
 
     // ---- Live-config seams -------------------------------------------------
@@ -1415,9 +1611,9 @@ mod tests {
         let me = make_node(self_id, 100);
         let replicas = vec![&me, &peer];
         // Identical offsets, so priority alone decides; id 10 wins the tiebreak.
-        let offsets = vec![(10, 1000u64), (11, 1000)];
+        let offsets = healthy(&[(10, 1000), (11, 1000)]);
 
-        let flags = ClusterRuntimeFlags::new(true, true, 100);
+        let flags = ClusterRuntimeFlags::new(true, true, 100, 0);
         let priority_of = |n: &NodeInfo| {
             if n.id == self_id {
                 flags.replica_priority()
@@ -1428,28 +1624,52 @@ mod tests {
 
         // Equal priorities: deterministic tiebreak picks the lower id (self).
         assert_eq!(
-            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            select_failover_target(
+                &replicas,
+                &offsets,
+                SelectionPolicy::default(),
+                &priority_of
+            )
+            .map(|n| n.id),
             Some(self_id)
         );
 
         // Demote self at runtime: the peer now wins without anything restarting.
         flags.set_replica_priority(200);
         assert_eq!(
-            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            select_failover_target(
+                &replicas,
+                &offsets,
+                SelectionPolicy::default(),
+                &priority_of
+            )
+            .map(|n| n.id),
             Some(11)
         );
 
         // Never-promote at runtime: self drops out of the candidate set entirely.
         flags.set_replica_priority(0);
         assert_eq!(
-            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            select_failover_target(
+                &replicas,
+                &offsets,
+                SelectionPolicy::default(),
+                &priority_of
+            )
+            .map(|n| n.id),
             Some(11)
         );
 
         // Promote self back: it wins outright.
         flags.set_replica_priority(1);
         assert_eq!(
-            select_failover_target(&replicas, &offsets, &priority_of).map(|n| n.id),
+            select_failover_target(
+                &replicas,
+                &offsets,
+                SelectionPolicy::default(),
+                &priority_of
+            )
+            .map(|n| n.id),
             Some(self_id)
         );
     }
@@ -1461,8 +1681,347 @@ mod tests {
         let a = make_node(10, 0);
         let b = make_node(11, 0);
         let replicas = vec![&a, &b];
-        let offsets = vec![(10, 1u64), (11, 2)];
-        assert!(select_failover_target(&replicas, &offsets, &|n| n.replica_priority).is_none());
+        let offsets = healthy(&[(10, 1), (11, 2)]);
+        assert!(
+            select_failover_target(&replicas, &offsets, SelectionPolicy::default(), &|n| {
+                n.replica_priority
+            })
+            .is_none()
+        );
+    }
+
+    // ---- Tiering, the staleness bound, and the handoff filter --------------
+
+    /// Select over `replicas` with the published priorities and `policy`.
+    fn pick(
+        replicas: &[&NodeInfo],
+        probes: &[CandidateProbe],
+        policy: SelectionPolicy,
+    ) -> Option<NodeId> {
+        select_failover_target(replicas, probes, policy, &|n| n.replica_priority).map(|n| n.id)
+    }
+
+    /// The policy that arms the handoff filter, with no byte bound.
+    const UNDER_HANDOFF: SelectionPolicy = SelectionPolicy {
+        under_handoff: true,
+        max_lag_bytes: 0,
+    };
+
+    /// A candidate whose offset nobody could read is a strictly last-resort
+    /// tier, not a peer scored at maximum lag: the old code substituted 0 for a
+    /// failed probe, so a long-partitioned replica with a better priority
+    /// out-scored a healthy peer and discarded the writes that peer held.
+    // FM-CLUSTER-105
+    #[test]
+    fn an_offset_unknown_candidate_never_outranks_a_determined_one() {
+        let blind_but_favoured = make_node(10, 1);
+        let known = make_node(11, 200);
+        let replicas = vec![&blind_but_favoured, &known];
+
+        assert_eq!(
+            pick(
+                &replicas,
+                &[blind(10), probe(11, 500, true)],
+                SelectionPolicy::default()
+            ),
+            Some(11),
+            "priority cannot buy a candidate out of the blind tier"
+        );
+
+        // Under the old sentinel scoring the blind candidate would have scored
+        // 1 * 100_000 + 500 * 1_000, beating the determined one outright.
+        assert!(
+            compute_replica_score(1, 0, 500) < compute_replica_score(200, 500, 500),
+            "the score formula alone would still prefer the blind candidate"
+        );
+    }
+
+    /// The availability floor: when nobody's offset could be read, promotion
+    /// still happens. Refusing to promote at all would trade the whole shard's
+    /// availability for a comparison nobody can make.
+    // FM-CLUSTER-105
+    #[test]
+    fn blind_candidates_are_promotable_when_nobody_has_an_offset() {
+        let solo = make_node(10, 100);
+        assert_eq!(
+            pick(&[&solo], &[blind(10)], SelectionPolicy::default()),
+            Some(10)
+        );
+    }
+
+    /// Inside the blind tier there is no offset to rank on, so the order is
+    /// effective priority and then node id — deterministic, so every node that
+    /// recomputes this selection reaches the same answer.
+    // FM-CLUSTER-105
+    #[test]
+    fn the_blind_tier_orders_by_priority_then_node_id() {
+        let worst = make_node(10, 100);
+        let best_high_id = make_node(12, 50);
+        let best_low_id = make_node(11, 50);
+        let replicas = vec![&worst, &best_high_id, &best_low_id];
+        let probes = [blind(10), blind(11), blind(12)];
+
+        assert_eq!(
+            pick(&replicas, &probes, SelectionPolicy::default()),
+            Some(11),
+            "priority first, then the lower id breaks the tie"
+        );
+
+        let equal_a = make_node(20, 100);
+        let equal_b = make_node(21, 100);
+        assert_eq!(
+            pick(
+                &[&equal_b, &equal_a],
+                &[blind(20), blind(21)],
+                SelectionPolicy::default()
+            ),
+            Some(20),
+            "equal priorities fall through to the lower id, whatever the input order"
+        );
+    }
+
+    /// `cluster-promotion-max-lag-bytes` disqualifies a candidate further
+    /// behind the freshest surviving copy than the operator's data-loss budget
+    /// allows — in bytes, never in disconnection seconds.
+    // FM-CLUSTER-105
+    #[test]
+    fn the_lag_bound_disqualifies_a_candidate_from_automatic_promotion() {
+        let stale_but_favoured = make_node(10, 1);
+        let fresh = make_node(11, 200);
+        let replicas = vec![&stale_but_favoured, &fresh];
+        let probes = [probe(10, 0, true), probe(11, 1_000, true)];
+
+        assert_eq!(
+            pick(
+                &replicas,
+                &probes,
+                SelectionPolicy {
+                    under_handoff: false,
+                    max_lag_bytes: 100,
+                }
+            ),
+            Some(11),
+            "1000 bytes behind is past a 100-byte budget"
+        );
+
+        // Exactly at the bound is still eligible: the bound is the most lag the
+        // operator accepts, not the least they refuse.
+        assert_eq!(
+            pick(
+                &replicas,
+                &probes,
+                SelectionPolicy {
+                    under_handoff: false,
+                    max_lag_bytes: 1_000,
+                }
+            ),
+            Some(10),
+        );
+    }
+
+    /// The shipped default disqualifies nobody, so the byte bound can default
+    /// to off without leaving the tiering half unenforced.
+    // FM-CLUSTER-105
+    #[test]
+    fn a_zero_lag_bound_disqualifies_nobody() {
+        let stale = make_node(10, 1);
+        let fresh = make_node(11, 200);
+        let replicas = vec![&stale, &fresh];
+        let probes = [probe(10, 0, true), probe(11, 1_000, true)];
+
+        assert_eq!(
+            SelectionPolicy::default().max_lag_bytes,
+            0,
+            "the default policy is the shipped default"
+        );
+        assert_eq!(
+            pick(&replicas, &probes, SelectionPolicy::default()),
+            Some(10),
+            "the candidate a 100-byte bound refuses is selectable when no bound is set"
+        );
+
+        // Even an astronomically stale candidate stays *in the set* with no
+        // bound: ranking last is not the same as being disqualified.
+        let ancient = make_node(12, 1);
+        assert_eq!(
+            pick(
+                &[&ancient],
+                &[probe(12, 0, true), probe(13, u64::MAX, true)],
+                SelectionPolicy::default()
+            ),
+            Some(12),
+        );
+    }
+
+    /// The tier gate keys on whether any *offset was determined*, never on what
+    /// survived the bound: a bound that disqualifies every scored candidate
+    /// abandons the failover rather than handing it down to a candidate nobody
+    /// could even measure.
+    // FM-CLUSTER-105
+    #[test]
+    fn an_emptied_scored_tier_abandons_rather_than_falling_through_to_the_blind_tier() {
+        let never_promote = make_node(10, 0);
+        let stale = make_node(11, 100);
+        let unmeasurable = make_node(12, 100);
+        let replicas = vec![&never_promote, &stale, &unmeasurable];
+        // The never-promote replica holds the freshest copy, so it sets the
+        // reference point even though it can never be the successor.
+        let probes = [probe(10, 10_000, true), probe(11, 0, true), blind(12)];
+
+        assert_eq!(
+            pick(
+                &replicas,
+                &probes,
+                SelectionPolicy {
+                    under_handoff: false,
+                    max_lag_bytes: 50,
+                }
+            ),
+            None,
+            "the blind candidate must not inherit a promotion the bound just refused"
+        );
+    }
+
+    /// A departing replica is not a candidate for a slot whose ownership is
+    /// still moving: it may hold FM-CLUSTER-097's drained tail, which must
+    /// never become a promoted primary's history.
+    // FM-CLUSTER-106
+    #[test]
+    fn a_departed_replica_is_not_a_candidate_while_a_slot_is_under_handoff() {
+        let departed_but_freshest = make_node(10, 1);
+        let attached = make_node(11, 200);
+        let replicas = vec![&departed_but_freshest, &attached];
+        let probes = [probe(10, 1_000, false), probe(11, 500, true)];
+
+        assert_eq!(
+            pick(&replicas, &probes, UNDER_HANDOFF),
+            Some(11),
+            "removed from the set, not merely scored worst"
+        );
+        assert_eq!(
+            pick(&replicas, &probes, SelectionPolicy::default()),
+            Some(10),
+            "and it is the winner the moment no handoff is in flight"
+        );
+    }
+
+    /// The exclusion lifts on re-attachment: the candidate reports its inbound
+    /// link past PSYNC, which is exactly the "re-attached and re-synced" the
+    /// ruling asks for.
+    // FM-CLUSTER-106
+    #[test]
+    fn a_re_attached_replica_is_a_candidate_again() {
+        let node = make_node(10, 100);
+
+        assert_eq!(pick(&[&node], &[probe(10, 1, false)], UNDER_HANDOFF), None);
+        assert_eq!(
+            pick(&[&node], &[probe(10, 1, true)], UNDER_HANDOFF),
+            Some(10)
+        );
+    }
+
+    /// Outside a handoff window the link state is not consulted at all —
+    /// re-introducing "unreachable is excluded" by the back door is exactly
+    /// what FM-CLUSTER-105 refuses.
+    // FM-CLUSTER-106
+    #[test]
+    fn outside_a_handoff_window_a_departed_replica_is_still_a_candidate() {
+        let solo = make_node(10, 100);
+        assert_eq!(
+            pick(&[&solo], &[probe(10, 7, false)], SelectionPolicy::default()),
+            Some(10)
+        );
+        assert_eq!(
+            pick(&[&solo], &[blind(10)], SelectionPolicy::default()),
+            Some(10)
+        );
+    }
+
+    /// Fail-closed on the filter's own error path: a probe that learned nothing
+    /// did not learn that the link is up.
+    // FM-CLUSTER-106
+    #[test]
+    fn a_probe_that_learned_nothing_is_treated_as_departed_under_handoff() {
+        let node = make_node(10, 100);
+
+        assert_eq!(pick(&[&node], &[blind(10)], UNDER_HANDOFF), None);
+        assert_eq!(
+            pick(&[&node], &[], UNDER_HANDOFF),
+            None,
+            "no probe record at all is no evidence of an attached link either"
+        );
+    }
+
+    /// A filter beats a ranking: the departed replica is refused even when it
+    /// is the only candidate left, so FM-CLUSTER-105's availability floor does
+    /// not smuggle it back in.
+    // FM-CLUSTER-106
+    #[test]
+    fn the_handoff_filter_beats_the_last_resort_availability_floor() {
+        let departed = make_node(10, 100);
+        let also_departed = make_node(11, 100);
+        let replicas = vec![&departed, &also_departed];
+
+        assert_eq!(
+            pick(&replicas, &[blind(10), blind(11)], UNDER_HANDOFF),
+            None,
+            "the failover is abandoned and re-driven, not handed to a departed replica"
+        );
+    }
+
+    /// The handoff predicate: ownership decides which slots the successor would
+    /// inherit, and an expired prepared record reads as absent here exactly as
+    /// it does everywhere else (FM-CLUSTER-085).
+    // FM-CLUSTER-106
+    #[test]
+    fn a_lapsed_handoff_lease_stops_filtering_candidates() {
+        let state = ClusterState::new();
+        for node in [primary_node(1), primary_node(2)] {
+            state
+                .apply_local(ClusterCommand::AddNode { node })
+                .expect("seeding the topology must succeed");
+        }
+        state
+            .apply_local(ClusterCommand::AssignSlots {
+                node_id: 2,
+                slots: vec![frogdb_core::cluster::SlotRange::new(7, 7)],
+            })
+            .expect("assigning a slot must succeed");
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 7,
+                source_node: 2,
+                target_node: 1,
+            })
+            .expect("begin must succeed");
+
+        let prepared_at = 1_000_000;
+        assert!(
+            !owns_slot_under_handoff(&state.snapshot(), 2, prepared_at),
+            "the bulk-transfer phase is not a handoff window"
+        );
+
+        state
+            .apply_local(ClusterCommand::PrepareSlotHandoff {
+                slot: 7,
+                source_node: 2,
+                target_node: 1,
+                barrier_ms: HANDOFF_BARRIER_MS,
+                lease_ms: HANDOFF_LEASE_MS,
+                proposed_at_ms: prepared_at,
+            })
+            .expect("prepare must succeed");
+        let snapshot = state.snapshot();
+
+        assert!(owns_slot_under_handoff(&snapshot, 2, prepared_at));
+        assert!(
+            !owns_slot_under_handoff(&snapshot, 2, prepared_at + HANDOFF_LEASE_MS + 1),
+            "a lapsed lease reads as absent, so ordinary selection resumes"
+        );
+        assert!(
+            !owns_slot_under_handoff(&snapshot, 1, prepared_at),
+            "the importing node does not own the slot, so it is not inheriting it"
+        );
     }
 
     // ---- The detector itself: consensus, reconciliation, auto-failover -----
@@ -1474,7 +2033,8 @@ mod tests {
     use frogdb_core::cluster::network::ConnectFactory;
     use frogdb_core::cluster::{
         BoxedStream, BusRpc, ClusterBusStats, ClusterRpcRequest, ClusterRpcResponse,
-        RaftClientWriteError, new_framed, parse_rpc_message, send_rpc_response,
+        HANDOFF_BARRIER_MS, HANDOFF_LEASE_MS, RaftClientWriteError, new_framed, parse_rpc_message,
+        send_rpc_response,
     };
     use openraft::error::{ClientWriteError, ForwardToLeader, RaftError};
     use std::collections::BTreeMap;
@@ -1645,40 +2205,56 @@ mod tests {
             self_id,
             nodes,
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(false, true, 100),
+            ClusterRuntimeFlags::new(false, true, 100, 0),
             network_reporting(&[]),
         )
     }
 
     /// A network whose peers answer `HealthProbe` with a scripted replication
-    /// offset; a node absent from the map refuses the connection, which is how
-    /// an unreachable candidate is exercised without a real partition.
+    /// offset and an attached inbound link; a node absent from the map refuses
+    /// the connection, which is how an unreachable candidate is exercised
+    /// without a real partition.
     fn network_reporting(offsets: &[(NodeId, u64)]) -> Arc<ClusterNetworkFactory> {
-        let by_addr: BTreeMap<SocketAddr, (NodeId, u64)> = offsets
+        let with_links: Vec<_> = offsets
             .iter()
-            .map(|&(id, offset)| (bus_addr(id), (id, offset)))
+            .map(|&(id, offset)| (id, offset, true))
+            .collect();
+        network_reporting_links(&with_links)
+    }
+
+    /// As [`network_reporting`], with each peer's reported link state chosen.
+    fn network_reporting_links(probes: &[(NodeId, u64, bool)]) -> Arc<ClusterNetworkFactory> {
+        let by_addr: BTreeMap<SocketAddr, (NodeId, u64, bool)> = probes
+            .iter()
+            .map(|&(id, offset, link_up)| (bus_addr(id), (id, offset, link_up)))
             .collect();
         let mut factory = ClusterNetworkFactory::new();
         factory.set_connect_factory(probe_factory(by_addr));
         Arc::new(factory)
     }
 
-    fn probe_factory(by_addr: BTreeMap<SocketAddr, (NodeId, u64)>) -> ConnectFactory {
+    fn probe_factory(by_addr: BTreeMap<SocketAddr, (NodeId, u64, bool)>) -> ConnectFactory {
         Arc::new(move |addr: SocketAddr| {
             let probe = by_addr.get(&addr).copied();
             Box::pin(async move {
-                let Some((node_id, offset)) = probe else {
+                let Some((node_id, offset, link_up)) = probe else {
                     return Err(std::io::Error::other("peer unreachable"));
                 };
                 let (client, server) = tokio::io::duplex(64 * 1024);
-                tokio::spawn(serve_health_probes(server, node_id, offset));
+                tokio::spawn(serve_health_probes(server, node_id, offset, link_up));
                 Ok(Box::new(client) as BoxedStream)
             })
         })
     }
 
-    /// The peer half of a bus connection: answer every health probe with `offset`.
-    async fn serve_health_probes(server: tokio::io::DuplexStream, node_id: NodeId, offset: u64) {
+    /// The peer half of a bus connection: answer every health probe with
+    /// `offset` and `link_up`.
+    async fn serve_health_probes(
+        server: tokio::io::DuplexStream,
+        node_id: NodeId,
+        offset: u64,
+        link_up: bool,
+    ) {
         let mut framed = new_framed(Box::new(server));
         let stats = ClusterBusStats::new();
         while let Ok(request) = parse_rpc_message(&mut framed, &stats).await {
@@ -1687,6 +2263,7 @@ mod tests {
                     ClusterRpcResponse::HealthProbeResponse {
                         node_id,
                         replication_offset: offset,
+                        replica_link_up: link_up,
                     }
                 }
                 other => ClusterRpcResponse::Error(format!("unexpected request: {other:?}")),
@@ -1920,7 +2497,7 @@ mod tests {
                 replica_node(4, 2),
             ],
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(true, true, 100),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
             network_reporting(&[(3, 100), (4, 900)]),
         );
 
@@ -1937,6 +2514,143 @@ mod tests {
         );
     }
 
+    /// Put slot 7, owned by `primary`, into a live prepared handoff toward
+    /// `target` — the window in which FM-CLUSTER-106's filter is armed.
+    fn arm_handoff(state: &ClusterState, primary: NodeId, target: NodeId) {
+        state
+            .apply_local(ClusterCommand::AssignSlots {
+                node_id: primary,
+                slots: vec![frogdb_core::cluster::SlotRange::new(7, 7)],
+            })
+            .expect("assigning a slot must succeed");
+        state
+            .apply_local(ClusterCommand::BeginSlotMigration {
+                slot: 7,
+                source_node: primary,
+                target_node: target,
+            })
+            .expect("begin must succeed");
+        state
+            .apply_local(ClusterCommand::PrepareSlotHandoff {
+                slot: 7,
+                source_node: primary,
+                target_node: target,
+                barrier_ms: HANDOFF_BARRIER_MS,
+                lease_ms: HANDOFF_LEASE_MS,
+                proposed_at_ms: crate::handoff_barrier::handoff_now_ms(),
+            })
+            .expect("prepare must succeed");
+    }
+
+    /// End to end: the freshest replica has departed its feed session and the
+    /// failing primary still owns a slot under handoff, so the successor is the
+    /// attached replica even though it is further behind.
+    // FM-CLUSTER-106
+    #[tokio::test]
+    async fn auto_failover_skips_the_departed_replica_of_a_slot_under_handoff() {
+        let f = build(
+            1,
+            vec![
+                primary_node(1),
+                primary_node(2),
+                replica_node(3, 2),
+                replica_node(4, 2),
+            ],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
+            network_reporting_links(&[(3, 1_000, false), (4, 500, true)]),
+        );
+        arm_handoff(&f.state, 2, 1);
+
+        f.detector.trigger_auto_failover(2).await;
+
+        assert_eq!(
+            f.raft.writes(),
+            vec![proposed(ClusterCommand::Failover {
+                old_primary_id: 2,
+                new_primary_id: 4,
+                force: true,
+            })],
+            "the departed replica is out of the set despite the freshest offset"
+        );
+    }
+
+    /// And when every candidate has departed, the failover is abandoned rather
+    /// than promoting one of them: the retry loop re-drives it once the
+    /// prepared record's lease lapses.
+    // FM-CLUSTER-106
+    #[tokio::test]
+    async fn auto_failover_abandons_when_every_candidate_departed_under_handoff() {
+        let f = build(
+            1,
+            vec![
+                primary_node(1),
+                primary_node(2),
+                replica_node(3, 2),
+                replica_node(4, 2),
+            ],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
+            network_reporting_links(&[(3, 1_000, false), (4, 500, false)]),
+        );
+        arm_handoff(&f.state, 2, 1);
+
+        f.detector.trigger_auto_failover(2).await;
+
+        assert!(
+            f.raft.writes().is_empty(),
+            "no promotion at all: {:?}",
+            f.raft.writes()
+        );
+    }
+
+    /// `cluster-promotion-max-lag-bytes` is read off the runtime flags at
+    /// *selection* time, so a `CONFIG SET` re-decides the very next automatic
+    /// promotion with nothing restarted.
+    // FM-CLUSTER-105
+    #[tokio::test]
+    async fn the_lag_bound_is_live() {
+        let mut favoured = replica_node(3, 2);
+        favoured.replica_priority = 1;
+        let f = build(
+            1,
+            vec![
+                primary_node(1),
+                primary_node(2),
+                favoured,
+                replica_node(4, 2),
+            ],
+            FailureDetectorConfig::default(),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
+            network_reporting(&[(3, 0), (4, 1_000)]),
+        );
+
+        // Unbounded: the better priority wins however far behind it is.
+        f.detector.trigger_auto_failover(2).await;
+
+        // Bounded below its lag: it is disqualified, and the fresh replica —
+        // whose priority is 100 times worse — takes the promotion.
+        f.detector.flags().set_promotion_max_lag_bytes(1);
+        f.detector.trigger_auto_failover(2).await;
+
+        assert_eq!(
+            f.raft.writes(),
+            vec![
+                proposed(ClusterCommand::Failover {
+                    old_primary_id: 2,
+                    new_primary_id: 3,
+                    force: true,
+                }),
+                proposed(ClusterCommand::Failover {
+                    old_primary_id: 2,
+                    new_primary_id: 4,
+                    force: true,
+                }),
+            ],
+            "the same topology, re-decided by the live bound alone"
+        );
+    }
+
     /// Auto-failover evicts the failed primary from the topology, so it owes the
     /// Raft voter set the same shrink `CLUSTER FORGET` does. It is the one
     /// removal site the connection layer never sees, and leaving the evicted
@@ -1949,7 +2663,7 @@ mod tests {
             1,
             vec![primary_node(1), primary_node(2), replica_node(3, 2)],
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(true, true, 100),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
             network_reporting(&[(3, 500)]),
         );
 
@@ -1972,7 +2686,7 @@ mod tests {
             1,
             vec![primary_node(1), primary_node(2), replica_node(3, 2)],
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(true, true, 100),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
             network_reporting(&[(3, 500)]),
         );
         f.raft.set_outcome(Ok(ClusterResponse::Error(
@@ -2066,7 +2780,7 @@ mod tests {
                 replica_node(4, 3),
             ],
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(true, true, 100),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
             network_reporting(&[(4, 500)]),
         );
 
@@ -2086,7 +2800,7 @@ mod tests {
             1,
             vec![primary_node(1), primary_node(2), replica_node(3, 2)],
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(true, true, 100),
+            ClusterRuntimeFlags::new(true, true, 100, 0),
             network_reporting(&[]),
         );
         f.raft.set_outcome(Err(forward_to_leader_err()));
@@ -2115,7 +2829,7 @@ mod tests {
                 connect_timeout_ms: 11,
                 fail_threshold: 2,
             },
-            ClusterRuntimeFlags::new(true, false, 42),
+            ClusterRuntimeFlags::new(true, false, 42, 0),
             network_reporting(&[]),
         );
 
@@ -2149,7 +2863,7 @@ mod tests {
             1,
             vec![me.clone(), peer.clone()],
             FailureDetectorConfig::default(),
-            ClusterRuntimeFlags::new(false, true, 42),
+            ClusterRuntimeFlags::new(false, true, 42, 0),
             network_reporting(&[]),
         );
 

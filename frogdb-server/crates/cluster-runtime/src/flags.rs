@@ -15,7 +15,7 @@
 
 use frogdb_core::command::QuorumChecker;
 use frogdb_core::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Shared, runtime-mutable cluster decision flags.
 #[derive(Debug)]
@@ -26,6 +26,10 @@ pub struct ClusterRuntimeFlags {
     self_fence_on_quorum_loss: AtomicBool,
     /// `cluster-replica-priority`: this node's promotion priority (0 = never).
     replica_priority: AtomicU32,
+    /// `cluster-promotion-max-lag-bytes`: the automatic-promotion staleness
+    /// bound, in replication-offset bytes behind the freshest candidate
+    /// (0 = no bound). See TR-CLUSTER-043.
+    promotion_max_lag_bytes: AtomicU64,
 }
 
 impl ClusterRuntimeFlags {
@@ -34,11 +38,13 @@ impl ClusterRuntimeFlags {
         auto_failover: bool,
         self_fence_on_quorum_loss: bool,
         replica_priority: u32,
+        promotion_max_lag_bytes: u64,
     ) -> Self {
         Self {
             auto_failover: AtomicBool::new(auto_failover),
             self_fence_on_quorum_loss: AtomicBool::new(self_fence_on_quorum_loss),
             replica_priority: AtomicU32::new(replica_priority),
+            promotion_max_lag_bytes: AtomicU64::new(promotion_max_lag_bytes),
         }
     }
 
@@ -48,6 +54,7 @@ impl ClusterRuntimeFlags {
             cluster.auto_failover,
             cluster.self_fence_on_quorum_loss,
             cluster.replica_priority,
+            cluster.promotion_max_lag_bytes,
         ))
     }
 
@@ -88,6 +95,21 @@ impl ClusterRuntimeFlags {
     pub fn set_replica_priority(&self, priority: u32) {
         self.replica_priority.store(priority, Ordering::Relaxed);
     }
+
+    /// The automatic-promotion staleness bound, in offset bytes (0 = no bound).
+    pub fn promotion_max_lag_bytes(&self) -> u64 {
+        self.promotion_max_lag_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Set the automatic-promotion staleness bound.
+    ///
+    /// Read inside `select_failover_target`, so a runtime change steers the very
+    /// next automatic promotion this node decides. Node-local by design: the
+    /// bound is this node's data-loss appetite, not a property of any candidate,
+    /// so it is never published through Raft (TR-CLUSTER-043).
+    pub fn set_promotion_max_lag_bytes(&self, bytes: u64) {
+        self.promotion_max_lag_bytes.store(bytes, Ordering::Relaxed);
+    }
 }
 
 impl Default for ClusterRuntimeFlags {
@@ -98,6 +120,7 @@ impl Default for ClusterRuntimeFlags {
             defaults.auto_failover,
             defaults.self_fence_on_quorum_loss,
             defaults.replica_priority,
+            defaults.promotion_max_lag_bytes,
         )
     }
 }
@@ -165,7 +188,7 @@ mod tests {
     // FM-CLUSTER-059
     #[test]
     fn auto_failover_flag_is_live() {
-        let flags = ClusterRuntimeFlags::new(false, true, 100);
+        let flags = ClusterRuntimeFlags::new(false, true, 100, 0);
         assert!(!flags.auto_failover());
         flags.set_auto_failover(true);
         assert!(flags.auto_failover());
@@ -179,7 +202,7 @@ mod tests {
     // FM-CLUSTER-059
     #[test]
     fn self_fence_gate_follows_live_flag() {
-        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
         let gate = SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: false }), flags.clone());
 
         // Enabled + no quorum => fenced (has_quorum false).
@@ -198,7 +221,7 @@ mod tests {
     // FM-CLUSTER-059
     #[test]
     fn self_fence_gate_passes_through_healthy_quorum() {
-        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
         let gate = SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: true }), flags.clone());
         assert!(gate.has_quorum());
         flags.set_self_fence_on_quorum_loss(false);
@@ -211,7 +234,7 @@ mod tests {
     // FM-CLUSTER-059
     #[test]
     fn self_fence_gate_reports_the_reason_it_gates_on() {
-        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
         let fenced =
             SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: false }), flags.clone());
         assert_eq!(fenced.write_fence_reason(), Some("cluster quorum lost"));
@@ -223,7 +246,7 @@ mod tests {
         assert!(fenced.has_quorum(), "no reason => gate does not fence");
 
         // Healthy quorum never reports a reason, flag either way.
-        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
         let healthy =
             SelfFenceGate::new(Arc::new(FixedChecker { has_quorum: true }), flags.clone());
         assert_eq!(healthy.write_fence_reason(), None);
@@ -250,7 +273,7 @@ mod tests {
             }
         }
 
-        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100));
+        let flags = Arc::new(ClusterRuntimeFlags::new(false, true, 100, 0));
         let gate = SelfFenceGate::new(Arc::new(NamedChecker), flags.clone());
         assert_eq!(gate.quorum_lost_error(), "SELFFENCE inner wording");
 
@@ -282,22 +305,26 @@ mod tests {
             auto_failover: true,
             self_fence_on_quorum_loss: false,
             replica_priority: 7,
+            promotion_max_lag_bytes: 4_096,
             ..Default::default()
         };
         let flags = ClusterRuntimeFlags::from_config(&cluster);
         assert!(flags.auto_failover());
         assert!(!flags.self_fence_on_quorum_loss());
         assert_eq!(flags.replica_priority(), 7);
+        assert_eq!(flags.promotion_max_lag_bytes(), 4_096);
 
         // Both booleans inverted: a transposed mapping would look identical
         // under the first case alone.
         cluster.auto_failover = false;
         cluster.self_fence_on_quorum_loss = true;
         cluster.replica_priority = 0;
+        cluster.promotion_max_lag_bytes = 0;
         let flags = ClusterRuntimeFlags::from_config(&cluster);
         assert!(!flags.auto_failover());
         assert!(flags.self_fence_on_quorum_loss());
         assert_eq!(flags.replica_priority(), 0, "0 = never promote");
+        assert_eq!(flags.promotion_max_lag_bytes(), 0, "0 = no bound");
     }
 
     /// The runtime defaults are the config defaults, so the same deployment
@@ -313,11 +340,20 @@ mod tests {
             config.self_fence_on_quorum_loss
         );
         assert_eq!(flags.replica_priority(), config.replica_priority);
+        assert_eq!(
+            flags.promotion_max_lag_bytes(),
+            config.promotion_max_lag_bytes
+        );
 
         // Pinned literally as well: an operator reads these from the docs, and
         // a change to either default is a behavior change, not a refactor.
         assert!(!flags.auto_failover(), "auto-failover is opt-in");
         assert!(flags.self_fence_on_quorum_loss(), "fencing is opt-out");
         assert_eq!(flags.replica_priority(), 100);
+        assert_eq!(
+            flags.promotion_max_lag_bytes(),
+            0,
+            "the promotion staleness bound ships off"
+        );
     }
 }
