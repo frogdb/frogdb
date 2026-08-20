@@ -69,17 +69,11 @@ pub type BusTlsHandshake = std::pin::Pin<
 /// end lives on the primary that just failed, so the only reachable end is the
 /// candidate itself — and the candidate is already being asked for its offset.
 /// The bus therefore asks the node one narrow question rather than depending on
-/// `frogdb-server`'s `RoleManager`; the blanket impl below makes every
-/// [`frogdb_core::RoleController`] one of these for free.
+/// `frogdb-server`'s `RoleManager`, which the server answers from the same place
+/// INFO's `master_link_status` reads.
 pub trait ReplicaLinkState: Send + Sync {
     /// Whether this node's inbound replication stream is attached past PSYNC.
     fn master_link_up(&self) -> bool;
-}
-
-impl<T: frogdb_core::RoleController> ReplicaLinkState for T {
-    fn master_link_up(&self) -> bool {
-        frogdb_core::RoleController::master_link_up(self)
-    }
 }
 
 /// The consensus half of the bus, as a seam.
