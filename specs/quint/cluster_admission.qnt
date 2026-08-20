@@ -45,14 +45,52 @@
 // FM-CLUSTER-101 (voter-set removal) and INV-EPOCH-1/2 (config-epoch arbitration) —
 // neither the voter-set claim nor epochs enter this model.
 //
-// Assumption: `NodeId` is a stable model parameter, so `member_of: Some(selfId)` and
-// every other `member_of`/`raft_origin` comparison implicitly assumes a node's id is
-// itself stable across `restart`. The state-space row "This node's own id"
-// (cluster.md:116) says the opposite: id is re-derived at every boot
-// (`ClusterConfigSection::effective_node_id`) and only stays fixed if
-// `cluster-node-id` is explicitly configured non-zero — left at the default, a fresh
-// id is minted on every boot. This model does not represent that instability; it
-// assumes the configured-non-zero case.
+// Rulings recorded on this model (formal-spec issue 03's admission items, ruled
+// 2026-08-19; the rationale for each lives at the definition it governs, in
+// cluster_admission_logic.qnt):
+//   - `canMeet` physicality — RESTORED. A MEET is admissible only against a node that has
+//     actually booted (`effective_id != None`), because `CLUSTER MEET` is a handshake with
+//     a running process. This is the transition's physical precondition, not a second
+//     admission gate: TR-CLUSTER-005's ruled precondition still names exactly one gate
+//     (empty Raft state) and the model still checks exactly that one.
+//     Forced by `meetRefusesUnbootedNodeTest`.
+//   - `applyRepurpose` rewriting the write-once `intent` cell — STANDS. cluster.md:129
+//     scopes the guarantee to "never rewritten *by config changes*", and `CLUSTER RESET`
+//     (TR-CLUSTER-035) is an operator command, not a config change. The scope that ruling
+//     leans on is itself checked rather than asserted: `inv_intent_write_once` fails if the
+//     one config-reading action, `restart`, ever writes the cell.
+//     Forced by `adminResetMayRewriteIntentTest`.
+//
+// Node-id instability (state-space row "This node's own id", cluster.md:116; issue 35
+// class, admitted into this model by the 2026-08-19 Quint-completeness campaign ruling):
+// an earlier version of this model *assumed* a node's id was stable across a restart, which
+// is exactly what that row denies — the id is re-derived at every boot by
+// `ClusterConfigSection::effective_node_id`, and only stays fixed when `cluster-node-id` is
+// explicitly configured non-zero; left at the default, a fresh id is minted on every boot.
+// The assumption is now gone, and the instability is modeled instead:
+//   - `NODES` keys the state map by the **durable node-local record** (the data directory a
+//     node boots from) rather than by the node's cluster-visible id. Everything the
+//     admission window turns on — the persisted bootstrap-vs-join intent, the Raft
+//     log/vote state, the membership claim and its `raft_origin` provenance — rides on that
+//     record, which is what "keyed by what actually persists across the restart" means.
+//   - `NodeState.effective_id` is the id this boot runs under (`None` before a node has
+//     ever booted: an id exists only while a process does). `NodeState.configured_id` is
+//     the `cluster-node-id` knob; unset, every boot draws a fresh id from the machine's
+//     monotone `next_id` and bumps the `id_mints` ghost.
+//   - The interaction that matters for THIS model's rows is that a fresh id must not
+//     re-open a settled decision: pre-ruling, `should_bootstrap` is computed from the node
+//     id (`initial_members.keys().next() == Some(node_id)`), so a re-minted id could flip
+//     the bootstrap-vs-join answer at every boot — issue 25's usurpation, reached through
+//     issue 35's churn. `inv_restart_deterministic` and `inv_intent_write_once` are the
+//     checks; `restartMintsFreshIdTest` and `configuredIdStableAcrossRestartTest` are the
+//     forcing traces.
+// Deliberately still out of scope, both documented rather than modeled: issue 35's
+// *entropy* defect (16 random bits per millisecond, so simultaneous boots can mint the
+// same id) — the model's mint source is monotone, and `inv_effective_ids_distinct` asserts
+// that device holds, because a colliding mint would falsify `inv_single_routable_group` by
+// representation-level construction rather than by anything the admission window does; and
+// TR-CLUSTER-035's HARD rename leg (`new_node_id`), an admin-driven identity change whose
+// epoch-zeroing the same campaign ruling put out of scope.
 //
 // Deviations from the brief's literal field notation, both purely syntactic (Quint has
 // no built-in Option/None; see quint-lang's Basic spells section):
@@ -138,6 +176,33 @@ module cluster_admission {
       ns.member_of == None and ns.raft != Empty
     })
 
+  // State-space row "This node's own id": some node has come back up under a second,
+  // freshly-minted id — the unconfigured-`cluster-node-id` default. Backed by the
+  // `id_mints` ghost, which only a fresh mint bumps, so this cannot be reached by a boot
+  // that reused a configured id.
+  val witnessFreshIdAfterRestart: bool =
+    NODES.exists(n => nodes.get(n).id_mints >= 2)
+
+  // The other identity regime: some booted node is running under an explicitly configured
+  // id and has never minted one. Proves `configuredIdStableAcrossRestartTest`'s regime is
+  // reachable in a sampled walk, not just by a scripted trace.
+  val witnessConfiguredIdPinned: bool =
+    NODES.exists(n => {
+      val ns = nodes.get(n)
+      ns.configured_id != None and ns.effective_id == ns.configured_id and ns.id_mints == 0
+    })
+
+  // Issue 35's orphan hazard, reachable: a node that minted its own cluster at bootstrap is
+  // now running under a *different* id than the one that cluster is named after — the
+  // "every restart joins as a stranger" state. Nothing in this model's invariant set forbids
+  // it (it is a real consequence of the ruled-today state-space row); the checks are that it
+  // does not let the node re-decide its mode, re-point its membership, or get re-absorbed.
+  val witnessStrangerIdentity: bool =
+    NODES.exists(n => {
+      val ns = nodes.get(n)
+      ns.raft_origin != None and ns.effective_id != ns.raft_origin
+    })
+
   // ---------------------------------------------------------------------------
   // Invariants — the ruled admission-window safety properties, grouped by family so a new
   // check is one `val inv_*` under the heading it belongs to. `scripts/quint-invariants.sh`
@@ -145,7 +210,8 @@ module cluster_admission {
   // only — nothing enumerates the families.
   //
   //   Leadership / usurpation — who may claim to be an externally routable leader.
-  //   Identity / restart      — what a restart may and may not re-derive.
+  //   Identity / restart      — what a restart may and may not re-derive, including the
+  //                             per-boot node id of state-space row "This node's own id".
   //   Admission / absorption  — what a MEET may fold in.
   // ---------------------------------------------------------------------------
 
@@ -200,6 +266,50 @@ module cluster_admission {
       }
     })
 
+  // cluster.md:129 ("written once at first-boot mode decision; never rewritten by config
+  // changes"), read with the issue-03 repurpose ruling in the header: the guarantee is
+  // scoped to config-driven rewrites, so it is asserted where that scope bites — `restart`,
+  // the one action that reads config (and, since the node-id extension, the one action that
+  // can see a brand-new id). `defects.restartIntentWrite` is recomputed inside `restart`
+  // from its own outcome, so a `restart` that re-derives the mode — from the since-flipped
+  // `configured_bootstrap`, or from a freshly-minted id the way today's `should_bootstrap`
+  // would — trips it however it is spelled. `applyRepurpose`'s admin-driven rewrite is
+  // outside the scope by ruling, and does not trip it.
+  val inv_intent_write_once: bool = not(defects.restartIntentWrite)
+
+  // State-space row "This node's own id" x TR-CLUSTER-028: a node's persisted cluster
+  // identity belongs to its durable record, not to the id it happens to be running under,
+  // so a restart never re-points `member_of`/`raft_origin` at the new boot's id. Checked
+  // via `defects.restartIdentityRemint`, recomputed inside `restart` from the outcome:
+  // `inv_meet_no_absorption` catches a remint of one of the two cells (they stop agreeing),
+  // but is blind to a restart that re-mints *both* in step — which is precisely the
+  // "rejoin as a stranger, under a fresh cluster identity" shape issue 35 describes.
+  val inv_identity_survives_id_churn: bool = not(defects.restartIdentityRemint)
+
+  // State-space row "This node's own id", the configured half: `effective_node_id` returns
+  // an explicitly-configured `cluster-node-id` unchanged at every boot. Falsified by a boot
+  // that mints a fresh id anyway — the defect that would make the knob decorative.
+  val inv_configured_id_stable: bool =
+    NODES.forall(n => {
+      val ns = nodes.get(n)
+      match ns.configured_id { | Some(c) => ns.effective_id == Some(c) | None => true }
+    })
+
+  // The mint device's own soundness, asserted rather than assumed (see the header's
+  // out-of-scope note): two distinct durable records never run under the same id at the
+  // same time. This is what lets `inv_single_routable_group` keep meaning something once
+  // ids churn — a cluster is named after the id that minted it, so id reuse would collapse
+  // two independent clusters into one name for reasons that have nothing to do with the
+  // admission window. Issue 35's real-world entropy defect lives outside this model; if a
+  // later mint model admits collisions, this invariant is the thing that must move, not
+  // quietly weaken.
+  val inv_effective_ids_distinct: bool =
+    NODES.forall(n1 => NODES.forall(n2 => {
+      val a = nodes.get(n1)
+      val b = nodes.get(n2)
+      (n1 != n2 and a.effective_id != None) implies a.effective_id != b.effective_id
+    }))
+
   // --- Admission / absorption ------------------------------------------------
 
   // TR-CLUSTER-005 amendment: `meet` never folds in a node whose Raft state carries a
@@ -224,15 +334,17 @@ module cluster_admission {
   // ---------------------------------------------------------------------------
 
   // Happy trajectory: TR-CLUSTER-028 bootstraps n1, TR-CLUSTER-029 defers n2's
-  // election, TR-CLUSTER-005 folds n2 into n1's cluster via MEET.
+  // election, TR-CLUSTER-005 folds n2 into n1's cluster via MEET. Both nodes boot with
+  // `cluster-node-id` unset (`pin == false`) — the default deployment shape — so each
+  // cluster identity is named after a minted id rather than after the node's record key.
   run bootstrapThenMeetTest: bool = {
     init
-      .then(bootAs(1, true))
+      .then(bootAs(1, true, false))
       .expect(
         val n1 = nodes.get(1)
-        all { n1.routable_leader, n1.raft != Empty, n1.member_of == Some(1) }
+        all { n1.routable_leader, n1.raft != Empty, n1.member_of == n1.effective_id }
       )
-      .then(bootAs(2, false))
+      .then(bootAs(2, false, false))
       .expect(
         val n2 = nodes.get(2)
         all { not(n2.routable_leader), n2.raft == Empty, n2.member_of == None }
@@ -257,9 +369,9 @@ module cluster_admission {
   // `boot`/`bootAs` is a first-boot-only action.
   run issue25UsurpationUnreachableTest: bool = {
     init
-      .then(bootAs(2, false))
+      .then(bootAs(2, false, false))
       .expect(nodes.get(2).intent == Join and not(nodes.get(2).routable_leader))
-      .then(restartAs(2, true))
+      .then(restartAs(2, true, false))
       .expect(
         val n2 = nodes.get(2)
         all { n2.intent == Join, not(n2.routable_leader), n2.raft == Empty }
@@ -267,11 +379,14 @@ module cluster_admission {
       .then(all {
         assert(inv_no_usurper),
         assert(inv_restart_deterministic),
+        assert(inv_intent_write_once),
         nodes' = nodes,
+        keepIds,
+        keepDefects,
       })
       // `.fail()` is the terminal step of the trace (see tests.md): re-deciding the
       // mode once persisted is not a legal step at all.
-      .then(bootAs(2, true).fail())
+      .then(bootAs(2, true, false).fail())
   }
 
   // TR-CLUSTER-005 amendment: MEET refuses a node that was ever a member of another
@@ -279,12 +394,16 @@ module cluster_admission {
   // rather than absorbing its foreign Raft state.
   run meetRefusesForeignRaftStateTest: bool = {
     init
-      .then(bootAs(1, true))
-      .then(bootAs(3, true))
+      .then(bootAs(1, true, false))
+      .then(bootAs(3, true, false))
       .then(all {
         assert(nodes.get(3).member_of != nodes.get(1).member_of),
         assert(inv_meet_no_absorption),
+        assert(inv_single_routable_group),
+        assert(inv_effective_ids_distinct),
         nodes' = nodes,
+        keepIds,
+        keepDefects,
       })
       // `.fail()` is the terminal step: MEET refuses n3, whose Raft state is
       // non-empty from its own independent bootstrap.
@@ -297,8 +416,8 @@ module cluster_admission {
   // reflect the node's true Raft provenance.
   run meetRefusesRepurposedNodeTest: bool = {
     init
-      .then(bootAs(1, true))
-      .then(bootAs(3, true))
+      .then(bootAs(1, true, false))
+      .then(bootAs(3, true, false))
       .then(repurpose(3))
       .expect(
         val n3 = nodes.get(3)
@@ -308,9 +427,134 @@ module cluster_admission {
         assert(witnessRepurposedHazard),
         assert(inv_meet_no_absorption),
         nodes' = nodes,
+        keepIds,
+        keepDefects,
       })
-      // `.fail()` is the terminal step: MEET still refuses n3 — `canMeet` gates on
-      // `raft == Empty` alone, which n3 fails regardless of its reset `intent`.
+      // `.fail()` is the terminal step: MEET still refuses n3 — a repurposed node is
+      // still a *running* node, so `canMeet`'s physicality conjunct is satisfied and the
+      // refusal is carried by `raft == Empty` alone, regardless of its reset `intent`.
       .then(meet(1, 3).fail())
+  }
+
+  // TR-CLUSTER-005 physicality (issue-03 ruling, see the header): MEET is refused against
+  // a node that has never booted, even though its Raft state is trivially empty — the one
+  // gate the ruled precondition names would admit it, but there is no process to hand the
+  // handshake to. This is the trace the restored conjunct exists for: without it, `meet`
+  // folds a never-started node into the cluster.
+  run meetRefusesUnbootedNodeTest: bool = {
+    init
+      .then(bootAs(1, true, false))
+      .expect(
+        val n4 = nodes.get(4)
+        all { n4.effective_id == None, n4.raft == Empty, n4.intent == Undecided }
+      )
+      // `.fail()` is the terminal step: n4 has never booted.
+      .then(meet(1, 4).fail())
+  }
+
+  // State-space row "This node's own id" (issue 35 class): a node left at the default
+  // `cluster-node-id` comes back from a restart under a brand-new id, and none of the
+  // persisted admission state moves with it — the decision it already made, the cluster it
+  // already minted and that cluster's provenance all stay keyed to its durable record.
+  run restartMintsFreshIdTest: bool = {
+    init
+      .then(bootAs(1, true, false))
+      .expect(
+        val n1 = nodes.get(1)
+        all { n1.effective_id == Some(FRESH_ID_BASE), n1.id_mints == 1,
+              n1.configured_id == None, n1.member_of == Some(FRESH_ID_BASE),
+              n1.raft_origin == Some(FRESH_ID_BASE) }
+      )
+      // Restart with the bootstrap knob since flipped off *and* a fresh id: neither may
+      // re-decide anything.
+      .then(restartAs(1, false, false))
+      .expect(
+        val n1 = nodes.get(1)
+        all {
+          n1.effective_id == Some(FRESH_ID_BASE + 1),
+          n1.id_mints == 2,
+          n1.intent == Bootstrap,
+          n1.decision_epoch == 1,
+          n1.routable_leader,
+          n1.member_of == Some(FRESH_ID_BASE),
+          n1.raft_origin == Some(FRESH_ID_BASE),
+        }
+      )
+      .then(all {
+        assert(witnessFreshIdAfterRestart),
+        assert(witnessStrangerIdentity),
+        assert(inv_restart_deterministic),
+        assert(inv_intent_write_once),
+        assert(inv_identity_survives_id_churn),
+        assert(inv_meet_no_absorption),
+        assert(inv_effective_ids_distinct),
+        nodes' = nodes,
+        keepIds,
+        keepDefects,
+      })
+  }
+
+  // The configured half of the same row: with `cluster-node-id` set, every boot returns
+  // that id unchanged and nothing is ever minted — then, once the knob is removed again,
+  // minting resumes. The two regimes are one trace so the contrast is forced, not assumed.
+  run configuredIdStableAcrossRestartTest: bool = {
+    init
+      .then(bootAs(2, false, true))
+      .expect(
+        val n2 = nodes.get(2)
+        all { n2.configured_id == Some(2), n2.effective_id == Some(2), n2.id_mints == 0,
+              n2.intent == Join }
+      )
+      .then(restartAs(2, true, true))
+      .expect(
+        val n2 = nodes.get(2)
+        all { n2.effective_id == Some(2), n2.id_mints == 0, n2.intent == Join,
+              not(n2.routable_leader) }
+      )
+      .then(all {
+        assert(witnessConfiguredIdPinned),
+        assert(inv_configured_id_stable),
+        assert(inv_restart_deterministic),
+        nodes' = nodes,
+        keepIds,
+        keepDefects,
+      })
+      // The knob removed again: this boot mints, and the mint source is untouched by the
+      // two pinned boots before it.
+      .then(restartAs(2, false, false))
+      .expect(
+        val n2 = nodes.get(2)
+        all { n2.configured_id == None, n2.effective_id == Some(FRESH_ID_BASE),
+              n2.id_mints == 1, n2.intent == Join }
+      )
+  }
+
+  // The issue-03 `applyRepurpose` ruling, forced: the write-once `intent` cell is immune to
+  // the config-driven paths the guarantee is scoped to (a flipped bootstrap knob, a
+  // re-minted id — neither moves it), and an admin `CLUSTER RESET` rewrites it anyway,
+  // which is lawful and leaves the scoped guarantee intact.
+  run adminResetMayRewriteIntentTest: bool = {
+    init
+      .then(bootAs(3, true, false))
+      .expect(nodes.get(3).intent == Bootstrap)
+      .then(restartAs(3, false, false))
+      .expect(
+        val n3 = nodes.get(3)
+        all { n3.intent == Bootstrap, n3.effective_id == Some(FRESH_ID_BASE + 1),
+              inv_intent_write_once, inv_identity_survives_id_churn }
+      )
+      .then(repurpose(3))
+      .expect(
+        val n3 = nodes.get(3)
+        all {
+          n3.intent == Join,
+          n3.member_of == None,
+          n3.raft != Empty,
+          // The reset does not un-boot the node: it is still a running process with an id,
+          // which is why MEET's physicality conjunct is not what refuses it.
+          n3.effective_id == Some(FRESH_ID_BASE + 1),
+          inv_intent_write_once,
+        }
+      )
   }
 }

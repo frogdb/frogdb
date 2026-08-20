@@ -1,9 +1,11 @@
 // cluster_admission_machine — the state machine of the admission-window model
 // (formal-spec phase 2, task 1): the `nodes` state variable (including the
-// `decision_epoch`/`raft_origin` ghost fields the invariants are made falsifiable by) and
-// one guarded action per modeled transition — `boot` (TR-CLUSTER-028/029), `restart`
-// (their persisted-intent amendment), `meet` (TR-CLUSTER-005) and `repurpose`
-// (TR-CLUSTER-035) — plus `init` and the `step` relation the simulator samples.
+// `decision_epoch`/`id_mints`/`raft_origin` ghost fields the invariants are made
+// falsifiable by), the `next_id` mint source behind state-space row "This node's own id",
+// the `defects` ghost record, and one guarded action per modeled transition — `boot`
+// (TR-CLUSTER-028/029), `restart` (their persisted-intent amendment, plus the per-boot id
+// re-derivation), `meet` (TR-CLUSTER-005) and `repurpose` (TR-CLUSTER-035) — plus `init`
+// and the `step` relation the simulator samples.
 //
 // Guards and updates themselves live in cluster_admission_logic.qnt; the model-wide
 // header (rows modeled, deviations, hardening notes) lives in cluster_admission.qnt.
@@ -21,53 +23,104 @@ module cluster_admission_machine {
   import cluster_admission_types.* from "./cluster_admission_types"
   import cluster_admission_logic.* from "./cluster_admission_logic"
 
+  // Keyed by the *durable node-local record* (the data directory), not by the node's
+  // cluster-visible id — that id is `NodeState.effective_id` and may be a different number
+  // at every boot (state-space row "This node's own id"). Keying the map by what actually
+  // persists is what lets the persisted cells (intent, Raft state) survive an id change.
   var nodes: NodeId -> NodeState
+
+  // The mint source for fresh (unconfigured) ids: strictly increasing, so no two mints
+  // collide and no mint collides with a pinned id. A model device, not a modeled cell —
+  // the real `effective_node_id` mints `(timestamp << 16) | random_bits`, whose entropy
+  // defect is deliberately out of scope (see cluster_admission.qnt's header).
+  var next_id: NodeId
+
+  // Ghost flags, set when an action took the *unsafe* variant of a ruled precondition.
+  // Never read by a guard; only by invariants. Each is recomputed inside the action that
+  // could take the unsafe variant, from that action's own outcome rather than from the
+  // guard, so weakening the update shows up here. (Same convention as the migration
+  // model's `defects` record.)
+  var defects: {
+    // cluster.md:129 / issue-03 repurpose ruling — `restart`, the one action that reads
+    // config (and, since the node-id extension, the one that can see a brand-new id),
+    // wrote the write-once `intent` cell.
+    restartIntentWrite: bool,
+    // Issue 35 — `restart` re-pointed the node's persisted cluster identity
+    // (`member_of`/`raft_origin`) at its new boot-time id instead of leaving the durable
+    // record's own claim alone.
+    restartIdentityRemint: bool,
+  }
 
   // ---------------------------------------------------------------------------
   // State machine (guarded actions).
   // ---------------------------------------------------------------------------
 
+  action keepIds: bool = next_id' = next_id
+  action keepDefects: bool = defects' = defects
+
   action init: bool = all {
     nodes' = NODES.mapBy(_ => {
       intent: Undecided, configured_bootstrap: false, raft: Empty,
       routable_leader: false, member_of: None,
-      decision_epoch: 0, raft_origin: None,
+      // No id before the first boot: an id exists only while a process does.
+      effective_id: None, configured_id: None,
+      decision_epoch: 0, id_mints: 0, raft_origin: None,
     }),
+    next_id' = FRESH_ID_BASE,
+    defects' = { restartIntentWrite: false, restartIdentityRemint: false },
   }
 
-  // Deterministic variant used by tests: `cb` is given directly rather than chosen by
-  // `boot`'s internal nondet pick, so a test can force a specific bootstrap-vs-join
-  // outcome.
-  action bootAs(n: NodeId, cb: bool): bool = {
+  // Deterministic variant used by tests: `cb` and `pin` are given directly rather than
+  // chosen by `boot`'s internal nondet picks, so a test can force a specific
+  // bootstrap-vs-join outcome and a specific identity regime.
+  action bootAs(n: NodeId, cb: bool, pin: bool): bool = {
     val ns = nodes.get(n)
+    val cfg = configuredIdFor(ns, n, pin)
     all {
       canBoot(ns),
-      nodes' = nodes.set(n, applyBoot(ns, n, cb)),
+      nodes' = nodes.set(n, applyBoot(ns, idForBoot(cfg, next_id), cfg, cb)),
+      next_id' = if (mintsFreshId(cfg)) next_id + 1 else next_id,
+      keepDefects,
     }
   }
 
   // TR-CLUSTER-028/029 — first boot: cb stands for "what this node's config says right
-  // now," read exactly once, at the moment the persisted intent is decided.
+  // now," read exactly once, at the moment the persisted intent is decided. `pin` is the
+  // other config read of a boot — whether `cluster-node-id` is set (state-space row "This
+  // node's own id"); left unset, this boot mints a fresh id.
   action boot(n: NodeId): bool = {
     nondet cb = Set(true, false).oneOf()
-    bootAs(n, cb)
+    nondet pin = Set(true, false).oneOf()
+    bootAs(n, cb, pin)
   }
 
-  action restartAs(n: NodeId, cb: bool): bool = {
+  action restartAs(n: NodeId, cb: bool, pin: bool): bool = {
     val ns = nodes.get(n)
+    val cfg = configuredIdFor(ns, n, pin)
+    val rebooted = applyRestart(ns, cb, idForBoot(cfg, next_id), cfg)
     all {
       canRestart(ns),
-      nodes' = nodes.set(n, applyRestart(ns, cb)),
+      nodes' = nodes.set(n, rebooted),
+      next_id' = if (mintsFreshId(cfg)) next_id + 1 else next_id,
+      defects' = { ...defects,
+        restartIntentWrite: defects.restartIntentWrite or rebooted.intent != ns.intent,
+        restartIdentityRemint: defects.restartIdentityRemint
+          or rebooted.member_of != ns.member_of
+          or rebooted.raft_origin != ns.raft_origin,
+      },
     }
   }
 
   // TR-CLUSTER-028/029 amendment — non-first boot: `cb` models a config value that may
   // have changed (an operator flip) since the persisted intent was written; the
   // model must allow `cb` to disagree with `intent` and have that disagreement be a
-  // no-op for behavior (inv_restart_deterministic checks exactly this).
+  // no-op for behavior (inv_restart_deterministic checks exactly this). `pin` likewise
+  // may have changed since the last boot — an operator adding the `cluster-node-id` knob
+  // (pins this node's identity from here on) or removing it (fresh id every boot again).
   action restart(n: NodeId): bool = {
     nondet cb = Set(true, false).oneOf()
-    restartAs(n, cb)
+    nondet pin = Set(true, false).oneOf()
+    restartAs(n, cb, pin)
   }
 
   // TR-CLUSTER-005 — `CLUSTER MEET` folding `m` into `n`'s cluster.
@@ -78,6 +131,8 @@ module cluster_admission_machine {
       n != m,
       canMeet(nNode, mNode),
       nodes' = nodes.set(m, applyMeetJoiner(mNode, nNode)),
+      keepIds,
+      keepDefects,
     }
   }
 
@@ -89,11 +144,15 @@ module cluster_admission_machine {
     all {
       canRepurpose(ns),
       nodes' = nodes.set(n, applyRepurpose(ns)),
+      keepIds,
+      keepDefects,
     }
   }
 
   action stutter: bool = all {
     nodes' = nodes,
+    keepIds,
+    keepDefects,
   }
 
   action step: bool = {
