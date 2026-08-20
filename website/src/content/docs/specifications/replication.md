@@ -278,8 +278,8 @@ the authority) differ from what the cited `Source` does today.
 | Field | Value |
 | --- | --- |
 | Precondition | SessionPhase = Streaming; ApplyGateFrozen = false; ApplyGateStint matches the consumer's own stint; Epoch matches the frame's epoch; DivergedEpoch is not the current Epoch; a frame is available |
-| Postcondition | On `Claim::Granted`: ClaimedOffset advances by the frame's byte length; the shard apply runs; LandedOffset is raised to ClaimedOffset (`land()`). On `Claim::Stale` (epoch mismatch or diverged): the frame is dropped, ClaimedOffset/LandedOffset unchanged, the consumer keeps running. On `Claim::Retired` (ApplyGateFrozen or stint mismatch): the frame is dropped and the consumer stops. |
-| Source | `frogdb-replication/src/replica/offset.rs:388` (`claim`), `:420` (`land`) |
+| Postcondition | A frame whose whole span ClaimedOffset already covers (`frame.sequence <= ClaimedOffset`) never reaches the claim at all: it is skipped and counted, both offsets unchanged, the consumer running (FM-REPLICATION-065). Otherwise the claim decides. On `Claim::Granted`: ClaimedOffset advances by the frame's byte length; the shard apply runs; LandedOffset is raised to ClaimedOffset (`land()`). On `Claim::Stale` (epoch mismatch or diverged): the frame is dropped, ClaimedOffset/LandedOffset unchanged, the consumer keeps running. On `Claim::Retired` (ApplyGateFrozen or stint mismatch): the frame is dropped and the consumer stops. |
+| Source | `frogdb-replication/src/replica/offset.rs:388` (`claim`), `:420` (`land`), `covers`/`record_skip` (the pre-claim skip); `frogdb-replication/src/apply.rs` (`consume_frames`, the one site that consults them) |
 | Rulings | — |
 | Model | `replication_fullsync.qnt::inv_offsets_ordered` |
 
@@ -600,8 +600,11 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
   offset-addressed**: the replica's claim is the address, `extract_backlog` returns only
   `offset > claimed` (`primary/ring_buffer.rs`), and `FeedSequencer::buffer` drops any live frame at
   or below the same `resume_offset` (`feed_sequencer.rs`), so nothing the claim already covers is
-  re-delivered at all — the skip is enforced on the sender, against the offset the replica named
-  (FM-REPLICATION-012, FM-REPLICATION-015). The re-delivered tail is therefore exactly the range
+  re-delivered at all (FM-REPLICATION-012, FM-REPLICATION-015). That sender-side skip is no longer
+  the only thing standing between a mis-computed resume and a double-applied write: the replica
+  enforces the same rule from its own side, against the head it actually holds rather than the
+  offset it once named, and ignores any frame whose whole span that head already covers
+  (FM-REPLICATION-065). The re-delivered tail is therefore exactly the range
   between the claim and what the keyspace holds, and that range is closed from the other side by
   issue-24's amendment point 2 (TR-REPLICATION-021): the persisted offset commits atomically with
   the write it names, so the claim does not sit below the keyspace. Re-execution of that range is
@@ -2075,6 +2078,32 @@ data paths down over peers that never had the option to announce. This row there
 what it can prove, and makes everything it cannot prove loud. The finalization-side gate — a
 readiness check an upgrade tool can query for a standalone primary's attached replicas — remains
 unbuilt; it is the second half of issue 27's open question and is out of this row's scope.
+
+---
+
+## FM-REPLICATION-065 — a replica ignores a frame its applied head already covers
+
+| Field | Value |
+|---|---|
+| Trigger | A frame reaches the replica's frame consumer whose whole byte span is already covered by what this node has applied — `frame.sequence <= ClaimedOffset`, the frame spanning `(sequence - stream_advance(), sequence]` (FM-REPLICATION-031). Every way the stream can produce one: a primary that replays a range the replica's claim already named (a resume computed against the wrong offset, an off-by-one in `extract_backlog`'s `offset > start` filter or `FeedSequencer::buffer`'s `sequence > resume_offset` drop, a backlog entry recorded twice), a re-delivery of a whole `MULTI … EXEC` group, and the boundary that decides the rule's shape: a frame ending *exactly* at the applied head. Sharpened by the frames this must **not** touch: a frame ending above the head, including one whose span *starts* below it, and a frame stamped with a history this node has replaced. |
+| Observable | The re-delivered frame is ignored: it is not parsed, not routed to a shard, and not applied — a replica re-sent `INCR k` for a write it already holds still reads `k = 1`, and the same for every other verbatim-propagated command (`LPUSH`, `APPEND`, `SETRANGE`; `core/src/shard/post_execution.rs`, `replication_forms`). Neither offset moves: ClaimedOffset and LandedOffset are exactly where they were, so the replica does not credit the same bytes twice and its next `REPLCONF ACK` still names data it holds. The skip is **counted, never silent**: `ConsumeStats.skipped` tallies it for the stint's owner (reported in the consumer's shutdown line beside `frames_processed`/`errors`/`discarded`), a node-wide cumulative counter (`AppliedOffset::skipped`) makes it readable while the stint is still running, and each skip logs one `WARN` naming the frame's sequence, its shard, the applied head it fell under and the running total — because a skip is always evidence of a sender-side accounting bug, and a receiver that quietly absorbs one leaves nothing for an operator to act on. |
+| NOT observable | **A re-delivered frame re-executing.** This is the hole the row closes: dedup was sender-side only (`primary/ring_buffer.rs` `offset > start`, `feed_sequencer.rs` `sequence > resume_offset`), keyed on the offset the replica *claimed*, so every path that computes that claim wrongly re-executed a non-idempotent command on the replica and left a keyspace that silently disagrees with the primary's while both nodes report the same offset. **A skipped frame moving ClaimedOffset or LandedOffset** — its bytes are inside the head by definition, so claiming them would push the replica's offset past the primary's and make it vouch for history that does not exist. **A silent skip**: no counter, no total, no log. **A frame ending above the head being skipped**, in whole or in part — the rule is whole-span coverage, not "starts below". A frame straddling the head is applied verbatim, sub-range and all; that residue belongs to TR-REPLICATION-034, which removes it at its source rather than here. **A skip decided before the history check**, which would let a frame from a replaced history be counted as a duplicate of the new history's data rather than discarded with the history it belongs to. **A skip that abandons an open `MULTI` group**, or one that arrives inside one: the applied head only moves at `EXEC`, by the whole group's byte total, so it never falls strictly inside a group's span — a re-delivered group is skipped whole, frame by frame, and `pending` is left untouched. **A skip that stops the consumer.** Ignoring is not divergence and not retirement: the link is healthy, the next frame above the head applies normally. |
+| Invariant | Receiver-authoritative dedup, Raft-style: the replica's own applied head is the address, not the offset it once told a primary about. One predicate, one site — `ReplicaApplyStint::covers(end_offset)` (`replica/offset.rs`) is `end_offset <= self.current()`, and `consume_frames` (`apply.rs`) consults it exactly once per frame, immediately after the two history checks (the `epoch != stint.epoch()` drop and the open-group epoch abandon) and **before** `stream_advance()`, the payload parse and every `claim_or_stop!` site. Placing it there is what makes the dispositions total and ordered: replaced history → `discarded`, already covered → `skipped`, otherwise → the claim decides (TR-REPLICATION-014). The skip is a `continue` with no other state touched: no claim, no `land()`, no `admit_divergence`, `pending` untouched. `ReplicaApplyStint::record_skip()` returns the node-wide running total and is called *outside* the `warn!` (a `tracing` macro does not evaluate its fields when the event is disabled, which would make the counter depend on log level — the same rule `ReplicaTxnBound::record_abandoned` follows). The node-wide counter lives on `AppliedOffset` beside the heads it guards and is deliberately **not** cleared by `reset_pair`: a full resync replaces the history, not the evidence that this node was re-sent data. Because the check reads the head rather than the epoch, it holds against a sender bug that has not been imagined yet — which is the whole reason the guarantee is stated on the receiver. |
+| Outcome variant | `ConsumeStats.skipped` (per stint); `AppliedOffset::skipped()` (node-wide, cumulative); one `WARN` per skipped frame. No wire surface — a skip changes nothing the primary can see except that the replica's ACK does not move. |
+| Forced by | `a_frame_at_or_below_the_applied_head_is_skipped`, `a_frame_ending_exactly_at_the_applied_head_is_skipped`, `a_frame_ending_above_the_applied_head_is_applied`, `a_skipped_frame_neither_claims_nor_lands`, `a_re_delivered_group_is_skipped_frame_by_frame`, `skipped_frames_are_counted_on_the_stats_and_the_node`, `a_replaced_history_is_discarded_before_the_skip_is_considered` |
+| Rulings | R7 of the quint-completeness campaign's 2026-08-20 post-execution rulings (`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`) — ruled receiver-side skip over tightening the sender, so the guarantee covers any future sender-side accounting bug rather than the one instance found. Skipped frames are counted rather than silently dropped, following the R-21 precedent (an out-of-range ACK is ignored *and* counted, FM-REPLICATION-012). |
+| Bug refs | `.scratch/replication-correctness/issues/done/34-replica-side-skip-below-applied-head.md` |
+| Model | `replication_fullsync.qnt::inv_reapply_is_a_noop` |
+
+**What this row does not cover, and why that is not a gap here.** The full-sync overship
+(FM-REPLICATION-004: `snapshot_offset` is captured *before* the checkpoint is cut, so the payload
+carries data the granted offset does not name) produces re-delivered frames that sit *above* the
+replica's applied head, not at or below it. They are therefore applied, correctly by this row's
+rule — the replica cannot tell from an offset that a checkpoint already contains a write the offset
+does not claim. Removing that class means removing the overship or refusing the arm that inherits
+it, which is TR-REPLICATION-034's subject and is explicitly deferred there. This row is the safety
+net under the *accounting*: whatever the sender believes about what the replica claimed, the replica
+answers with what it actually holds.
 
 ---
 
