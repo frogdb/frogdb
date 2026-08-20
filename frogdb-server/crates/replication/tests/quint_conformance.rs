@@ -143,15 +143,14 @@
 //! else means the projection stopped matching the model and stays a hard failure. A state with
 //! *some* variables but not others is likewise a hard failure, never a silent refusal.
 //!
-//! # FM-CLUSTER-097 carve-out (pending ruling)
+//! # FM-CLUSTER-097 carve-out (ruled R3, 2026-08-20)
 //!
 //! A link that ends inside an armed barrier window drains its held buffer past the barrier
 //! floor without re-consulting the gate — `feed_sequencer.rs:221-230` does it, and the model
-//! reproduces it faithfully with a disclosed carve-out in
-//! `inv_no_ship_inside_barrier_window`. Seam and model agree, so this harness conforms to
-//! both; `close_inside_window_drains_then_ends_graceful` replays the exact sequence. If the
-//! ruling in `.scratch/formal-spec/t9b-blocked.md` lands on "the seam is wrong", the model
-//! changes first and this harness turns red on the seam — which is the point.
+//! reproduces it faithfully with a carve-out in `inv_no_ship_inside_barrier_window`. Ruling
+//! R3 (campaign ledger, `.scratch/formal-spec/t9b-blocked.md`) amended FM-CLUSTER-097 to
+//! state the drain, so seam, model, and row now agree; this harness conforms to all three,
+//! and `close_inside_window_drains_then_ends_graceful` replays the exact sequence.
 //!
 //! # Acceptance demonstration (campaign W3: "the revert test")
 //!
