@@ -365,7 +365,25 @@ TCP connect; after `fail_threshold` consecutive failures it proposes `MarkNodeFa
 metadata, so centralizing detection there costs O(N) rather than O(N²) probes.
 
 When automatic failover is enabled (`auto_failover`), the leader then selects a successor among the
-failed primary's replicas by lag-based scoring and proposes a single composite `Failover` command:
+failed primary's replicas — **filter, then tier, then bound, then score**, in that order
+(`select_failover_target`) — and proposes a single composite `Failover` command:
+
+- *Filter* removes priority-0 candidates, and — while any slot the successor would inherit is under
+  a live prepared handoff — any candidate that does not report its inbound replication link attached
+  and past PSYNC, since it may hold a drained tail of writes whose ownership is still moving.
+- *Tier* splits what is left by whether the health probe determined the candidate's offset at all.
+  Offset-unknown candidates rank strictly last; they are promotable only when nobody's offset could
+  be read. A failed probe is never scored as offset 0 — that sentinel is what let a
+  long-partitioned replica out-score a healthy peer.
+- *Bound* applies `cluster-promotion-max-lag-bytes`, an operator data-loss budget in offset bytes
+  (never in disconnection seconds — no wall clock gates a promotion here). It is 0, meaning off, by
+  default, and forced failover never consults it.
+- *Score* is `priority * 100_000 + lag * 1_000`, saturating, with ties broken by the lower node ID.
+
+A selection that survives none of these abandons the failover rather than handing it down a tier;
+the retry loop re-drives it.
+
+
 
 ```rust
 enum ClusterCommand {

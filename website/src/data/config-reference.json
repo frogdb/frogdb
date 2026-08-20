@@ -148,6 +148,14 @@
           "description": "This node's unique ID (0 = auto-generate from timestamp)."
         },
         {
+          "name": "promotion-max-lag-bytes",
+          "type": "integer",
+          "default": 0,
+          "description": "Automatic-promotion staleness bound, in replication-offset bytes behind\nthe freshest candidate. `0` (the default) disqualifies nobody.\n\nRedis spells this bound in disconnection *seconds*\n(`cluster-replica-validity-factor`); FrogDB spells it in offset lag so\nno wall clock gates a promotion. Forced failover\n(`CLUSTER FAILOVER FORCE`/`TAKEOVER`) never consults it.",
+          "config_param": "cluster-promotion-max-lag-bytes",
+          "mutable": true
+        },
+        {
           "name": "replica-priority",
           "type": "integer",
           "default": 100,

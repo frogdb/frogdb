@@ -155,6 +155,7 @@ auto-failover = false
 fail-threshold = 5
 self-fence-on-quorum-loss = true
 replica-priority = 100
+promotion-max-lag-bytes = 0
 
 [status]
 memory-warning-percent = 90

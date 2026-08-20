@@ -2826,6 +2826,31 @@ impl ConfigManager {
                 render: |v| v.to_string(),
                 propagation: Propagation::None,
             }),
+            // Fully live: `select_failover_target` reads the bound through
+            // `ClusterRuntimeFlags` at selection time, so a set that lands
+            // mid-outage governs the very next promotion (TR-CLUSTER-043).
+            ClusterPromotionMaxLagBytes => Box::new(ConfigParam::<u64, ConfigManager> {
+                name: id.name(),
+                parse: |s| {
+                    s.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                        param: "cluster-promotion-max-lag-bytes".to_string(),
+                        message: "must be a non-negative integer number of bytes".to_string(),
+                    })
+                },
+                validate: ConfigParam::no_validate,
+                default: || 0,
+                get: |mgr| mgr.cluster_flags.promotion_max_lag_bytes(),
+                apply: |mgr, v| {
+                    mgr.cluster_flags.set_promotion_max_lag_bytes(v);
+                    info!(
+                        max_lag_bytes = v,
+                        "Automatic-promotion staleness bound updated"
+                    );
+                    Ok(())
+                },
+                render: |v| v.to_string(),
+                propagation: Propagation::None,
+            }),
 
             // === config-mutability round: [status] health thresholds ===
             // The status collector classifies every `/status` render against
@@ -4868,6 +4893,13 @@ maxmemory = 0
         manager.set("replica-priority", "42").unwrap();
         assert_eq!(flags.replica_priority(), 42);
         assert_eq!(manager.get("replica-priority")[0].1, "42");
+
+        assert_eq!(flags.promotion_max_lag_bytes(), 0);
+        manager
+            .set("cluster-promotion-max-lag-bytes", "4096")
+            .unwrap();
+        assert_eq!(flags.promotion_max_lag_bytes(), 4_096);
+        assert_eq!(manager.get("cluster-promotion-max-lag-bytes")[0].1, "4096");
     }
 
     #[test]

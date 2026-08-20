@@ -1240,7 +1240,7 @@ mod tests {
 
         let addr: SocketAddr = "127.0.0.1:16379".parse().unwrap();
         let probe = factory.connect(1, addr).health_probe().await.unwrap();
-        assert_eq!(probe, (7, 99));
+        assert_eq!(probe, (7, 99, true));
         peer.await.unwrap();
 
         // One request out, one response back — and the peer handle counts into

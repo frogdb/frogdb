@@ -101,6 +101,7 @@ The `[cluster]` keys and defaults:
 | `fail-threshold` | `5` | Consecutive failed probes before a node is marked failed — and consecutive successful probes before the flag is cleared again. |
 | `self-fence-on-quorum-loss` | `true` | Reject writes when this node cannot form a quorum. |
 | `replica-priority` | `100` | Promotion preference during auto-failover (lower is preferred; `0` never promotes). |
+| `cluster-promotion-max-lag-bytes` | `0` | Data-loss budget for automatic promotion, in replication-offset bytes behind the freshest surviving candidate. `0` disqualifies nobody. Unlike Redis's `cluster-replica-validity-factor`, the bound is spelled in bytes, not disconnection seconds, so no wall clock gates a promotion. Forced failover (`CLUSTER FAILOVER FORCE`/`TAKEOVER`) never consults it. |
 
 See the [Configuration reference](/reference/configuration/) for the generated, authoritative list.
 
@@ -141,9 +142,34 @@ Secure the admin surfaces with network isolation and, for the HTTP endpoints, an
 
 | Scenario | Behavior |
 |---|---|
-| Node failure | With `auto-failover = true`, the Raft leader promotes a replica after `fail-threshold` consecutive failures, choosing among candidates by `replica-priority`. With the default `auto-failover = false`, promotion is manual via `CLUSTER FAILOVER`. |
+| Node failure | With `auto-failover = true`, the Raft leader promotes a replica after `fail-threshold` consecutive failures. With the default `auto-failover = false`, promotion is manual via `CLUSTER FAILOVER`. See [candidate selection](#candidate-selection) for how the successor is chosen. |
 | Quorum loss | With `self-fence-on-quorum-loss = true` (default), a node that cannot form a quorum rejects writes with `CLUSTERDOWN` while continuing to serve reads, preventing split-brain divergence. |
 | Raft leader loss | A standard openraft election runs, governed by `election-timeout-ms` and `heartbeat-interval-ms`. Explicit leadership transfer is not implemented. |
+
+### Candidate selection
+
+Automatic promotion picks the successor in four stages, in this order. The
+[cluster specification](/specifications/cluster/) is authoritative; this is the operator's summary.
+
+1. **Filter.** A candidate at `replica-priority` 0 is never promoted. Additionally, while any slot the
+   successor would inherit is under a live prepared handoff, a candidate whose inbound replication
+   link is not attached and past PSYNC is excluded outright — it may hold a drained tail of writes
+   whose ownership is still moving. A probe that failed counts as "not attached" here, so this filter
+   is fail-closed; the wait is bounded by the handoff lease, after which selection resumes normally.
+2. **Tier.** Surviving candidates whose replication offset the health probe actually returned are
+   ranked ahead of every candidate whose offset is unknown. An unreachable replica is *ranked last*,
+   never scored as if it were at offset 0 — but it is still promotable if nobody's offset could be
+   read, so an all-blind outage does not cost the shard its availability.
+3. **Bound.** Within the ranked tier, a candidate further behind the freshest surviving copy than
+   `cluster-promotion-max-lag-bytes` is disqualified from *automatic* promotion. If the bound
+   disqualifies everyone, the failover is abandoned and retried rather than handed down to a
+   candidate nobody could measure.
+4. **Score.** What survives is ordered by `replica-priority` first and replication lag second, with
+   ties broken by the lower node ID so every node reaches the same answer.
+
+Manual failover (`CLUSTER FAILOVER` with `FORCE` or `TAKEOVER`) does not run this selection at all —
+the operator has named the successor, and a forced failover is the operator deliberately accepting
+whatever data loss comes with it.
 
 ## Monitoring
 
