@@ -128,6 +128,11 @@ module replication_fullsync_types {
     last_departure: Option[Departure],
     // Issue-21 ruling: acks above the live head are counted, not applied.
     acks_ignored: int,
+    // R7 / FM-REPLICATION-065: frames re-delivered at or below this node's
+    // applied head are counted, not applied. Node-wide and cumulative — a
+    // resync does not clear it, because what it counts is a *sender* bug the
+    // operator has to see across the reconnect that hides it.
+    frames_skipped: int,
   }
 
   type Session = {

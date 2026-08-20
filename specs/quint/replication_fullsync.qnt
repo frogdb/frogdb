@@ -37,6 +37,7 @@
 //                       inv_superseded_records_no_departure
 //   TR-REPLICATION-034  inv_no_forked_tail_above_the_claim (R5, model-only)
 //   FM-REPLICATION-001  inv_reapply_is_a_noop (R4)
+//   FM-REPLICATION-065  inv_reapply_is_a_noop (R7, the receiver-side skip)
 //   FM-REPLICATION-004  inv_payload_covers_grant, inv_applied_covered_by_data
 //   FM-REPLICATION-005  inv_splice_continuity
 //   FM-REPLICATION-012  spliceOverEvictedRangeFailsTest
@@ -73,21 +74,31 @@
 // by `writeDuringTransferSurvivesTest`) is the witness that the overlap is
 // exercised at all.
 //
-// *What the abstraction carries, and what it does not.* The skip rule R4 names
-// is real and already specced — it is FM-REPLICATION-015's sequence dedup
-// (`frame.sequence <= resume_offset`) plus FM-REPLICATION-012's contiguity
-// check on the extraction — but it is enforced on the *sender*, against the
-// offset the replica claimed, so it covers positions at or below that claim.
-// The checkpoint-cut overship sits strictly *above* the claim, and this model's
-// unit-write log makes its re-landing a no-op because a position is overwritten
-// with the identical write id. A keyspace under verbatim propagation
-// (`replication_forms`, `core/src/shard/post_execution.rs:87` — "everything else
-// propagates verbatim") does not have that property, and FM-REPLICATION-015's
-// own not-observable says so: re-applying a boundary command "for a
-// non-idempotent replicated command ... is corruption, not a no-op". The model
-// therefore asserts the no-op it can see and records here that the overship
-// range's re-execution is *not* covered by the sender-side skip; see the
-// campaign ledger's R4 follow-up.
+// **R7 (2026-08-19 ruling, issue 34) — the skip is receiver-authoritative.**
+// R4's follow-up is ruled and shipped. The sender-side checks R4 leaned on —
+// FM-REPLICATION-015's sequence dedup (`frame.sequence <= resume_offset`) plus
+// FM-REPLICATION-012's contiguity check on the extraction — are enforced
+// against the offset the replica *claimed*, so a mis-computed resume point on
+// the primary put a re-applied write straight into the replica's keyspace.
+// FM-REPLICATION-065 moves the authority to the receiver, Raft style: a frame
+// at or below the replica's own applied head is ignored whole and counted,
+// whoever sent it. `inv_reapply_is_a_noop` therefore stops being a pure
+// abstraction guard — its third conjunct is modelled behaviour, driven by
+// `redeliverFrameAt` (the invalid input a correct primary never sends) and
+// witnessed by `witnessFrameSkipped` / `skipBelowAppliedHeadTest`.
+//
+// *What the receiver skip does not cover.* The checkpoint-cut overship sits
+// strictly *above* the applied head — payload data the replica installed but
+// does not claim — so the skip is not what makes its re-landing harmless. In
+// this model's unit-write log it is harmless by construction (a position is
+// overwritten with the identical write id), while a keyspace under verbatim
+// propagation (`replication_forms`, `core/src/shard/post_execution.rs:87` —
+// "everything else propagates verbatim") has no such property, and
+// FM-REPLICATION-015's own not-observable says so: re-applying a boundary
+// command "for a non-idempotent replicated command ... is corruption, not a
+// no-op". That range is R5's subject, not R7's: `truncateAboveClaim` removes
+// the class at the partial-resync accept (`inv_no_forked_tail_above_the_claim`,
+// TR-REPLICATION-034), which is where the residue is tracked.
 //
 // **R5 (2026-08-20 ruling) — the overshipped tail is truncated above the claim.**
 // A replica that installs a payload covering more than its granted offset holds
@@ -163,8 +174,18 @@ module replication_fullsync {
   // write-log abstraction; the second is the ordering the offset addressing
   // rests on. Both are true by construction of `applyFrameToData`/`applyFrameAt`
   // — the ghosts exist so a mutation of either cannot pass silently.
+  //
+  // R7 (issue 34, FM-REPLICATION-065) adds the third conjunct and is the one
+  // that is *behaviour* rather than construction: a frame at or below the
+  // replica's applied head is ignored whole and counted, whatever the sender
+  // believed. `redeliverFrameAt` admits the frame no correct primary would
+  // send, `frameIsCovered` decides, and `skipDisposedOk` recomputes the ruled
+  // disposition — so narrowing the comparison to `<`, landing the frame, or
+  // dropping it without counting all latch `defects.skippedFrameLanded`.
   val inv_reapply_is_a_noop: bool =
-    not(defects.reapplyChangedData) and not(defects.replayRegressedApplied)
+    not(defects.reapplyChangedData)
+      and not(defects.replayRegressedApplied)
+      and not(defects.skippedFrameLanded)
 
   // R5: no frame ever lands on a divergent position *above* the offset its
   // grant claims. The partial-resync accept truncates the replica's data to its
@@ -387,6 +408,7 @@ module replication_fullsync {
   val witnessEvictionForcedFullResync: bool = coverage.evictionForcedFull
   val witnessSpliceAbandoned: bool = coverage.spliceAbandoned
   val witnessAckIgnored: bool = coverage.ackIgnored
+  val witnessFrameSkipped: bool = coverage.frameSkipped
   val witnessSuperseded: bool = coverage.superseded
   val witnessCorpseSession: bool = coverage.corpseSession
   val witnessSettleDiscardedFrames: bool = coverage.settleDiscardedFrames
@@ -711,6 +733,39 @@ module replication_fullsync {
         nodes.get(2).applied == 0,
         inv_partial_grant_sound,
         inv_identity_pair_monotone,
+      }))
+
+  // 11. FM-REPLICATION-065 (R7): the primary re-ships frames the replica has
+  //     already applied — a mis-computed resume point, the shape the sender-side
+  //     dedup is supposed to prevent and sometimes does not. The replica is
+  //     receiver-authoritative: it ignores both, at the boundary (a frame ending
+  //     exactly at the applied head) and below it, and counts them. Nothing about
+  //     its history moves, so the primary's own history stays the one it holds.
+  run skipBelowAppliedHeadTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(check(nodes.get(2).applied == 2 and nodes.get(2).frames_skipped == 0))
+      // The boundary: `sequence == applied`. This is the case a `<` comparison
+      // would let through.
+      .then(redeliverFrameAt(1, 2))
+      // …and a frame from well below the head.
+      .then(redeliverFrameAt(1, 1))
+      .then(check(and {
+        nodes.get(2).applied == 2,
+        nodes.get(2).recv == 2,
+        nodes.get(2).data == nodes.get(1).data,
+        // Ignored *and* counted — a silent drop leaves the operator with no
+        // evidence of the sender bug (the R-21 "ignore + count" shape).
+        nodes.get(2).frames_skipped == 2,
+        coverage.frameSkipped,
+        inv_reapply_is_a_noop,
+        inv_no_acked_write_lost_across_fullsync,
+        inv_offsets_ordered,
       }))
 
   // The FM-REPLICATION-004 overshipped tail meeting a failover, and R5's

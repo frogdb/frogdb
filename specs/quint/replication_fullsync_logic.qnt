@@ -170,6 +170,11 @@ module replication_fullsync_logic {
   // past the granted offset. R5 (2026-08-20) removes that class at the accept
   // (`truncateAboveClaim`), so reaching it is now also a defect
   // (`defects.forkedTailApplied`, pinned by `overshippedTailMeetsFailoverTest`).
+  //
+  // Note the split from `frameIsCovered` below: `Reapplied` is a position the
+  // replica's *data* already holds but its applied head does not cover (the
+  // checkpoint overship). A position the head *covers* never reaches this
+  // classification at all — the receiver skips it first.
   pure def classifyApply(d: List[WriteId], k: Offset, w: WriteId): ApplyOutcome =
     if (k == d.length() + 1) Appended
     else if (k > d.length() + 1) Gapped
@@ -191,6 +196,36 @@ pure def truncateAboveClaim(d: List[WriteId], claim: Offset): List[WriteId] =
 
 pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId] =
     if (k == d.length() + 1) d.append(w) else d.replaceAt(k - 1, w)
+
+  // --- Receiver-side skip (R7, FM-REPLICATION-065) ---
+  //
+  // R7 (2026-08-19 ruling, issue 34): dedup is *receiver-authoritative*, Raft
+  // style. A frame the replica's applied head already covers is ignored whole,
+  // whoever sent it and for whatever reason. The sender-side checks
+  // (FM-REPLICATION-012/-015) stay, but they are no longer the only thing
+  // between a mis-computed resume and a double-applied write.
+  //
+  // The comparison is inclusive because a frame is addressed by the offset it
+  // ends at — the position it occupies here, `frame.sequence` in the
+  // implementation — so `k == applied` is a frame the head covers exactly.
+  pure def frameIsCovered(n: NodeState, k: Offset): bool = k <= n.applied
+
+  // The ruled disposition of a covered frame: nothing about the history moves,
+  // and the skip is counted (the R-21 "ignore + count" shape — a silent drop
+  // leaves the operator with no evidence of the sender bug).
+  pure def applySkip(n: NodeState): NodeState =
+    { ...n, frames_skipped: n.frames_skipped + 1 }
+
+  // Recomputed from the outcome so a mutation that lands a covered frame — or
+  // drops it without counting — shows up in the defect ghost rather than
+  // passing silently (defects-family convention).
+  pure def skipDisposedOk(pre: NodeState, post: NodeState): bool =
+    and {
+      post.data == pre.data,
+      post.applied == pre.applied,
+      post.recv == pre.recv,
+      post.frames_skipped == pre.frames_skipped + 1,
+    }
 
   // --- ACK ingest (TR-REPLICATION-018, issue-21 ruling) ---
 

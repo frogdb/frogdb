@@ -23,6 +23,7 @@
 //   FM-REPLICATION-012  spliceStream / abandonSplice: contiguous or not at all
 //   FM-REPLICATION-016  evictBacklog: eviction raises the floor
 //   FM-REPLICATION-019  promote: mint, freeze, re-arm — in one step
+//   FM-REPLICATION-065  redeliverFrame: the receiver-side skip (R7)
 //   INV-SESSION-1       a session belongs to exactly one replica link
 //
 // Ghost conventions (phase-2 plan): `defects` latches when the *unsafe* variant
@@ -75,6 +76,10 @@ module replication_fullsync_machine {
     reapplyChangedData: bool,
     // R4: the applied position never regresses on a frame landing.
     replayRegressedApplied: bool,
+    // R7 (2026-08-19 ruling) / FM-REPLICATION-065: a frame the replica's
+    // applied head already covers was not disposed of as a skip — it landed,
+    // or it was dropped without being counted.
+    skippedFrameLanded: bool,
     // FM-REPLICATION-012 / -014: a partial grant issued below the armed floor.
     grantBelowFloor: bool,
     // FM-REPLICATION-013: a partial grant issued over a history the primary
@@ -101,6 +106,8 @@ module replication_fullsync_machine {
     partialViaSecondary: bool,
     evictionForcedFull: bool,
     ackIgnored: bool,
+    // R7: the replica ignored a frame its applied head already covered.
+    frameSkipped: bool,
     superseded: bool,
     settleDiscardedFrames: bool,
     uncleanRestartReminted: bool,
@@ -175,11 +182,13 @@ module replication_fullsync_machine {
       if (n == INITIAL_PRIMARY)
         { role: Primary, data: List(), replid: FIRST_GEN, replid2: None,
           second_offset: NO_WINDOW, recv: 0, applied: 0, floor: UNARMED,
-          link: None, last_departure: None, acks_ignored: 0 }
+          link: None, last_departure: None, acks_ignored: 0,
+          frames_skipped: 0 }
       else
         { role: Replica, data: List(), replid: NO_HISTORY, replid2: None,
           second_offset: NO_WINDOW, recv: 0, applied: 0, floor: UNARMED,
-          link: None, last_departure: None, acks_ignored: 0 })
+          link: None, last_departure: None, acks_ignored: 0,
+          frames_skipped: 0 })
     all {
       nodes' = n0,
       sessions' = SIDS.mapBy(_ => freshSession(INITIAL_PRIMARY, INITIAL_PRIMARY)),
@@ -198,9 +207,11 @@ module replication_fullsync_machine {
         grantForeignHistory: false, tornIdentity: false, restartOffsetTorn: false,
         supersededDeparture: false, forkedTailApplied: false,
         reapplyChangedData: false, replayRegressedApplied: false,
+        skippedFrameLanded: false,
       },
       coverage' = {
         overshipped: false, reapplied: false, overshipTruncated: false,
+        frameSkipped: false,
         spliceAbandoned: false,
         partialViaSecondary: false, evictionForcedFull: false, ackIgnored: false,
         superseded: false, settleDiscardedFrames: false,
@@ -455,6 +466,51 @@ module replication_fullsync_machine {
     }
   }
 
+  // --- Re-delivery below the applied head (FM-REPLICATION-065, R7) ---
+  //
+  // The frame stream is peer-supplied input, so — exactly as with the wire ack
+  // below — the model admits a frame no correct primary would send: R7 rules
+  // the *receiver* authoritative for dedup, and a model of an input validation
+  // must admit the invalid input. The class is "a frame at or below the offset
+  // this replica has already applied", which on the wire arrives from a
+  // mis-computed resume point or a duplicated backlog extraction.
+  //
+  // Unlike the ack pair (`recordAckAt`/`ignoreAckAt`), this is a single action
+  // that *decides* internally on `frameIsCovered`, mirroring the consumer loop
+  // it models — the implementation checks coverage inline, before the claim,
+  // and falls through to the apply path otherwise. That shape is also what
+  // makes the boundary falsifiable: narrowing `frameIsCovered` to `<` routes
+  // the `k == applied` re-delivery into the landing branch instead of the skip,
+  // and `skipDisposedOk` catches it. A guard-only split could not — it would
+  // merely disable the action.
+  action redeliverFrameAt(sid: SessionId, k: Offset): bool = {
+    val s = sessions.get(sid)
+    val pn = nodes.get(s.primary)
+    val rn = nodes.get(s.replica)
+    // Sentinel-guarded read, as in `applyFrameAt`: the `k <= pn.data.length()`
+    // conjunct disables the action whenever the sentinel would be used.
+    val w = if (k >= 1 and k <= pn.data.length()) pn.data.nth(k - 1) else NO_HISTORY
+    val rnPost =
+      if (frameIsCovered(rn, k)) applySkip(rn)
+      else { ...rn, data: applyFrameToData(rn.data, k, w), applied: max2(rn.applied, k) }
+    all {
+      s.phase == Streaming,
+      linkIs(rn, sid),
+      // The input class: a position this replica has already applied. `k >= 1`
+      // keeps the offset a real position rather than the pre-history zero.
+      k >= 1,
+      k <= rn.applied,
+      k <= pn.data.length(),
+      nodes' = nodes.set(s.replica, rnPost),
+      keepSessions,
+      keepCtl,
+      defects' = { ...defects,
+        skippedFrameLanded: latch(defects.skippedFrameLanded,
+          not(skipDisposedOk(rn, rnPost))) },
+      coverage' = { ...coverage, frameSkipped: latch(coverage.frameSkipped, true) },
+    }
+  }
+
   // --- ACK ingest (TR-REPLICATION-018, issue-21 ruling) ---
   //
   // The wire ack is peer-supplied input, so the model admits values no correct
@@ -658,6 +714,15 @@ module replication_fullsync_machine {
   action receiveStep: bool = { nondet sid = liveSidCands.oneOf() receiveFrameAt(sid) }
   action applyStep: bool = { nondet sid = liveSidCands.oneOf() applyFrameAt(sid) }
 
+  // The two re-delivery offsets worth sampling: the boundary the rule turns on
+  // (a frame ending exactly at the applied head) and the deepest one there is.
+  action redeliverStep: bool = {
+    nondet sid = liveSidCands.oneOf()
+    val s = sessions.get(sid)
+    nondet k = Set(nodes.get(s.replica).applied, 1).oneOf()
+    redeliverFrameAt(sid, k)
+  }
+
   action ackStep: bool = {
     nondet sid = liveSidCands.oneOf()
     val s = sessions.get(sid)
@@ -707,6 +772,7 @@ module replication_fullsync_machine {
     abandonStep,
     receiveStep,
     applyStep,
+    redeliverStep,
     ackStep,
     teardownStep,
   }
