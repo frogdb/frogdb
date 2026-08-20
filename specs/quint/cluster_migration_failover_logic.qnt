@@ -203,6 +203,33 @@ module cluster_migration_failover_logic {
       local_role: if (ns.booted) role else ns.local_role,
       local_parent: if (ns.booted) parent else ns.local_parent }
 
+  // R1 (issue 41), ruled 2026-08-20: **a demotion repoints the demoted node's
+  // dependants.** Redis/Valkey re-parent a demoted primary's replicas at the node that
+  // takes over from it; nothing is left hanging off a node that is no longer a primary.
+  // `applyFailoverCommon` already did this on the failover/`demoteNode` paths (its sibling
+  // re-parent); the other arms that turn a Primary into a Replica did not, and the chained
+  // (`1 -> 4 -> 3`) and cyclic (`1 <-> 4`) topologies that leaked through are exactly what
+  // the one-hop `shardPrimary` closure cannot walk — a residue entry's copy claim, or a
+  // replica's own copy, becomes unreachable through a shard edge a later role change cut
+  // (t5-blocked.md's counterexample). With the repoint the closure stays sound one hop
+  // deep, so `shardPrimary`/`shardHoldsCopy`/`keyIsTracked` are left as they are.
+  //
+  // The new upstream is itself excluded, exactly as `applyFailoverCommon` excludes `succ`:
+  // when the demotion parents `n` at one of `n`'s own dependants (the swap that produced
+  // the `1 <-> 4` cycle), that dependant becomes the head of the shard and is left with no
+  // parent, rather than being pointed back at the node demoting onto it.
+  //
+  // Every write goes through the `writeParentPointer` funnel, so the parenting token moves
+  // and `inv_role_written_only_by_declared_writers` still sees it.
+  pure def repointDependants(allNodes: NodeId -> NodeState, n: NodeId,
+                             upstream: Option[NodeId]): NodeId -> NodeState =
+    NODES.fold(allNodes, (acc, m) =>
+      if (m != n and acc.get(m).parent == Some(n))
+        acc.set(m, writeParentPointer(acc.get(m), acc.get(m).role,
+                                      if (upstream == Some(m)) None else upstream,
+                                      false, None, None))
+      else acc)
+
   // ---------------------------------------------------------------------------
   // ext-15/ext-16: the two planes and the lineage guard.
   // ---------------------------------------------------------------------------
@@ -746,10 +773,19 @@ module cluster_migration_failover_logic {
   // **no target arm**: target-side totality is in-apply at `demoteNode` (V10-C4), and
   // `residueHasAnEffectiveRemover` is what proves no level-triggered target re-home is
   // needed while that in-apply rule is intact.
+  //
+  // R1 (issue 41), ruled 2026-08-20: the re-home additionally demands that the new source
+  // **physically holds** the slot — `keys.contains(s)` on its own keyspace, never a
+  // derivative holding reached through the shard closure. Without it the entry's whole
+  // copy claim can come to rest on a single closure edge that any later role change cuts,
+  // which is the first sub-root of t5-blocked.md's counterexample: the claim evaporates
+  // with nothing deleted, and `completeAdoption`'s ruled discard leg (M37) then turns that
+  // tracking hole into modelled copy loss. An entry whose shard primary does not hold the
+  // slot simply stays pinned to the physical holder, which is where the copy is.
   pure def canRetargetSlotResidue(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue], s: SlotId): bool =
     match res.get(s) {
       | Some(r) => match shardPrimary(allNodes, r.source) {
-          | Some(p) => p != r.source
+          | Some(p) => p != r.source and allNodes.get(p).keys.contains(s)
           | None => false
         }
       | None => false
@@ -941,6 +977,54 @@ module cluster_migration_failover_logic {
           else acc
       | None => acc
     })
+
+  // R1 (issue 41): the same in-apply re-home, for the demotion writers *outside* the
+  // failover family (`setRole`, the `reportRunIdentity` Demotion arm, `attachTargetReplica`).
+  // Those three write a node from Primary to Replica without moving its slots, and — since
+  // R1 — they repoint its dependants at the same upstream. Both halves matter to the
+  // residue: `shardHoldsCopy` reads the *downward* closure of the entry's `source`, so a
+  // source that becomes a Replica keeps nothing under it (`shardPrimary(x) == Some(source)`
+  // is false for a non-primary), and the sibling that physically holds the copy has just
+  // followed the demotion up to the new upstream. Leaving the entry pinned to the demoted
+  // node is what makes `inv_source_keeps_its_copy_until_promotion_attested` false with
+  // nothing deleted. Detaching demotions (`upstream == None`, `demoteNodeExternal`) are
+  // deliberately excluded: they leave no shard to follow, and a detached node keeps its own
+  // keys, so the entry stays truthfully pinned to the physical holder.
+  //
+  // **Source arm only**, unlike `retargetResidueOnDemotion`. The failover family may move
+  // the target leg because its successor inherits the moved slots *and their keys*
+  // (`applyFailoverCommon`), so the re-pointed target is a real holder and clearing
+  // `target_gone` re-opens the reap-then-clear path truthfully. These three writers move no
+  // keys at all: re-pointing the target leg at a node that holds nothing would hand the
+  // reaper a slot whose only copy lives elsewhere (`inv_slot_copy_survives_until_owned_and_
+  // served`). A demoted *target* keeps its copy on its own node, and V10-C4's in-apply
+  // target totality still belongs to the failover/`demoteNode` path that owns it.
+  //
+  // Two conjuncts keep the move from *creating* the loss it exists to prevent, and both
+  // are read off the **post-state** node map (dependants already repointed):
+  //   - `not(post.get(n).keys.contains(s))` — a demoted node that still physically holds
+  //     the slot keeps the claim. Moving it would take the claim off the holder, and
+  //     `completeAdoption`'s ruled discard leg (M37) reads `trackedDirectly`, so the very
+  //     next adoption step would discard the last copy (`inv_slot_copy_survives_until_
+  //     owned_and_served`) — the tracking-loss-into-copy-loss escalation R1 forbids;
+  //   - `shardHoldsCopy(post, u, s)` — the claim only follows to a shard that actually
+  //     reaches the copy. This is R1's physical-holding rule read through the closure, the
+  //     same test `inv_source_keeps_its_copy_until_promotion_attested` applies to `source`.
+  pure def residueFollowsDemotion(post: NodeId -> NodeState, res: SlotId -> Option[Residue],
+                                  n: NodeId, upstream: Option[NodeId]): SlotId -> Option[Residue] =
+    match upstream {
+      | Some(u) =>
+          if (u == n) res
+          else SLOTS.fold(res, (acc, s) => match res.get(s) {
+            | Some(r) =>
+                if (and { r.source == n, not(post.get(n).keys.contains(s)),
+                          shardHoldsCopy(post, u, s) })
+                  acc.set(s, Some({ ...r, source: u }))
+                else acc
+            | None => acc
+          })
+      | None => res
+    }
 
   // ---------------------------------------------------------------------------
   // Failover / demotion logic — the postcondition shared by all three failover paths and

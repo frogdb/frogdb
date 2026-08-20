@@ -1447,6 +1447,11 @@ module cluster_migration_failover {
   // naming a node that is no longer a primary and `retargetSlotResidue` is the verb that
   // has to move it. (The other slots are unassigned first so the demotion does not leave
   // a Replica owning slots.)
+  //
+  // R1 (issue 41): the arm now re-homes **only onto a physical holder**, so the trace
+  // attests the promotion first — `reportPromoted` is what puts the copy into the new
+  // owner's own keyspace — and demotes the source under it afterwards. The refusal half
+  // (a shard primary that holds nothing) is `retargetRefusedOntoNonHoldingPrimaryTest`.
   run demotedSourceResidueRetargetedTest: bool = {
     init
       .then(beginMigration(1, 1, 4, false))
@@ -1456,27 +1461,153 @@ module cluster_migration_failover {
       .then(removeSlot(2))
       .then(removeSlot(3))
       .then(removeSlot(4))
-      // Node 3 leaves node 1's shard and becomes the primary node 1 is then demoted
-      // under — the entry is left naming a node that is no longer a primary.
-      .then(setRole(3, Primary, None))
-      .then(setRole(1, Replica, Some(3)))
+      // The attestation: only now does node 4 hold slot 1 in its own keyspace.
+      .then(relabelShadow(1))
+      .then(reportPromoted(1))
+      // Node 1 is demoted under the new owner — the entry is left naming a node that is
+      // no longer a primary, and the shard primary it would move to is a real holder.
+      .then(setRole(1, Replica, Some(4)))
       .expect(and {
-        shardPrimary(nodes, 1) == Some(3),
+        shardPrimary(nodes, 1) == Some(4),
+        nodes.get(4).keys.contains(1),
         canRetargetSlotResidue(nodes, residue, 1),
         inv_residue_has_an_effective_remover,
-        match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
+        match residue.get(1) { | Some(r) => r.source == 1 | None => false },
       })
       .then(retargetSlotResidue(1))
       .expect(and {
         match residue.get(1) {
-          | Some(r) => and { r.source == 3, not(r.source_gone), r.target == 4 }
+          | Some(r) => and { r.source == 4, not(r.source_gone), r.target == 4 }
           | None => false
         },
-        // The old source still physically holds the copy; it stays reachable through its
-        // shard primary, which is now the entry's source.
-        nodes.get(1).keys.contains(1),
+        // The entry's new source holds the copy in its own keyspace — the re-home moved
+        // the claim onto the data, not onto a closure edge.
+        nodes.get(4).keys.contains(1),
         not(defects.untracked),
         inv_member_keyspace_is_tracked,
+      })
+  }
+
+  // R1 (issue 41), the tightened guard's forcing test — and the trace t5-blocked.md's
+  // counterexample used to run through. Node 1 is the residue's source and the only
+  // physical holder of slot 1; it is demoted under node 3, which holds nothing. Before
+  // the narrowing the entry re-homed onto node 3 and its whole copy claim came to rest on
+  // the single closure edge `1 -> 3`, which the very next demotion cut. The re-home is
+  // refused instead, the entry stays pinned to the holder, and the four-invariant family
+  // survives the demotion that used to break it.
+  run retargetRefusedOntoNonHoldingPrimaryTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(removeSlot(2))
+      .then(removeSlot(3))
+      .then(removeSlot(4))
+      .then(setRole(3, Primary, None))
+      .then(setRole(1, Replica, Some(3)))
+      .expect(and {
+        shardPrimary(nodes, 1) == Some(3),
+        not(nodes.get(3).keys.contains(1)),
+        not(canRetargetSlotResidue(nodes, residue, 1)),
+        inv_residue_has_an_effective_remover,
+      })
+      // The chained demotion that used to cut the claim: node 3 goes under node 4. With
+      // the dependants repointed, node 1 follows to node 4 — and because the entry never
+      // left the physical holder, the claim does not depend on either edge.
+      .then(setRole(3, Replica, Some(4)))
+      .expect(and {
+        match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
+        nodes.get(1).keys.contains(1),
+        nodes.get(1).parent == Some(4),
+        inv_source_keeps_its_copy_until_promotion_attested,
+        inv_slot_copy_survives_until_owned_and_served,
+        inv_no_serve_before_attestation,
+        inv_residue_has_an_effective_remover,
+      })
+      .then(retargetSlotResidue(1).fail())
+  }
+
+  // R1 (issue 41), the staged-flip demotion's structural guard. A record staged against an
+  // upstream that is a Replica cannot adopt: this arm writes `parent`, so it owes
+  // TR-CLUSTER-004 the same rule `canSetRole` enforces (`isLivePrimary(upstream)`). Without
+  // it the demoted node lands in a shard with no primary at all — the `1 <-> 4` cycle
+  // t5-blocked.md recorded pre-repoint, a parentless Replica post-repoint — and the entry
+  // sourced there loses `shardHoldsCopy` and every remover disjunct at once. The block is
+  // not a refusal: no `Refusal` is minted, and the record adopts unchanged once the
+  // upstream is a primary again.
+  run demotionRefusedOntoNonPrimaryUpstreamTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      // Node 3 is a replica of node 1: staging against it is admissible, adopting is not.
+      .then(stageFlip(1, 3))
+      .expect(and {
+        not(isLivePrimary(nodes, 3)),
+        match nodes.get(1).record { | Some(rec) => rec.upstream == 3 | None => false },
+        nodes.get(1).role == Primary,
+        refusals == Set(),
+        inv_source_keeps_its_copy_until_promotion_attested,
+        inv_residue_has_an_effective_remover,
+      })
+      .then(reportRunIdentity(1, Demotion, Primary, 0, false).fail())
+  }
+
+  // The other half of the guard: the block is not a refusal and not a disposal — the very
+  // same record adopts unchanged once its upstream is a live primary again.
+  run demotionAdoptsOnceUpstreamIsPrimaryTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(stageFlip(1, 3))
+      .then(setRole(3, Primary, None))
+      .then(reportRunIdentity(1, Demotion, Primary, 0, false))
+      .expect(and {
+        demotedTo(nodes, 1, 3),
+        refusals == Set(),
+        inv_source_keeps_its_copy_until_promotion_attested,
+        inv_residue_has_an_effective_remover,
+      })
+  }
+
+  // R1 (issue 41), the companion of the repoint: the residue follows the demotion when —
+  // and only when — the copy has moved out of the source's own closure. The failover hands
+  // node 2 the moved slots and their keys, leaving node 1 a replica of node 2 holding the
+  // still-claimed copy of slot 1. Demoting node 2 under node 4 repoints node 1 there too,
+  // so the entry's `source` must follow: node 2 holds nothing, and `shardHoldsCopy` reads
+  // the *downward* closure, which a demoted node no longer has. Pinning the entry to node 2
+  // is what makes `inv_source_keeps_its_copy_until_promotion_attested` false with nothing
+  // deleted; moving it to a shard that does not reach the copy would be the M37 escalation
+  // the ruling forbids, so the move is conditioned on the post-state closure.
+  run residueFollowsDemotedSourceTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(demoteNode(1, 2))
+      .expect(and {
+        demotedTo(nodes, 1, 2),
+        match residue.get(1) { | Some(r) => r.source == 2 | None => false },
+        // The copy is on node 1, reachable only through the shard edge `1 -> 2`.
+        not(nodes.get(2).keys.contains(1)),
+        nodes.get(1).keys.contains(1),
+        inv_source_keeps_its_copy_until_promotion_attested,
+      })
+      .then(setRole(2, Replica, Some(4)))
+      .expect(and {
+        // Node 1 followed node 2's demotion (the repoint), and the claim followed the copy.
+        nodes.get(1).parent == Some(4),
+        match residue.get(1) { | Some(r) => r.source == 4 | None => false },
+        shardHoldsCopy(nodes, 4, 1),
+        inv_source_keeps_its_copy_until_promotion_attested,
+        inv_slot_copy_survives_until_owned_and_served,
+        inv_residue_has_an_effective_remover,
+        not(defects.untracked),
       })
   }
 

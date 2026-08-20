@@ -247,6 +247,14 @@ module cluster_migration_failover_machine {
     keepSlots, keepMigAll, keepBar, keepAux, keepCtl,
   }
 
+  // R1 (issue 41): `nodesOnly` plus the residue re-home a demotion owes (see
+  // `residueFollowsDemotion`) — the demotion writers outside the failover family.
+  action nodesAndResidue(m: NodeId -> NodeState, res: SlotId -> Option[Residue]): bool = all {
+    nodes' = m,
+    residue' = res,
+    keepSlots, keepMigrations, keepShadow, keepBar, keepAux, keepCtl,
+  }
+
   action migrationsOnly(m: SlotId -> Option[Migration]): bool = all {
     migrations' = m,
     keepGraph, keepShadow, keepResidue, keepBar, keepAux, keepCtl,
@@ -419,10 +427,9 @@ module cluster_migration_failover_machine {
   // cross-registration stage-id collision expressible.
   action removeNode(n: NodeId, force: bool, wipe: bool): bool = {
     val prunedSet = slotsNaming(migrations, n)
-    val detached = NODES.fold(nodes, (acc, m) =>
-      if (m != n and acc.get(m).parent == Some(n))
-        acc.set(m, writeParentPointer(acc.get(m), acc.get(m).role, None, false, None, None))
-      else acc)
+    // ext-17's detach, which is `repointDependants` with no upstream to follow to: the
+    // departing node takes no one with it and leaves no one chained off it (R1/issue 41).
+    val detached = repointDependants(nodes, n, None)
     all {
       canRemoveNode(nodes, slots, n, force),
       // Issue 33: `ClusterState`'s `RemoveNode` *deletes* the node record, so there is no
@@ -506,9 +513,18 @@ module cluster_migration_failover_machine {
   }
 
   // TR-CLUSTER-004.
-  action setRole(n: NodeId, role: RoleTag, parent: Option[NodeId]): bool = all {
-    canSetRole(nodes, n, role, parent),
-    nodesOnly(nodes.set(n, writeParentPointer(nodes.get(n), role, parent, false, None, None))),
+  //
+  // R1 (issue 41): a role write that leaves `n` a **Replica** is a demotion, so `n`'s
+  // dependants follow it to its new upstream (`repointDependants`) instead of being left
+  // hanging off a node that is no longer a primary. A write to Primary keeps them.
+  action setRole(n: NodeId, role: RoleTag, parent: Option[NodeId]): bool = {
+    val base = if (role == Replica) repointDependants(nodes, n, parent) else nodes
+    val post = base.set(n, writeParentPointer(base.get(n), role, parent, false, None, None))
+    val postRes = if (role == Replica) residueFollowsDemotion(post, residue, n, parent) else residue
+    all {
+      canSetRole(nodes, n, role, parent),
+      nodesAndResidue(post, postRes),
+    }
   }
 
   // ext-15: the kind-stamped identity report. The Boot arm lifts the boot-ordering
@@ -554,11 +570,21 @@ module cluster_migration_failover_machine {
       if (not(admitted)) nodes
       else if (kind == Boot) nodes.set(n, { ...stamped, booted: true })
       else match ns.record {
-        | Some(rec) => nodes.set(n, {
+        // R1 (issue 41): the Demotion arm is the model's other Primary -> Replica writer,
+        // so it repoints `n`'s dependants at the record's upstream in the same step.
+        | Some(rec) => repointDependants(nodes, n, Some(rec.upstream)).set(n, {
             ...writeParentPointer(stamped, Replica, Some(rec.upstream), false, Some(rec.stage_id), None),
             record: Some({ ...rec, adopted: true }),
           })
         | None => nodes
+      }
+    // R1 (issue 41): the residue re-home this demotion owes, for the same reason the
+    // failover family pays it in `applyFailoverCommon` — see `residueFollowsDemotion`.
+    val postResidue =
+      if (not(admitted) or kind == Boot) residue
+      else match ns.record {
+        | Some(rec) => residueFollowsDemotion(postNodes, residue, n, Some(rec.upstream))
+        | None => residue
       }
     val postMigs = if (cancelled == Set()) migrations else cancelledBySource(migrations, n)
     val postStored = postNodes.get(n).stored_identity
@@ -568,6 +594,24 @@ module cluster_migration_failover_machine {
     all {
       // A Demotion report only exists against a staged record.
       kind == Boot or (match ns.record { | Some(rec) => rec.kind == Demotion | None => false }),
+      // R1 (issue 41), the second half of the repoint rule: this arm is the model's other
+      // Primary -> Replica *parent* writer, and until now it was the only role writer that
+      // did not obey TR-CLUSTER-004 (`canSetRole`: a Replica's parent is a live Primary).
+      // A record staged against an upstream that is a Replica by the time it adopts parks
+      // the demoted node in a headless shard — pre-fix as the `1 <-> 4` parent cycle
+      // t5-blocked.md recorded, post-repoint as a parentless Replica — and either shape
+      // empties `shardPrimary`, so an unpromoted residue entry sourced there loses both
+      // `shardHoldsCopy` (`inv_source_keeps_its_copy_until_promotion_attested`) and its
+      // level-triggered re-home (`inv_residue_has_an_effective_remover`). Blocked rather
+      // than refused: this is the structural rule `setRole` is gated by, not one of
+      // ext-16's four refusal classes. The record survives, and re-adopts once the
+      // upstream is a live primary again (or is disposed of by a terminal refusal), so no
+      // liveness obligation is dropped. Redis is the same rule: `CLUSTER REPLICATE`
+      // refuses a non-master target ("I can only replicate a master, not a replica").
+      kind == Boot or (match ns.record {
+        | Some(rec) => isLivePrimary(nodes, rec.upstream)
+        | None => false
+      }),
       nodes' = postNodes,
       refusals' =
         if (admitted) refusals
@@ -611,7 +655,8 @@ module cluster_migration_failover_machine {
           or (admitted and kind == Demotion
               and (ns.role != obsRole or ns.epoch_own != obsEpoch)),
       },
-      keepSlots, keepShadow, keepResidue, keepHistory, keepSpent, keepCoverage, keepCtl,
+      residue' = postResidue,
+      keepSlots, keepShadow, keepHistory, keepSpent, keepCoverage, keepCtl,
     }
   }
 
@@ -1000,13 +1045,19 @@ module cluster_migration_failover_machine {
 
   // ext-14: attaching a replica to the migration target and counting it toward the
   // `Complete` conjunct.
-  action attachTargetReplica(n: NodeId, t: NodeId): bool = all {
-    n != t,
-    nodes.get(n).member,
-    isLivePrimary(nodes, t),
-    not(nodes.get(n).counted),
-    nodesOnly(nodes.set(n, { ...writeParentPointer(nodes.get(n), Replica, Some(t), false, None, None),
-                            counted: true, replica_copy: 0, install_incomplete: false })),
+  // R1 (issue 41): attaching a *primary* as a replica of `t` demotes it, so its own
+  // dependants follow it to `t` rather than chaining off it.
+  action attachTargetReplica(n: NodeId, t: NodeId): bool = {
+    val post = repointDependants(nodes, n, Some(t)).set(n,
+      { ...writeParentPointer(nodes.get(n), Replica, Some(t), false, None, None),
+        counted: true, replica_copy: 0, install_incomplete: false })
+    all {
+      n != t,
+      nodes.get(n).member,
+      isLivePrimary(nodes, t),
+      not(nodes.get(n).counted),
+      nodesAndResidue(post, residueFollowsDemotion(post, residue, n, Some(t))),
+    }
   }
 
   // ext-14: detaching it. With the knob on and *zero* counted replicas, `Complete`'s
@@ -1541,10 +1592,9 @@ module cluster_migration_failover_machine {
   // ext-12 (V7-m7/V8-C6): the successor-less demotion — no promotion in the step, and a
   // **whole refusal** while the node still owns slots.
   action demoteNodeExternal(n: NodeId): bool = {
-    val detached = NODES.fold(nodes, (acc, m) =>
-      if (m != n and acc.get(m).parent == Some(n))
-        acc.set(m, writeParentPointer(acc.get(m), acc.get(m).role, None, false, None, None))
-      else acc)
+    // R1 (issue 41): the same dependants-follow rule, with no successor to follow to —
+    // the demoted node's replicas are detached rather than left chained off a Replica.
+    val detached = repointDependants(nodes, n, None)
     val post = detached.set(n, writeParentPointer(detached.get(n), Replica, None, false, None, None))
     all {
       canDemoteNodeExternal(nodes, slots, n),
