@@ -115,12 +115,12 @@ to be exactly the Q4 footprint. `git checkout -- specs/quint/` was never used.
 | M25 | MISSED | CAUGHT-T | drop `isLivePrimary(allNodes, m.target)` → `completeRefusesDemotedTargetTest` QNT511 |
 | M29 | MISSED | CAUGHT-T | drop `countedReplicasOf(...) != Set()` → `replicaAckKnobRefusesEmptyCountedSetTest` QNT508 |
 | M30 | MISSED | CAUGHT-T | same edit as M04; the witness step is never reached → `replicaAckKnobCompletesReachableTest` QNT508 |
-| M32 | MISSED | **MISSED** | drop `isInShardReplicaOf` from `canDemoteNode`: 2000×40 walk over both named invariants clean (design-owner flag) |
+| M32 | MISSED | **MISSED** → **CAUGHT-P+T** † | drop `isInShardReplicaOf` from `canDemoteNode`: 2000×40 walk over both named invariants clean (design-owner flag) — **closed by the 2026-08-19 M32 ruling**: `inv_no_cross_shard_successor` violated at 500×20 and `demotionRefusesCrossShardSuccessorTest` fails |
 | M33 | MISSED | CAUGHT-T | `canClearSlotResidue` → `Some(r) => true` → `unpromotedResidueNotClearableTest` QNT508 |
 | M34 | MISSED | CAUGHT-P | cancel unbound from the field write → `inv_no_spurious_cancel` violated, 1500×40 |
-| M37 | MISSED | **MISSED** | the staged flip's dataset-discard leg is not modelled (below) |
-| M38 | MISSED | CAUGHT-T | `restarted` clears `record` → `stagedFlipSurvivesCrashReachableTest` QNT508 |
-| M39 | MISSED | CAUGHT-T | adoption folded into the admission apply → `stagedFlipSurvivesCrashReachableTest` QNT508 |
+| M37 | MISSED | **MISSED** → **CAUGHT-T / CAUGHT-P+T** † | the staged flip's dataset-discard leg is not modelled (below) — **closed by the 2026-08-19 M37 ruling**: hoisting the discard to stage time fails `adoptionDiscardsUnclaimedCopyTest`; discarding unexempted at adoption fails `assignSlotDuringStagedFlipKeepsCopyTest` **and** violates `inv_slot_copy_survives_until_owned_and_served` |
+| M38 | MISSED | CAUGHT-T † | `restarted` clears `record` → `stagedFlipSurvivesCrashReachableTest` QNT508 (re-verified 2026-08-20 with the discard leg modelled; `inv_member_keyspace_is_tracked` still does not bite) |
+| M39 | MISSED | CAUGHT-T † | adoption folded into the admission apply → `stagedFlipSurvivesCrashReachableTest` QNT508, plus `fenceClearsWithinThreeStepsTest`, `adoptionDiscardsUnclaimedCopyTest`, `assignSlotDuringStagedFlipKeepsCopyTest` (2026-08-20) |
 | M40 | MISSED | CAUGHT-T | `completeAdoption` → bare pair (`record ∧ role == Replica`) → `adoptionRefusedWithoutItsOwnAdmissionTest` QNT511 |
 | M42 | MISSED | CAUGHT-P | `Ordering` conjunct dropped from `refusalClassOf` → `inv_run_identity_never_regresses` violated, 1500×40 |
 | M43 | MISSED | CAUGHT-T | drop `ns.record == None` from `stageFlip` → `competingStageRefusedTest` QNT511 |
@@ -140,6 +140,10 @@ to be exactly the Q4 footprint. `git checkout -- specs/quint/` was never used.
 
 **Totals: 34 rows re-verified — 29 CAUGHT (26 CAUGHT-T, 2 CAUGHT-P, 1 both), 4 still MISSED,
 1 N/A.**
+
+† Superseded by the **2026-08-20 re-run addendum** at the end of this report (the model
+changed under these rows in `2eb66e35`). Totals after that re-run: **31 CAUGHT, 2 MISSED
+(M06, M22), 1 N/A (M55)**.
 
 ## Rows still MISSED — per-row analysis (nothing weakened)
 
@@ -161,7 +165,10 @@ true cannot falsify it; run tests cannot steer `step`'s nondeterminism, and `qui
 liveness or temporal checking at all. Detecting it needs a temporal operator this tool does not
 have.
 
-**M32 — the Demotion arm's shard-relationship conjunct.** Dropping `isInShardReplicaOf` from
+**M32 — the Demotion arm's shard-relationship conjunct.** *(Superseded 2026-08-20 — the
+design owner ruled flag 4 in favour of a coverage ghost; `2eb66e35` added
+`defects.crossShardSuccessor` and `inv_no_cross_shard_successor`, and the row is now
+CAUGHT-P+T. The analysis below is why it was MISSED before that ruling.)* Dropping `isInShardReplicaOf` from
 `canDemoteNode` (accepting a cross-shard successor) leaves **both** invariants the doc names
 true, for structural reasons: the demoted source keeps its copy (demote-don't-remove), so
 `inv_slot_copy_survives_until_owned_and_served` is satisfied by the *old* owner; and the
@@ -171,7 +178,12 @@ its copy" — which is false in states the design declares lawful (the migration
 nothing until commit; the residue exists precisely because owner and holder diverge). No
 semantics invented; carried as design-owner flag 4.
 
-**M37 — collapse stage and discard (discard at stage time).** The doc's `completeAdoption`
+**M37 — collapse stage and discard (discard at stage time).** *(Superseded 2026-08-20 — flag 5
+was ruled "model the discard leg"; `2eb66e35` added the `trackedDirectly` discard in
+`completeAdoption` plus the `adoptionDiscardedKeys` coverage ghost, giving the mutation a
+surface. The row is now CAUGHT-T (hoist variant) / CAUGHT-P+T (unexempted-discard variant) —
+see the addendum. The analysis below is why it had no surface before that.)* The doc's
+`completeAdoption`
 effect is *discard + upstream adoption + record clear*; this model carries the adoption and the
 record clear but **not** the dataset discard — no action writes `keys` on a staged flip. The
 mutation therefore has no surface here. Fixing it means adding the discard leg to the model
@@ -209,29 +221,51 @@ two-plane/lineage machinery; 2 new actions.
 
 ## Design-owner flags carried (no model change made)
 
+**Disposition (2026-08-20).** All nine flags are now closed. Flags 4 and 5 were ruled in
+favour of the model (ghost + discard leg, built in `2eb66e35`); flags 1, 2, 3, 6, 7 were
+ruled in favour of the model's measured behaviour and the **design doc was corrected** in
+this commit; flags 8 and 9 stand as honest-miss findings (M22, M06 remain MISSED). Per-flag
+notes below.
+
 1. **F6 / M65** — the doc's detector for deleting `clearStaleRecord` is half wrong:
    `inv_no_record_outlives_its_registration` is not asserted in this model (Q2), so only the
    `witnessFenceClears` half bites.
+   → **CLOSED**: detector correction written into the design doc, item (15).
 2. **F7 / M59** — stage-unbound refusal: the doc attributes the failure to
    `witnessStagedFlipCompletesAcrossCrash` becoming unreachable; the model's binding is in
    `refusalBinds`, and the observable is the disposition, not the witness.
+   → **CLOSED**: detector correction written into the design doc, item (9)
+   (`inv_no_live_record_disposed_by_a_foreign_refusal` / `foreignRefusalDoesNotDisposeTest`).
 3. **F13 / M21** — target-departure unassign+mark: attribution to
    `inv_slot_copy_survives_until_owned_and_served` does not follow in this model's state shape
    (the departing target's copy is not the last one).
+   → **CLOSED**: measured per-half attribution written into the design doc — the *unassign*
+   half violates `inv_slot_owner_valid`, the *mark* half is caught only by run tests.
 4. **M32** — no distinguishing observable exists for the cross-shard demotion; see above.
+   → **CLOSED by ruling**: coverage ghost `defects.crossShardSuccessor` +
+   `inv_no_cross_shard_successor` added in `2eb66e35`; row is CAUGHT-P+T.
 5. **M37** — the staged flip's dataset-discard leg is unmodelled; see above.
+   → **CLOSED by ruling**: discard leg modelled in `completeAdoption` (`trackedDirectly`) in
+   `2eb66e35`; row is CAUGHT.
 6. **M38 / M39 detector attribution** — both are caught, but by
    `stagedFlipSurvivesCrashReachableTest` (record survives the crash / adoption is not edged on
    the admission apply), **not** by `inv_member_keyspace_is_tracked` as the doc says. The
    doc's detector presumes the unmodelled discard leg of flag 5: with no discard, a lost record
    wedges the fence rather than stranding a keyspace copy.
+   → **CLOSED**: re-measured *with* the discard leg present (2026-08-20). The reason survives
+   — a lost record wedges the fence, so adoption never runs, so nothing is discarded and no
+   copy is stranded; `inv_member_keyspace_is_tracked` stays green through 2000×40 on two seeds
+   for each mutant. Corrected attribution written into the design doc.
 7. **M34 mutation form** — binding the cancel to `admitted` instead of `identityWritten` is a
    **no-op**: admission requires strict domination of the stored pair, so `admitted` implies the
    proposed identity differs from the stored one, i.e. `admitted ⟺ identityWritten` for any
    admitted report. The doc's "replayed/reordered report cancels" only bites in the
    unconditional form (cancel on a *refused* report), which is what was run and caught.
+   → **CLOSED**: mutation-form correction written into the design doc.
 8. **M22** — undetectable step-unwiring; needs a temporal operator Quint's simulator lacks.
+   → **CLOSED as honest miss**; still MISSED after the rework (detector unchanged).
 9. **M06** — invisible except as a compound mutation with M08.
+   → **CLOSED as honest miss**; still MISSED after the rework (detector unchanged).
 
 **Correct as written** (raised in Q3 as suspect, confirmed accurate after the item-C/D fixes):
 the doc's detectors for **F2 (M34 → `inv_no_spurious_cancel`)** and
@@ -239,3 +273,105 @@ the doc's detectors for **F2 (M34 → `inv_no_spurious_cancel`)** and
 are postcondition-derived. F1's detector (M33 → `inv_member_keyspace_is_tracked`) is honest at
 the ghost level, but the state is only reached deterministically — the random walk does not get
 there, so `unpromotedResidueNotClearableTest` is the operative oracle.
+
+---
+
+## Addendum — 2026-08-20 re-run of the rows affected by `2eb66e35`
+
+`2eb66e35` ("spec(quint): close mutation-battery coverage gaps for issue-31 rework") changed
+the model underneath part of this battery, applying the four 2026-08-19 flag rulings:
+
+- **M37 discard leg** — `completeAdoption` now discards the keys that are not
+  `trackedDirectly(slots, migrations, residue, n, s)`, with a `coverage.adoptionDiscardedKeys`
+  ghost.
+- **hold × flip made effect-based** — `stageFlip` clears `held` for the flipping node and sets
+  `coverage.stagedFlipAnsweredHolds`; `canLatchHold(ns) = ns.record == None` closes the
+  latch/flip interleaving.
+- **M32 ghost** — `defects.crossShardSuccessor` (postcondition-derived, set by `demoteNode`)
+  plus `inv_no_cross_shard_successor`.
+- **issue-33 tombstones** — `removeNode` writes the departure through `writeParentPointer`,
+  clearing `member`/`registration_seq`/`epoch_own`.
+- **anti-churn** — `churnFlag(n, failed)` / `churnEpoch` with `defects.churnEpochBump`.
+
+Rows were selected by diffing every battery row's **mutation site** and **named detector**
+against `2eb66e35`. Rows whose site text and detector are both untouched were not re-run; their
+Q4 verdicts stand. Fourteen rows were affected (M17, M21, M31, M32, M37, M38, M39, M43, M44,
+M62, M63, plus the new anti-churn row M74). Row ids follow the Q3 report's numbering; **M74 is
+new here** — the anti-churn no-bump row has no Q3 id because the mechanism did not exist then.
+
+### Re-run verdicts
+
+| Row | Mutation (single exact replacement) | Q4 verdict | 2026-08-20 verdict | Evidence |
+|---|---|---|---|---|
+| M17 | drop the hold-region guard from the staged flip | CAUGHT-P+T | **CAUGHT-P+T** | control that `stageFlip`'s new `held' = held.set(n, Set())` does not mask the row: `inv_no_hold_during_staged_flip` violated at 2000×40 (2 seeds); forcing tests still fail |
+| M21a | drop the **unassign** half of target-departure cleanup | CAUGHT-P+T | **CAUGHT-P+T** | `inv_slot_owner_valid` violated at 500×20; `orphanRehomeToSourceTest`, `removeNodeForceEvictsLiveOwnerTest` fail |
+| M21b | drop the **mark** half of target-departure cleanup | CAUGHT-P+T | **CAUGHT-T** | no invariant trips (2000×40); 4 run tests fail (`reapDeferredWhileTargetGoneTest`, `failPromotionRefusedAfterSourceDepartedTest`, both orphan re-home tests) |
+| M31 | re-armed at the **new** issue-33 tombstone site in `removeNode` | CAUGHT-P | **CAUGHT-P+T** | `inv_role_written_only_by_declared_writers` violated at 500×20; run tests also fail |
+| M32 | drop `isInShardReplicaOf` from `canDemoteNode` | MISSED | **CAUGHT-P+T** | `inv_no_cross_shard_successor` violated at 500×20; `demotionRefusesCrossShardSuccessorTest` fails |
+| M37a | hoist the discard into `stageFlip` | MISSED | **CAUGHT-T** | `adoptionDiscardsUnclaimedCopyTest` fails via `coverage.adoptionDiscardedKeys`; walk silent at 2000×40 |
+| M37b | unexempted discard at adoption (`keys: Set()`) | MISSED | **CAUGHT-P+T** | `inv_slot_copy_survives_until_owned_and_served` violated at 500×20; `assignSlotDuringStagedFlipKeepsCopyTest` fails |
+| M38 | make the staged-flip record volatile across crash | CAUGHT-T | **CAUGHT-T** | `stagedFlipSurvivesCrashReachableTest` fails; `inv_member_keyspace_is_tracked` green at 2000×40 (2 seeds) **even with the discard leg present** |
+| M39 | edge adoption on the admission apply | CAUGHT-T | **CAUGHT-T** | 4 failing tests now (`stagedFlipSurvivesCrashReachableTest`, `fenceClearsWithinThreeStepsTest`, `adoptionDiscardsUnclaimedCopyTest`, `assignSlotDuringStagedFlipKeepsCopyTest`); walk silent |
+| M43 | (site text rewritten by the rework; mutation re-expressed against the new text) | CAUGHT-T | **CAUGHT-T** | forcing tests unchanged |
+| M44a | drop the hold-latch precondition `ns.record == None` | N/A | **CAUGHT-P+T** | was N/A because `canLatchHold` did not exist; `inv_no_hold_during_staged_flip` violated at 2000×40 (3 seeds) |
+| M44b | latch a hold on a node with a live record | N/A | **CAUGHT-P+T** | `inv_held_set_empty_while_latched` violated at 500×20 |
+| M62 | (tombstone-driven test amendment) | CAUGHT-T | **CAUGHT-T** | forcing tests fail |
+| M63 | (tombstone-driven test amendment) | CAUGHT-T | **CAUGHT-T** | forcing tests fail |
+| M74a | drop the epoch bump from `churnFlag` | *(new row)* | **CAUGHT-P+T** | `defects.churnEpochBump` observed; invariant violated at 500×20 and forcing test fails |
+| M74b | bypass the ghost — write the churn flag without touching `churnEpoch` | *(new row)* | **CAUGHT-T** | run test only; the ghost is written on the same postcondition path the mutation removes, so the walk is blind to this form (see note below) |
+
+**Verdict deltas.** M32 MISSED → CAUGHT-P+T; M37 MISSED → CAUGHT; M44 N/A → CAUGHT-P+T; M21b
+CAUGHT-P+T → CAUGHT-T (a *measurement correction*, not a regression — Q3/Q4 recorded the
+combined row's P from the unassign half); all other re-run rows unchanged. Battery totals after
+the re-run: **31 CAUGHT, 2 MISSED (M06, M22), 1 N/A (M55)**.
+
+**No masking.** M17, M43, M62, M63 were re-run specifically as controls that the new hold-clear
+effect and the tombstone write do not mask an existing kill. None did.
+
+**No counterexample-protocol trigger.** The unmutated model violated no detector at any budget
+run here; `t2-blocked.md` was not needed.
+
+### Two attribution findings recorded but *not* written into the design doc
+
+Both are outside the ruled correction list for this task, so the doc was left alone:
+
+1. **M37's doc-named detectors stay silent.** With the discard leg now modelled, the doc's own
+   named detectors for M37 do not fire at 2000×40; the kills come from
+   `adoptionDiscardsUnclaimedCopyTest` (variant a) and
+   `inv_slot_copy_survives_until_owned_and_served` + `assignSlotDuringStagedFlipKeepsCopyTest`
+   (variant b).
+2. **M74b is ghost-blind by construction.** `defects.churnEpochBump` is computed on the same
+   postcondition path the mutation deletes, so a mutant that bypasses the write is invisible to
+   every invariant built on it. Deterministic tests catch it. A ghost derived from a *separate*
+   observation of `ctl.epoch` would close the gap; that is a modelling decision for the design
+   owner, not a test gap.
+
+### Repro
+
+```bash
+eval "$(mise activate bash)"
+quint test specs/quint/cluster_migration_failover.qnt
+INVS=$(scripts/quint-invariants.sh specs/quint/cluster_migration_failover.qnt)
+quint run specs/quint/cluster_migration_failover.qnt \
+  --max-samples=500 --max-steps=20 --invariants $INVS
+# escalation used before declaring any MISSED (2–3 seeds each):
+quint run specs/quint/cluster_migration_failover.qnt \
+  --max-samples=2000 --max-steps=40 --seed=<seed> --invariants $INVS
+```
+
+Runs are scoped to `cluster_migration_failover.qnt` only (not `just quint-run` /
+`just quint-check`, which sweep the whole directory — other models were under concurrent
+edit). Each mutation was a single exact temporary text replacement, applied and reverted
+byte-for-byte from a scratch backup; `shasum` of all four migration `.qnt` files matches the
+backups and `git diff --stat -- specs/quint/cluster_migration_failover*` is empty.
+
+### Counts after `2eb66e35`
+
+| | Q4 (`c8ed899b`) | 2026-08-20 (`2eb66e35`) |
+|---|---|---|
+| `val inv_*` (auto-discovered) | 37 | **40** |
+| `val witness*` | 23 | **25** |
+| run tests, migration model | 71 | **77** |
+
+Final baseline, unmutated: `quint test` → **77 passing, 0 failing**; the 40-invariant walk at
+500×20 → `[ok] No violation found`.
