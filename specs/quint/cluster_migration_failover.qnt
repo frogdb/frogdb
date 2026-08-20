@@ -151,8 +151,9 @@
 //     precondition only (`beltOk`); the numeric priority/offset scoring formula is out of
 //     scope.
 //   TR-CLUSTER-024/025 — MarkNodeFailed/MarkNodeRecovered: FAIL-flag transitions.
-//     Disclaimer: TR-CLUSTER-025's no-bump anti-churn property (FM-CLUSTER-014) is not
-//     machine-checked here.
+//     TR-CLUSTER-025's no-bump anti-churn property (FM-CLUSTER-014) **is** machine-checked
+//     as of the 2026-08-19 ruling — `inv_no_churn_epoch_bump`, off the `churnEpochBump`
+//     postcondition ghost both transitions write.
 //   TR-CLUSTER-033/034 — Handoff barrier arm/release and the held-write region, modeled
 //     at the applied-state level as `barriers.armed: Set[SlotId]` plus a per-node
 //     `held: NodeId -> Set[SlotId]`: at most one migration (hence one source) can be open
@@ -517,6 +518,20 @@ module cluster_migration_failover {
         }
       | None => false
     })
+
+  // V12-M1, ruled 2026-08-19: the *non-vacuity* half of
+  // `inv_no_hold_during_staged_flip`. The invariant alone is satisfied by a model in which
+  // no staging node ever held anything, so the claim that matters — a staged flip found
+  // outstanding held writes and **answered** them rather than waiting on a drain — is
+  // stated here as a reachability obligation. Pinned by
+  // `stagedFlipAnswersHeldWritesTest`.
+  val witnessStagedFlipAnsweredHolds: bool = coverage.stagedFlipAnsweredHolds
+
+  // M37, ruled 2026-08-19: the dataset-discard leg *fired* — some `completeAdoption`
+  // found the adopting node holding a copy the replicated map gave it no claim to and
+  // dropped it. Without this the discard leg could be deleted and every invariant would
+  // stay green. Pinned by `adoptionDiscardsUnclaimedCopyTest`.
+  val witnessAdoptionDiscardsUnclaimedCopy: bool = coverage.adoptionDiscardedKeys
 
   // ---------------------------------------------------------------------------
   // Invariants, grouped by family. A new check is one `inv_*` value added under the
@@ -893,6 +908,33 @@ module cluster_migration_failover {
       | None => true
     })
 
+  // ext-18 + V12-M1, ruled 2026-08-19: **the staged-fence level rule**. In every state
+  // with a pending transition record, that node's held set is empty — a write scheduled
+  // at a staged node is answered (`-TRYAGAIN`), never held, so no client ever waits out a
+  // partition on the staged-flip fence and a demotion is never blockable by a wedged
+  // drain. Closed by effect, not by guard (the ruling rejected the guard form for wiring
+  // demotion liveness to drain-release liveness): `stageFlip` empties the hold region in
+  // the same step and `prepareHandoff`'s `canLatchHold` refuses to latch a new one
+  // underneath a pending record. Reverting either half and scheduling a hold makes this
+  // false — see `stagedFlipAnswersHeldWritesTest` / `noHoldLatchesUnderPendingRecordTest`.
+  val inv_no_hold_during_staged_flip: bool =
+    NODES.forall(n => nodes.get(n).record != None implies held.get(n) == Set())
+
+  // ext-12 (V9-C1), M32 ruled 2026-08-19: a demotion never hands a node's slots to a
+  // successor outside its shard. Stated over the `crossShardSuccessor` ghost because the
+  // fact has **no post-state trace** — `applyFailoverCommon` promotes the successor and
+  // re-parents the demoted node onto it either way — so the pre-state recompute in
+  // `demoteNode` is the only observable. Deliberately structural: whether the successor
+  // actually holds the shard's data is phase-3 replication-model territory.
+  val inv_no_cross_shard_successor: bool = not(defects.crossShardSuccessor)
+
+  // TR-CLUSTER-025 / FM-CLUSTER-014, ruled 2026-08-19: the anti-churn rule. A FAIL-flag
+  // transition carries health news and must never bump the config epoch — a flapping node
+  // that bumped on every transition would churn every other member's view. Off the
+  // postcondition ghost both `markNodeFailed` and `markNodeRecovered` write, so a mutant
+  // that bumps the epoch there trips this rather than hiding inside `keepCtl`.
+  val inv_no_churn_epoch_bump: bool = not(defects.churnEpochBump)
+
   // ---------------------------------------------------------------------------
   // Stated in the doc, NOT stated here — with the reachable counter-state each one is
   // pinned by, because a property that is false of the model must be a test, not a
@@ -901,14 +943,11 @@ module cluster_migration_failover {
   // - `inv_no_replica_without_a_primary_pointer`: withdrawn by ext-17 (V15-C3) itself —
   //   `removeNode`'s detach writes `parent == None` at a Replica, a lawful state.
   // - `inv_abort_repatriates`: deleted with repatriation (MAJ-5).
-  // - `inv_no_hold_during_staged_flip`: **false of this model**. `prepareHandoff` latches
-  //   the hold region on the source, and `stageFlip` is admissible on that same node
-  //   (it requires only membership and no live record), so a pending flip coexisting with
-  //   a non-empty held set is reachable in two steps — see
-  //   `stagedFlipLeavesHoldRegionTest`. Flagged as a design/model gap in the Q2 report
-  //   rather than encoded as a weakened invariant: closing it means a new conjunct on
-  //   `stageFlip` (or on `prepareHandoff`), which is an action-semantics change this
-  //   phase does not own.
+  // - `inv_no_hold_during_staged_flip`: **no longer here** — closed by the 2026-08-19
+  //   ruling (V12-M1) and asserted above. The action-semantics change this block declined
+  //   to make is exactly the one that was ruled: `stageFlip` answers and empties the hold
+  //   region it finds, and `prepareHandoff` will not latch a new one at a node carrying a
+  //   pending record.
   // - `inv_no_record_outlives_its_registration`: its strict form is unsatisfiable by
   //   construction, and its guarded form is a tautology. The record is node-local and
   //   crash-durable, so it deliberately survives the loss of its registration cell
@@ -1787,6 +1826,14 @@ module cluster_migration_failover {
         not(nodes.get(1).member),
         nodes.get(1).registration_seq == None,
         nodes.get(1).keys == SLOTS,
+        // Issue 33: the tombstone carries the "nothing here" values a deleted
+        // `ClusterState` node record projects to — not the node's last live ones — on
+        // both planes. Only the keyspace survives (ext-12's mark-don't-remove).
+        nodes.get(1).role == Replica,
+        nodes.get(1).parent == None,
+        nodes.get(1).epoch_own == 0,
+        nodes.get(1).local_role == Replica,
+        nodes.get(1).local_parent == None,
       })
   }
 
@@ -1799,6 +1846,11 @@ module cluster_migration_failover {
         not(nodes.get(1).member),
         slots.get(1) == None,
         slots.get(2) == None,
+        // Issue 33: the `force` path tombstones identically — a live owning Primary
+        // leaves behind the same absent-record projection, role included.
+        nodes.get(1).role == Replica,
+        nodes.get(1).parent == None,
+        nodes.get(1).epoch_own == 0,
       })
   }
 
@@ -1979,6 +2031,46 @@ module cluster_migration_failover {
         not(ownsAnySlot(slots, 1)),
       })
       .then(resetCluster(1).fail())
+  }
+
+  // M32 (V9-C1), ruled 2026-08-19: the demotion successor must be a replica of the node
+  // being demoted, and the ghost is what makes that checkable. Node 4 is a live primary
+  // of its own — a cross-shard successor — so the demotion is refused; node 2 is in
+  // node 1's shard, so it is admitted with the ghost clear. Dropping
+  // `isInShardReplicaOf` from `canDemoteNode` makes the refused step fire and trips
+  // `inv_no_cross_shard_successor`, where before the change nothing observed it.
+  run demotionSuccessorMustBeInShardTest: bool = {
+    init
+      .expect(isInShardReplicaOf(nodes, 2, 1))
+      .then(demoteNode(1, 2))
+      .expect(and {
+        nodes.get(2).role == Primary,
+        nodes.get(1).parent == Some(2),
+        inv_no_cross_shard_successor,
+      })
+  }
+
+  // The refusal half of the same rule, in its own run because a `.fail()` step produces no
+  // frame for a later step to read. Node 4 is a live primary of its own shard, so it is
+  // never a lawful successor for node 1.
+  run demotionRefusesCrossShardSuccessorTest: bool = {
+    init
+      .expect(not(isInShardReplicaOf(nodes, 4, 1)))
+      .then(demoteNode(1, 4).fail())
+  }
+
+  // TR-CLUSTER-025 / FM-CLUSTER-014, ruled 2026-08-19: the FAIL flag is health news, so
+  // neither transition moves the config epoch. Both directions are exercised because both
+  // write the ghost; bumping the epoch in either trips `inv_no_churn_epoch_bump`.
+  run churnDoesNotBumpEpochTest: bool = {
+    init
+      .expect(ctl.epoch == 0)
+      .then(markNodeFailed(2))
+      .expect(and { nodes.get(2).fail, ctl.epoch == 0, inv_no_churn_epoch_bump })
+      .then(markNodeRecovered(2))
+      .expect(and { not(nodes.get(2).fail), ctl.epoch == 0, inv_no_churn_epoch_bump })
+      .then(markNodeFailed(2))
+      .expect(and { ctl.epoch == 0, inv_no_churn_epoch_bump })
   }
 
   // ext-4: the seal resets the counter (V7-C3), so the three ticks below are all
@@ -2211,20 +2303,93 @@ module cluster_migration_failover {
       })
   }
 
-  // The counter-state for `inv_no_hold_during_staged_flip` (see the block above): the
-  // prepare latches the hold region on node 1, and `stageFlip` is admissible on that same
-  // node, so a pending flip coexists with a non-empty held set. Reachable in three steps —
-  // hence a test rather than an invariant.
-  run stagedFlipLeavesHoldRegionTest: bool = {
+  // V12-M1, ruled 2026-08-19 — the *effect* half of `inv_no_hold_during_staged_flip`, and
+  // the state that made the invariant false before the ruling. The prepare latches the
+  // hold region on node 1; staging a flip at that same node **answers** the held writes
+  // and empties the region in the same step, rather than refusing to stage until a drain
+  // that may never finish releases them. Deleting the `held' = held.set(n, Set())` write
+  // from `stageFlip` restores the old counter-state and trips the invariant here.
+  run stagedFlipAnswersHeldWritesTest: bool = {
     init
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
-      .expect(held.get(1) == Set(1))
-      .then(stageFlip(1, 4))
       .expect(and {
         held.get(1) == Set(1),
+        not(witnessStagedFlipAnsweredHolds),
+      })
+      .then(stageFlip(1, 4))
+      .expect(and {
+        // The region is answered and empty, while the flip is pending and the node fenced.
+        held.get(1) == Set(),
         nodes.get(1).record != None,
         nodes.get(1).node_fenced,
+        witnessStagedFlipAnsweredHolds,
+        inv_no_hold_during_staged_flip,
+      })
+  }
+
+  // V12-M1, ruled 2026-08-19 — the *guard* half of the same closure. `prepareHandoff` is
+  // the model's only action that adds to `held`, so once a record is pending at the source
+  // it must not latch a new hold region underneath it: otherwise the invariant would be
+  // restorable one step after `stageFlip` answered the region. The prepare is admissible
+  // on this very migration before the flip is staged (`happyMigrationTest` runs it), so
+  // what this pins is the record, not some other unmet precondition.
+  run noHoldLatchesUnderPendingRecordTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(stageFlip(1, 4))
+      .expect(and { nodes.get(1).record != None, held.get(1) == Set() })
+      .then(prepareHandoff(1).fail())
+  }
+
+  // M37, ruled 2026-08-19 — the dataset-discard leg fires. Node 3 is handed slot 1 and
+  // its copy, the slot is then unassigned, and node 3 is left holding a copy the
+  // replicated map gives it no claim to. Adopting a foreign upstream discards the node's
+  // dataset (FM-REPLICATION-022), so the copy goes at `completeAdoption` — deleting the
+  // discard leaves node 3 holding it and `witnessAdoptionDiscardsUnclaimedCopy`
+  // unreachable.
+  run adoptionDiscardsUnclaimedCopyTest: bool = {
+    init
+      .then(assignSlot(1, 3))
+      .then(removeSlot(1))
+      .expect(and {
+        nodes.get(3).keys == Set(1),
+        slots.get(1) == None,
+        not(witnessAdoptionDiscardsUnclaimedCopy),
+      })
+      .then(stageFlip(3, 4))
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .then(completeAdoption(3))
+      .expect(and {
+        nodes.get(3).keys == Set(),
+        witnessAdoptionDiscardsUnclaimedCopy,
+        nodes.get(3).record == None,
+      })
+  }
+
+  // M37's **`assignSlots`-interleaved schedule**, which is the reason the flip is staged
+  // at all: the gate check (`stageFlip`) passes on a node bound to no slot, and an
+  // `AssignSlots` then lands in the window before the report applies — "the race
+  // interleaving staging exists for". Because the discard is at *adoption* and exempts
+  // what the replicated map claims, the freshly assigned copy survives. Collapsing stage
+  // and discard — discarding at stage time — loses it, which is the wiped-source leg of
+  // `inv_no_acked_write_lost` and V11-C2's `inv_member_keyspace_is_tracked`.
+  run assignSlotDuringStagedFlipKeepsCopyTest: bool = {
+    init
+      .then(assignSlot(1, 3))
+      .then(removeSlot(1))
+      .then(stageFlip(3, 4))
+      // The interleaved apply: node 3 is bound to slot 1 *after* the gate check passed.
+      .then(assignSlot(1, 3))
+      .expect(and { slots.get(1) == Some(3), nodes.get(3).keys == Set(1) })
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .then(completeAdoption(3))
+      .expect(and {
+        // The copy the interleaved assign bound is still there — the discard exempted it.
+        nodes.get(3).keys == Set(1),
+        inv_slot_copy_survives_until_owned_and_served,
+        inv_member_keyspace_is_tracked,
+        inv_no_acked_write_lost,
       })
   }
 
@@ -2421,12 +2586,14 @@ module cluster_migration_failover {
       .expect(and {
         // Every other operand of the in-flight attestation matches...
         nodes.get(3).parent == Some(1),
-        nodes.get(3).parent_seq == 2,
+        // Three parent writes: issue 33's tombstone null at `removeNode`, the rejoin, and
+        // the `setRole`. Each moves the token, which is the ext-17 funnel's whole point.
+        nodes.get(3).parent_seq == 3,
         canAct(nodes, 3),
         // ...and the registration it was minted under is gone.
         nodes.get(3).registration_seq == Some(5),
       })
-      .then(attestReplicaSynced(3, 1, 2, 3).fail())
+      .then(attestReplicaSynced(3, 1, 3, 3).fail())
   }
 
   // The same schedule with the run tag pinned (ext-17/V18-C1 mutation (14)): node 3 never
@@ -2447,7 +2614,7 @@ module cluster_migration_failover {
         nodes.get(3).registration_seq == Some(5),
       })
       .then(setRole(3, Replica, Some(1)))
-      .then(attestReplicaSynced(3, 1, 2, 3).fail())
+      .then(attestReplicaSynced(3, 1, 3, 3).fail())
   }
 
   // ---------------------------------------------------------------------------

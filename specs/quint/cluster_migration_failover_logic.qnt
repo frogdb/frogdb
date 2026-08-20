@@ -425,6 +425,18 @@ module cluster_migration_failover_logic {
   // ext-18: an `Ordering` refusal against an **absent stored identity** (arm 4b) and a
   // `Membership` refusal (arm 5) are the design's declared *terminal* classes — the ones
   // that must clear the record, drop the fence and pay the client.
+  //
+  // Arm 4b, and the 2026-08-19 ruling that would delete it: **NOT APPLIED — blocked**,
+  // see `.scratch/formal-spec/t1-blocked.md`. The ruling's premise is that an `Ordering`
+  // refusal presupposes a stored cell, which is true *of this model* — `refusalClassOf`
+  // reaches `Ordering` only when `identityOrderOk` is false, and that predicate is
+  // vacuously **true** on `None` — but false of the design doc, whose §"absent-operand"
+  // rule as narrowed by **V18-M1** makes the ordering conjunct false for
+  // `kind = Demotion` against an absent cell precisely so 4b is reachable (design doc
+  // ~L5651, L6354, L6434). The dead arm here is therefore a *model* gap — the narrowing
+  // is unmodelled — not evidence the doc's arm is dead, so it is kept rather than
+  // deleted; deleting it would bake in a premise the doc contradicts and would silently
+  // remove the wedge exit V19-M1/V20-C1/V21-M2/V28-M5 are built on.
   pure def isRefusalTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
     class == Membership or (class == Ordering and stored == None)
 
@@ -508,6 +520,13 @@ module cluster_migration_failover_logic {
   // and TR-CLUSTER-012's stale-seq refusal unreachable — see the header note.
   pure def canPrepareHandoff(migs: SlotId -> Option[Migration], s: SlotId): bool =
     migs.get(s) != None
+
+  // V12-M1, ruled 2026-08-19: hold-latching is disabled at a node carrying a pending
+  // transition record. The other half of the effect-based closure of
+  // `inv_no_hold_during_staged_flip` — `stageFlip` empties the hold region it finds, and
+  // this keeps a new one from being latched underneath a staged flip. `prepareHandoff` is
+  // the model's only action that *adds* to `held`, so this one guard is the whole gate.
+  pure def canLatchHold(ns: NodeState): bool = ns.record == None
 
   // TR-CLUSTER-011/034 + ext-2/ext-3: mints the attempt stamp from the bumped counter,
   // arms the barrier at the source and **seals the source** (`fenced`), which is a

@@ -170,6 +170,14 @@ module cluster_migration_failover_machine {
     // ext-18 (V21) — a terminal refusal observed against its own record that left the
     // record, the fence or the reply undisposed.
     disposition: bool,
+    // ext-12 (M32, ruled 2026-08-19) — a demotion whose chosen successor was not a
+    // replica of the demoted primary in the *pre*-state. The semantic observable (the
+    // successor actually holds the shard's data) is phase-3 replication-model territory;
+    // this ghost is the structural one the migration model can see.
+    crossShardSuccessor: bool,
+    // TR-CLUSTER-025 / FM-CLUSTER-014 (anti-churn) — a FAIL-flag transition that moved
+    // the config epoch. Health churn must never bump it.
+    churnEpochBump: bool,
   }
   // Coverage ghosts: set when a behaviour the witnesses care about actually happened.
   var coverage: {
@@ -188,6 +196,15 @@ module cluster_migration_failover_machine {
     // Written by `adoptReplicatedRole` from its own post-state (the split it was looking
     // at is gone in the node it wrote), never from its guard.
     planesConverged: bool,
+    // V12-M1 (ruled 2026-08-19) — a `stageFlip` that found outstanding held writes at the
+    // staging node and *answered* them in the same step. This is the coverage side of
+    // `inv_no_hold_during_staged_flip`: without it the invariant is vacuously true
+    // whenever the staging node never held anything.
+    stagedFlipAnsweredHolds: bool,
+    // M37 (ruled 2026-08-19) — a `completeAdoption` whose dataset-discard leg actually
+    // dropped a key, i.e. the adopting node held a copy the replicated map gave it no
+    // lawful claim to.
+    adoptionDiscardedKeys: bool,
   }
 
   // ---------------------------------------------------------------------------
@@ -327,10 +344,12 @@ module cluster_migration_failover_machine {
                  ackLoss: false, fencedAdmit: false, phaseAdmit: false, replicaAck: false,
                  replicaSlot: false, boundAbort: false, sealCounter: false, overDelete: false,
                  discard: false, untracked: false, demotedExec: false, identityRegress: false,
-                 spuriousCancel: false, staleDemote: false, disposition: false },
+                 spuriousCancel: false, staleDemote: false, disposition: false,
+                 crossShardSuccessor: false, churnEpochBump: false },
     coverage' = { gracefulPruned: false, forcedDemotedReplica: false, failoverDuringOpenMigration: false,
                   promotionRolledBack: false, reaped: false, emptyBatch: false,
-                  healthyAborted: false, knobCompleted: false, planesConverged: false },
+                  healthyAborted: false, knobCompleted: false, planesConverged: false,
+                  stagedFlipAnsweredHolds: false, adoptionDiscardedKeys: false },
   }
 
   // ---------------------------------------------------------------------------
@@ -406,8 +425,19 @@ module cluster_migration_failover_machine {
       else acc)
     all {
       canRemoveNode(nodes, slots, n, force),
+      // Issue 33: `ClusterState`'s `RemoveNode` *deletes* the node record, so there is no
+      // live data anywhere to recover the departed node's last role/parent/epoch from.
+      // The model keeps `nodes` a total map, so the tombstone has to carry the same
+      // "nothing here" values the conformance harness's projection produces for an absent
+      // record — `Replica`, no parent, epoch 0 — rather than the node's last live ones.
+      // The pointer null goes through the ext-17 funnel like every other parent write, so
+      // `inv_role_written_only_by_declared_writers` still sees the token move. The
+      // keyspace is deliberately *not* cleared: ext-12's mark-don't-remove keeps a
+      // departing node's copies (V8-C1).
       nodes' = detached.set(n, {
-        ...detached.get(n), member: false, registration_seq: None,
+        ...writeParentPointer(detached.get(n), Replica, None, false, None, None),
+        member: false, registration_seq: None,
+        epoch_own: 0,
         booted: false, counted: false,
         stage_counter: if (wipe) 0 else detached.get(n).stage_counter,
       }),
@@ -643,6 +673,19 @@ module cluster_migration_failover_machine {
   // ext-18: the pending-transition record.
   // ---------------------------------------------------------------------------
 
+  // V12-M1, ruled 2026-08-19 (effect-based closure of `inv_no_hold_during_staged_flip`).
+  // Staging the flip **answers** whatever the node was holding — an about-to-demote
+  // primary refuses or redirects the held writes rather than keeping them hostage — and
+  // so empties its hold region in the same step. This is an *effect* of staging, not a
+  // guard against it: refusing to stage while holds are outstanding would wire demotion
+  // liveness to drain-release liveness (the issue-17 class), which the ruling rejected.
+  // The complementary half — no *new* hold latches at a node with a pending record —
+  // lives in `prepareHandoff` (`canLatchHold`). Together the two close the invariant.
+  //
+  // Modelling note: the answers themselves are not materialised. `refusals` is the
+  // run-identity refusal channel (ext-16/ext-18), typed over `{node, stage_id, reg_seq,
+  // class, terminal}`, and a client write refusal is not one of those; the coverage
+  // ghost below is what keeps the invariant from being vacuous.
   action stageFlip(n: NodeId, upstream: NodeId): bool = {
     val ns = nodes.get(n)
     // A stage is minted **against a registration** (ext-17/V18-C1): with no live cell
@@ -653,11 +696,16 @@ module cluster_migration_failover_machine {
       ns.record == None,
       upstream != n,
       rs >= 0,
-      nodesOnly(nodes.set(n, {
+      nodes' = nodes.set(n, {
         ...ns, stage_counter: ns.stage_counter + 1, node_fenced: true, reply_emitted: false,
         record: Some({ kind: Demotion, upstream: upstream, stage_id: ns.stage_counter + 1,
                        staged_reg_seq: rs, adopted: false }),
-      })),
+      }),
+      held' = held.set(n, Set()),
+      coverage' = { ...coverage,
+        stagedFlipAnsweredHolds: coverage.stagedFlipAnsweredHolds or held.get(n) != Set() },
+      keepSlots, keepMigAll, keepBarriers, keepFeed,
+      keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
     }
   }
 
@@ -716,11 +764,26 @@ module cluster_migration_failover_machine {
   // record adopted while the stamp names the pre-crash stage, and the flip could never
   // land again (`witnessStagedFlipCompletesAcrossCrash` unreachable). Reading the stamp is
   // also what makes an admission *someone else* earned useless here (V13-C1).
+  //
+  // M37, ruled 2026-08-19 — the **dataset-discard leg**. Adopting a foreign upstream
+  // discards the node's dataset (FM-REPLICATION-022), which is precisely why the flip is
+  // staged: the discard lands here, at adoption, not at the gate check, so an
+  // `AssignSlots` that binds the node in the window between the two still finds its copy
+  // afterwards. Modelled as "drop every slot the replicated map gives this node no lawful
+  // copy claim to", with the ruling's exemption list verbatim — it owns the slot, it is
+  // the source or target of a live migration for it, or a residue entry names it
+  // (`trackedDirectly`).
   action completeAdoption(n: NodeId): bool = {
     val ns = nodes.get(n)
+    val discarded = ns.keys.filter(s => not(trackedDirectly(slots, migrations, residue, n, s)))
     all {
       match ns.record { | Some(rec) => rec.adopted and ns.admitted_stage == Some(rec.stage_id) | None => false },
-      nodesOnly(nodes.set(n, { ...ns, record: None, node_fenced: false, reply_emitted: true })),
+      nodes' = nodes.set(n, { ...ns, record: None, node_fenced: false, reply_emitted: true,
+                              keys: ns.keys.exclude(discarded) }),
+      coverage' = { ...coverage,
+        adoptionDiscardedKeys: coverage.adoptionDiscardedKeys or discarded != Set() },
+      keepSlots, keepMigAll, keepBar,
+      keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
     }
   }
 
@@ -778,6 +841,7 @@ module cluster_migration_failover_machine {
           all {
             canPrepareHandoff(migrations, s),
             canAct(nodes, m.source),
+            canLatchHold(nodes.get(m.source)),
             migrations' = r.migs,
             barriers' = { ...barriers, armed: r.armed },
             held' = held.set(m.source, held.get(m.source).union(Set(s))),
@@ -1337,15 +1401,34 @@ module cluster_migration_failover_machine {
   // Roles, failover and demotion.
   // ---------------------------------------------------------------------------
 
+  // TR-CLUSTER-024/025 + FM-CLUSTER-014 (anti-churn), ruled 2026-08-19. A FAIL-flag
+  // transition is *health* news and must never move the config epoch — a flapping node
+  // that bumped the epoch on every transition would churn the whole cluster's view.
+  // `churnEpoch` names the epoch the step actually writes and the ghost compares it
+  // against the pre-state's, so a mutant that bumps here moves the written value and the
+  // ghost together and trips `inv_no_churn_epoch_bump`. (`nodesOnly` would fold the epoch
+  // into `keepCtl` and make the property unobservable, which is why these two spell out
+  // their `ctl` frame.)
+  action churnFlag(n: NodeId, failed: bool): bool = {
+    val churnEpoch = ctl.epoch
+    all {
+      nodes' = nodes.set(n, { ...nodes.get(n), fail: failed }),
+      ctl' = { ...ctl, epoch: churnEpoch, prev_epoch: ctl.epoch,
+               prev_parents: parentsOf(nodes), prev_keys: keysOf(nodes) },
+      defects' = { ...defects, churnEpochBump: defects.churnEpochBump or churnEpoch != ctl.epoch },
+      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepCoverage,
+    }
+  }
+
   action markNodeFailed(n: NodeId): bool = all {
     nodes.get(n).member,
     not(nodes.get(n).fail),
-    nodesOnly(nodes.set(n, { ...nodes.get(n), fail: true })),
+    churnFlag(n, true),
   }
 
   action markNodeRecovered(n: NodeId): bool = all {
     nodes.get(n).fail,
-    nodesOnly(nodes.set(n, { ...nodes.get(n), fail: false })),
+    churnFlag(n, false),
   }
 
   // TR-CLUSTER-024/025's arming step: the fence is single-shot and is consumed by the
@@ -1441,7 +1524,17 @@ module cluster_migration_failover_machine {
         // successor it handed them to must be a Primary. Recomputed on the post-state
         // view, scoped to the two nodes this step wrote.
         replicaSlot: defects.replicaSlot
-          or replicaOwnsSlot(v.nodes, v.slots, n) or replicaOwnsSlot(v.nodes, v.slots, succ) },
+          or replicaOwnsSlot(v.nodes, v.slots, n) or replicaOwnsSlot(v.nodes, v.slots, succ),
+        // M32 (V9-C1), ruled 2026-08-19: the successor's *shard relationship* is the one
+        // admission conjunct with no post-state trace — `applyFailoverCommon` makes the
+        // successor a Primary and re-parents the demoted node onto it, so the post-state
+        // looks identical whether or not the successor was in the demoted node's shard.
+        // Recomputed here from the **pre-state** `nodes`, independently of the guard, so
+        // dropping `isInShardReplicaOf` from `canDemoteNode` surfaces as a violation
+        // instead of as an unobservable widening. The *semantic* observable (the
+        // successor actually holds the shard's data) is phase-3 replication-model
+        // territory and is deliberately not claimed here.
+        crossShardSuccessor: defects.crossShardSuccessor or not(isInShardReplicaOf(nodes, succ, n)) },
     }
   }
 
