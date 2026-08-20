@@ -1,0 +1,346 @@
+{
+"F01": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F04": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F07": {
+"verdict": "CAUGHT-T",
+"evidence": "unarmedFloorRefusesPartialTest"
+},
+"F09": {
+"verdict": "CAUGHT-T",
+"evidence": "noHistoryStillFullSyncsTest"
+},
+"F11": {
+"verdict": "CAUGHT-T",
+"evidence": "windowCheckedAtAppliedTest"
+},
+"F14": {
+"verdict": "CAUGHT-T",
+"evidence": "restartRefusesAheadReplicaTest"
+},
+"F16": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F17": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F23": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F24": {
+"verdict": "CAUGHT-T",
+"evidence": "unarmedBacklogHasNothingToEvictTest"
+},
+"F25": {
+"verdict": "CAUGHT-T",
+"evidence": "evictionNeedsAboveCapacityTest"
+},
+"F33": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F34": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F38": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F39": {
+"verdict": "CAUGHT-T",
+"evidence": "spliceAtHeadOverUnarmedBacklogTest"
+},
+"F42": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F49": {
+"verdict": "CAUGHT-T",
+"evidence": "ackAboveLiveHeadIgnoredTest"
+},
+"F57": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F59": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartAtFullRecoveryStillRemintsTest"
+},
+"F64": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest"
+},
+"F65": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F66": {
+"verdict": "CAUGHT-T",
+"evidence": "restartRefusesAheadReplicaTest"
+},
+"F70": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F73": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"M02": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"M03": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"M04": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"M05": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M06": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M10": {
+"verdict": "CAUGHT-T",
+"evidence": "initStateTest"
+},
+"M12": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M13": {
+"verdict": "CAUGHT-T",
+"evidence": "replicaAcceptsNoWriteTest"
+},
+"M16": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M18": {
+"verdict": "CAUGHT-T",
+"evidence": "psyncTargetsAPrimaryTest"
+},
+"M19": {
+"verdict": "CAUGHT-T",
+"evidence": "linkedReplicaDoesNotRepsyncTest"
+},
+"M27": {
+"verdict": "CAUGHT-T",
+"evidence": "windowCheckedAtAppliedTest,psyncResetsReplicaPositionTest"
+},
+"M28": {
+"verdict": "CAUGHT-T",
+"evidence": "psyncResetsReplicaPositionTest"
+},
+"M31": {
+"verdict": "CAUGHT-T",
+"evidence": "restartRefusesAheadReplicaTest"
+},
+"M32": {
+"verdict": "CAUGHT-T",
+"evidence": "psyncResetsReplicaPositionTest"
+},
+"M33": {
+"verdict": "CAUGHT-T",
+"evidence": "restartRefusesAheadReplicaTest"
+},
+"M35": {
+"verdict": "CAUGHT-T",
+"evidence": "unannouncedRegistrationDoesNotDedupTest,corpseTeardownKeepsLiveLinkTest"
+},
+"M36": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M37": {
+"verdict": "CAUGHT-T",
+"evidence": "dedupIsPerPrimaryTest"
+},
+"M40": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M41": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M42": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M46": {
+"verdict": "CAUGHT-T",
+"evidence": "cutHappensOnceTest"
+},
+"M49": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest"
+},
+"M50": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M53": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M56": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M59": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest"
+},
+"M61": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M62": {
+"verdict": "CAUGHT-T",
+"evidence": "abandonNeedsUnavailableRangeTest"
+},
+"M66": {
+"verdict": "CAUGHT-T",
+"evidence": "framesOnlyOnStreamingSessionTest"
+},
+"M67": {
+"verdict": "CAUGHT-T",
+"evidence": "corpseCannotFeedReplicaTest"
+},
+"M68": {
+"verdict": "CAUGHT-T",
+"evidence": "promotedOvershipDoesNotServeForkedTailTest"
+},
+"M69": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M71": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M74": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M77": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M78": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M82": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest"
+},
+"M83": {
+"verdict": "CAUGHT-T",
+"evidence": "ackOnlyWhileStreamingTest"
+},
+"M86": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M87": {
+"verdict": "CAUGHT-T",
+"evidence": "honestAckIsNotIgnoredTest"
+},
+"M90": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M92": {
+"verdict": "CAUGHT-T",
+"evidence": "primaryIsNotPromotedTest"
+},
+"M94": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"M96": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M97": {
+"verdict": "CAUGHT-T",
+"evidence": "windowCheckedAtAppliedTest"
+},
+"M98": {
+"verdict": "CAUGHT-T",
+"evidence": "replicaIsNotRestartedTest"
+},
+"M99": {
+"verdict": "CAUGHT-T",
+"evidence": "restartCannotInventDataTest"
+},
+"M103": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M104": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M106": {
+"verdict": "CAUGHT-T",
+"evidence": "corpseLinkNotDroppableTest"
+},
+"M109": {
+"verdict": "CAUGHT-T",
+"evidence": "corpseTeardownKeepsLiveLinkTest"
+},
+"M110": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest"
+},
+"M112": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M113": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M114": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"T06": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I05": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I09": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I10": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I11": {
+"verdict": "green@500x20",
+"evidence": ""
+}
+}

@@ -1,0 +1,362 @@
+{
+"F01": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F03": {
+"verdict": "CAUGHT-P",
+"evidence": "4000x40 seed 0x1: inv_no_acked_write_lost_across_fullsync"
+},
+"F04": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F07": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F09": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F11": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F14": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F16": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F17": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F23": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F24": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F25": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F33": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F34": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F38": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F39": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F42": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F49": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F57": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F59": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F64": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F65": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F66": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F70": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"F73": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M01": {
+"verdict": "CAUGHT-P",
+"evidence": "4000x40 seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_splice_continuity"
+},
+"M02": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M03": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M04": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M05": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M06": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M10": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M12": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M13": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M16": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M18": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M19": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M20": {
+"verdict": "CAUGHT-P",
+"evidence": "4000x40 seed 0x1: inv_link_points_at_a_live_session"
+},
+"M27": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M28": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M31": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M32": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M33": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M35": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M36": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M37": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M40": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M41": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M42": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M46": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M49": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M50": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M53": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M56": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M59": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M61": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M62": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M66": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M67": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M68": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M69": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M71": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M72": {
+"verdict": "CAUGHT-P",
+"evidence": "4000x40 seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_splice_continuity"
+},
+"M74": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M77": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M78": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M82": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M83": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M86": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M87": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M90": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M92": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M94": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M96": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M97": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M98": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M99": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M103": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M104": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M106": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M109": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M110": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M112": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M113": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"M114": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"T06": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"I05": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"I09": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"I10": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+},
+"I11": {
+"verdict": "MISSED",
+"evidence": "green at 4000x40, seeds 0x1/0x2/0x3"
+}
+}

@@ -1,0 +1,818 @@
+{
+"F01": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F02": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_no_acked_write_lost_across_fullsync"
+},
+"F03": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F04": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F05": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x2: inv_no_acked_write_lost_across_fullsync"
+},
+"F06": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,overshippedTailMeetsFailoverTest"
+},
+"F07": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F08": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,overshippedTailMeetsFailoverTest"
+},
+"F09": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F10": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"F11": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F12": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_partial_grant_sound"
+},
+"F13": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,overshippedTailMeetsFailoverTest"
+},
+"F14": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F15": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest"
+},
+"F16": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F17": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F18": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,uncleanRestartMintsFreshIdTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"F19": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"F20": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"F21": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest"
+},
+"F22": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest,overshippedTailMeetsFailoverTest"
+},
+"F23": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F24": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F25": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F26": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest"
+},
+"F27": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest"
+},
+"F28": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F29": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F30": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest"
+},
+"F31": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F32": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,overshippedTailMeetsFailoverTest"
+},
+"F33": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F34": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F35": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,promotionMidSyncTest"
+},
+"F36": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"F37": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F38": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F39": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F40": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F41": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F42": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F43": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"F44": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"F45": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"F46": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_applied_covered_by_data,inv_payload_covers_grant,inv_splice_continuity,inv_partial_grant_sound,inv_replid_offset_paired,inv_restart_pairs_offset,inv_identity_pair_monotone,inv_failover_window_whole,inv_replids_distinct,inv_second_offset_not_above_live,inv_offsets_ordered,inv_backlog_floor_sound,inv_ack_never_above_live_head,inv_one_session_per_announced_identity,inv_link_points_at_a_live_session,inv_superseded_records_no_departure"
+},
+"F47": {
+"verdict": "CAUGHT-T",
+"evidence": "ackAboveLiveHeadIgnoredTest"
+},
+"F48": {
+"verdict": "CAUGHT-T",
+"evidence": "ackAboveLiveHeadIgnoredTest"
+},
+"F49": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F50": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest"
+},
+"F51": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest"
+},
+"F52": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest"
+},
+"F53": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"F54": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"F55": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest"
+},
+"F56": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_link_points_at_a_live_session"
+},
+"F57": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F58": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_identity_pair_monotone,inv_second_offset_not_above_live"
+},
+"F59": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F60": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x2: inv_restart_pairs_offset"
+},
+"F61": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest,overshippedTailMeetsFailoverTest"
+},
+"F62": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest,overshippedTailMeetsFailoverTest"
+},
+"F63": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest"
+},
+"F64": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F65": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F66": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F67": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest,overshippedTailMeetsFailoverTest"
+},
+"F68": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest,overshippedTailMeetsFailoverTest"
+},
+"F69": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest"
+},
+"F70": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"F71": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest"
+},
+"F72": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_identity_pair_monotone"
+},
+"F73": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M01": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M02": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M03": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M04": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M05": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M06": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M07": {
+"verdict": "CAUGHT-T",
+"evidence": "restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M08": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,uncleanRestartMintsFreshIdTest,overshippedTailMeetsFailoverTest"
+},
+"M09": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M10": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M11": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest,uncleanRestartMintsFreshIdTest,overshippedTailMeetsFailoverTest"
+},
+"M12": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M13": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M14": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"M15": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest"
+},
+"M16": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M17": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_applied_covered_by_data,inv_payload_covers_grant,inv_identity_pair_monotone,inv_second_offset_not_above_live,inv_backlog_floor_sound"
+},
+"M18": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M19": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M20": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M21": {
+"verdict": "CAUGHT-T",
+"evidence": "supersededPredecessorTest"
+},
+"M22": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_one_session_per_announced_identity"
+},
+"M23": {
+"verdict": "CAUGHT-T",
+"evidence": "truncatedSpliceIsAbandonedTest,overshippedTailMeetsFailoverTest"
+},
+"M24": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M25": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,overshippedTailMeetsFailoverTest"
+},
+"M26": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M27": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M28": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M29": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M30": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest"
+},
+"M31": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M32": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M33": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M34": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_offsets_ordered"
+},
+"M35": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M36": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M37": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M38": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest"
+},
+"M39": {
+"verdict": "CAUGHT-T",
+"evidence": "supersededPredecessorTest"
+},
+"M40": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M41": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M42": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M43": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,overshippedTailMeetsFailoverTest"
+},
+"M44": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest"
+},
+"M45": {
+"verdict": "CAUGHT-T",
+"evidence": "supersededPredecessorTest"
+},
+"M46": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M47": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M48": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"M49": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M50": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M51": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,overshippedTailMeetsFailoverTest"
+},
+"M52": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_applied_covered_by_data,inv_payload_covers_grant,inv_splice_continuity,inv_partial_grant_sound,inv_replid_offset_paired,inv_restart_pairs_offset,inv_identity_pair_monotone,inv_failover_window_whole,inv_replids_distinct,inv_second_offset_not_above_live,inv_offsets_ordered,inv_backlog_floor_sound,inv_ack_never_above_live_head,inv_one_session_per_announced_identity,inv_link_points_at_a_live_session,inv_superseded_records_no_departure"
+},
+"M53": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M54": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M55": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,restartRefusesAheadReplicaTest"
+},
+"M56": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M57": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_splice_continuity"
+},
+"M58": {
+"verdict": "CAUGHT-T",
+"evidence": "spliceOverEvictedRangeFailsTest"
+},
+"M59": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M60": {
+"verdict": "CAUGHT-T",
+"evidence": "happyFullSyncTest,writeDuringTransferSurvivesTest,promotionMidSyncTest,ackAboveLiveHeadIgnoredTest,supersededPredecessorTest,overshippedTailMeetsFailoverTest"
+},
+"M61": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M62": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M63": {
+"verdict": "CAUGHT-T",
+"evidence": "truncatedSpliceIsAbandonedTest"
+},
+"M64": {
+"verdict": "CAUGHT-T",
+"evidence": "truncatedSpliceIsAbandonedTest"
+},
+"M65": {
+"verdict": "CAUGHT-T",
+"evidence": "truncatedSpliceIsAbandonedTest"
+},
+"M66": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M67": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M68": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M69": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M70": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest,promotionMidSyncTest,overshippedTailMeetsFailoverTest"
+},
+"M71": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M72": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M73": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_offsets_ordered"
+},
+"M74": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M75": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"M76": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest"
+},
+"M77": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M78": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M79": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"M80": {
+"verdict": "CAUGHT-T",
+"evidence": "writeDuringTransferSurvivesTest"
+},
+"M81": {
+"verdict": "CAUGHT-T",
+"evidence": "overshippedTailMeetsFailoverTest"
+},
+"M82": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M83": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M84": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_ack_never_above_live_head"
+},
+"M85": {
+"verdict": "CAUGHT-T",
+"evidence": "ackAboveLiveHeadIgnoredTest"
+},
+"M86": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M87": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M88": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_ack_never_above_live_head"
+},
+"M89": {
+"verdict": "CAUGHT-T",
+"evidence": "ackAboveLiveHeadIgnoredTest"
+},
+"M90": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M91": {
+"verdict": "CAUGHT-T",
+"evidence": "ackAboveLiveHeadIgnoredTest"
+},
+"M92": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M93": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest,partialResyncViaReplid2WindowTest"
+},
+"M94": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M95": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_replid_offset_paired,inv_identity_pair_monotone,inv_replids_distinct"
+},
+"M96": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M97": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M98": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M99": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M100": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest,restartRefusesAheadReplicaTest,overshippedTailMeetsFailoverTest"
+},
+"M101": {
+"verdict": "CAUGHT-T",
+"evidence": "restartRefusesAheadReplicaTest"
+},
+"M102": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_no_acked_write_lost_across_fullsync,inv_replid_offset_paired,inv_identity_pair_monotone,inv_replids_distinct"
+},
+"M103": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M104": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M105": {
+"verdict": "CAUGHT-T",
+"evidence": "uncleanRestartMintsFreshIdTest"
+},
+"M106": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M107": {
+"verdict": "CAUGHT-T",
+"evidence": "supersededPredecessorTest"
+},
+"M108": {
+"verdict": "CAUGHT-T",
+"evidence": "supersededPredecessorTest"
+},
+"M109": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M110": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M111": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest"
+},
+"M112": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M113": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"M114": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"T01": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_failover_window_whole"
+},
+"T02": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest"
+},
+"T03": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,overshippedTailMeetsFailoverTest"
+},
+"T04": {
+"verdict": "CAUGHT-T",
+"evidence": "partialResyncViaReplid2WindowTest,backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest,overshippedTailMeetsFailoverTest"
+},
+"T05": {
+"verdict": "CAUGHT-T",
+"evidence": "backlogEvictionForcesFullResyncTest,spliceOverEvictedRangeFailsTest,truncatedSpliceIsAbandonedTest"
+},
+"T06": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I01": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x2: inv_no_acked_write_lost_across_fullsync"
+},
+"I02": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x2: inv_no_acked_write_lost_across_fullsync"
+},
+"I03": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_applied_covered_by_data"
+},
+"I04": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_offsets_ordered"
+},
+"I05": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I06": {
+"verdict": "CAUGHT-T",
+"evidence": "promotionMidSyncTest"
+},
+"I07": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_backlog_floor_sound"
+},
+"I08": {
+"verdict": "CAUGHT-P",
+"evidence": "seed 0x1: inv_one_session_per_announced_identity"
+},
+"I09": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I10": {
+"verdict": "green@500x20",
+"evidence": ""
+},
+"I11": {
+"verdict": "green@500x20",
+"evidence": ""
+}
+}

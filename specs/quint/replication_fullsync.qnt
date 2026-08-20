@@ -228,6 +228,99 @@ module replication_fullsync {
   // The predecessor kicked by a duplicate registration records no departure.
   val inv_superseded_records_no_departure: bool = not(defects.supersededDeparture)
 
+  // --- Structural invariants (mutation-battery gap closure, T10b) ---
+  //
+  // Each of these closes a battery row. Some kill their mutation outright; the
+  // rest are the *falsifiable tripwires* behind an equivalent-mutant argument —
+  // a guard whose removal is harmless only because the invariant below holds, so
+  // the claim "that conjunct is redundant" is checked rather than asserted in
+  // prose. The row each one answers is named at its definition; the verdict
+  // table lives in `.scratch/formal-spec/2026-08-20-fullsync-battery.md`.
+
+  // Roles are monotone: a node that was a primary in the previous state still
+  // is one. Rows I10 and M03 (the `prev.primary` half of the pairing shadow).
+  val inv_primary_role_is_terminal: bool =
+    NODES.forall(n => ctl.prev_pair.get(n).primary implies nodes.get(n).role == Primary)
+
+  // A primary serves exactly what it has applied — it never carries a decoded
+  // tail of its own. Rows M02, M69 (with inv_applied_covered_by_data, this is
+  // what makes the frame consumer's `pn.data` bound redundant).
+  val inv_primary_applied_is_head: bool =
+    NODES.forall(n =>
+      (nodes.get(n).role == Primary) implies (nodes.get(n).applied == nodes.get(n).recv))
+
+  // A primary holds no upstream link of its own. Row F65 (the restart's
+  // `link: None` write).
+  val inv_primary_holds_no_link: bool =
+    NODES.forall(n => (nodes.get(n).role == Primary) implies (nodes.get(n).link == None))
+
+  // Only a primary ever holds a failover window: a replica's window is closed.
+  // Rows F33, F34 (the trailer's window clear) and I05.
+  val inv_replica_holds_no_window: bool =
+    NODES.forall(n => (nodes.get(n).role == Replica) implies and {
+      nodes.get(n).replid2 == None,
+      nodes.get(n).second_offset == NO_WINDOW,
+    })
+
+  // Only a primary ever arms a backlog floor. Row F23.
+  val inv_only_primaries_arm_a_floor: bool =
+    NODES.forall(n => (nodes.get(n).role == Replica) implies (nodes.get(n).floor == UNARMED))
+
+  // A registered session's replica is a replica. Rows M06, M94.
+  val inv_registered_session_replica_is_replica: bool =
+    SIDS.forall(k => (sessions.get(k).phase != Disconnected)
+      implies (nodes.get(sessions.get(k).replica).role == Replica))
+
+  // Before Streaming a session is always held by its replica's own live link:
+  // the corpse is a Streaming-only shape. Row M53.
+  val inv_prestream_session_is_linked: bool =
+    SIDS.forall(k => {
+      val s = sessions.get(k)
+      and { s.phase != Disconnected, s.phase != Streaming }
+        implies linkIs(nodes.get(s.replica), k)
+    })
+
+  // ...and before Streaming nothing is decoded-but-unapplied: the gap between
+  // `recv` and `applied` opens only under a live stream. Row M71.
+  val inv_prestream_link_has_nothing_pending: bool =
+    SIDS.forall(k => {
+      val s = sessions.get(k)
+      val r = nodes.get(s.replica)
+      and { s.phase != Disconnected, s.phase != Streaming, linkIs(r, k) }
+        implies r.applied == r.recv
+    })
+
+  // A streaming replica never received past the history its primary holds.
+  // Row M74 (the sentinel bound on the apply path).
+  val inv_linked_replica_recv_within_primary_data: bool =
+    SIDS.forall(k => {
+      val s = sessions.get(k)
+      val r = nodes.get(s.replica)
+      and { s.phase == Streaming, linkIs(r, k) }
+        implies r.recv <= nodes.get(s.primary).data.length()
+    })
+
+  // A replica claiming a primary's own history never claims more of it than
+  // that primary holds. Row F01 (the `off <= p.recv` bound on the primary arm).
+  val inv_replica_not_ahead_of_matching_primary: bool =
+    NODES.forall(r => NODES.forall(p => and {
+      nodes.get(r).role == Replica,
+      nodes.get(p).role == Primary,
+      nodes.get(r).replid == nodes.get(p).replid,
+    } implies nodes.get(r).applied <= nodes.get(p).recv))
+
+  // Every payload a session installed came out of a checkpoint cut. Row M49 —
+  // and the only reader of `payload_cut`, which the battery found otherwise
+  // dead.
+  val inv_installed_payload_was_cut: bool =
+    SIDS.forall(k => {
+      val s = sessions.get(k)
+      and {
+        s.arm == FullSnapshot,
+        or { s.phase == StreamingCheckpoint, s.phase == PayloadInstalled, s.phase == Streaming },
+      } implies s.payload_cut
+    })
+
   // --- Witnesses ---
 
   val witnessFullSyncStreaming: bool = coverage.fullSyncStreaming
@@ -274,6 +367,9 @@ module replication_fullsync {
       .then(spliceStreamAt(1))
       .then(check(and {
         sessions.get(1).phase == Streaming,
+        // TR-REPLICATION-002: the resume point is seeded from the grant.
+        sessions.get(1).resume_offset == 2,
+        sessions.get(1).payload_cut,
         nodes.get(2).applied == 2,
         nodes.get(2).replid == nodes.get(1).replid,
         nodes.get(2).data == nodes.get(1).data,
@@ -303,6 +399,7 @@ module replication_fullsync {
         nodes.get(2).applied == 2,
         nodes.get(2).data == nodes.get(1).data,
         coverage.reapplied,
+        coverage.tailApplied,
         inv_no_acked_write_lost_across_fullsync,
         inv_splice_continuity,
         inv_applied_covered_by_data,
@@ -331,6 +428,11 @@ module replication_fullsync {
         nodes.get(2).second_offset == 2,
         nodes.get(2).recv == 2,
         nodes.get(2).floor == 2,
+        // The links it held as a replica die with the role change.
+        sessions.get(1).phase == Disconnected,
+        // The pairing shadow holds the *immediately preceding* state, refreshed
+        // by this very step: gen 1 at the received head, not yet a primary.
+        ctl.prev_pair.get(2) == { gen: FIRST_GEN, off: 3, primary: false },
         coverage.settleDiscardedFrames,
         inv_replid_offset_paired,
         inv_identity_pair_monotone,
@@ -381,7 +483,12 @@ module replication_fullsync {
       .then(writeOnPrimaryAs(1))
       .then(evictBacklogAs(1))
       .then(evictBacklogAs(1))
-      .then(check(nodes.get(1).floor == 2 and nodes.get(2).applied == 1))
+      .then(check(and {
+        nodes.get(1).floor == 2,
+        nodes.get(2).applied == 1,
+        // The streaming teardown above recorded a graceful departure.
+        nodes.get(1).last_departure == Some(Graceful),
+      }))
       .then(psyncRequestAs(2, 1, true, 1))
       .then(check(and {
         sessions.get(1).arm == FullSnapshot,
@@ -444,6 +551,9 @@ module replication_fullsync {
       .then(spliceStreamAt(1))
       .then(recordAckAt(1, 2))
       .then(check(sessions.get(1).acked == 2))
+      // AckedOffset never regresses: a late, lower, *honest* ack is absorbed.
+      .then(recordAckAt(1, 1))
+      .then(check(sessions.get(1).acked == 2))
       .then(ignoreAckAt(1, 3))
       .then(check(and {
         sessions.get(1).acked == 2,
@@ -490,6 +600,9 @@ module replication_fullsync {
         nodes.get(1).second_offset == 1,
         nodes.get(1).recv == 1,
         nodes.get(1).data.length() == 1,
+        // A reboot comes up with an unarmed backlog: nothing is resumable until
+        // the first push arms it again.
+        nodes.get(1).floor == UNARMED,
         coverage.uncleanRestartReminted,
         inv_restart_pairs_offset,
         inv_replid_offset_paired,
@@ -507,11 +620,24 @@ module replication_fullsync {
       .then(cutCheckpointAt(1))
       .then(deliverPayloadAt(1))
       .then(spliceStreamAt(1))
+      .then(endSessionAt(1))
       .then(restartNodeAs(1, true, 1))
-      .then(check(nodes.get(2).applied == 2 and nodes.get(2).link == None))
+      .then(check(and {
+        nodes.get(2).applied == 2,
+        nodes.get(2).link == None,
+        // The reboot forgets the departure the session before it recorded.
+        nodes.get(1).last_departure == None,
+      }))
       .then(psyncRequestAs(2, 1, true, 1))
       .then(check(and {
         sessions.get(1).arm == FullSnapshot,
+        // The window refused it, not the floor: this is not the eviction path.
+        not(coverage.evictionForcedFull),
+        // On the full arm the replica adopts neither half of the identity pair
+        // until the trailer lands: it keeps its old id and rewinds to zero.
+        nodes.get(2).replid == FIRST_GEN,
+        nodes.get(2).recv == 0,
+        nodes.get(2).applied == 0,
         inv_partial_grant_sound,
         inv_identity_pair_monotone,
       }))
@@ -554,6 +680,9 @@ module replication_fullsync {
         sessions.get(2).arm == PartialGrant,
         sessions.get(2).grant_offset == 1,
         coverage.partialViaSecondary,
+        // The fork is real before the replay reconciles it: position 2 carries
+        // the replaced history's write, not the live one's.
+        not(prefixAgrees(nodes.get(2).data, nodes.get(1).data, 2)),
       }))
       .then(spliceStreamAt(2))
       .then(receiveFrameAt(2))
@@ -563,5 +692,365 @@ module replication_fullsync {
         inv_splice_continuity,
         inv_no_acked_write_lost_across_fullsync,
         prefixAgrees(nodes.get(2).data, nodes.get(1).data, nodes.get(2).applied),
+      }))
+
+  // --- Scenarios added by the T10b mutation battery (gap closure) ---
+  //
+  // Every scenario below exists to kill a specific battery row that both
+  // oracles missed; the row id is named on each. Disabled-action scenarios use
+  // `.fail()`: the run fails precisely because the guard the row deletes is the
+  // one holding the action back.
+
+  // Row M10/M12: the initial state, and the first push arming the floor at the
+  // command's start offset (the pre-write head).
+  run initStateTest =
+    init
+      .then(check(and {
+        nodes.get(1).role == Primary,
+        nodes.get(1).replid == FIRST_GEN,
+        nodes.get(1).floor == UNARMED,
+        nodes.get(1).recv == 0,
+        nodes.get(2).role == Replica,
+        nodes.get(2).replid == NO_HISTORY,
+        nodes.get(2).floor == UNARMED,
+        nodes.get(2).recv == 0,
+      }))
+      .then(writeOnPrimaryAs(1))
+      .then(check(nodes.get(1).floor == 0 and nodes.get(1).recv == 1))
+
+  // Row F09: a replica that has never held a history full-syncs even when the
+  // primary's inherited window nominally covers the `PSYNC ? -1` sentinel.
+  run noHistoryStillFullSyncsTest =
+    init
+      .then(promoteAs(2))
+      .then(check(and {
+        nodes.get(2).role == Primary,
+        nodes.get(2).replid2 == Some(NO_HISTORY),
+        nodes.get(2).second_offset == 0,
+        nodes.get(2).floor == 0,
+      }))
+      .then(psyncRequestAs(3, 2, true, 1))
+      .then(check(sessions.get(1).arm == FullSnapshot))
+
+  // Row F07: an unarmed floor refuses a `+CONTINUE` outright, even to a replica
+  // whose id and offset the window would otherwise admit.
+  run unarmedFloorRefusesPartialTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(endSessionAt(1))
+      .then(restartNodeAs(1, false, 1))
+      .then(check(and {
+        nodes.get(1).floor == UNARMED,
+        nodes.get(1).replid == FIRST_GEN,
+        nodes.get(2).replid == FIRST_GEN,
+        nodes.get(2).applied == 1,
+      }))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(check(sessions.get(1).arm == FullSnapshot))
+
+  // Row F24: an unarmed buffer has nothing to evict.
+  run unarmedBacklogHasNothingToEvictTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(restartNodeAs(1, false, 1))
+      .then(evictBacklogAs(1))
+      .fail()
+
+  // Row F25: eviction happens strictly above capacity, never at it.
+  run evictionNeedsAboveCapacityTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(evictBacklogAs(1))
+      .fail()
+
+  // Row F39: an empty replay range needs no backlog at all — a replica granted
+  // at the primary's own head splices over an unarmed buffer.
+  run spliceAtHeadOverUnarmedBacklogTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(restartNodeAs(1, false, 1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(check(and {
+        nodes.get(1).floor == UNARMED,
+        sessions.get(1).phase == Streaming,
+        coverage.fullSyncStreaming,
+      }))
+
+  // Rows F11, M97: the arm decision reads the replica's *applied* offset, not
+  // its received head. Replica 3 holds a decoded-but-unapplied frame; the
+  // inherited window covers what it applied and nothing more, so the resume is
+  // granted. (M97: the promoted node discarded nothing, so the settle ghost
+  // stays dark.)
+  run windowCheckedAtAppliedTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(3, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(psyncRequestAs(2, 1, true, 2))
+      .then(cutCheckpointAt(2))
+      .then(deliverPayloadAt(2))
+      .then(spliceStreamAt(2))
+      .then(writeOnPrimaryAs(1))
+      .then(receiveFrameAt(1))
+      .then(check(nodes.get(3).recv == 2 and nodes.get(3).applied == 1))
+      .then(promoteAs(2))
+      .then(endSessionAt(1))
+      .then(psyncRequestAs(3, 2, true, 1))
+      .then(check(and {
+        sessions.get(1).arm == PartialGrant,
+        sessions.get(1).grant_offset == 1,
+        nodes.get(2).second_offset == 1,
+        coverage.partialViaSecondary,
+        not(coverage.settleDiscardedFrames),
+        inv_partial_grant_sound,
+      }))
+
+  // Rows M27, M28, M32: a reconnect resumes from what the replica *applied* —
+  // the previous connection's decoded-but-unapplied bytes died with it — and
+  // the new session starts with no ack credited.
+  run psyncResetsReplicaPositionTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(writeOnPrimaryAs(1))
+      .then(receiveFrameAt(1))
+      .then(dropLinkAt(1))
+      .then(check(nodes.get(2).recv == 2 and nodes.get(2).applied == 1))
+      .then(psyncRequestAs(2, 1, true, 2))
+      .then(check(and {
+        sessions.get(2).arm == PartialGrant,
+        sessions.get(2).grant_offset == 1,
+        sessions.get(2).acked == 0,
+        nodes.get(2).recv == 1,
+        nodes.get(2).applied == 1,
+        sessions.get(1).phase == Disconnected,
+        coverage.superseded,
+      }))
+
+  // Row M46: the cut happens once, at the preparing phase.
+  run cutHappensOnceTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(cutCheckpointAt(1))
+      .fail()
+
+  // Row M62: a splice is abandoned only when the replay range is gone.
+  run abandonNeedsUnavailableRangeTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(abandonSpliceAt(1))
+      .fail()
+
+  // Row M66: frames arrive only after the splice, never during the transfer.
+  run framesOnlyOnStreamingSessionTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(writeOnPrimaryAs(1))
+      .then(receiveFrameAt(1))
+      .fail()
+
+  // Row M67 (issue-22): a corpse session holds no socket, so it cannot feed the
+  // replica that has since left it — even while the session is still Streaming.
+  run corpseCannotFeedReplicaTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(dropLinkAt(1))
+      .then(writeOnPrimaryAs(1))
+      .then(receiveFrameAt(1))
+      .fail()
+
+  // Row M83: ACK ingest belongs to the streaming phase.
+  run ackOnlyWhileStreamingTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(recordAckAt(1, 1))
+      .fail()
+
+  // Row M87 (issue-21): an honest ack cannot take the ignore branch.
+  run honestAckIsNotIgnoredTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(ignoreAckAt(1, 1))
+      .fail()
+
+  // Row M13: a replica accepts no local write.
+  run replicaAcceptsNoWriteTest =
+    init.then(writeOnPrimaryAs(2)).fail()
+
+  // Row M18: PSYNC targets a primary.
+  run psyncTargetsAPrimaryTest =
+    init.then(psyncRequestAs(2, 3, true, 1)).fail()
+
+  // Row M19: an already-linked replica does not open a second registration.
+  run linkedReplicaDoesNotRepsyncTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(psyncRequestAs(2, 1, true, 2))
+      .fail()
+
+  // Row M92: a primary is not promoted.
+  run primaryIsNotPromotedTest =
+    init.then(promoteAs(1)).fail()
+
+  // Row M98: the restart subject is a primary.
+  run replicaIsNotRestartedTest =
+    init.then(restartNodeAs(2, true, 0)).fail()
+
+  // Row M99 (TR-REPLICATION-021): recovery never invents data. Node 2 holds an
+  // overshipped tail — a payload position its own offset does not claim — and
+  // a restart still cannot recover *past* what it applied.
+  run restartCannotInventDataTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(writeOnPrimaryAs(1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(promoteAs(2))
+      .then(restartNodeAs(2, false, 2))
+      .fail()
+
+  // Row M68: the same overshipped tail, on a promoted primary, is never served.
+  // The head it settled at is the head it streams from; the forked position
+  // above it is residue no reconnect can ask for.
+  run promotedOvershipDoesNotServeForkedTailTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(writeOnPrimaryAs(1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(promoteAs(2))
+      .then(psyncRequestAs(3, 2, true, 2))
+      .then(cutCheckpointAt(2))
+      .then(deliverPayloadAt(2))
+      .then(spliceStreamAt(2))
+      .then(receiveFrameAt(2))
+      .fail()
+
+  // Row M35 (TR-REPLICATION-022): an unannounced registration
+  // (`listening_port == 0`) is exempt from dedup — it kicks nobody.
+  run unannouncedRegistrationDoesNotDedupTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(dropLinkAt(1))
+      .then(psyncRequestAs(2, 1, false, 2))
+      .then(check(and {
+        sessions.get(1).phase == Streaming,
+        sessions.get(2).identity == None,
+        not(coverage.superseded),
+        inv_one_session_per_announced_identity,
+      }))
+
+  // Row M37 (issue-22): dedup is per-primary. Registering with a *different*
+  // primary leaves the predecessor's session on the old one alone.
+  run dedupIsPerPrimaryTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(dropLinkAt(1))
+      .then(promoteAs(3))
+      .then(psyncRequestAs(2, 3, true, 2))
+      .then(check(and {
+        sessions.get(1).phase == Streaming,
+        sessions.get(1).primary == 1,
+        sessions.get(2).primary == 3,
+        not(coverage.superseded),
+      }))
+
+  // Row M109: tearing down a corpse clears only its own holder's link — never
+  // the link the replica has since opened elsewhere.
+  run corpseTeardownKeepsLiveLinkTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(dropLinkAt(1))
+      .then(psyncRequestAs(2, 1, false, 2))
+      .then(check(nodes.get(2).link == Some(2)))
+      .then(endSessionAt(1))
+      .then(check(and {
+        nodes.get(2).link == Some(2),
+        sessions.get(1).phase == Disconnected,
+        sessions.get(2).phase != Disconnected,
+        inv_link_points_at_a_live_session,
+      }))
+
+  // Row M106: and a link is dropped only by the session that holds it.
+  run corpseLinkNotDroppableTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(dropLinkAt(1))
+      .then(psyncRequestAs(2, 1, false, 2))
+      .then(dropLinkAt(1))
+      .fail()
+
+  // Row F59: it is the *unclean* shutdown that mints a fresh id, not the
+  // recovery point. A reboot that comes back holding everything it had applied
+  // still comes up on a new history: an unclean stop is what makes the old id
+  // untrustworthy (TR-021), and a full recovery does not make it trustworthy
+  // again. `uncleanRestartMintsFreshIdTest` recovers *below* the applied
+  // offset, so it cannot tell the two conditions apart on its own.
+  run uncleanRestartAtFullRecoveryStillRemintsTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(check(nodes.get(1).applied == 1))
+      .then(restartNodeAs(1, true, 1))
+      .then(check(and {
+        // Nothing was lost — the recovery point is the applied head…
+        nodes.get(1).data.length() == 1,
+        nodes.get(1).applied == 1,
+        // …and the identity is reminted anyway, with the old one frozen at it.
+        nodes.get(1).replid == FIRST_GEN + 1,
+        nodes.get(1).replid2 == Some(FIRST_GEN),
+        nodes.get(1).second_offset == 1,
+        coverage.uncleanRestartReminted,
+        inv_restart_pairs_offset,
+        inv_replid_offset_paired,
       }))
 }
