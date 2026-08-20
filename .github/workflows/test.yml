@@ -81,7 +81,7 @@ jobs:
             - 'specs/**'
             - 'Justfile'
             - '.mise.toml'
-            - 'scripts/quint-invariants.sh'
+            - 'scripts/quint-*.sh'
           testing:
             - 'testing/**'
   actionlint:

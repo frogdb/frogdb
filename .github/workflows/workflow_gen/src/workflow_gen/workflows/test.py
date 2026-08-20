@@ -127,7 +127,7 @@ def test_workflow() -> Workflow:
                               - 'specs/**'
                               - 'Justfile'
                               - '.mise.toml'
-                              - 'scripts/quint-invariants.sh'
+                              - 'scripts/quint-*.sh'
                             testing:
                               - 'testing/**'
                         """),
@@ -228,10 +228,12 @@ def test_workflow() -> Workflow:
     # docstring — `quint run` defaults `--invariant` to `"true"`, i.e. no
     # check, unless told otherwise). The exhaustive/bounded Apalache tier
     # (`quint verify`) is too slow for per-PR and runs nightly instead
-    # (quint_verify.py). Gated on the dedicated `quint` filter (specs/**, plus
-    # Justfile / .mise.toml / scripts/quint-invariants.sh — a change to any of
-    # those can break `just quint-check`/`quint-run` without touching a single
-    # .qnt file, and previously never triggered this job at all).
+    # (quint_verify.py). `quint-run` also carries the witness-floor gate — the
+    # only lane that sees an action unwired from `step` (see specs/quint/README.md).
+    # Gated on the dedicated `quint` filter (specs/**, plus Justfile /
+    # .mise.toml / scripts/quint-*.sh — a change to any of those can break
+    # `just quint-check`/`quint-run` without touching a single .qnt file, and
+    # previously never triggered this job at all).
     quint = w.job(
         "quint",
         Job(
