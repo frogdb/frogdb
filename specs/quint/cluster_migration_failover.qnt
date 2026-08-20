@@ -1574,6 +1574,42 @@ module cluster_migration_failover {
       })
   }
 
+  // R1 (issue 41), the repoint at the **staged-flip adoption** site. `setRole` is not the
+  // only Primary -> Replica writer: the `reportRunIdentity` Demotion arm is the one the
+  // protocol actually uses, and its dependants must follow the same way. Deleting the
+  // `repointDependants` call there leaves nodes 2 and 3 parented at a Replica — the
+  // `1 -> 4` chain the one-hop `shardPrimary` cannot walk, which is exactly issue 41's
+  // second sub-root. The flat walk is blind to it (battery row R1-1b), so this is the
+  // detector.
+  run adoptionRepointsDependantsTest: bool = {
+    init
+      .expect(and { nodes.get(2).parent == Some(1), nodes.get(3).parent == Some(1) })
+      .then(stageFlip(1, 4))
+      .then(reportRunIdentity(1, Demotion, Primary, 0, false))
+      .expect(and {
+        demotedTo(nodes, 1, 4),
+        // The dependants followed rather than chaining off a Replica.
+        nodes.get(2).parent == Some(4),
+        nodes.get(3).parent == Some(4),
+        shardPrimary(nodes, 2) == Some(4),
+        shardPrimary(nodes, 1) == Some(4),
+      })
+  }
+
+  // R1 (issue 41), the repoint at the **replica-attach** site. `attachTargetReplica` turns
+  // a primary into a replica of the migration target, so it owes the same rule; without it
+  // nodes 2 and 3 hang off the freshly demoted node 1. Battery row R1-1c.
+  run attachTargetReplicaRepointsDependantsTest: bool = {
+    init
+      .then(attachTargetReplica(1, 4))
+      .expect(and {
+        demotedTo(nodes, 1, 4),
+        nodes.get(2).parent == Some(4),
+        nodes.get(3).parent == Some(4),
+        shardPrimary(nodes, 2) == Some(4),
+      })
+  }
+
   // R1 (issue 41), the companion of the repoint: the residue follows the demotion when —
   // and only when — the copy has moved out of the source's own closure. The failover hands
   // node 2 the moved slots and their keys, leaving node 1 a replica of node 2 holding the
