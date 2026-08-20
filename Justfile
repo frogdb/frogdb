@@ -416,6 +416,12 @@ quint-check:
 # one `val inv_*`", the same fact `quint-invariants.sh` keys off, so the two
 # cannot drift apart. Cheap enough for the PR lane, unlike `quint verify`
 # below (Apalache/SMT) — that is the nightly tier.
+#
+# Third lane: the **witness floor** (`quint-witness-gate` below). Neither of
+# the two lanes above can see an action unwired from `step` — invariants are
+# safety properties, and removing a transition only shrinks the reachable set;
+# the `run` tests drive actions directly and never consult `step`. The witness
+# counts are the one observable, so they get their own gate.
 quint-run:
     #!/usr/bin/env bash
     set -uo pipefail
@@ -432,7 +438,33 @@ quint-run:
         echo "quint run $model --max-samples=200 --max-steps=20 --invariants $invariants"
         quint run "$model" --max-samples=200 --max-steps=20 --invariants $invariants || status=1
     done <<< "$models"
+    # Run last and fold into `status` rather than sitting in a `just` dependency:
+    # a failing gate must not stop the invariant lanes from reporting, the same
+    # reason the loop above keeps going after a red model.
+    scripts/quint-witness-gate.sh || status=1
     exit $status
+
+# Witness-floor gate: fail when a model declares a `val witness*` that the
+# sampled walk reaches in **0** traces. Runs as part of `quint-run`; also
+# callable on its own (optionally against specific models) while iterating on
+# a model's reachability.
+#
+# This closes the one mutation class both other lanes are blind to *by
+# construction* — an action disconnected from `step` (mutation-battery rows
+# A57/A58, M48/M49, M112-M114 under .scratch/formal-spec/). Removing a
+# transition cannot falsify a safety invariant and cannot fail a `run` test
+# that drives actions directly; what it does do is collapse the witness that
+# behaviour carried to 0 traces.
+#
+# Deterministic by construction: the sampling budget and seeds are pinned in
+# scripts/quint-witness-gate.sh (defaults 2000x40 over seeds 0x1/0x2, the
+# batteries' convention), so CI and a laptop see the same counts for the same
+# tree. Witnesses that sampling legitimately cannot reach are exempted one at
+# a time, with a written reason, in specs/quint/witness-floor-exemptions.txt;
+# the gate rejects an exemption that is dangling or stale, so the list cannot
+# quietly outlive the hole it documents.
+quint-witness-gate *models:
+    scripts/quint-witness-gate.sh {{models}}
 
 # Bounded *exhaustive* model checking (Apalache) of one Quint design model —
 # the nightly tier of formal verification (`quint-run` above is the sampled

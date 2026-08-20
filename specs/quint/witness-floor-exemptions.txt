@@ -1,0 +1,64 @@
+# Witness-floor exemptions — witnesses the sampled PR-lane walk does not reach.
+#
+# Read scripts/quint-witness-gate.sh first: the gate fails when a `val witness*` is
+# observed in 0 traces, because that is the only observable of an action unwired from
+# `step` (admission rows A57/A58, feed-gate M48/M49, fullsync M112-M114 in the mutation
+# batteries under .scratch/formal-spec/). This file is the escape hatch, and it is
+# deliberately per-witness: there is no blanket exemption, no wildcard, and no way to
+# turn the gate off for a model.
+#
+# Format, one exemption per line:
+#
+#     <model path> <witnessName> <reason>
+#
+# All three fields are mandatory. A witness field of `*` is the model-level row: "this
+# main model declares no witnesses at all, on purpose" — the same hole one size larger,
+# so it is written down the same way. The reason is free text and must say *why* the
+# witness is not reachable by sampling and *what checks it instead* — for a
+# reachable-but-deep witness that is the deterministic `run` test carrying it; for a
+# witness that is unreachable by construction it is the revert that would make it fire.
+# A row naming a model or a witness that does not exist fails the gate, and so does a
+# row for a witness the run actually observed: a stale exemption is a hole that has
+# quietly closed, and the line must be deleted rather than left to rot.
+#
+# Before adding a line, rule out the thing the gate exists to catch: if a witness that
+# used to be observed now reports 0, the first hypothesis is that its behaviour was
+# disconnected from `step`, not that the sampler got unlucky.
+
+# --- lib_selftest --------------------------------------------------------------------
+#
+# The one model-level row. lib_selftest is a *test* model, not a design model: it states
+# the laws of the pure helper modules (lib_option, lib_monotone) as invariants over the
+# smallest synthetic machine that has the shape both consumers have, and claims nothing
+# about FrogDB. There is no FrogDB behaviour in it to witness. Its own header records the
+# mutation check for whoever changes a helper, and the oracles that catch each mutation.
+specs/quint/lib_selftest.qnt * test model for the pure helper modules (lib_option, lib_monotone), not a design model — it models no FrogDB behaviour, so it has nothing to witness; helper mutations are caught by its `quint test` suite and the sampled invariants, as recorded in its header
+
+# --- cluster_migration_failover ------------------------------------------------------
+#
+# Unreachable by construction. Both witnesses state a wedged pre-`Confirm` drain that
+# the ext-13 narrowing of the observation reset forbids (`hasObservedProgress` no longer
+# reads `drained_pos`), written down so that the narrowing is checkable rather than a
+# claim in a comment: reverting to the v4 reset arm makes them reachable, which is
+# exactly the signal they exist to give. They are declared unreachable in the model's
+# own witness index and deliberately have no carrier test.
+specs/quint/cluster_migration_failover.qnt witnessDrainingWedgedBeforeConfirm unreachable by construction (ext-13 narrowed observation reset); reverting the v4 "or drained_pos unset" arm reaches it — declared unreachable in the model's witness index
+specs/quint/cluster_migration_failover.qnt witnessDrainingWedgedWithCompletableToken unreachable by construction (ext-13, post-seal mirror of the above); same single revert reaches it — declared unreachable in the model's witness index
+#
+# Reachable, but only down a long specific choice sequence (seal the drain, then hold it
+# across observation ticks without progress, or run a `require_replica_ack` migration all
+# the way to commit). The uniform walk in this model is weak — the campaign's open
+# "walk steering" work item in
+# .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md (W1) is what fixes
+# that, and when it lands these rows go stale and the gate will demand their removal.
+specs/quint/cluster_migration_failover.qnt witnessDrainingHeldForKTicks deep under uniform sampling (sealed drain held K observation ticks with no progress); carrier: drainingHeldForKTicksReachableTest — pending the campaign's W1 walk-steering item
+specs/quint/cluster_migration_failover.qnt witnessHealthyDrainAbortedByBound deep under uniform sampling (pre-Confirm migration taken by the pre-seal bound); carrier: healthyDrainAbortedByBoundReachableTest — pending the campaign's W1 walk-steering item
+specs/quint/cluster_migration_failover.qnt witnessKnobOnMigrationCompletes deep under uniform sampling (require_replica_ack migration driven to commit); carrier: replicaAckKnobCompletesReachableTest — pending the campaign's W1 walk-steering item
+
+# --- replication_feed_gate -----------------------------------------------------------
+#
+# The model documents the arithmetic at the declaration: it needs a barrier armed before
+# the frame was written, the frame buffered, and the link ending before anything releases
+# the barrier — roughly eight specific choices in a row, found about 16 times in 200 000
+# samples and essentially never at a PR-lane budget.
+specs/quint/replication_feed_gate.qnt witnessEndingDrainedPastFloor deep under uniform sampling (~16 hits per 200k samples, documented at the declaration); carrier: closeInsideWindowDrainsThenEndsGracefulTest, which is what keeps inv_no_ship_inside_barrier_window's ending carve-out non-vacuous
