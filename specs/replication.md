@@ -124,6 +124,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | SessionPhase = Connecting (the reply is decided but not yet sent — see TR-REPLICATION-002); the chosen `ResumeSource` is `PartialGrant` iff ReplicationId/SecondaryId+SecondaryOffset admit the requested `(id, offset)` under `window_contains`'s two-bound check, else `FullSnapshot` |
 | Source | `frogdb-replication/src/session_machine.rs:410` (`step`, `Phase::Connecting`/`SessionEvent::Begin` arm) and `:512` (`begin`); `frogdb-replication/src/replica/psync.rs:87` (`select_psync_arm`); `frogdb-replication/src/state.rs:434` (`window_contains`) |
 | Rulings | — |
+| Model | `replication_fullsync.qnt::inv_partial_grant_sound` |
 
 ---
 
@@ -146,6 +147,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | SessionPhase = StreamingCheckpoint; the session owns the checkpoint directory (`Effect::OwnCheckpointDir`) and begins sending it (`Effect::SendCheckpoint{path, replication_id: ReplicationId, offset: OffsetAtSave-equivalent snapshot offset}`) |
 | Source | `frogdb-replication/src/session_machine.rs:450` |
 | Rulings | — |
+| Model | `replication_fullsync.qnt::inv_payload_covers_grant` |
 
 ---
 
@@ -168,6 +170,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | SessionPhase = Streaming; LastStreamingDeparture cleared to None for this generation (`Effect::ClearDeparture`); streaming begins from the offset the payload carried; ResumeOffset for this session is seeded the same way as TR-REPLICATION-002 — to the last offset actually streamed from any backlog tail replayed after the payload's offset, or to the payload's own offset unchanged if that tail was empty — not unconditionally to the payload's offset |
 | Source | `frogdb-replication/src/session_machine.rs:474`; `frogdb-replication/src/replica_session.rs:941` (`start_streaming`), `:1030-1032` (the `seed_replica_position` call) |
 | Rulings | — |
+| Model | `replication_fullsync.qnt::inv_no_acked_write_lost_across_fullsync` |
 
 ---
 
@@ -190,6 +193,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | SessionPhase = Disconnecting (terminal); if the phase this session was on *before* the event was Streaming: LastStreamingDeparture is set (Graceful for `LinkOutcome::Ended(Graceful)`/orderly EOF/primary-initiated teardown/broadcaster closed, Lost for `LinkOutcome::Errored`/read-write errors/lag disconnect/`RecvError::Lagged`) via `Effect::RecordDeparture`, strictly before `Effect::Unregister` removes it from ReplicaRegistry; if the phase before the event was not Streaming, LastStreamingDeparture is left untouched (no record for a session that never streamed) |
 | Source | `frogdb-replication/src/session_machine.rs:492` (`Ended` arm), `:601-610` (effect ordering: `RecordDeparture` before `Unregister`) |
 | Rulings | — (already locked behavior, FM-REPLICATION-062) — this row transcribes the classification the FM row specifies; issue 23 changes what happens to LastStreamingDeparture on a subsequent *demotion*, not on this transition — see TR-REPLICATION-010 |
+| Model | `replication_feed_gate.qnt::inv_departure_matches_its_cause`, `replication_feed_gate.qnt::inv_departure_record_backed_by_an_ended_session` |
 
 ---
 
@@ -259,6 +263,7 @@ the authority) differ from what the cited `Source` does today.
 | Source | `frogdb-replication/src/feed_gate.rs` (`decide_publish`, `decide_feed_hold_until`, `ReplicaFeedGate::publish`) |
 | Rulings | [issue 26](../.scratch/replication-correctness/issues/open/26-the-feed-gate-model-proves-a-transcription-not-the-session.md) — the derivation this row states is correct and already witnessed (the stateright model catches a reintroduced defect here in under a second). What issue 26 found is a gap in what *consumes* this value: `replica_session.rs`'s two consultation points (`feed_gate.released().await` before the backlog tail, and `while feed_gate.is_held()` in the buffering loop) can silently stop being called with no model or layer noticing except FM-CLUSTER-097's own integration test. Ruled fix (Option 2 now): a slot-handoff-barrier fault family in the replication seeded sweep, plus an interim seam lint requiring the streaming path to call both consumption points — neither is landed yet. |
 | Pending | [issue 26](../.scratch/replication-correctness/issues/open/26-the-feed-gate-model-proves-a-transcription-not-the-session.md) |
+| Model | `replication_feed_gate.qnt::inv_no_ship_inside_barrier_window` |
 
 ---
 
@@ -270,6 +275,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | On `Claim::Granted`: ClaimedOffset advances by the frame's byte length; the shard apply runs; LandedOffset is raised to ClaimedOffset (`land()`). On `Claim::Stale` (epoch mismatch or diverged): the frame is dropped, ClaimedOffset/LandedOffset unchanged, the consumer keeps running. On `Claim::Retired` (ApplyGateFrozen or stint mismatch): the frame is dropped and the consumer stops. |
 | Source | `frogdb-replication/src/replica/offset.rs:388` (`claim`), `:420` (`land`) |
 | Rulings | — |
+| Model | `replication_fullsync.qnt::inv_offsets_ordered` |
 
 ---
 
@@ -282,6 +288,7 @@ the authority) differ from what the cited `Source` does today.
 | Source | `frogdb-replication/src/replica/offset.rs:268` (`reset_pair`, private — reached only through the resync install path) |
 | Rulings | [issue 17](../.scratch/replication-correctness/issues/open/17-save-point-above-the-live-head.md) — ruled "save point follows the history": `OffsetAtSave` (the *persisted* save point, a separate field from LandedOffset) must be allowed to follow a `reset_to`/staged-checkpoint install downward together with LiveOffset/ClaimedOffset/LandedOffset, rather than only ever rising. INV-OFFSET-2 becomes Hard-tier and scoped "monotone within a replication history" rather than globally monotone. Per the anti-pattern review (finding H5) and issue 24's amendment (point 3), that scoping needs `(ReplicationId, Epoch)` keying to be checkable, and issue 24 is ruled to land its identity/offset-pairing changes **before** this issue, since both relocate `OffsetAtSave` and neither issue originally cited the other. Neither ordering nor the OffsetAtSave-follows-history behavior is implemented yet. |
 | Pending | [issue 17](../.scratch/replication-correctness/issues/open/17-save-point-above-the-live-head.md), [issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) |
+| Model | `replication_fullsync.qnt::inv_applied_covered_by_data` |
 
 ---
 
@@ -293,6 +300,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | ApplyGateFrozen = true; the returned boundary = ClaimedOffset at the instant of the call (never LiveOffset, which may be ahead of what the applier has actually claimed) |
 | Source | `frogdb-replication/src/offset_coordinator.rs:205` (`settle_at_applied`), `:223` (`settle_at_applied_inner`) |
 | Rulings | — (already locked behavior, FM-REPLICATION-019's Invariant cell) |
+| Model | `replication_fullsync.qnt::inv_second_offset_not_above_live` |
 
 ---
 
@@ -316,6 +324,7 @@ the authority) differ from what the cited `Source` does today.
 | Source | `frogdb-replication/src/tracker.rs:612` (`record_ack`); `frogdb-replication/src/replica_session.rs:539` (`ReplicaSession::record_ack`); `frogdb-replication/src/offset_coordinator.rs:260` (`ingest_replica_ack`, the entry point) |
 | Rulings | [issue 21](../.scratch/replication-correctness/issues/open/21-ack-above-live-head.md) — AMENDED ruling "ignore + count": today neither `ingest_replica_ack` nor `record_ack` checks the wire ack against LiveOffset at all (`record_ack` only checks monotonicity against the session's own prior AckedOffset), so a replica that acks past the primary's own live head is credited in full — inflating WAIT's count, reporting negative INFO lag, and shrinking the divergence window used elsewhere. The ruled postcondition adds a precondition clause: `offset <= LiveOffset` — an ack strictly above LiveOffset is **ignored entirely** (no AckedOffset write, the session's next valid ack still updates normally), counted via a metric, with no disconnect. The originally-ruled alternative (clamp AckedOffset to LiveOffset) was reversed by the anti-pattern review because it makes the primary a writer of AckedOffset, contradicting this same row's Source-level guarantee that only the wire ack writes it. Not implemented yet — the ceiling check itself is absent from both cited functions. |
 | Pending | [issue 21](../.scratch/replication-correctness/issues/open/21-ack-above-live-head.md) |
+| Model | `replication_feed_gate.qnt::inv_ack_never_above_live`, `replication_feed_gate.qnt::inv_ack_ignored_not_clamped`, `replication_fullsync.qnt::inv_ack_never_above_live_head` |
 
 ---
 
@@ -339,6 +348,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | if well-formed: ReplicationId = the trailer's id; SecondaryId/SecondaryOffset are cleared (`clear_secondary_window`, folded into `adopt_replication_history`) — a full resync closes any prior failover window rather than merging with it. If malformed: rejected, prior ReplicationId/SecondaryId/SecondaryOffset untouched. |
 | Source | `frogdb-replication/src/replica/connection.rs:388` (`receive_snapshot`, `.adopt_replication_history(metadata.replication_id.clone())`), `:462` (`receive_checkpoint`, same call); `frogdb-replication/src/state.rs:407` (`adopt_replication_history`), `:413` (`_inner`) |
 | Rulings | same as TR-REPLICATION-019 (issue 18) |
+| Model | `replication_fullsync.qnt::inv_failover_window_whole` |
 
 ---
 
@@ -351,6 +361,7 @@ the authority) differ from what the cited `Source` does today.
 | Source | `frogdb-replication/src/state.rs:235` (`load_or_create`); `frogdb-replication/src/identity.rs:~90-98` (`adopting`, `live.fetch_max(state.offset_at_save)`) |
 | Rulings | [issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) — ruled (a) structural + AMENDED (b) as well as (a), after the anti-pattern review found (a) alone insufficient (R-C1 CRITICAL: an unclean restart *with* a dataset can still resume `(id, offset)` below what replicas already acked and re-issue those offsets under the same id, reachable into a `+CONTINUE` over divergent bytes). Cross-references (not yet folded into `specs/persistence.md` by this task): FM-PERSISTENCE-019 (quiesce window), FM-PERSISTENCE-027/-028/-033/-038/-039/-049. |
 | Pending | [issue 24](../.scratch/replication-correctness/issues/open/24-a-restart-keeps-the-replication-id-it-lost-the-history-for.md) |
+| Model | `replication_fullsync.qnt::inv_replid_offset_paired`, `replication_fullsync.qnt::inv_restart_pairs_offset`, `replication_fullsync.qnt::inv_identity_pair_monotone` |
 
 ---
 
@@ -363,6 +374,7 @@ the authority) differ from what the cited `Source` does today.
 | Source | `frogdb-replication/src/tracker.rs:173` (`register_replica`), `:183` (`register_announced_replica`) |
 | Rulings | [issue 22](../.scratch/replication-correctness/issues/open/22-duplicate-streaming-identity.md) — AMENDED ruling. Original ruling ("kick predecessor", classified as Graceful) was corrected by the anti-pattern review (finding H2): a Graceful record for the kicked predecessor can land *after* the successor's own `ClearDeparture`, silently un-fencing the primary — exactly the shape FM-REPLICATION-062's NOT-observable clause forbids. The corrected ruling adds the `Superseded` outcome (no departure record at all) and changes the dedup key from (peer IP, announced port) to node/replica id + cooldown (finding A1: an IP:port key would kick-loop forever on a shared/NAT'd address). Not implemented — today's registration path has no dedup of any kind. |
 | Pending | [issue 22](../.scratch/replication-correctness/issues/open/22-duplicate-streaming-identity.md) |
+| Model | `replication_feed_gate.qnt::inv_superseded_writes_no_departure`, `replication_feed_gate.qnt::inv_departure_record_is_never_superseded`, `replication_feed_gate.qnt::inv_unannounced_is_never_superseded`, `replication_feed_gate.qnt::inv_duplicate_identity_is_always_kickable`, `replication_fullsync.qnt::inv_one_session_per_announced_identity`, `replication_fullsync.qnt::inv_superseded_records_no_departure` |
 
 ---
 
@@ -488,6 +500,7 @@ the authority) differ from what the cited `Source` does today.
 | Postcondition | the value sent as `REPLCONF ACK <offset>` is LandedOffset (`applied.landed()`) at the moment of sending, in both arms — never ClaimedOffset and never LiveOffset. A solicited ack additionally waits until LandedOffset reaches the solicited target before sending (`wait_until_applied`) rather than sending immediately at whatever LandedOffset already holds. This is the wire counterpart of AckedOffset's own row: the acked value is always a durability claim about applied data, never about bytes merely received or claimed. |
 | Source | `frogdb-replication/src/replica/streaming.rs:139-142` (spontaneous tick, `applied.landed()`), `:135` (solicited send), `:36` (`solicited_ack`/`wait_until_applied`), `:247` (`send_ack`) |
 | Rulings | — |
+| Model | `replication_feed_gate.qnt::inv_ack_never_above_the_wire` |
 
 ---
 
@@ -604,6 +617,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Outcome variant | n/a (wire-level invariant; surfaces as a missing write on the replica) |
 | Forced by | `full_sync_replays_writes_made_during_handoff`, `the_granted_offset_is_the_one_the_payload_and_the_replay_both_use` |
 | Bug refs | `.scratch/replication-cluster-rework/issues` (the WAL-drain half — a full-resync checkpoint cut before the shard WALs were drained lost acknowledged writes) |
+| Model | `replication_fullsync.qnt::inv_applied_covered_by_data`, `replication_fullsync.qnt::inv_payload_covers_grant` |
 
 ## FM-REPLICATION-005 — the receive→stream handoff loses no byte of the live tail
 
@@ -616,6 +630,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Outcome variant | n/a (wire-level invariant; surfaces as a stalled replica offset and an unsatisfiable `WAIT`) |
 | Forced by | `receive_checkpoint_streams_the_frames_that_trailed_the_payload`, `receive_snapshot_streams_the_frames_that_trailed_the_payload`, `a_payload_with_no_trailing_frames_leaves_the_stream_empty`, `dropping_the_reader_hands_back_what_it_read_past_the_payload`, `a_fully_consumed_reader_leaves_no_residual` |
 | Bug refs | `.scratch/hardening/issues` (issue 01 — surfaced as a load-dependent `test_broadcast_lag_disconnect_and_resync` flake; the seed write was acked by neither replica because the ACK never arrived) |
+| Model | `replication_fullsync.qnt::inv_splice_continuity` |
 
 [`PayloadReader`]: ../frogdb-server/crates/replication/src/replica/payload_reader.rs
 
@@ -659,6 +674,7 @@ Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 | Outcome variant | n/a (wire-level invariant; surfaces as `WAIT` returning a count that overstates durability) |
 | Forced by | `an_ack_reports_the_landed_head_not_the_claimed_one`, `a_claim_alone_does_not_move_the_offset_the_replica_acks`, `a_group_in_flight_to_its_shard_is_claimed_but_not_yet_ackable`, `a_frame_that_touches_no_shard_lands_as_it_is_claimed`, `a_full_resync_levels_the_landed_head_with_the_adopted_offset`, `test_spop_replication_convergence_random_workload` |
 | Bug refs | `.scratch/testing-improvements-round2/issues` (issue 76) |
+| Model | `replication_fullsync.qnt::inv_offsets_ordered` |
 
 **Latency.** Moving the ACK behind the apply does not add a round trip, but it does mean a `WAIT`
 is answered on the *applier's* schedule rather than the decoder's: the solicited answer is parked as
@@ -782,6 +798,7 @@ is equivalent to "no entry covering the replayed range was dropped".
 | Outcome variant | `ReplayDecision::{Continue, FullResync}`; `FullResyncReason::{Disabled, InitialSync, ReplidMismatch, OffsetAhead, BacklogEvicted}` |
 | Forced by | `initial_sync_sentinel_falls_back_to_full`, `unknown_replid_falls_back_to_full`, `offset_ahead_falls_back_to_full`, `disabled_backlog_always_full_resyncs`, `window_fit_continues_with_ordered_tail`, `partial_falls_back_to_full_when_backlog_disabled`, `fullresync_offset_and_metadata_come_from_live_tracker`, `test_partial_sync_falls_back_to_full`, `test_partial_resync_unknown_replid_falls_back_to_full`, `test_psync_initial_request`, `test_psync_invalid_args`, `a_continue_carries_an_optional_id`, `a_refusal_is_passed_through_verbatim`, `anything_that_is_not_a_psync_answer_is_rejected`, `promotion_model_full_two_primary` |
 | Bug refs | `.scratch/testing-improvements/issues/34` (the loose `FULLRESYNC-or-OK` assertions that would have masked a bogus grant — fixed; this row is the tightened contract) |
+| Model | `replication_fullsync.qnt::inv_partial_grant_sound`, `replication_fullsync.qnt::inv_replids_distinct` |
 
 Deliberate non-guarantees, so a future reader does not mistake them for gaps:
 
@@ -836,6 +853,7 @@ Deliberate non-guarantees:
 | Outcome variant | `ReplayDecision::Continue(ReplayGrant { replay_from, frames, resume_offset })` |
 | Forced by | `handle_partial_replays_backlog_then_live_tail`, `partial_window_with_backlog_grants_continue`, `window_fit_continues_with_ordered_tail`, `boundary_req_equals_current_grants_empty_tail`, `test_ring_buffer_extract_backlog_is_contiguous_and_bounded`, `test_ring_buffer_extract_is_nondestructive`, `test_partial_resync_after_brief_disconnect_grants_continue`, `test_partial_sync_continue_response`, `a_partial_grant_replies_then_streams_from_the_offset_the_replica_named`, `the_handshake_replies_render_the_lines_the_replica_parses_back` |
 | Bug refs | `.scratch/testing-improvements/issues/34` (`test_partial_sync_continue_response` previously accepted `CONTINUE`, `FULLRESYNC` *or* `OK`) |
+| Model | `replication_feed_gate.qnt::inv_wire_is_a_prefix_of_accepted`, `replication_feed_gate.qnt::inv_offsets_strictly_increase`, `replication_feed_gate.qnt::inv_buffer_ahead_of_the_wire`, `replication_feed_gate.qnt::inv_no_resend_below_resume`, `replication_fullsync.qnt::inv_splice_continuity` |
 
 Deliberate non-guarantees:
 
@@ -857,6 +875,7 @@ Deliberate non-guarantees:
 | Outcome variant | n/a (wire-level; surfaces through `FullResyncReason::BacklogEvicted`) |
 | Forced by | `test_ring_buffer_entry_limit_eviction`, `test_ring_buffer_byte_limit_eviction`, `test_ring_buffer_oldest_offset_tracks_eviction`, `test_ring_buffer_push_and_extract`, `test_ring_buffer_empty`, `evicted_offset_falls_back_to_full_not_truncated` |
 | Bug refs | `.scratch/hardening/issues/done/14-the-replication-backlog-is-wired-to-split-brain-config.md` (fixed — the backlog now has its own config keys, both caps are validated, and the eviction loop's empty-deque guard covers both axes; see FM-REPLICATION-047) |
+| Model | `replication_fullsync.qnt::inv_backlog_floor_sound` |
 
 Deliberate non-guarantees:
 
@@ -921,6 +940,7 @@ Deliberate non-guarantees:
 | Outcome variant | `+CONTINUE` at or below the boundary under the inherited id; `+FULLRESYNC` above it |
 | Forced by | `test_secondary_replication_id_failover`, `test_promoted_node_via_replicaof_no_one_serves_downstream_psync`, `test_psync2_failover_partial_sync`, `test_failover_chain_survivor_reattaches_to_promoted_node`, `promotion_freezes_the_window_at_the_applied_offset_not_the_received_head`, `a_re_promotion_at_a_lower_offset_re_arms_the_floor_from_scratch`, `shift_replication_id_freezes_window_inclusively`, `test_window_contains`, `can_serve_partial_sync_honours_secondary_failover_window`, `secondary_id_within_window_continues`, `a_stint_heads_the_minted_id_and_freezes_the_inherited_one_at_the_boundary`, `the_save_offset_rises_to_the_boundary`, `the_save_offset_never_follows_a_boundary_backwards`, `a_boundary_equal_to_the_save_offset_changes_nothing_about_it`, `a_stint_at_the_zero_boundary_still_mints_and_arms`, `a_second_stint_shifts_the_first_stints_id_into_the_window`, `the_decision_is_a_function_of_its_inputs_alone`, `promotion_model_smoke`, `promotion_model_full_deep` |
 | Bug refs | `.scratch/replication-cluster-rework/promotion-replid-psync.md` §6.1, §12 finding 1 (CRITICAL: window frozen at the received head, not the applied head), §12 finding 2 (MAJOR: backlog floor survived a role change) |
+| Model | `replication_fullsync.qnt::inv_failover_window_whole`, `replication_fullsync.qnt::inv_replids_distinct`, `replication_fullsync.qnt::inv_second_offset_not_above_live` |
 
 ---
 
@@ -936,6 +956,7 @@ Deliberate non-guarantees:
 | Outcome variant | Error to the caller; role and identity unchanged |
 | Forced by | `a_promotion_that_cannot_persist_leaves_the_identity_untouched`, `a_promotion_that_cannot_mint_leaves_the_node_a_replica`, `promote_mints_identity_before_clearing_the_replica_flag`, `promote_stops_the_inbound_stream_before_minting`, `promote_is_idempotent_and_does_not_remint`, `promoting_a_node_that_booted_primary_mints_nothing`, `discard_staged_full_sync_keeps_the_metadata_when_disarming_fails`, `the_rollback_is_the_state_the_node_was_already_on`, `a_failed_promotion_strands_the_node`, `a_failed_promotion_leaves_the_node_unable_to_replicate` |
 | Bug refs | `.scratch/replication-cluster-rework/promotion-replid-psync.md` §12 finding 5 (MEDIUM: a promotion that could not persist flipped the role flag anyway), §13 finding 3 (MEDIUM: mint/persist/rollback made atomic under one lock) |
+| Model | `replication_fullsync.qnt::inv_replid_offset_paired` |
 
 **Deliberate non-guarantee — "adopts nothing" is about the identity, not the link.** The rollback
 this row owns is `StintPlan`'s: the `ReplicationState`, restored bit for bit. It is *not* a
@@ -1283,6 +1304,7 @@ scratch dir to be trusted across a reconnect — exactly the state this row exis
 | Outcome variant | `WaitVerdict::{Reached, TimedOut}`; `Response::Integer`; `ERR WAIT cannot be used with replica instances` |
 | Forced by | `quorum_already_met_returns_without_soliciting`, `numreplicas_zero_returns_actual_acked_count`, `timeout_returns_count_acked_at_target`, `no_deadline_blocks_until_quorum`, `target_offset_reads_the_offset_coordinator`, `a_replica_credited_only_by_a_resume_seed_does_not_satisfy_the_quorum`, `test_wait_during_replica_resync`, `test_wait_no_replicas`, `test_wait_zero_numreplicas`, `test_wait_zero_timeout_blocks_without_quorum`, `test_wait_zero_timeout_blocks_until_ack`, `test_wait_invalid_args`, `test_wait_on_replica_is_an_error`, `test_client_unblock_releases_wait`, `test_wait_numreplicas_exceeds_actual_blocks_to_timeout`, `test_wait_never_redirects_in_cluster`, `test_cluster_wait_degrades_under_partition`, `test_wait_blocks_until_ack` |
 | Bug refs | `.scratch/replication-cluster-rework/wait-cluster-mode.md` (the contract table Q1-Q9 and risks R1-R9 this row is the outcome of); `.scratch/testing-improvements/issues/37` (its origin — the INFO/WAIT probe that found cluster WAIT unspecified) |
+| Model | `replication_feed_gate.qnt::inv_ack_never_above_live` |
 
 **Deliberate divergence: the target offset.** Redis snapshots `c->woff`, the offset right after
 *this connection's* last write, so one client's `WAIT` is never delayed by another client's later
@@ -1320,6 +1342,7 @@ not acked. The cost is latency under a mixed write load, not correctness.
 | Outcome variant | n/a (surfaces as `WAIT`'s integer and as `INFO replication`'s `connected_slaves`) |
 | Forced by | `acks_below_the_target_do_not_count`, `a_replica_that_attaches_mid_wait_can_satisfy_the_quorum`, `a_replica_that_detaches_mid_wait_stops_counting`, `record_ack_is_monotonic_and_refreshes_liveness`, `test_get_streaming_replicas`, `test_record_ack`, `test_wait_for_acks_immediate`, `test_wait_for_acks_with_timeout`, `a_resume_seed_never_moves_the_wire_acked_offset`, `seed_resume_position_advances_only_strictly_forward`, `wait_does_not_count_a_seeded_position_that_was_never_acked`, `a_resume_seed_does_not_wake_a_blocked_wait`, `min_acked_offset_ignores_a_resume_seed`, `seed_replica_position_does_not_satisfy_wait`, `test_min_acked_offset`, `test_wait_with_disconnected_replica`, `test_wait_returns_correct_count_with_partial_ack`, `test_wait_multiple_replicas`, `test_wait_never_exceeds_connected_slaves`, `test_wait_in_cluster_counts_shard_replicas`, `test_wait_does_not_count_other_shards_replicas`, `test_wait_ignores_slot_migration_target` |
 | Bug refs | `.scratch/replication-cluster-rework/wait-cluster-mode.md` §4.0 Q3/Q5 (per-node, per-shard counting; no server-side fan-out); `.scratch/testing-improvements-round2/issues/76` (what an ACK means, the other half of this count — FM-REPLICATION-008) |
+| Model | `replication_feed_gate.qnt::inv_duplicate_identity_is_always_kickable`, `replication_fullsync.qnt::inv_one_session_per_announced_identity` |
 
 ---
 
@@ -1529,6 +1552,7 @@ worse failure than a lost audit. The counter is the signal that the trade was ma
 | Outcome variant | n/a (RESP `+OK` on the announcement; `INFO replication` fields `slaveN:ip/port/state/offset/lag`; `ROLE`'s replica triplet). Rejections reuse `CommandError::WrongArity { command: "replconf listening-port" \| "replconf frogdb-version" }` and `CommandError::InvalidArgument`. `ReplicaInfo::replica_version: Option<String>` is internal — no surface *renders* it, but it is no longer inert: FM-REPLICATION-064 reads the announcement at the `PSYNC` and can turn it into a refusal on the wire. |
 | Forced by | `an_announced_session_reports_the_port_and_capabilities_it_was_told`, `an_unknown_capability_is_recorded_as_absent_not_rejected`, `a_repeated_option_overwrites_only_its_own_kind`, `a_replica_that_announced_its_version_is_recorded_with_it`, `a_replica_that_announced_no_version_is_recorded_as_unknown`, `re_announcing_the_version_does_not_clear_the_port_or_capabilities`, `an_unreadable_frogdb_version_is_refused`, `lag_secs_is_the_age_of_the_last_ack`, `a_psync_carries_the_announcement_into_the_registry`, `a_slave_line_is_projected_from_the_replica_not_from_literals`, `a_slave_line_reports_the_real_ack_age`, `role_reports_the_announced_port`, `parse_capa_matches_case_insensitively`, `the_handshake_announces_the_port_it_was_given`, `runtime_stream_announces_the_streamers_listening_port`, `test_info_replication_shows_all_replicas` |
 | Bug refs | `.scratch/hardening/issues/done/16-replconf-listening-port-and-capa-are-parsed-then-discarded.md`, `.scratch/hardening/issues/done/22-replconf-frogdb-version-is-parsed-then-discarded.md`, `.scratch/hardening/issues/done/25-a-replica-announces-its-configured-port-not-its-bound-one.md`; closes GAP-2 and GAP-3 |
+| Model | `replication_feed_gate.qnt::inv_unannounced_is_never_superseded` |
 
 **The issue's suggested remedy was not available.** Issue 16 proposed "adding setters called from the
 connection-coupled path where `PSYNC` already reaches the session". There is no session to set: the
@@ -1899,6 +1923,7 @@ the issue's acceptance test cannot pass without it.
 | Outcome variant | `INFO replication` fields `connected_slaves`, `slaveN:...,state=...` |
 | Forced by | `a_replica_being_fed_a_checkpoint_is_rendered_as_send_bulk`, `connected_slaves_counts_every_rendered_line`, `a_disconnecting_replica_is_not_rendered`, `rendered_replicas_are_ordered_by_attach` |
 | Bug refs | `.scratch/hardening/issues/done/21-info-renders-only-streaming-replicas.md` |
+| Model | `replication_fullsync.qnt::inv_link_points_at_a_live_session` |
 
 **This is a wire-visible change, taken on the accuracy rule.** `connected_slaves` grows to include
 syncing replicas, and `state` values other than `online` now reach clients. A client that treats
@@ -1955,6 +1980,7 @@ the task is gone because the refusal is latched in the handler, not in the loop.
 | Outcome variant | n/a (internal; the only wire-visible consequence is FM-REPLICATION-041's `SELFFENCE` refusal appearing or not appearing) |
 | Forced by | `an_orderly_eof_is_a_graceful_departure`, `a_read_error_is_a_lost_departure`, `a_lag_disconnect_is_a_lost_departure`, `a_primary_initiated_disconnect_is_graceful`, `a_session_that_never_streamed_records_no_departure`, `a_new_streaming_generation_clears_the_previous_departure`, `only_a_session_that_reached_streaming_reports_a_departure`, `the_departure_is_recorded_before_the_session_leaves_the_registry`, `an_error_out_of_any_phase_is_a_lost_departure`, `the_last_streaming_departure_wins`, `a_graceful_departure_disarms_the_fence`, `a_lost_departure_keeps_the_fence_armed`, `an_unrecorded_departure_keeps_the_fence_armed`, `a_registered_but_silent_replica_still_fences`, `a_disarmed_fence_re_arms_on_the_next_streaming_replica`, `test_self_fence_disarms_after_a_clean_replica_departure` |
 | Bug refs | `.scratch/hardening/issues/done/30-self-fence-flake-and-misleading-clusterdown.md` |
+| Model | `replication_feed_gate.qnt::inv_departure_matches_its_cause`, `replication_feed_gate.qnt::inv_graceful_end_flushed_everything`, `replication_feed_gate.qnt::inv_superseded_writes_no_departure`, `replication_feed_gate.qnt::inv_departure_record_backed_by_an_ended_session` |
 
 **What this seam deliberately does not claim.** A replica that is killed outright still closes its
 socket the way an orderly one does — the kernel sends the same FIN — so "graceful" here means

@@ -31,6 +31,36 @@ not built yet (disk-full injection, a torn-file harness). Those may write
 file must exist. That form warns instead of failing, so the gap stays visible
 in every lint run without blocking the spec on machinery that does not exist.
 
+A fourth direction, spec <-> Quint model, in the same shape as the forcing-test
+discipline. A row may carry an optional `Model` cell naming the Quint
+declaration(s) that encode it, backticked and comma-separated:
+
+    | Model | `cluster_admission.qnt::inv_no_usurper`, `…::inv_meet_no_absorption` |
+
+  spec -> model  every entry resolves to a real `val inv_*` / `temporal <name>`
+                 declaration in the named file under `specs/quint/`.
+  model -> spec  every such declaration is named by at least one row's `Model`
+                 cell, or is registered in `MODEL_EXEMPTIONS` below with the
+                 reason it states no spec-level claim. A property no row claims
+                 is either dead or its row forgot the cell; both are findings.
+
+Rows without a `Model` cell are exempt — a model covers a deliberate subset of
+rows and coverage ratchets up per area — so the ratchet runs in the model ->
+spec direction only.
+
+**The naming convention is load-bearing.** Only `val inv_*` and `temporal <name>`
+declarations are checked; a model's helper/ghost `val`s and `pure def`s are
+invisible to this lint by construction. Renaming a checkable property out of the
+`inv_` prefix therefore removes it from the ratchet — which is the same rule
+`scripts/quint-models.sh` already keys the runnable-model discovery off, so the
+two cannot disagree. Declarations are found by regex on the file text, so no
+quint binary is needed at commit time; a commented-out declaration does not
+match.
+
+**Linkage is not fidelity.** This proves the named property exists, not that it
+encodes the row's semantics. Mutation review (the model lifecycle's steps 4-5)
+owns that; this only stops a row and its model drifting apart silently.
+
 Usage:
     spec-lint.py                          # runs `cargo nextest list`
     spec-lint.py --nextest-output list.txt  # reuse a listing (CI)
@@ -62,6 +92,124 @@ SOURCE_ROOTS = [REPO / "frogdb-server/crates"]
 INVARIANT_CATALOGS = {
     "CLUSTER": REPO / "frogdb-server/crates/cluster/src/invariants.rs",
     "REPLICATION": REPO / "frogdb-server/crates/replication/src/invariants.rs",
+}
+
+# Quint properties no spec row claims, and why. The model -> spec direction (see the
+# docstring) errors on every `val inv_*` / `temporal <name>` that no row's `Model` cell
+# names; this registry is the documented escape — one class per *reason*, rather than one
+# line per property, so what is being excused is reviewable at a glance and a class that
+# empties out disappears with its last member.
+#
+# The registry cannot rot into a blanket skip: an entry naming a declaration no model
+# declares is an error (stale), and so is an entry for a declaration a row *does* claim
+# (redundant). A property leaves this list by gaining a row, not by being renamed.
+MODEL_EXEMPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "lib-law": (
+        "`lib_selftest.qnt` is a test model, not a design model: it states the algebraic "
+        "laws of the shared `lib_*` modules (`max2`'s high-water law, `lexGt`'s strict "
+        "domination, `latch`'s accumulator law) and claims nothing about FrogDB. It "
+        "declares them as `val inv_*` only because that is what makes "
+        "`scripts/quint-models.sh` run the file at all.",
+        (
+            "lib_selftest.qnt::inv_watermark_dominates_admitted",
+            "lib_selftest.qnt::inv_stored_dominates_admitted",
+            "lib_selftest.qnt::inv_refusal_evidence_latches",
+        ),
+    ),
+    "model-hygiene": (
+        "Model-internal well-formedness: the property makes the model's own encoding "
+        "falsifiable (a mint that collides, a state shape a mutation could quietly "
+        "wreck) rather than stating a claim about FrogDB. Nothing in a spec row is "
+        "weaker for its absence, and a row that claimed it would be claiming the model, "
+        "not the system.",
+        (
+            "cluster_admission.qnt::inv_effective_ids_distinct",
+            "cluster_admission.qnt::inv_member_carries_raft_state",
+            # Ghost-bookkeeping tripwires in the migration model: the append-only
+            # shape of the `stream` history ghost and the monotonicity of the
+            # registration-generation mint. Both exist so a mutation cannot
+            # quietly wreck the model's own accounting.
+            "cluster_migration_failover.qnt::inv_stream_history_sound",
+            "cluster_migration_failover.qnt::inv_registration_gen_monotone",
+            "replication_feed_gate.qnt::inv_offsets_within_live",
+            "replication_feed_gate.qnt::inv_stage_shape",
+            # The full-sync model's "structural invariants (mutation-battery gap
+            # closure)" block: each one is the tripwire behind a battery row's
+            # equivalent-mutant argument (a role shape, a phase/link shape, a
+            # ghost that would otherwise be dead), named at its definition site
+            # by the battery row it answers.
+            "replication_fullsync.qnt::inv_primary_role_is_terminal",
+            "replication_fullsync.qnt::inv_primary_applied_is_head",
+            "replication_fullsync.qnt::inv_primary_holds_no_link",
+            "replication_fullsync.qnt::inv_replica_holds_no_window",
+            "replication_fullsync.qnt::inv_only_primaries_arm_a_floor",
+            "replication_fullsync.qnt::inv_registered_session_replica_is_replica",
+            "replication_fullsync.qnt::inv_prestream_session_is_linked",
+            "replication_fullsync.qnt::inv_prestream_link_has_nothing_pending",
+            "replication_fullsync.qnt::inv_linked_replica_recv_within_primary_data",
+            "replication_fullsync.qnt::inv_replica_not_ahead_of_matching_primary",
+            "replication_fullsync.qnt::inv_installed_payload_was_cut",
+        ),
+    ),
+    "admission-pending": (
+        "Encodes node-identity semantics ruled in cluster-correctness issue 35 "
+        "(`35-node-identity-outlives-the-process.md`), whose anchor in specs/cluster.md "
+        "is a *state-space* row (`This node's own id`) — named, not numbered "
+        "(specs/cluster.md cites those rows by name on purpose) — so there is no id for "
+        "a `Model` cell to live on until the ruling gets a TR row.",
+        ("cluster_admission.qnt::inv_configured_id_stable",),
+    ),
+    "fairness-hypothesis": (
+        "Not a property: a fairness assumption the temporal properties are checked "
+        "*under* (`temporal_no_stuck_handoff` et al. are vacuous without them). They are "
+        "declared `temporal` because that is the only Quint form for a temporal formula, "
+        "so the naming convention sweeps them up; a spec row claiming one would be "
+        "claiming an assumption, not a guarantee.",
+        (
+            "cluster_migration_failover_temporal.qnt::reconcileFair",
+            "cluster_migration_failover_temporal.qnt::boundExitFair",
+            "cluster_migration_failover_temporal.qnt::handoffFairness",
+        ),
+    ),
+    "issue-31-pending": (
+        "States the *redesigned* migration semantics — source-authoritative-until-commit, "
+        "attested promotion, residue disposition, staged flip "
+        "(.scratch/cluster-correctness/issues/open/"
+        "31-slot-migration-redesign-source-authoritative-until-commit.md). The ~40 LOCKED "
+        "rows those rulings rewrite are explicitly out of scope for the quint-completeness "
+        "campaign (.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md, 'Out of "
+        "scope'), so today's rows state the *superseded* contract and claiming one would "
+        "misattribute the property. Each leaves this class by gaining the amended row it "
+        "encodes, not by being renamed.",
+        (
+            "cluster_migration_failover.qnt::inv_complete_requires_fenced_source",
+            "cluster_migration_failover.qnt::inv_target_replicas_hold_committed_slot",
+            "cluster_migration_failover.qnt::inv_slots_only_assigned_to_primaries",
+            "cluster_migration_failover.qnt::inv_progressing_migration_never_aborts",
+            "cluster_migration_failover.qnt::inv_draining_bound_counts_post_seal_observations",
+            "cluster_migration_failover.qnt::inv_held_set_empty_while_latched",
+            "cluster_migration_failover.qnt::inv_no_execution_after_demotion",
+            "cluster_migration_failover.qnt::inv_no_acked_write_lost",
+            "cluster_migration_failover.qnt::inv_no_serve_before_attestation",
+            "cluster_migration_failover.qnt::inv_source_keeps_its_copy_until_promotion_attested",
+            "cluster_migration_failover.qnt::inv_slot_copy_survives_until_owned_and_served",
+            "cluster_migration_failover.qnt::inv_residue_has_an_effective_remover",
+            "cluster_migration_failover.qnt::inv_begin_refuses_slot_with_residue",
+            "cluster_migration_failover.qnt::inv_node_keeps_slots_it_owns",
+            "cluster_migration_failover.qnt::inv_owner_serves_promoted_slot",
+            "cluster_migration_failover.qnt::inv_member_keyspace_is_tracked",
+            "cluster_migration_failover.qnt::inv_no_orphan_shadow_blocks_ingest",
+            "cluster_migration_failover.qnt::inv_open_migration_keeps_its_shadow",
+            "cluster_migration_failover.qnt::inv_run_identity_never_regresses",
+            "cluster_migration_failover.qnt::inv_no_spurious_cancel",
+            "cluster_migration_failover.qnt::inv_promotion_is_not_reverted_without_a_failover",
+            "cluster_migration_failover.qnt::inv_every_terminal_refusal_has_a_disposition",
+            "cluster_migration_failover.qnt::inv_no_live_record_disposed_by_a_foreign_refusal",
+            "cluster_migration_failover.qnt::inv_role_written_only_by_declared_writers",
+            "cluster_migration_failover.qnt::inv_no_hold_during_staged_flip",
+            "cluster_migration_failover.qnt::inv_no_cross_shard_successor",
+        ),
+    ),
 }
 
 # Crates whose tests a failure-mode row may name. `cargo nextest list` over
@@ -133,6 +281,15 @@ INV_REF_RE = re.compile(r"\bINV-[A-Z0-9]+(?:-[A-Z0-9]+)*")
 # `pub static CATALOG: &[Invariant] = &[` … `];`
 CATALOG_START_RE = re.compile(r"^pub static CATALOG\b")
 CATALOG_ID_RE = re.compile(r'^\s*id:\s*"(INV-[A-Z0-9-]+)"\s*,')
+
+# A model's checkable properties, by house-style declaration: `val inv_slot_owner_valid:
+# bool = …` and `temporal temporal_hold_eventually_releases: bool = …`. Anchored at the
+# start of the (indented) line, so a commented-out or quoted declaration does not match,
+# and deliberately blind to helper `val`s and `pure def`s — see the naming-convention
+# paragraph in this module's docstring.
+QUINT_DECL_RE = re.compile(r"^\s*(?:val\s+(inv_[A-Za-z0-9_]+)|temporal\s+([A-Za-z0-9_]+))\b")
+# One entry of a row's `Model` cell: `cluster_admission.qnt::inv_no_usurper`.
+MODEL_LINK_RE = re.compile(r"^([A-Za-z0-9_]+\.qnt)::([A-Za-z0-9_]+)$")
 
 # Every FM row carries the full schema; a missing field is a half-specified
 # failure mode.
@@ -560,6 +717,142 @@ def check_quint_citations(
     return models, citations
 
 
+@dataclass(frozen=True)
+class QuintDecl:
+    """One checkable property a Quint model declares."""
+
+    model: str  # the file's name, e.g. `cluster_admission.qnt`
+    name: str  # `inv_no_usurper` / `temporal_hold_eventually_releases`
+    path: Path
+    line: int
+
+    @property
+    def link(self) -> str:
+        """How a spec row's `Model` cell names it."""
+        return f"{self.model}::{self.name}"
+
+    def where(self) -> str:
+        return f"{rel(self.path)}:{self.line}"
+
+
+def collect_quint_declarations(quint_dir: Path) -> dict[str, QuintDecl]:
+    """Every `val inv_*` / `temporal <name>` under `quint_dir`, keyed by its link.
+
+    Text-scanned, not parsed: the point is that `just lint-spec` needs no quint
+    binary at commit time. Every `.qnt` file is scanned, not only the runnable
+    main models, because an invariant declared in a satellite module *makes* it
+    a main model (`scripts/quint-models.sh`) — the two must not disagree about
+    where a checkable property may live.
+    """
+    decls: dict[str, QuintDecl] = {}
+    for path in sorted(quint_dir.glob("*.qnt")):
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            match = QUINT_DECL_RE.match(line)
+            if not match:
+                continue
+            name = match.group(1) or match.group(2)
+            decl = QuintDecl(model=path.name, name=name, path=path, line=lineno)
+            decls[decl.link] = decl
+    return decls
+
+
+def check_model_links(
+    modes: list[FailureMode],
+    rows: list[SpecRow],
+    decls: dict[str, QuintDecl],
+    exemptions: dict[str, tuple[str, tuple[str, ...]]],
+    errors: list[str],
+) -> tuple[int, int, int]:
+    """Both directions of the spec <-> Quint model agreement.
+
+    spec -> model  every `Model` cell entry is a `<file>.qnt::<declaration>`
+                   link that resolves.
+    model -> spec  every declaration is claimed by some row, or excused by
+                   `MODEL_EXEMPTIONS` — whose entries are themselves checked for
+                   staleness and redundancy.
+
+    Returns (links, claimed declarations, exempt declarations).
+    """
+    claimed: dict[str, list[FailureMode | SpecRow]] = {}
+    links = 0
+
+    for row in [*modes, *rows]:
+        if "Model" not in row.fields:
+            # Rows without the cell are exempt: a model covers a deliberate
+            # subset of rows, and coverage ratchets up per area over time.
+            continue
+        cell = row.fields["Model"]
+        entries = [entry.strip() for entry in BACKTICKED_RE.findall(cell)]
+        entries = [entry for entry in entries if entry]
+        if not entries:
+            errors.append(
+                f"{row.where()}: {row.id} has an unparseable `Model` cell ({cell!r}) — "
+                "name each property in backticks as `<file>.qnt::<declaration>`, or drop "
+                "the cell (a row with no `Model` cell claims no model)"
+            )
+            continue
+        for entry in entries:
+            links += 1
+            link = MODEL_LINK_RE.match(entry)
+            if not link:
+                errors.append(
+                    f"{row.where()}: {row.id} names `{entry}`, which is not a "
+                    "`<file>.qnt::<declaration>` link"
+                )
+                continue
+            model, name = link.groups()
+            if entry in decls:
+                claimed.setdefault(entry, []).append(row)
+                continue
+            if not any(decl.model == model for decl in decls.values()):
+                errors.append(
+                    f"{row.where()}: {row.id} names `{entry}`, but no model file "
+                    f"`{model}` exists under specs/quint"
+                )
+            else:
+                errors.append(
+                    f"{row.where()}: {row.id} names `{entry}`, which `{model}` does not "
+                    "declare (a model states its checkable properties as `val inv_*` or "
+                    "`temporal <name>`)"
+                )
+
+    excused: dict[str, str] = {}
+    for reason_class, (reason, members) in sorted(exemptions.items()):
+        for member in members:
+            if member in excused:
+                errors.append(
+                    f"scripts/spec-lint.py: `{member}` is registered in MODEL_EXEMPTIONS "
+                    f"twice ({excused[member]} and {reason_class}) — one property, one reason"
+                )
+                continue
+            excused[member] = reason_class
+            if member not in decls:
+                errors.append(
+                    f"scripts/spec-lint.py: MODEL_EXEMPTIONS[{reason_class!r}] excuses "
+                    f"`{member}`, which no model declares — the property was renamed or "
+                    f"deleted, so drop the entry ({reason})"
+                )
+            elif member in claimed:
+                owner = claimed[member][0]
+                errors.append(
+                    f"scripts/spec-lint.py: MODEL_EXEMPTIONS[{reason_class!r}] excuses "
+                    f"`{member}`, but {owner.id} claims it ({owner.where()}) — a claimed "
+                    "property needs no exemption"
+                )
+
+    for link, decl in sorted(decls.items()):
+        if link in claimed or link in excused:
+            continue
+        errors.append(
+            f"{decl.where()}: `{decl.name}` is claimed by no spec row's `Model` cell — "
+            "name it from the row it encodes (`| Model | `"
+            f"{link}` |`), or register it in MODEL_EXEMPTIONS (scripts/spec-lint.py) with "
+            "the reason it states no spec-level claim"
+        )
+
+    return links, len(claimed), len(excused)
+
+
 def cargo_env() -> dict[str, str]:
     """Environment for `cargo nextest`, mirroring the Justfile's build vars."""
     env = dict(os.environ)
@@ -774,6 +1067,10 @@ def main() -> None:
     spec_refs = check_spec_references(args.spec_dir, defined, errors)
     quint_dir = args.quint_dir or (args.spec_dir / "quint")
     quint_models, quint_refs = check_quint_citations(quint_dir, defined, catalogs, errors)
+    quint_decls = collect_quint_declarations(quint_dir)
+    model_links, claimed, exempt = check_model_links(
+        modes, rows, quint_decls, MODEL_EXEMPTIONS, errors
+    )
     tags = scan_tags(SOURCE_ROOTS, errors)
     test_paths = load_test_paths(args.nextest_output)
     errors += check(modes, rows, tags, test_paths)
@@ -797,6 +1094,8 @@ def main() -> None:
         f"{references} test references, {len(tags)} tags, "
         f"{spec_refs} spec-id citations, "
         f"{quint_refs} quint citations over {quint_models} models, "
+        f"{model_links} model links claiming {claimed}/{len(quint_decls)} quint properties "
+        f"({exempt} exempt), "
         f"{sum(citations.values())} invariant citations over "
         f"{sum(len(cat.ids) for cat in catalogs.values())} catalog entries ({breakdown})"
     )

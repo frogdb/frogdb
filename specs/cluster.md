@@ -199,6 +199,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | Not yet in code — the MEET handler constructs `AddNode` with no such precheck today (`server/src/server/cluster_init.rs`) |
 | Rulings | Issue 25 |
 | Pending | [issue 25](../.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) |
+| Model | `cluster_admission.qnt::inv_meet_no_absorption` |
 
 ### Group B — Config epoch
 
@@ -259,6 +260,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Postcondition | "Handoff attempt counter" += 1; "A migration's prepared handoff"(slot) = `SlotHandoff{seq: new counter value, prepared_at_ms: proposed_at_ms, barrier_ms, lease_ms, drained: false}`; emits `SlotHandoffPrepared` on every node (only the source node arms its write barrier, TR-CLUSTER-034). |
 | Source | `cluster/src/commands.rs` (`PrepareSlotHandoff` arm); `cluster/src/state.rs` (`handoff_seq` increment) |
 | Rulings | — |
+| Model | `cluster_migration_failover_temporal.qnt::temporal_hold_eventually_releases`, `cluster_migration_failover_temporal.qnt::temporal_hold_region_eventually_empties` |
 
 ## TR-CLUSTER-012 — `ConfirmSlotHandoffDrained`
 
@@ -278,6 +280,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `cluster/src/commands.rs` (`CompleteSlotMigration` arm); `cluster/src/types.rs` `SlotHandoff::admits_complete_at` (today includes `!barrier_expired`, which the ruling removes) |
 | Rulings | Issue 17; ambiguity on the `lease_ms` reading above flagged open by issue 29 |
 | Pending | [issue 17](../.scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md), [issue 29](../.scratch/cluster-correctness/issues/open/29-spec-row-edit-sweep-from-the-2026-08-13-rulings.md) (open: which of `barrier_ms`/`lease_ms` survives) |
+| Model | `cluster_migration_failover.qnt::inv_complete_requires_drained`, `cluster_migration_failover.qnt::inv_complete_requires_draining_phase`, `cluster_migration_failover_temporal.qnt::temporal_no_stuck_handoff` |
 
 ## TR-CLUSTER-014 — `AbortSlotHandoff`
 
@@ -288,6 +291,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `cluster/src/commands.rs` (`AbortSlotHandoff` arm) |
 | Rulings | Issue 17 |
 | Pending | [issue 17](../.scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md) |
+| Model | `cluster_migration_failover_temporal.qnt::temporal_no_stuck_handoff` |
 
 ## TR-CLUSTER-015 — `CancelSlotMigration` (`CLUSTER SETSLOT ... STABLE`)
 
@@ -298,6 +302,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `cluster/src/commands.rs` (`CancelSlotMigration` arm) |
 | Rulings | Issue 15 |
 | Pending | [issue 15](../.scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md) |
+| Model | `cluster_migration_failover_temporal.qnt::temporal_no_stuck_handoff` |
 
 ## TR-CLUSTER-016 — Replica-feed hold during an armed slot barrier
 
@@ -320,6 +325,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `server/src/commands/cluster/admin.rs` (handler, immediate-propose today); `cluster/src/commands.rs` (`Failover` arm, `force: false` path) |
 | Rulings | Issue 26 |
 | Pending | [issue 26](../.scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md) |
+| Model | `cluster_migration_failover.qnt::inv_graceful_failover_barriered` |
 
 ## TR-CLUSTER-018 — `Failover` state-machine application (graceful, `force: false`)
 
@@ -330,6 +336,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `cluster/src/commands.rs:393-499` (`Failover` arm, `force: false` path within it); per-object epoch/role fence not yet in code |
 | Rulings | Issue 15 (migration-cancellation scope), Issue 19 (per-object epoch/role fence, amended) |
 | Pending | [issue 15](../.scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md), [issue 19](../.scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md) |
+| Model | `cluster_migration_failover.qnt::inv_last_failover_fenced` |
 
 ## TR-CLUSTER-019 — Automatic failover proposal (failure-detector-decided)
 
@@ -340,6 +347,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `cluster-runtime/src/failure_detector.rs:594-745` (`trigger_auto_failover`); per-object epoch/role fence not yet in code |
 | Rulings | Issue 19 (per-object epoch/role fence, amended), Issue 20, Issue 26 |
 | Pending | [issue 19](../.scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md), [issue 20](../.scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md), [issue 26](../.scratch/cluster-correctness/issues/open/26-planned-failover-gets-a-drain-and-offset-parity-barrier.md) |
+| Model | `cluster_migration_failover.qnt::inv_last_failover_demoted`, `cluster_migration_failover.qnt::inv_last_failover_fenced` |
 
 ## TR-CLUSTER-020 — `CLUSTER FAILOVER FORCE`/`TAKEOVER` issued to a primary
 
@@ -398,6 +406,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Postcondition | "Node FAIL flag"(node_id) = false. No epoch bump (FM-CLUSTER-014: bumping here would let a flapping peer churn the epoch once per round — the anti-churn reasoning issue 19's amendment leans on when explaining why a *global* epoch CAS was the wrong granularity). |
 | Source | `cluster/src/commands.rs` (`MarkNodeRecovered` arm) |
 | Rulings | Issue 19 (cross-reference only) |
+| Model | `cluster_migration_failover.qnt::inv_no_churn_epoch_bump` |
 
 ## TR-CLUSTER-026 — Write-admission self-fence check
 
@@ -430,6 +439,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `server/src/server/cluster_init.rs:386,437-450` (today: `should_bootstrap` computed from config every boot, no persisted intent) |
 | Rulings | Issue 25 |
 | Pending | [issue 25](../.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) |
+| Model | `cluster_admission.qnt::inv_single_routable_group`, `cluster_admission.qnt::inv_restart_deterministic`, `cluster_admission.qnt::inv_intent_write_once`, `cluster_admission.qnt::inv_identity_survives_id_churn` |
 
 ## TR-CLUSTER-029 — Joining node defers election until MEET folds it in
 
@@ -440,6 +450,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Source | `server/src/server/cluster_init.rs:437-450` (today: unconditional solo bootstrap for `member_count=1`); `cluster/src/network.rs:779` (`add_learner` retry, `MAX_ATTEMPTS=5`) |
 | Rulings | Issue 25 |
 | Pending | [issue 25](../.scratch/cluster-correctness/issues/open/25-newly-started-node-briefly-usurps-leadership-via-solo-bootstrap.md) |
+| Model | `cluster_admission.qnt::inv_no_usurper`, `cluster_admission.qnt::inv_restart_deterministic` |
 
 ## TR-CLUSTER-030 — Bootstrap slot seeding
 
@@ -489,6 +500,7 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 | Postcondition | `plan_handoff_action` returns `Arm` only on the node whose id equals `source_node` for a `Prepared` event: "Slot-scoped write barrier"(slot) armed (`WRITE` mode), shard drain spawned. `Release`: barrier lifted. Every other node: `Ignore`. |
 | Source | `cluster-runtime/src/handoff_barrier.rs` (`plan_handoff_action`, the runner's recv loop) |
 | Rulings | — |
+| Model | `cluster_migration_failover_temporal.qnt::temporal_barrier_eventually_disarms`, `cluster_migration_failover_temporal.qnt::temporal_hold_eventually_releases`, `cluster_migration_failover_temporal.qnt::temporal_hold_region_eventually_empties` |
 
 ## TR-CLUSTER-035 — `CLUSTER RESET SOFT`/`HARD`
 
@@ -565,6 +577,7 @@ than renumbering TR-CLUSTER-021..041 in place.*
 | Source | `cluster/src/commands.rs:393-499` (`Failover` arm, `force: true` path within it); `server/src/commands/cluster/admin.rs:312-347` (the replica-issued `FAILOVER FORCE`/`TAKEOVER` handler that constructs this command, `force: force \|\| takeover` at line 342); fence/belt not yet in code |
 | Rulings | Issue 19 (per-object fence + no-op belt, amended) |
 | Pending | [issue 19](../.scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md) |
+| Model | `cluster_migration_failover.qnt::inv_last_failover_demoted`, `cluster_migration_failover.qnt::inv_last_failover_fenced` |
 
 Which admin path reaches this row: after issue 28's ruling lands (TR-CLUSTER-020), the
 primary-issued absorb branch of `cluster_failover` (`admin.rs:277-310`) is refused unconditionally,
@@ -639,6 +652,7 @@ generalization.
 | Outcome variant | `ClusterResponse::Ok` / `ClusterError::NodeNotFound`; `ClusterEvent::SlotHandoffReleased` per pruned prepared handoff |
 | Forced by | `test_remove_node_clears_slots`, `test_remove_node_nonexistent`, `remove_node_prunes_migrations_and_detaches_replicas`, `remove_node_prunes_a_migration_that_only_targets_it_and_releases_its_barrier`, `remove_node_keeps_migrations_and_parents_that_do_not_name_it` |
 | Bug refs | fixed: issue 01, `.scratch/cluster-correctness/issues/`; round-2 issue 62 (11/F5), `.scratch/testing-improvements-round2/issues/` |
+| Model | `cluster_migration_failover.qnt::inv_slot_owner_valid` |
 
 The dangling references `RemoveNode` used to leave — pinned until 2026-08-08 by
 `remove_node_leaves_migrations_and_replicas_dangling`, which now asserts the pruning under its new
@@ -657,6 +671,7 @@ an invariant exception. The slots staying *unassigned* is the part that remains 
 | Outcome variant | `ClusterError::SlotAlreadyAssigned` |
 | Forced by | `test_assign_slots`, `test_assign_slots_node_not_found`, `test_assign_slots_already_assigned`, `test_assign_slots_idempotent`, `assign_slots_rejects_the_whole_batch_on_one_conflict` |
 | Bug refs | — |
+| Model | `cluster_migration_failover.qnt::inv_slot_owner_valid` |
 
 ## FM-CLUSTER-004 — `RemoveSlots` unassigns only slots the named node owns
 
@@ -754,6 +769,7 @@ crate cannot reach.
 | Outcome variant | `EpochReconciliation::{Accepted, Reassigned}` |
 | Forced by | `test_config_epoch_counter_dominates_every_node_epoch_across_command_sequence`, `test_add_node_collision_mints_above_cluster_counter`, `test_add_node_uncontested_epoch_raises_cluster_counter`, `max_node_epoch_tracks_the_highest_claim` |
 | Bug refs | — |
+| Model | `cluster_migration_failover.qnt::inv_epoch_monotone`, `cluster_migration_failover.qnt::inv_epoch_never_decreases` |
 
 Deliberate non-guarantee: the epoch is **not** globally monotonic across `CLUSTER RESET HARD`, which
 zeroes the counter (FM-CLUSTER-006). Assertions of the form `cluster_current_epoch` only ever
@@ -771,6 +787,7 @@ increases are wrong; the invariant is the dominance relation above, within a clu
 | Outcome variant | `EpochReconciliation::Reassigned{claimed, assigned}` |
 | Forced by | `test_add_node_epoch_collision_reassigns_incoming_node`, `test_add_node_self_epoch_is_not_a_collision`, `test_add_node_replica_sharing_primary_epoch_is_not_a_collision` |
 | Bug refs | — |
+| Model | `cluster_migration_failover.qnt::inv_epoch_monotone` |
 
 ## FM-CLUSTER-012 — epoch 0 means "unassigned" and is preserved, never contested
 
@@ -808,6 +825,7 @@ increases are wrong; the invariant is the dominance relation above, within a clu
 | Outcome variant | `ClusterResponse::Ok` / `ClusterError::NodeNotFound` |
 | Forced by | `test_mark_node_recovered`, `test_mark_node_recovered_nonexistent` |
 | Bug refs | — |
+| Model | `cluster_migration_failover.qnt::inv_no_churn_epoch_bump` |
 
 `pfail` is structurally supported everywhere (flags, health counting, `CLUSTER NODES` rendering) but
 is **never produced** — FrogDB has no gossip suspicion phase, so nothing sets it and only
@@ -865,6 +883,7 @@ group (010..017) and sits here rather than at the end of the file.
 | Outcome variant | `ClusterResponse::Epoch` / `ClusterError::{InvalidOperation, NodeNotFound}` |
 | Forced by | `set_config_epoch_assigns_the_exact_value_requested`, `set_config_epoch_never_lowers_the_cluster_counter`, `set_config_epoch_refused_once_the_node_knows_another_node`, `set_config_epoch_refused_once_the_node_holds_an_epoch`, `set_config_epoch_on_an_unknown_node_is_not_found`, `test_cluster_set_config_epoch_assigns_the_exact_value_on_a_lone_node`, `test_cluster_set_config_epoch_refused_once_the_node_knows_a_peer` |
 | Bug refs | fixed: [38-set-config-epoch-discards-its-argument.md](../.scratch/hardening/issues/done/38-set-config-epoch-discards-its-argument.md) |
+| Model | `cluster_migration_failover.qnt::inv_epoch_never_decreases` |
 
 ---
 
@@ -1063,6 +1082,7 @@ skipping it. See FM-CLUSTER-028.
 | Outcome variant | `ClusterError::{NodeNotFound, InvalidOperation}` |
 | Forced by | `test_begin_migration_source_not_found`, `test_begin_migration_target_not_found`, `test_begin_migration_wrong_owner`, `begin_migration_accepts_an_unassigned_slot` |
 | Bug refs | — |
+| Model | `cluster_migration_failover.qnt::inv_migration_endpoints_valid` |
 
 ## FM-CLUSTER-033 — completing a migration consults the node table, never the slot map
 
@@ -1076,6 +1096,7 @@ skipping it. See FM-CLUSTER-028.
 | Outcome variant | `ClusterResponse::Ok` / `ClusterError::{InvalidOperation, NodeNotFound}` |
 | Forced by | `test_complete_migration_no_active`, `test_complete_migration_params_mismatch`, `complete_migration_transfers_ownership_over_an_existing_owner`, `complete_migration_refuses_a_target_that_is_no_longer_a_member` |
 | Bug refs | fixed: issue 01, `.scratch/cluster-correctness/issues/`; round-2 issue 62 (11/F5 ghost-owner consequence), `.scratch/testing-improvements-round2/issues/` |
+| Model | `cluster_migration_failover.qnt::inv_slot_owner_valid`, `cluster_migration_failover.qnt::inv_migration_endpoints_valid` |
 
 ## FM-CLUSTER-034 — a completed migration emits exactly one event, and a failed one emits none
 
@@ -1747,6 +1768,7 @@ which is fail-closed rather than coarse (FM-CLUSTER-096).
 | Outcome variant | `ClusterError::HandoffNotReady` / `ClusterError::InvalidOperation` |
 | Forced by | `a_stale_drain_ack_cannot_vouch_for_the_next_attempt`, `prepare_requires_a_migration_and_matching_parameters`, `handoff_model_smoke`, `handoff_model_full_cross_slot`, `handoff_model_full_deep` |
 | Bug refs | [02-migration-finalization-pause-barrier.md](../.scratch/replication-cluster-rework/issues/done/02-migration-finalization-pause-barrier.md) |
+| Model | `cluster_migration_failover.qnt::inv_handoff_owned`, `cluster_migration_failover.qnt::inv_handoff_seq_never_reused` |
 
 ## FM-CLUSTER-087 — a prepared handoff never disappears without a release event
 
@@ -1896,6 +1918,7 @@ inside it.
 | Outcome variant | `Option<Instant>` |
 | Forced by | `the_barrier_holds_the_replica_feed_until_the_handoff_releases_it`, `slot_barrier_publishes_and_clears_the_replica_feed_hold`, `a_node_pause_does_not_hold_the_replica_feed`, `a_lapsed_barrier_frees_the_feed_with_nobody_clearing_it`, `overlapping_barriers_hold_the_feed_to_the_later_deadline`, `a_published_deadline_holds_the_feed_until_it_lapses`, `a_lapsed_hold_releases_a_waiter_without_an_explicit_release`, `an_explicit_release_wakes_a_waiter_early`, `a_shortened_deadline_is_honoured`, `an_open_gate_holds_nothing`, `republishing_the_same_deadline_is_a_no_op`, `a_publish_stores_and_wakes_exactly_when_it_changes_the_value`, `a_shorter_deadline_is_a_change`, `the_hold_is_the_latest_deadline_across_armed_barriers`, `a_published_hold_is_in_force_strictly_before_its_deadline`, `a_lapsed_hold_never_comes_back`, `feed_gate_model_smoke`, `feed_gate_model_full_overlapping`, `feed_gate_model_full_churn`, `a_feed_that_ignores_the_gate_ships_inside_a_barrier_window`, `the_pre_fix_write_task_ships_inside_the_barrier_window`, `the_shipped_write_task_refuses_that_counterexample`, `a_release_does_not_open_a_feed_another_barrier_still_holds` |
 | Bug refs | [12-barrier-vs-replica-feed-policy.md](../.scratch/replication-cluster-rework/issues/done/12-barrier-vs-replica-feed-policy.md) |
+| Model | `replication_feed_gate.qnt::inv_no_ship_inside_barrier_window`, `replication_feed_gate.qnt::inv_nothing_held_is_dropped`, `replication_feed_gate.qnt::inv_wire_is_a_prefix_of_accepted`, `replication_feed_gate.qnt::inv_offsets_strictly_increase`, `replication_feed_gate.qnt::inv_buffer_ahead_of_the_wire` |
 
 The hold is node-wide for the barrier window (≤100 ms in production, backstopped by the handoff
 lease), which is what Redis 8.4 and Valkey 9.0 do: their atomic-slot-migration pause is node-wide

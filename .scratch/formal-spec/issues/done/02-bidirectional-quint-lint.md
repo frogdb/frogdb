@@ -1,6 +1,6 @@
 # 02: Bidirectional markdown↔Quint lint enforcement
 
-Status: ready-for-agent
+Status: done
 
 ## What to build
 
@@ -35,10 +35,10 @@ named invariant exists, not that it encodes the row's semantics — mutation rev
 
 ## Acceptance criteria
 
-- [ ] `Model:` cell format specified in the spec authoring doc and parsed by the linter
-- [ ] Both directions enforced with tests (dangling entry, unclaimed invariant, list cells, exemption)
-- [ ] Existing cluster models + their rows backfilled; `just lint-spec` green and summary line reports the new counts
-- [ ] `just lint-spec` stays quint-binary-free at commit time
+- [x] `Model:` cell format specified in the spec authoring doc and parsed by the linter
+- [x] Both directions enforced with tests (dangling entry, unclaimed invariant, list cells, exemption)
+- [x] Existing cluster models + their rows backfilled; `just lint-spec` green and summary line reports the new counts
+- [x] `just lint-spec` stays quint-binary-free at commit time
 
 ## Citation-accuracy findings to fold into the backfill
 

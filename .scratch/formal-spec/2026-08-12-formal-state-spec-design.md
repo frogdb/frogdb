@@ -108,6 +108,29 @@ specs/
 6. **Composition pointers** — links into `specs/composition.md` for interactions that leave
    the area (e.g. handoff barrier × replica feed gate, checkpoint drain × `WAIT`).
 
+**The `Model` cell.** Any `TR-`/`FM-`/`LV-` row may carry one optional extra field naming
+the Quint declaration(s) that encode it — the model-side twin of `Forced by`:
+
+```
+| Model | `cluster_admission.qnt::inv_no_usurper`, `cluster_admission.qnt::inv_meet_no_absorption` |
+```
+
+Format: backticked `<file>.qnt::<decl>` entries, comma-separated, list-valued in both
+directions (one property may cover several rows; several may jointly cover one row). `<decl>`
+is a `val inv_*` or a `temporal <name>` declaration in that file — the same house-style
+naming `scripts/quint-models.sh` keys runnable-model discovery off, so the two cannot
+disagree, and a model's helper `val`s/`pure def`s stay invisible to the lint by construction.
+
+The cell records **asserted linkage only**. A model header citing a row for context, or
+citing an id in order to disclaim or reject it ("not machine-checked"), is not coverage and
+does not earn a cell; the reverse-direction count in the lint summary — properties claimed
+by a row, not ids mentioned in a header — is the coverage number. Nor is linkage fidelity:
+the cell proves the named property exists, not that it encodes the row's semantics. The
+model lifecycle's mutation battery (§3) owns fidelity; the cell only stops a row and its
+model drifting apart silently. A property that states semantics no current LOCKED row
+states (a model built ahead of a pending spec amendment) takes an exemption in the lint's
+registry rather than being attached to the nearest row.
+
 **Why this formalism.** TR/INV is the canonical state-machine specification form — the same
 one TLA+ and Quint use (state variables; named actions as guard → postcondition; invariants;
 temporal properties). The mapping into Quint is one-to-one: §1 variables → `var`
@@ -144,6 +167,13 @@ pre-production; no backwards compatibility is kept). The linter checks:
   `.qnt` model headers (§3).
 - State-space completeness: every state variable mentioned in a TR pre/postcondition is
   declared in §1 of the same file (mechanical string-level check).
+- Spec ↔ model, both directions (formal-spec issue 02): every `Model` cell entry resolves to
+  a real `val inv_*` / `temporal <name>` declaration in the named model, **and** every such
+  declaration under `specs/quint/` is claimed by at least one row or carries a documented
+  exemption in the linter's `MODEL_EXEMPTIONS` registry (one class per *reason*, stale and
+  redundant entries both errors). Rows without a `Model` cell are exempt — a model covers a
+  deliberate subset of rows — so the ratchet runs model → spec only. Declarations are found
+  by regex on the file text: no quint binary at commit time.
 
 Coverage note (corrected during planning): today `lint-failure-modes` is reachable *only*
 through `just lint` — lefthook skips it under `CLAUDECODE=1` and CI never invokes it (the

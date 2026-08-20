@@ -438,6 +438,181 @@ def test_absent_quint_dir_is_vacuous() -> None:
     assert errors == [] and models == 0 and citations == 0, (errors, models, citations)
 
 
+MODEL = """\
+// Models TR-CLUSTER-001.
+module handoff {
+  // A helper the lint must not see: it is not a checkable property.
+  pure def owner(s: int): int = s
+
+  val inv_owner_valid: bool = true
+
+  // val inv_commented_out: bool = false
+
+  temporal temporal_owner_settles: bool = true
+}
+"""
+
+
+def _model_check(
+    specs: dict[str, str],
+    quint: dict[str, str],
+    exemptions: dict[str, tuple[str, tuple[str, ...]]] | None = None,
+) -> tuple[list[str], tuple[int, int, int]]:
+    tmp, spec_dir, _ = _tree(specs, {}, quint)
+    with tmp:
+        errors: list[str] = []
+        modes, rows = fm.parse_specs(spec_dir, errors)
+        decls = fm.collect_quint_declarations(spec_dir / "quint")
+        counts = fm.check_model_links(modes, rows, decls, exemptions or {}, errors)
+        return errors, counts
+
+
+def _spec(*model_cells: str) -> str:
+    """A one-row spec whose `Model` cell is whatever the caller passes."""
+    body = "".join(f"| Model | {cell} |\n" for cell in model_cells)
+    return "# Cluster\n\n## TR-CLUSTER-001 — the leader assigns an unowned slot\n\n" + body
+
+
+def test_only_house_style_declarations_are_collected() -> None:
+    """The naming convention is load-bearing: helpers and comments are invisible."""
+    tmp, spec_dir, _ = _tree({}, {}, {"handoff.qnt": MODEL})
+    with tmp:
+        decls = fm.collect_quint_declarations(spec_dir / "quint")
+    assert sorted(decls) == [
+        "handoff.qnt::inv_owner_valid",
+        "handoff.qnt::temporal_owner_settles",
+    ], sorted(decls)
+    assert decls["handoff.qnt::inv_owner_valid"].line == 6
+
+
+def test_list_valued_model_cell_claims_every_entry() -> None:
+    errors, counts = _model_check(
+        {
+            "cluster.md": _spec(
+                "`handoff.qnt::inv_owner_valid`, `handoff.qnt::temporal_owner_settles`"
+            )
+        },
+        {"handoff.qnt": MODEL},
+    )
+    assert errors == [], errors
+    assert counts == (2, 2, 0), counts
+
+
+CLAIMS_EVERYTHING = "`handoff.qnt::inv_owner_valid`, `handoff.qnt::temporal_owner_settles`"
+
+
+def test_dangling_model_entry_is_an_error() -> None:
+    errors, _ = _model_check(
+        {"cluster.md": _spec(f"{CLAIMS_EVERYTHING}, `handoff.qnt::inv_nope`")},
+        {"handoff.qnt": MODEL},
+    )
+    assert len(errors) == 1, errors
+    assert "inv_nope" in errors[0], errors
+    assert "which `handoff.qnt` does not declare" in errors[0], errors
+
+
+def test_model_entry_naming_an_absent_file_is_an_error() -> None:
+    """A renamed or deleted model file, told apart from a renamed property."""
+    errors, _ = _model_check(
+        {"cluster.md": _spec(f"{CLAIMS_EVERYTHING}, `absent.qnt::inv_owner_valid`")},
+        {"handoff.qnt": MODEL},
+    )
+    assert len(errors) == 1, errors
+    assert "no model file `absent.qnt` exists" in errors[0], errors
+
+
+def test_malformed_model_entry_is_an_error() -> None:
+    errors, _ = _model_check(
+        {"cluster.md": _spec(f"{CLAIMS_EVERYTHING}, `inv_owner_valid`")},
+        {"handoff.qnt": MODEL},
+    )
+    assert len(errors) == 1, errors
+    assert "not a `<file>.qnt::<declaration>` link" in errors[0], errors
+
+
+def test_empty_model_cell_is_an_error() -> None:
+    errors, _ = _model_check({"cluster.md": _spec("see the model")}, {})
+    assert len(errors) == 1, errors
+    assert "unparseable `Model` cell" in errors[0], errors
+
+
+def test_a_row_without_a_model_cell_is_silent() -> None:
+    errors, counts = _model_check({"cluster.md": CONSTRUCTIVE_SPEC}, {})
+    assert errors == [] and counts == (0, 0, 0), (errors, counts)
+
+
+def test_unclaimed_declaration_is_an_error() -> None:
+    errors, counts = _model_check({"cluster.md": CONSTRUCTIVE_SPEC}, {"handoff.qnt": MODEL})
+    assert len(errors) == 2, errors
+    assert "`inv_owner_valid` is claimed by no spec row" in errors[0], errors
+    assert "`temporal_owner_settles` is claimed by no spec row" in errors[1], errors
+    assert counts == (0, 0, 0), counts
+
+
+def test_exempt_declaration_is_silent_and_counted() -> None:
+    errors, counts = _model_check(
+        {"cluster.md": _spec("`handoff.qnt::inv_owner_valid`")},
+        {"handoff.qnt": MODEL},
+        {"hygiene": ("model-internal", ("handoff.qnt::temporal_owner_settles",))},
+    )
+    assert errors == [], errors
+    assert counts == (1, 1, 1), counts
+
+
+def test_stale_exemption_is_an_error() -> None:
+    """An exemption outlives its property only until the next lint run."""
+    errors, _ = _model_check(
+        {"cluster.md": _spec("`handoff.qnt::inv_owner_valid`")},
+        {"handoff.qnt": MODEL},
+        {
+            "hygiene": (
+                "model-internal",
+                ("handoff.qnt::temporal_owner_settles", "handoff.qnt::inv_renamed_away"),
+            )
+        },
+    )
+    assert len(errors) == 1, errors
+    assert "inv_renamed_away" in errors[0] and "no model declares" in errors[0], errors
+
+
+def test_exempting_a_claimed_declaration_is_an_error() -> None:
+    errors, _ = _model_check(
+        {"cluster.md": _spec("`handoff.qnt::inv_owner_valid`")},
+        {"handoff.qnt": MODEL},
+        {
+            "hygiene": (
+                "model-internal",
+                ("handoff.qnt::inv_owner_valid", "handoff.qnt::temporal_owner_settles"),
+            )
+        },
+    )
+    assert len(errors) == 1, errors
+    assert "TR-CLUSTER-001 claims it" in errors[0], errors
+
+
+def test_one_property_may_be_claimed_by_several_rows() -> None:
+    spec = (
+        "# Cluster\n\n"
+        "## TR-CLUSTER-001 — the leader assigns an unowned slot\n\n"
+        "| Model | `handoff.qnt::inv_owner_valid` |\n\n"
+        "## TR-CLUSTER-002 — the leader completes a migration\n\n"
+        "| Model | `handoff.qnt::inv_owner_valid`, `handoff.qnt::temporal_owner_settles` |\n"
+    )
+    errors, counts = _model_check({"cluster.md": spec}, {"handoff.qnt": MODEL})
+    assert errors == [], errors
+    assert counts == (3, 2, 0), counts
+
+
+def test_live_exemptions_all_resolve() -> None:
+    """The real registry: every excused property exists, so no entry is stale."""
+    decls = fm.collect_quint_declarations(fm.SPEC_DIR / "quint")
+    assert decls, "no quint declarations found — the reverse check would be vacuous"
+    for reason_class, (reason, members) in fm.MODEL_EXEMPTIONS.items():
+        assert reason.strip(), reason_class
+        for member in members:
+            assert member in decls, (reason_class, member)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
