@@ -47,9 +47,9 @@ Scope. The cluster area is one replicated state machine plus the seams that read
 * **Failover, promotion, and the propose path (039..051)** — the atomic `Failover` entry, the role
   events it emits, the reconciler that re-drives a data path that disagrees, and every error
   surface of `ClusterWriter::propose` (`cluster/src/{commands,state,writer,network}.rs`).
-* **Failure detection (052..060)** — the leader-only, level-triggered detector: latching
-  hysteresis, staleness, quorum arithmetic, promotion scoring, and the live runtime flags
-  (`cluster-runtime/src/{failure_detector,flags}.rs`).
+* **Failure detection (052..060, 105..106)** — the leader-only, level-triggered detector: latching
+  hysteresis, staleness, quorum arithmetic, promotion eligibility, tiering and scoring, and the
+  live runtime flags (`cluster-runtime/src/{failure_detector,flags}.rs`).
 * **Admin gating (061..064)** — the per-subcommand admin surface for `CLUSTER`, including both
   fail-closed defaults (`core/src/command_spec.rs`, `server/src/connection/guards.rs`).
 * **Bus, pub/sub, and reporting (065..075, 077)** — the cluster bus transport decision, the pub/sub
@@ -122,6 +122,7 @@ payload and diverge freely node to node by design.
 | `cluster-auto-failover` runtime flag | `ClusterRuntimeFlags.auto_failover: AtomicBool` (node-local, not replicated) | `CONFIG SET cluster-auto-failover`; constructed at boot from `ClusterConfigSection` | In-memory only | No — re-derived from config at boot (default off) |
 | `cluster-self-fence-on-quorum-loss` runtime flag | `ClusterRuntimeFlags.self_fence_on_quorum_loss: AtomicBool` (node-local) | `CONFIG SET cluster-self-fence-on-quorum-loss`; constructed at boot | In-memory only | No — re-derived from config at boot (default on) |
 | `cluster-replica-priority` runtime flag | `ClusterRuntimeFlags.replica_priority: AtomicU32` (node-local) | `CONFIG SET cluster-replica-priority`; constructed at boot | In-memory only | No — re-derived from config at boot (default 100). Ruled (issue 30): the replicated `NodeInfo.replica_priority` above is the single authority for cross-node scoring, and `CONFIG SET` converges it by proposing an `AddNode` re-registration with the new value; this atomic keeps one authoritative role — the node's own immediate view, so priority 0 removes the node from its own candidate set before the Raft commit lands (FM-CLUSTER-058). Today the re-registration proposal does not exist, leaving peers on the stale replicated value until the next boot-time registration — [issue 30](../.scratch/cluster-correctness/issues/open/30-config-set-replica-priority-re-registers-through-raft.md) tracks code catch-up |
+| `cluster-promotion-max-lag-bytes` runtime flag | `ClusterRuntimeFlags.promotion_max_lag_bytes: AtomicU64` (node-local) | `CONFIG SET cluster-promotion-max-lag-bytes`; constructed at boot | In-memory only | No — re-derived from config at boot (default 0 = no bound). The *automatic* promotion staleness bound of TR-CLUSTER-043/FM-CLUSTER-105, expressed in offset bytes rather than disconnection seconds so no wall clock gates the decision. Node-local by design: the bound is a property of the deciding node's data-loss appetite, not of the candidate, so it is never published through Raft |
 | Per-peer local health | `HealthTable.health: HashMap<NodeId, NodeHealth>` (node-local, leader-only, not replicated) | `record_failure`/`record_success` from the probe loop (`failure_detector.rs`) | In-memory only | No — rebuilt from empty; every peer reads `Unknown` until re-probed, which is fail-safe under FM-CLUSTER-055's conservative-quorum rule |
 | Failure-detector tuning | `FailureDetectorConfig.{check_interval_ms, connect_timeout_ms, fail_threshold}` (node-local) | Constructed once at `FailureDetector::new`, clamped into `[MIN_*, MAX_*]` (FM-CLUSTER-102) | In-memory only | No — re-derived from config at boot |
 | Slot-scoped write barrier | `PauseState.slots: HashMap<u16, PauseEntry>` (node-local, `core/src/client_registry/mod.rs`) | `handoff_barrier.rs`'s `plan_handoff_action` (`Arm`/`Release`), driven by replicated `SlotHandoffPrepared`/`SlotHandoffReleased` events | In-memory only | No — and it **must be reconstructed** from the replicated `migrations` map on both restore paths (boot-time snapshot restore and live `install_snapshot`), or a restarted source serves its migrating slot unfenced (FM-CLUSTER-104). The barrier is a pure function of the replicated handoff state, but nothing in the code performs the reconstruction today — [issue 32](../.scratch/cluster-correctness/issues/open/32-restarted-source-never-re-arms-its-slot-write-barrier.md) tracks code catch-up |
@@ -363,10 +364,10 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 
 | Field | Value |
 |---|---|
-| Precondition | Candidates = replicas of the failing primary. |
-| Postcondition | Score = `priority * 100_000 + (max_offset - replica_offset) * 1_000` (saturating); priority-0 candidates excluded outright; ties broken by lower node id; `None` if every candidate is priority-0 or the replica set is empty (failover abandoned with a warning). |
-| Source | `cluster-runtime/src/failure_detector.rs` (`compute_replica_score`, `select_failover_target`) |
-| Rulings | — |
+| Precondition | Candidates = replicas of the failing primary, each probed once (`HealthProbe`) for two things: its replication offset, and whether its own inbound replication link is attached and past PSYNC. A probe that fails or times out determines *neither* — the candidate is offset-unknown **and** link-unknown, which are two different facts about it and are used by two different rules below. |
+| Postcondition | Selection is **filter, then tier, then bound, then score**, in that order. (1) *Eligibility filter*: a candidate at effective priority 0 is excluded outright (FM-CLUSTER-057); and, while any slot the successor would inherit is under a live prepared handoff, a candidate that does not report its inbound link attached-and-past-PSYNC is excluded outright (FM-CLUSTER-106). (2) *Tiering*: surviving candidates whose offset the probe determined form the **scored tier**; the rest form the **last-resort tier**, which is reached only when the scored tier's *input* is empty — that is, when no eligible candidate has a determined offset at all (FM-CLUSTER-105). (3) *Bound*: within the scored tier, a candidate lagging `max_offset` by more than `cluster-promotion-max-lag-bytes` is disqualified from **automatic** promotion; a bound of 0 disqualifies nobody (TR-CLUSTER-043). (4) *Score*: `priority * 100_000 + (max_offset - replica_offset) * 1_000` (saturating) over what survives, where `max_offset` is the maximum over *determined* offsets only (FM-CLUSTER-056); ties broken by lower node id (FM-CLUSTER-058). The last-resort tier has no offset term to score, so it orders by effective priority then node id. `None` — failover abandoned with a warning, and re-driven by TR-CLUSTER-023's retry loop — if the replica set is empty, if every candidate is priority-0, if the handoff filter empties the set, or if every scored candidate is beyond the bound. |
+| Source | `cluster-runtime/src/failure_detector.rs` (`compute_replica_score`, `select_failover_target`, `CandidateProbe`, `SelectionPolicy`) |
+| Rulings | Issues 37, 42 |
 
 ### Group E — Failure detection and runtime flags
 
@@ -422,8 +423,8 @@ code-wrong and gets filed or attached to an issue in the area's tracker with the
 
 | Field | Value |
 |---|---|
-| Precondition | `CONFIG SET cluster-auto-failover \| cluster-self-fence-on-quorum-loss \| cluster-replica-priority <value>`. |
-| Postcondition | The matching `ClusterRuntimeFlags` atomic is stored, effective immediately for this node (no restart) — priority 0 removes this node from its own candidate set in TR-CLUSTER-021 before any Raft round-trip. Ruled (issue 30): for `cluster-replica-priority`, a successful `CONFIG SET` additionally proposes an `AddNode` re-registration carrying the new priority, converging the replicated `NodeInfo.replica_priority` peers score from within one Raft commit; the local store is not gated on that proposal succeeding. Today no such proposal exists — peers keep scoring the stale replicated field until the node's next boot-time registration (FM-CLUSTER-058's documented asymmetry, to be amended by the issue). |
+| Precondition | `CONFIG SET cluster-auto-failover \| cluster-self-fence-on-quorum-loss \| cluster-replica-priority \| cluster-promotion-max-lag-bytes <value>`. |
+| Postcondition | The matching `ClusterRuntimeFlags` atomic is stored, effective immediately for this node (no restart) — priority 0 removes this node from its own candidate set in TR-CLUSTER-021 before any Raft round-trip, and a new `cluster-promotion-max-lag-bytes` steers the very next automatic promotion this node decides (TR-CLUSTER-043). Ruled (issue 30): for `cluster-replica-priority`, a successful `CONFIG SET` additionally proposes an `AddNode` re-registration carrying the new priority, converging the replicated `NodeInfo.replica_priority` peers score from within one Raft commit; the local store is not gated on that proposal succeeding. Today no such proposal exists — peers keep scoring the stale replicated field until the node's next boot-time registration (FM-CLUSTER-058's documented asymmetry, to be amended by the issue). |
 | Source | `cluster-runtime/src/flags.rs` |
 | Rulings | Issue 30 |
 | Pending | [issue 30](../.scratch/cluster-correctness/issues/open/30-config-set-replica-priority-re-registers-through-raft.md) |
@@ -584,6 +585,18 @@ primary-issued absorb branch of `cluster_failover` (`admin.rs:277-310`) is refus
 so the only surviving caller is the replica-issued branch (`admin.rs:312-347`) — a replica naming
 its own recorded primary and forcing past the health check. That branch, not the absorb branch, is
 this row's `Source`.
+
+## TR-CLUSTER-043 — the automatic-promotion staleness bound
+
+*Belongs topically to Group D — Failover and promotion; appended here with the next free id rather
+than renumbering TR-CLUSTER-021..042 in place.*
+
+| Field | Value |
+|---|---|
+| Precondition | Step 3 of TR-CLUSTER-021's selection, on a candidate whose offset the probe *determined*: `max_offset - replica_offset` compared against `cluster-promotion-max-lag-bytes`, read live off `ClusterRuntimeFlags` at selection time. |
+| Postcondition | Ruled (issue 37, MAJ-9): a candidate lagging by strictly more than the bound is disqualified from **automatic** promotion. The bound is expressed in offset bytes, never in disconnection seconds — Redis's `cluster-replica-validity-factor` gates on wall-clock disconnection time, which this area's clock principle rejects, and the byte spelling is the same vocabulary as issue 17's byte-cap hold and issue 26's offset-parity barrier. Default 0, which disqualifies nobody: FrogDB cannot pick a byte threshold that is right for every write rate and link, so the shipped default preserves availability and leaves the bound to the operator who knows their data-loss budget; the half of the ruling that is always on is the tiering (FM-CLUSTER-105), which costs nothing to enforce. A bound that disqualifies every scored candidate abandons the failover rather than falling through to the last-resort tier. The **forced** paths — `CLUSTER FAILOVER FORCE` and `TAKEOVER` (TR-CLUSTER-042) — never consult the bound: forced failover is the operator deliberately accepting the data loss (issue 19), and a validity bound there would make the escape hatch refuse exactly when it is needed. |
+| Source | `cluster-runtime/src/failure_detector.rs` (`SelectionPolicy::max_lag_bytes`, `select_failover_target`), `cluster-runtime/src/flags.rs` (`promotion_max_lag_bytes`) |
+| Rulings | Issue 37 |
 
 ---
 
@@ -1385,13 +1398,25 @@ propose-time one; it is recorded so a reader does not go looking for the missing
 
 | Field | Value |
 |---|---|
-| Trigger | Scoring candidate replicas for an automatic failover. |
-| Observable | The score is `priority * 100_000 + (max_offset - replica_offset) * 1_000`, lower is better. At equal offsets the lower priority wins; at equal priorities the higher offset (less lag) wins. A candidate whose offset could not be determined is scored as if it had the worst offset, not excluded. |
-| NOT observable | A more-lagged replica outscoring a less-lagged one at the same priority — that is data loss chosen deliberately. The lag term uses `saturating_sub`, so a stale or absent offset can only make a candidate look worse. |
-| Invariant | `compute_replica_score` is a pure function of three numbers, so the weighting is auditable in one place rather than distributed across the selection loop. |
+| Trigger | Scoring candidate replicas for an automatic failover — the **scored tier** of TR-CLUSTER-021, i.e. candidates that survived eligibility and whose offset the probe determined. |
+| Observable | The score is `priority * 100_000 + (max_offset - replica_offset) * 1_000`, lower is better. At equal offsets the lower priority wins; at equal priorities the higher offset (less lag) wins. `max_offset` is the maximum over determined offsets only, so an unreachable peer cannot drag the reference point down. |
+| NOT observable | A more-lagged replica outscoring a less-lagged one at the same priority — that is data loss chosen deliberately. The lag term uses `saturating_sub`, so a candidate reporting an offset *above* `max_offset` scores lag 0 rather than underflowing to the best score in the set. |
+| Invariant | `compute_replica_score` is a pure function of three numbers, so the weighting is auditable in one place rather than distributed across the selection loop. It is reached only for candidates with a determined offset: an unknown offset is no longer folded into the formula as 0. |
 | Outcome variant | `u64` score |
-| Forced by | `test_compute_replica_score_formula`, `test_compute_replica_score_lower_priority_is_better`, `test_compute_replica_score_higher_offset_is_better`, `test_compute_replica_score_no_offset_found`, `auto_failover_promotes_the_replica_with_the_freshest_offset` |
+| Forced by | `test_compute_replica_score_formula`, `test_compute_replica_score_lower_priority_is_better`, `test_compute_replica_score_higher_offset_is_better`, `test_compute_replica_score_lag_term_saturates`, `the_lag_reference_point_ignores_undetermined_offsets`, `auto_failover_promotes_the_replica_with_the_freshest_offset` |
 | Bug refs | — |
+
+**Scope, against the two rows that now bound it.** This row is about *ranking* candidates that have
+a number to rank. It used to also rule that "a candidate whose offset could not be determined is
+scored as if it had the worst offset, not excluded" — issue 37's ruling (MAJ-9) retires that clause:
+an undetermined offset is a **tier**, not a score (FM-CLUSTER-105). And it never governed
+eligibility at all: while a slot is under handoff, a candidate whose replication link has departed
+is removed from the set before this row is consulted (FM-CLUSTER-106). The division is:
+FM-CLUSTER-056 ranks known-offset candidates on a link nothing has disqualified, FM-CLUSTER-105
+ranks the rest strictly below them (and bounds staleness within the scored tier), and
+FM-CLUSTER-106 decides who is in the set at all during a handoff window. A filter beats a ranking:
+when 106 and either of 056/105 both apply to the same candidate, 106 wins and the candidate is not
+scored at all.
 
 ## FM-CLUSTER-057 — priority 0 is never promoted
 
@@ -1912,7 +1937,7 @@ inside it.
 | Field | Value |
 |---|---|
 | Trigger | A slot-scoped pause is armed on a node that is also a replication primary — the slot-handoff write barrier, hand-armed by `DEBUG PAUSE-SLOT` or armed by the handoff itself — while a replica is attached and streaming. |
-| Observable | Nothing the node applies during the barrier window reaches the replica **unless that replica's link is ending**: for a session that is still live, its `DBSIZE` does not move, on the barriered slot or any other. When the barrier ends — the handoff completes, aborts, or the pause simply lapses — the feed resumes and the replica converges on everything held, in offset order and with nothing dropped. A replica that PSYNCs *into* the window waits before it replays the backlog tail, so the held writes do not leak out of the other lane. The one exemption is a session that has **already classified its departure** — its frame source closed, or it lagged off the WAL broadcast: that session drains the frames it already accepted, past the barrier's floor, before it reports the departure, so a replica whose link dies inside the window can still see writes the barrier was holding. Dropping that tail instead would be strictly worse for a replica that is about to reconnect and PSYNC from its own offset — it would have to be re-shipped what it was already given, or fall back to a full resync — and the hold buys nothing in exchange, because the departing session ships nothing *after* the drain either way. What makes the drained tail safe is that a departing replica is not a promotion candidate for the slot under handoff: the tail cannot become a promoted primary's history while ownership is still moving. That is what closes the combination this exemption would otherwise open with FM-REPLICATION-062 — the `SourceClosed` path classifies the departure `Graceful`, the classification that *disarms* the self-fence, on the same arm that ships the tail. |
+| Observable | Nothing the node applies during the barrier window reaches the replica **unless that replica's link is ending**: for a session that is still live, its `DBSIZE` does not move, on the barriered slot or any other. When the barrier ends — the handoff completes, aborts, or the pause simply lapses — the feed resumes and the replica converges on everything held, in offset order and with nothing dropped. A replica that PSYNCs *into* the window waits before it replays the backlog tail, so the held writes do not leak out of the other lane. The one exemption is a session that has **already classified its departure** — its frame source closed, or it lagged off the WAL broadcast: that session drains the frames it already accepted, past the barrier's floor, before it reports the departure, so a replica whose link dies inside the window can still see writes the barrier was holding. Dropping that tail instead would be strictly worse for a replica that is about to reconnect and PSYNC from its own offset — it would have to be re-shipped what it was already given, or fall back to a full resync — and the hold buys nothing in exchange, because the departing session ships nothing *after* the drain either way. What makes the drained tail safe is that a departing replica is not a promotion candidate for the slot under handoff (FM-CLUSTER-106): the tail cannot become a promoted primary's history while ownership is still moving. That is what closes the combination this exemption would otherwise open with FM-REPLICATION-062 — the `SourceClosed` path classifies the departure `Graceful`, the classification that *disarms* the self-fence, on the same arm that ships the tail. |
 | NOT observable | A node-global `CLIENT PAUSE` holding the feed: it stops the writes themselves, so there is nothing new to ship and stalling a replica behind it would be pure lag — Redis likewise reserves `PAUSE_ACTION_REPLICA` for the migration pause. Nor a per-shard hold: frames carry a shard id but there is one monotonic replication offset (`OffsetCoordinator::advance`), so shipping shard B while holding shard A would put offsets on the wire out of order, which is worse than the anomaly. Nor rollback of the fenced-but-applied writes of FM-CLUSTER-095 — they are legitimate local state and they do ship once the hold ends; what the hold buys is that they do not ship *while the client is being told to retry elsewhere*. Nor a feed that can wedge: the hold carries the barrier's own deadline, so a finalizer that dies mid-handoff cannot leave the feed held. |
 | Invariant | `PauseState::feed_hold_until` derives the hold — the latest deadline across armed slot pauses — from the same pause state the write barrier reads, and `ClientRegistry::publish_pause_derived_state` republishes it to a `ReplicaFeedGate` on *every* pause mutation, so the two halves of the barrier cannot disagree about whether it is up (`core/src/client_registry/mod.rs`, `replication/src/feed_gate.rs`). The gate stores an `Instant`, not a latch: `hold_deadline` answers `None` once `clock::now()` passes it, so normal completion, abort, and a lapsed lease all release without anyone clearing anything. Both of those rules are pure functions of plain data — `decide_publish(current, next)` (store-and-wake exactly when the value changes, in either direction) and `decide_hold(published, now)` (in force strictly before the deadline) — with `ReplicaFeedGate` owning only the mutex, the `Notify` and the clock read. `ReplicaSession::start_streaming` waits on it after subscribing and buffers frames in a per-session `VecDeque` while held, draining in offset order on release, so ordering survives the hold and a held session cannot be `Lagged` off the broadcast channel. |
 | Outcome variant | `Option<Instant>` |
@@ -1934,13 +1959,11 @@ unconditionally, which the seam has never implemented: `FeedSequencer`'s `Source
 `isEnding` carve-out in `replication_feed_gate.qnt::inv_no_ship_inside_barrier_window`, kept
 non-vacuous by `coverage.endingDrainedPastBarrierFloor` and pinned deterministically by
 `closeInsideWindowDrainsThenEndsGracefulTest`. The ruling is that the drain is correct and the row
-was too strong. **Not yet pinned by a row of its own:** the protection the clause leans on — that a
-departing replica is not a promotion candidate for the slot under handoff. Selection today filters
-on `replica_priority` alone (FM-CLUSTER-056/057/058), and FM-CLUSTER-056 says in as many words that
-a candidate whose offset cannot be determined is *scored worst, not excluded*; "unreachable scores 0
-but stays a candidate" is GAPS item 3 below. Closing that needs its own row plus a forcing test on
-candidate eligibility, and until it lands the safety argument above rests on the selection path's
-behaviour rather than on anything this spec forces.
+was too strong. The protection the clause leans on — that a departing replica is not a promotion
+candidate for the slot under handoff — is now pinned by **FM-CLUSTER-106** (issue 42), which makes
+it an eligibility filter in TR-CLUSTER-021 rather than an assumption about how the selection path
+happens to behave. Selection used to filter on `replica_priority` alone (FM-CLUSTER-056/057/058),
+which is why the exemption was landed with the gap named here.
 
 ## FM-CLUSTER-098 — an acknowledged vote is on the platter, not in an unsynced memtable
 
@@ -2074,6 +2097,46 @@ lesson, unapplied; CRDB rebuilds leaseholder/latch state from replicated range s
 restart for exactly this reason. Survives issue 31's migration redesign unchanged: 31 keeps the
 Prepare→drain→Complete finalization, and a restart mid-drain still requires re-arming.
 
+## FM-CLUSTER-105 — an undetermined offset is a promotion tier, not a promotion score
+
+| Field | Value |
+|---|---|
+| Trigger | Automatic failover where at least one eligible candidate's offset probe returned no number (the peer refused the connection, or the probe timed out), and/or a candidate lags `max_offset` by more than `cluster-promotion-max-lag-bytes`. |
+| Observable | A candidate whose offset was determined always beats one whose offset was not, **whatever their priorities** — the blind candidates are a strictly last-resort tier, not peers scored at `max_offset - 0`. The last-resort tier is reached only when *no* eligible candidate has a determined offset; then promotion still happens (the availability floor: a solo blind survivor is promotable), ordered by effective priority and then by node id, since there is no offset term to rank on. With `cluster-promotion-max-lag-bytes` set, a scored candidate further behind `max_offset` than that is disqualified from **automatic** promotion (TR-CLUSTER-043); if that empties the scored tier the failover is abandoned, **not** handed down to the blind tier — the tier gate keys on whether any offset was determined, never on what survived the bound. |
+| NOT observable | An offset-unknown candidate promoted while a candidate with a determined offset was eligible. That is the MAJ-9 defect: the old code substituted offset 0 for a failed probe, so a replica partitioned for an hour scored as merely maximally-lagged and could out-score a healthy peer on priority alone, discarding writes the healthy peer held. Nor the reverse over-correction — a cluster that refuses to promote anybody because every probe failed; the last-resort tier exists so the ruling never trades availability for a candidate nobody can compare. Nor a wall clock anywhere in this decision: FrogDB bounds staleness in offset bytes, so Redis's `cluster-replica-validity-factor` (disconnection seconds vs node timeout) has no analogue here, and a skewed clock cannot admit or refuse a promotion. Nor the bound applied to `CLUSTER FAILOVER FORCE`/`TAKEOVER`, whose whole purpose is to promote past exactly this objection. |
+| Invariant | `CandidateProbe.offset: Option<u64>` makes "unknown" a distinct value rather than a sentinel that arithmetic can launder into a score, and `select_failover_target` partitions on `Option::is_some` *before* it computes any score — so the two tiers cannot be compared against one another by construction, not merely by a large constant. `max_offset` is folded over determined offsets only, so an unreachable peer cannot move the reference point every other candidate is judged against. |
+| Outcome variant | `Option<&NodeInfo>` |
+| Forced by | `an_offset_unknown_candidate_never_outranks_a_determined_one`, `blind_candidates_are_promotable_when_nobody_has_an_offset`, `the_blind_tier_orders_by_priority_then_node_id`, `the_lag_bound_disqualifies_a_candidate_from_automatic_promotion`, `an_emptied_scored_tier_abandons_rather_than_falling_through_to_the_blind_tier`, `a_zero_lag_bound_disqualifies_nobody`, `the_lag_bound_is_live` |
+| Bug refs | [37-promotion-validity-bound-offset-unknown-last.md](../.scratch/cluster-correctness/issues/done/37-promotion-validity-bound-offset-unknown-last.md) |
+
+Ruled shape, not a free choice (issue 37, from distsys-review MAJ-9). Redis disqualifies a stale
+replica by `cluster-replica-validity-factor`, which is disconnection *time*; this area's clock
+principle rejects a wall clock that gates a state transition, so the disqualifier is spelled in
+offset lag instead — the same vocabulary as issue 17's byte-cap hold and issue 26's offset-parity
+barrier. Raft's voting restriction (§5.4.1) is the clock-free ancestor of the tiering half: a
+candidate whose log is not at least as up to date as the voter's cannot win, and a candidate whose
+log nobody could read is not at least as up to date as anything.
+
+## FM-CLUSTER-106 — a departing replica is not a promotion candidate for a slot under handoff
+
+| Field | Value |
+|---|---|
+| Trigger | Automatic failover for a primary that owns at least one slot carrying a **live** prepared handoff (`SlotMigration::live_handoff_at`), where a candidate replica's feed session for that primary has classified its departure — `Graceful` (its frame source closed) or `Lost` (it lagged off the WAL broadcast, or the send failed). |
+| Observable | That candidate is excluded from selection outright — removed from the set, not scored worst — and becomes selectable again only once it has re-attached and re-synced, which it reports as its inbound link being past PSYNC (the same fact INFO renders as `master_link_status:up`). The exclusion is a **filter** and runs before any tiering or scoring, so it beats both FM-CLUSTER-056's ranking and FM-CLUSTER-105's availability floor: a departed replica is not promoted even when it is the only candidate left; the failover is abandoned and re-driven by TR-CLUSTER-023's retry loop instead. Under a dead primary that is the common case, and it is the intended shape — the wait is bounded by the prepared record's lease (FM-CLUSTER-085), after which the handoff reads as absent to every reader and ordinary selection resumes. Outside a handoff window this row never fires: a replica whose link merely died is still a candidate there, ranked last by FM-CLUSTER-105. |
+| NOT observable | A replica that received FM-CLUSTER-097's drained tail becoming a promoted primary's history while ownership is still moving. That is the combination this row closes: the ending-drain exemption ships frames past the barrier floor to a session that is already ending, and `SourceClosed` classifies that departure `Graceful` — the classification that *disarms* the replication self-fence (FM-REPLICATION-062) — so nothing downstream would stop the drained tail from being promoted. Nor a link-state filter applied when no slot is under handoff: that would re-introduce, by the back door, the "unreachable is excluded" rule FM-CLUSTER-105 deliberately refuses. Nor a filter that outlives the handoff it protects — an expired prepared record is treated as absent here exactly as it is everywhere else. |
+| Invariant | The handoff predicate is read from the **replicated** `migrations` map (`ClusterState::snapshot`), so every node computing selection sees the same handoff state; the only local input is the lease comparison every reader of a prepared record already performs. The link predicate is `CandidateProbe.link_up: Option<bool>`, answered by the candidate itself on the `HealthProbe` it is already being asked for its offset — the replica-side end of the very session whose departure the source classifies. `Option` rather than `bool`: a probe that failed learned nothing, and "nothing" is treated as departed, so the filter is fail-closed on its own error path. The two ends of a session transition at slightly different instants; the residual is the candidate's own socket-close detection lag, and it closes in the safe direction for the case that matters — a source that stopped answering the detector's probes has stopped answering the candidate's socket too. |
+| Outcome variant | `Option<&NodeInfo>` |
+| Forced by | `a_departed_replica_is_not_a_candidate_while_a_slot_is_under_handoff`, `a_re_attached_replica_is_a_candidate_again`, `outside_a_handoff_window_a_departed_replica_is_still_a_candidate`, `a_probe_that_learned_nothing_is_treated_as_departed_under_handoff`, `the_handoff_filter_beats_the_last_resort_availability_floor`, `auto_failover_skips_the_departed_replica_of_a_slot_under_handoff`, `auto_failover_abandons_when_every_candidate_departed_under_handoff`, `a_lapsed_handoff_lease_stops_filtering_candidates` |
+| Bug refs | [42-departing-replica-promotion-eligibility-under-handoff.md](../.scratch/cluster-correctness/issues/done/42-departing-replica-promotion-eligibility-under-handoff.md) |
+
+Ruling R3's safety argument, made forceable (issue 42). R3 (2026-08-20) amended FM-CLUSTER-097 with
+the ending-drain exemption and leaned on this protection to close it; nothing in the code enforced
+it, because selection filtered on `replica_priority` alone. Promotion in FrogDB is whole-node —
+TR-CLUSTER-021 picks one successor that inherits every slot the failing primary owned — so the
+slot-scoped rule is enforced at node granularity: the filter is armed whenever *any* slot the
+successor would inherit is under a live handoff. That is the conservative direction, and it costs
+nothing outside a handoff window, which is where a migration spends essentially none of its life.
+
 ---
 
 ## GAPS — behavior nothing forces
@@ -2088,8 +2151,11 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 2. **`InflightGuard` dedup and drop** (`failure_detector.rs:107-123, 394-414`) — the at-most-one-
    write-per-peer property and the poison-recovering `Drop` are untested. Same blocker.
 3. **`trigger_auto_failover` end to end** (`failure_detector.rs:487-629`) — the primary check, the
-   empty-replica abandon, sequential offset probing, "unreachable scores 0 but stays a candidate",
-   the 3-attempt retry loop, and the permanent give-up. The give-up is the highest-consequence
+   empty-replica abandon, sequential offset probing,
+   the 3-attempt retry loop, and the permanent give-up. Candidate selection itself is no longer on
+   this list: an undetermined offset is a tier rather than a score (FM-CLUSTER-105) and eligibility
+   during a handoff window is filtered (FM-CLUSTER-106), both with forcing tests on
+   `select_failover_target` and on the detector end to end. The give-up is the highest-consequence
    untested path in the area: after it, the FAIL flag is already set, so level-triggered
    reconciliation never calls `mark_node_failed` again and no further automatic attempt is made.
 4. **`check_node_reachable`** — liveness is a bare TCP connect, so a wedged-but-listening node reads
@@ -2141,6 +2207,7 @@ rediscovered. Each is a candidate row for the gap-filling step of this phase.
 | `ping-sent`/`pong-recv` in `CLUSTER NODES` | Always `0 0` | Real timestamps | Same reason; positional fields cannot be omitted without breaking every client's parser, so `0` is the honest placeholder here. |
 | `PFAIL` | Structurally supported, never produced | Set by gossip suspicion before a majority confirms `FAIL` | Leader-only detection has no suspicion phase: the leader either has enough consecutive failures to latch or it does not. |
 | Shard pub/sub slot routing | `SPUBLISH` forwards to the slot owner when it can name one, and otherwise delivers locally; `SSUBSCRIBE` does not slot-route subscribers | Both are slot-routed like keyed commands, answering `MOVED`/`CLUSTERDOWN` | Since subscribers are not pinned to the owner, refusing a publish would drop a message no other node would deliver. The fallback is named rather than silent (FM-CLUSTER-070); adopting Redis' refusal means routing subscribers first. |
+| Promotion validity bound | `cluster-promotion-max-lag-bytes`: offset lag behind the best candidate, default 0 (off); a candidate whose offset could not be determined ranks strictly last instead | `cluster-replica-validity-factor`: disconnection *seconds* vs node timeout, default 10, disqualifying outright | Same goal, clock-free spelling. A wall-clock disconnection timer gating a promotion is the anti-pattern this area's preamble rejects; lag in bytes is data both ends already agree on. The tiering half (FM-CLUSTER-105) is always on and needs no tuning, which is why the byte bound can default to off without leaving the MAJ-9 defect open. |
 | `CLUSTER BUMPEPOCH` | Not supported | Supported | Epoch changes are authorized by the replicated log; a manual bump would create a claim no entry justifies. |
 | `CLUSTER SET-CONFIG-EPOCH` | Sets the exact value; refused unless the node knows no peer and holds epoch 0 | Same two guards, same exact assignment | Identical (FM-CLUSTER-076). The command is replicated through Raft rather than applied locally, so the assignment is durable on the log; the guards are Redis' verbatim. |
 | `WAIT` in cluster mode | Per-node, keyless, never redirects | Per-node, keyless, never redirects | Identical. Cluster replicas attach over the same PSYNC link and ACK into the same tracker, so there is no cluster-mode branch to deviate in. |
