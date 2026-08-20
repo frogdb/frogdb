@@ -93,3 +93,27 @@ jobs:
     - name: 'Apalache verify: cluster_migration_failover.qnt (all invariants, depth >= 6)'
       run: |
         just quint-verify-migration-failover
+  verify-temporal:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    name: 'Verify: migration liveness (temporal, report-only)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just npm:@informalsystems/quint
+        cache: 'true'
+        experimental: 'true'
+    - name: Set up JVM
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+      with:
+        distribution: temurin
+        java-version: '21'
+    - name: 'TLC verify: cluster_migration_failover_temporal.qnt (liveness, report-only)'
+      run: |
+        just quint-verify-temporal

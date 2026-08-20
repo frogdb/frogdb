@@ -46,6 +46,26 @@ a JVM already on PATH. jepsen_nightly.py gets Java through mise (temurin-21,
 pinned in .mise.toml) because that job already needs mise for Leiningen; this
 job has no other use for mise's Java plugin, so it installs the JVM directly
 via actions/setup-java instead.
+
+A third job, `verify-temporal`, checks the migration/failover model's
+**liveness** properties (`specs/quint/cluster_migration_failover_temporal.qnt`,
+quint-completeness campaign T6) rather than its safety invariants. It is
+report-only: `just quint-verify-temporal` always exits 0 and annotates its
+verdicts as `::warning::`. The reason is measured, not defensive — Apalache
+0.56.1 refuses fairness outright (`Handling fairness is not supported yet!`)
+and its temporal loop-finding encoding crashes on this model with an internal
+`assertion failed` even with the fairness hypothesis removed, while the TLC
+backend accepts the fairness hypothesis but cannot terminate (quint's TLC path
+emits no depth bound and this model has unbounded counters). Every property in
+that module is asserted under an explicit fairness hypothesis (without one they
+are trivially false by stuttering), so no *complete* verdict is obtainable
+today. The recipe defaults to TLC anyway because TLC checks the properties
+against the state graph it has already explored, which makes this a time-capped
+liveness search: inconclusive when the cap expires (the expected nightly
+outcome), but a genuine counterexample when it fires. Full write-up:
+.scratch/formal-spec/t6-findings.md. This job is the only sanctioned caller of
+`quint verify --temporal` — the campaign ruling scopes it to the nightly lane,
+never the dev loop or a commit gate.
 """
 
 from workflow_gen.helpers import (
@@ -135,6 +155,34 @@ def quint_verify_workflow() -> Workflow:
                     name="Apalache verify: cluster_migration_failover.qnt (all invariants, depth >= 6)",
                     run=script("""\
                         just quint-verify-migration-failover
+                    """),
+                ),
+            ],
+        ),
+    )
+
+    w.job(
+        "verify-temporal",
+        Job(
+            name="Verify: migration liveness (temporal, report-only)",
+            runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
+            # 4 temporal properties at the recipe's 900s (15min) default
+            # TIMEOUT each is a 60-minute worst case, plus setup. On the TLC
+            # default that worst case IS the expected runtime: the search
+            # cannot terminate on this model, so every property runs out its
+            # cap doing useful (if incomplete) liveness checking and is
+            # reported as inconclusive.
+            timeout_minutes=90,
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST_QUINT),
+                setup_java_step(),
+                run_step(
+                    name="TLC verify: cluster_migration_failover_temporal.qnt (liveness, report-only)",
+                    run=script("""\
+                        just quint-verify-temporal
                     """),
                 ),
             ],

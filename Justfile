@@ -559,10 +559,132 @@ quint-verify-admission MAX_STEPS='10' TIMEOUT='1200': (quint-verify-model "specs
 # would only grow the expected-timeout count, not useful coverage.
 quint-verify-migration-failover MAX_STEPS='6' TIMEOUT='1200': (quint-verify-model "specs/quint/cluster_migration_failover.qnt" MAX_STEPS TIMEOUT)
 
+# Nightly sweep of the migration/failover model's **temporal** (liveness)
+# properties — specs/quint/cluster_migration_failover_temporal.qnt, a sibling
+# root module over the same machine that declares `temporal` properties and no
+# `val inv_*`. This is the ONE sanctioned use of `quint verify` on temporal
+# properties in the quint-completeness campaign, and it is scoped to the
+# nightly lane: never the dev loop, never a commit gate. `quint run` ignores
+# `temporal` declarations outright, and `scripts/quint-models.sh` selects main
+# models by "declares at least one `val inv_*`", so neither `just quint-run`
+# nor the two `quint-verify-<model>` sweeps above see this module at all.
+#
+# **REPORT-ONLY, deliberately** — a `HOLDS`/`VIOLATED`/`INCONCLUSIVE` summary
+# and `::warning::` annotations, never a job failure. Three independent
+# reasons, all measured on 2026-08-20 and written up in
+# .scratch/formal-spec/t6-findings.md:
+#
+#   1. Apalache 0.56.1 (the version `quint verify` pins) rejects fairness
+#      outright: `error: Handling fairness is not supported yet!` from its
+#      TemporalPass. Every property here is asserted under an explicit
+#      `weakFair`/`strongFair` hypothesis — without one they are all trivially
+#      false by stuttering — so the Apalache backend cannot check any of them
+#      today.
+#   2. Even with the fairness hypothesis stripped, Apalache's temporal
+#      loop-finding encoding dies on this model with an internal
+#      `error: assertion failed` inside PASS #13 (BoundedChecker) at step 1.
+#      That is a tool defect, not a model verdict.
+#   3. The TLC backend (the default here, see below) *does* accept the
+#      fairness hypothesis and does check the properties — but quint's TLC
+#      path emits no depth bound (`dist/src/tlc.js` writes only INIT/NEXT/
+#      PROPERTY, never a CONSTRAINT, and silently ignores `--max-steps`), and
+#      this model has unbounded counters, so the search cannot terminate. A
+#      900s run reached 1,287 distinct states with 1,269 still queued.
+#
+# So a red job here would mean "the tooling still cannot do this", which is
+# not news and not actionable — exactly the report-only shape
+# `quint-conformance-quarantine` uses elsewhere in this repo. What the lane IS
+# for: TLC checks the temporal properties against the state graph it *has*
+# explored (see "Checking N branches of temporal properties" in its output), so
+# a lasso it finds inside that subgraph is a **genuine** counterexample — this
+# is a time-capped liveness search, inconclusive when it expires but real when
+# it fires. And the day either backend grows the missing support, the job
+# starts producing full verdicts without anyone rewiring it.
+#
+# BACKEND: `tlc` (default — exhaustive-in-principle, the backend quint's own
+# warning recommends for temporal properties, and the only one that gets as far
+# as checking anything here) or `apalache` (bounded/SMT; honours MAX_STEPS, but
+# returns UNSUPPORTED on every property today per reasons 1 and 2 — kept
+# reachable so the day fairness lands, `just quint-verify-temporal 6 900
+# apalache` is the whole migration). `--temporal` makes `quint verify` prompt
+# for confirmation on the Apalache backend, so the invocation feeds it `yes` —
+# a bare pipe would otherwise hang the nightly.
+#
+# Properties are derived from the module, not hardcoded (the same discipline
+# as scripts/quint-invariants.sh, task-4 review finding I1): the module names
+# every checkable property `temporal temporal_*`, and its fairness helpers
+# deliberately do NOT carry that prefix, so this grep cannot pick them up.
+quint-verify-temporal MAX_STEPS='6' TIMEOUT='900' BACKEND='tlc':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    model="specs/quint/cluster_migration_failover_temporal.qnt"
+    main="cluster_migration_failover_temporal"
+    # Same coreutils probe (and same rationale) as quint-verify-model above:
+    # macOS ships no `timeout`, Homebrew installs it as `gtimeout`, and a
+    # missing binary would otherwise read as a verification result.
+    if command -v timeout >/dev/null 2>&1; then
+        TIMEOUT_BIN=timeout
+    elif command -v gtimeout >/dev/null 2>&1; then
+        TIMEOUT_BIN=gtimeout
+    else
+        echo "quint-verify-temporal: neither 'timeout' nor 'gtimeout' found on PATH — install coreutils (see Brewfile/shell.nix)" >&2
+        exit 1
+    fi
+    if [[ ! "{{MAX_STEPS}}" =~ ^[0-9]+$ ]]; then
+        echo "quint-verify-temporal: MAX_STEPS must be a non-negative integer; got {{MAX_STEPS}}" >&2
+        exit 1
+    fi
+    props=$(grep -oE '\btemporal[[:space:]]+temporal_[A-Za-z0-9_]+' "$model" | awk '{print $2}')
+    if [ -z "$props" ]; then
+        echo "quint-verify-temporal: $model declares no 'temporal temporal_*' properties" >&2
+        exit 1
+    fi
+    log=$(mktemp -t quint-verify-temporal)
+    trap 'rm -f "$log"' EXIT
+    summary=()
+    violations=0
+    for prop in $props; do
+        echo "=== quint verify $model --temporal=$prop --backend={{BACKEND}} --max-steps={{MAX_STEPS}} (timeout {{TIMEOUT}}s) ==="
+        yes y | "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} quint verify "$model" \
+            --main="$main" --temporal="$prop" \
+            --max-steps={{MAX_STEPS}} --backend={{BACKEND}} >"$log" 2>&1
+        rc=${PIPESTATUS[1]}
+        cat "$log"
+        # Classify off `quint verify`'s own result markers rather than the exit
+        # code alone: it exits 1 both for a counterexample and for a backend
+        # that could not run at all, and telling those apart is the whole point
+        # of this lane (see the docstring's two blockers).
+        if [ $rc -eq 0 ]; then
+            summary+=("$prop: HOLDS to depth {{MAX_STEPS}} ({{BACKEND}})")
+        elif [ $rc -eq 124 ]; then
+            echo "::warning::$prop TIMED OUT after {{TIMEOUT}}s at depth {{MAX_STEPS}} ({{BACKEND}}) — inconclusive"
+            summary+=("$prop: TIMED OUT (inconclusive)")
+        elif grep -q '\[violation\]' "$log"; then
+            echo "::warning::$prop VIOLATED ({{BACKEND}} found a counterexample) — REPORT-ONLY lane, triage against .scratch/formal-spec/t6-findings.md"
+            summary+=("$prop: VIOLATED (counterexample)")
+            violations=$((violations + 1))
+        elif grep -qiE 'not supported yet|assertion failed' "$log"; then
+            echo "::warning::$prop UNSUPPORTED by {{BACKEND}} — the backend refused the property, this is not a model verdict"
+            summary+=("$prop: UNSUPPORTED by {{BACKEND}}")
+        else
+            echo "::warning::$prop backend failure ({{BACKEND}}, exit $rc) — inconclusive"
+            summary+=("$prop: BACKEND FAILURE (exit $rc)")
+        fi
+    done
+    echo "=== quint-verify-temporal summary ({{BACKEND}}, depth {{MAX_STEPS}}) ==="
+    printf '  %s\n' "${summary[@]}"
+    if [ "$violations" -gt 0 ]; then
+        echo "$violations temporal propert(y|ies) reported a counterexample — report-only lane, job stays green; triage before trusting it (Apalache's temporal support is experimental)."
+    fi
+    # Report-only by construction: see the docstring.
+    exit 0
+
 # Both models' nightly Apalache sweep, sequentially. CI itself runs the two
 # halves as separate jobs (quint_verify.py) so a hang in one model's sweep
 # doesn't eat the other's timeout headroom; this combined target exists for
-# a single local invocation.
+# a single local invocation. `quint-verify-temporal` is deliberately NOT part
+# of it: it is a report-only liveness probe on a different (temporal) module,
+# not part of the safety sweep's verdict.
 quint-verify: quint-verify-admission quint-verify-migration-failover
 
 # Report-only: run the quint-connect conformance harness's quarantined

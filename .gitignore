@@ -104,6 +104,11 @@ Thumbs.db
 # Insta snapshot testing (pending snapshots)
 *.snap.new
 
+# Apalache run artifacts (`quint verify` / `just quint-verify-*` drop a
+# per-invocation run directory holding the translated TLA+, the SMT logs and
+# detailed.log into the cwd)
+_apalache-out/
+
 # RocksDB snapshot artifacts leaked by integration tests running with a
 # relative default snapshot_dir (crate dir as cwd)
 frogdb-server/crates/server/snapshots/
