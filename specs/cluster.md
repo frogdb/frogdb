@@ -1912,7 +1912,7 @@ inside it.
 | Field | Value |
 |---|---|
 | Trigger | A slot-scoped pause is armed on a node that is also a replication primary — the slot-handoff write barrier, hand-armed by `DEBUG PAUSE-SLOT` or armed by the handoff itself — while a replica is attached and streaming. |
-| Observable | Nothing the node applies during the barrier window reaches the replica: its `DBSIZE` does not move, on the barriered slot or any other. When the barrier ends — the handoff completes, aborts, or the pause simply lapses — the feed resumes and the replica converges on everything held, in offset order and with nothing dropped. A replica that PSYNCs *into* the window waits before it replays the backlog tail, so the held writes do not leak out of the other lane. |
+| Observable | Nothing the node applies during the barrier window reaches the replica **unless that replica's link is ending**: for a session that is still live, its `DBSIZE` does not move, on the barriered slot or any other. When the barrier ends — the handoff completes, aborts, or the pause simply lapses — the feed resumes and the replica converges on everything held, in offset order and with nothing dropped. A replica that PSYNCs *into* the window waits before it replays the backlog tail, so the held writes do not leak out of the other lane. The one exemption is a session that has **already classified its departure** — its frame source closed, or it lagged off the WAL broadcast: that session drains the frames it already accepted, past the barrier's floor, before it reports the departure, so a replica whose link dies inside the window can still see writes the barrier was holding. Dropping that tail instead would be strictly worse for a replica that is about to reconnect and PSYNC from its own offset — it would have to be re-shipped what it was already given, or fall back to a full resync — and the hold buys nothing in exchange, because the departing session ships nothing *after* the drain either way. What makes the drained tail safe is that a departing replica is not a promotion candidate for the slot under handoff: the tail cannot become a promoted primary's history while ownership is still moving. That is what closes the combination this exemption would otherwise open with FM-REPLICATION-062 — the `SourceClosed` path classifies the departure `Graceful`, the classification that *disarms* the self-fence, on the same arm that ships the tail. |
 | NOT observable | A node-global `CLIENT PAUSE` holding the feed: it stops the writes themselves, so there is nothing new to ship and stalling a replica behind it would be pure lag — Redis likewise reserves `PAUSE_ACTION_REPLICA` for the migration pause. Nor a per-shard hold: frames carry a shard id but there is one monotonic replication offset (`OffsetCoordinator::advance`), so shipping shard B while holding shard A would put offsets on the wire out of order, which is worse than the anomaly. Nor rollback of the fenced-but-applied writes of FM-CLUSTER-095 — they are legitimate local state and they do ship once the hold ends; what the hold buys is that they do not ship *while the client is being told to retry elsewhere*. Nor a feed that can wedge: the hold carries the barrier's own deadline, so a finalizer that dies mid-handoff cannot leave the feed held. |
 | Invariant | `PauseState::feed_hold_until` derives the hold — the latest deadline across armed slot pauses — from the same pause state the write barrier reads, and `ClientRegistry::publish_pause_derived_state` republishes it to a `ReplicaFeedGate` on *every* pause mutation, so the two halves of the barrier cannot disagree about whether it is up (`core/src/client_registry/mod.rs`, `replication/src/feed_gate.rs`). The gate stores an `Instant`, not a latch: `hold_deadline` answers `None` once `clock::now()` passes it, so normal completion, abort, and a lapsed lease all release without anyone clearing anything. Both of those rules are pure functions of plain data — `decide_publish(current, next)` (store-and-wake exactly when the value changes, in either direction) and `decide_hold(published, now)` (in force strictly before the deadline) — with `ReplicaFeedGate` owning only the mutex, the `Notify` and the clock read. `ReplicaSession::start_streaming` waits on it after subscribing and buffers frames in a per-session `VecDeque` while held, draining in offset order on release, so ordering survives the hold and a held session cannot be `Lagged` off the broadcast channel. |
 | Outcome variant | `Option<Instant>` |
@@ -1924,6 +1924,23 @@ The hold is node-wide for the barrier window (≤100 ms in production, backstopp
 lease), which is what Redis 8.4 and Valkey 9.0 do: their atomic-slot-migration pause is node-wide
 and includes `PAUSE_ACTION_REPLICA`, stopping the primary from flushing replica output buffers so
 replicas cannot run ahead of a primary that is fencing its own clients.
+
+**The ending-drain clause is a ruling, not a description of a leak** (R3, 2026-08-20, in
+`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`; the divergence analysis that
+asked for it is `.scratch/formal-spec/t9b-blocked.md`). The row previously stated the hold
+unconditionally, which the seam has never implemented: `FeedSequencer`'s `SourceClosed`/
+`SourceLagged` arms set `ending` and flush without re-reading the gate
+(`replication/src/feed_sequencer.rs`), and the Quint model discloses the same thing as the
+`isEnding` carve-out in `replication_feed_gate.qnt::inv_no_ship_inside_barrier_window`, kept
+non-vacuous by `coverage.endingDrainedPastBarrierFloor` and pinned deterministically by
+`closeInsideWindowDrainsThenEndsGracefulTest`. The ruling is that the drain is correct and the row
+was too strong. **Not yet pinned by a row of its own:** the protection the clause leans on — that a
+departing replica is not a promotion candidate for the slot under handoff. Selection today filters
+on `replica_priority` alone (FM-CLUSTER-056/057/058), and FM-CLUSTER-056 says in as many words that
+a candidate whose offset cannot be determined is *scored worst, not excluded*; "unreachable scores 0
+but stays a candidate" is GAPS item 3 below. Closing that needs its own row plus a forcing test on
+candidate eligibility, and until it lands the safety argument above rests on the selection path's
+behaviour rather than on anything this spec forces.
 
 ## FM-CLUSTER-098 — an acknowledged vote is on the platter, not in an unsynced memtable
 

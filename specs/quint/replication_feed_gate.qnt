@@ -90,23 +90,30 @@
 //     space without adding a decision point.
 //
 // ---------------------------------------------------------------------------
-// Known spec/seam divergence, disclosed rather than modeled away
+// The ending-drain carve-out (ruled, not a divergence)
 // ---------------------------------------------------------------------------
-// FM-CLUSTER-097 says nothing applied during the barrier window reaches the replica. The
-// seam's `SourceClosed`/`SourceLagged` arms set `ending` and then call `flush()` *without*
-// re-reading the gate, so a link that ends inside the window drains its held buffer past
-// the barrier floor (the seam's own tests assert this: a close inside the window flushes
-// before it ends the link). The two cannot both be right.
+// The seam's `SourceClosed`/`SourceLagged` arms set `ending` and then call `flush()`
+// *without* re-reading the gate, so a link that ends inside the window drains its held
+// buffer past the barrier floor (the seam's own tests assert this: a close inside the
+// window flushes before it ends the link). This model was filed as a spec/seam divergence
+// against FM-CLUSTER-097's then-unconditional "nothing applied during the window reaches
+// the replica" (.scratch/formal-spec/t9b-blocked.md).
 //
-// This model does not silently pick a side. It models the seam's behaviour faithfully,
-// states `inv_no_ship_inside_barrier_window` with an explicit, narrow carve-out for a
-// session that has already classified its departure, and makes the carve-out *provably
-// reached* rather than vacuous via `coverage.endingDrainedPastBarrierFloor`, its witness,
-// and `closeInsideWindowDrainsThenEndsGracefulTest`. The ruling request — either the row
-// gains an "unless the link is ending" clause, or the seam must consult the gate before
-// draining on close — is written up in .scratch/formal-spec/t9b-blocked.md. If the ruling
-// goes the other way, the fix here is to delete the carve-out; the test that documents it
-// then fails, which is the intended alarm.
+// **Ruled 2026-08-20 — R3 of the quint-completeness campaign ledger**
+// (.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md): the ending drain is
+// CORRECT and the row was too strong. FM-CLUSTER-097's Observable now carries the "unless
+// the link is ending" clause — a session that has already classified its departure drains
+// the frames it already accepted, because dropping that tail is strictly worse for a
+// replica about to reconnect and PSYNC from its own offset — together with the protection
+// that makes it safe: a departing replica is not a promotion candidate for the slot under
+// handoff.
+//
+// So `inv_no_ship_inside_barrier_window`'s `isEnding` carve-out is the ruled semantics, not
+// a tolerated deviation. It stays narrow — only a session that has *already* classified its
+// departure, only for the buffer it drains on the way out — and it stays non-vacuous via
+// `coverage.endingDrainedPastBarrierFloor`, its witness, and
+// `closeInsideWindowDrainsThenEndsGracefulTest`, so it cannot be deleted or become
+// unreachable without an oracle noticing.
 //
 // ---------------------------------------------------------------------------
 // Layout
@@ -169,11 +176,14 @@ module replication_feed_gate {
   // barrier that arms in the middle of a drain records a floor above everything already
   // buffered, so the drain in progress is not retroactively a violation.
   //
-  // The `isEnding` carve-out is the disclosed seam divergence — see this file's header and
-  // .scratch/formal-spec/t9b-blocked.md. It excuses only a session that has *already*
-  // classified its departure, and only for the buffer it is draining on the way out; a
-  // session that is still live gets no exemption. `witnessEndingDrainedPastFloor` proves
-  // the carve-out is actually exercised, so it cannot be quietly load-bearing.
+  // The `isEnding` carve-out is FM-CLUSTER-097's ruled "unless the link is ending" clause
+  // — ruling R3, 2026-08-20, in .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md
+  // (analysis in .scratch/formal-spec/t9b-blocked.md); see this file's header. It excuses
+  // only a session that has *already* classified its departure, and only for the buffer it
+  // is draining on the way out; a session that is still live gets no exemption. What makes
+  // it safe is stated at the row: a departing replica is not a promotion candidate for the
+  // slot under handoff. `witnessEndingDrainedPastFloor` proves the carve-out is actually
+  // exercised, so it cannot be quietly load-bearing.
   val inv_no_ship_inside_barrier_window: bool =
     BARRIERS.forall(b =>
       SESSIONS.forall(s => {
@@ -500,11 +510,11 @@ module replication_feed_gate {
         coverage.endingDrainedPastBarrierFloor,
         not(defects.gracefulEndDroppedFrames),
         // The carve-out is *reached* here — barrier 1 is still armed on floor 0 and the wire
-        // is at 1 — so this is the gated statement that the disclosed divergence is what the
-        // invariant tolerates. Sampled runs do not reach this state (the witness sits at 0
-        // traces), so without this line the carve-out could be deleted with no oracle
-        // noticing. If the FM-CLUSTER-097 ruling removes the carve-out, this expectation is
-        // the alarm the file header promises.
+        // is at 1 — so this is the gated statement that the ending drain (FM-CLUSTER-097's
+        // "unless the link is ending" clause, ruling R3) is what the invariant permits.
+        // Sampled runs do not reach this state (the witness sits at 0 traces), so without
+        // this line the carve-out could be deleted with no oracle noticing; deleting it
+        // fails here, which is the alarm the file header promises.
         inv_no_ship_inside_barrier_window,
       })
 
