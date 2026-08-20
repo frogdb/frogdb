@@ -27,6 +27,11 @@
 // Import it directly wherever it is needed: Quint's `import M.*` is NOT transitive, so a
 // module that uses `NodeId`/`Option` imports this file itself rather than inheriting it
 // through a sibling.
+//
+// This module models no transition itself — it supplies the vocabulary both consuming
+// models key their per-node state by: `NodeId` anchors cluster_admission's `AddNode`
+// (TR-CLUSTER-005) and cluster_migration_failover's `BeginSlotMigration`
+// (TR-CLUSTER-010), and `Option` is the sum type both machines use throughout.
 module cluster_common_types {
   // The abstract node identifier. Uninterpreted beyond equality and the per-model `NODES`
   // universe that enumerates it.

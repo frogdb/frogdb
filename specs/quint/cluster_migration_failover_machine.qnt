@@ -71,6 +71,17 @@
 //   Escape flags and knobs       — setSourceCannotApply, setSourceCannotDrain,
 //                                  setTargetSilent
 //   step
+//
+// Rows wired by the actions above (guard/update logic lives in
+// cluster_migration_failover_logic.qnt; this file only cites what it *dispatches* to):
+// TR-CLUSTER-004 (setRole), TR-CLUSTER-008/009 (assignSlot/removeSlot), TR-CLUSTER-010
+// (beginMigration), TR-CLUSTER-011 (prepareHandoff), TR-CLUSTER-012 (confirmDrained),
+// TR-CLUSTER-013 (completeMigration), TR-CLUSTER-014 (abortHandoff), TR-CLUSTER-015
+// (cancelMigration), TR-CLUSTER-016 (feedBuffer/disconnectFeed/localReleaseOnCapBreach/
+// selfFenceRelease), TR-CLUSTER-017/018 (failoverGraceful), TR-CLUSTER-024/025
+// (markNodeFailed/markNodeRecovered), TR-CLUSTER-033 (reconcileIdentity), TR-CLUSTER-034
+// (stageFlip/observeRefusal/clearStaleRecord/completeAdoption), TR-CLUSTER-042
+// (failoverForced).
 module cluster_migration_failover_machine {
   import cluster_common_types.* from "./cluster_common_types"
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
