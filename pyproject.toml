@@ -7,7 +7,10 @@ target-version = "py311"
 # formatter rewrites into misleading-but-"valid" code, so keep Markdown out of
 # ruff's file set. `force-exclude` makes the exclusion hold when a caller (editor,
 # hook) passes a .md path explicitly.
-extend-exclude = ["*.md"]
+# `.scratch` holds archived evidence scripts (e.g. mutation-battery drivers with
+# byte-frozen pre-registration snapshots) that must never be reformatted or
+# style-fixed after the fact.
+extend-exclude = ["*.md", ".scratch"]
 force-exclude = true
 
 [tool.ruff.lint]
