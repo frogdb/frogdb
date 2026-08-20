@@ -178,6 +178,23 @@ Each `.qnt` file header cites the spec `TR-`/`INV-`/`CO-` ids it models; the lin
 the citations resolve. Counterexamples found by checking are triaged like defects: ruling →
 spec row → forcing test (or model fix, if the model was wrong).
 
+**Model lifecycle (mandatory, ruled 2026-08-19).** A model is not "done" at green invariants.
+Every model — regardless of size — follows the pipeline the issue-31 rework proved out:
+
+1. **Build** — state + actions from the spec/ruled semantics (never transcribed from code).
+2. **Modularize** — types → logic → machine → main-module layering once it outgrows one file.
+3. **Properties** — invariants + a witness per major action, each witness backed by a
+   deterministic forcing test when the random walk cannot reach it.
+4. **Documented mutation battery** — a per-row table (mutation applied → detector that fired,
+   or MISSED) authored *before* running, committed as a report.
+5. **Gap closure** — every MISSED row is either closed with a new detector or analyzed as a
+   structural limit *in writing* (compound-only visibility, temporal-operator need, missing
+   observable). Unexplained misses block the model's "done" claim.
+
+Exhaustiveness of a model's checking is judged by its battery verdict table, not its
+invariant count. The small-model exemption was considered and rejected: the admission
+model's first-draft `inv_no_usurper` was vacuous precisely at 4 invariants.
+
 **Cadence**: `quint typecheck` + a short `quint run` smoke on every CI run; `quint verify`
 (Apalache backend, bounded/symbolic) in the nightly lane alongside the existing model-check
 and seed nightlies. Bounded verification is a known limit: depth-k unless we author

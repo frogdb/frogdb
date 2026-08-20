@@ -13,10 +13,12 @@ Status: ready-for-human
 > `## Spec / impl blast radius — full verdicts` section (~40+ LOCKED-row rewrites/retires/adds in
 > `specs/cluster.md`, each landing spec-first with its forcing tests, plus the Rust
 > implementation). Needs decomposition into issues/waves and a human ruling on staging before
-> work starts. A dozen design-owner flags from Q2-Q4 (dead design arm 4b of `isRefusalTerminal`,
-> `inv_no_hold_during_staged_flip` semantics, wrong-detector attributions, M32 cross-shard
-> successor observable, etc.) are recorded in the Q2-Q4 reports and should be ruled during that
-> decomposition.
+> work starts. Of the dozen design-owner flags from Q2-Q4, **four were ruled 2026-08-19**
+> (M37 add-discard-leg, `inv_no_hold_during_staged_flip` stageFlip-answers-holds, M32
+> defect-ghost, arm 4b deleted — ledger in
+> [.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md](../../../formal-spec/2026-08-19-quint-completeness-campaign.md),
+> applied to the model in that campaign's W1, which also lands the detector-attribution text
+> corrections); M22/M06 stay accepted structural limits.
 > Do not start independent work on this issue or the slot-migration area.
 
 ## Origin

@@ -3,6 +3,18 @@
 Status: **BLOCKED — needs a design ruling.** Do not weaken the invariant, the guard, or the
 steering to make the gate green.
 
+> **Addendum (same day): steering parked, gates green again.** Progressive quarantine was
+> attempted and abandoned — the same root violates **four** invariants under the steered walk
+> (also `inv_residue_has_an_effective_remover` via a zero-live-primary parent *cycle* 1<->4,
+> `inv_slot_copy_survives_until_owned_and_served`, `inv_no_serve_before_attestation`; seeds
+> 2/777/12345/20260819). Quarantining four core safety properties would gut the model, so the
+> steering commit `477b813c` is reverted by `9c5d6f17` — sampling distribution only, transition
+> relation untouched — and the flat walk is clean again (0/10 seeds at 2000x40, 77 run tests).
+> Re-land = revert `9c5d6f17` after the ruling. Tracked as
+> `.scratch/cluster-correctness/issues/open/41-residue-copy-claim-lost-under-chained-demotion.md`,
+> which also records the M37 discard-leg interaction (tracking-loss becomes modeled copy-loss).
+> "What is red" below describes the pre-revert state.
+
 Filed 2026-08-19 by the T5 (walk steering) task. The steering work itself is complete and
 committed; the gate `just quint-run` is now **intermittently RED on
 `specs/quint/cluster_migration_failover.qnt`** because the deeper walk reaches a state the flat
