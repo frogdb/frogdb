@@ -535,6 +535,13 @@ impl RoleManagerHandle {
             .sync_refusal()
     }
 
+    /// A non-owning view of this node's inbound link. See [`WeakReplicaLink`].
+    pub fn weak_link(&self) -> WeakReplicaLink {
+        WeakReplicaLink {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     /// Adopt a boot-spawned replica handler so a later `promote()`/`demote()`
     /// also stops its reconnect loop. See
     /// [`RoleManager::register_boot_replica_handler`].
@@ -544,6 +551,31 @@ impl RoleManagerHandle {
         primary: SocketAddr,
     ) {
         self.with_lock(|manager| manager.register_boot_replica_handler(handler, primary));
+    }
+}
+
+/// A borrowing view of a [`RoleManagerHandle`]'s inbound-link state, for
+/// observers whose lifetime is not the node's.
+///
+/// The cluster bus answers a peer's `HealthProbe` with this node's link state
+/// (FM-CLUSTER-106), and a bus context lives as long as the bus task. Holding a
+/// `RoleManagerHandle` there would keep the manager — and through it the
+/// replica stream, the stint target and the shard fences, and so the storage
+/// engine — alive past shutdown, which makes a restart-in-place fail to
+/// reacquire the RocksDB lock. A `Weak` observes the same fact without owning
+/// it: once the manager is gone the link reports down, which is the honest
+/// answer a shutting-down node owes a peer scoring it for promotion.
+pub struct WeakReplicaLink {
+    inner: std::sync::Weak<Mutex<RoleManager>>,
+}
+
+impl WeakReplicaLink {
+    /// Whether the inbound stream is up right now; `false` once the manager
+    /// this view was taken from has been dropped.
+    pub fn link_up(&self) -> bool {
+        self.inner
+            .upgrade()
+            .is_some_and(|manager| manager.lock().expect("role manager poisoned").link_up())
     }
 }
 
@@ -1765,6 +1797,37 @@ mod tests {
             attempts.load(Ordering::SeqCst),
             attempts_at_promote,
             "no further connection attempts to the old primary after promote()"
+        );
+    }
+
+    /// Regression: the cluster bus holds this view for the life of the bus
+    /// task. If it held the handle instead, the role manager — and through its
+    /// stream and stint target the storage engine — would outlive shutdown, and
+    /// a restart in place would fail to reacquire the RocksDB lock.
+    #[test]
+    fn the_weak_link_view_does_not_keep_the_role_manager_alive() {
+        let streamer = Arc::new(FakeStreamer::default());
+        let stops = streamer.stops.clone();
+        let handle = RoleManagerHandle::new(RoleManager::new(
+            Arc::new(AtomicBool::new(false)),
+            streamer,
+            None,
+        ));
+        handle.with_lock(|mgr| mgr.demote(addr("127.0.0.1:7000")));
+
+        let link = handle.weak_link();
+        assert_eq!(stops.load(Ordering::SeqCst), 0);
+
+        drop(handle);
+
+        assert_eq!(
+            stops.load(Ordering::SeqCst),
+            1,
+            "the view must not keep the manager (and its stream) alive"
+        );
+        assert!(
+            !link.link_up(),
+            "a node whose role manager is gone has no inbound link"
         );
     }
 }

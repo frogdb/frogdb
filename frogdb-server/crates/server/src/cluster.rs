@@ -19,6 +19,16 @@ pub use frogdb_cluster_runtime::failure_detector::{
 pub use frogdb_cluster_runtime::flags::{self, ClusterRuntimeFlags, SelfFenceGate};
 pub use frogdb_cluster_runtime::pubsub::{self, ClusterPubSubForwarder};
 
+/// The bus reads the node's inbound link through a `Weak` view of the role
+/// manager rather than the manager itself, so the bus task cannot keep the
+/// storage engine alive past shutdown. See
+/// [`WeakReplicaLink`](crate::role_manager::WeakReplicaLink).
+impl ReplicaLinkState for crate::role_manager::WeakReplicaLink {
+    fn master_link_up(&self) -> bool {
+        self.link_up()
+    }
+}
+
 /// The server's [`BusTlsAcceptor`](frogdb_cluster_runtime::bus::BusTlsAcceptor):
 /// inbound cluster-bus TLS, served from the live [`TlsRuntimeHandle`].
 ///
