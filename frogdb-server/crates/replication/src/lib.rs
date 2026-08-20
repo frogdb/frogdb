@@ -33,6 +33,7 @@
 
 pub mod apply;
 pub mod feed_gate;
+pub mod feed_sequencer;
 pub mod frame;
 pub mod fullsync;
 pub mod identity;
@@ -62,6 +63,7 @@ pub use apply::{
     consume_frames, parse_frame_payload,
 };
 pub use feed_gate::ReplicaFeedGate;
+pub use feed_sequencer::{FeedAction, FeedInput, FeedSequencer};
 pub use frame::{
     CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
     serialize_command_to_resp,

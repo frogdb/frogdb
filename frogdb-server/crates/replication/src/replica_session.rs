@@ -12,6 +12,11 @@
 //! the filesystem, the tracker and the spawned read/write tasks live here and
 //! the decisions do not.
 //!
+//! The live feed inside [`Phase::Streaming`] has the same split of its own:
+//! [`crate::feed_sequencer`] decides when a frame ships, when it is buffered
+//! behind an armed slot-handoff barrier and what ends the link, and the write
+//! task below performs the actions it returns.
+//!
 //! # Phases
 //!
 //! ```text
@@ -27,7 +32,6 @@
 //! task termination ended the sync.
 
 use frogdb_types::clock;
-use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -42,6 +46,7 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 
 use crate::BoxedStream;
+use crate::feed_sequencer::{FeedAction, FeedInput, FeedSequencer};
 use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
     CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
@@ -955,16 +960,23 @@ impl ReplicaSession {
         // receiver and the replayed tail cannot leave a gap (step 1 above).
         let mut wal_rx = handler.wal_broadcast.subscribe();
 
-        // A slot-handoff write barrier holds the whole feed, and the replayed
-        // tail is feed too: a session that handshakes mid-barrier would
-        // otherwise pull the held writes straight out of the backlog
-        // (FM-CLUSTER-097). Waiting here rather than capping the tail keeps one
-        // rule for both lanes, and it is safe to wait *after* subscribing —
-        // anything broadcast meanwhile is in the live receiver, and the head is
-        // only read below, so the tail this session replays is whatever the
-        // barrier left behind. The wait is bounded by the barrier's own
-        // deadline (see `ReplicaFeedGate`).
-        handler.feed_gate.released().await;
+        // What this feed does — when a frame goes on the wire, when it is
+        // buffered behind an armed slot-handoff barrier, what ends the link —
+        // is [`FeedSequencer`]'s; this method and the write task below only
+        // perform what it asks for.
+        let mut sequencer = FeedSequencer::new();
+
+        // Its first demand is the barrier wait: the replayed tail is feed too,
+        // so a session that handshakes mid-barrier would otherwise pull the
+        // held writes straight out of the backlog (FM-CLUSTER-097). Waiting
+        // here rather than capping the tail keeps one rule for both lanes, and
+        // it is safe to wait *after* subscribing — anything broadcast meanwhile
+        // is in the live receiver, and the head is only read below, so the tail
+        // this session replays is whatever the barrier left behind. The wait is
+        // bounded by the barrier's own deadline (see `ReplicaFeedGate`).
+        if matches!(sequencer.start(), FeedAction::AwaitRelease) {
+            handler.feed_gate.released().await;
+        }
 
         // Replay the backlog handoff tail `(replay_from, current]` ahead of the
         // live tail (steps 2). `resume_offset` tracks the last offset actually
@@ -1062,124 +1074,40 @@ impl ReplicaSession {
         let write_timeout = frame_write_timeout(handler.write_timeout_ms);
 
         let feed_gate = handler.feed_gate.clone();
+        // The handoff lane is behind us: the barrier released and the tail is on
+        // the wire up to `resume_offset`. From here the sequencer decides and
+        // this task performs.
+        let mut action = sequencer.step(FeedInput::HandoffReplayed { resume_offset });
         let write_task = tokio::spawn(async move {
-            // Frames the slot-handoff feed hold is keeping off the wire, in
-            // offset order (FM-CLUSTER-097). Empty whenever no barrier is armed,
-            // which is the overwhelmingly common case. Buffering here rather
-            // than leaving the frames in the broadcast channel is what keeps a
-            // held session from tripping the `Lagged` disconnect and resyncing
-            // its way around the barrier; the buffer is bounded by the writes a
-            // node takes inside one barrier window, because the gate expires
-            // itself on the deadline the barrier armed it with.
-            let mut held: VecDeque<ReplicationFrame> = VecDeque::new();
-            // Single live frame source: `wal_broadcast`. Subscribe, replay,
-            // forward-or-break.
-            'session: loop {
-                // Take the next frame, then — for as long as the feed is held —
-                // keep draining the broadcast into `held` instead of writing.
-                match wal_rx.recv().await {
-                    Ok(frame) => {
-                        // Dedup the handoff overlap: frames already sent via the
-                        // backlog replay (sequence <= resume_offset) must not be
-                        // re-sent, or the replica double-applies.
-                        if frame.sequence > resume_offset {
-                            held.push_back(frame);
-                        }
+            loop {
+                let input = match action {
+                    FeedAction::AwaitRelease => {
+                        feed_gate.released().await;
+                        FeedInput::HandoffReplayed { resume_offset }
                     }
-                    // The primary's own broadcaster went away (this node is
-                    // shutting down or ending its primary stint): the link is
-                    // being closed from this side, not lost.
-                    Err(broadcast::error::RecvError::Closed) => break ReplicaDeparture::Graceful,
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(
-                            replica_id = lag_replica_id,
-                            lagged = n,
-                            "Replica lagged in WAL stream, disconnecting for resync"
-                        );
-                        break ReplicaDeparture::Lost;
-                    }
-                }
-
-                // Wait the barrier out, still draining, so ordering is exactly
-                // the order the offsets were minted in.
-                let mut ended: Option<ReplicaDeparture> = None;
-                while feed_gate.is_held() {
-                    tokio::select! {
-                        received = wal_rx.recv() => match received {
-                            Ok(frame) => {
-                                if frame.sequence > resume_offset {
-                                    held.push_back(frame);
-                                }
-                            }
-                            // Flush what the barrier was holding before ending:
-                            // the link is closing, not being fenced.
-                            Err(broadcast::error::RecvError::Closed) => {
-                                ended = Some(ReplicaDeparture::Graceful);
-                                break;
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(
-                                    replica_id = lag_replica_id,
-                                    lagged = n,
-                                    "Replica lagged in WAL stream, disconnecting for resync"
-                                );
-                                ended = Some(ReplicaDeparture::Lost);
-                                break;
-                            }
-                        },
-                        _ = feed_gate.released() => {}
-                    }
-                }
-
-                // The feed is free: ship everything buffered, in offset order.
-                while let Some(frame) = held.pop_front() {
-                    let encoded = match frame.encode() {
-                        Ok(encoded) => encoded,
-                        Err(e) => {
-                            // Unreplicable, and no reconnect can change that
-                            // — the same frame comes back from the backlog.
-                            // Drop the link loudly rather than put a frame
-                            // with a wrapped length prefix on the wire.
-                            tracing::error!(
-                                replica_id = lag_replica_id,
-                                sequence = frame.sequence,
-                                error = %e,
-                                "Replication frame exceeds the link's frame ceiling; dropping the replica link"
-                            );
-                            break 'session ReplicaDeparture::Lost;
-                        }
-                    };
-                    match forward_frame(&mut write_half, &encoded, write_timeout, lag_replica_id)
+                    FeedAction::Receive => classify_feed_frame(wal_rx.recv().await, lag_replica_id),
+                    // A barrier is armed: race the broadcast against its release
+                    // so the session keeps draining the channel instead of
+                    // lagging off it (FM-CLUSTER-097).
+                    FeedAction::ReceiveOrRelease => tokio::select! {
+                        received = wal_rx.recv() => classify_feed_frame(received, lag_replica_id),
+                        _ = feed_gate.released() => FeedInput::Released,
+                    },
+                    FeedAction::ConsultGate => FeedInput::GateHeld(feed_gate.is_held()),
+                    FeedAction::Send(frame) => {
+                        send_feed_frame(
+                            &mut write_half,
+                            &frame,
+                            write_timeout,
+                            lag_replica_id,
+                            &lag_tracker,
+                            &mut lag_policy,
+                        )
                         .await
-                    {
-                        Forward::Continue => {
-                            // The frame lane (hardening issue 29) — only
-                            // bytes actually written to the wire, never
-                            // bytes merely encoded: a `Break` below means
-                            // the write did not land, or landed partially,
-                            // and must not be counted as sent.
-                            lag_tracker
-                                .net_bytes_handle()
-                                .record_output(encoded.len() as u64);
-                        }
-                        Forward::Break => break 'session ReplicaDeparture::Lost,
                     }
-                    if let Some(breach) = lag_policy.should_disconnect(&lag_tracker, lag_replica_id)
-                    {
-                        tracing::warn!(
-                            replica_id = lag_replica_id,
-                            byte_exceeded = breach.byte_exceeded,
-                            time_exceeded = breach.time_exceeded,
-                            "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
-                        );
-                        lag_tracker.record_lag_disconnect(lag_replica_id);
-                        break 'session ReplicaDeparture::Lost;
-                    }
-                }
-
-                if let Some(departure) = ended {
-                    break 'session departure;
-                }
+                    FeedAction::End(departure) => break departure,
+                };
+                action = sequencer.step(input);
             }
         });
 
@@ -1605,6 +1533,83 @@ fn frame_write_timeout(write_timeout_ms: u64) -> Option<Duration> {
     } else {
         None
     }
+}
+
+/// Classify what the WAL broadcast handed the write task, for
+/// [`FeedSequencer::step`].
+///
+/// The logging is the driver's: the sequencer is told *that* the receiver
+/// lagged, not by how much.
+fn classify_feed_frame(
+    received: Result<ReplicationFrame, broadcast::error::RecvError>,
+    replica_id: u64,
+) -> FeedInput {
+    match received {
+        Ok(frame) => FeedInput::Received(frame),
+        // The primary's own broadcaster went away (this node is shutting down
+        // or ending its primary stint): the link is being closed from this
+        // side, not lost.
+        Err(broadcast::error::RecvError::Closed) => FeedInput::SourceClosed,
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+            tracing::warn!(
+                replica_id,
+                lagged = n,
+                "Replica lagged in WAL stream, disconnecting for resync"
+            );
+            FeedInput::SourceLagged
+        }
+    }
+}
+
+/// Put one frame the sequencer released on the wire, and report back the two
+/// facts it decides on: whether the frame landed, and whether the lag policy
+/// has had enough of this replica.
+async fn send_feed_frame(
+    write_half: &mut (impl AsyncWrite + Unpin),
+    frame: &ReplicationFrame,
+    timeout: Option<Duration>,
+    replica_id: u64,
+    tracker: &ReplicationTrackerImpl,
+    lag_policy: &mut LagPolicy,
+) -> FeedInput {
+    let encoded = match frame.encode() {
+        Ok(encoded) => encoded,
+        Err(e) => {
+            // Unreplicable, and no reconnect can change that — the same frame
+            // comes back from the backlog. Drop the link loudly rather than put
+            // a frame with a wrapped length prefix on the wire.
+            tracing::error!(
+                replica_id,
+                sequence = frame.sequence,
+                error = %e,
+                "Replication frame exceeds the link's frame ceiling; dropping the replica link"
+            );
+            return FeedInput::SendFailed;
+        }
+    };
+    match forward_frame(write_half, &encoded, timeout, replica_id).await {
+        // The frame lane (hardening issue 29) — only bytes actually written to
+        // the wire, never bytes merely encoded: a `Break` means the write did
+        // not land, or landed partially, and must not be counted as sent.
+        Forward::Continue => tracker
+            .net_bytes_handle()
+            .record_output(encoded.len() as u64),
+        Forward::Break => return FeedInput::SendFailed,
+    }
+    let lag_breached = match lag_policy.should_disconnect(tracker, replica_id) {
+        Some(breach) => {
+            tracing::warn!(
+                replica_id,
+                byte_exceeded = breach.byte_exceeded,
+                time_exceeded = breach.time_exceeded,
+                "Replica exceeded lag threshold, disconnecting for FULLRESYNC"
+            );
+            tracker.record_lag_disconnect(replica_id);
+            true
+        }
+        None => false,
+    };
+    FeedInput::Sent { lag_breached }
 }
 
 async fn forward_frame(
