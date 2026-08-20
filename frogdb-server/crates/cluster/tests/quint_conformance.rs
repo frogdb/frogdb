@@ -10,15 +10,75 @@
 //! not reachable from this external `tests/` crate). No production API was widened
 //! for this harness.
 //!
-//! ## Projection coverage (projection-blindness guard)
+//! ## STATUS: FULLY QUARANTINED (quint-completeness campaign, W0)
 //!
-//! The model's state (declared in `cluster_migration_failover_machine.qnt`, the machine
-//! module `cluster_migration_failover.qnt` imports) is:
-//! `nodes, slots, migrations, handoff_seq, epoch, node_epoch`, plus a set of ghost /
-//! derived variables that exist only to make the model's own guards and postconditions
-//! expressible and have **no counterpart in `ClusterState`**.
+//! **Every model-replay test in this file is `#[ignore]`d.** The issue-31 Quint rework
+//! (`ce75ec0d`) rewrote `specs/quint/cluster_migration_failover*.qnt` to the
+//! source-authoritative-until-commit design; this harness still projects the *pre-rework*
+//! state shape and still hardcodes the *pre-rework* run scripts, so no trace in the model
+//! replays against it any more. The rebuild is deliberately deferred to the issue-31
+//! implementation campaign (~40 LOCKED spec rows are pending amendment; building the
+//! projection before them means building it twice). See
+//! `.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`, wave W0.
 //!
-//! Covered below (every field a modeled TR postcondition touches, per the task brief):
+//! Four independent breaks, each confirmed empirically on `ce75ec0d`:
+//!
+//!  1. **State shape.** `ClusterProjection` below requires
+//!     `nodes, slots, migrations, handoff_seq, epoch, node_epoch`. The reworked machine
+//!     (`cluster_migration_failover_machine.qnt`) declares 14 vars —
+//!     `nodes, slots, migrations, shadow, residue, stream_history, held, feed_bytes,
+//!     refusals, barriers, spent, ctl, defects, coverage` — with the old top-level
+//!     counters folded into `ctl` (`handoff_seq`, `epoch`, `prev_epoch`, `reset_epoch`,
+//!     `next_mig`, `next_reg`, `next_run`, plus the `prev_parents`/`prev_keys` step
+//!     shadows) and `node_epoch` folded into `NodeState`. Every replay therefore dies at
+//!     step 0 with "Failed to deserialize specification's state: missing field
+//!     `handoff_seq`" — the projection never gets to compare anything.
+//!  2. **Deleted run tests.** Five scripts below name runs that no longer exist
+//!     (`quint run --init <name>` answers `[QNT404] Name '<name>' not found`, surfacing
+//!     here as `Failed to execute Quint command`): `abortRepatriatesTest`,
+//!     `cancelBeforeRepatriationTest`, `cancelRefusedWhileRepatriatingTest`,
+//!     `cancelWithoutResidueAppliesImmediatelyTest`, `feedHoldOverflowDisconnectsTest`.
+//!     Repatriation is gone from the design entirely (`shadow`/`residue`/`reapSlots`
+//!     replace it); the cancel and feed-hold families have differently-shaped successors
+//!     (`cancelAppliesInOneStepTest`, `feedHoldCapBreachReleasesTest`).
+//!  3. **Rewritten bodies under surviving names.** A surviving run name is *not* a
+//!     surviving trace. `happyMigrationTest` grew from 5 steps to 9
+//!     (`… completeMigration -> relabelShadow -> reportPromoted -> reapSlots ->
+//!     clearSlotResidue`); action arities changed (`beginMigration(s, src, tgt, force)`,
+//!     `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`); and
+//!     `init` now seeds a different topology (node 1 primary of *all four* slots holding
+//!     every copy, 2 and 3 its replicas, 4 a slotless primary) where
+//!     `ClusterDriver::init` below still seeds the old 1/2-primaries-with-two-slots-each
+//!     shape. So `ScriptedDriver`'s action-name assertion and every hardcoded argument
+//!     list are stale even where the `init = "…"` target still resolves.
+//!  4. **Simulation decode.** `step`'s `any` block grew from 19 arms to ~60, and its
+//!     `nondet` bindings were renamed wholesale (now `n1, n2, s, r, flag, kind, role,
+//!     obsEpoch, obsRole, obsSeq, obsReg, att`). `switch!` decodes a handler parameter by
+//!     looking its Rust identifier up verbatim in `mbt::nondetPicks`, so the arms in
+//!     `impl Driver for ClusterDriver` neither cover most sampled actions (they silently
+//!     `stutter` — the driver no-ops while the model advances) nor resolve their
+//!     parameters. The simulation half needs its `switch!` block rewritten, not just a
+//!     new projection.
+//!
+//! What the rebuild has to do (not attempted here): project the 14-var shape, re-derive
+//! every script from the reworked Tests section, and re-seed `ClusterDriver::init` to the
+//! new topology. **No test function was deleted** — every one is quarantined in place with
+//! its failure class recorded in its `#[ignore]` text, so each impl wave can un-quarantine
+//! the traces it makes replayable rather than re-deriving the list.
+//!
+//! One test is deliberately live: `driver_seeds_and_projects_pre_rework_topology` at the
+//! bottom. It is model-free (no `quint_run`) and is *not* a conformance check — it pins the
+//! driver/projection plumbing the rebuild will replace, and keeps this binary from being
+//! entirely ignored (`cargo nextest` exits non-zero with `no tests to run` when every test
+//! in a selection is skipped, which would make `just quint-conformance` red for a reason
+//! unrelated to conformance).
+//!
+//! ## Projection coverage of the PRE-rework model (retained for the rebuild)
+//!
+//! Everything in this section describes the superseded model. It is kept because the
+//! rebuild starts from it, not because it is current.
+//!
+//! Covered by `ClusterProjection`:
 //!   - `nodes`: `role`, `parent`, `member`, `fail`               -> `NodeProj`
 //!   - `slots`: owner                                             -> `ClusterProjection::slots`
 //!   - `migrations`: `source`, `target`, `handoff.seq`, `handoff.drained`
@@ -28,41 +88,44 @@
 //!     mirroring the model's own increments would defeat this exact guard by construction,
 //!     since a code mutation to the real counter would have no shadow to disagree with)
 //!
-//! Excluded, and why (ghost/derived state with no `ClusterState` counterpart):
-//!   - `migrations.*.cancelling` — no residue/repatriation bookkeeping exists in code
-//!     (see divergences below); there is nothing to project it onto.
-//!   - `armed_barriers`, `failover_fence` — the model's explicit barrier-arm ghost
-//!     state (`armFailoverFence`). NOT unprojectable in principle: `barrierArmed(s)` is
-//!     a pure function of state this harness already carries (a live, undrained
-//!     `SlotHandoff` inside its window, via `MigrationProj`/`HandoffProj`), and
-//!     `SlotHandoff`'s window predicates live in `frogdb-cluster`'s own `types.rs`, not
-//!     `frogdb-cluster-runtime`. Excluded here as redundant with
+//! Excluded from it, with the pre-rework reasoning:
+//!   - `migrations.*.cancelling`, `provisional_target`, `repatriating` — pre-rework ghost
+//!     state for the repatriation phase. **All three no longer exist in the model either**
+//!     (`ce75ec0d` deleted them); the redesign's replacements (`shadow`, `residue`,
+//!     `stream_history`, `held`) are unprojected here because nothing in this harness has
+//!     been pointed at them yet.
+//!   - `armed_barriers`, `failover_fence` — the model's barrier-arm ghost state (now the
+//!     `barriers` record). NOT unprojectable in principle: `barrierArmed(s)` is a pure
+//!     function of state this harness already carries (a live, undrained `SlotHandoff`
+//!     inside its window, via `MigrationProj`/`HandoffProj`), and `SlotHandoff`'s window
+//!     predicates live in `frogdb-cluster`'s own `types.rs`. Excluded as redundant with
 //!     `migrations.*.handoff` rather than as permanently unprojectable; the production
-//!     barrier *planner* (`handoff_barrier.rs::plan_handoff_action`, which acts on that
-//!     state) does live in `frogdb-cluster-runtime` and is out of this crate's reach,
-//!     but that is a reason not to drive the planner from here, not a reason the ghost
-//!     state itself has no counterpart.
-//!   - `provisional_target` — a ghost "who provisionally owns this slot" tracker with
-//!     no code counterpart (code has no provisional-ownership concept distinct from
-//!     `slot_assignment`).
-//!   - `feed_bytes`, `disconnected_feed` — model the byte-cap replication feed hold
+//!     barrier *planner* (`handoff_barrier.rs::plan_handoff_action`) does live in
+//!     `frogdb-cluster-runtime` and is out of this crate's reach, but that is a reason not
+//!     to drive the planner from here, not a reason the ghost state has no counterpart.
+//!   - `feed_bytes`, `disconnected_feed` — the byte-cap replication feed hold
 //!     (`feedBuffer`); `ClusterCommand` has no matching variant at all.
-//!   - `repatriating` — the model's repatriation-phase membership set; code has no
-//!     `CompleteRepatriation` command and no residue bookkeeping.
-//!   - `prev_epoch`, `spent`, `defects{demotion,fence,barrier,admission,seqReuse}`,
-//!     `coverage{...}` — pure bookkeeping/coverage-instrumentation internal to the
-//!     model, never referenced by `ClusterState`.
+//!   - `prev_epoch`, `spent`, `defects{...}`, `coverage{...}` — bookkeeping and
+//!     coverage instrumentation internal to the model, never referenced by `ClusterState`.
+//!
+//! Not covered, and not yet analysed for projectability — the rework's new vars:
+//! `shadow`, `residue`, `stream_history`, `held`, `refusals`, `barriers`, `ctl` (all
+//! fields), and the per-node fields folded into `NodeState` (`keys`, `run_id`,
+//! `registration_seq`, `stored_identity`, `synced`, `stage_counter`, `silent`, ...).
 //!
 //! ## Known divergences (code lags the model's *ruled* target semantics)
 //!
-//! The model's header states plainly that it encodes the RULED/AMENDED semantics for
-//! issues 15, 17, 19, 20 and 26 — not today's code. Every divergence below traces to
-//! one of those five filed, `ready-for-agent` (Pending) issues:
+//! These predate the rework and are still the reason most traces would diverge even once
+//! the projection is rebuilt. The superseded model's header stated it encoded the
+//! RULED/AMENDED semantics for issues 15, 17, 19, 20 and 26 — not today's code; the
+//! reworked model additionally encodes issue 31's redesign. Each divergence below traces
+//! to a filed, `ready-for-agent` (Pending) issue:
 //!
 //!   - issue 15 (`.scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md`):
 //!     graceful (`force: false`) `Failover` never prunes migrations sourced at the old
-//!     primary, and there is no repatriation phase (`CancelSlotMigration` /
-//!     `AbortSlotHandoff` apply immediately, unconditionally, with no residue tracking).
+//!     primary. (Its repatriation half is **superseded** by issue 31's
+//!     source-authoritative-until-commit ruling — see the campaign doc; the code still has
+//!     no residue bookkeeping either way.)
 //!   - issue 17 (`.scratch/cluster-correctness/issues/open/17-*.md`, byte-cap feed hold
 //!     amendment): `PrepareSlotHandoff` *refuses* (`HandoffNotReady`) a re-prepare over
 //!     a live (unexpired-lease) handoff, rather than superseding it; and there is no
@@ -79,19 +142,10 @@
 //!     no drain/offset-parity barrier exists on the graceful failover path at all
 //!     (`Failover{force: false}` proposes and applies immediately).
 //!
-//! Every named-run test below whose trace exercises one of these paths is
-//! `#[ignore = "pending issue NN — ..."]`-annotated citing the issue file, with the
-//! `#[ignore]` text stating the *observed* first failure verbatim (a panic inside
-//! `apply_command`, a returned-`Ok` refusal that should have been `Err`, or a plain
-//! projection mismatch) rather than an inferred one — run
-//! `just quint-conformance-quarantine` to reproduce any of them directly. Two
-//! quarantine-shaped tests, `abort_repatriates_test` and
-//! `feed_hold_overflow_disconnects_test`, in fact pass and are *not* `#[ignore]`d: the
-//! model state they would diverge on is excluded from `ClusterProjection` (see above),
-//! so their pass is weak (real shared-field coverage, not evidence the cited issue is
-//! fixed) — each has a comment saying so at its definition. Every other test that
-//! stays in the default suite genuinely does not exercise a divergent path (confirmed
-//! empirically, not merely by inspection).
+//! Each `#[ignore]` below records the test's **W0 failure class** (deleted run test vs.
+//! 14-var deserialize) first, then the pre-rework divergence it was quarantined for, if
+//! any. Run `just quint-conformance-quarantine` to reproduce them: that lane is expected
+//! to be red for the whole duration of the quarantine, and its output is the worklist.
 //!
 //! ## Ghost-field finding (issue 33): removed-node role/parent normalization
 //!
@@ -116,11 +170,15 @@
 //! Until that model fix lands, `ScriptedProj::from_spec`'s
 //! `normalize_removed_node_ghost_fields` (below) applies the same blanking on the spec
 //! side, as a total, case-independent normalization — not a per-test workaround — so
-//! both tests stay live in the default suite with their real slot-pruning/reparenting
-//! assertions intact. This normalization is scoped to `ScriptedDriver`/`ScriptedProj`
-//! only: the simulation tests below use the plain `ClusterDriver`/`ClusterProjection`
-//! pair and remain exposed to this finding on any sampled trace that reaches
-//! `removeNode`.
+//! both tests kept their real slot-pruning/reparenting assertions intact. This
+//! normalization is scoped to `ScriptedDriver`/`ScriptedProj` only: the simulation tests
+//! below use the plain `ClusterDriver`/`ClusterProjection` pair and remain exposed to this
+//! finding on any sampled trace that reaches `removeNode`.
+//!
+//! W0 note: both tests are now quarantined for the 14-var deserialize break above, which
+//! fires before this normalization is ever consulted — the finding is unchanged and the
+//! normalization is retained for the rebuild. Issue 33's model-side fix is scheduled in
+//! the campaign's W1 wave.
 //!
 //! ## Design note: `removeNode`'s `force` flag is not representable
 //!
@@ -183,6 +241,12 @@
 //! refusal itself is still asserted directly in each affected run's terminal scripted
 //! closure (`assert!(result.is_err(), ...)` against `ClusterState::apply_local`'s own
 //! return). Search this file for "Terminal `.fail()` step" to find all five.
+//!
+//! W0 note: of those five pre-rework runs, `cancelRefusedWhileRepatriatingTest` no longer
+//! exists in the model at all; the other four survive by name with rewritten bodies. The
+//! mechanism itself (`NoSpecState` + the two opt-in cells) is model-independent and is
+//! retained unchanged for the rebuild — the reworked model uses the same `.fail()` idiom
+//! in ~20 runs.
 //!
 //! That per-step error handling only reaches the test failure message intact because
 //! of a companion fix (final-review I2): quint-connect's `replay_traces` owns the
@@ -493,7 +557,10 @@ impl ClusterDriver {
         );
     }
 
-    // No code counterpart: no `CompleteRepatriation` command exists (issue 15).
+    // No code counterpart: no `CompleteRepatriation` command exists (issue 15). The
+    // `completeRepatriation` *model* action is gone too as of `ce75ec0d` — issue 31's
+    // source-authoritative-until-commit ruling superseded repatriation outright — so this
+    // no-op and its `switch!` arm are dead weight the rebuild removes.
     fn complete_repatriation(&mut self, _s: i64) {}
 
     fn mark_node_failed(&mut self, n: i64) {
@@ -616,6 +683,12 @@ impl State<ClusterDriver> for ClusterProjection {
 }
 
 // ## Nondet-pick names (simulation driver only)
+//
+// **Stale as of `ce75ec0d` (W0, module header break 4).** The reworked `step` binds
+// `n1, n2, s, r, flag, kind, role, obsEpoch, obsRole, obsSeq, obsReg, att` and offers ~60
+// action arms; none of the names below resolve any more, and most arms are missing
+// entirely. Kept verbatim because it documents exactly *how* `switch!` binds parameters,
+// which the rebuild needs — but every name it lists is now wrong.
 //
 // The model's `step` action (the only place `nondet` appears in this spec) binds
 // exactly 12 names into `mbt::nondetPicks`: `s, n1, n2, handoffSlot, succGuess,
@@ -1011,13 +1084,18 @@ impl Drop for ScriptedDriver {
 // ---------------------------------------------------------------------------
 
 // (a) Full happy migration: begin -> prepare -> confirm drained -> complete.
-// No failover/repatriation/fence involved; matches code exactly.
+// No failover/repatriation/fence involved; matched code exactly before the rework. The
+// reworked `happyMigrationTest` continues past `completeMigration` through
+// `relabelShadow -> reportPromoted -> reapSlots -> clearSlotResidue`, none of which have
+// a `ClusterCommand` counterpart yet — so this is the trace the impl campaign should
+// re-derive first.
 #[quint_run(
     spec = "../../../specs/quint/cluster_migration_failover.qnt",
     init = "happyMigrationTest",
     max_steps = 0,
     max_samples = 1
 )]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. `happyMigrationTest` survives by name but grew from 5 steps to 9 (adds relabelShadow, reportPromoted, reapSlots, clearSlotResidue), so the hardcoded script below is stale too. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0."]
 fn happy_migration_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1034,7 +1112,7 @@ fn happy_migration_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 15 — observed failure is a panic inside production code, not a projection mismatch: commands.rs:108 `cluster state invariants violated after apply_command: INV-MIG-1: slot 1 is migrating from 1 but is owned by 3` (graceful Failover never prunes migrations sourced at the old primary); see issue 15's witness section and .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 15 — graceful Failover never prunes migrations sourced at the old primary; before the rework the observed failure was a panic inside production code (commands.rs:108 `cluster state invariants violated after apply_command: INV-MIG-1: slot 1 is migrating from 1 but is owned by 3`); see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn graceful_failover_before_prepare_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1050,7 +1128,7 @@ fn graceful_failover_before_prepare_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 15 — observed failure is a panic inside production code, not a missing barrier: commands.rs:108 `cluster state invariants violated after apply_command: INV-MIG-1: slot 1 is migrating from 1 but is owned by 3` (graceful Failover never prunes migrations sourced at the old primary); previously miscited to issue 26 (F2/F4) — see issue 15's witness section and .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 15 — same INV-MIG-1 panic as above rather than the missing barrier this run is about (previously miscited to issue 26); see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn graceful_failover_refuses_without_barrier_test() -> ScriptedDriver {
     ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
@@ -1082,7 +1160,7 @@ fn graceful_failover_refuses_without_barrier_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 15 — observed failure is a panic inside production code, not a projection mismatch: commands.rs:108 `cluster state invariants violated after apply_command: INV-MIG-1: slot 1 is migrating from 1 but is owned by 3` (graceful Failover never prunes migrations sourced at the old primary); see issue 15's witness section and .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 15 — same INV-MIG-1 panic; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn graceful_failover_armed_not_drained_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1099,7 +1177,7 @@ fn graceful_failover_armed_not_drained_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 15 — observed failure is a panic inside production code, not a projection mismatch: commands.rs:108 `cluster state invariants violated after apply_command: INV-MIG-1: slot 1 is migrating from 1 but is owned by 3` (graceful Failover never prunes migrations sourced at the old primary); see issue 15's witness section and .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 15 — same INV-MIG-1 panic; the reworked run additionally ends with a discardShadow step code has no counterpart for; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn graceful_failover_drained_not_complete_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1117,13 +1195,15 @@ fn graceful_failover_drained_not_complete_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-// PASSES today, but weakly (F2): `repatriating`/`provisional_target` are excluded from
-// `ClusterProjection` (issue 15 — no repatriation phase exists in code at all, so there is
-// nothing on the driver side to project), so this test cannot observe a divergence on those
-// fields either way — only on the fields it shares with the happy-path projection (which
-// `AbortSlotHandoff` does implement correctly: it clears the handoff and keeps the migration
-// record). Left in the default suite because that shared-field coverage is real; not
-// evidence that issue 15's repatriation phase is implemented.
+// Passed before the rework, but weakly (F2): `repatriating`/`provisional_target` were
+// excluded from `ClusterProjection` (issue 15 — no repatriation phase exists in code at
+// all, so there was nothing on the driver side to project), so this test could not observe
+// a divergence on those fields either way — only on the fields it shares with the
+// happy-path projection (which `AbortSlotHandoff` does implement correctly: it clears the
+// handoff and keeps the migration record). Its pass was never evidence that issue 15's
+// repatriation phase was implemented, and the rework has now deleted repatriation from the
+// design outright, so the trace itself is gone (see the `#[ignore]`).
+#[ignore = "W0 quarantine: the model run test `abortRepatriatesTest` was deleted by the issue-31 rework (ce75ec0d) — `quint run --init abortRepatriatesTest` answers `[QNT404] Name not found`, which surfaces here as `Failed to execute Quint command`. Repatriation is gone from the design entirely (source-authoritative-until-commit); `shadow`/`residue`/`reapSlots` replace it, so this trace has no direct successor run. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0."]
 fn abort_repatriates_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1141,7 +1221,7 @@ fn abort_repatriates_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 15 — no repatriation phase exists in code: CancelSlotMigration removes the record unconditionally and immediately, with no `cancelling`/residue bookkeeping; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
+#[ignore = "W0 quarantine: the model run test `cancelBeforeRepatriationTest` was deleted by the issue-31 rework (ce75ec0d) — `quint run --init cancelBeforeRepatriationTest` answers `[QNT404] Name not found`, which surfaces here as `Failed to execute Quint command`. Repatriation is gone from the design entirely (source-authoritative-until-commit); `shadow`/`residue`/`reapSlots` replace it, so this trace has no direct successor run. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 15 — CancelSlotMigration removes the record unconditionally and immediately, with no residue bookkeeping; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn cancel_before_repatriation_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1159,7 +1239,7 @@ fn cancel_before_repatriation_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 15 — no repatriation phase exists in code, so there is no repatriating-phase re-entry guard to refuse a second Cancel; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
+#[ignore = "W0 quarantine: the model run test `cancelRefusedWhileRepatriatingTest` was deleted by the issue-31 rework (ce75ec0d) — `quint run --init cancelRefusedWhileRepatriatingTest` answers `[QNT404] Name not found`, which surfaces here as `Failed to execute Quint command`. Repatriation is gone from the design entirely (source-authoritative-until-commit); `shadow`/`residue`/`reapSlots` replace it, so this trace has no direct successor run. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 15 — no repatriating-phase re-entry guard exists to refuse a second Cancel; see .scratch/cluster-correctness/issues/open/15-graceful-failover-leaves-migrations-sourced-at-the-old-primary.md"]
 fn cancel_refused_while_repatriating_test() -> ScriptedDriver {
     ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
@@ -1184,14 +1264,17 @@ fn cancel_refused_while_repatriating_test() -> ScriptedDriver {
 }
 
 // The no-residue case: cancelling a migration that never reached a drained
-// handoff removes the record immediately in both the model and the code —
-// no repatriation phase applies, so this one does not diverge.
+// handoff removed the record immediately in both the model and the code —
+// no repatriation phase applied, so this one did not diverge. Under the rework
+// *every* cancel resolves in one step, which is why the run was replaced rather
+// than kept alongside a residue-bearing sibling.
 #[quint_run(
     spec = "../../../specs/quint/cluster_migration_failover.qnt",
     init = "cancelWithoutResidueAppliesImmediatelyTest",
     max_steps = 0,
     max_samples = 1
 )]
+#[ignore = "W0 quarantine: the model run test `cancelWithoutResidueAppliesImmediatelyTest` was deleted by the issue-31 rework (ce75ec0d) — `quint run --init cancelWithoutResidueAppliesImmediatelyTest` answers `[QNT404] Name not found`, which surfaces here as `Failed to execute Quint command`. Successor run: `cancelAppliesInOneStepTest`, which resolves the record in a single step and takes `cancelMigration(slot, mig)`. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0."]
 fn cancel_without_residue_applies_immediately_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1206,7 +1289,7 @@ fn cancel_without_residue_applies_immediately_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 17 — code's PrepareSlotHandoff refuses (HandoffNotReady) a re-prepare while the current handoff's lease has not expired, rather than superseding it; see .scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 17 — code's PrepareSlotHandoff refuses (HandoffNotReady) a re-prepare while the current handoff's lease has not expired, rather than superseding it; see .scratch/cluster-correctness/issues/open/17-stale-source-outlives-its-write-barrier.md"]
 fn prepare_supersedes_live_handoff_test() -> ScriptedDriver {
     ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
@@ -1238,7 +1321,7 @@ fn prepare_supersedes_live_handoff_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 20 — code's force:true Failover branch removes the old primary from the node table rather than demoting it (demote-don't-remove is implemented on the graceful branch only); see .scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 20 — code's force:true Failover branch removes the old primary from the node table rather than demoting it; see .scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md"]
 fn forced_failover_demotes_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1254,7 +1337,7 @@ fn forced_failover_demotes_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 19 — ClusterCommand::Failover has no per-object fence fields (no obsEpoch/obsRole) and no fence check, so a stale proposal is never refused; see .scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 19 — ClusterCommand::Failover has no per-object fence fields (no obsEpoch/obsRole) and no fence check, so a stale proposal is never refused; see .scratch/cluster-correctness/issues/open/19-a-forced-failover-promotes-a-node-that-inherits-nothing.md"]
 fn failover_refuses_stale_fence_test() -> ScriptedDriver {
     ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
@@ -1283,12 +1366,12 @@ fn failover_refuses_stale_fence_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-// PASSES today, but weakly (F2): `feed_bytes`/`disconnected_feed` are excluded from
-// `ClusterProjection` (issue 17 — no `FeedBuffer`-shaped command exists in code at all, so
-// `ClusterDriver::feed_buffer` is a no-op), so this test cannot observe a divergence on
-// those fields either way. Left in the default suite for the same reason as
-// `abort_repatriates_test` above (whatever shared-field coverage the surrounding
-// begin/prepare steps exercise); not evidence the byte-cap hold is implemented.
+// Passed before the rework, but weakly (F2): `feed_bytes`/`disconnected_feed` are excluded
+// from `ClusterProjection` (issue 17 — no `FeedBuffer`-shaped command exists in code at
+// all, so `ClusterDriver::feed_buffer` is a no-op), so this test could not observe a
+// divergence on those fields either way — same weak-pass class as `abort_repatriates_test`
+// above, and never evidence the byte-cap hold is implemented.
+#[ignore = "W0 quarantine: the model run test `feedHoldOverflowDisconnectsTest` was deleted by the issue-31 rework (ce75ec0d) — `quint run --init feedHoldOverflowDisconnectsTest` answers `[QNT404] Name not found`, which surfaces here as `Failed to execute Quint command`. Successor runs: `feedHoldCapBreachReleasesTest` and `feedHoldCapBreachReleasesFenceTest`; the `feedBuffer` action itself survives. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0."]
 fn feed_hold_overflow_disconnects_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1306,7 +1389,7 @@ fn feed_hold_overflow_disconnects_test() -> ScriptedDriver {
     max_steps = 0,
     max_samples = 1
 )]
-#[ignore = "pending issue 20 — the terminal step now asserts directly (ScriptedProj/F3) that RemoveNode is refused; it is not, because code's RemoveNode has no still-owns-slots guard at all and always succeeds; see .scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issue 20 — the terminal step asserts directly (ScriptedProj) that RemoveNode is refused; it is not, because code's RemoveNode has no still-owns-slots guard at all and always succeeds; see .scratch/cluster-correctness/issues/open/20-force-failover-evicts-the-old-primary-from-raft-so-it-never-learns-it-lost-its-slots.md"]
 fn remove_node_refuses_live_owner_test() -> ScriptedDriver {
     ScriptedDriver::new_expecting_terminal_fail(vec![
         step_("init", |d| d.init()),
@@ -1337,18 +1420,20 @@ fn remove_node_refuses_live_owner_test() -> ScriptedDriver {
 // postcondition in `specs/cluster.md` ("Node membership" loses `node_id`) — so there
 // is no live data anywhere in `ClusterState` to recover a removed node's last
 // role/parent from; this is a model-representation artifact (`specs/cluster.md`
-// confirms real deletion is the intended semantics), not a code defect. Un-ignored:
+// confirms real deletion is the intended semantics), not a code defect.
 // `ScriptedProj::from_spec`'s ghost-field normalization (I4/F5, module header) blanks
-// the same fields on the spec side for any node reporting `member: false`, restoring
-// this test's real slot-pruning/reparenting coverage. Issue 33 tracks the model-side
-// fix (null the same fields in `removeNode`'s own transition) that would let this
-// normalization be deleted.
+// the same fields on the spec side for any node reporting `member: false`, which is what
+// kept this test's real slot-pruning/reparenting coverage live before the rework. Issue 33
+// tracks the model-side fix (null the same fields in `removeNode`'s own transition) that
+// would let this normalization be deleted; the W0 quarantine below fires earlier and is
+// unrelated to it.
 #[quint_run(
     spec = "../../../specs/quint/cluster_migration_failover.qnt",
     init = "removeNodeAfterDemotionSucceedsTest",
     max_steps = 0,
     max_samples = 1
 )]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. `removeNodeAfterDemotionSucceedsTest` survives by name; its body now asserts the new `registration_seq`/`keys` postconditions on top of the shape change. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0."]
 fn remove_node_after_demotion_succeeds_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1361,16 +1446,18 @@ fn remove_node_after_demotion_succeeds_test() -> ScriptedDriver {
 // Code's RemoveNode has no `force` field (see the module-level design note),
 // so both `force` values map to the same unconditional command, which was
 // expected to match the model's `force: true` branch exactly for this scenario
-// (unconditional success, slots pruned, non-member) — it does for slots/
-// membership, and now for role/parent too, via the same ghost-field
-// normalization (issue 33) described on `remove_node_after_demotion_succeeds_test`
-// above.
+// (unconditional success, slots pruned, non-member) — it did for slots/
+// membership, and for role/parent too, via the same ghost-field normalization
+// (issue 33) described on `remove_node_after_demotion_succeeds_test` above.
+// The reworked `removeNode(n, force, _)` takes a third argument, so the model
+// branch this script replays is no longer even the one it names.
 #[quint_run(
     spec = "../../../specs/quint/cluster_migration_failover.qnt",
     init = "removeNodeForceEvictsLiveOwnerTest",
     max_steps = 0,
     max_samples = 1
 )]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. `removeNodeForceEvictsLiveOwnerTest` survives by name with the new `removeNode` arity. The surviving runs also changed shape: `beginMigration(s, src, tgt, force)`, `removeNode(n, force, _)`, `failoverGraceful(n, succ, obsEpoch, obsRole)`, and `init` now seeds node 1 as primary of all four slots. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0."]
 fn remove_node_force_evicts_live_owner_test() -> ScriptedDriver {
     ScriptedDriver::new(vec![
         step_("init", |d| d.init()),
@@ -1382,25 +1469,85 @@ fn remove_node_force_evicts_live_owner_test() -> ScriptedDriver {
 // Simulation tests.
 // ---------------------------------------------------------------------------
 //
-// The model's `step` action samples uniformly across all 19 actions, including
-// failoverGraceful/Auto/Forced, feedBuffer and completeRepatriation. Any
-// sampled trace that reaches one of those is expected to diverge immediately
-// by the same issues cited above (15, 17, 19, 20, 26) — the model's own header
-// says as much: it encodes the ruled/amended target semantics for those five
-// issues, none of which are implemented yet. Both simulation tests are
-// therefore ignored pending the same issues as the named tests above, rather
-// than narrowly scoped to a single row.
+// Pre-rework, the model's `step` action sampled uniformly across 19 actions, including
+// failoverGraceful/Auto/Forced, feedBuffer and completeRepatriation. Any sampled trace
+// that reached one of those diverged immediately by the issues cited above (15, 17, 19,
+// 20, 26), so both simulation tests were ignored pending those issues rather than
+// narrowly scoped to a single row.
+//
+// After the rework (ce75ec0d) the simulation pair is broken three ways over, and the
+// `#[ignore]`s below record all of them:
+//   1. the 14-var state does not deserialize into `ClusterProjection` (as for every
+//      named run);
+//   2. `step`'s `any` block now offers ~60 arms, so the `switch!` arms below cover a
+//      small minority of what a sampled trace can take and silently `stutter` on the
+//      rest — which is *worse* than failing, because a stuttered action means the driver
+//      no-ops while the model advances;
+//   3. `step`'s nondet bindings were renamed wholesale (now `n1, n2, s, r, flag, kind,
+//      role, obsEpoch, obsRole, obsSeq, obsReg, att`), and `switch!` decodes handler
+//      parameters by looking their Rust identifier up verbatim in `mbt::nondetPicks` —
+//      so `handoffSlot`, `succGuess`, `roleGuess`, `bytesGuess`, `seqGuess`,
+//      `forceGuess`, `obsCorrectCoin`, `obsEpochGuess` and `obsRoleGuess` below no
+//      longer resolve to anything.
+// (2) and (3) mean the simulation half needs its `switch!` block rewritten, not just a
+// new projection — the largest single piece of the deferred rebuild.
 #[quint_run(
     spec = "../../../specs/quint/cluster_migration_failover.qnt",
     seed = "20260813"
 )]
-#[ignore = "pending issues 15/17/19/20/26 plus issue 33 (ghost-field finding) — any sampled trace touching failoverGraceful/Auto/Forced, feedBuffer, completeRepatriation, or removeNode diverges immediately (simulation traces use plain ClusterDriver/ClusterProjection, not ScriptedProj, so issue 33's harness-side normalization does not apply here); see the named-run citations above. Un-ignore owner: .scratch/formal-spec/issues/open/03-phase2-model-hygiene-sweep.md (I7/minor-6) — held additionally on that issue's removeNode-churn fix and simulation-support validation"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. For the simulation drivers the break is wider than the projection: the reworked `step` action offers a far larger action set over the 14-var shape, so the `switch!` arms below (the pre-rework 19 actions) silently `stutter` on everything new. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issues 15/17/19/20/26 plus issue 33 (ghost-field finding; simulation traces use plain ClusterDriver/ClusterProjection, so issue 33's harness-side normalization does not apply here). Un-ignore owner: .scratch/formal-spec/issues/open/03-phase2-model-hygiene-sweep.md (I7/minor-6)"]
 fn seeded_simulation_test() -> ClusterDriver {
     new_driver()
 }
 
 #[quint_run(spec = "../../../specs/quint/cluster_migration_failover.qnt")]
-#[ignore = "pending issues 15/17/19/20/26 plus issue 33 (ghost-field finding) — any sampled trace touching failoverGraceful/Auto/Forced, feedBuffer, completeRepatriation, or removeNode diverges immediately (simulation traces use plain ClusterDriver/ClusterProjection, not ScriptedProj, so issue 33's harness-side normalization does not apply here); see the named-run citations above. Un-ignore owner: .scratch/formal-spec/issues/open/03-phase2-model-hygiene-sweep.md (I7/minor-6) — held additionally on that issue's removeNode-churn fix and simulation-support validation"]
+#[ignore = "W0 quarantine: the issue-31 rework (ce75ec0d) replaced the model's 6-var state with a 14-var shape (counters folded into `ctl`, `node_epoch` into `NodeState`), so this trace dies at step 0 with `Failed to deserialize specification's state: missing field handoff_seq` — the projection never compares anything. For the simulation drivers the break is wider than the projection: the reworked `step` action offers a far larger action set over the 14-var shape, so the `switch!` arms below (the pre-rework 19 actions) silently `stutter` on everything new. Rebuild deferred to the issue-31 impl campaign; see .scratch/formal-spec/2026-08-19-quint-completeness-campaign.md W0. Pre-rework divergence, still pending: issues 15/17/19/20/26 plus issue 33 (ghost-field finding; simulation traces use plain ClusterDriver/ClusterProjection, so issue 33's harness-side normalization does not apply here). Un-ignore owner: .scratch/formal-spec/issues/open/03-phase2-model-hygiene-sweep.md (I7/minor-6)"]
 fn unpinned_simulation_test() -> ClusterDriver {
     new_driver()
+}
+
+// ---------------------------------------------------------------------------
+// Live harness plumbing test (model-free).
+// ---------------------------------------------------------------------------
+//
+// Every model-replay test above is quarantined (module header, W0), so this is the only
+// test in this binary that runs by default. It is deliberately NOT a conformance check —
+// it never invokes `quint` and asserts nothing about the model. It exists for two reasons:
+//
+//   1. It pins the two pieces the rebuild replaces — `ClusterDriver::init`'s seeded
+//      topology and `ClusterProjection::from_driver`'s extraction — so a refactor of
+//      `ClusterState`'s accessors breaks here loudly instead of only inside an ignored
+//      test nobody runs during the quarantine.
+//   2. `just quint-conformance` runs `cargo nextest run -E 'binary(quint_conformance)'`,
+//      and nextest exits non-zero with `no tests to run` when every test in a selection is
+//      skipped. Without one live test the recipe would be red for a reason that has
+//      nothing to do with conformance, hiding the real signal from
+//      `just quint-conformance-quarantine`.
+//
+// The asserted topology is the PRE-rework one, on purpose: the reworked model's `init`
+// seeds node 1 as primary of all four slots (2 and 3 its replicas, 4 a slotless primary),
+// so re-seeding `ClusterDriver::init` has to update this test deliberately rather than
+// drift past it.
+#[test]
+fn driver_seeds_and_projects_pre_rework_topology() {
+    let mut driver = ClusterDriver::new();
+    driver.init();
+    let proj = ClusterProjection::from_driver(&driver).expect("projection from seeded driver");
+
+    assert_eq!(proj.slots[&1], QOpt::Some(1));
+    assert_eq!(proj.slots[&2], QOpt::Some(1));
+    assert_eq!(proj.slots[&3], QOpt::Some(2));
+    assert_eq!(proj.slots[&4], QOpt::Some(2));
+
+    assert_eq!(proj.nodes[&1].role, RoleTagQ::Primary);
+    assert_eq!(proj.nodes[&1].parent, QOpt::None);
+    assert!(proj.nodes[&1].member);
+    assert_eq!(proj.nodes[&3].role, RoleTagQ::Replica);
+    assert_eq!(proj.nodes[&3].parent, QOpt::Some(1));
+    assert_eq!(proj.nodes[&4].parent, QOpt::Some(2));
+
+    for slot in SLOTS {
+        assert_eq!(proj.migrations[&slot], QOpt::None, "slot {slot}");
+    }
+    assert_eq!(proj.handoff_seq, 0);
 }
