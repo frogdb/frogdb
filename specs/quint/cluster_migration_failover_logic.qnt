@@ -393,10 +393,18 @@ module cluster_migration_failover_logic {
   // ext-15: `ReportRunIdentity`'s ordering conjunct — the report's (incarnation,
   // identity_seq) pair must strictly dominate the stored one. A replayed or reordered
   // report from earlier in the boot is refused, never a migration cancel.
-  pure def identityOrderOk(stored: Option[RunIdentity], inc: int, seq: int): bool =
+  // R2, ruled 2026-08-20 (see `.scratch/formal-spec/t1-blocked.md`): the **absent-operand**
+  // arm is kind-scoped, per the design doc's V18-M1 narrowing. A `Boot` report against an
+  // empty cell is the ordinary first report and dominates vacuously; a `Demotion` report
+  // against an empty cell has nothing to order itself against and no boot behind it, so the
+  // ordering conjunct is false and the report is refused `Ordering` — which is precisely
+  // what makes arm 4b of `isRefusalTerminal` (`Ordering` against an absent cell) live
+  // rather than a contradiction of its own classifier.
+  pure def identityOrderOk(stored: Option[RunIdentity], kind: TransitionKind,
+                           inc: int, seq: int): bool =
     match stored {
       | Some(st) => inc > st.inc or (inc == st.inc and seq > st.seq)
-      | None => true
+      | None => kind != Demotion
     }
 
   // ext-15's **re-mint rule**: a node whose node-local incarnation counter was lost mints
@@ -423,7 +431,7 @@ module cluster_migration_failover_logic {
   // is the mutation test the doc asks for.
   pure def bootMintOf(ns: NodeState, kind: TransitionKind, replay: bool): { inc: int, seq: int } = {
     val freshSeq = if (replay) ns.identity_seq else ns.identity_seq + 1
-    if (kind != Boot or replay or identityOrderOk(ns.stored_identity, ns.incarnation, freshSeq))
+    if (kind != Boot or replay or identityOrderOk(ns.stored_identity, kind, ns.incarnation, freshSeq))
       { inc: ns.incarnation, seq: freshSeq }
     else
       // Above the replicated pair: a strictly greater incarnation restarts the sequence.
@@ -445,7 +453,7 @@ module cluster_migration_failover_logic {
   pure def refusalClassOf(allNodes: NodeId -> NodeState, n: NodeId, kind: TransitionKind,
                           inc: int, seq: int, obsRole: RoleTag, obsEpoch: int): RefusalClass =
     if (not(allNodes.get(n).member)) Membership
-    else if (not(identityOrderOk(allNodes.get(n).stored_identity, inc, seq))) Ordering
+    else if (not(identityOrderOk(allNodes.get(n).stored_identity, kind, inc, seq))) Ordering
     else if (kind == Demotion and not(demotionFenceOk(allNodes.get(n), obsRole, obsEpoch))) Fenced
     else Whole
 
@@ -453,17 +461,22 @@ module cluster_migration_failover_logic {
   // `Membership` refusal (arm 5) are the design's declared *terminal* classes — the ones
   // that must clear the record, drop the fence and pay the client.
   //
-  // Arm 4b, and the 2026-08-19 ruling that would delete it: **NOT APPLIED — blocked**,
-  // see `.scratch/formal-spec/t1-blocked.md`. The ruling's premise is that an `Ordering`
-  // refusal presupposes a stored cell, which is true *of this model* — `refusalClassOf`
-  // reaches `Ordering` only when `identityOrderOk` is false, and that predicate is
-  // vacuously **true** on `None` — but false of the design doc, whose §"absent-operand"
-  // rule as narrowed by **V18-M1** makes the ordering conjunct false for
+  // Arm 4b: the 2026-08-19 ruling that would have **deleted** it is withdrawn, and **R2
+  // (ruled 2026-08-20)** closes the model gap that ruling mistook for a dead arm — see
+  // `.scratch/formal-spec/t1-blocked.md`. The withdrawn ruling's premise was that an
+  // `Ordering` refusal presupposes a stored cell, which was true of this model only
+  // because `identityOrderOk` answered **true** on `None` for every kind; the design doc's
+  // §"absent-operand" rule as narrowed by **V18-M1** makes the ordering conjunct false for
   // `kind = Demotion` against an absent cell precisely so 4b is reachable (design doc
-  // ~L5651, L6354, L6434). The dead arm here is therefore a *model* gap — the narrowing
-  // is unmodelled — not evidence the doc's arm is dead, so it is kept rather than
-  // deleted; deleting it would bake in a premise the doc contradicts and would silently
-  // remove the wedge exit V19-M1/V20-C1/V21-M2/V28-M5 are built on.
+  // ~L5651, L6354, L6434). R2 applies that narrowing here, so `refusalClassOf` now returns
+  // `Ordering` against an absent cell for a Demotion report and the arm is live in the
+  // classifier — the wedge exit V19-M1/V20-C1/V21-M2/V28-M5 are built on.
+  //
+  // What remains unmodelled is the *state*, not the rule: nothing in this model ever
+  // clears `stored_identity` (`init` mints one per node, `meetNode` and `restarted` both
+  // carry it through), so the absent-cell classification is forced from a constructed view
+  // in `demotionAgainstAbsentCellIsTerminalTest` rather than walked to. Modelling a cell
+  // that can go absent (a forget-the-replicated-identity arm) is a separate ruling.
   pure def isRefusalTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
     class == Membership or (class == Ordering and stored == None)
 

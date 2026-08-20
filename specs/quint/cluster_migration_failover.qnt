@@ -2545,6 +2545,44 @@ module cluster_migration_failover {
       })
   }
 
+  // ext-18 (V18-M1/V19-M1), **arm 4b** of `isRefusalTerminal`: a `Demotion` report against
+  // an **absent** stored identity is refused `Ordering`, and that refusal is *terminal*.
+  // R2 (ruled 2026-08-20, `.scratch/formal-spec/t1-blocked.md`) is what makes the first half
+  // true: `identityOrderOk`'s absent-operand arm is kind-scoped, so a Demotion — which has
+  // no boot behind it and nothing to order itself against — fails the ordering conjunct
+  // where a `Boot` report passes it vacuously. Both halves are asserted here, so reverting
+  // the arm to `| None => true` flips the Ordering assertion and reverting the kind scope
+  // (`| None => kind != Boot`, say) flips the Boot control.
+  //
+  // Forced from a **constructed view** rather than walked to: no action in this model ever
+  // clears `stored_identity` (`init` mints one per node; `meetNode` and `restarted` carry it
+  // through), so the absent cell is not a reachable state here. That gap is in the *state
+  // space*, not the rule — see the note at `isRefusalTerminal`.
+  run demotionAgainstAbsentCellIsTerminalTest: bool = {
+    init
+      .expect({
+        val ns = nodes.get(3)
+        val absent = nodes.set(3, { ...ns, stored_identity: None })
+        and {
+          // The cell really is absent in the view, and present in the reachable state —
+          // the difference the arm is about.
+          absent.get(3).stored_identity == None,
+          ns.stored_identity != None,
+          // Arm 4b, both halves.
+          refusalClassOf(absent, 3, Demotion, ns.incarnation, ns.identity_seq + 1,
+                         ns.role, ns.epoch_own) == Ordering,
+          isRefusalTerminal(absent.get(3).stored_identity, Ordering),
+          // Kind scope: the same absent cell admits a `Boot` report — the ordinary first
+          // report of a node whose cell was never written.
+          refusalClassOf(absent, 3, Boot, ns.incarnation, ns.identity_seq + 1,
+                         ns.role, ns.epoch_own) == Whole,
+          // And against a *present* cell an `Ordering` refusal stays non-terminal, so 4b
+          // is the absent-cell case alone rather than "every ordering refusal".
+          not(isRefusalTerminal(ns.stored_identity, Ordering)),
+        }
+      })
+  }
+
   // ext-18 (V21/V28-M6): the antecedent of `inv_no_live_record_disposed_by_a_foreign_
   // refusal`. `last_disposition` is written on a disposing step and on no other, so the
   // invariant is vacuous until some trace reaches a terminal refusal bound to its own

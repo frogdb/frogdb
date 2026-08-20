@@ -646,7 +646,7 @@ module cluster_migration_failover_machine {
       defects' = { ...defects,
         identityRegress: defects.identityRegress
           or (postStored != ns.stored_identity and match postStored {
-            | Some(st) => not(identityOrderOk(ns.stored_identity, st.inc, st.seq))
+            | Some(st) => not(identityOrderOk(ns.stored_identity, kind, st.inc, st.seq))
             | None => true
           }),
         spuriousCancel: defects.spuriousCancel
