@@ -236,6 +236,10 @@ impl FeedSequencer {
                     lag_breached: false,
                 },
             ) => self.flush(),
+            // This arm is behaviorally identical to the `_` fence below — it
+            // exists so the two driver-reachable failure inputs are named
+            // rather than swallowed by the "not reachable" catch-all. Deleting
+            // it is an equivalent mutant (excluded in .cargo/mutants.toml).
             (Stage::Sending, FeedInput::Sent { lag_breached: true })
             | (Stage::Sending, FeedInput::SendFailed) => self.end(ReplicaDeparture::Lost),
 

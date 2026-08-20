@@ -31,6 +31,13 @@ exclude_globs = [
 # `FailureDetector::record_success`. Excluding those is not noise reduction, it
 # is a blind spot in the middle of the specced behavior.
 exclude_re = [
+    # `FeedSequencer::step`'s explicit (Sending, Sent{lag_breached:true} |
+    # SendFailed) arm is behaviorally identical to the `_ => end(Lost)` fence
+    # that follows it — the arm exists to *name* the driver-reachable failure
+    # inputs, so deleting it is an equivalent mutant no test can kill (see the
+    # comment at the arm). Only this one arm-deletion is excluded; every other
+    # `step` mutation stays in scope.
+    "delete match arm \\(Stage::Sending, FeedInput::Sent\\{lag_breached:true\\}\\) \\|\\(Stage::Sending, FeedInput::SendFailed\\) in FeedSequencer::step",
     # `CfTier::label` exists only to name the tier in two `error!` fields; no
     # caller branches on it.
     "CfTier::label",
