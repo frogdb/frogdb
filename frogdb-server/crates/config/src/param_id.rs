@@ -352,8 +352,11 @@ mod tests {
         // round (`repl-backlog-ttl`) + 1 added by the persistence hardening
         // round (`stop-writes-on-save-error`) + 1 added by the replication
         // hardening round's issue 18 (`min-replicas-max-lag-ms`, the native
-        // millisecond unit behind Redis's seconds-valued `min-replicas-max-lag`).
-        assert_eq!(MutableParamId::ALL.len(), 76);
+        // millisecond unit behind Redis's seconds-valued `min-replicas-max-lag`)
+        // + 1 added by the cluster-correctness round's issue 37
+        // (`cluster-promotion-max-lag-bytes`, the automatic-promotion staleness
+        // bound, spelled in offset bytes rather than disconnection seconds).
+        assert_eq!(MutableParamId::ALL.len(), 77);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params
