@@ -7,6 +7,8 @@ use frogdb_core::{
 };
 use frogdb_protocol::Response;
 
+use crate::command_meta::{build_command_docs, build_command_info};
+
 use frogdb_core::ArgParser;
 
 use super::utils::{ExpiryErr, checked_expire_value, parse_i64};
@@ -25,8 +27,7 @@ impl Command for PingCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Range { min: 0, max: 1 },
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::FAST)
+            flags: CommandFlags::FAST
                 .union(CommandFlags::STALE)
                 .union(CommandFlags::LOADING),
             keys: KeySpec::None,
@@ -66,7 +67,7 @@ impl Command for EchoCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(1),
-            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
+            flags: CommandFlags::FAST,
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
@@ -103,8 +104,7 @@ impl Command for QuitCommand {
             // so a client that sends `QUIT` with trailing junk still gets +OK
             // and a closed connection rather than a wrong-arity error.
             arity: Arity::AtLeast(0),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::FAST)
+            flags: CommandFlags::FAST
                 .union(CommandFlags::LOADING)
                 .union(CommandFlags::STALE),
             keys: KeySpec::None,
@@ -144,9 +144,7 @@ impl Command for CommandCommand {
                 complexity: Some("O(N) where N is the total number of Redis commands"),
             },
             arity: Arity::AtLeast(0),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::LOADING)
-                .union(CommandFlags::STALE),
+            flags: CommandFlags::LOADING.union(CommandFlags::STALE),
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
@@ -478,7 +476,7 @@ impl Command for SetCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST).union(CommandFlags::DENYOOM),
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             // VARIABLE_FLAGS in Redis: the `GET` option makes SET read the old
             // value (key becomes `RW,ACCESS`), while a plain `SET k v` is a blind
@@ -860,219 +858,6 @@ fn all_commands_docs(ctx: &CommandContext) -> Vec<(Response, Response)> {
         .unwrap_or_default()
 }
 
-/// Build the `COMMAND DOCS` value map for one command from its
-/// [`frogdb_core::CommandDocs`].
-///
-/// Field order follows Redis's `addReplyCommandDocs`: summary, since, group,
-/// then complexity. Fields FrogDB has no data source for are *omitted* rather
-/// than emitted empty — Redis omits `complexity` the same way for commands
-/// whose upstream JSON has none, and clients treat every field as optional.
-/// `arguments`, `history`, `doc_flags` and `subcommands` are omitted for the
-/// same reason: no structured per-argument or per-subcommand registry exists
-/// (see `build_command_info`'s subcommands note).
-fn build_command_docs(spec: &CommandSpec) -> Response {
-    let mut fields = vec![
-        (
-            Response::bulk(Bytes::from_static(b"summary")),
-            Response::bulk(Bytes::from_static(spec.docs.summary.as_bytes())),
-        ),
-        (
-            Response::bulk(Bytes::from_static(b"since")),
-            Response::bulk(Bytes::from_static(spec.docs.since.as_bytes())),
-        ),
-        (
-            Response::bulk(Bytes::from_static(b"group")),
-            Response::bulk(Bytes::from_static(spec.docs.group.as_bytes())),
-        ),
-    ];
-    if let Some(complexity) = spec.docs.complexity {
-        fields.push((
-            Response::bulk(Bytes::from_static(b"complexity")),
-            Response::bulk(Bytes::from_static(complexity.as_bytes())),
-        ));
-    }
-    Response::Map(fields)
-}
-
-/// Build the full 10-element `COMMAND INFO` reply for one command: name,
-/// arity, flags, first-key, last-key, key-step, ACL categories, tips,
-/// key-specs, subcommands. Matches the Redis 8.x reply shape.
-fn build_command_info(spec: &CommandSpec) -> Response {
-    let (first_key, last_key, key_step, dynamic_movable) = spec.keys.command_info_triplet();
-    // `CommandSpec::validate` only forces `CommandFlags::MOVABLEKEYS` to
-    // agree with `KeySpec::Dynamic`; `NumkeysAt`/`DestThenNumkeys` commands
-    // are movable too (see `command_info_triplet`) without necessarily
-    // carrying the bit themselves, so the wire fact is the union of both.
-    let movablekeys = spec.flags.contains(CommandFlags::MOVABLEKEYS) || dynamic_movable;
-
-    Response::Array(vec![
-        Response::bulk(Bytes::from(spec.name.to_lowercase())),
-        Response::Integer(command_info_arity(spec.arity)),
-        Response::Array(command_info_flags(spec.flags, movablekeys)),
-        Response::Integer(first_key),
-        Response::Integer(last_key),
-        Response::Integer(key_step),
-        Response::Array(command_info_categories(spec.name)),
-        // Tips: no per-command tip data source exists yet — an empty array
-        // is truthful, not a placeholder claiming knowledge we don't have.
-        Response::Array(vec![]),
-        Response::Array(command_info_key_specs(first_key, last_key, key_step)),
-        // Subcommands: no structured per-subcommand registry exists yet;
-        // same truthfulness rationale as tips.
-        Response::Array(vec![]),
-    ])
-}
-
-/// Redis's `firstkey`-relative arity encoding: exact arities (`CommandSpec::
-/// arity` min == max) are positive (including the command name itself, so
-/// `Arity::Fixed(1)` — one argument after the name — is wire arity `2`);
-/// open-ended/ranged arities are negative minimums, matching how Redis
-/// reports e.g. `SET` as `-3` and `PING` as `-1`.
-///
-/// Public so the upstream-metadata join test can cross-check vendored arities
-/// against the very function that answers `COMMAND INFO`, rather than against
-/// a second copy of this encoding.
-pub fn command_info_arity(arity: Arity) -> i64 {
-    match arity {
-        Arity::Fixed(n) => n as i64 + 1,
-        Arity::AtLeast(n) => -(n as i64 + 1),
-        Arity::Range { min, max } if min == max => min as i64 + 1,
-        Arity::Range { min, .. } => -(min as i64 + 1),
-    }
-}
-
-/// Redis-wire flag strings for a command's `CommandFlags`, plus the derived
-/// `movablekeys` fact (which may be true even when `CommandFlags::
-/// MOVABLEKEYS` itself is unset for this spec — see `build_command_info`).
-/// Only flags this registry actually tracks are emitted; flags Redis has but
-/// FrogDB's `CommandFlags` does not model (e.g. `may_replicate`) are never
-/// fabricated.
-fn command_info_flags(flags: CommandFlags, movablekeys: bool) -> Vec<Response> {
-    let mut flag_strs: Vec<Response> = Vec::new();
-    if flags.contains(CommandFlags::WRITE) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"write")));
-    }
-    if flags.contains(CommandFlags::READONLY) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"readonly")));
-    }
-    if flags.contains(CommandFlags::DENYOOM) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"denyoom")));
-    }
-    if flags.contains(CommandFlags::FAST) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"fast")));
-    }
-    if flags.contains(CommandFlags::STALE) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"stale")));
-    }
-    if flags.contains(CommandFlags::LOADING) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"loading")));
-    }
-    if flags.contains(CommandFlags::ADMIN) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"admin")));
-    }
-    if flags.contains(CommandFlags::NOSCRIPT) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"noscript")));
-    }
-    if flags.contains(CommandFlags::BLOCKING) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"blocking")));
-    }
-    if flags.contains(CommandFlags::PUBSUB) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"pubsub")));
-    }
-    if flags.contains(CommandFlags::SKIP_SLOWLOG) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"skip_slowlog")));
-    }
-    if flags.contains(CommandFlags::NO_PROPAGATE) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"no-propagate")));
-    }
-    if flags.contains(CommandFlags::RANDOM) {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"random")));
-    }
-    if movablekeys {
-        flag_strs.push(Response::Simple(Bytes::from_static(b"movablekeys")));
-    }
-    flag_strs
-}
-
-/// `@`-prefixed ACL category names for a command, from the real ACL registry
-/// (`frogdb_acl::CommandCategory`) rather than a re-derivation from
-/// `CommandFlags` — the two are joined only by the command's lowercase name,
-/// so a command absent from the ACL category table truthfully reports no
-/// categories rather than a guessed one.
-fn command_info_categories(name: &str) -> Vec<Response> {
-    frogdb_acl::CommandCategory::all_for_command(name)
-        .into_iter()
-        .map(|cat| Response::Simple(Bytes::from(format!("@{}", cat.name()))))
-        .collect()
-}
-
-/// Structured `COMMAND INFO` key-specs entries for a command whose key
-/// positions are statically known (`first_key != 0`). Movable-key commands
-/// (`first_key == 0`: `NumkeysAt`/`Dynamic`) and keyless commands report no
-/// entries — Redis's structured form for those relies on per-command
-/// `keynum`/`unknown` `begin_search`/`find_keys` metadata this registry does
-/// not carry, and fabricating it would not be truthful.
-fn command_info_key_specs(first_key: i64, last_key: i64, key_step: i64) -> Vec<Response> {
-    if first_key == 0 {
-        return Vec::new();
-    }
-    // `find_keys`'s `lastkey` is relative to `begin_search`'s index (0 means
-    // "the same key as first_key"); `-1` still means "to the last argument".
-    let relative_last_key = if last_key == -1 {
-        -1
-    } else {
-        last_key - first_key
-    };
-    vec![Response::Map(vec![
-        (
-            Response::bulk(Bytes::from_static(b"flags")),
-            Response::Array(vec![]),
-        ),
-        (
-            Response::bulk(Bytes::from_static(b"begin_search")),
-            Response::Map(vec![
-                (
-                    Response::bulk(Bytes::from_static(b"type")),
-                    Response::bulk(Bytes::from_static(b"index")),
-                ),
-                (
-                    Response::bulk(Bytes::from_static(b"spec")),
-                    Response::Map(vec![(
-                        Response::bulk(Bytes::from_static(b"index")),
-                        Response::Integer(first_key),
-                    )]),
-                ),
-            ]),
-        ),
-        (
-            Response::bulk(Bytes::from_static(b"find_keys")),
-            Response::Map(vec![
-                (
-                    Response::bulk(Bytes::from_static(b"type")),
-                    Response::bulk(Bytes::from_static(b"range")),
-                ),
-                (
-                    Response::bulk(Bytes::from_static(b"spec")),
-                    Response::Map(vec![
-                        (
-                            Response::bulk(Bytes::from_static(b"lastkey")),
-                            Response::Integer(relative_last_key),
-                        ),
-                        (
-                            Response::bulk(Bytes::from_static(b"keystep")),
-                            Response::Integer(key_step),
-                        ),
-                        (
-                            Response::bulk(Bytes::from_static(b"limit")),
-                            Response::Integer(0),
-                        ),
-                    ]),
-                ),
-            ]),
-        ),
-    ])]
-}
-
 /// Map `CommandFlags` to a Redis ACL category name.
 ///
 /// Redis COMMAND LIST FILTERBY ACLCAT returns commands whose flags match
@@ -1198,13 +983,18 @@ mod command_info_tests {
     }
 
     /// The structured key-specs array for a command with exactly one
-    /// statically-known key at wire position `index`, mirroring
-    /// `command_info_key_specs`'s own shape.
-    fn key_specs(index: i64, relative_last_key: i64, keystep: i64) -> Response {
+    /// statically-known key range starting at wire position `index`, with
+    /// `flags` the already-cased wire spelling (`RO`, `access`, ...).
+    fn key_specs(
+        flags: &[&'static str],
+        index: i64,
+        relative_last_key: i64,
+        keystep: i64,
+    ) -> Response {
         Response::Array(vec![Response::Map(vec![
             (
                 Response::bulk(Bytes::from_static(b"flags")),
-                Response::Array(vec![]),
+                Response::Array(flags.iter().copied().map(flag).collect()),
             ),
             (
                 Response::bulk(Bytes::from_static(b"begin_search")),
@@ -1251,6 +1041,9 @@ mod command_info_tests {
         ])])
     }
 
+    /// Categories are listed in Redis's own `ACLCommandCategories` order, not
+    /// in whatever order our ACL table happens to store them (`@read` before
+    /// `@string` before `@fast`).
     #[test]
     fn command_info_get_full_reply() {
         assert_eq!(
@@ -1262,37 +1055,58 @@ mod command_info_tests {
                 Response::Integer(1),
                 Response::Integer(1),
                 Response::Integer(1),
-                Response::Array(vec![category("string"), category("read"), category("fast"),]),
+                Response::Array(vec![category("read"), category("string"), category("fast"),]),
                 Response::Array(vec![]),
-                key_specs(1, 0, 1),
+                key_specs(&["RO", "access"], 1, 0, 1),
                 Response::Array(vec![]),
             ])
         );
     }
 
+    /// SET's vendored key spec carries `notes` and `variable_flags` (the
+    /// optional `GET` argument turns the write into a read-modify-write), so
+    /// the entry has four fields rather than three.
     #[test]
     fn command_info_set_full_reply() {
+        let mut spec = match key_specs(&["RW", "access", "update", "variable_flags"], 1, 0, 1) {
+            Response::Array(mut entries) => match entries.remove(0) {
+                Response::Map(fields) => fields,
+                other => panic!("expected a key-spec Map, got {other:?}"),
+            },
+            other => panic!("expected an Array, got {other:?}"),
+        };
+        spec.insert(
+            0,
+            (
+                Response::bulk(Bytes::from_static(b"notes")),
+                Response::bulk(Bytes::from_static(
+                    b"RW and ACCESS due to the optional `GET` argument",
+                )),
+            ),
+        );
         assert_eq!(
             info("set"),
             Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"set")),
                 Response::Integer(-3),
-                Response::Array(vec![flag("write"), flag("denyoom"), flag("fast")]),
+                Response::Array(vec![flag("write"), flag("denyoom")]),
                 Response::Integer(1),
                 Response::Integer(1),
                 Response::Integer(1),
                 Response::Array(vec![
-                    category("string"),
                     category("write"),
+                    category("string"),
                     category("slow"),
                 ]),
                 Response::Array(vec![]),
-                key_specs(1, 0, 1),
+                Response::Array(vec![Response::Map(spec)]),
                 Response::Array(vec![]),
             ])
         );
     }
 
+    /// MSET is the tipped case: its `request_policy`/`response_policy` pair
+    /// survived the wave-D2 tip audit, so `COMMAND INFO` repeats it.
     #[test]
     fn command_info_mset_full_reply() {
         assert_eq!(
@@ -1305,23 +1119,26 @@ mod command_info_tests {
                 Response::Integer(-1),
                 Response::Integer(2),
                 Response::Array(vec![
-                    category("string"),
                     category("write"),
+                    category("string"),
                     category("slow"),
                 ]),
-                Response::Array(vec![]),
-                key_specs(1, -1, 2),
+                Response::Array(vec![
+                    Response::bulk(Bytes::from_static(b"request_policy:multi_shard")),
+                    Response::bulk(Bytes::from_static(b"response_policy:all_succeeded")),
+                ]),
+                key_specs(&["OW", "update"], 1, -1, 2),
                 Response::Array(vec![]),
             ])
         );
     }
 
     /// SINTERCARD (`KeySpec::NumkeysAt`) — the movablekeys case: no static
-    /// key position exists, so first/last/step are all `0`, `movablekeys` is
-    /// asserted even though `SintercardCommand`'s own `CommandFlags` carry
-    /// only `READONLY` (see `build_command_info`'s flag/derived-fact union),
-    /// and the structured key-specs array is empty (nothing static to
-    /// describe).
+    /// key position exists, so first/last/step are all `0` and `movablekeys`
+    /// is asserted even though `SintercardCommand`'s own `CommandFlags` carry
+    /// only `READONLY` (see `command_meta::effective_flags`). The structured
+    /// key-specs array is still populated, from the vendored `keynum` spec —
+    /// the one form the flat triplet cannot express.
     #[test]
     fn command_info_sintercard_reports_movablekeys() {
         assert_eq!(
@@ -1333,9 +1150,56 @@ mod command_info_tests {
                 Response::Integer(0),
                 Response::Integer(0),
                 Response::Integer(0),
-                Response::Array(vec![category("set"), category("read"), category("slow")]),
+                Response::Array(vec![category("read"), category("set"), category("slow")]),
                 Response::Array(vec![]),
-                Response::Array(vec![]),
+                Response::Array(vec![Response::Map(vec![
+                    (
+                        Response::bulk(Bytes::from_static(b"flags")),
+                        Response::Array(vec![flag("RO"), flag("access")]),
+                    ),
+                    (
+                        Response::bulk(Bytes::from_static(b"begin_search")),
+                        Response::Map(vec![
+                            (
+                                Response::bulk(Bytes::from_static(b"type")),
+                                Response::bulk(Bytes::from_static(b"index")),
+                            ),
+                            (
+                                Response::bulk(Bytes::from_static(b"spec")),
+                                Response::Map(vec![(
+                                    Response::bulk(Bytes::from_static(b"index")),
+                                    Response::Integer(1),
+                                )]),
+                            ),
+                        ]),
+                    ),
+                    (
+                        Response::bulk(Bytes::from_static(b"find_keys")),
+                        Response::Map(vec![
+                            (
+                                Response::bulk(Bytes::from_static(b"type")),
+                                Response::bulk(Bytes::from_static(b"keynum")),
+                            ),
+                            (
+                                Response::bulk(Bytes::from_static(b"spec")),
+                                Response::Map(vec![
+                                    (
+                                        Response::bulk(Bytes::from_static(b"keynumidx")),
+                                        Response::Integer(0),
+                                    ),
+                                    (
+                                        Response::bulk(Bytes::from_static(b"firstkey")),
+                                        Response::Integer(1),
+                                    ),
+                                    (
+                                        Response::bulk(Bytes::from_static(b"keystep")),
+                                        Response::Integer(1),
+                                    ),
+                                ]),
+                            ),
+                        ]),
+                    ),
+                ])]),
                 Response::Array(vec![]),
             ])
         );
@@ -1416,7 +1280,23 @@ mod command_docs_tests {
         )
     }
 
-    /// A vendored Redis command: all four fields, complexity included.
+    /// A key argument, the simplest `arguments` node: name, type,
+    /// `display_text` defaulted from the name, and the index of the key spec
+    /// it fills.
+    fn key_argument(name: &'static str, key_spec_index: i64) -> Response {
+        Response::Map(vec![
+            field("name", name),
+            field("type", "key"),
+            field("display_text", name),
+            (
+                Response::bulk(Bytes::from_static(b"key_spec_index")),
+                Response::Integer(key_spec_index),
+            ),
+        ])
+    }
+
+    /// A vendored Redis command: summary/since/group/complexity from our own
+    /// spec, then the vendored argument tree.
     #[test]
     fn command_docs_get_full_reply() {
         assert_eq!(
@@ -1428,6 +1308,10 @@ mod command_docs_tests {
                     field("since", "1.0.0"),
                     field("group", "string"),
                     field("complexity", "O(1)"),
+                    (
+                        Response::bulk(Bytes::from_static(b"arguments")),
+                        Response::Array(vec![key_argument("key", 0)]),
+                    ),
                 ])
             )])
         );
@@ -1451,6 +1335,17 @@ mod command_docs_tests {
                     field(
                         "complexity",
                         "O(1). The amortized time complexity is O(1) assuming the appended value is small and the already present value is of any size, since the dynamic string library used by Redis will double the free space available on every reallocation."
+                    ),
+                    (
+                        Response::bulk(Bytes::from_static(b"arguments")),
+                        Response::Array(vec![
+                            key_argument("key", 0),
+                            Response::Map(vec![
+                                field("name", "value"),
+                                field("type", "string"),
+                                field("display_text", "value"),
+                            ]),
+                        ]),
                     ),
                 ])
             )])
@@ -1495,12 +1390,11 @@ mod command_docs_tests {
                 assert_eq!(pairs.len(), 2, "one entry per registered command");
                 for (_, docs) in pairs {
                     match docs {
-                        // summary/since/group are always present; complexity is
-                        // the only optional field.
-                        Response::Map(fields) => assert!(
-                            fields.len() == 3 || fields.len() == 4,
-                            "unexpected docs field count: {fields:?}"
-                        ),
+                        // summary/since/group are always present; everything
+                        // after them is emitted only where a source exists.
+                        Response::Map(fields) => {
+                            assert!(fields.len() >= 3, "unexpected docs field count: {fields:?}")
+                        }
                         other => panic!("expected a docs Map, got {other:?}"),
                     }
                 }

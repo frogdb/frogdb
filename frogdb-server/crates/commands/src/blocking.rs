@@ -34,9 +34,7 @@ impl Command for BlpopCommand {
                 complexity: Some("O(N) where N is the number of provided keys."),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::BLOCKING)
-                .union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::AllButLast,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,
@@ -127,9 +125,7 @@ impl Command for BrpopCommand {
                 complexity: Some("O(N) where N is the number of provided keys."),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::BLOCKING)
-                .union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::AllButLast,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistOrDeleteFirstKey,

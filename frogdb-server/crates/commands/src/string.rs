@@ -96,9 +96,7 @@ impl Command for SetexCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::DENYOOM),
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -152,9 +150,7 @@ impl Command for PsetexCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::DENYOOM),
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

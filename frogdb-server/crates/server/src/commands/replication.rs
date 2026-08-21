@@ -606,7 +606,7 @@ impl Command for WaitCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::NOSCRIPT,
+            flags: CommandFlags::NOSCRIPT.union(CommandFlags::BLOCKING),
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
@@ -662,8 +662,7 @@ impl Command for RoleCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(0),
-            flags: CommandFlags::READONLY
-                .union(CommandFlags::LOADING)
+            flags: CommandFlags::LOADING
                 .union(CommandFlags::STALE)
                 .union(CommandFlags::FAST)
                 .union(CommandFlags::NOSCRIPT),

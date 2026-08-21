@@ -25,7 +25,9 @@ impl Command for XreadCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::READONLY
+                .union(CommandFlags::MOVABLEKEYS)
+                .union(CommandFlags::BLOCKING),
             keys: KeySpec::Dynamic,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
@@ -187,7 +189,9 @@ impl Command for XreadgroupCommand {
                 ),
             },
             arity: Arity::AtLeast(6),
-            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::MOVABLEKEYS)
+                .union(CommandFlags::BLOCKING),
             keys: KeySpec::Dynamic,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::Dynamic,

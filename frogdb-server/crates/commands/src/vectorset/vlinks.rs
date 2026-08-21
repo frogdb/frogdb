@@ -22,7 +22,7 @@ impl Command for VlinksCommand {
                 complexity: None,
             },
             arity: Arity::Range { min: 2, max: 3 },
-            flags: CommandFlags::READONLY,
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,

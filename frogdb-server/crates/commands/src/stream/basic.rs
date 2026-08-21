@@ -426,7 +426,9 @@ impl Command for XsetidCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Range { min: 2, max: 5 },
-            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::DENYOOM)
+                .union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

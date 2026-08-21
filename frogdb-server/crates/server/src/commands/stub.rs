@@ -225,7 +225,7 @@ not_supported_command!(
         complexity: None,
     },
     Arity::Fixed(0),
-    CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::READONLY,
+    CommandFlags::ADMIN | CommandFlags::NOSCRIPT,
     "Legacy replication protocol. Use PSYNC instead."
 );
 

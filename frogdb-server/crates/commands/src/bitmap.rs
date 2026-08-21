@@ -35,9 +35,7 @@ impl Command for SetbitCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::FAST)
-                .union(CommandFlags::DENYOOM),
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -512,7 +510,7 @@ impl Command for BitfieldRoCommand {
                 complexity: Some("O(1) for each subcommand specified"),
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::READONLY,
+            flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,

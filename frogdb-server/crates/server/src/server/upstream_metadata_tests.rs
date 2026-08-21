@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bytes::Bytes;
-use frogdb_commands::basic::command_info_arity;
+use frogdb_commands::command_meta::command_info_arity;
 use frogdb_commands::upstream::{self, BeginSearch, FindKeys, UpstreamCommand};
 use frogdb_core::CommandRegistry;
 
@@ -114,6 +114,30 @@ fn frogdb_only_allowlist_has_no_dead_weight() {
              `frogdb_only_commands()` so it is checked like everything else"
         );
     }
+}
+
+/// The registry keys itself by the ASCII-uppercase name, so a `CommandSpec`
+/// whose own `name` is spelled differently still dispatches — but every
+/// metadata path that joins on `spec.name` (the vendored key-spec, tip,
+/// argument and history lookups in `frogdb_commands::command_meta`) silently
+/// misses, and in debug builds `upstream::find` panics on the case mismatch.
+/// `CLUSTER` shipped that way; this keeps it from happening again.
+#[test]
+fn spec_names_match_their_registry_key() {
+    let registry = full_registry();
+
+    let mismatched: Vec<(&str, &str)> = registry
+        .iter()
+        .map(|(key, entry)| (key, entry.spec().name))
+        .filter(|(key, name)| key != name)
+        .collect();
+
+    assert!(
+        mismatched.is_empty(),
+        "`CommandSpec::name` must be the ASCII-uppercase wire name — the \
+         registry uppercases its keys, so these dispatch fine but drop out of \
+         every vendored-metadata join: {mismatched:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -614,4 +638,242 @@ fn vendored_arity_agrees_with_spec_arity() {
              reached by the check — remove the stale entry"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Command-flag parity
+// ---------------------------------------------------------------------------
+
+/// Commands whose `COMMAND INFO` flag set deliberately differs from what
+/// upstream declares, each with the reason. Same discipline as the arity and
+/// key-spec exemptions: a stale entry fails the test, so the list can only
+/// shrink deliberately.
+///
+/// Flags are compared over the intersection of both vocabularies — a flag
+/// FrogDB does not model (`may_replicate`, `no_auth`, `skip_monitor`, ...) is
+/// not a divergence, it is silence, and `command_info_flags` is deliberately
+/// silent rather than guessing. `movablekeys` is excluded too: Redis derives it
+/// from the presence of a `getkeys_proc` in C and never writes it into the
+/// JSON this snapshot is vendored from, so upstream's list is not evidence
+/// either way.
+const FLAG_EXEMPTIONS: &[(&str, &str)] = &[
+    (
+        "PFDEBUG",
+        "upstream declares PFDEBUG `write denyoom` because its `TODENSE` \
+         subcommand rewrites a sparse HyperLogLog in place; FrogDB's HLL is \
+         always dense, so every PFDEBUG subcommand is a pure read and `TODENSE` \
+         is a no-op — advertising `write` would claim a keyspace mutation that \
+         cannot happen",
+    ),
+    (
+        "WAITAOF",
+        "upstream declares WAITAOF `blocking`; FrogDB's WAITAOF is an unimplemented \
+         stub that replies with an error before waiting for anything, so claiming it \
+         blocks would misdescribe it (same reason its upstream tips are dropped — see \
+         `command_meta::TIP_AUDIT`)",
+    ),
+    ("VEMB", VECTOR_SET_FAST),
+    ("VGETATTR", VECTOR_SET_FAST),
+    ("VLINKS", VECTOR_SET_FAST),
+    ("VSETATTR", VECTOR_SET_FAST),
+];
+
+/// Shared reason for the four vector-set commands that carry `fast` here and
+/// not upstream.
+const VECTOR_SET_FAST: &str = "the vector-sets module omits `fast` on this command while documenting \
+     it as O(1) — upstream is inconsistent with itself here, since VCARD and \
+     VDIM are O(1) too and do carry the bit. FrogDB's implementation is O(1), \
+     so `fast` describes it truthfully and keeps its `@fast` ACL membership \
+     consistent with the complexity we publish";
+
+/// Flags left out of the comparison entirely, with why. Unlike
+/// `FLAG_EXEMPTIONS` these are not per-command judgments — the flag itself
+/// carries no comparable meaning, so comparing it would produce noise for
+/// every command rather than information about any one of them.
+const UNCOMPARED_FLAGS: &[(&str, &str)] = &[
+    (
+        "movablekeys",
+        "Redis derives `movablekeys` from the presence of a `getkeys_proc` in C \
+         and never writes it into the `src/commands/*.json` this snapshot is \
+         vendored from, so upstream's silence is not evidence either way. Our own \
+         `movablekeys` is checked instead by replaying the vendored key specs \
+         against real key extraction (`vendored_key_specs_agree_with_key_extraction`)",
+    ),
+    (
+        "noscript",
+        "an admission gate FrogDB does not implement: nothing consults \
+         `CommandFlags::NOSCRIPT`, and the Lua sandbox restricts globals rather \
+         than the command surface, so neither our value nor upstream's describes \
+         what FrogDB does with a script that calls the command",
+    ),
+    (
+        "loading",
+        "an admission gate FrogDB does not implement: FrogDB serves every command \
+         during recovery, so upstream's per-command answer describes a refusal \
+         FrogDB never issues",
+    ),
+    (
+        "stale",
+        "an admission gate FrogDB does not implement: nothing consults \
+         `CommandFlags::STALE`, so a link-down replica applies no per-command \
+         refusal for upstream's value to agree or disagree with",
+    ),
+];
+
+/// The flag vocabulary both sides can express, lowercase.
+fn comparable_flags() -> BTreeSet<&'static str> {
+    frogdb_commands::command_meta::WIRE_FLAGS
+        .iter()
+        .map(|(_, name)| *name)
+        .filter(|name| !UNCOMPARED_FLAGS.iter().any(|(flag, _)| flag == name))
+        .collect()
+}
+
+#[test]
+fn vendored_command_flags_agree_with_command_info_flags() {
+    let registry = full_registry();
+    let comparable = comparable_flags();
+    let exemptions: BTreeMap<&str, &str> = FLAG_EXEMPTIONS.iter().copied().collect();
+    let mut checked = 0usize;
+    let mut used_exemptions = BTreeSet::new();
+    let mut divergences: Vec<String> = Vec::new();
+
+    for (name, entry) in registry.iter() {
+        let Some(cmd) = upstream::command(name) else {
+            continue;
+        };
+        // Container commands (`OBJECT`, `XINFO`, `SLOWLOG`, ...) carry no
+        // `command_flags` of their own upstream: Redis puts every flag on the
+        // subcommand and the container advertises an empty array. FrogDB has no
+        // per-subcommand registry, so the container's own spec is the only
+        // place its flags can live and it advertises the union its dispatch
+        // actually enforces. There is no upstream value to compare against, so
+        // these rows are skipped rather than exempted one by one; the whole
+        // class is recorded as deliberate in
+        // `.scratch/redis-feel/issues/done/12-command-metadata-deep-fidelity.md`.
+        let Some(vendored) = cmd.command_flags else {
+            continue;
+        };
+        let theirs: BTreeSet<String> = vendored
+            .iter()
+            .map(|flag| flag.to_lowercase())
+            .filter(|flag| comparable.contains(flag.as_str()))
+            .collect();
+        let ours: BTreeSet<String> =
+            frogdb_commands::command_meta::command_info_flags(entry.spec())
+                .iter()
+                .map(|flag| match flag {
+                    frogdb_protocol::Response::Simple(bytes) => {
+                        String::from_utf8_lossy(bytes).into_owned()
+                    }
+                    other => panic!("{name}: expected a Simple flag, got {other:?}"),
+                })
+                .filter(|flag| comparable.contains(flag.as_str()))
+                .collect();
+        let agrees = theirs == ours;
+
+        match exemptions.get(name) {
+            Some(reason) => {
+                if agrees {
+                    divergences.push(format!(
+                        "{name} is exempt from the flag check (\"{reason}\") but now \
+                         matches upstream ({theirs:?}) — remove the exemption"
+                    ));
+                }
+                used_exemptions.insert(name);
+            }
+            None => {
+                if !agrees {
+                    let missing: Vec<&String> = theirs.difference(&ours).collect();
+                    let extra: Vec<&String> = ours.difference(&theirs).collect();
+                    divergences.push(format!(
+                        "{name}: upstream-only {missing:?}, frogdb-only {extra:?}"
+                    ));
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        divergences.is_empty(),
+        "vendored command flags and FrogDB's COMMAND INFO flags disagree for {} \
+         command(s). Fix the spec, or add a FLAG_EXEMPTIONS entry with a reason.\n{}",
+        divergences.len(),
+        divergences.join("\n")
+    );
+    assert!(
+        checked > 100,
+        "only {checked} commands were flag checked — the join looks broken"
+    );
+    for (name, _) in FLAG_EXEMPTIONS {
+        assert!(
+            used_exemptions.contains(name) || registry.get_entry(name).is_none(),
+            "FLAG_EXEMPTIONS lists {name}, which is registered but was never reached \
+             by the check — remove the stale entry"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tips
+// ---------------------------------------------------------------------------
+
+/// Every command upstream tags with tips needs a
+/// [`frogdb_commands::command_meta::TIP_AUDIT`] ruling before `COMMAND INFO`
+/// says anything about it, and every ruling has to name a command that is
+/// still tipped upstream. Vendoring a newer Redis that tips a new command
+/// fails here rather than silently emitting an unaudited routing promise.
+#[test]
+fn tip_audit_covers_every_tipped_command() {
+    use frogdb_commands::command_meta::{TIP_AUDIT, tip_ruling};
+
+    let registry = full_registry();
+    let mut unaudited: Vec<&str> = Vec::new();
+
+    for (name, _) in registry.iter() {
+        let Some(cmd) = upstream::command(name) else {
+            continue;
+        };
+        if !cmd.command_tips.is_empty() && tip_ruling(name).is_none() {
+            unaudited.push(name);
+        }
+    }
+
+    assert!(
+        unaudited.is_empty(),
+        "upstream declares tips for {unaudited:?}, which have no TIP_AUDIT ruling. \
+         Judge each against FrogDB's real routing/determinism and add a row — \
+         repeat upstream's list verbatim, or emit a subset with the reason."
+    );
+
+    for row in TIP_AUDIT {
+        if registry.get_entry(row.command).is_none() {
+            continue;
+        }
+        let tipped = upstream::command(row.command).is_some_and(|cmd| !cmd.command_tips.is_empty());
+        assert!(
+            tipped,
+            "TIP_AUDIT rules on {}, which upstream no longer tips — remove the row",
+            row.command
+        );
+    }
+}
+
+/// The emitter's key-spec bypass list and this file's key-spec exemption list
+/// have to name the same commands: a divergence the truthfulness gate tolerates
+/// is exactly a divergence `COMMAND INFO` must not repeat as if it were ours.
+#[test]
+fn key_spec_divergences_match_the_emitter_bypass() {
+    let exempt: BTreeSet<&str> = KEY_SPEC_EXEMPTIONS.iter().map(|(name, _)| *name).collect();
+    let bypassed: BTreeSet<&str> = frogdb_commands::command_meta::KEY_SPEC_DIVERGENCES
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(
+        exempt, bypassed,
+        "KEY_SPEC_EXEMPTIONS (this file) and command_meta::KEY_SPEC_DIVERGENCES \
+         (the emitter) disagree; they describe the same set of commands whose \
+         vendored key specs do not describe FrogDB"
+    );
 }

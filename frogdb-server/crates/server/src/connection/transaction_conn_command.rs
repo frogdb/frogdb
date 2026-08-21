@@ -141,7 +141,9 @@ static EXEC_SPEC: CommandSpec = transaction_spec(
         complexity: Some("Depends on commands in the transaction"),
     },
     Arity::Fixed(0),
-    CommandFlags::LOADING.union(CommandFlags::STALE),
+    CommandFlags::LOADING
+        .union(CommandFlags::STALE)
+        .union(CommandFlags::SKIP_SLOWLOG),
     KeySpec::None,
 );
 

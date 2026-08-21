@@ -20,7 +20,7 @@ impl Command for VsetattrCommand {
                 complexity: None,
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

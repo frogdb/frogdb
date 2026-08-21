@@ -991,7 +991,6 @@ impl Command for SpopCommand {
             // matching Redis, which never replicates SPOP itself.
             flags: CommandFlags::WRITE
                 .union(CommandFlags::FAST)
-                .union(CommandFlags::RANDOM)
                 .union(CommandFlags::NONDETERMINISTIC),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
@@ -1115,7 +1114,7 @@ impl Command for SmoveCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,

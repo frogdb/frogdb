@@ -54,8 +54,7 @@ static LASTSAVE_SPEC: CommandSpec = CommandSpec {
         complexity: Some("O(1)"),
     },
     arity: Arity::Fixed(0),
-    flags: CommandFlags::READONLY
-        .union(CommandFlags::FAST)
+    flags: CommandFlags::FAST
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     keys: KeySpec::None,

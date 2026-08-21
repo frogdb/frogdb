@@ -293,7 +293,7 @@ static MEMORY_SPEC: CommandSpec = CommandSpec {
         complexity: Some("Depends on subcommand."),
     },
     arity: Arity::AtLeast(1),
-    flags: CommandFlags::READONLY.union(CommandFlags::RANDOM),
+    flags: CommandFlags::READONLY,
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

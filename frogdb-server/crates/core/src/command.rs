@@ -957,9 +957,6 @@ bitflags! {
         /// Command should not be logged to slowlog.
         const SKIP_SLOWLOG = 0b0100_0000_0000;
 
-        /// Command may involve random data.
-        const RANDOM = 0b1000_0000_0000;
-
         /// Command modifies server state (not data).
         const ADMIN = 0b0001_0000_0000_0000;
 

@@ -28,6 +28,7 @@ pub mod blocking;
 pub mod bloom;
 #[cfg(feature = "cms")]
 pub mod cms;
+pub mod command_meta;
 #[cfg(feature = "cuckoo")]
 pub mod cuckoo;
 #[cfg(feature = "event-sourcing")]

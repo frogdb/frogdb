@@ -354,7 +354,7 @@ impl Command for PfselftestCommand {
             },
             // Upstream's arity is 1 — the command name and nothing else.
             arity: Arity::Fixed(0),
-            flags: CommandFlags::READONLY.union(CommandFlags::ADMIN),
+            flags: CommandFlags::ADMIN,
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,

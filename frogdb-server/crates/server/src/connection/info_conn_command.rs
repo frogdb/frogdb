@@ -42,9 +42,7 @@ static INFO_SPEC: CommandSpec = CommandSpec {
         complexity: Some("O(1)"),
     },
     arity: Arity::AtLeast(0),
-    flags: CommandFlags::READONLY
-        .union(CommandFlags::LOADING)
-        .union(CommandFlags::STALE),
+    flags: CommandFlags::LOADING.union(CommandFlags::STALE),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

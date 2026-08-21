@@ -87,7 +87,7 @@ pub struct ClusterCommand;
 impl Command for ClusterCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
-            name: "cluster",
+            name: "CLUSTER",
             docs: frogdb_core::CommandDocs {
                 summary: "A container for Redis Cluster commands.",
                 since: "3.0.0",
