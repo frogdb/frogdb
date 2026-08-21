@@ -427,13 +427,35 @@ impl ShardWorker {
                 // here in the async event loop rather than in the sync
                 // `dispatch_search`. All other search messages are synchronous.
                 match m {
-                    super::message::SearchMsg::FlushWal { response_tx } => {
+                    super::message::SearchMsg::FlushWal {
+                        hold_for,
+                        response_tx,
+                    } => {
                         if let Some(wal) = self.persistence.wal_writer()
                             && let Err(e) = wal.flush_async().await
                         {
                             tracing::error!(shard_id = self.shard_id(), error = %e, "Failed to flush WAL for snapshot");
                         }
-                        let _ = response_tx.send(());
+                        // Armed synchronously, with **no `.await` between the
+                        // drain above and here**. This task is the only producer
+                        // of WAL entries for this shard, so nothing can have been
+                        // staged in the gap: the armed instant *is* the drain
+                        // point, and `last_broadcast_offset` read below is the
+                        // exact watermark the pinned payload covers. That is why
+                        // no new `WalCommand` is needed — the hold does not have
+                        // to travel the WAL channel to be correctly placed.
+                        let hold: Option<std::sync::Arc<crate::persistence::FlushHold>> =
+                            match (hold_for, self.persistence.flush_hold()) {
+                                (Some(window), Some(hold)) => {
+                                    hold.arm(frogdb_types::clock::now() + window);
+                                    Some(std::sync::Arc::clone(hold))
+                                }
+                                _ => None,
+                            };
+                        let _ = response_tx.send(super::message::WalDrainAck {
+                            last_broadcast_offset: self.last_broadcast_offset(),
+                            hold,
+                        });
                     }
                     other => self.dispatch_search(other),
                 }

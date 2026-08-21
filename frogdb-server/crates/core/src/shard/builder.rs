@@ -386,15 +386,26 @@ impl ShardWorkerBuilder {
             .wal_failure_policy
             .clone()
             .unwrap_or_else(|| Arc::new(AtomicU8::new(WalFailurePolicy::default().as_u8())));
+        // The full-sync flush hold: minted here because the flush thread has to
+        // adopt it at construction, and kept on `ShardPersistence` because the
+        // `FULLRESYNC` drain handler is what arms it. Only the real WAL has a
+        // flush engine whose triggers there is anything to suppress.
+        let mut flush_hold: Option<Arc<crate::persistence::FlushHold>> = None;
         let wal_writer: Option<Box<dyn WalSink>> = match self.wal_mode {
             // Production path — byte-identical to the pre-WalMode behavior.
             WalMode::Rocks => match (self.rocks_store.as_ref(), self.wal_config.as_ref()) {
-                (Some(rocks), Some(wal_config)) => Some(Box::new(RocksWalWriter::new(
-                    rocks.clone(),
-                    shard_id,
-                    wal_config.clone(),
-                    metrics_recorder.clone(),
-                )) as Box<dyn WalSink>),
+                (Some(rocks), Some(wal_config)) => {
+                    let hold = crate::persistence::FlushHold::shared();
+                    flush_hold = Some(Arc::clone(&hold));
+                    let mut wal_config = wal_config.clone();
+                    wal_config.flush_hold_handle = Some(hold);
+                    Some(Box::new(RocksWalWriter::new(
+                        rocks.clone(),
+                        shard_id,
+                        wal_config,
+                        metrics_recorder.clone(),
+                    )) as Box<dyn WalSink>)
+                }
                 _ => None,
             },
             // Deterministic fake WAL — only compiled under test / `fake-wal`.
@@ -457,6 +468,7 @@ impl ShardWorkerBuilder {
             snapshot_coordinator,
             failure_policy,
             sync_durability,
+            flush_hold,
         );
         persistence.set_recovery_stats(recovery_stats);
 
@@ -492,6 +504,7 @@ impl ShardWorkerBuilder {
             scripting: ShardScripting::new(script_executor, self.function_registry),
             wait_queue: ShardWaitQueue::new(),
             replication_broadcaster,
+            last_broadcast_offset: 0,
             pending_serve_propagations: Vec::new(),
             per_request_spans,
             expiry_paused: Arc::new(AtomicBool::new(false)),

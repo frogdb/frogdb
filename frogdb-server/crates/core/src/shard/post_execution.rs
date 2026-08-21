@@ -452,12 +452,20 @@ impl ShardWorker {
                             EffectScope::Command
                             | EffectScope::ScatterPart
                             | EffectScope::InternalRemoval { .. } => {
+                                // Each emit hands back the offset it was
+                                // assigned; keeping the highest is what makes
+                                // this shard's `Y_s` exact for a full-sync
+                                // coverage vector (see
+                                // `ShardWorker::last_broadcast_offset`).
+                                let mut broadcast_to = 0;
                                 for record in summary.writes {
                                     for (name, args) in replication_forms(record) {
-                                        self.replication_broadcaster
+                                        broadcast_to = self
+                                            .replication_broadcaster
                                             .broadcast_command_on_shard(shard_id, name, args);
                                     }
                                 }
+                                self.record_broadcast_offset(broadcast_to);
                             }
                             EffectScope::Transaction => {
                                 let commands: Vec<(&str, &[Bytes])> = summary
@@ -469,8 +477,10 @@ impl ShardWorker {
                                 // (suppressed / NO_PROPAGATE) ships nothing —
                                 // not an empty MULTI/EXEC frame.
                                 if !commands.is_empty() {
-                                    self.replication_broadcaster
+                                    let broadcast_to = self
+                                        .replication_broadcaster
                                         .broadcast_transaction_on_shard(shard_id, &commands);
+                                    self.record_broadcast_offset(broadcast_to);
                                 }
                             }
                         }
@@ -483,10 +493,13 @@ impl ShardWorker {
                         // are not part of any MULTI/EXEC frame: waiter
                         // satisfaction runs after the transaction commits, so
                         // Redis likewise propagates the serve outside the frame.
+                        let mut broadcast_to = 0;
                         for cmd in &served_pops {
-                            self.replication_broadcaster
+                            broadcast_to = self
+                                .replication_broadcaster
                                 .broadcast_command_on_shard(shard_id, cmd.name, &cmd.args);
                         }
+                        self.record_broadcast_offset(broadcast_to);
                     }
                 }
             }
@@ -881,7 +894,7 @@ mod tests {
     use crate::noop::NoopMetricsRecorder;
     use crate::registry::CommandRegistry;
     use crate::replication::{ReplicationBroadcaster, SharedBroadcaster};
-    use crate::shard::message::{ShardReceiver, ShardSender};
+    use crate::shard::message::{SearchMsg, ShardMessage, ShardReceiver, ShardSender};
     use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
 
     #[derive(Default)]
@@ -976,6 +989,42 @@ mod tests {
         ) -> Result<Response, frogdb_types::CommandError> {
             ctx.effects.write_was_noop = true; // verified: nothing changed
             Ok(Response::Integer(0))
+        }
+    }
+
+    /// A broadcaster that hands back a scripted offset per frame, so a test can
+    /// prove the shard keeps the **maximum** rather than the last value.
+    struct ScriptedBroadcaster {
+        offsets: Mutex<std::collections::VecDeque<u64>>,
+    }
+
+    impl ScriptedBroadcaster {
+        fn new(offsets: impl IntoIterator<Item = u64>) -> Self {
+            Self {
+                offsets: Mutex::new(offsets.into_iter().collect()),
+            }
+        }
+    }
+
+    impl ReplicationBroadcaster for ScriptedBroadcaster {
+        fn broadcast_command_on_shard(
+            &self,
+            _shard_id: u16,
+            _cmd_name: &str,
+            _args: &[Bytes],
+        ) -> u64 {
+            self.offsets
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("script exhausted")
+        }
+        fn is_active(&self) -> bool {
+            true
+        }
+        fn current_offset(&self) -> u64 {
+            u64::MAX // never a valid `Y_s`: reading it instead of the per-shard
+            // watermark would make the replica skip frames it was never sent.
         }
     }
 
@@ -1943,5 +1992,102 @@ mod tests {
             worker.pending_serve_propagations.is_empty(),
             "the served-pop buffer must drain even when the broadcast is gated off"
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // The per-shard coverage watermark `Y_s`.
+    //
+    // `Y_s` is the offset of the last write THIS shard broadcast. A full-sync
+    // payload reports it so the replica can skip the frames the payload already
+    // contains. Too low replays a write twice (the defect); too high loses one.
+    // ------------------------------------------------------------------------
+
+    fn set(key: &str, value: &str) -> ParsedCommand {
+        ParsedCommand::new(
+            Bytes::from_static(b"SET"),
+            vec![
+                Bytes::copy_from_slice(key.as_bytes()),
+                Bytes::copy_from_slice(value.as_bytes()),
+            ],
+        )
+    }
+
+    /// The watermark folds in every broadcast as a **maximum**, and the WAL
+    /// drain ack reports exactly that value — not the broadcaster's node-wide
+    /// offset, which can sit above this shard's last frame.
+    #[tokio::test]
+    async fn the_wal_drain_ack_reports_the_shards_max_broadcast_offset() {
+        // Deliberately not monotonic: the last frame is assigned a *lower*
+        // offset than an earlier one, so "last wins" and "max wins" disagree.
+        let bc = Arc::new(ScriptedBroadcaster::new([7, 11, 3]));
+        let mut worker = worker_with_registry(bc as SharedBroadcaster, |r| r.register(MockWrite));
+
+        assert_eq!(worker.last_broadcast_offset(), 0, "nothing broadcast yet");
+
+        for (i, key) in ["a", "b", "c"].iter().enumerate() {
+            worker
+                .execute_command(&set(key, "v"), 1, ProtocolVersion::Resp2, false)
+                .await;
+            let expected = [7, 11, 11][i];
+            assert_eq!(
+                worker.last_broadcast_offset(),
+                expected,
+                "watermark after {} write(s) must be the max broadcast offset",
+                i + 1
+            );
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        worker
+            .dispatch_message(ShardMessage::Search(SearchMsg::FlushWal {
+                hold_for: None,
+                response_tx: tx,
+            }))
+            .await;
+        let ack = rx.await.expect("the drain acks");
+        assert_eq!(ack.last_broadcast_offset, 11);
+        assert!(
+            ack.hold.is_none(),
+            "a drain with no hold window (BGSAVE) must not arm one"
+        );
+    }
+
+    /// A `FULLRESYNC` drain arms the shard's flush hold, in the same message as
+    /// the watermark it reports, and hands the coordinator the handle it will
+    /// release the hold through after the checkpoint cut.
+    #[tokio::test]
+    async fn a_fullresync_drain_arms_the_flush_hold_and_hands_back_the_handle() {
+        let bc = Arc::new(ScriptedBroadcaster::new([4]));
+        let mut worker = worker_with_registry(bc as SharedBroadcaster, |r| r.register(MockWrite));
+        let hold = crate::persistence::FlushHold::shared();
+        worker.persistence = crate::shard::types::ShardPersistence::new(
+            None,
+            Arc::new(crate::persistence::NoopSnapshotCoordinator::new()),
+            Arc::new(std::sync::atomic::AtomicU8::new(
+                crate::persistence::WalFailurePolicy::default().as_u8(),
+            )),
+            false,
+            Some(Arc::clone(&hold)),
+        );
+
+        worker
+            .execute_command(&set("a", "v"), 1, ProtocolVersion::Resp2, false)
+            .await;
+        assert!(!hold.is_held(), "nothing armed it yet");
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        worker
+            .dispatch_message(ShardMessage::Search(SearchMsg::FlushWal {
+                hold_for: Some(std::time::Duration::from_secs(60)),
+                response_tx: tx,
+            }))
+            .await;
+        let ack = rx.await.expect("the drain acks");
+
+        assert_eq!(ack.last_broadcast_offset, 4);
+        assert!(hold.is_held(), "the drain arms the hold before it acks");
+        let handle = ack.hold.expect("the ack carries the hold handle");
+        assert!(!handle.release(), "released cleanly, no breach");
+        assert!(!hold.is_held(), "the coordinator's release lifts it");
     }
 }

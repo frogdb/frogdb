@@ -190,6 +190,25 @@ pub struct ShardWorker {
     /// Replication broadcaster for streaming writes to replicas.
     pub(crate) replication_broadcaster: SharedBroadcaster,
 
+    /// The replication offset of the last write **this shard** broadcast — the
+    /// `Y_s` a full-sync payload reports as its per-shard coverage watermark.
+    ///
+    /// Written by the terminal `ReplicationBroadcast` write effect, which is
+    /// the last thing a write does, so by the time this shard processes any
+    /// later message every write it has executed is at or below this value —
+    /// and nothing above it has executed here. That exactness is the whole
+    /// point, and it is why
+    /// [`ReplicationBroadcaster::current_offset`](frogdb_replication::ReplicationBroadcaster::current_offset)
+    /// is *not* a substitute: that is the node-wide head, which another shard
+    /// can have advanced past this shard's last broadcast. A watermark that is
+    /// too high makes the replica skip a frame the payload does not contain —
+    /// silent write loss.
+    ///
+    /// Kept as a maximum rather than a plain assignment: the broadcaster hands
+    /// back the offset it assigned, and nothing in this type's contract
+    /// promises those arrive in increasing order.
+    pub(crate) last_broadcast_offset: u64,
+
     /// Deterministic pop commands synthesized while satisfying blocking waiters
     /// (issue 02), pending broadcast to replicas.
     ///
@@ -241,6 +260,18 @@ impl ShardWorker {
     /// Get the shard ID.
     pub fn shard_id(&self) -> usize {
         self.identity.shard_id()
+    }
+
+    /// This shard's coverage watermark `Y_s`: the offset of the last write it
+    /// broadcast. See [`Self::last_broadcast_offset`]'s field docs.
+    pub fn last_broadcast_offset(&self) -> u64 {
+        self.last_broadcast_offset
+    }
+
+    /// Record the offset the broadcaster assigned to a frame this shard just
+    /// emitted. The single writer of [`Self::last_broadcast_offset`].
+    pub(crate) fn record_broadcast_offset(&mut self, offset: u64) {
+        self.last_broadcast_offset = std::cmp::max(self.last_broadcast_offset, offset);
     }
 
     /// Get the total number of shards.

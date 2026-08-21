@@ -78,7 +78,7 @@ pub use message::TickKind;
 pub use message::{
     BlockingMsg, ClusterMsg, CoreMsg, DebugIntrospectionMsg, Envelope, ObservabilityMsg, PubSubMsg,
     ReplicationMsg, ScatterOp, ScriptingMsg, SearchMsg, ShardMessage, ShardReceiver, ShardSender,
-    SnapshotEntry, TrackingMsg, UnregisterAck, VllMsg, WatchEntry,
+    SnapshotEntry, TrackingMsg, UnregisterAck, VllMsg, WalDrainAck, WatchEntry,
 };
 pub use partition::{REDIS_CLUSTER_SLOTS, extract_hash_tag, shard_for_key, slot_for_key};
 pub use search::lifecycle::{

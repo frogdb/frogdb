@@ -42,6 +42,7 @@ pub use snapshot::{
     SnapshotMode, SnapshotRequest, SnapshotScheduler, SnapshotStats,
 };
 pub use wal::{
-    DurabilityMode, FakeFailure, FakeWalLog, FakeWalSink, RecordedWalEffect, RocksWalWriter,
-    WalConfig, WalEffectKind, WalFailurePolicy, WalLagStats, WalSink, spawn_periodic_sync,
+    DurabilityMode, FULL_SYNC_HOLD, FakeFailure, FakeWalLog, FakeWalSink, FlushHold,
+    RecordedWalEffect, RocksWalWriter, WalConfig, WalEffectKind, WalFailurePolicy, WalLagStats,
+    WalSink, spawn_periodic_sync,
 };

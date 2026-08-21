@@ -912,6 +912,28 @@ pub enum DebugIntrospectionMsg {
     },
 }
 
+/// What one shard reports when it has drained its WAL flush engine.
+///
+/// More than an "it's done" tick because the drain is also the **capture point**
+/// of a full-sync payload's per-shard coverage watermark: the two facts are one
+/// instant of one shard, and splitting them across two messages would let writes
+/// slip between them.
+#[derive(Debug)]
+pub struct WalDrainAck {
+    /// `Y_s` — the offset of the last write this shard broadcast as of the
+    /// drain. Every write in this shard's half of a payload cut after this is
+    /// at or below it; nothing above it has executed here. See
+    /// [`ShardWorker::last_broadcast_offset`](super::worker::ShardWorker::last_broadcast_offset).
+    pub last_broadcast_offset: u64,
+    /// The armed flush hold, when [`SearchMsg::FlushWal::hold_for`] asked for
+    /// one and this shard has a flush engine to hold.
+    ///
+    /// Handed back rather than looked up because the coordinator releases it
+    /// from its own thread through this `Arc`: sending the release down the WAL
+    /// channel would queue behind the explicit `Flush` the hold is blocking.
+    pub hold: Option<Arc<crate::persistence::FlushHold>>,
+}
+
 /// Search index flush + pub/sub limits messages.
 #[derive(Debug)]
 pub enum SearchMsg {
@@ -927,7 +949,20 @@ pub enum SearchMsg {
     /// committed to RocksDB on a later size/timeout trigger; without this drain,
     /// `create_checkpoint` would snapshot a RocksDB that is missing the most
     /// recent writes, producing a silently-incomplete disaster-recovery artifact.
-    FlushWal { response_tx: oneshot::Sender<()> },
+    ///
+    /// A `FULLRESYNC` checkpoint needs the same drain plus one thing `BGSAVE`
+    /// does not: the payload must be *pinned* at the watermark the ack reports,
+    /// so `hold_for` asks the shard to arm its flush hold for that long once the
+    /// drain completes.
+    FlushWal {
+        /// `Some(window)` arms this shard's [`FlushHold`](crate::persistence::FlushHold)
+        /// for `window` starting at the drain point, so the flush engine's own
+        /// size/timeout triggers cannot commit post-drain writes into the
+        /// checkpoint. `None` (the `BGSAVE` path) drains only — extra data in a
+        /// recovery artifact is harmless, so it pays none of the hold's cost.
+        hold_for: Option<std::time::Duration>,
+        response_tx: oneshot::Sender<WalDrainAck>,
+    },
 
     /// Get pub/sub limits info from this shard.
     GetPubSubLimitsInfo {
@@ -991,11 +1026,14 @@ pub enum ReplicationMsg {
     /// run ahead of the offset, never behind it, and the difference is replayed
     /// from the backlog at the streaming handoff.
     ExportSnapshot {
-        /// The serialized dataset blob (empty for an empty shard), or the
-        /// reason it could not be produced. An export that cannot see a key's
-        /// value must fail rather than omit it: the blob is installed as a
-        /// *complete* dataset, so a partial one is silent data loss.
-        response_tx: oneshot::Sender<Result<Vec<u8>, String>>,
+        /// The serialized dataset blob (empty for an empty shard) paired with
+        /// this shard's coverage watermark `Y_s` — the offset of the last write
+        /// it broadcast as of the export — or the reason the blob could not be
+        /// produced. An export that cannot see a key's value must fail rather
+        /// than omit it: the blob is installed as a *complete* dataset, so a
+        /// partial one is silent data loss. Blob and watermark travel together
+        /// so they describe the same instant of the same shard.
+        response_tx: oneshot::Sender<Result<(Vec<u8>, u64), String>>,
     },
 }
 

@@ -31,7 +31,14 @@ impl ShardWorker {
                 let _ = response_tx.send(());
             }
             ReplicationMsg::ExportSnapshot { response_tx } => {
-                let _ = response_tx.send(self.export_snapshot());
+                // The watermark is read in the same message as the export, with
+                // no `.await` between: every write in this blob was broadcast at
+                // or below it, and nothing above it has executed on this shard.
+                let last_broadcast_offset = self.last_broadcast_offset();
+                let _ = response_tx.send(
+                    self.export_snapshot()
+                        .map(|blob| (blob, last_broadcast_offset)),
+                );
             }
         }
         false

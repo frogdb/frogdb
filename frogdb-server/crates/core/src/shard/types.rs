@@ -389,6 +389,15 @@ pub(crate) struct ShardPersistence {
     /// parameter (its `CONFIG SET` arm updates the reported value and nothing
     /// else), so unlike the policy this needs no shared atomic.
     sync_durability: bool,
+    /// The full-sync flush hold this shard's WAL flush thread honours, when
+    /// persistence is enabled.
+    ///
+    /// Lives here rather than behind the [`WalSink`] trait because it is not a
+    /// WAL operation: the shard *arms* it at a `FULLRESYNC` drain, and a
+    /// different thread — the full-sync coordinator, through this same `Arc` —
+    /// releases it after the checkpoint cut. Sending the release down the WAL
+    /// channel would deadlock behind the explicit `Flush` the hold is blocking.
+    flush_hold: Option<Arc<crate::persistence::FlushHold>>,
     /// This node's boot-time recovery outcome, set once after construction
     /// (recovery finishes before any shard worker exists — there is nothing
     /// to reconstruct it from at `ShardPersistence::new` time) via
@@ -404,12 +413,14 @@ impl ShardPersistence {
         snapshot_coordinator: Arc<dyn SnapshotCoordinator>,
         failure_policy: Arc<std::sync::atomic::AtomicU8>,
         sync_durability: bool,
+        flush_hold: Option<Arc<crate::persistence::FlushHold>>,
     ) -> Self {
         Self {
             wal_writer,
             snapshot_coordinator,
             failure_policy,
             sync_durability,
+            flush_hold,
             recovery_stats: Arc::new(RecoveryStats::default()),
         }
     }
@@ -417,6 +428,11 @@ impl ShardPersistence {
     /// The WAL writer for this shard, if persistence is enabled.
     pub(crate) fn wal_writer(&self) -> Option<&dyn WalSink> {
         self.wal_writer.as_deref()
+    }
+
+    /// The full-sync flush hold for this shard, if persistence is enabled.
+    pub(crate) fn flush_hold(&self) -> Option<&Arc<crate::persistence::FlushHold>> {
+        self.flush_hold.as_ref()
     }
 
     /// Returns true if a WAL writer is configured for this shard.
@@ -1348,6 +1364,7 @@ mod persistence_tests {
                 WalFailurePolicy::default().as_u8(),
             )),
             sync_durability,
+            None,
         )
     }
 
@@ -1417,6 +1434,7 @@ mod persistence_tests {
                 WalFailurePolicy::default().as_u8(),
             )),
             false,
+            None,
         )
     }
 
