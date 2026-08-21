@@ -103,7 +103,11 @@ pub fn build(frogdb: &FrogDB, config_hash: &str) -> StatefulSet {
                 .collect();
             env.push(EnvVar {
                 name: "FROGDB_CLUSTER__INITIAL_NODES".into(),
-                value: Some(initial_nodes.join(",")),
+                // Brackets are required: the server reads env through figment,
+                // whose parser only produces a sequence for a value starting
+                // with '[' — a bare "a:1,b:2" fails to boot with
+                // "invalid type: found string, expected a sequence".
+                value: Some(format!("[{}]", initial_nodes.join(","))),
                 ..Default::default()
             });
 

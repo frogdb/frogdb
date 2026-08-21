@@ -36,5 +36,8 @@ hex = "0.4"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 frogdb-test-harness = { path = "../frogdb-server/crates/test-harness" }
+# Round-trips rendered env values through the same env provider the server's
+# config loader uses, so the operator cannot render a value the server rejects.
+figment = { version = "0.10", features = ["env", "test"] }
 
 [workspace]

@@ -36,6 +36,16 @@ fn env_value(container: &k8s_openapi::api::core::v1::Container, name: &str) -> O
         .and_then(|e| e.value.clone())
 }
 
+/// Split a rendered figment sequence env value (`"[a,b,c]"`) into its entries.
+fn seq_entries(value: &str) -> Vec<&str> {
+    value
+        .strip_prefix('[')
+        .and_then(|v| v.strip_suffix(']'))
+        .unwrap_or_else(|| panic!("expected a bracket-wrapped sequence value, got {value:?}"))
+        .split(',')
+        .collect()
+}
+
 /// Get pod template annotations from a StatefulSet.
 fn pod_annotations(sts: &k8s_openapi::api::apps::v1::StatefulSet) -> &BTreeMap<String, String> {
     sts.spec
@@ -125,7 +135,7 @@ mod statefulset_tests {
 
         let c = container(&sts);
         let nodes = env_value(c, "FROGDB_CLUSTER__INITIAL_NODES").unwrap();
-        let entries: Vec<&str> = nodes.split(',').collect();
+        let entries = seq_entries(&nodes);
         assert_eq!(entries.len(), 3);
         assert!(entries[0].contains("mydb-0.mydb-headless.ns1.svc.cluster.local:16379"));
         assert!(entries[1].contains("mydb-1.mydb-headless.ns1.svc.cluster.local:16379"));
@@ -139,7 +149,29 @@ mod statefulset_tests {
 
         let c = container(&sts);
         let nodes = env_value(c, "FROGDB_CLUSTER__INITIAL_NODES").unwrap();
-        assert_eq!(nodes.split(',').count(), 5);
+        assert_eq!(seq_entries(&nodes).len(), 5);
+    }
+
+    /// The rendered value must be bracket-wrapped. figment (the server's env
+    /// config source) only enters its sequence branch when the value starts
+    /// with '[': a bare comma-joined list is decoded as a scalar string and
+    /// the server refuses to boot with
+    /// `invalid type: found string, expected a sequence`.
+    #[test]
+    fn cluster_initial_nodes_is_bracket_wrapped() {
+        for replicas in [1i32, 3, 5] {
+            let frogdb = make_frogdb("mydb", "ns1", cluster_spec(replicas));
+            let sts = statefulset::build(&frogdb, "abc123");
+            let nodes =
+                env_value(container(&sts), "FROGDB_CLUSTER__INITIAL_NODES").unwrap_or_else(|| {
+                    panic!("cluster mode must render INITIAL_NODES for {replicas} replicas")
+                });
+            assert!(
+                nodes.starts_with('[') && nodes.ends_with(']'),
+                "INITIAL_NODES must be bracket-wrapped for figment to parse it as a \
+                 sequence, got {nodes:?}"
+            );
+        }
     }
 
     #[test]
@@ -153,9 +185,61 @@ mod statefulset_tests {
         let nodes3 = env_value(container(&sts3), "FROGDB_CLUSTER__INITIAL_NODES").unwrap();
         let nodes5 = env_value(container(&sts5), "FROGDB_CLUSTER__INITIAL_NODES").unwrap();
 
-        assert_eq!(nodes3.split(',').count(), 3);
-        assert_eq!(nodes5.split(',').count(), 5);
+        assert_eq!(seq_entries(&nodes3).len(), 3);
+        assert_eq!(seq_entries(&nodes5).len(), 5);
         assert_ne!(nodes3, nodes5);
+    }
+
+    /// End-to-end guard on the rendered value: feed the exact string the
+    /// operator puts in the pod spec through the same figment env provider
+    /// the server's config loader uses
+    /// (`frogdb-server/crates/server/src/config/loader.rs`) and assert it
+    /// deserializes as a sequence with the expected entries. This is the
+    /// assertion that would have caught the bare comma-joined form, which
+    /// figment decodes as a scalar string.
+    #[test]
+    fn cluster_initial_nodes_env_value_decodes_as_sequence() {
+        let frogdb = make_frogdb("mydb", "ns1", cluster_spec(3));
+        let sts = statefulset::build(&frogdb, "abc123");
+        let rendered = env_value(container(&sts), "FROGDB_CLUSTER__INITIAL_NODES").unwrap();
+
+        #[derive(serde::Deserialize)]
+        struct ClusterSection {
+            #[serde(rename = "initial-nodes")]
+            initial_nodes: Vec<String>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Rendered {
+            cluster: ClusterSection,
+        }
+
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("FROGDB_CLUSTER__INITIAL_NODES", &rendered);
+            // Mirrors loader.rs: `__` is the section separator, remaining
+            // single underscores become hyphens to match the kebab-case serde
+            // renames on the config structs.
+            let figment = figment::Figment::from(
+                figment::providers::Env::prefixed("FROGDB_")
+                    .split("__")
+                    .map(|key| {
+                        key.as_str()
+                            .replace("__", "\x00")
+                            .replace('_', "-")
+                            .replace('\x00', "__")
+                            .into()
+                    }),
+            );
+            let parsed: Rendered = figment.extract()?;
+            assert_eq!(
+                parsed.cluster.initial_nodes,
+                vec![
+                    "mydb-0.mydb-headless.ns1.svc.cluster.local:16379".to_string(),
+                    "mydb-1.mydb-headless.ns1.svc.cluster.local:16379".to_string(),
+                    "mydb-2.mydb-headless.ns1.svc.cluster.local:16379".to_string(),
+                ]
+            );
+            Ok(())
+        });
     }
 
     #[test]

@@ -71,7 +71,10 @@ Return the headless service name for cluster discovery
 {{/*
 Generate cluster peer addresses for Raft discovery.
 This generates the list of peer addresses based on the StatefulSet naming pattern.
-Format: frogdb-0.frogdb-headless.namespace.svc.cluster.local:16379
+Format: [frogdb-0.frogdb-headless.namespace.svc.cluster.local:16379,...]
+The brackets are required: the server reads this env var through figment, whose
+parser only produces a sequence for a value starting with '[' — a bare
+"a:1,b:2" fails to boot with "invalid type: found string, expected a sequence".
 */}}
 {{- define "frogdb.clusterPeers" -}}
 {{- $fullname := include "frogdb.fullname" . -}}
@@ -83,7 +86,7 @@ Format: frogdb-0.frogdb-headless.namespace.svc.cluster.local:16379
 {{- range $i := until $replicas -}}
 {{- $peers = append $peers (printf "%s-%d.%s.%s.svc.cluster.local:%d" $fullname $i $headless $namespace $busPort) -}}
 {{- end -}}
-{{- join "," $peers -}}
+{{- printf "[%s]" (join "," $peers) -}}
 {{- end }}
 
 {{/*
