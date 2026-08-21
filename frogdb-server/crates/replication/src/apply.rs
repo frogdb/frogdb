@@ -2095,6 +2095,15 @@ mod tests {
             2,
             "a resync replaced the history, not the evidence that data was re-shipped"
         );
+
+        // What `record_skip` *returns* is the running total including its own
+        // increment. The warn! line logs that value instead of loading the
+        // counter back, so a pre-increment return would misreport every skip by
+        // one and the two log lines of a double skip would read the same.
+        let later = applied.begin_replica_stint();
+        assert_eq!(later.record_skip(), 3, "the total after this increment");
+        assert_eq!(later.record_skip(), 4, "and it keeps counting");
+        assert_eq!(applied.skipped(), 4, "the node agrees with what was logged");
     }
 
     /// Ordering between the two "do not apply this" checks: a frame stamped with
