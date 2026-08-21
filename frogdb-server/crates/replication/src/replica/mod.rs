@@ -30,7 +30,7 @@ use crate::state::ReplicationState;
 use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
 use offset::ReplicaOffset;
-pub use offset::{AppliedOffset, Claim, ReplicaApplyStint};
+pub use offset::{AppliedOffset, Claim, FrameDisposition, ReplicaApplyStint, frame_disposition};
 pub use psync::{
     FullResyncPayload, PsyncArm, psync_request_args, select_full_resync_payload, select_psync_arm,
 };

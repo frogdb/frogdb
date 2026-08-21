@@ -1,6 +1,7 @@
 //! The replica-side live offset, owned in one place.
 
 use crate::frame::ReplicationFrame;
+use crate::fullsync::ShardCoverage;
 use crate::offset_coordinator::OffsetCoordinator;
 use crate::state::ReplicationState;
 use parking_lot::{Mutex, RwLock};
@@ -100,6 +101,88 @@ pub struct AppliedOffset {
     /// already held. Every increment is a sender-side accounting bug, so the
     /// number is only ever interesting as a total.
     skipped: Arc<AtomicU64>,
+    /// The per-shard skip floors the most recent full-sync payload installed —
+    /// its [`ShardCoverage`] vector (FM-REPLICATION-066).
+    ///
+    /// Written only by [`Self::reset_pair`], under the gate and in the same
+    /// critical section as the offset pair, because the two describe one
+    /// dataset: an install that adopted the offset without the floors would
+    /// replay the overshipped range verbatim, and floors without their offset
+    /// would be read against the wrong head.
+    floors: Arc<Mutex<ShardCoverage>>,
+    /// `max(Y_s)` over [`Self::floors`], or `0` when no floors are installed.
+    ///
+    /// The fast path: the floors are consulted per frame, and once the applied
+    /// head reaches this ceiling no frame can be at or below any floor, so the
+    /// applier retires the vector and stops taking the lock. `0` is unambiguous
+    /// as "no floors" — a real ceiling is the end offset of a frame, which is
+    /// positive.
+    floor_ceiling: Arc<AtomicU64>,
+    /// How many frames this node stepped over because the installed payload
+    /// already contained their effect (FM-REPLICATION-066). Node-wide and
+    /// cumulative, like [`Self::skipped`], and deliberately not cleared by
+    /// [`Self::reset_pair`].
+    ///
+    /// Separate from [`Self::skipped`] because the two mean opposite things: an
+    /// FM-065 skip is evidence of a sender-side accounting bug and is logged as
+    /// one, while a floor skip is the expected, healthy outcome of mending a
+    /// full-sync overship. Folding them together would make the bug counter fire
+    /// on every full sync.
+    floor_skipped: Arc<AtomicU64>,
+}
+
+/// What the applier should do with one frame, decided before it is parsed.
+///
+/// The three answers are mutually exclusive and the order they are tried in is
+/// load-bearing — see [`frame_disposition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameDisposition {
+    /// Nothing on this node covers the frame: parse it, claim it, apply it.
+    Apply,
+    /// The applied head already covers the frame's whole byte span. It claims
+    /// nothing and lands nothing — the head is already past it
+    /// (FM-REPLICATION-065).
+    CoveredByHead,
+    /// The frame is above the applied head, but the full-sync payload this node
+    /// installed already contains its effect. Its bytes *are* claimed — this
+    /// node really does hold them — but the command is not re-executed
+    /// (FM-REPLICATION-066).
+    CoveredByFloor,
+}
+
+/// Decide one frame's disposition from the three numbers that determine it.
+///
+/// Pure, and separate from the state it reads, so the rule can be tested at its
+/// boundaries without a stint, a channel or a keyspace.
+///
+/// **Head before floor.** The two answers differ in what they do with the
+/// frame's bytes — a head-covered frame claims nothing, a floor-covered frame
+/// claims all of them — so a frame that is both must take the head's branch, or
+/// its bytes would be claimed twice and push this node's offset past the
+/// primary's.
+///
+/// **`floor` is an `Option`, and `None` means apply.** A shard with no watermark
+/// is a shard the payload makes no claim about: a control-shard frame, or a
+/// sender with fewer shards than the frame's tag indexes. Reading an absent
+/// watermark as "not covered" costs at worst a re-apply; reading it as "covered"
+/// drops a write. The type makes only the first reading available.
+///
+/// **Both bounds are inclusive.** A frame spans
+/// `(end_offset - stream_advance(), end_offset]` (FM-REPLICATION-031), so a
+/// frame ending exactly at the head, or exactly at `Y_s`, has nothing of itself
+/// above that bound.
+pub fn frame_disposition(
+    applied_head: u64,
+    floor: Option<u64>,
+    end_offset: u64,
+) -> FrameDisposition {
+    if end_offset <= applied_head {
+        return FrameDisposition::CoveredByHead;
+    }
+    match floor {
+        Some(watermark) if end_offset <= watermark => FrameDisposition::CoveredByFloor,
+        _ => FrameDisposition::Apply,
+    }
 }
 
 impl AppliedOffset {
@@ -118,6 +201,9 @@ impl AppliedOffset {
             diverged: Arc::new(AtomicU64::new(NO_DIVERGENCE)),
             divergence: Arc::new(tokio::sync::Notify::new()),
             skipped: Arc::new(AtomicU64::new(0)),
+            floors: Arc::new(Mutex::new(ShardCoverage::none())),
+            floor_ceiling: Arc::new(AtomicU64::new(0)),
+            floor_skipped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -286,11 +372,29 @@ impl AppliedOffset {
     /// connection task can otherwise land *after* a promotion froze the
     /// boundary, rewriting the head a freshly minted window and backlog floor
     /// were just built around.
-    fn reset_pair(&self, stint: u64, offset: u64, live: &AtomicU64) -> bool {
+    ///
+    /// `coverage` is the installed payload's per-shard watermark vector, which
+    /// replaces the floors wholesale — including with the empty vector, which is
+    /// what every rewind and every coverage-less install passes. Floors from a
+    /// dataset that has just been thrown away would skip frames whose effects
+    /// the *new* dataset does not contain, so "reset at each install" is not a
+    /// convenience, it is the safety rule (FM-REPLICATION-066).
+    fn reset_pair(
+        &self,
+        stint: u64,
+        offset: u64,
+        live: &AtomicU64,
+        coverage: ShardCoverage,
+    ) -> bool {
         let gate = self.gate.lock();
         if gate.frozen || gate.stint != stint {
             return false;
         }
+        // Under the gate, with the pair: an applier that reads a floor is
+        // reading the floors of the dataset whose offset it is claiming into.
+        let ceiling = coverage.max();
+        *self.floors.lock() = coverage;
+        self.floor_ceiling.store(ceiling, Ordering::Release);
         live.store(offset, Ordering::Release);
         self.applied.store(offset, Ordering::Release);
         // The installed dataset *is* applied, so the landed head is level with
@@ -314,6 +418,64 @@ impl AppliedOffset {
     /// decode loop queues, and the discriminator the consumer claims against.
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Acquire)
+    }
+
+    /// How many frames this node has stepped over because the full-sync payload
+    /// it installed already contained their effect (FM-REPLICATION-066).
+    pub fn floor_skipped(&self) -> u64 {
+        self.floor_skipped.load(Ordering::Relaxed)
+    }
+
+    /// `max(Y_s)` of the floors currently installed, or `0` once they have been
+    /// retired (or were never installed).
+    ///
+    /// This is also the threshold the window-grant refusal reads: below it, this
+    /// node's keyspace holds effects its claimed offset does not describe, so a
+    /// `+CONTINUE` that replaces the history would resume over them.
+    pub fn floor_ceiling(&self) -> u64 {
+        self.floor_ceiling.load(Ordering::Acquire)
+    }
+
+    /// Whether floors are still in force — i.e. whether the applied head has yet
+    /// to catch up with everything the installed payload covered.
+    ///
+    /// Retires the vector as a side effect once the head reaches the ceiling, so
+    /// the steady-state applier neither takes the floors lock nor keeps a stale
+    /// vector alive. Retiring on a *read* rather than on the claim that crossed
+    /// the ceiling keeps the rule in one place: every consumer of the floors
+    /// goes through here.
+    fn floors_in_force(&self) -> bool {
+        let ceiling = self.floor_ceiling.load(Ordering::Acquire);
+        if ceiling == 0 {
+            return false;
+        }
+        if self.current() >= ceiling {
+            // Compare-exchange rather than a bare store: a full resync may have
+            // installed a *new* vector between the load above and here, and
+            // clobbering it would drop floors that are still needed.
+            let _ = self.floor_ceiling.compare_exchange(
+                ceiling,
+                0,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Shard `shard`'s installed floor, or `None` when no floor applies to it —
+    /// no vector in force, or a vector that does not describe that shard.
+    pub fn floor_for(&self, shard: u16) -> Option<u64> {
+        if !self.floors_in_force() {
+            return None;
+        }
+        self.floors.lock().watermark(shard)
+    }
+
+    /// The floors currently installed, for persistence and for tests.
+    pub fn floors(&self) -> ShardCoverage {
+        self.floors.lock().clone()
     }
 
     /// Whether a replicated apply has failed on the history this node is
@@ -503,6 +665,33 @@ impl ReplicaApplyStint {
         end_offset <= self.current()
     }
 
+    /// What to do with a frame from `shard` ending at `end_offset`: apply it,
+    /// step over it as already-applied ([`FrameDisposition::CoveredByHead`]), or
+    /// step over it as already-in-the-payload
+    /// ([`FrameDisposition::CoveredByFloor`]).
+    ///
+    /// The floor half is the receiver end of FM-REPLICATION-066. A full-sync
+    /// payload is cut *after* the offset the replica is granted, so the handoff
+    /// replays a range the installed keyspace already partly holds; the sender's
+    /// per-shard watermarks say exactly how much, per shard, and this is where
+    /// that is spent.
+    ///
+    /// Reads the floors outside the gate for the same reason [`Self::covers`]
+    /// reads the head outside it: the only writer during a stint is
+    /// [`AppliedOffset::reset_pair`], which bumps the epoch under the gate, so a
+    /// frame that races an install is refused [`Claim::Stale`] whichever side of
+    /// the reset this read lands on.
+    pub fn disposition(&self, shard: u16, end_offset: u64) -> FrameDisposition {
+        frame_disposition(self.current(), self.offset.floor_for(shard), end_offset)
+    }
+
+    /// Record one frame stepped over by a full-sync floor, and return the
+    /// node-wide running total. Counterpart to [`Self::record_skip`]; see
+    /// [`AppliedOffset::floor_skipped`] for why the two are separate counters.
+    pub fn record_floor_skip(&self) -> u64 {
+        self.offset.floor_skipped.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
     /// Record one frame ignored as already covered, and return the node-wide
     /// running total.
     ///
@@ -627,7 +816,24 @@ impl ReplicaOffset {
     /// reach here after either. The caller must abandon the sync.
     #[must_use = "a refused reset means the stream must abandon this sync"]
     pub fn reset_to(&self, offset: u64) -> bool {
-        let accepted = self.applied.reset_pair(self.stint, offset, &self.live);
+        self.reset_to_payload(offset, ShardCoverage::none())
+    }
+
+    /// [`Self::reset_to`] for an install that carries a coverage vector: adopt
+    /// the payload's offset *and* its per-shard skip floors, in one critical
+    /// section (FM-REPLICATION-066).
+    ///
+    /// Every other reset — a rewind to `0`, a coverage-less install — goes
+    /// through [`Self::reset_to`] and clears the floors, which is the same
+    /// operation with an empty vector. There is deliberately no way to adopt an
+    /// offset while *leaving* the floors alone: the floors describe the dataset
+    /// the offset came with, and pairing them with a different one is the bug
+    /// they exist to prevent.
+    #[must_use = "a refused reset means the stream must abandon this sync"]
+    pub fn reset_to_payload(&self, offset: u64, coverage: ShardCoverage) -> bool {
+        let accepted = self
+            .applied
+            .reset_pair(self.stint, offset, &self.live, coverage);
         #[cfg(any(test, debug_assertions))]
         crate::invariants::debug_assert_view_clean(&self.view(), "ReplicaOffset::reset_to");
         accepted
@@ -1139,6 +1345,118 @@ mod tests {
         assert_eq!(
             persisted.offset_at_save, 900,
             "the file must describe the data this node holds, not the one it used to"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // Full-sync coverage floors (FM-REPLICATION-066).
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn a_frame_at_or_below_its_floor_is_covered_by_it() {
+        assert_eq!(
+            frame_disposition(0, Some(100), 100),
+            FrameDisposition::CoveredByFloor,
+            "the boundary is inclusive: a frame ending exactly at Y_s is wholly inside the payload"
+        );
+        assert_eq!(
+            frame_disposition(0, Some(100), 99),
+            FrameDisposition::CoveredByFloor
+        );
+        assert_eq!(
+            frame_disposition(0, Some(100), 101),
+            FrameDisposition::Apply,
+            "one byte above Y_s is a byte the payload does not contain"
+        );
+    }
+
+    #[test]
+    fn an_absent_floor_never_covers_anything() {
+        // The reading that costs a re-apply, never the one that drops a write.
+        assert_eq!(frame_disposition(0, None, 1), FrameDisposition::Apply);
+        assert_eq!(
+            frame_disposition(0, None, u64::MAX),
+            FrameDisposition::Apply
+        );
+    }
+
+    #[test]
+    fn the_head_outranks_the_floor() {
+        // Both cover it. The head's branch claims nothing; the floor's claims
+        // everything. Taking the floor's would credit the bytes twice.
+        assert_eq!(
+            frame_disposition(100, Some(100), 100),
+            FrameDisposition::CoveredByHead
+        );
+        assert_eq!(
+            frame_disposition(100, Some(1_000), 50),
+            FrameDisposition::CoveredByHead
+        );
+    }
+
+    #[test]
+    fn an_install_adopts_the_payloads_floors_with_its_offset() {
+        let applied = AppliedOffset::detached(0);
+        let _stint = applied.begin_replica_stint();
+        let offsets = ReplicaOffset::new(state_with_save(0), seeded(0), applied.clone());
+
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![10, 40, 25])));
+        assert_eq!(applied.floor_for(0), Some(10));
+        assert_eq!(applied.floor_for(1), Some(40));
+        assert_eq!(applied.floor_for(2), Some(25));
+        assert_eq!(applied.floor_ceiling(), 40, "the ceiling is max(Y_s)");
+    }
+
+    #[test]
+    fn a_shard_the_vector_does_not_describe_has_no_floor() {
+        let applied = AppliedOffset::detached(0);
+        let _stint = applied.begin_replica_stint();
+        let offsets = ReplicaOffset::new(state_with_save(0), seeded(0), applied.clone());
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![10])));
+
+        assert_eq!(
+            applied.floor_for(1),
+            None,
+            "a shard past the end of the vector"
+        );
+        assert_eq!(
+            applied.floor_for(crate::frame::CONTROL_SHARD),
+            None,
+            "a control frame is process-wide state the payload makes no claim about"
+        );
+    }
+
+    #[test]
+    fn floors_retire_once_the_head_reaches_the_ceiling() {
+        let applied = AppliedOffset::detached(0);
+        let stint = applied.begin_replica_stint();
+        let offsets = ReplicaOffset::new(state_with_save(0), seeded(0), applied.clone());
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![10, 40])));
+
+        assert!(matches!(stint.claim(applied.epoch(), 39), Claim::Granted));
+        assert_eq!(applied.floor_for(1), Some(40), "still one byte short");
+
+        assert!(matches!(stint.claim(applied.epoch(), 1), Claim::Granted));
+        assert_eq!(
+            applied.floor_for(1),
+            None,
+            "the head has caught up with everything the payload covered"
+        );
+        assert_eq!(applied.floor_ceiling(), 0, "and the vector is retired");
+    }
+
+    #[test]
+    fn a_rewind_clears_the_floors() {
+        let applied = AppliedOffset::detached(0);
+        let _stint = applied.begin_replica_stint();
+        let offsets = ReplicaOffset::new(state_with_save(0), seeded(0), applied.clone());
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![10])));
+
+        assert!(offsets.reset_to(0));
+        assert_eq!(
+            applied.floor_for(0),
+            None,
+            "the dataset those floors described has been thrown away"
         );
     }
 }

@@ -33,7 +33,7 @@ use redis_protocol::resp2::decode::decode_bytes_mut;
 use tokio::sync::mpsc;
 
 use crate::frame::ReplicationFrame;
-use crate::replica::{Claim, ReplicaApplyStint};
+use crate::replica::{Claim, FrameDisposition, ReplicaApplyStint};
 use crate::state::ReplicationState;
 
 /// What the replica's frame channel carries: a decoded frame plus the **history
@@ -294,6 +294,13 @@ pub struct ConsumeStats {
     /// claimed — which is why it is a disposition of its own rather than part of
     /// `discarded`.
     pub skipped: u64,
+    /// Frames stepped over because the full-sync payload this node installed
+    /// already contained their effect (FM-REPLICATION-066). Unlike `skipped`,
+    /// these frames *do* claim their bytes — this node holds them — and unlike
+    /// `skipped` they are the expected outcome of a healthy full sync, not
+    /// evidence of a bug, which is why they are a fifth disposition rather than
+    /// part of the fourth.
+    pub floor_skipped: u64,
 }
 
 /// Consume replication frames from the primary and apply them, honoring the
@@ -381,6 +388,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
     let mut errors: u64 = 0;
     let mut discarded: u64 = 0;
     let mut skipped: u64 = 0;
+    let mut floor_skipped: u64 = 0;
     let mut pending: Option<PendingTxn> = None;
 
     while let Some(StreamedFrame { epoch, frame }) = frame_rx.recv().await {
@@ -512,6 +520,45 @@ pub async fn consume_frames<A: ReplicaApplier>(
         // Stream bytes this frame accounts for, claimed before it touches the
         // keyspace (or, inside a MULTI, when the group EXECs).
         let frame_bytes = frame.stream_advance();
+
+        // The frame is above this node's head, but the full-sync payload this
+        // node installed already contains its effect: the payload was cut after
+        // the offset the replica was granted, and the sender said so, per shard,
+        // in the trailer's coverage vector (FM-REPLICATION-066).
+        //
+        // Its *bytes* are claimed — the effect really is held, so the head must
+        // move past it or the node would stall below its own data and re-ask for
+        // a range it already has — but the command is not parsed and not
+        // re-executed. That is the whole fix: the replayed range is verbatim and
+        // non-idempotent (`INCR`, `LPUSH`, `APPEND`), so re-executing it over a
+        // keyspace that already holds its effect diverges silently, with both
+        // nodes reporting the same offset.
+        //
+        // Only consulted outside an open group, and that is structural rather
+        // than defensive: a shard broadcasts a whole transaction in one step, so
+        // `Y_s` always lands on one of that shard's group boundaries and can
+        // never fall strictly inside a group's span. Two *sibling* groups of a
+        // cross-shard transaction can still fall on opposite sides of their own
+        // shards' watermarks — that is the torn checkpoint, and stepping over
+        // one while applying the other is exactly what mends it, once.
+        if pending.is_none()
+            && stint.disposition(frame.shard_id, frame.sequence) == FrameDisposition::CoveredByFloor
+        {
+            floor_skipped += 1;
+            let floor_total = stint.record_floor_skip();
+            claim_or_stop!(frame_bytes);
+            settled!();
+            tracing::debug!(
+                shard = frame.shard_id,
+                sequence = frame.sequence,
+                applied = stint.current(),
+                epoch = epoch,
+                floor_total,
+                "Frame is already contained in the installed full-sync payload; \
+                 claiming its bytes without re-applying it."
+            );
+            continue;
+        }
 
         let cmd = match parse_frame_payload(&frame.payload) {
             Ok(cmd) => cmd,
@@ -694,6 +741,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
         errors = errors,
         discarded = discarded,
         skipped = skipped,
+        floor_skipped = floor_skipped,
         oversized_groups_abandoned = txn_bound.abandoned(),
         "Replica frame consumer shutting down"
     );
@@ -703,6 +751,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
         errors,
         discarded,
         skipped,
+        floor_skipped,
     }
 }
 
@@ -710,6 +759,7 @@ pub async fn consume_frames<A: ReplicaApplier>(
 mod tests {
     use super::*;
     use crate::frame::serialize_command_to_resp;
+    use crate::fullsync::ShardCoverage;
     use crate::replica::AppliedOffset;
     use crate::replica::offset::ReplicaOffset;
     use bytes::Bytes;
@@ -1161,6 +1211,7 @@ mod tests {
                 errors: 3,
                 discarded: 0,
                 skipped: 0,
+                floor_skipped: 0,
             }
         );
         assert_eq!(
@@ -1240,6 +1291,7 @@ mod tests {
                 errors: 1,
                 discarded: 0,
                 skipped: 0,
+                floor_skipped: 0,
             },
             "two control commands applied; the abandoned group is the one error"
         );
@@ -1292,6 +1344,7 @@ mod tests {
                 errors: 0,
                 discarded: 0,
                 skipped: 0,
+                floor_skipped: 0,
             },
             "an absorbed FINALIZE is a frame processed, not one stepped over"
         );
@@ -1369,6 +1422,7 @@ mod tests {
                 errors: 1,
                 discarded: 2,
                 skipped: 0,
+                floor_skipped: 0,
             },
             "the breach is one error, nothing applies, and every frame after it \
              is dropped with the history the breach ended"
@@ -1538,6 +1592,7 @@ mod tests {
                 errors: 0,
                 discarded: 1,
                 skipped: 0,
+                floor_skipped: 0,
             },
             "the frame of the replaced history is dropped, not stepped over or applied"
         );
@@ -1600,6 +1655,7 @@ mod tests {
                 errors: 1,
                 discarded: 2,
                 skipped: 0,
+                floor_skipped: 0,
             },
             "both frames of the replaced history are dropped, and the EXEC that \
              closes nothing is stepped over"
@@ -1671,6 +1727,7 @@ mod tests {
                 errors: 0,
                 discarded: 1,
                 skipped: 0,
+                floor_skipped: 0,
             },
             "the group the resync voided must be counted as dropped"
         );
@@ -2144,5 +2201,233 @@ mod tests {
         assert_eq!(stats.skipped, 0, "it is not this history's duplicate");
         assert_eq!(applied.skipped(), 0);
         assert_eq!(applied.current(), 9_000, "the install's head is untouched");
+    }
+
+    // ---------------------------------------------------------------------
+    // Full-sync coverage floors (FM-REPLICATION-066).
+    //
+    // The shape every test here sets up is the healthy handoff: the payload
+    // was cut *after* the offset the replica was granted, so the range the
+    // primary now replays is partly already in the installed keyspace. The
+    // trailer says exactly how much, per shard.
+    // ---------------------------------------------------------------------
+
+    /// The defect this row closes. Both `INCR`s are replayed at the handoff;
+    /// the first one's effect is already in the payload. Without the floor the
+    /// counter reaches 2 where the primary has 1, with both nodes reporting the
+    /// same offset.
+    #[tokio::test]
+    async fn a_frame_the_installed_payload_already_holds_is_not_re_applied() {
+        let (stint, offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let overshipped = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let fresh = wire.stamp(frame_on(0, 2, "INCR", &["n"]));
+
+        // Granted offset 0; shard 0 kept executing until its drain-ack at
+        // `overshipped.sequence`, so the payload contains that write.
+        assert!(offsets.reset_to_payload(
+            0,
+            ShardCoverage::from_watermarks(vec![overshipped.sequence])
+        ));
+
+        let (groups, stats) = replay(vec![overshipped, fresh.clone()], stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(0, incr())],
+            "the overshipped INCR was applied a second time"
+        );
+        assert_eq!(stats.floor_skipped, 1);
+        assert_eq!(stats.frames_processed, 1);
+        assert_eq!(
+            applied.current(),
+            fresh.sequence,
+            "the head still tracks the primary's stream"
+        );
+    }
+
+    /// The half of the rule that separates it from FM-065: a floor-skipped
+    /// frame is *above* the head, so its bytes must be claimed. A replica that
+    /// stepped over it without claiming would stall below its own data and
+    /// re-ask for a range it already holds.
+    #[tokio::test]
+    async fn a_floor_skipped_frame_claims_its_bytes() {
+        let (stint, offsets, applied) = resyncable();
+        let only = Wire::default().stamp(frame_on(0, 1, "INCR", &["n"]));
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![only.sequence])));
+
+        let (groups, stats) = replay(vec![only.clone()], stint, &applied).await;
+
+        assert!(groups.is_empty(), "it must not reach a shard");
+        assert_eq!(stats.floor_skipped, 1);
+        assert_eq!(
+            applied.current(),
+            only.sequence,
+            "a floor skip advances the head over the frame it stepped over"
+        );
+        assert_eq!(
+            applied.landed(),
+            only.sequence,
+            "and lands it: nothing is in flight"
+        );
+    }
+
+    /// The boundary, inclusive on both sides: a frame ending exactly at `Y_s`
+    /// is wholly inside the payload, and the very next byte is not.
+    #[tokio::test]
+    async fn the_floor_boundary_is_inclusive() {
+        let (stint, offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let at = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let above = wire.stamp(frame_on(0, 2, "INCR", &["n"]));
+
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![at.sequence])));
+
+        let (groups, stats) = replay(vec![at, above], stint, &applied).await;
+
+        assert_eq!(stats.floor_skipped, 1, "only the frame ending at Y_s");
+        assert_eq!(groups, vec![(0, incr())], "the one above it applied");
+    }
+
+    /// Each frame is measured against **its own** shard's watermark. A single
+    /// scalar bound would either skip shard 1's fresh write (loss) or re-apply
+    /// shard 0's overshipped one (the defect).
+    #[tokio::test]
+    async fn a_frame_is_measured_against_its_own_shards_floor() {
+        let (stint, offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let on_zero = wire.stamp(frame_on(0, 1, "INCR", &["a"]));
+        let on_one = wire.stamp(frame_on(1, 2, "INCR", &["b"]));
+
+        // Shard 0 drained late (it holds `on_zero`), shard 1 drained early
+        // (it holds nothing), even though shard 1's frame is the later one.
+        assert!(
+            offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![on_zero.sequence, 0]))
+        );
+
+        let (groups, stats) = replay(vec![on_zero, on_one], stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(1, incr())],
+            "shard 1's write must survive shard 0's higher watermark"
+        );
+        assert_eq!(stats.floor_skipped, 1);
+    }
+
+    /// The torn checkpoint, mended once. A cross-shard transaction is broadcast
+    /// as one group per shard; the drain can fall between them, so the payload
+    /// holds one half and not the other. Stepping over the half it holds while
+    /// applying the half it does not is what makes the whole transaction land
+    /// exactly once.
+    #[tokio::test]
+    async fn a_torn_cross_shard_transaction_is_mended_exactly_once() {
+        let (stint, offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let in_payload = wire.stamp_all(vec![
+            frame_on(0, 1, "MULTI", &[]),
+            frame_on(0, 2, "INCR", &["a"]),
+            frame_on(0, 3, "EXEC", &[]),
+        ]);
+        let shard_zero_watermark = wire.offset;
+        let missing = wire.stamp_all(vec![
+            frame_on(1, 4, "MULTI", &[]),
+            frame_on(1, 5, "INCR", &["b"]),
+            frame_on(1, 6, "EXEC", &[]),
+        ]);
+
+        // Shard 0 drained after its half of the transaction, shard 1 before its
+        // own — the tear.
+        assert!(offsets.reset_to_payload(
+            0,
+            ShardCoverage::from_watermarks(vec![shard_zero_watermark, 0])
+        ));
+
+        let frames: Vec<_> = in_payload.into_iter().chain(missing).collect();
+        let (groups, stats) = replay(frames, stint, &applied).await;
+
+        assert_eq!(
+            groups,
+            vec![(1, incr())],
+            "only the half the payload was missing may be applied"
+        );
+        assert_eq!(
+            stats.floor_skipped, 3,
+            "every frame of the covered half is stepped over, MULTI and EXEC included"
+        );
+        assert_eq!(
+            stats.errors, 0,
+            "stepping over a whole group is not an EXEC-without-MULTI"
+        );
+    }
+
+    /// A frame both the head and a floor cover takes the head's branch. The two
+    /// dispositions disagree about the frame's bytes — the head has already
+    /// claimed them — so claiming them again would push this node's offset past
+    /// the primary's.
+    #[tokio::test]
+    async fn the_head_is_consulted_before_the_floor() {
+        let (stint, offsets, applied) = resyncable();
+        let only = Wire::default().stamp(frame_on(0, 1, "INCR", &["n"]));
+
+        // Installed head is already above the frame, and the floor covers it too.
+        assert!(offsets.reset_to_payload(
+            only.sequence,
+            ShardCoverage::from_watermarks(vec![only.sequence + 1_000])
+        ));
+
+        let (_groups, stats) = replay(vec![only.clone()], stint, &applied).await;
+
+        assert_eq!(stats.skipped, 1, "the head's disposition wins");
+        assert_eq!(stats.floor_skipped, 0);
+        assert_eq!(
+            applied.current(),
+            only.sequence,
+            "and it claims nothing on top of the head"
+        );
+    }
+
+    /// Floors belong to the dataset they arrived with. A second install
+    /// replaces them wholesale — keeping them would step over frames whose
+    /// effects the *new* payload does not contain.
+    #[tokio::test]
+    async fn floors_are_replaced_at_the_next_install() {
+        let (_stint, offsets, applied) = resyncable();
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![500])));
+        assert_eq!(applied.floor_for(0), Some(500));
+
+        assert!(offsets.reset_to(0), "a coverage-less install clears them");
+        assert_eq!(applied.floor_for(0), None);
+        assert_eq!(applied.floor_ceiling(), 0);
+    }
+
+    /// Floor skips are counted, not silent — the same discipline FM-065's skips
+    /// are held to, on a counter of their own because the two mean opposite
+    /// things.
+    #[tokio::test]
+    async fn floor_skips_are_counted_on_the_stats_and_the_node() {
+        let (stint, offsets, applied) = resyncable();
+        let mut wire = Wire::default();
+        let first = wire.stamp(frame_on(0, 1, "INCR", &["n"]));
+        let second = wire.stamp(frame_on(0, 2, "INCR", &["n"]));
+        assert!(offsets.reset_to_payload(0, ShardCoverage::from_watermarks(vec![second.sequence])));
+
+        let (_groups, stats) = replay(vec![first, second], stint, &applied).await;
+
+        assert_eq!(stats.floor_skipped, 2, "the stint's own tally");
+        assert_eq!(applied.floor_skipped(), 2, "the node-wide total");
+        assert_eq!(
+            applied.skipped(),
+            0,
+            "a healthy full sync must not fire the sender-bug counter"
+        );
+
+        let later = applied.begin_replica_stint();
+        assert_eq!(
+            later.record_floor_skip(),
+            3,
+            "the return is the total including this increment"
+        );
+        assert_eq!(applied.floor_skipped(), 3);
     }
 }
