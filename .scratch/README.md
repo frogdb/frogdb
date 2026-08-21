@@ -12,6 +12,7 @@ temp dir. Several files here are load-bearing — `scripts/coverage-depth.py` wr
 
 | directory | state | open | done | what |
 |---|---|--:|--:|---|
+| [redis-feel](redis-feel/) | active | 11 | 0 | 2026-08-15 side-by-side feel test vs Redis 8.6.1; data path matched line-for-line, gaps are all introspection/metadata — rulings in `adr/0005-truthful-redis-86-surface.md` |
 | [testing-improvements-round2](testing-improvements-round2/) | active | 70 | 6 | round-2 testing-gap audit; 249 findings → 95 issues. Re-triaged 2026-08-06: **18 confirmed live defects** |
 | [arch-deepening](arch-deepening/) | active | 15 | 1 | architecture deepening rounds; proposals backlog empty, issues backlog is not |
 | [hardening-2](hardening-2/) | active | 9 | 1 | second hardening campaign, detection-first; running |

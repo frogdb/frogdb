@@ -144,6 +144,21 @@ Partial vs full replica synchronization; FULLRESYNC transfers a Checkpoint.
 The server-produced support archive (config section `[debug-bundle]`).
 _Avoid_: diagnostic bundle
 
+### Compatibility surface
+
+**Truthful-Inert Shim**:
+A Redis-shaped query answered with a value that is accurate for FrogDB even though the backing
+Redis feature does not exist (`CONFIG GET appendonly` → `no`, `LATENCY HISTORY <unknown>` →
+empty array). Shims never fabricate state; where Redis would error on unbacked state (e.g.
+`OBJECT FREQ` without an LFU policy), FrogDB errors too. See ADR-0005.
+_Avoid_: "stub" (implies fake data); answering with values that could mislead tooling
+
+**Advertised Compat Version**:
+The Redis version FrogDB reports to clients for feature detection — `redis_version` in INFO and
+`version` in HELLO, both fixed at the regression-tested compat target (8.6.0). Distinct from
+`frogdb_version` (the product version) and from HELLO's `server` field, which stays `frogdb`.
+See ADR-0005.
+
 ## Relationships
 
 - A **Node** runs N **ShardWorkers**; each owns one **Internal Shard** with its own **Store**,
