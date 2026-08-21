@@ -1178,8 +1178,9 @@ struct SessionDriver<'a> {
     /// What the payload about to be cut already covers, plus the hold that
     /// keeps that true. Produced by [`Effect::DrainBeforeCheckpoint`] (or, with
     /// no hold, by [`Effect::ExportLiveDataset`]); the hold is dropped by
-    /// [`Effect::CutCheckpoint`] and the coverage travels on into the trailer
-    /// written by [`Effect::SendCheckpoint`] / [`Effect::SendLiveDataset`].
+    /// [`Effect::CutCheckpoint`] — which abandons the sync outright if a hold
+    /// lapsed first — and the coverage travels on into the trailer written by
+    /// [`Effect::SendCheckpoint`] / [`Effect::SendLiveDataset`].
     capture: Option<FullSyncCapture>,
 }
 
@@ -1362,20 +1363,28 @@ impl<'a> SessionDriver<'a> {
                     .map_err(io::Error::other);
                 // The cut is done, so the flush engines go free — on success and
                 // on failure alike. Holding past this point would stall this
-                // node's `sync`-durability write acks for nothing. A shard whose
-                // hold lapsed before we got here loses its coverage claim, which
-                // is what `release_hold` reconciles.
-                if let Some(capture) = self.capture.as_mut() {
-                    capture.release_hold();
-                }
+                // node's `sync`-durability write acks for nothing. The release
+                // also reports the shards whose hold lapsed before we got here:
+                // their watermarks no longer describe the artefact that was
+                // just cut, and there is no sound weaker claim to ship in their
+                // place, so the sync is abandoned (FM-REPLICATION-066).
+                let breached = match self.capture.as_mut() {
+                    Some(capture) => capture.release_hold(),
+                    None => Vec::new(),
+                };
                 // A join failure is the runtime going away under the session,
                 // not a checkpoint verdict, so it leaves the machine entirely —
                 // after the release above.
                 let cut = cut?;
-                Ok(Next::Event(SessionEvent::CheckpointCut(match cut {
-                    Ok(()) => StepOutcome::Ok,
-                    Err(e) => StepOutcome::Failed(e.to_string()),
-                })))
+                Ok(Next::Event(match cut {
+                    // A cut that failed wins over a breach: there is no payload
+                    // and no directory, so the breach has nothing left to say.
+                    Err(e) => SessionEvent::CheckpointCut(StepOutcome::Failed(e.to_string())),
+                    Ok(()) if !breached.is_empty() => {
+                        SessionEvent::CoverageBreached(format!("shard(s) {breached:?}"))
+                    }
+                    Ok(()) => SessionEvent::CheckpointCut(StepOutcome::Ok),
+                }))
             }
 
             Effect::OwnCheckpointDir { path } => {
@@ -1395,9 +1404,10 @@ impl<'a> SessionDriver<'a> {
                     .stream
                     .as_mut()
                     .ok_or_else(|| io::Error::other("session stream already handed off"))?;
-                // The coverage the drain reported, reconciled at the release.
-                // A session that never drained claims nothing, which is the
-                // pre-existing behaviour: replay the whole window.
+                // The coverage the drain reported. Reaching here at all means
+                // every hold kept it true — a lapsed one abandoned the sync at
+                // the cut. A session that never drained claims nothing, which is
+                // the pre-existing behaviour: replay the whole window.
                 let coverage = self
                     .capture
                     .as_ref()
@@ -3493,6 +3503,114 @@ mod tests {
             released.load(Ordering::SeqCst),
             1,
             "a failed cut releases the hold exactly as a successful one does"
+        );
+    }
+
+    /// A hold that lapsed before the cut **fails the sync**: the cut itself
+    /// succeeded, but the payload may hold writes above the watermark its
+    /// trailer would claim, so no payload goes on the wire at all, the link
+    /// drops, and the replica retries from scratch (one reconnect backoff).
+    ///
+    /// The amended semantics (user ruling, 2026-08-21). The landed behaviour —
+    /// zero that shard's watermark and ship the payload anyway — reads as
+    /// graceful degradation and is not: `0` means "no floor", so the
+    /// overshipped range re-executes on the replica and the D1 silent
+    /// divergence this row closes is back, in the slow-cut shape, invisible to
+    /// both nodes. The staged directory is still cleaned: the abort owns it
+    /// first, exactly as a shipped payload does.
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn a_breached_hold_aborts_the_sync() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(
+            RocksStore::open(&dir.path().join("rocks"), 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"k", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), Some(store), dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let session = tracker.register_replica(addr());
+        let checkpoint_path = dir.path().join(format!("fullsync_{}", session.id()));
+
+        let released = Arc::new(AtomicUsize::new(0));
+        let cut_first = Arc::new(AtomicBool::new(false));
+        {
+            let released = released.clone();
+            let cut_first = cut_first.clone();
+            let checkpoint_path = checkpoint_path.clone();
+            handler.set_pre_checkpoint_hook(Arc::new(move || {
+                let hold = RecordingHold {
+                    released: released.clone(),
+                    cut_first: cut_first.clone(),
+                    checkpoint_path: checkpoint_path.clone(),
+                    // Shard 1's hold lapsed before the cut.
+                    breached: vec![1],
+                };
+                Box::pin(async move {
+                    Ok(FullSyncCapture {
+                        coverage: ShardCoverage::from_watermarks(vec![7, 11]),
+                        hold: Some(Box::new(hold)),
+                    })
+                })
+            }));
+        }
+
+        let (mut client, server) = tokio::io::duplex(1024 * 1024);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                session
+                    .run(
+                        server,
+                        SyncKind::Full {
+                            replication_id: repl_id,
+                        },
+                        handler,
+                    )
+                    .await
+            }
+        });
+
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        let err = task
+            .await
+            .unwrap()
+            .expect_err("a breached hold must fail the sync");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("flush hold lapsed") && rendered.contains("shard(s) [1]"),
+            "the abort must name itself and the shard: {rendered}"
+        );
+
+        // Nothing but the handshake reply ever reached the replica: the next
+        // read is the closed link, not `$FROGDB_CHECKPOINT`.
+        let mut rest = Vec::new();
+        client.read_to_end(&mut rest).await.unwrap();
+        assert!(
+            rest.is_empty(),
+            "no payload may follow a breached hold, got: {:?}",
+            String::from_utf8_lossy(&rest)
+        );
+
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            1,
+            "the hold is released exactly once, at the cut"
+        );
+        assert!(
+            cut_first.load(Ordering::SeqCst),
+            "the cut really did happen — this is an abort of a staged payload, \
+             not a cut that failed"
+        );
+        assert!(
+            !checkpoint_path.exists(),
+            "the abandoned sync must not leak the directory it staged"
         );
     }
 

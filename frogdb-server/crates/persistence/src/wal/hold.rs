@@ -30,9 +30,14 @@
 //! anomaly it closes, so the arm carries its own deadline. A hold whose
 //! deadline has passed reads as released without anybody touching it, and the
 //! flush that pushed past it marks the hold **breached**. A breached shard may
-//! have data above `Y_s` in the cut, so its watermark is reported as `0` — "no
-//! frame is at or below this floor", i.e. exactly the pre-coverage behaviour
-//! for that shard. Graceful degradation, not a wedged write path.
+//! have data above `Y_s` in the cut, so the full sync that armed the hold is
+//! **abandoned**: the payload is never sent, the link drops, and the replica
+//! retries from scratch. Reporting `0` for that shard instead would look like
+//! graceful degradation and is not — `0` is "no floor", so the overshipped
+//! range re-executes on the replica and the silent divergence the watermark
+//! exists to prevent is back. One reconnect backoff in a rare shape is the
+//! cheaper half of that trade. What the deadline does buy is that the *write
+//! path* is never wedged: the flush goes through regardless of who is syncing.
 //!
 //! # Mandatory flushes wait rather than skip
 //!
@@ -48,7 +53,7 @@
 //! Two replicas can full-sync at once, so arms are counted. The effective
 //! deadline is the latest one armed, and only the last release actually lifts
 //! the hold; a breach observed while any arm is live is reported to every one
-//! of them (conservative: both payloads report `0` for that shard).
+//! of them (conservative: both syncs are abandoned).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,8 +71,8 @@ use tracing::warn;
 /// or two. Ten seconds is three orders of magnitude above the flush engine's
 /// default batch timeout (10ms) and far above any healthy cut, while still
 /// bounding the worst case: a full-sync that wedges cannot stall a `sync`
-/// durability write ack for longer than this, and the shard whose hold lapsed
-/// degrades to a `0` watermark rather than shipping an unsound floor.
+/// durability write ack for longer than this, and the sync whose hold lapsed is
+/// abandoned rather than shipping a coverage claim its payload may not honour.
 pub const FULL_SYNC_HOLD: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Suppression state shared between the arming producer, the releasing
@@ -145,7 +150,8 @@ impl FlushHold {
 
     /// Stop suppressing. Returns whether the hold was breached — its deadline
     /// expired under a live arm and a mandatory flush went through, so the
-    /// caller's payload may hold data above its captured watermark.
+    /// caller's payload may hold data above its captured watermark and the
+    /// full sync it was taken for must be abandoned.
     ///
     /// Releasing a hold that was never armed is a no-op reporting `false`, so
     /// a guard that releases on both an explicit path and `Drop` is safe.
@@ -174,8 +180,8 @@ impl FlushHold {
     /// Whether the engine's own size/timeout triggers are currently suppressed.
     ///
     /// Lapses the hold in passing: a deadline that has gone by reads as
-    /// released, and is recorded as a breach so the capture that armed it can
-    /// downgrade its watermark.
+    /// released, and is recorded as a breach so the capture that armed it
+    /// learns its claim is unsound and abandons its sync.
     pub fn is_held(&self) -> bool {
         if !self.held.load(Ordering::Acquire) {
             return false;
@@ -219,8 +225,8 @@ impl FlushHold {
         self.released.notify_all();
         warn!(
             "WAL flush hold expired before it was released; the full-sync \
-             payload may hold writes above the captured watermark, so that \
-             shard's coverage watermark degrades to 0"
+             payload may hold writes above the captured watermark, so the \
+             sync that armed this hold will be abandoned"
         );
         false
     }

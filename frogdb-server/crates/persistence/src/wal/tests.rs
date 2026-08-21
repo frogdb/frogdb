@@ -2756,8 +2756,8 @@ fn an_explicit_flush_blocks_until_the_hold_is_released() {
 
 /// A hold that is never released expires on its own deadline and marks itself
 /// breached: a wedged full-sync must not wedge the write path. The capture that
-/// armed it learns its floor is unsafe and degrades that shard's watermark
-/// to `0`.
+/// armed it learns its floor is unsafe and abandons the sync rather than
+/// shipping a claim the payload may not honour.
 #[test]
 fn the_deadline_expires_the_hold_and_marks_it_breached() {
     let hold = Arc::new(FlushHold::new());

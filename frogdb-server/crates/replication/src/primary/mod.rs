@@ -69,7 +69,8 @@ pub trait CaptureHold: Send + Sync {
     /// Lift the hold on every shard. Returns the ids of the shards whose hold
     /// lapsed before this call — those shards may have committed a write above
     /// their watermark into the payload, so their claim can no longer be
-    /// trusted. Idempotent: a second call releases nothing and names nobody.
+    /// trusted and the sync that armed them is abandoned. Idempotent: a second
+    /// call releases nothing and names nobody.
     fn release(&self) -> Vec<u16>;
 }
 
@@ -83,33 +84,28 @@ impl FullSyncCapture {
         }
     }
 
-    /// Lift the hold and reconcile the claim with what actually happened.
+    /// Lift the hold and report which shards' claims it failed to keep true.
     ///
     /// A shard whose hold lapsed before the cut may have committed a write
-    /// above its watermark into the payload. Its watermark is therefore reset
-    /// to `0` — the "claim nothing" value — which costs that shard a replay of
-    /// the whole window (the pre-existing, safe-but-doubling behaviour) instead
-    /// of asserting a floor the payload may not honour. The element is zeroed
-    /// rather than dropped: the vector is positional, so removing one would
-    /// silently reassign every later shard's watermark.
+    /// above its watermark into the payload, so this capture no longer
+    /// describes the artefact it was taken for. There is no sound weaker claim
+    /// to fall back to: a `0` watermark for that shard would suppress the floor
+    /// and hand the replica back the double-apply the vector exists to prevent
+    /// (FM-REPLICATION-066), silently, in exactly the slow-cut shape nobody is
+    /// watching. So a non-empty result **fails the sync** — the payload is
+    /// never sent, the link drops, and the replica retries from scratch at the
+    /// cost of one reconnect backoff. Same fail-loudly stance as
+    /// FM-REPLICATION-001: a wrong replica is worse than a retried one.
     ///
     /// Called after the cut, on success *and* on failure: a failed cut still
-    /// has to let the flush engine go.
-    pub fn release_hold(&mut self) {
-        let Some(hold) = self.hold.take() else {
-            return;
-        };
-        let breached = hold.release();
-        if breached.is_empty() {
-            return;
+    /// has to let the flush engine go. Idempotent — a second call has no hold
+    /// left and names nobody.
+    #[must_use = "a breached hold must abort the full sync"]
+    pub fn release_hold(&mut self) -> Vec<u16> {
+        match self.hold.take() {
+            Some(hold) => hold.release(),
+            None => Vec::new(),
         }
-        let mut watermarks = self.coverage.as_slice().to_vec();
-        for shard in breached {
-            if let Some(watermark) = watermarks.get_mut(shard as usize) {
-                *watermark = 0;
-            }
-        }
-        self.coverage = ShardCoverage::from_watermarks(watermarks);
     }
 }
 

@@ -29,9 +29,11 @@
 //! Two orderings that used to be comments are now data:
 //!
 //! * a checkpoint directory is owed cleanup **only after** the cut succeeded —
-//!   [`Effect::OwnCheckpointDir`] is emitted on [`StepOutcome::Ok`] and on no
-//!   other arm, so a failed cut cannot leave the exit handler chasing a
-//!   directory that was never created;
+//!   [`Effect::OwnCheckpointDir`] is emitted on the two arms a cut that
+//!   returned `Ok` can reach ([`StepOutcome::Ok`] and the coverage-breach
+//!   abort) and on no other, so a failed cut cannot leave the exit handler
+//!   chasing a directory that was never created, and an abandoned sync cannot
+//!   leak the one it staged;
 //! * the exit handler records the departure **before** it unregisters the
 //!   session (FM-REPLICATION-062), because the self-fence's disarm reads
 //!   "nothing is streaming" and "the last departure was graceful" as two
@@ -57,6 +59,8 @@
 //!
 //!   PreparingCheckpoint ──CheckpointCut(Ok)──► StreamingCheckpoint
 //!                       ──DatasetExported───►  StreamingCheckpoint
+//!                       ──CoverageBreached──►  PreparingCheckpoint
+//!                                              [OwnCheckpointDir, FailSync]
 //!   StreamingCheckpoint ──PayloadSent───────►  Streaming
 //!   <any>               ──Ended────────────►   Disconnecting
 //! ```
@@ -143,6 +147,12 @@ pub enum SyncFailure {
     /// A primary with neither RocksDB nor a live-keyspace export has no dataset
     /// to serve.
     NoLiveSnapshotSource,
+    /// A shard's flush hold lapsed before the cut, so the payload may hold
+    /// writes above the coverage watermark the trailer would claim for it. The
+    /// vector is the replica's only defence against re-executing the
+    /// overshipped range, and there is no sound weaker claim to ship instead,
+    /// so the sync is abandoned rather than degraded (FM-REPLICATION-066).
+    CoverageHoldBreached,
     /// The session was handed an event its phase cannot answer. Unreachable
     /// from [`crate::ReplicaSession::run`], which is a straight line; kept
     /// because a total table is what makes [`Phase::Disconnecting`] terminal by
@@ -161,6 +171,10 @@ impl SyncFailure {
                 "no live-snapshot source wired: a primary without persistence cannot serve \
                  a FULLRESYNC"
             }
+            SyncFailure::CoverageHoldBreached => {
+                "full-sync flush hold lapsed before the checkpoint cut, so the payload's \
+                 per-shard coverage claim is unsound"
+            }
             SyncFailure::UnexpectedEvent => "replica session event does not apply to its phase",
         }
     }
@@ -171,6 +185,9 @@ impl SyncFailure {
             SyncFailure::PreCheckpointDrain => "Pre-checkpoint drain failed for FULLRESYNC",
             SyncFailure::Checkpoint => "Failed to create checkpoint for FULLRESYNC",
             SyncFailure::NoLiveSnapshotSource => "No live-snapshot source wired for FULLRESYNC",
+            SyncFailure::CoverageHoldBreached => {
+                "Full-sync flush hold lapsed before the checkpoint cut; abandoning the sync"
+            }
             SyncFailure::UnexpectedEvent => "Replica session event does not apply to its phase",
         }
     }
@@ -239,6 +256,12 @@ pub enum SessionEvent {
     Drained(StepOutcome),
     /// `create_checkpoint` reported back.
     CheckpointCut(StepOutcome),
+    /// The cut succeeded, but a shard's flush hold lapsed before it: the
+    /// payload may hold writes above the coverage its trailer would claim, so
+    /// the claim is unsound and the sync is abandoned (FM-REPLICATION-066).
+    /// Carries the operator-facing list of shards. Reported *after* a cut that
+    /// succeeded, so the staged directory is real and is owed cleanup.
+    CoverageBreached(String),
     /// The live-keyspace export produced its blobs.
     DatasetExported,
     /// The full-sync payload is on the wire.
@@ -445,6 +468,27 @@ pub fn step(view: &SessionView, event: &SessionEvent) -> Transition {
                     failure: SyncFailure::Checkpoint,
                     cause: Some(cause.clone()),
                 }],
+            )
+        }
+        (Phase::PreparingCheckpoint, SessionEvent::CoverageBreached(cause)) => {
+            // The cut *succeeded* here, so unlike the arm above there is a real
+            // directory on disk: it is owned first, so the exit handler deletes
+            // it, and only then is the sync abandoned. Shipping this payload
+            // would hand the replica either a floor the artefact does not
+            // honour (silent write loss) or no floor at all (the D1
+            // double-apply, silently, under a verbatim `INCR`) — so it is not
+            // shipped at all.
+            Transition::new(
+                Phase::PreparingCheckpoint,
+                vec![
+                    Effect::OwnCheckpointDir {
+                        path: view.checkpoint_path(),
+                    },
+                    Effect::FailSync {
+                        failure: SyncFailure::CoverageHoldBreached,
+                        cause: Some(cause.clone()),
+                    },
+                ],
             )
         }
         (Phase::PreparingCheckpoint, SessionEvent::CheckpointCut(StepOutcome::Ok)) => {
@@ -807,6 +851,35 @@ mod tests {
         );
     }
 
+    /// A cut whose flush hold lapsed first produced a real directory but not a
+    /// trustworthy claim about it: the sync is abandoned, and — unlike the
+    /// failed cut above — the directory that *was* staged is owned first so the
+    /// exit handler deletes it. No payload effect is emitted at all: the
+    /// alternative the row rejects is shipping the payload with a `0` watermark,
+    /// which reads as "no floor" and silently restores the double-apply.
+    // FM-REPLICATION-066
+    #[test]
+    fn a_breached_coverage_hold_abandons_the_sync_and_owns_the_directory() {
+        let breached = step(
+            &wired(Phase::PreparingCheckpoint, full()),
+            &SessionEvent::CoverageBreached("shard(s) [1]".into()),
+        );
+        assert_eq!(breached.phase, Phase::PreparingCheckpoint);
+        assert_eq!(
+            breached.effects,
+            vec![
+                Effect::OwnCheckpointDir {
+                    path: PathBuf::from("/var/lib/frogdb/fullsync_7"),
+                },
+                Effect::FailSync {
+                    failure: SyncFailure::CoverageHoldBreached,
+                    cause: Some("shard(s) [1]".into()),
+                },
+            ],
+            "the staged directory is owed cleanup and the payload is never sent"
+        );
+    }
+
     /// …and a cut that succeeded is claimed for cleanup *before* a single byte
     /// of it goes on the wire, so a link that dies mid-transfer still has its
     /// directory removed.
@@ -1038,6 +1111,7 @@ mod tests {
             SessionEvent::Drained(StepOutcome::Failed("x".into())),
             SessionEvent::CheckpointCut(StepOutcome::Ok),
             SessionEvent::CheckpointCut(StepOutcome::Failed("x".into())),
+            SessionEvent::CoverageBreached("shard(s) [1]".into()),
             SessionEvent::DatasetExported,
             SessionEvent::PayloadSent,
             SessionEvent::Ended(LinkOutcome::Ended(ReplicaDeparture::Graceful)),
@@ -1147,6 +1221,7 @@ mod tests {
             SyncFailure::PreCheckpointDrain,
             SyncFailure::Checkpoint,
             SyncFailure::NoLiveSnapshotSource,
+            SyncFailure::CoverageHoldBreached,
             SyncFailure::UnexpectedEvent,
         ];
         let reasons: std::collections::BTreeSet<_> = all.iter().map(|f| f.reason()).collect();

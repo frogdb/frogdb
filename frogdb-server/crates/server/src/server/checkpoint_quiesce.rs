@@ -48,8 +48,11 @@
 //! installs as a per-shard skip floor), and the shard's flush engine is *held*
 //! from the drain until the cut, so nothing above `Y_s` can enter the payload
 //! behind the claim. The hold is self-expiring; a shard whose hold lapsed before
-//! the cut has its watermark reset to `0`, claiming nothing rather than claiming
-//! wrong.
+//! the cut **fails the sync** — no payload is sent, the link drops and the
+//! replica retries from scratch. Claiming `0` for that shard instead would be a
+//! sound-looking degradation and is not: no floor means the overshipped range
+//! re-executes, which is the very corruption the vector exists to prevent, back
+//! again in the slow-cut shape and invisible to the replica.
 //!
 //! # Why an undrained shard fails the checkpoint
 //!
@@ -195,11 +198,14 @@ impl CaptureHold for FullSyncHoldGuard {
         for (shard, hold) in holds {
             if hold.release() {
                 // The engine was free to commit again before the cut, so this
-                // shard's watermark is no longer a claim the payload honours.
+                // shard's watermark is no longer a claim the payload honours —
+                // and the sync that armed it is abandoned rather than shipped
+                // with a claim nobody can trust.
                 tracing::warn!(
                     shard,
                     "Full-sync flush hold expired before the checkpoint cut; \
-                     this shard's payload claims no coverage"
+                     abandoning the sync rather than shipping a coverage claim \
+                     this shard's payload may not honour"
                 );
                 breached.push(shard);
             }
@@ -437,7 +443,10 @@ mod tests {
             "the engines stay held from the drain until the cut"
         );
 
-        capture.release_hold();
+        assert!(
+            capture.release_hold().is_empty(),
+            "no hold lapsed, so nothing is breached"
+        );
         assert!(
             holds.iter().all(|h| !h.is_held()),
             "releasing the capture lifts every shard's hold"
@@ -450,12 +459,14 @@ mod tests {
     }
 
     /// A shard whose hold lapsed before the cut may have committed a write
-    /// above its watermark into the payload, so its claim is reset to `0` —
-    /// claiming nothing — while the other shards keep theirs. The element is
-    /// zeroed, never dropped: the vector is positional.
+    /// above its watermark into the payload, so the release **names** it and
+    /// the driver fails the sync (`a_breached_hold_aborts_the_sync`). What it
+    /// deliberately does not do is rewrite the vector: a `0` there would read as
+    /// "no floor for this shard", which is exactly the double-apply the vector
+    /// exists to prevent, shipped silently instead of loudly refused.
     // FM-REPLICATION-066
     #[tokio::test]
-    async fn a_breached_shards_watermark_is_zeroed() {
+    async fn a_breached_hold_names_its_shard_and_downgrades_no_claim() {
         let held = FlushHold::shared();
         let lapsed = FlushHold::shared();
         let senders = vec![
@@ -469,12 +480,16 @@ mod tests {
             .expect("every shard drained");
         assert_eq!(capture.coverage.as_slice(), &[7, 11, 13]);
 
-        capture.release_hold();
-
+        assert_eq!(
+            capture.release_hold(),
+            vec![1],
+            "the breach names the shard whose hold lapsed, and only that one"
+        );
         assert_eq!(
             capture.coverage.as_slice(),
-            &[7, 0, 13],
-            "only the breached shard loses its claim, and it keeps its slot"
+            &[7, 11, 13],
+            "the claim is never degraded behind the sync's back; the sync is \
+             abandoned instead"
         );
     }
 
