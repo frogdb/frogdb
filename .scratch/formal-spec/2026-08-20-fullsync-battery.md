@@ -1058,3 +1058,83 @@ which is exactly the same-id partial F17 wanted. Its remaining obstacle (whether
 and is untouched by this note, but "no such trace exists" is no longer part of it.
 
 Follow-up 2 above is **resolved**; follow-ups 1 and 3 stand.
+
+---
+
+## Addendum — 2026-08-20 (later): M61 CAUGHT, F17 confirmed equivalent
+
+**Append-only.** Row M61's original `MISSED` verdict, its class-6 analysis, and the resolution note
+above all stand as written. This section records what landed and one **correction** to the knock-on
+claim the previous note made about F17.
+
+### M61: `MISSED` → **CAUGHT**
+
+The negative assertion is landed in `specs/quint/replication_fullsync.qnt` as
+`partialSpliceLeavesFullSyncGhostDarkTest`, in the "Scenarios added by the T10b mutation battery"
+section and following its `// Row NN:` convention. It is the trace recorded above, with the lawfulness
+assertions kept. Additive only — no new invariant, witness, coverage ghost, defect ghost, or state
+field, so no `Model` cell, exemption list, or witness floor moves.
+
+| gate | result |
+| --- | --- |
+| `quint test specs/quint/replication_fullsync.qnt` | **40 passing** (39 + the new test) |
+| `quint run --max-samples=200 --max-steps=20` over all 30 invariants | `[ok] No violation found` |
+| witness floor, 18 witnesses × 2000×40 × seeds 0x1/0x2 | all ok (`witnessFullSyncStreaming` 1103) |
+| the same test with M61's mutation applied | the **only** failure in the suite |
+
+Battery tallies for the fullsync model become **`run` tests 39 → 40**, and M61 moves out of class 6.
+
+*(`just quint-run` as a whole was red on this tree for an unrelated reason: another agent's
+uncommitted work in `cluster_migration_failover_machine.qnt` violates
+`inv_residue_has_an_effective_remover` and staled three witness-floor exemptions. Verified
+independent — the same model built from `HEAD` runs `[ok]`, and both replication models are green.)*
+
+### F17: the knock-on claim above was **wrong**; the row is an equivalent mutant
+
+The previous note said the M61 trace voids F17's "no such trace exists" premise. It does produce the
+same-id partial grant F17 wanted — but that trace **does not distinguish** F17's mutant, because a
+same-id partial grant leaves `coverage.partialViaSecondary` dark under the *mutation* too
+(`p.replid != r.replid` is false there). Replayed to be sure:
+
+| check | result |
+| --- | --- |
+| F17 mutation (drop `optExists(p.replid2, …)`) + full suite **including the new M61 test** | **40/40 pass** — survives |
+| same mutant, all 30 invariants, 4000×40, seeds 0x1/0x2/0x3 | `[ok] No violation found` ×3 |
+| `witnessPartialViaSecondary` counts, mutant vs pristine, same seeds | **identical** — 45/2000 (0x1), 51/2000 (0x2) |
+
+The identical witness counts are the empirical form of the equivalence argument, which holds
+algebraically at the one call site (`grantedViaSecondary` has exactly one caller, the
+`coverage.partialViaSecondary` latch in `psyncRequestAs`, guarded by `arm == PartialGrant`):
+
+> `arm == PartialGrant` ⟹ `windowContains(p, r.replid, r.applied)`, whose only two disjuncts are
+> `p.replid == r.replid ∧ …` and `optExists(p.replid2, g => g == r.replid) ∧ …`. The first is false
+> exactly when `p.replid != r.replid`, so under that conjunct the second must have held. Hence
+> `arm == PartialGrant ∧ p.replid != r.replid` already implies the `optExists` conjunct, and the
+> mutated latch condition is *pointwise identical* to the original.
+
+Checked against the model rather than only on paper: a scratch-only invariant asserting the
+distinguishing state is unreachable —
+
+```quint
+  val inv_f17_distinguisher_unreachable: bool =
+    NODES.forall(p => NODES.forall(r => not(and {
+      p != r, nodes.get(p).role == Primary, nodes.get(r).role == Replica,
+      nodes.get(r).link == None,
+      decideArm(nodes.get(p), nodes.get(r)) == PartialGrant,
+      nodes.get(p).replid != nodes.get(r).replid,
+      not(optExists(nodes.get(p).replid2, g => g == nodes.get(r).replid)),
+    })))
+```
+
+— holds at 4000×40 over seeds 0x1/0x2/0x3 (12,000 traces). It deliberately ignores
+`psyncRequestAs`'s free-session-slot guard, so it over-approximates what the transition can fire on
+and the negative result is the stronger one.
+
+**Verdict: F17 is a genuinely equivalent mutant, not a detection gap.** No test can kill it, and per
+the repo's convention that is now documented *at the code* — a comment on `grantedViaSecondary` in
+`specs/quint/replication_fullsync_logic.qnt` records the call-site conditions that make the conjunct
+redundant and why it is nonetheless kept (the predicate is read on its own, and its name promises
+the secondary window). The row's own class-6 wording — "the mutation is equivalent" — was right; only
+its *reason* for deferring to M61 was confused, and only the deferral is retracted here.
+
+Follow-up 2 stays **resolved**; follow-ups 1 and 3 stand.
