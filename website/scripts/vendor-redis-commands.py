@@ -9,8 +9,9 @@ Fetches `src/commands/*.json` from the `redis/redis` GitHub repo at the tag
 matching `REDIS_COMPAT_TARGET` (the single source of truth in
 `frogdb-server/crates/types/src/redis_version.rs`) and writes a trimmed,
 diff-stable `website/src/data/redis-commands-8x.json` containing just the
-fields `matrix-gen.py` needs to join against the FrogDB command registry:
-name, group, and since-version.
+fields FrogDB needs: the `matrix-gen.py` join keys (name, group,
+since-version) plus the human-facing documentation the command registry
+serves through `COMMAND DOCS` (summary, complexity).
 
 Unlike the other `website/src/data/*.json` files, this one is NOT
 regenerated on every `just docs-build` — it's a point-in-time vendored
@@ -90,6 +91,12 @@ def vendor(redis_version: str) -> dict:
                 "name": cmd_name,
                 "group": meta.get("group", "").replace("_", "-"),
                 "since": meta.get("since", ""),
+                "summary": meta.get("summary", ""),
+                # Upstream omits `complexity` for commands with nothing
+                # meaningful to state (e.g. container commands). Carry the
+                # absence through as null rather than inventing a string:
+                # `COMMAND DOCS` omits the field entirely in that case.
+                "complexity": meta.get("complexity") or None,
             }
 
     sorted_commands = [commands[name] for name in sorted(commands)]
@@ -110,8 +117,8 @@ def vendor(redis_version: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Vendor the upstream Redis command list (name, group, since) "
-        "pinned to REDIS_COMPAT_TARGET."
+        description="Vendor the upstream Redis command list (name, group, since, "
+        "summary, complexity) pinned to REDIS_COMPAT_TARGET."
     )
     parser.add_argument(
         "--output",

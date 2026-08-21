@@ -27,6 +27,12 @@ impl Command for BlpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BLPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes and returns the first element in a list. Blocks until an element is available otherwise. Deletes the list if the last element was popped.",
+                since: "2.0.0",
+                group: "list",
+                complexity: Some("O(N) where N is the number of provided keys."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE
                 .union(CommandFlags::BLOCKING)
@@ -114,6 +120,12 @@ impl Command for BrpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BRPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes and returns the last element in a list. Blocks until an element is available otherwise. Deletes the list if the last element was popped.",
+                since: "2.0.0",
+                group: "list",
+                complexity: Some("O(N) where N is the number of provided keys."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE
                 .union(CommandFlags::BLOCKING)
@@ -196,6 +208,12 @@ impl Command for BlmoveCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BLMOVE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Pops an element from a list, pushes it to another list and returns it. Blocks until an element is available otherwise. Deletes the list if the last element was moved.",
+                since: "6.2.0",
+                group: "list",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(5),
             flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::FirstTwo,
@@ -316,6 +334,14 @@ impl Command for BlmpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BLMPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Pops the first element from one of multiple lists. Blocks until an element is available otherwise. Deletes the list if the last element was popped.",
+                since: "7.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(N+M) where N is the number of provided keys and M is the number of elements returned.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::NumkeysAt {
@@ -454,6 +480,14 @@ impl Command for BzpopminCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BZPOPMIN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes and returns the member with the lowest score from one or more sorted sets. Blocks until a member is available otherwise. Deletes the sorted set if the last element was popped.",
+                since: "5.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)) with N being the number of elements in the sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE
                 .union(CommandFlags::BLOCKING)
@@ -539,6 +573,14 @@ impl Command for BzpopmaxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BZPOPMAX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes and returns the member with the highest score from one or more sorted sets. Blocks until a member available otherwise.  Deletes the sorted set if the last element was popped.",
+                since: "5.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)) with N being the number of elements in the sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE
                 .union(CommandFlags::BLOCKING)
@@ -623,6 +665,14 @@ impl Command for BzmpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BZMPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes and returns a member by score from one or more sorted sets. Blocks until a member is available otherwise. Deletes the sorted set if the last element was popped.",
+                since: "7.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(K) + O(M*log(N)) where K is the number of provided keys, N being the number of elements in the sorted set, and M being the number of elements popped.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::NumkeysAt {
@@ -768,6 +818,12 @@ impl Command for BrpoplpushCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BRPOPLPUSH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Pops an element from a list, pushes it to another list and returns it. Block until an element is available otherwise. Deletes the list if the last element was popped.",
+                since: "2.2.0",
+                group: "list",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
             keys: KeySpec::FirstTwo,

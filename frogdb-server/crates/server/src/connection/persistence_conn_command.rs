@@ -24,6 +24,12 @@ use frogdb_protocol::Response;
 /// validates that this agrees with the `Connection` executor variant.
 static BGSAVE_SPEC: CommandSpec = CommandSpec {
     name: "BGSAVE",
+    docs: frogdb_core::CommandDocs {
+        summary: "Asynchronously saves the database(s) to disk.",
+        since: "1.0.0",
+        group: "server",
+        complexity: Some("O(1)"),
+    },
     arity: Arity::Range { min: 0, max: 1 },
     flags: CommandFlags::ADMIN,
     keys: KeySpec::None,
@@ -41,6 +47,12 @@ static BGSAVE_SPEC: CommandSpec = CommandSpec {
 /// The `CommandSpec` for LASTSAVE.
 static LASTSAVE_SPEC: CommandSpec = CommandSpec {
     name: "LASTSAVE",
+    docs: frogdb_core::CommandDocs {
+        summary: "Returns the Unix timestamp of the last successful save to disk.",
+        since: "1.0.0",
+        group: "server",
+        complexity: Some("O(1)"),
+    },
     arity: Arity::Fixed(0),
     flags: CommandFlags::READONLY
         .union(CommandFlags::FAST)

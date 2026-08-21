@@ -18,6 +18,12 @@ impl Command for VsimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VSIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the elements of a vector set most similar to a query vector or element.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

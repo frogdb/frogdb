@@ -13,6 +13,12 @@ impl Command for VsetattrCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VSETATTR",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets or clears the JSON attributes associated with an element of a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

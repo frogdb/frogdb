@@ -17,6 +17,12 @@ impl Command for ZrankCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the index of a member in a sorted set ordered by ascending scores.",
+                since: "2.0.0",
+                group: "sorted-set",
+                complexity: Some("O(log(N))"),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -74,6 +80,12 @@ impl Command for ZrevrankCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the index of a member in a sorted set ordered by descending scores.",
+                since: "2.0.0",
+                group: "sorted-set",
+                complexity: Some("O(log(N))"),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,

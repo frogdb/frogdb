@@ -13,6 +13,12 @@ impl Command for VdimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VDIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the dimensionality of the vectors in a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,

@@ -14,6 +14,12 @@ impl Command for VinfoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VINFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the size, dimensionality, and graph parameters of a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,

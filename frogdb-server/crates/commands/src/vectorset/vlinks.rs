@@ -15,6 +15,12 @@ impl Command for VlinksCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VLINKS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns an element's neighbours in each layer of a vector set's graph.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Range { min: 2, max: 3 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

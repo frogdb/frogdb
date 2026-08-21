@@ -67,6 +67,12 @@ impl Command for InfoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns information and statistics about the server.",
+                since: "1.0.0",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::AtLeast(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::LOADING)

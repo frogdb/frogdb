@@ -15,6 +15,12 @@ impl Command for EsAllCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.ALL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Reads the global event stream across all shards.",
+                since: "1.0.0",
+                group: "event-sourcing",
+                complexity: None,
+            },
             arity: Arity::AtLeast(0),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,

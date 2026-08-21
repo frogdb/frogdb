@@ -17,6 +17,14 @@ impl Command for ZcountCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZCOUNT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the count of members in a sorted set that have scores within a range.",
+                since: "2.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)) with N being the number of elements in the sorted set.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -58,6 +66,14 @@ impl Command for ZlexcountCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZLEXCOUNT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of members in a sorted set within a lexicographical range.",
+                since: "2.8.9",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)) with N being the number of elements in the sorted set.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,

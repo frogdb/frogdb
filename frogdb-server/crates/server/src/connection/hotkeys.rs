@@ -36,6 +36,12 @@ use frogdb_core::clock;
 /// validates that this agrees with the `Connection` executor variant.
 static HOTKEYS_SPEC: CommandSpec = CommandSpec {
     name: "HOTKEYS",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for hotkeys tracking commands.",
+        since: "8.6.0",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::ADMIN
         .union(CommandFlags::NOSCRIPT)

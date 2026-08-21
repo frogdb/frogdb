@@ -21,13 +21,14 @@ use std::sync::LazyLock;
 /// Stubs are keyless and never persist or notify. `flags` is built at runtime
 /// in a `LazyLock` because `CommandFlags` bit-or is not `const`.
 macro_rules! stub_command {
-    ($name:ident, $cmd:literal, $arity:expr, $flags:expr) => {
+    ($name:ident, $cmd:literal, $docs:expr, $arity:expr, $flags:expr) => {
         pub struct $name;
 
         impl Command for $name {
             fn spec(&self) -> &'static CommandSpec {
                 static SPEC: LazyLock<CommandSpec> = LazyLock::new(|| CommandSpec {
                     name: $cmd,
+                    docs: $docs,
                     arity: $arity,
                     flags: $flags,
                     keys: KeySpec::None,
@@ -66,6 +67,12 @@ macro_rules! stub_command {
 stub_command!(
     WaitaofCommand,
     "WAITAOF",
+    frogdb_core::CommandDocs {
+        summary: "Blocks until all of the preceding write commands sent by the connection are written to the append-only file of the master and/or replicas.",
+        since: "7.2.0",
+        group: "generic",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(3),
     CommandFlags::NOSCRIPT
 );
@@ -80,6 +87,12 @@ impl Command for ModuleCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MODULE",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for module commands.",
+                since: "4.0.0",
+                group: "server",
+                complexity: Some("Depends on subcommand."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::ADMIN.union(CommandFlags::NOSCRIPT),
             keys: KeySpec::None,
@@ -132,13 +145,14 @@ impl Command for ModuleCommand {
 
 /// Macro to generate commands that reject with NotSupported and a reason.
 macro_rules! not_supported_command {
-    ($name:ident, $cmd:literal, $arity:expr, $flags:expr, $reason:literal) => {
+    ($name:ident, $cmd:literal, $docs:expr, $arity:expr, $flags:expr, $reason:literal) => {
         pub struct $name;
 
         impl Command for $name {
             fn spec(&self) -> &'static CommandSpec {
                 static SPEC: LazyLock<CommandSpec> = LazyLock::new(|| CommandSpec {
                     name: $cmd,
+                    docs: $docs,
                     arity: $arity,
                     flags: $flags,
                     keys: KeySpec::None,
@@ -176,6 +190,12 @@ macro_rules! not_supported_command {
 not_supported_command!(
     SaveCommand,
     "SAVE",
+    frogdb_core::CommandDocs {
+        summary: "Synchronously saves the database(s) to disk.",
+        since: "1.0.0",
+        group: "server",
+        complexity: Some("O(N) where N is the total number of keys in all databases"),
+    },
     Arity::Fixed(0),
     CommandFlags::ADMIN | CommandFlags::NOSCRIPT,
     "FrogDB uses continuous WAL persistence. Use BGSAVE for snapshots."
@@ -184,6 +204,12 @@ not_supported_command!(
 not_supported_command!(
     BgrewriteaofCommand,
     "BGREWRITEAOF",
+    frogdb_core::CommandDocs {
+        summary: "Asynchronously rewrites the append-only file to disk.",
+        since: "1.0.0",
+        group: "server",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::ADMIN,
     "FrogDB has no AOF. WAL compaction is handled automatically by RocksDB."
@@ -192,6 +218,12 @@ not_supported_command!(
 not_supported_command!(
     SyncCommand,
     "SYNC",
+    frogdb_core::CommandDocs {
+        summary: "An internal command used in replication.",
+        since: "1.0.0",
+        group: "server",
+        complexity: None,
+    },
     Arity::Fixed(0),
     CommandFlags::ADMIN | CommandFlags::NOSCRIPT | CommandFlags::READONLY,
     "Legacy replication protocol. Use PSYNC instead."
@@ -203,7 +235,7 @@ not_supported_command!(
 
 /// Macro to generate commands that reject with DatabaseNotSupported.
 macro_rules! db_not_supported_command {
-    ($name:ident, $cmd:literal, $arity:expr, $flags:expr) => {
+    ($name:ident, $cmd:literal, $docs:expr, $arity:expr, $flags:expr) => {
         pub struct $name;
 
         impl Command for $name {
@@ -212,6 +244,7 @@ macro_rules! db_not_supported_command {
                 // suppress notifications and persist nothing (see WAL allowlist).
                 static SPEC: LazyLock<CommandSpec> = LazyLock::new(|| CommandSpec {
                     name: $cmd,
+                    docs: $docs,
                     arity: $arity,
                     flags: $flags,
                     keys: KeySpec::None,
@@ -246,6 +279,12 @@ macro_rules! db_not_supported_command {
 db_not_supported_command!(
     MoveCommand,
     "MOVE",
+    frogdb_core::CommandDocs {
+        summary: "Moves a key to another database.",
+        since: "1.0.0",
+        group: "generic",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(2),
     CommandFlags::WRITE | CommandFlags::FAST
 );
@@ -253,6 +292,14 @@ db_not_supported_command!(
 db_not_supported_command!(
     SwapdbCommand,
     "SWAPDB",
+    frogdb_core::CommandDocs {
+        summary: "Swaps two Redis databases.",
+        since: "4.0.0",
+        group: "server",
+        complexity: Some(
+            "O(N) where N is the count of clients watching or blocking on keys from both databases."
+        ),
+    },
     Arity::Fixed(2),
     CommandFlags::WRITE | CommandFlags::FAST
 );
@@ -265,6 +312,12 @@ impl Command for SelectCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SELECT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Changes the selected database.",
+                since: "1.0.0",
+                group: "connection",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::FAST
                 .union(CommandFlags::LOADING)

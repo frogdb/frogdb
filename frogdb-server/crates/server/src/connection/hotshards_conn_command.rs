@@ -18,6 +18,12 @@ use frogdb_protocol::Response;
 /// so the connection command is a single self-contained unit.
 static HOTSHARDS_SPEC: CommandSpec = CommandSpec {
     name: "FROGDB.HOTSHARDS",
+    docs: frogdb_core::CommandDocs {
+        summary: "Returns the per-shard load report from the hot-shard detector.",
+        since: "1.0.0",
+        group: "server",
+        complexity: None,
+    },
     arity: Arity::AtLeast(0),
     flags: CommandFlags::READONLY
         .union(CommandFlags::ADMIN)

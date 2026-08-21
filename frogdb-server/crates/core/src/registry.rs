@@ -295,6 +295,12 @@ mod tests {
             use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
             static SPEC: CommandSpec = CommandSpec {
                 name: "TEST",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::Fixed(0),
                 flags: CommandFlags::READONLY.union(CommandFlags::FAST),
                 keys: KeySpec::None,
@@ -328,6 +334,12 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "TESTSTUB",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::Fixed(0),
                 flags: CommandFlags::ADMIN,
                 keys: KeySpec::None,
@@ -415,6 +427,12 @@ mod tests {
     const fn conn_spec(strategy: ExecutionStrategy) -> CommandSpec {
         CommandSpec {
             name: "TESTCONN",
+            docs: crate::command_spec::CommandDocs {
+                summary: "Test-fixture command; not registered on a running server.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::ADMIN,
             keys: KeySpec::None,

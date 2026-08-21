@@ -22,6 +22,12 @@ impl Command for EsAppendCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.APPEND",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends an event to a stream under an optimistic-concurrency version check.",
+                since: "1.0.0",
+                group: "event-sourcing",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

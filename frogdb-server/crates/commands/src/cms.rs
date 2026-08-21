@@ -19,6 +19,12 @@ impl Command for CmsInitByDim {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INITBYDIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty count-min sketch with the given width and depth.",
+                since: "1.0.0",
+                group: "count-min-sketch",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -84,6 +90,12 @@ impl Command for CmsInitByProb {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INITBYPROB",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty count-min sketch sized from an error rate and probability.",
+                since: "1.0.0",
+                group: "count-min-sketch",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -155,6 +167,12 @@ impl Command for CmsIncrBy {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increases the count of one or more items in a count-min sketch.",
+                since: "1.0.0",
+                group: "count-min-sketch",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -216,6 +234,12 @@ impl Command for CmsQuery {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.QUERY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the estimated count of one or more items in a count-min sketch.",
+                since: "1.0.0",
+                group: "count-min-sketch",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -257,6 +281,12 @@ impl Command for CmsMerge {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.MERGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Merges several count-min sketches into a destination sketch.",
+                since: "1.0.0",
+                group: "count-min-sketch",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::DestThenNumkeys {
@@ -398,6 +428,12 @@ impl Command for CmsInfo {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CMS.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the width, depth, and total count of a count-min sketch.",
+                since: "1.0.0",
+                group: "count-min-sketch",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

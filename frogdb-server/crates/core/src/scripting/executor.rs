@@ -873,6 +873,12 @@ mod tests {
             use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
             static SPEC: CommandSpec = CommandSpec {
                 name: "__SEAMSET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::Fixed(0),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::None,
@@ -907,6 +913,12 @@ mod tests {
             use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
             static SPEC: CommandSpec = CommandSpec {
                 name: "__SEAMGET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::Fixed(0),
                 flags: CommandFlags::READONLY,
                 keys: KeySpec::None,
@@ -1016,6 +1028,12 @@ mod tests {
             use crate::command_spec::{AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec};
             static SPEC: CommandSpec = CommandSpec {
                 name: "PROBEREADKEY",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::Fixed(1),
                 flags: CommandFlags::READONLY,
                 keys: KeySpec::None,

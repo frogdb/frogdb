@@ -13,6 +13,12 @@ impl Command for VremCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VREM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes an element and its vector from a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

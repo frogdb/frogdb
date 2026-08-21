@@ -17,6 +17,12 @@ impl Command for VaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds an element and its vector to a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

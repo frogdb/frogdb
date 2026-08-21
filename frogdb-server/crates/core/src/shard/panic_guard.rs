@@ -236,6 +236,12 @@ mod isolation_tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "BOOM",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::AtLeast(0),
                 flags: CommandFlags::READONLY,
                 keys: KeySpec::None,
@@ -267,6 +273,12 @@ mod isolation_tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "FINE",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::AtLeast(0),
                 flags: CommandFlags::READONLY,
                 keys: KeySpec::None,

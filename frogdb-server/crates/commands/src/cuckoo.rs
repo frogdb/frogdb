@@ -22,6 +22,12 @@ impl Command for CfReserve {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.RESERVE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty cuckoo filter with a given capacity.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -103,6 +109,12 @@ impl Command for CfAdd {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.ADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds an item to a cuckoo filter, creating the filter if it does not exist.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -151,6 +163,12 @@ impl Command for CfAddnx {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.ADDNX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds an item to a cuckoo filter only if it is not already present.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -198,6 +216,12 @@ impl Command for CfInsert {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.INSERT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more items to a cuckoo filter, with optional creation parameters.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -228,6 +252,12 @@ impl Command for CfInsertnx {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.INSERTNX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more items to a cuckoo filter, skipping items already present.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -350,6 +380,12 @@ impl Command for CfExists {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.EXISTS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Checks whether an item may have been added to a cuckoo filter.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -386,6 +422,12 @@ impl Command for CfMexists {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.MEXISTS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Checks whether each of several items may have been added to a cuckoo filter.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -427,6 +469,12 @@ impl Command for CfDel {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.DEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes a single occurrence of an item from a cuckoo filter.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -468,6 +516,12 @@ impl Command for CfCount {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.COUNT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of times an item was added to a cuckoo filter.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -504,6 +558,12 @@ impl Command for CfInfo {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns size, capacity, and bucket information about a cuckoo filter.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -558,6 +618,12 @@ impl Command for CfScandump {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.SCANDUMP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns successive chunks of a cuckoo filter for incremental serialization.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -634,6 +700,12 @@ impl Command for CfLoadchunk {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "CF.LOADCHUNK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Restores a cuckoo filter chunk previously produced by CF.SCANDUMP.",
+                since: "1.0.0",
+                group: "cuckoo-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

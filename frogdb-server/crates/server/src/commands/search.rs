@@ -27,6 +27,12 @@ impl Command for FtCreateCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.CREATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates a search index with the given schema.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -70,6 +76,12 @@ impl Command for FtAlterCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.ALTER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds a field to an existing search index's schema.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -114,6 +126,12 @@ impl Command for FtSearchCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SEARCH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Searches an index with a query and returns the matching documents.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -157,6 +175,12 @@ impl Command for FtDropIndexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.DROPINDEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes a search index, optionally deleting the documents it indexed.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -200,6 +224,12 @@ impl Command for FtInfoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the schema, options, and statistics of a search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -243,6 +273,12 @@ impl Command for FtListCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT._LIST",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the names of every search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -287,6 +323,12 @@ impl Command for FtAggregateCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.AGGREGATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Runs an aggregation pipeline over the results of a query against an index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -332,6 +374,12 @@ impl Command for FtHybridCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.HYBRID",
+            docs: frogdb_core::CommandDocs {
+                summary: "Runs a hybrid query combining full-text and vector search over an index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(6),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -375,6 +423,12 @@ impl Command for FtSynupdateCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SYNUPDATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates or updates a synonym group in a search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -418,6 +472,12 @@ impl Command for FtSyndumpCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SYNDUMP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the synonym groups of a search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -464,6 +524,12 @@ impl Command for FtAliasaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.ALIASADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds an alias for a search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -506,6 +572,12 @@ impl Command for FtAliasdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.ALIASDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes an alias from a search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -548,6 +620,12 @@ impl Command for FtAliasupdateCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.ALIASUPDATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Points an existing alias at a different search index.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -590,6 +668,12 @@ impl Command for FtTagvalsCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.TAGVALS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the distinct values indexed in a TAG field.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -632,6 +716,12 @@ impl Command for FtDictaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.DICTADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds terms to a spelling-correction dictionary.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -674,6 +764,12 @@ impl Command for FtDictdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.DICTDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes terms from a spelling-correction dictionary.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -716,6 +812,12 @@ impl Command for FtDictdumpCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.DICTDUMP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns every term in a spelling-correction dictionary.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -758,6 +860,12 @@ impl Command for FtConfigCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.CONFIG",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for search engine configuration commands.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -800,6 +908,12 @@ impl Command for FtSpellcheckCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SPELLCHECK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns spelling suggestions for the terms of a query.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -845,6 +959,12 @@ impl Command for FtSugaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SUGADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds a suggestion string to an auto-complete dictionary.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -952,6 +1072,12 @@ impl Command for FtSuggetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SUGGET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the auto-complete suggestions matching a prefix.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -1107,6 +1233,12 @@ impl Command for FtSugdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SUGDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes a suggestion string from an auto-complete dictionary.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -1164,6 +1296,12 @@ impl Command for FtSuglenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.SUGLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of suggestions in an auto-complete dictionary.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -1216,6 +1354,12 @@ impl Command for FtExplainCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.EXPLAIN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the parsed execution plan for a query.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -1259,6 +1403,12 @@ impl Command for FtProfileCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.PROFILE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Runs a search or aggregation and reports how it was executed.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -1302,6 +1452,12 @@ impl Command for FtExplainCliCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FT.EXPLAINCLI",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the parsed execution plan for a query, formatted for a terminal.",
+                since: "1.0.0",
+                group: "search",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,

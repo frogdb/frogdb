@@ -913,6 +913,12 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "SET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.",
+                    since: "1.0.0",
+                    group: "string",
+                    complexity: Some("O(1)"),
+                },
                 arity: Arity::AtLeast(2),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::First,
@@ -942,6 +948,12 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "NOOPW",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::AtLeast(1),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::First,
@@ -1124,6 +1136,12 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "NOPROPW",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::AtLeast(2),
                 flags: CommandFlags::WRITE.union(CommandFlags::NO_PROPAGATE),
                 keys: KeySpec::First,
@@ -1155,6 +1173,12 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "RANDW",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: None,
+                },
                 arity: Arity::AtLeast(1),
                 flags: CommandFlags::WRITE.union(CommandFlags::NONDETERMINISTIC),
                 keys: KeySpec::First,
@@ -1454,6 +1478,14 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "DEL",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Deletes one or more keys.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: Some(
+                        "O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).",
+                    ),
+                },
                 arity: Arity::AtLeast(1),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::All,
@@ -1752,6 +1784,14 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "LPUSH",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Prepends one or more elements to a list. Creates the key if it doesn't exist.",
+                    since: "1.0.0",
+                    group: "list",
+                    complexity: Some(
+                        "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+                    ),
+                },
                 arity: Arity::AtLeast(2),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::First,

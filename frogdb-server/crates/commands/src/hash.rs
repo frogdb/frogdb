@@ -37,6 +37,14 @@ impl Command for HsetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates or modifies the value of a field in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some(
+                    "O(1) for each field/value pair added, so O(N) to add N field/value pairs when the command is called with multiple field/value pairs.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -101,6 +109,12 @@ impl Command for HsetnxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSETNX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the value of a field in a hash only when the field doesn't exist.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -147,6 +161,12 @@ impl Command for HgetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the value of a field in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -192,6 +212,12 @@ impl Command for HdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes one or more fields and their values from a hash. Deletes the hash if no fields remain.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of fields to be removed."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -255,6 +281,12 @@ impl Command for HmsetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HMSET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the values of multiple fields.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of fields being set."),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -308,6 +340,12 @@ impl Command for HmgetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HMGET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the values of all fields in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of fields being requested."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -359,6 +397,12 @@ impl Command for HgetallCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGETALL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns all fields and values in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the size of the hash."),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -420,6 +464,12 @@ impl Command for HkeysCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HKEYS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns all fields in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the size of the hash."),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -461,6 +511,12 @@ impl Command for HvalsCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HVALS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns all values in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the size of the hash."),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -502,6 +558,12 @@ impl Command for HexistsCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXISTS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Determines whether a field exists in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -548,6 +610,12 @@ impl Command for HlenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of fields in a hash.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -586,6 +654,12 @@ impl Command for HincrbyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HINCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increments the integer value of a field in a hash by a number. Uses 0 as initial value if the field doesn't exist.",
+                since: "2.0.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -628,6 +702,12 @@ impl Command for HincrbyfloatCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HINCRBYFLOAT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increments the floating point value of a field by a number. Uses 0 as initial value if the field doesn't exist.",
+                since: "2.6.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -672,6 +752,12 @@ impl Command for HstrlenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSTRLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the length of the value of a field.",
+                since: "3.2.0",
+                group: "hash",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -715,6 +801,14 @@ impl Command for HscanCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSCAN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Iterates over fields and values of a hash.",
+                since: "2.8.0",
+                group: "hash",
+                complexity: Some(
+                    "O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -774,6 +868,12 @@ impl Command for HrandfieldCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HRANDFIELD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns one or more random fields from a hash.",
+                since: "6.2.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of fields returned"),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -1215,6 +1315,12 @@ impl Command for HexpireCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXPIRE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Set expiry for hash field using relative time to expire (seconds)",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1261,6 +1367,12 @@ impl Command for HpexpireCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPEXPIRE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Set expiry for hash field using relative time to expire (milliseconds)",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1307,6 +1419,12 @@ impl Command for HexpireatCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXPIREAT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Set expiry for hash field using an absolute Unix timestamp (seconds)",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1353,6 +1471,12 @@ impl Command for HpexpireatCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPEXPIREAT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Set expiry for hash field using an absolute Unix timestamp (milliseconds)",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1399,6 +1523,12 @@ impl Command for HttlCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HTTL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the TTL in seconds of a hash field.",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1439,6 +1569,12 @@ impl Command for HpttlCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPTTL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the TTL in milliseconds of a hash field.",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1476,6 +1612,12 @@ impl Command for HexpiretimeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HEXPIRETIME",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the expiration time of a hash field as a Unix timestamp, in seconds.",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1507,6 +1649,12 @@ impl Command for HpexpiretimeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPEXPIRETIME",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the expiration time of a hash field as a Unix timestamp, in msec.",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1538,6 +1686,12 @@ impl Command for HpersistCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HPERSIST",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes the expiration time for each specified field",
+                since: "7.4.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1745,6 +1899,12 @@ impl Command for HgetdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGETDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the value of a field and deletes it from the hash.",
+                since: "8.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1830,6 +1990,12 @@ impl Command for HgetexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HGETEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Get the value of one or more fields of a given hash key, and optionally set their expiration.",
+                since: "8.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of specified fields"),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1938,6 +2104,12 @@ impl Command for HsetexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "HSETEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Set the value of one or more fields of a given hash key, and optionally set their expiration.",
+                since: "8.0.0",
+                group: "hash",
+                complexity: Some("O(N) where N is the number of fields being set."),
+            },
             arity: Arity::AtLeast(6),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,

@@ -84,6 +84,12 @@ impl MonitorProvider for MonitorIo<'_> {
 /// validates that this agrees with the `Connection` executor variant.
 static MONITOR_SPEC: CommandSpec = CommandSpec {
     name: "MONITOR",
+    docs: frogdb_core::CommandDocs {
+        summary: "Listens for all requests received by the server in real-time.",
+        since: "1.0.0",
+        group: "server",
+        complexity: None,
+    },
     arity: Arity::Fixed(0),
     flags: CommandFlags::ADMIN,
     keys: KeySpec::None,

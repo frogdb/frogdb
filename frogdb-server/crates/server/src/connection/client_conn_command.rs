@@ -35,6 +35,12 @@ use crate::connection::util::validate_client_name;
 /// by the registry against the `Connection` executor variant.
 static CLIENT_SPEC: CommandSpec = CommandSpec {
     name: "CLIENT",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for client connection commands.",
+        since: "2.4.0",
+        group: "connection",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; the subcommands that
     // observe or disturb *other* connections stay admin-only.

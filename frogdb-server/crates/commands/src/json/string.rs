@@ -21,6 +21,12 @@ impl Command for JsonStrAppendCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.STRAPPEND",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends a string to the JSON string at a path in a document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -85,6 +91,12 @@ impl Command for JsonStrLenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.STRLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the length of the JSON string at a path in a document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

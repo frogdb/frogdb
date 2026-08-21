@@ -209,6 +209,12 @@ impl ConnectionHandler {
 /// validates that this agrees with the `Connection` executor variant.
 static CONFIG_SPEC: CommandSpec = CommandSpec {
     name: "CONFIG",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for server configuration commands.",
+        since: "2.0.0",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; CONFIG's split
     // leaves only HELP public.
@@ -384,6 +390,12 @@ fn config_help(ctx: &ConnCtx<'_>) -> Response {
 /// validates that this agrees with the `Connection` executor variant.
 static FT_CURSOR_SPEC: CommandSpec = CommandSpec {
     name: "FT.CURSOR",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for commands that read and release aggregation cursors.",
+        since: "1.0.0",
+        group: "search",
+        complexity: None,
+    },
     arity: Arity::AtLeast(3),
     flags: CommandFlags::READONLY,
     keys: KeySpec::None,

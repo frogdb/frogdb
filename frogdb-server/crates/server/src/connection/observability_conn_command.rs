@@ -117,6 +117,12 @@ async fn gather_latency_history(
 /// `Connection` executor variant.
 static SLOWLOG_SPEC: CommandSpec = CommandSpec {
     name: "SLOWLOG",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for slow log commands.",
+        since: "2.2.12",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::READONLY
         .union(CommandFlags::ADMIN)
@@ -280,6 +286,12 @@ fn slowlog_help() -> Response {
 /// The `CommandSpec` for MEMORY.
 static MEMORY_SPEC: CommandSpec = CommandSpec {
     name: "MEMORY",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for memory diagnostics commands.",
+        since: "4.0.0",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::READONLY.union(CommandFlags::RANDOM),
     keys: KeySpec::None,
@@ -510,6 +522,12 @@ async fn memory_usage(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// The `CommandSpec` for LATENCY.
 static LATENCY_SPEC: CommandSpec = CommandSpec {
     name: "LATENCY",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for latency diagnostics commands.",
+        since: "2.8.13",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::ADMIN
         .union(CommandFlags::NOSCRIPT)
@@ -795,6 +813,12 @@ async fn latency_reset(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// The `CommandSpec` for STATUS.
 static STATUS_SPEC: CommandSpec = CommandSpec {
     name: "STATUS",
+    docs: frogdb_core::CommandDocs {
+        summary: "Returns a human-readable summary of server health, load, and replication state.",
+        since: "1.0.0",
+        group: "server",
+        complexity: None,
+    },
     arity: Arity::Range { min: 0, max: 1 },
     flags: CommandFlags::READONLY
         .union(CommandFlags::LOADING)

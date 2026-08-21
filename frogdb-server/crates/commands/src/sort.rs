@@ -455,6 +455,12 @@ impl Command for SortCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SORT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sorts the elements in a list, a set, or a sorted set, optionally storing the result.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N)."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
@@ -528,6 +534,14 @@ impl Command for SortRoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SORT_RO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the sorted elements of a list, a set, or a sorted set.",
+                since: "7.0.0",
+                group: "generic",
+                complexity: Some(
+                    "O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

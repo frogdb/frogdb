@@ -19,6 +19,12 @@ impl Command for TopkReserve {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.RESERVE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty top-k sketch with the given k and sizing parameters.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::Range { min: 2, max: 5 },
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -122,6 +128,12 @@ impl Command for TopkAdd {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.ADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more items to a top-k sketch, returning any items they evicted.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -167,6 +179,12 @@ impl Command for TopkIncrby {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.INCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increases the score of one or more items in a top-k sketch.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -236,6 +254,12 @@ impl Command for TopkQuery {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.QUERY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Checks whether each of several items is currently held by a top-k sketch.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -277,6 +301,12 @@ impl Command for TopkCount {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.COUNT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the estimated count of one or more items in a top-k sketch.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -318,6 +348,12 @@ impl Command for TopkList {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.LIST",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the items currently held by a top-k sketch.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -387,6 +423,12 @@ impl Command for TopkInfo {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOPK.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the k, width, depth, and decay parameters of a top-k sketch.",
+                since: "1.0.0",
+                group: "top-k",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

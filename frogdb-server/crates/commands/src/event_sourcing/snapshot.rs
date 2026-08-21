@@ -15,6 +15,12 @@ impl Command for EsSnapshotCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.SNAPSHOT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores a snapshot of an event stream's state at a given version.",
+                since: "1.0.0",
+                group: "event-sourcing",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

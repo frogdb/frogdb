@@ -18,6 +18,12 @@ impl Command for PingCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PING",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the server's liveliness response.",
+                since: "1.0.0",
+                group: "connection",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 0, max: 1 },
             flags: CommandFlags::READONLY
                 .union(CommandFlags::FAST)
@@ -53,6 +59,12 @@ impl Command for EchoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ECHO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the given string.",
+                since: "1.0.0",
+                group: "connection",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::None,
@@ -81,6 +93,12 @@ impl Command for QuitCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "QUIT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Closes the connection.",
+                since: "1.0.0",
+                group: "connection",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::FAST)
@@ -116,6 +134,12 @@ impl Command for CommandCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "COMMAND",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns detailed information about all commands.",
+                since: "2.8.13",
+                group: "server",
+                complexity: Some("O(N) where N is the total number of Redis commands"),
+            },
             arity: Arity::AtLeast(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::LOADING)
@@ -152,30 +176,33 @@ impl Command for CommandCommand {
                 }
             }
             b"DOCS" => {
-                // COMMAND DOCS [command-name ...] - return docs for commands
+                // COMMAND DOCS [command-name ...] - documentation for commands.
+                // Reply is a map name -> docs-map; Redis *skips* names it cannot
+                // resolve rather than replying nil for them, so the reply may be
+                // shorter than the request.
                 if args.len() == 1 {
-                    // Return docs for all commands (empty for now)
-                    Ok(Response::Array(vec![]))
+                    Ok(Response::Map(all_commands_docs(ctx)))
                 } else {
-                    // Return docs for specified commands
                     let mut results = Vec::new();
                     for cmd_name in &args[1..] {
-                        let cmd_str = String::from_utf8_lossy(cmd_name).to_uppercase();
-                        // Build basic doc entry
-                        let doc = Response::Array(vec![
-                            Response::bulk(cmd_name.clone()),
-                            Response::Array(vec![
-                                Response::bulk(Bytes::from_static(b"summary")),
-                                Response::bulk(Bytes::from(format!("{} command", cmd_str))),
-                                Response::bulk(Bytes::from_static(b"since")),
-                                Response::bulk(Bytes::from_static(b"1.0.0")),
-                                Response::bulk(Bytes::from_static(b"group")),
-                                Response::bulk(Bytes::from_static(b"generic")),
-                            ]),
-                        ]);
-                        results.push(doc);
+                        let name_upper = String::from_utf8_lossy(cmd_name).to_ascii_uppercase();
+                        // Same exact-name rule as `COMMAND INFO`: subcommands are
+                        // not separate registry entries, so `config|get` resolves
+                        // to nothing (and is therefore skipped).
+                        let entry = if name_upper.contains('|') {
+                            None
+                        } else {
+                            ctx.command_registry.and_then(|r| r.get_entry(&name_upper))
+                        };
+                        if let Some(entry) = entry {
+                            let spec = entry.spec();
+                            results.push((
+                                Response::bulk(Bytes::from(spec.name.to_lowercase())),
+                                build_command_docs(spec),
+                            ));
+                        }
                     }
-                    Ok(Response::Array(results))
+                    Ok(Response::Map(results))
                 }
             }
             b"INFO" => {
@@ -401,6 +428,12 @@ impl Command for GetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the string value of a key.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -435,6 +468,12 @@ impl Command for SetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -738,6 +777,12 @@ impl Command for DelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes one or more keys.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1)."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
@@ -792,6 +837,58 @@ fn all_commands_info(ctx: &CommandContext) -> Vec<Response> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The `COMMAND DOCS` reply for every registered command, as map pairs.
+fn all_commands_docs(ctx: &CommandContext) -> Vec<(Response, Response)> {
+    ctx.command_registry
+        .map(|registry| {
+            registry
+                .iter()
+                .map(|(_, entry)| {
+                    let spec = entry.spec();
+                    (
+                        Response::bulk(Bytes::from(spec.name.to_lowercase())),
+                        build_command_docs(spec),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build the `COMMAND DOCS` value map for one command from its
+/// [`frogdb_core::CommandDocs`].
+///
+/// Field order follows Redis's `addReplyCommandDocs`: summary, since, group,
+/// then complexity. Fields FrogDB has no data source for are *omitted* rather
+/// than emitted empty — Redis omits `complexity` the same way for commands
+/// whose upstream JSON has none, and clients treat every field as optional.
+/// `arguments`, `history`, `doc_flags` and `subcommands` are omitted for the
+/// same reason: no structured per-argument or per-subcommand registry exists
+/// (see `build_command_info`'s subcommands note).
+fn build_command_docs(spec: &CommandSpec) -> Response {
+    let mut fields = vec![
+        (
+            Response::bulk(Bytes::from_static(b"summary")),
+            Response::bulk(Bytes::from_static(spec.docs.summary.as_bytes())),
+        ),
+        (
+            Response::bulk(Bytes::from_static(b"since")),
+            Response::bulk(Bytes::from_static(spec.docs.since.as_bytes())),
+        ),
+        (
+            Response::bulk(Bytes::from_static(b"group")),
+            Response::bulk(Bytes::from_static(spec.docs.group.as_bytes())),
+        ),
+    ];
+    if let Some(complexity) = spec.docs.complexity {
+        fields.push((
+            Response::bulk(Bytes::from_static(b"complexity")),
+            Response::bulk(Bytes::from_static(complexity.as_bytes())),
+        ));
+    }
+    Response::Map(fields)
 }
 
 /// Build the full 10-element `COMMAND INFO` reply for one command: name,
@@ -992,6 +1089,12 @@ impl Command for ExistsCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXISTS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Determines whether one or more keys exist.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(N) where N is the number of keys to check."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::All,
@@ -1251,6 +1354,148 @@ mod command_info_tests {
         match reply {
             Response::Array(entries) => assert_eq!(entries.len(), 4),
             other => panic!("expected Array, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod command_docs_tests {
+    //! `COMMAND DOCS` reply-shape tests (issue redis-feel/03). The docs come
+    //! from the required `CommandSpec::docs` field, so "every command has
+    //! documentation" is a compile-time property, not something a test can
+    //! regress; what these pin is the *wire shape*: a map of name -> docs-map,
+    //! the summary/since/group/complexity field order, the omission of
+    //! `complexity` when the spec has none, and the skip-don't-nil behaviour
+    //! Redis's `commandDocsCommand` has for unresolvable names.
+    //!
+    //! The "FrogDB extension" case (hand-written summary, no complexity) is
+    //! pinned at the server level instead — every extension family in this
+    //! crate is behind a cargo feature the core profile does not build, so
+    //! `FROGDB.VERSION` in `redis-regression`'s `introspection_tcl` covers it
+    //! against the full registry.
+    use super::*;
+    use crate::string::AppendCommand;
+    use frogdb_core::{CommandRegistry, HashMapStore};
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx_with_registry() -> CommandContext<'static> {
+        let mut registry = CommandRegistry::new();
+        registry.register(GetCommand);
+        registry.register(AppendCommand);
+        let registry: &'static Arc<CommandRegistry> = Box::leak(Box::new(Arc::new(registry)));
+
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        let mut c = CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2);
+        c.command_registry = Some(registry);
+        c
+    }
+
+    fn docs(names: &[&str]) -> Response {
+        let mut c = ctx_with_registry();
+        let mut args = vec![Bytes::from_static(b"DOCS")];
+        args.extend(names.iter().map(|n| Bytes::from(n.to_string())));
+        CommandCommand.execute(&mut c, &args).unwrap()
+    }
+
+    fn field(key: &'static str, value: &str) -> (Response, Response) {
+        (
+            Response::bulk(Bytes::from_static(key.as_bytes())),
+            Response::bulk(Bytes::from(value.to_string())),
+        )
+    }
+
+    /// A vendored Redis command: all four fields, complexity included.
+    #[test]
+    fn command_docs_get_full_reply() {
+        assert_eq!(
+            docs(&["get"]),
+            Response::Map(vec![(
+                Response::bulk(Bytes::from_static(b"get")),
+                Response::Map(vec![
+                    field("summary", "Returns the string value of a key."),
+                    field("since", "1.0.0"),
+                    field("group", "string"),
+                    field("complexity", "O(1)"),
+                ])
+            )])
+        );
+    }
+
+    /// `complexity` is emitted verbatim from the vendored data, however long
+    /// — never truncated or reworded.
+    #[test]
+    fn command_docs_carries_verbatim_complexity() {
+        assert_eq!(
+            docs(&["append"]),
+            Response::Map(vec![(
+                Response::bulk(Bytes::from_static(b"append")),
+                Response::Map(vec![
+                    field(
+                        "summary",
+                        "Appends a string to the value of a key. Creates the key if it doesn't exist."
+                    ),
+                    field("since", "2.0.0"),
+                    field("group", "string"),
+                    field(
+                        "complexity",
+                        "O(1). The amortized time complexity is O(1) assuming the appended value is small and the already present value is of any size, since the dynamic string library used by Redis will double the free space available on every reallocation."
+                    ),
+                ])
+            )])
+        );
+    }
+
+    /// Redis skips names it cannot resolve rather than replying nil for them,
+    /// so the reply is shorter than the request instead of holding a hole.
+    #[test]
+    fn command_docs_skips_unknown_names() {
+        assert_eq!(
+            docs(&["nosuchcommand"]),
+            Response::Map(vec![]),
+            "unknown names are skipped entirely"
+        );
+        match docs(&["get", "nosuchcommand"]) {
+            Response::Map(pairs) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(pairs[0].0, Response::bulk(Bytes::from_static(b"get")));
+            }
+            other => panic!("expected Map, got {other:?}"),
+        }
+    }
+
+    /// Subcommands are not separate registry entries (same limitation
+    /// `build_command_info` reports through an empty subcommands array), so a
+    /// dotted/piped name resolves to nothing and is skipped.
+    #[test]
+    fn command_docs_piped_subcommand_name_is_skipped() {
+        assert_eq!(docs(&["command|docs"]), Response::Map(vec![]));
+    }
+
+    /// No-argument form covers the whole registry.
+    #[test]
+    fn command_docs_no_args_covers_registry() {
+        let mut c = ctx_with_registry();
+        let reply = CommandCommand
+            .execute(&mut c, &[Bytes::from_static(b"DOCS")])
+            .unwrap();
+        match reply {
+            Response::Map(pairs) => {
+                assert_eq!(pairs.len(), 2, "one entry per registered command");
+                for (_, docs) in pairs {
+                    match docs {
+                        // summary/since/group are always present; complexity is
+                        // the only optional field.
+                        Response::Map(fields) => assert!(
+                            fields.len() == 3 || fields.len() == 4,
+                            "unexpected docs field count: {fields:?}"
+                        ),
+                        other => panic!("expected a docs Map, got {other:?}"),
+                    }
+                }
+            }
+            other => panic!("expected Map, got {other:?}"),
         }
     }
 }

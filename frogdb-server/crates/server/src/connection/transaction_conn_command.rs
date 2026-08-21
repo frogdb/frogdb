@@ -47,12 +47,14 @@ use crate::connection::ConnectionHandler;
 /// differ only in name, arity, flags, and key spec (WATCH takes keys).
 const fn transaction_spec(
     name: &'static str,
+    docs: frogdb_core::CommandDocs,
     arity: Arity,
     flags: CommandFlags,
     keys: KeySpec,
 ) -> CommandSpec {
     CommandSpec {
         name,
+        docs,
         arity,
         flags,
         keys,
@@ -75,6 +77,12 @@ const fn transaction_spec(
 /// The `CommandSpec` for MULTI (flags preserved from the former `MultiCommand`).
 static MULTI_SPEC: CommandSpec = transaction_spec(
     "MULTI",
+    frogdb_core::CommandDocs {
+        summary: "Starts a transaction.",
+        since: "1.2.0",
+        group: "transactions",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)
@@ -119,6 +127,12 @@ impl ConnectionCommand for MultiConnCommand {
 /// The `CommandSpec` for EXEC (flags preserved from the former `ExecCommand`).
 static EXEC_SPEC: CommandSpec = transaction_spec(
     "EXEC",
+    frogdb_core::CommandDocs {
+        summary: "Executes all commands in a transaction.",
+        since: "1.2.0",
+        group: "transactions",
+        complexity: Some("Depends on commands in the transaction"),
+    },
     Arity::Fixed(0),
     CommandFlags::LOADING.union(CommandFlags::STALE),
     KeySpec::None,
@@ -170,6 +184,12 @@ impl ConnectionCommand for ExecConnCommand {
 /// The `CommandSpec` for DISCARD (flags preserved from the former `DiscardCommand`).
 static DISCARD_SPEC: CommandSpec = transaction_spec(
     "DISCARD",
+    frogdb_core::CommandDocs {
+        summary: "Discards a transaction.",
+        since: "2.0.0",
+        group: "transactions",
+        complexity: Some("O(N), when N is the number of queued commands"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)
@@ -230,6 +250,12 @@ impl ConnectionCommand for DiscardConnCommand {
 /// The `CommandSpec` for WATCH (flags preserved from the former `WatchCommand`).
 static WATCH_SPEC: CommandSpec = transaction_spec(
     "WATCH",
+    frogdb_core::CommandDocs {
+        summary: "Monitors changes to keys to determine the execution of a transaction.",
+        since: "2.2.0",
+        group: "transactions",
+        complexity: Some("O(1) for every key."),
+    },
     Arity::AtLeast(1),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)
@@ -374,6 +400,12 @@ async fn handle_watch(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// The `CommandSpec` for UNWATCH (flags preserved from the former `UnwatchCommand`).
 static UNWATCH_SPEC: CommandSpec = transaction_spec(
     "UNWATCH",
+    frogdb_core::CommandDocs {
+        summary: "Forgets about watched keys of a transaction.",
+        since: "2.2.0",
+        group: "transactions",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)

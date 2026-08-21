@@ -17,6 +17,12 @@ impl Command for JsonObjKeysCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.OBJKEYS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the keys of the JSON object at a path.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -68,6 +74,12 @@ impl Command for JsonObjLenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.OBJLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of keys in the JSON object at a path.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

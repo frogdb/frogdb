@@ -19,6 +19,12 @@ impl Command for JsonNumIncrByCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.NUMINCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increments the number at a path in a JSON document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -78,6 +84,12 @@ impl Command for JsonNumMultByCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.NUMMULTBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Multiplies the number at a path in a JSON document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

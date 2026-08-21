@@ -44,11 +44,13 @@ use crate::scatter::ScatterGather;
 /// differ only in name, arity, and flags.
 const fn connection_state_spec(
     name: &'static str,
+    docs: frogdb_core::CommandDocs,
     arity: Arity,
     flags: CommandFlags,
 ) -> CommandSpec {
     CommandSpec {
         name,
+        docs,
         arity,
         flags,
         keys: KeySpec::None,
@@ -71,6 +73,12 @@ const fn connection_state_spec(
 /// The `CommandSpec` for RESET (flags preserved from the former `ResetMetadata`).
 static RESET_SPEC: CommandSpec = connection_state_spec(
     "RESET",
+    frogdb_core::CommandDocs {
+        summary: "Resets the connection.",
+        since: "6.2.0",
+        group: "connection",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)
@@ -157,6 +165,12 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
 /// The `CommandSpec` for ASKING (flags preserved from the former `AskingCommand`).
 static ASKING_SPEC: CommandSpec = connection_state_spec(
     "ASKING",
+    frogdb_core::CommandDocs {
+        summary: "Signals that a cluster client is following an -ASK redirect.",
+        since: "3.0.0",
+        group: "cluster",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST.union(CommandFlags::STALE),
 );
@@ -193,6 +207,12 @@ impl ConnectionCommand for AskingConnCommand {
 /// The `CommandSpec` for READONLY (flags preserved from the former `ReadonlyCommand`).
 static READONLY_SPEC: CommandSpec = connection_state_spec(
     "READONLY",
+    frogdb_core::CommandDocs {
+        summary: "Enables read-only queries for a connection to a Redis Cluster replica node.",
+        since: "3.0.0",
+        group: "cluster",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)
@@ -231,6 +251,12 @@ impl ConnectionCommand for ReadonlyConnCommand {
 /// The `CommandSpec` for READWRITE (flags preserved from the former `ReadwriteCommand`).
 static READWRITE_SPEC: CommandSpec = connection_state_spec(
     "READWRITE",
+    frogdb_core::CommandDocs {
+        summary: "Enables read-write queries for a connection to a Reids Cluster replica node.",
+        since: "3.0.0",
+        group: "cluster",
+        complexity: Some("O(1)"),
+    },
     Arity::Fixed(0),
     CommandFlags::FAST
         .union(CommandFlags::LOADING)

@@ -35,6 +35,12 @@ use frogdb_protocol::Response;
 /// executor variant.
 static INFO_SPEC: CommandSpec = CommandSpec {
     name: "INFO",
+    docs: frogdb_core::CommandDocs {
+        summary: "Returns information and statistics about the server.",
+        since: "1.0.0",
+        group: "server",
+        complexity: Some("O(1)"),
+    },
     arity: Arity::AtLeast(0),
     flags: CommandFlags::READONLY
         .union(CommandFlags::LOADING)

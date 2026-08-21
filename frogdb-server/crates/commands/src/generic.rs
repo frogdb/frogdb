@@ -28,6 +28,12 @@ impl Command for TypeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TYPE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Determines the type of value stored at a key.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -69,6 +75,12 @@ impl Command for RenameCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RENAME",
+            docs: frogdb_core::CommandDocs {
+                summary: "Renames a key and overwrites the destination.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -155,6 +167,12 @@ impl Command for RenamenxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RENAMENX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Renames a key only when the target key name doesn't exist.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -242,6 +260,12 @@ impl Command for TouchCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TOUCH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of existing keys out of those specified after updating the time they were last accessed.",
+                since: "3.2.1",
+                group: "generic",
+                complexity: Some("O(N) where N is the number of keys that will be touched."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::All,
@@ -280,6 +304,14 @@ impl Command for UnlinkCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "UNLINK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Asynchronously deletes one or more keys.",
+                since: "4.0.0",
+                group: "generic",
+                complexity: Some(
+                    "O(1) for each key removed regardless of its size. Then the command does O(N) work in a different thread in order to reclaim memory, where N is the number of allocations the deleted objects where composed of.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::All,
@@ -334,6 +366,12 @@ impl Command for ObjectCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "OBJECT",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for object introspection commands.",
+                since: "2.2.3",
+                group: "generic",
+                complexity: Some("Depends on subcommand."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
@@ -547,6 +585,14 @@ impl Command for CopyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "COPY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Copies the value of a key to a new key.",
+                since: "6.2.0",
+                group: "generic",
+                complexity: Some(
+                    "O(N) worst case for collections, where N is the number of nested items. O(1) for string values.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -655,6 +701,12 @@ impl Command for RandomkeyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RANDOMKEY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns a random key name from the database.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY.union(CommandFlags::RANDOM),
             keys: KeySpec::None,

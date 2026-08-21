@@ -19,6 +19,14 @@ impl Command for XaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends a new message to a stream. Creates the key if it doesn't exist.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -121,6 +129,12 @@ impl Command for XlenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Return the number of messages in a stream.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -157,6 +171,14 @@ impl Command for XrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the messages from a stream within a range of IDs.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(N) with N being the number of elements being returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).",
+                ),
+            },
             arity: Arity::Range { min: 3, max: 5 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -211,6 +233,14 @@ impl Command for XrevrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XREVRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the messages from a stream within a range of IDs in reverse order.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(N) with N being the number of elements returned. If N is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1).",
+                ),
+            },
             arity: Arity::Range { min: 3, max: 5 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -266,6 +296,14 @@ impl Command for XdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of messages after removing them from a stream.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(1) for each single item to delete in the stream, regardless of the stream size.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -320,6 +358,14 @@ impl Command for XtrimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XTRIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes messages from the beginning of a stream.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -369,6 +415,12 @@ impl Command for XsetidCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XSETID",
+            docs: frogdb_core::CommandDocs {
+                summary: "An internal command for replicating stream values.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 2, max: 5 },
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -467,6 +519,14 @@ impl Command for XdelexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XDELEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes one or multiple entries from the stream.",
+                since: "8.2.0",
+                group: "stream",
+                complexity: Some(
+                    "O(1) for each single item to delete in the stream, regardless of the stream size.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,

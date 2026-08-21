@@ -22,6 +22,14 @@ impl Command for DumpCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DUMP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns a serialized representation of the value stored at a key.",
+                since: "2.6.0",
+                group: "generic",
+                complexity: Some(
+                    "O(1) to access the key and additional O(N*M) to serialize it, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).",
+                ),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -63,6 +71,14 @@ impl Command for RestoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RESTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates a key from the serialized representation of a value.",
+                since: "2.6.0",
+                group: "generic",
+                complexity: Some(
+                    "O(1) to create the new key and additional O(N*M) to reconstruct the serialized value, where N is the number of Redis objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1). However for sorted set values the complexity is O(N*M*log(N)) because inserting values into sorted sets is O(log(N)).",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

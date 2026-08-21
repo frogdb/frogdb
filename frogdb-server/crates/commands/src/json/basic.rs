@@ -21,6 +21,12 @@ impl Command for JsonSetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.SET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the JSON value at a path in a document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -130,6 +136,12 @@ impl Command for JsonGetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.GET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the values at one or more paths in a JSON document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -251,6 +263,12 @@ impl Command for JsonDelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.DEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes the value at a path in a JSON document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -296,6 +314,12 @@ impl Command for JsonMgetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.MGET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the value at a path from each of several JSON documents.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::AllButLast,
@@ -352,6 +376,12 @@ impl Command for JsonTypeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.TYPE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the type of the JSON value at a path in a document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -395,6 +425,12 @@ impl Command for JsonDebugCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.DEBUG",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for JSON debugging commands.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::FAST)

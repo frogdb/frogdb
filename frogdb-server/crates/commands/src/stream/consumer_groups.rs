@@ -19,6 +19,12 @@ impl Command for XgroupCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XGROUP",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for consumer groups commands.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some("Depends on subcommand."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Index(1),
@@ -306,6 +312,12 @@ impl Command for XackCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XACK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some("O(1) for each message ID processed."),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -356,6 +368,12 @@ impl Command for XackdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XACKDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Acknowledges and deletes one or multiple messages for a stream consumer group.",
+                since: "8.2.0",
+                group: "stream",
+                complexity: Some("O(1) for each message ID processed."),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,

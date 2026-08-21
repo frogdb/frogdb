@@ -47,6 +47,14 @@ impl Command for GeoaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more members to a geospatial index. The key is created if it doesn't exist.",
+                since: "3.2.0",
+                group: "geo",
+                complexity: Some(
+                    "O(log(N)) for each item added, where N is the number of elements in the sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -171,6 +179,12 @@ impl Command for GeodistCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEODIST",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the distance between two members of a geospatial index.",
+                since: "3.2.0",
+                group: "geo",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 3, max: 4 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -233,6 +247,12 @@ impl Command for GeohashCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOHASH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members from a geospatial index as geohash strings.",
+                since: "3.2.0",
+                group: "geo",
+                complexity: Some("O(1) for each member requested."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -291,6 +311,12 @@ impl Command for GeoposCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOPOS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the longitude and latitude of members from a geospatial index.",
+                since: "3.2.0",
+                group: "geo",
+                complexity: Some("O(1) for each member requested."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -346,6 +372,14 @@ impl Command for GeosearchCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOSEARCH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Queries a geospatial index for members inside an area of a box or a circle.",
+                since: "6.2.0",
+                group: "geo",
+                complexity: Some(
+                    "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -384,6 +418,14 @@ impl Command for GeosearchstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEOSEARCHSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Queries a geospatial index for members inside an area of a box or a circle, optionally stores the result.",
+                since: "6.2.0",
+                group: "geo",
+                complexity: Some(
+                    "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
+                ),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -467,6 +509,14 @@ impl Command for GeoradiusCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Queries a geospatial index for members within a distance from a coordinate, optionally stores the result.",
+                since: "3.2.0",
+                group: "geo",
+                complexity: Some(
+                    "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+                ),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
@@ -605,6 +655,14 @@ impl Command for GeoradiusbymemberCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUSBYMEMBER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Queries a geospatial index for members within a distance from a member, optionally stores the result.",
+                since: "3.2.0",
+                group: "geo",
+                complexity: Some(
+                    "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
@@ -770,6 +828,14 @@ impl Command for GeoradiusRoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUS_RO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members from a geospatial index that are within a distance from a coordinate.",
+                since: "3.2.10",
+                group: "geo",
+                complexity: Some(
+                    "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+                ),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -802,6 +868,14 @@ impl Command for GeoradiusbymemberRoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GEORADIUSBYMEMBER_RO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members from a geospatial index that are within a distance from a member.",
+                since: "3.2.10",
+                group: "geo",
+                complexity: Some(
+                    "O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

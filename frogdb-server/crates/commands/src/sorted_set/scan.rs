@@ -17,6 +17,14 @@ impl Command for ZscanCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZSCAN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Iterates over members and scores of a sorted set.",
+                since: "2.8.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

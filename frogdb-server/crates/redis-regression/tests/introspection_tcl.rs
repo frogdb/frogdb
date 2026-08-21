@@ -43,7 +43,6 @@
 //! - MONITOR tests (complex interleaving)
 //! - DEBUG OBJECT / DEBUG SET-ACTIVE-EXPIRE tests
 //! - OBJECT FREQ/IDLETIME/REFCOUNT tests
-//! - COMMAND DOCS tests (complex output format)
 //! - ACL-dependent tests (CLIENT KILL maxAGE with ACL)
 //! - bgsave/bgrewriteaof tests
 //! - CONFIG SET rollback / hidden / multiple args tests (Redis-internal options)
@@ -640,6 +639,114 @@ async fn tcl_command_list_count_matches() {
         "COMMAND COUNT ({count}) should match COMMAND LIST length ({})",
         list.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// COMMAND DOCS
+// ---------------------------------------------------------------------------
+
+/// `COMMAND DOCS <name>` is a map (flattened to `[name, docs...]` on RESP2)
+/// whose docs value is itself a flattened map of summary/since/group and —
+/// only when known — complexity.
+#[tokio::test]
+async fn tcl_command_docs_get() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let outer = unwrap_array(client.command(&["COMMAND", "DOCS", "GET"]).await);
+    assert_eq!(outer.len(), 2, "one name/docs pair: {outer:?}");
+    assert_bulk_eq(&outer[0], b"get");
+
+    let fields = extract_bulk_strings(&outer[1]);
+    let pairs: Vec<(&str, &str)> = fields
+        .chunks(2)
+        .map(|c| (c[0].as_str(), c[1].as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            ("summary", "Returns the string value of a key."),
+            ("since", "1.0.0"),
+            ("group", "string"),
+            ("complexity", "O(1)"),
+        ],
+        "COMMAND DOCS GET should carry real vendored documentation"
+    );
+}
+
+/// A FrogDB-only command carries a hand-written summary and *no* complexity
+/// key — FrogDB publishes no complexity bound for its extensions, and
+/// inventing one would be a lie on the wire.
+#[tokio::test]
+async fn tcl_command_docs_extension_omits_unknown_complexity() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let outer = unwrap_array(client.command(&["COMMAND", "DOCS", "FROGDB.VERSION"]).await);
+    assert_eq!(outer.len(), 2, "one name/docs pair: {outer:?}");
+    assert_bulk_eq(&outer[0], b"frogdb.version");
+
+    let fields = extract_bulk_strings(&outer[1]);
+    let pairs: Vec<(&str, &str)> = fields
+        .chunks(2)
+        .map(|c| (c[0].as_str(), c[1].as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            (
+                "summary",
+                "Returns the binary, cluster, and active feature-compatibility versions."
+            ),
+            ("since", "1.0.0"),
+            ("group", "server"),
+        ],
+        "extension docs should omit complexity entirely"
+    );
+}
+
+/// Unknown names are skipped, not reported as nil (Redis's
+/// `commandDocsCommand` behaviour), so the reply can be empty.
+#[tokio::test]
+async fn tcl_command_docs_unknown_is_skipped() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let outer = unwrap_array(client.command(&["COMMAND", "DOCS", "NOSUCHCOMMAND"]).await);
+    assert!(outer.is_empty(), "expected an empty reply, got {outer:?}");
+}
+
+/// The no-argument form documents the whole registry: one pair per command,
+/// every one of them carrying a non-empty summary (the required
+/// `CommandSpec::docs` field makes that a compile-time guarantee — this
+/// asserts it survives to the wire).
+#[tokio::test]
+async fn tcl_command_docs_all_commands() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let count = unwrap_integer(&client.command(&["COMMAND", "COUNT"]).await) as usize;
+    let outer = unwrap_array(client.command(&["COMMAND", "DOCS"]).await);
+    assert_eq!(
+        outer.len(),
+        count * 2,
+        "COMMAND DOCS should cover every command COMMAND COUNT reports"
+    );
+
+    for pair in outer.chunks(2) {
+        let name = String::from_utf8_lossy(unwrap_bulk(&pair[0])).to_string();
+        let fields = extract_bulk_strings(&pair[1]);
+        let summary = fields
+            .chunks(2)
+            .find(|c| c[0] == "summary")
+            .map(|c| c[1].clone())
+            .unwrap_or_default();
+        assert!(!summary.is_empty(), "{name} has no summary");
+        assert!(
+            !summary.ends_with(" command"),
+            "{name} still carries a synthesized placeholder summary: {summary}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

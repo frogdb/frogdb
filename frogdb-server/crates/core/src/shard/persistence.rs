@@ -670,6 +670,12 @@ mod tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "SET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.",
+                    since: "1.0.0",
+                    group: "string",
+                    complexity: Some("O(1)"),
+                },
                 arity: Arity::Fixed(2),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::First,
@@ -956,6 +962,12 @@ mod sync_durability_ack_tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "SET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.",
+                    since: "1.0.0",
+                    group: "string",
+                    complexity: Some("O(1)"),
+                },
                 arity: Arity::AtLeast(2),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::First,

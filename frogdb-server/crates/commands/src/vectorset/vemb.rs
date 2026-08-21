@@ -15,6 +15,12 @@ impl Command for VembCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VEMB",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the vector associated with an element of a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Range { min: 2, max: 3 },
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,

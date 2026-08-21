@@ -111,6 +111,12 @@ impl Command for TsCreateCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.CREATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty time series.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -207,6 +213,12 @@ impl Command for TsAlterCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.ALTER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Updates the retention, chunk size, labels, and duplicate policy of a time series.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -308,6 +320,12 @@ impl Command for TsAddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.ADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends a sample to a time series, creating the series if it does not exist.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -437,6 +455,12 @@ impl Command for TsMaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends samples to several time series.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Stride { step: 3 },
@@ -522,6 +546,12 @@ impl Command for TsIncrbyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.INCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increases the value of a time series' latest sample.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -551,6 +581,12 @@ impl Command for TsDecrbyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.DECRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Decreases the value of a time series' latest sample.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -659,6 +695,12 @@ impl Command for TsGetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.GET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the latest sample of a time series.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -702,6 +744,12 @@ impl Command for TsDelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.DEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Deletes the samples of a time series within a timestamp range.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -747,6 +795,12 @@ impl Command for TsRangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.RANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the samples of a time series within a timestamp range.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -775,6 +829,12 @@ impl Command for TsRevrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.REVRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the samples of a time series within a timestamp range, newest first.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -938,6 +998,12 @@ impl Command for TsInfoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the retention, labels, rules, and statistics of a time series.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -1029,6 +1095,12 @@ impl Command for TsQueryIndexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.QUERYINDEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the names of the time series matching a label filter.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -1072,6 +1144,12 @@ impl Command for TsMgetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MGET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the latest sample of every time series matching a label filter.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -1117,6 +1195,12 @@ impl Command for TsMrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns samples in a timestamp range from every time series matching a label filter.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -1160,6 +1244,12 @@ impl Command for TsMrevrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.MREVRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns samples in a timestamp range, newest first, from every time series matching a label filter.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -1203,6 +1293,12 @@ impl Command for TsCreateRuleCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.CREATERULE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates a downsampling rule from a source time series to a destination.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::Fixed(5),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -1287,6 +1383,12 @@ impl Command for TsDeleteRuleCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TS.DELETERULE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes a downsampling rule between two time series.",
+                since: "1.0.0",
+                group: "timeseries",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,

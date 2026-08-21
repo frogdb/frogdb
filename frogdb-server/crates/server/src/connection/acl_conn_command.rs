@@ -32,6 +32,12 @@ use crate::connection::util::{
 /// validates that this agrees with the `Connection` executor variant.
 static ACL_SPEC: CommandSpec = CommandSpec {
     name: "ACL",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for Access List Control commands.",
+        since: "6.0.0",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; only the
     // self-directed subcommands (WHOAMI/CAT/GENPASS/HELP) are public.

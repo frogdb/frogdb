@@ -590,6 +590,14 @@ mod effect_tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "DEL",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Deletes one or more keys.",
+                    since: "1.0.0",
+                    group: "generic",
+                    complexity: Some(
+                        "O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).",
+                    ),
+                },
                 arity: Arity::AtLeast(1),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::All,
@@ -1491,6 +1499,12 @@ mod seam_reachability_tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "SET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.",
+                    since: "1.0.0",
+                    group: "string",
+                    complexity: Some("O(1)"),
+                },
                 arity: Arity::AtLeast(2),
                 flags: CommandFlags::WRITE,
                 keys: KeySpec::First,
@@ -1527,6 +1541,12 @@ mod seam_reachability_tests {
         fn spec(&self) -> &'static CommandSpec {
             static SPEC: CommandSpec = CommandSpec {
                 name: "GET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Returns the string value of a key.",
+                    since: "1.0.0",
+                    group: "string",
+                    complexity: Some("O(1)"),
+                },
                 arity: Arity::Fixed(1),
                 flags: CommandFlags::READONLY,
                 keys: KeySpec::First,

@@ -22,6 +22,12 @@ impl Command for PfaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds elements to a HyperLogLog key. Creates the key if it doesn't exist.",
+                since: "2.8.9",
+                group: "hyperloglog",
+                complexity: Some("O(1) to add every element."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -111,6 +117,14 @@ impl Command for PfcountCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFCOUNT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the approximated cardinality of the set(s) observed by the HyperLogLog key(s).",
+                since: "2.8.9",
+                group: "hyperloglog",
+                complexity: Some(
+                    "O(1) with a very small average constant time when called with a single key. O(N) with N being the number of keys, and much bigger constant times, when called with multiple keys.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::All,
@@ -162,6 +176,12 @@ impl Command for PfmergeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFMERGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Merges one or more HyperLogLog values into a single key.",
+                since: "2.8.9",
+                group: "hyperloglog",
+                complexity: Some("O(N) to merge N HyperLogLogs, but with high constant times."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
@@ -243,6 +263,12 @@ impl Command for PfdebugCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFDEBUG",
+            docs: frogdb_core::CommandDocs {
+                summary: "Internal commands for debugging HyperLogLog values.",
+                since: "2.8.9",
+                group: "hyperloglog",
+                complexity: Some("N/A"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::ADMIN),
             keys: KeySpec::Index(1),
@@ -318,6 +344,12 @@ impl Command for PfselftestCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PFSELFTEST",
+            docs: frogdb_core::CommandDocs {
+                summary: "An internal command for testing HyperLogLog values.",
+                since: "2.8.9",
+                group: "hyperloglog",
+                complexity: Some("N/A"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::ADMIN),
             keys: KeySpec::None,

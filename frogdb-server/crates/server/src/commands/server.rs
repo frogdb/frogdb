@@ -26,6 +26,12 @@ impl Command for DbsizeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DBSIZE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of keys in the database.",
+                since: "1.0.0",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::None,
@@ -58,6 +64,12 @@ impl Command for FlushdbCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FLUSHDB",
+            docs: frogdb_core::CommandDocs {
+                summary: "Remove all keys from the current database.",
+                since: "1.0.0",
+                group: "server",
+                complexity: Some("O(N) where N is the number of keys in the selected database"),
+            },
             arity: Arity::Range { min: 0, max: 1 },
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -106,6 +118,12 @@ impl Command for FlushallCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FLUSHALL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes all keys from all databases.",
+                since: "1.0.0",
+                group: "server",
+                complexity: Some("O(N) where N is the total number of keys in all databases"),
+            },
             arity: Arity::Range { min: 0, max: 1 },
             flags: CommandFlags::WRITE,
             keys: KeySpec::None,
@@ -151,6 +169,12 @@ impl Command for TimeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TIME",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the server time.",
+                since: "2.6.0",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::FAST)
@@ -199,6 +223,14 @@ impl Command for ShutdownCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SHUTDOWN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Synchronously saves the database(s) to disk and shuts down the Redis server.",
+                since: "1.0.0",
+                group: "server",
+                complexity: Some(
+                    "O(N) when saving, where N is the total number of keys in all databases when saving data, otherwise O(1)",
+                ),
+            },
             arity: Arity::Range { min: 0, max: 2 },
             flags: CommandFlags::ADMIN
                 .union(CommandFlags::NOSCRIPT)
@@ -245,6 +277,12 @@ impl Command for LolwutCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LOLWUT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Displays computer art and the Redis version",
+                since: "5.0.0",
+                group: "server",
+                complexity: None,
+            },
             arity: Arity::AtLeast(0),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::None,

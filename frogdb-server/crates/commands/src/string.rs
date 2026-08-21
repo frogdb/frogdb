@@ -36,6 +36,12 @@ impl Command for SetnxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETNX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Set the string value of a key only when the key doesn't exist.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -81,6 +87,12 @@ impl Command for SetexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the string value and expiration time of a key. Creates the key if it doesn't exist.",
+                since: "2.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -129,6 +141,12 @@ impl Command for PsetexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PSETEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets both string value and expiration time in milliseconds of a key. The key is created if it doesn't exist.",
+                since: "2.6.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -175,6 +193,14 @@ impl Command for AppendCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "APPEND",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends a string to the value of a key. Creates the key if it doesn't exist.",
+                since: "2.0.0",
+                group: "string",
+                complexity: Some(
+                    "O(1). The amortized time complexity is O(1) assuming the appended value is small and the already present value is of any size, since the dynamic string library used by Redis will double the free space available on every reallocation.",
+                ),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -224,6 +250,12 @@ impl Command for StrlenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "STRLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the length of a string value.",
+                since: "2.2.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -266,6 +298,14 @@ impl Command for GetrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns a substring of the string stored at a key.",
+                since: "2.4.0",
+                group: "string",
+                complexity: Some(
+                    "O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -311,6 +351,14 @@ impl Command for SetrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Overwrites a part of a string value with another by an offset. Creates the key if it doesn't exist.",
+                since: "2.2.0",
+                group: "string",
+                complexity: Some(
+                    "O(1), not counting the time taken to copy the new string in place. Usually, this string is very small so the amortized complexity is O(1). Otherwise, complexity is O(M) with M being the length of the value argument.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -375,6 +423,12 @@ impl Command for GetdelCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETDEL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the string value of a key after deleting the key.",
+                since: "6.2.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -422,6 +476,12 @@ impl Command for GetexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the string value of a key after setting its expiration time.",
+                since: "6.2.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -539,6 +599,12 @@ impl Command for IncrCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INCR",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increments the integer value of a key by one. Uses 0 as initial value if the key doesn't exist.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -587,6 +653,12 @@ impl Command for DecrCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DECR",
+            docs: frogdb_core::CommandDocs {
+                summary: "Decrements the integer value of a key by one. Uses 0 as initial value if the key doesn't exist.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -635,6 +707,12 @@ impl Command for IncrbyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increments the integer value of a key by a number. Uses 0 as initial value if the key doesn't exist.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -684,6 +762,12 @@ impl Command for DecrbyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DECRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Decrements a number from the integer value of a key. Uses 0 as initial value if the key doesn't exist.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -737,6 +821,12 @@ impl Command for IncrbyfloatCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "INCRBYFLOAT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increment the floating point value of a key by a number. Uses 0 as initial value if the key doesn't exist.",
+                since: "2.6.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -797,6 +887,12 @@ impl Command for MgetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MGET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Atomically returns the string values of one or more keys.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(N) where N is the number of keys to retrieve."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::All,
@@ -846,6 +942,12 @@ impl Command for MsetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Atomically creates or modifies the string values of one or more keys.",
+                since: "1.0.1",
+                group: "string",
+                complexity: Some("O(N) where N is the number of keys to set."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Stride { step: 2 },
@@ -889,6 +991,12 @@ impl Command for MsetnxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSETNX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Atomically modifies the string values of one or more keys only when all keys don't exist.",
+                since: "1.0.1",
+                group: "string",
+                complexity: Some("O(N) where N is the number of keys to set."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Stride { step: 2 },
@@ -964,6 +1072,12 @@ impl Command for LcsCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LCS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Finds the longest common substring.",
+                since: "7.0.0",
+                group: "string",
+                complexity: Some("O(N*M) where N and M are the lengths of s1 and s2, respectively"),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::FirstTwo,
@@ -1190,6 +1304,12 @@ impl Command for GetsetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETSET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the previous string value of a key after setting it to a new value.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1245,6 +1365,14 @@ impl Command for SubstrCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SUBSTR",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns a substring from a string value.",
+                since: "1.0.0",
+                group: "string",
+                complexity: Some(
+                    "O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -1277,6 +1405,12 @@ impl Command for DigestCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DIGEST",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the XXH3 hash of a string value.",
+                since: "8.4.0",
+                group: "string",
+                complexity: Some("O(N) where N is the length of the string value."),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1316,6 +1450,14 @@ impl Command for DelexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "DELEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Conditionally removes the specified key based on value or digest comparison.",
+                since: "8.4.0",
+                group: "string",
+                complexity: Some(
+                    "O(1) for IFEQ/IFNE, O(N) for IFDEQ/IFDNE where N is the length of the string value.",
+                ),
+            },
             arity: Arity::Range { min: 1, max: 3 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -1408,6 +1550,12 @@ impl Command for MsetexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MSETEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Atomically sets multiple string keys with a shared expiration in a single operation. Supports flexible argument parsing where condition and expiration flags can appear in any order.",
+                since: "8.4.0",
+                group: "string",
+                complexity: Some("O(N) where N is the number of keys to set."),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,

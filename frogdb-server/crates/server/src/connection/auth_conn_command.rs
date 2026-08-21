@@ -186,6 +186,12 @@ impl ConnStateMut for ConnectionState {
 /// `Connection` executor by the registry.
 static AUTH_SPEC: CommandSpec = CommandSpec {
     name: "AUTH",
+    docs: frogdb_core::CommandDocs {
+        summary: "Authenticates the connection.",
+        since: "1.0.0",
+        group: "connection",
+        complexity: Some("O(N) where N is the number of passwords defined for the user"),
+    },
     arity: Arity::Range { min: 1, max: 2 },
     flags: CommandFlags::FAST,
     keys: KeySpec::None,
@@ -275,6 +281,12 @@ fn handle_auth(ctx: &mut ConnCtx<'_>, args: &[Bytes]) -> Response {
 /// carries an optional inline AUTH clause).
 static HELLO_SPEC: CommandSpec = CommandSpec {
     name: "HELLO",
+    docs: frogdb_core::CommandDocs {
+        summary: "Handshakes with the Redis server.",
+        since: "6.0.0",
+        group: "connection",
+        complexity: Some("O(1)"),
+    },
     arity: Arity::AtLeast(0),
     flags: CommandFlags::FAST
         .union(CommandFlags::NOSCRIPT)

@@ -48,6 +48,14 @@ impl Command for ScanCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SCAN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Iterates over the key names in the database.",
+                since: "2.8.0",
+                group: "generic",
+                complexity: Some(
+                    "O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,
@@ -115,6 +123,14 @@ impl Command for KeysCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "KEYS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns all key names that match a pattern.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some(
+                    "O(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.",
+                ),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::None,

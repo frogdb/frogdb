@@ -18,6 +18,14 @@ impl Command for ZrangestoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGESTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores a range of members from sorted set in a key.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements stored into the destination key.",
+                ),
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -147,6 +155,14 @@ impl Command for ZremrangebyrankCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREMRANGEBYRANK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes members in a sorted set within a range of indexes. Deletes the sorted set if all members were removed.",
+                since: "2.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements removed by the operation.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -194,6 +210,14 @@ impl Command for ZremrangebyscoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREMRANGEBYSCORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes members in a sorted set within a range of scores. Deletes the sorted set if all members were removed.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements removed by the operation.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -241,6 +265,14 @@ impl Command for ZremrangebylexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREMRANGEBYLEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes members in a sorted set within a lexicographical range. Deletes the sorted set if all members were removed.",
+                since: "2.8.9",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements removed by the operation.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

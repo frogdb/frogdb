@@ -15,6 +15,12 @@ impl Command for VrandmemberCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VRANDMEMBER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns one or more random elements of a vector set.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

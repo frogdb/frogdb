@@ -20,6 +20,12 @@ impl Command for FrogdbVersionCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FROGDB.VERSION",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the binary, cluster, and active feature-compatibility versions.",
+                since: "1.0.0",
+                group: "server",
+                complexity: None,
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::FAST)
@@ -84,6 +90,12 @@ impl Command for FrogdbFinalizeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "FROGDB.FINALIZE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Finalizes a rolling upgrade, irreversibly committing the cluster to the new version.",
+                since: "1.0.0",
+                group: "server",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::ADMIN.union(CommandFlags::WRITE),
             keys: KeySpec::None,

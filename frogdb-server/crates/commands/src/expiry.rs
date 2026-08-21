@@ -236,6 +236,12 @@ impl Command for ExpireCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXPIRE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the expiration time of a key in seconds.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 2, max: 4 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -332,6 +338,12 @@ impl Command for PexpireCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PEXPIRE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the expiration time of a key in milliseconds.",
+                since: "2.6.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 2, max: 4 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -420,6 +432,12 @@ impl Command for ExpireatCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXPIREAT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the expiration time of a key to a Unix timestamp.",
+                since: "1.2.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 2, max: 4 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -504,6 +522,12 @@ impl Command for PexpireatCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PEXPIREAT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the expiration time of a key to a Unix milliseconds timestamp.",
+                since: "2.6.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Range { min: 2, max: 4 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -588,6 +612,12 @@ impl Command for TtlCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TTL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the expiration time in seconds of a key.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -641,6 +671,12 @@ impl Command for PttlCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PTTL",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the expiration time in milliseconds of a key.",
+                since: "2.6.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -690,6 +726,12 @@ impl Command for PersistCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PERSIST",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes the expiration time of a key.",
+                since: "2.2.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -726,6 +768,12 @@ impl Command for ExpiretimeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "EXPIRETIME",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the expiration time of a key as a Unix timestamp.",
+                since: "7.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -776,6 +824,12 @@ impl Command for PexpiretimeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PEXPIRETIME",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the expiration time of a key as a Unix milliseconds timestamp.",
+                since: "7.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,

@@ -77,6 +77,12 @@ fn numkeys_keys(args: &[Bytes]) -> Vec<&[u8]> {
 /// validated by the registry against the `Connection` executor variant.
 static EVAL_SPEC: CommandSpec = CommandSpec {
     name: "EVAL",
+    docs: frogdb_core::CommandDocs {
+        summary: "Executes a server-side Lua script.",
+        since: "2.6.0",
+        group: "scripting",
+        complexity: Some("Depends on the script that is executed."),
+    },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::NONDETERMINISTIC)
@@ -118,6 +124,12 @@ impl ConnectionCommand for EvalConnCommand {
 /// The `CommandSpec` for EVAL_RO (read-only: replica-eligible, write-rejecting).
 static EVAL_RO_SPEC: CommandSpec = CommandSpec {
     name: "EVAL_RO",
+    docs: frogdb_core::CommandDocs {
+        summary: "Executes a read-only server-side Lua script.",
+        since: "7.0.0",
+        group: "scripting",
+        complexity: Some("Depends on the script that is executed."),
+    },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::READONLY)
@@ -160,6 +172,12 @@ impl ConnectionCommand for EvalRoConnCommand {
 /// The `CommandSpec` for EVALSHA.
 static EVALSHA_SPEC: CommandSpec = CommandSpec {
     name: "EVALSHA",
+    docs: frogdb_core::CommandDocs {
+        summary: "Executes a server-side Lua script by SHA1 digest.",
+        since: "2.6.0",
+        group: "scripting",
+        complexity: Some("Depends on the script that is executed."),
+    },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::NONDETERMINISTIC)
@@ -201,6 +219,12 @@ impl ConnectionCommand for EvalshaConnCommand {
 /// The `CommandSpec` for EVALSHA_RO.
 static EVALSHA_RO_SPEC: CommandSpec = CommandSpec {
     name: "EVALSHA_RO",
+    docs: frogdb_core::CommandDocs {
+        summary: "Executes a read-only server-side Lua script by SHA1 digest.",
+        since: "7.0.0",
+        group: "scripting",
+        complexity: Some("Depends on the script that is executed."),
+    },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::READONLY)
@@ -247,6 +271,12 @@ impl ConnectionCommand for EvalshaRoConnCommand {
 /// The `CommandSpec` for SCRIPT (LOAD/EXISTS/FLUSH/KILL/HELP). Keyless.
 static SCRIPT_SPEC: CommandSpec = CommandSpec {
     name: "SCRIPT",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for Lua scripts management commands.",
+        since: "2.6.0",
+        group: "scripting",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::NOSCRIPT
         .union(CommandFlags::LOADING)
@@ -289,6 +319,12 @@ impl ConnectionCommand for ScriptConnCommand {
 /// The `CommandSpec` for FCALL.
 static FCALL_SPEC: CommandSpec = CommandSpec {
     name: "FCALL",
+    docs: frogdb_core::CommandDocs {
+        summary: "Invokes a function.",
+        since: "7.0.0",
+        group: "scripting",
+        complexity: Some("Depends on the function that is executed."),
+    },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::NOSCRIPT)
@@ -331,6 +367,12 @@ impl ConnectionCommand for FcallConnCommand {
 /// The `CommandSpec` for FCALL_RO.
 static FCALL_RO_SPEC: CommandSpec = CommandSpec {
     name: "FCALL_RO",
+    docs: frogdb_core::CommandDocs {
+        summary: "Invokes a read-only function.",
+        since: "7.0.0",
+        group: "scripting",
+        complexity: Some("Depends on the function that is executed."),
+    },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::NOSCRIPT)
@@ -375,6 +417,12 @@ impl ConnectionCommand for FcallRoConnCommand {
 /// KILL/HELP). Keyless.
 static FUNCTION_SPEC: CommandSpec = CommandSpec {
     name: "FUNCTION",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for function commands.",
+        since: "7.0.0",
+        group: "scripting",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::NOSCRIPT,
     keys: KeySpec::None,

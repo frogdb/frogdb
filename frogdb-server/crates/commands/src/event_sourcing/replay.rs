@@ -18,6 +18,12 @@ impl Command for EsReplayCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.REPLAY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Replays an event stream, optionally resuming from the stored snapshot.",
+                since: "1.0.0",
+                group: "event-sourcing",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,

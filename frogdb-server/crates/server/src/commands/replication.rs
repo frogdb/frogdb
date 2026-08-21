@@ -77,6 +77,12 @@ impl Command for ReplicaofCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "REPLICAOF",
+            docs: frogdb_core::CommandDocs {
+                summary: "Configures a server as replica of another, or promotes it to a master.",
+                since: "5.0.0",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::ADMIN
                 .union(CommandFlags::NOSCRIPT)
@@ -203,6 +209,12 @@ impl Command for SlaveofCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SLAVEOF",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets a Redis server as a replica of another, or promotes it to being a master.",
+                since: "1.0.0",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::ADMIN
                 .union(CommandFlags::NOSCRIPT)
@@ -244,6 +256,12 @@ impl Command for ReplconfCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "REPLCONF",
+            docs: frogdb_core::CommandDocs {
+                summary: "An internal command for configuring the replication stream.",
+                since: "3.0.0",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::AtLeast(0),
             flags: CommandFlags::ADMIN
                 .union(CommandFlags::NOSCRIPT)
@@ -385,6 +403,12 @@ impl Command for PsyncCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "PSYNC",
+            docs: frogdb_core::CommandDocs {
+                summary: "An internal command used in replication.",
+                since: "2.8.0",
+                group: "server",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::ADMIN.union(CommandFlags::NOSCRIPT),
             keys: KeySpec::None,
@@ -575,6 +599,12 @@ impl Command for WaitCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "WAIT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Blocks until the asynchronous replication of all preceding write commands sent by the connection is completed.",
+                since: "3.0.0",
+                group: "generic",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::NOSCRIPT,
             keys: KeySpec::None,
@@ -625,6 +655,12 @@ impl Command for RoleCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ROLE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the replication role.",
+                since: "2.8.12",
+                group: "server",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::LOADING)

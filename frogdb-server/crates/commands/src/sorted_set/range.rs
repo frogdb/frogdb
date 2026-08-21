@@ -21,6 +21,14 @@ impl Command for ZrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members in a sorted set within a range of indexes.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements returned.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -140,6 +148,14 @@ impl Command for ZrangebyscoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGEBYSCORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members in a sorted set within a range of scores.",
+                since: "1.0.5",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -196,6 +212,14 @@ impl Command for ZrevrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members in a sorted set within a range of indexes in reverse order.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements returned.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -245,6 +269,14 @@ impl Command for ZrevrangebyscoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANGEBYSCORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members in a sorted set within a range of scores in reverse order.",
+                since: "2.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -302,6 +334,14 @@ impl Command for ZrangebylexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANGEBYLEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members in a sorted set within a lexicographical range.",
+                since: "2.8.9",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -355,6 +395,14 @@ impl Command for ZrevrangebylexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREVRANGEBYLEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns members in a sorted set within a lexicographical range in reverse order.",
+                since: "2.8.9",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)+M) with N being the number of elements in the sorted set and M the number of elements being returned. If M is constant (e.g. always asking for the first 10 elements with LIMIT), you can consider it O(log(N)).",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

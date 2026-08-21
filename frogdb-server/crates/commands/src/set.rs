@@ -43,6 +43,14 @@ impl Command for SaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more members to a set. Creates the key if it doesn't exist.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some(
+                    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -87,6 +95,12 @@ impl Command for SremCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SREM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes one or more members from a set. Deletes the set if the last member was removed.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(N) where N is the number of members to be removed."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -139,6 +153,12 @@ impl Command for SmembersCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SMEMBERS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns all members of a set.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(N) where N is the set cardinality."),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -188,6 +208,12 @@ impl Command for SismemberCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SISMEMBER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Determines whether a member belongs to a set.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -231,6 +257,14 @@ impl Command for SmismemberCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SMISMEMBER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Determines whether multiple members belong to a set.",
+                since: "6.2.0",
+                group: "set",
+                complexity: Some(
+                    "O(N) where N is the number of elements being checked for membership",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -283,6 +317,12 @@ impl Command for ScardCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SCARD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of members in a set.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -319,6 +359,12 @@ impl Command for SunionCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SUNION",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the union of multiple sets.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(N) where N is the total number of elements in all given sets."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::All,
@@ -370,6 +416,14 @@ impl Command for SinterCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SINTER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the intersect of multiple sets.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some(
+                    "O(N*M) worst case where N is the cardinality of the smallest set and M is the number of sets.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::All,
@@ -433,6 +487,12 @@ impl Command for SdiffCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SDIFF",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the difference of multiple sets.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(N) where N is the total number of elements in all given sets."),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::All,
@@ -495,6 +555,12 @@ impl Command for SunionstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SUNIONSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores the union of multiple sets in a key.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(N) where N is the total number of elements in all given sets."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
@@ -558,6 +624,14 @@ impl Command for SinterstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SINTERSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores the intersect of multiple sets in a key.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some(
+                    "O(N*M) worst case where N is the cardinality of the smallest set and M is the number of sets.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
@@ -633,6 +707,12 @@ impl Command for SdiffstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SDIFFSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores the difference of multiple sets in a key.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(N) where N is the total number of elements in all given sets."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::All,
@@ -704,6 +784,14 @@ impl Command for SintercardCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SINTERCARD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of members of the intersect of multiple sets.",
+                since: "7.0.0",
+                group: "set",
+                complexity: Some(
+                    "O(N*M) worst case where N is the cardinality of the smallest set and M is the number of sets.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::NumkeysAt {
@@ -795,6 +883,14 @@ impl Command for SrandmemberCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SRANDMEMBER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Get one or multiple random members from a set",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some(
+                    "Without the count argument O(1), otherwise O(N) where N is the absolute value of the passed count.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -877,6 +973,14 @@ impl Command for SpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns one or more random members from a set after removing them. Deletes the set if the last member was popped.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some(
+                    "Without the count argument O(1), otherwise O(N) where N is the value of the passed count.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             // NONDETERMINISTIC is a replication contract, not decoration: the
             // broadcast path debug-asserts that a nondeterministic write never
@@ -1002,6 +1106,12 @@ impl Command for SmoveCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SMOVE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Moves a member from one set to another.",
+                since: "1.0.0",
+                group: "set",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -1090,6 +1200,14 @@ impl Command for SscanCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SSCAN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Iterates over members of a set.",
+                since: "2.8.0",
+                group: "set",
+                complexity: Some(
+                    "O(1) for every call. O(N) for a complete iteration, including enough command calls for the cursor to return back to 0. N is the number of elements inside the collection.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

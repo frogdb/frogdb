@@ -20,6 +20,12 @@ impl Command for JsonClearCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.CLEAR",
+            docs: frogdb_core::CommandDocs {
+                summary: "Empties the containers and zeroes the numbers at a path in a JSON document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -58,6 +64,12 @@ impl Command for JsonToggleCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.TOGGLE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Inverts the JSON boolean at a path in a document.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -99,6 +111,12 @@ impl Command for JsonMergeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.MERGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Merges a value into a JSON document at a path, following RFC 7386 semantics.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

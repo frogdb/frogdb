@@ -18,6 +18,14 @@ impl Command for ZaddCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more members to a sorted set, or updates their scores. Creates the key if it doesn't exist.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)) for each item added, where N is the number of elements in the sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -194,6 +202,14 @@ impl Command for ZremCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZREM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes one or more members from a sorted set. Deletes the sorted set if all members were removed.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(M*log(N)) with N being the number of elements in the sorted set and M the number of elements to be removed.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -247,6 +263,12 @@ impl Command for ZscoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZSCORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the score of a member in a sorted set.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -287,6 +309,12 @@ impl Command for ZmscoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZMSCORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the score of one or more members in a sorted set.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some("O(N) where N is the number of members being requested."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -337,6 +365,12 @@ impl Command for ZcardCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZCARD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of members in a sorted set.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -373,6 +407,12 @@ impl Command for ZincrbyCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINCRBY",
+            docs: frogdb_core::CommandDocs {
+                summary: "Increments the score of a member in a sorted set.",
+                since: "1.2.0",
+                group: "sorted-set",
+                complexity: Some("O(log(N)) where N is the number of elements in the sorted set."),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,

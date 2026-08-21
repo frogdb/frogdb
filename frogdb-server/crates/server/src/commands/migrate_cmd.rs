@@ -20,6 +20,14 @@ impl Command for MigrateCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "MIGRATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Atomically transfers a key from one Redis instance to another.",
+                since: "2.6.0",
+                group: "generic",
+                complexity: Some(
+                    "This command actually executes a DUMP+DEL in the source instance, and a RESTORE in the target instance. See the pages of these commands for time complexity. Also an O(N) data transfer between the two instances is performed.",
+                ),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE
                 .union(CommandFlags::NOSCRIPT)

@@ -32,6 +32,14 @@ impl Command for LpushCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPUSH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Prepends one or more elements to a list. Creates the key if it doesn't exist.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -74,6 +82,14 @@ impl Command for RpushCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPUSH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends one or more elements to a list. Creates the key if it doesn't exist.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -115,6 +131,14 @@ impl Command for LpushxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPUSHX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Prepends one or more elements to a list only when the list exists.",
+                since: "2.2.0",
+                group: "list",
+                complexity: Some(
+                    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -156,6 +180,14 @@ impl Command for RpushxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPUSHX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends an element to a list only when the list exists.",
+                since: "2.2.0",
+                group: "list",
+                complexity: Some(
+                    "O(1) for each element added, so O(N) to add N elements when the command is called with multiple arguments.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -197,6 +229,12 @@ impl Command for LpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the first elements in a list after removing it. Deletes the list if the last element was popped.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some("O(N) where N is the number of elements returned"),
+            },
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -279,6 +317,12 @@ impl Command for RpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns and removes the last elements of a list. Deletes the list if the last element was popped.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some("O(N) where N is the number of elements returned"),
+            },
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -361,6 +405,12 @@ impl Command for LlenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the length of a list.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -403,6 +453,14 @@ impl Command for LrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns a range of elements from a list.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(S+N) where S is the distance of start offset from HEAD for small lists, from nearest end (HEAD or TAIL) for large lists; and N is the number of elements in the specified range.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -451,6 +509,14 @@ impl Command for LindexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LINDEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns an element from a list by its index.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(N) where N is the number of elements to traverse to get to the element at index. This makes asking for the first or the last element of the list O(1).",
+                ),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -499,6 +565,14 @@ impl Command for LsetCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LSET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets the value of an element in a list by its index.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(N) where N is the length of the list. Setting either the first or the last element of the list is O(1).",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -549,6 +623,14 @@ impl Command for LinsertCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LINSERT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Inserts an element before or after another element in a list.",
+                since: "2.2.0",
+                group: "list",
+                complexity: Some(
+                    "O(N) where N is the number of elements to traverse before seeing the value pivot. This means that inserting somewhere on the left end on the list (head) can be considered O(1) and inserting somewhere on the right end (tail) is O(N).",
+                ),
+            },
             arity: Arity::Fixed(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -598,6 +680,14 @@ impl Command for LremCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LREM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes elements from a list. Deletes the list if the last element was removed.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(N+M) where N is the length of the list and M is the number of elements removed.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -646,6 +736,14 @@ impl Command for LtrimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LTRIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes elements from both ends a list. Deletes the list if all elements were trimmed.",
+                since: "1.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(N) where N is the number of elements to be removed by the operation.",
+                ),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -694,6 +792,14 @@ impl Command for LposCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LPOS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the index of matching elements in a list.",
+                since: "6.0.6",
+                group: "list",
+                complexity: Some(
+                    "O(N) where N is the number of elements in the list, for the average case. When searching for elements near the head or the tail of the list, or when the MAXLEN option is provided, the command may run in constant time.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -794,6 +900,12 @@ impl Command for RpoplpushCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "RPOPLPUSH",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the last element of a list after removing and pushing it to another list. Deletes the list if the last element was popped.",
+                since: "1.2.0",
+                group: "list",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -868,6 +980,12 @@ impl Command for LmoveCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LMOVE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns an element after popping it from one list and pushing it to another. Deletes the list if the last element was moved.",
+                since: "6.2.0",
+                group: "list",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::FirstTwo,
@@ -968,6 +1086,14 @@ impl Command for LmpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "LMPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns multiple elements from a list after removing them. Deletes the list if the last element was popped.",
+                since: "7.0.0",
+                group: "list",
+                complexity: Some(
+                    "O(N+M) where N is the number of provided keys and M is the number of elements returned.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::NumkeysAt {

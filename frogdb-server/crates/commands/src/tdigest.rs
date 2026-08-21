@@ -47,6 +47,12 @@ impl Command for TdCreate {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.CREATE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty t-digest sketch with the given compression.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -115,6 +121,12 @@ impl Command for TdAdd {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.ADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more observations to a t-digest sketch.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -168,6 +180,12 @@ impl Command for TdMerge {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.MERGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Merges several t-digest sketches into a destination sketch.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::DestThenNumkeys {
@@ -302,6 +320,12 @@ impl Command for TdReset {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.RESET",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes all observations from a t-digest sketch.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -342,6 +366,12 @@ impl Command for TdQuantile {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.QUANTILE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the observation value at each of the given quantiles.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -389,6 +419,12 @@ impl Command for TdCdf {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.CDF",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the fraction of observations at or below each given value.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -434,6 +470,12 @@ impl Command for TdRank {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.RANK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the rank of each given value among a t-digest sketch's observations.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -481,6 +523,12 @@ impl Command for TdRevrank {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.REVRANK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the reverse rank of each given value among a t-digest sketch's observations.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -528,6 +576,12 @@ impl Command for TdMin {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.MIN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the smallest observation added to a t-digest sketch.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -565,6 +619,12 @@ impl Command for TdMax {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.MAX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the largest observation added to a t-digest sketch.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -602,6 +662,12 @@ impl Command for TdInfo {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the compression, capacity, and observation counts of a t-digest sketch.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -658,6 +724,12 @@ impl Command for TdTrimmedMean {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "TDIGEST.TRIMMED_MEAN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the mean of a t-digest sketch, ignoring observations outside a quantile range.",
+                since: "1.0.0",
+                group: "t-digest",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

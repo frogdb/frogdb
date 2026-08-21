@@ -19,6 +19,12 @@ impl Command for EsReadCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ES.READ",
+            docs: frogdb_core::CommandDocs {
+                summary: "Reads the events of a stream within a version range.",
+                since: "1.0.0",
+                group: "event-sourcing",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

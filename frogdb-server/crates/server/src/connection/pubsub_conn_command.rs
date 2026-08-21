@@ -738,12 +738,14 @@ enum PubSubKind {
 /// event); they differ only in name/arity/flags/keys.
 const fn pubsub_spec(
     name: &'static str,
+    docs: frogdb_core::CommandDocs,
     arity: Arity,
     flags: CommandFlags,
     keys: KeySpec,
 ) -> CommandSpec {
     CommandSpec {
         name,
+        docs,
         arity,
         flags,
         keys,
@@ -764,44 +766,118 @@ const PUBSUB_FLAGS: CommandFlags = CommandFlags::PUBSUB
     .union(CommandFlags::LOADING)
     .union(CommandFlags::STALE);
 
-static SUBSCRIBE_SPEC: CommandSpec =
-    pubsub_spec("SUBSCRIBE", Arity::AtLeast(1), PUBSUB_FLAGS, KeySpec::None);
+static SUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
+    "SUBSCRIBE",
+    frogdb_core::CommandDocs {
+        summary: "Listens for messages published to channels.",
+        since: "2.0.0",
+        group: "pubsub",
+        complexity: Some("O(N) where N is the number of channels to subscribe to."),
+    },
+    Arity::AtLeast(1),
+    PUBSUB_FLAGS,
+    KeySpec::None,
+);
 static UNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
     "UNSUBSCRIBE",
+    frogdb_core::CommandDocs {
+        summary: "Stops listening to messages posted to channels.",
+        since: "2.0.0",
+        group: "pubsub",
+        complexity: Some("O(N) where N is the number of channels to unsubscribe."),
+    },
     Arity::AtLeast(0),
     PUBSUB_FLAGS,
     KeySpec::None,
 );
-static PSUBSCRIBE_SPEC: CommandSpec =
-    pubsub_spec("PSUBSCRIBE", Arity::AtLeast(1), PUBSUB_FLAGS, KeySpec::None);
+static PSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
+    "PSUBSCRIBE",
+    frogdb_core::CommandDocs {
+        summary: "Listens for messages published to channels that match one or more patterns.",
+        since: "2.0.0",
+        group: "pubsub",
+        complexity: Some("O(N) where N is the number of patterns to subscribe to."),
+    },
+    Arity::AtLeast(1),
+    PUBSUB_FLAGS,
+    KeySpec::None,
+);
 static PUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
     "PUNSUBSCRIBE",
+    frogdb_core::CommandDocs {
+        summary: "Stops listening to messages published to channels that match one or more patterns.",
+        since: "2.0.0",
+        group: "pubsub",
+        complexity: Some("O(N) where N is the number of patterns to unsubscribe."),
+    },
     Arity::AtLeast(0),
     PUBSUB_FLAGS,
     KeySpec::None,
 );
-static SSUBSCRIBE_SPEC: CommandSpec =
-    pubsub_spec("SSUBSCRIBE", Arity::AtLeast(1), PUBSUB_FLAGS, KeySpec::All);
+static SSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
+    "SSUBSCRIBE",
+    frogdb_core::CommandDocs {
+        summary: "Listens for messages published to shard channels.",
+        since: "7.0.0",
+        group: "pubsub",
+        complexity: Some("O(N) where N is the number of shard channels to subscribe to."),
+    },
+    Arity::AtLeast(1),
+    PUBSUB_FLAGS,
+    KeySpec::All,
+);
 static SUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
     "SUNSUBSCRIBE",
+    frogdb_core::CommandDocs {
+        summary: "Stops listening to messages posted to shard channels.",
+        since: "7.0.0",
+        group: "pubsub",
+        complexity: Some("O(N) where N is the number of shard channels to unsubscribe."),
+    },
     Arity::AtLeast(0),
     PUBSUB_FLAGS,
     KeySpec::None,
 );
 static PUBLISH_SPEC: CommandSpec = pubsub_spec(
     "PUBLISH",
+    frogdb_core::CommandDocs {
+        summary: "Posts a message to a channel.",
+        since: "2.0.0",
+        group: "pubsub",
+        complexity: Some(
+            "O(N+M) where N is the number of clients subscribed to the receiving channel and M is the total number of subscribed patterns (by any client).",
+        ),
+    },
     Arity::Fixed(2),
     PUBSUB_FLAGS.union(CommandFlags::FAST),
     KeySpec::None,
 );
 static SPUBLISH_SPEC: CommandSpec = pubsub_spec(
     "SPUBLISH",
+    frogdb_core::CommandDocs {
+        summary: "Post a message to a shard channel",
+        since: "7.0.0",
+        group: "pubsub",
+        complexity: Some(
+            "O(N) where N is the number of clients subscribed to the receiving shard channel.",
+        ),
+    },
     Arity::Fixed(2),
     PUBSUB_FLAGS.union(CommandFlags::FAST),
     KeySpec::First,
 );
-static PUBSUB_SPEC: CommandSpec =
-    pubsub_spec("PUBSUB", Arity::AtLeast(1), PUBSUB_FLAGS, KeySpec::None);
+static PUBSUB_SPEC: CommandSpec = pubsub_spec(
+    "PUBSUB",
+    frogdb_core::CommandDocs {
+        summary: "A container for Pub/Sub commands.",
+        since: "2.8.0",
+        group: "pubsub",
+        complexity: Some("Depends on subcommand."),
+    },
+    Arity::AtLeast(1),
+    PUBSUB_FLAGS,
+    KeySpec::None,
+);
 
 /// A registrable, `'static` pub/sub executor. One instance per command name,
 /// differing only by [`CommandSpec`] and [`PubSubKind`]; the shared logic lives

@@ -498,11 +498,50 @@ impl ReindexSpec {
     }
 }
 
+/// Human-facing documentation for a command — the data `COMMAND DOCS` serves.
+///
+/// Carried as a **required** [`CommandSpec`] field rather than an `Option` or a
+/// side table, which is what makes documentation coverage compile-enforced: a
+/// new command whose spec literal omits `docs` does not compile. That is the
+/// invariant keeping `COMMAND DOCS` from regressing to the synthesized
+/// `"<NAME> command"` / `generic` / `1.0.0` placeholders it used to return.
+///
+/// For Redis-compatible commands the field values are vendored verbatim from
+/// upstream `redis/redis@<REDIS_COMPAT_TARGET>/src/commands/*.json` (see
+/// `website/scripts/vendor-redis-commands.py`). FrogDB-only commands carry
+/// hand-written values; their [`since`](Self::since) is a FrogDB version, not a
+/// Redis one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandDocs {
+    /// One-line description of what the command does, e.g. `"Returns the
+    /// string value of a key."`. Ends with a period, matching upstream.
+    pub summary: &'static str,
+    /// The version the command first appeared in — the Redis version for
+    /// Redis-compatible commands, the FrogDB version for FrogDB-only ones.
+    pub since: &'static str,
+    /// Command group: the upstream Redis group (`"string"`, `"list"`,
+    /// `"generic"`, …) for Redis-compatible commands, or the FrogDB family
+    /// (`"json"`, `"search"`, `"timeseries"`, …) for FrogDB-only ones.
+    ///
+    /// Redis reports every *module* command's group as `"module"`. FrogDB has
+    /// no module system — these commands are built in — so reporting the real
+    /// family is both more useful and more truthful than claiming a module
+    /// loaded them.
+    pub group: &'static str,
+    /// Big-O complexity, when there is a stated one. `None` means "not
+    /// stated": `COMMAND DOCS` omits the field entirely rather than emitting a
+    /// fabricated complexity string.
+    pub complexity: Option<&'static str>,
+}
+
 /// Declarative description of a command's mechanics. One `static` per command.
 #[derive(Debug, Clone)]
 pub struct CommandSpec {
     /// Command name (uppercase, e.g. `"GET"`).
     pub name: &'static str,
+    /// Human-facing documentation served by `COMMAND DOCS`. Required — see
+    /// [`CommandDocs`] for why.
+    pub docs: CommandDocs,
     /// Expected argument count.
     pub arity: Arity,
     /// Behavior flags.
@@ -1284,6 +1323,12 @@ mod tests {
     fn base_write_spec() -> CommandSpec {
         CommandSpec {
             name: "TESTW",
+            docs: crate::command_spec::CommandDocs {
+                summary: "Test-fixture command; not registered on a running server.",
+                since: "1.0.0",
+                group: "generic",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

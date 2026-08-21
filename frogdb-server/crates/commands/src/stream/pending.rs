@@ -19,6 +19,14 @@ impl Command for XpendingCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XPENDING",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the information and entries from a stream consumer group's pending entries list.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(N) with N being the number of elements returned, so asking for a small fixed number of entries per call is O(1). O(M), where M is the total number of entries scanned when used with the IDLE filter. When the command returns just the summary and the list of consumers is small, it runs in O(1) time; otherwise, an additional O(N) time for iterating every consumer.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -129,6 +137,14 @@ impl Command for XclaimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XCLAIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Changes, or acquires, ownership of a message in a consumer group, as if the message was delivered a consumer group member.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "O(log N) with N being the number of messages in the PEL of the consumer group.",
+                ),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -298,6 +314,12 @@ impl Command for XautoclaimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XAUTOCLAIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to as consumer group member.",
+                since: "6.2.0",
+                group: "stream",
+                complexity: Some("O(1) if COUNT is small."),
+            },
             arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

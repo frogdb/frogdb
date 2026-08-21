@@ -21,6 +21,12 @@ impl Command for BfReserve {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.RESERVE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Creates an empty Bloom filter with a given error rate and capacity.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -115,6 +121,12 @@ impl Command for BfAdd {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.ADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds an item to a Bloom filter, creating the filter if it does not exist.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -161,6 +173,12 @@ impl Command for BfMadd {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.MADD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more items to a Bloom filter, creating the filter if it does not exist.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -212,6 +230,12 @@ impl Command for BfExists {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.EXISTS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Checks whether an item may have been added to a Bloom filter.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -248,6 +272,12 @@ impl Command for BfMexists {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.MEXISTS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Checks whether each of several items may have been added to a Bloom filter.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -289,6 +319,12 @@ impl Command for BfInsert {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.INSERT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Adds one or more items to a Bloom filter, with optional creation parameters.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -390,6 +426,12 @@ impl Command for BfInfo {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.INFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns capacity, size, and sub-filter information about a Bloom filter.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::Range { min: 1, max: 2 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -460,6 +502,12 @@ impl Command for BfCard {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.CARD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of items added to a Bloom filter.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -498,6 +546,12 @@ impl Command for BfScandump {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.SCANDUMP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns successive chunks of a Bloom filter for incremental serialization.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -573,6 +627,12 @@ impl Command for BfLoadchunk {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BF.LOADCHUNK",
+            docs: frogdb_core::CommandDocs {
+                summary: "Restores a Bloom filter chunk previously produced by BF.SCANDUMP.",
+                since: "1.0.0",
+                group: "bloom-filter",
+                complexity: None,
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

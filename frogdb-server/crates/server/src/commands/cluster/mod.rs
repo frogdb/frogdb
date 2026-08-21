@@ -88,6 +88,12 @@ impl Command for ClusterCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "cluster",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for Redis Cluster commands.",
+                since: "3.0.0",
+                group: "cluster",
+                complexity: Some("Depends on subcommand."),
+            },
             arity: Arity::AtLeast(1),
             // No whole-command ADMIN: the admin surface is split per subcommand
             // (`SPLIT_ADMIN_SURFACES` in `frogdb_core::command_spec`), so

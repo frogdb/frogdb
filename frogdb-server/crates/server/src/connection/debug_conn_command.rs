@@ -46,6 +46,12 @@ use frogdb_protocol::Response;
 /// agrees with the `Connection` executor variant.
 static DEBUG_SPEC: CommandSpec = CommandSpec {
     name: "DEBUG",
+    docs: frogdb_core::CommandDocs {
+        summary: "A container for debugging commands.",
+        since: "1.0.0",
+        group: "server",
+        complexity: Some("Depends on subcommand."),
+    },
     arity: Arity::AtLeast(1),
     flags: CommandFlags::ADMIN
         .union(CommandFlags::NOSCRIPT)

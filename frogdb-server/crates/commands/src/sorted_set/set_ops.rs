@@ -132,6 +132,14 @@ impl Command for ZunionCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZUNION",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the union of multiple sorted sets.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(N)+O(M*log(M)) with N being the sum of the sizes of the input sorted sets, and M being the number of elements in the resulting sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::NumkeysAt {
@@ -212,6 +220,14 @@ impl Command for ZunionstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZUNIONSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores the union of multiple sorted sets in a key.",
+                since: "2.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(N)+O(M log(M)) with N being the sum of the sizes of the input sorted sets, and M being the number of elements in the resulting sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::DestThenNumkeys {
@@ -302,6 +318,14 @@ impl Command for ZinterCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINTER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the intersect of multiple sorted sets.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(N*K)+O(M*log(M)) worst case with N being the smallest input sorted set, K being the number of input sorted sets and M being the number of elements in the resulting sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::NumkeysAt {
@@ -404,6 +428,14 @@ impl Command for ZinterstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINTERSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores the intersect of multiple sorted sets in a key.",
+                since: "2.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(N*K)+O(M*log(M)) worst case with N being the smallest input sorted set, K being the number of input sorted sets and M being the number of elements in the resulting sorted set.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::DestThenNumkeys {
@@ -523,6 +555,14 @@ impl Command for ZintercardCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZINTERCARD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of members of the intersect of multiple sorted sets.",
+                since: "7.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(N*K) worst case with N being the smallest input sorted set, K being the number of input sorted sets.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::NumkeysAt {
@@ -625,6 +665,14 @@ impl Command for ZdiffCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZDIFF",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the difference between multiple sorted sets.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(L + (N-K)log(N)) worst case where L is the total number of elements in all the sets, N is the size of the first set, and K is the size of the result set.",
+                ),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::NumkeysAt {
@@ -711,6 +759,14 @@ impl Command for ZdiffstoreCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZDIFFSTORE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Stores the difference of multiple sorted sets in a key.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(L + (N-K)log(N)) worst case where L is the total number of elements in all the sets, N is the size of the first set, and K is the size of the result set.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::DestThenNumkeys {

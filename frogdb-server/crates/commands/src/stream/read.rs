@@ -18,6 +18,12 @@ impl Command for XreadCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XREAD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns messages from multiple streams with IDs greater than the ones requested. Blocks until a message is available otherwise.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
@@ -172,6 +178,14 @@ impl Command for XreadgroupCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XREADGROUP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns new or historical messages from a stream for a consumer in a group. Blocks until a message is available otherwise.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some(
+                    "For each stream mentioned: O(M) with M being the number of elements returned. If M is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1). On the other side when XREADGROUP blocks, XADD will pay the O(N) time in order to serve the N clients blocked on the stream getting new data.",
+                ),
+            },
             arity: Arity::AtLeast(6),
             flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,

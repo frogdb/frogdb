@@ -1919,6 +1919,12 @@ mod tests {
                 fn spec(&self) -> &'static CommandSpec {
                     static SPEC: CommandSpec = CommandSpec {
                         name: "WALMOCK",
+                        docs: crate::command_spec::CommandDocs {
+                            summary: "Test-fixture command; not registered on a running server.",
+                            since: "1.0.0",
+                            group: "generic",
+                            complexity: None,
+                        },
                         arity: Arity::AtLeast(1),
                         flags: CommandFlags::WRITE,
                         keys: $keys,

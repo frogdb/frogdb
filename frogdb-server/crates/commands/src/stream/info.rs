@@ -18,6 +18,12 @@ impl Command for XinfoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "XINFO",
+            docs: frogdb_core::CommandDocs {
+                summary: "A container for stream introspection commands.",
+                since: "5.0.0",
+                group: "stream",
+                complexity: Some("Depends on subcommand."),
+            },
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::Index(1),

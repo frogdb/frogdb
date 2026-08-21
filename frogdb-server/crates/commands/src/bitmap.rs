@@ -28,6 +28,12 @@ impl Command for SetbitCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "SETBIT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Sets or clears the bit at offset of the string value. Creates the key if it doesn't exist.",
+                since: "2.2.0",
+                group: "bitmap",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(3),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -100,6 +106,12 @@ impl Command for GetbitCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "GETBIT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns a bit value by offset.",
+                since: "2.2.0",
+                group: "bitmap",
+                complexity: Some("O(1)"),
+            },
             arity: Arity::Fixed(2),
             flags: CommandFlags::READONLY.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -145,6 +157,12 @@ impl Command for BitcountCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITCOUNT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Counts the number of set bits (population counting) in a string.",
+                since: "2.6.0",
+                group: "bitmap",
+                complexity: Some("O(N)"),
+            },
             arity: Arity::Range { min: 1, max: 4 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -216,6 +234,12 @@ impl Command for BitopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Performs bitwise operations on multiple strings, and stores the result.",
+                since: "2.6.0",
+                group: "bitmap",
+                complexity: Some("O(N)"),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::Skip(1),
@@ -309,6 +333,12 @@ impl Command for BitposCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITPOS",
+            docs: frogdb_core::CommandDocs {
+                summary: "Finds the first set (1) or clear (0) bit in a string.",
+                since: "2.8.7",
+                group: "bitmap",
+                complexity: Some("O(N)"),
+            },
             arity: Arity::Range { min: 2, max: 5 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -393,6 +423,12 @@ impl Command for BitfieldCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITFIELD",
+            docs: frogdb_core::CommandDocs {
+                summary: "Performs arbitrary bitfield integer operations on strings.",
+                since: "3.2.0",
+                group: "bitmap",
+                complexity: Some("O(1) for each subcommand specified"),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -467,6 +503,12 @@ impl Command for BitfieldRoCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "BITFIELD_RO",
+            docs: frogdb_core::CommandDocs {
+                summary: "Performs arbitrary read-only bitfield integer operations on strings.",
+                since: "6.0.0",
+                group: "bitmap",
+                complexity: Some("O(1) for each subcommand specified"),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

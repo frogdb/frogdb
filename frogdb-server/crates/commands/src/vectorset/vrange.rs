@@ -15,6 +15,12 @@ impl Command for VrangeCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "VRANGE",
+            docs: frogdb_core::CommandDocs {
+                summary: "Iterates the elements of a vector set in lexicographic order.",
+                since: "1.0.0",
+                group: "vector-set",
+                complexity: None,
+            },
             arity: Arity::Range { min: 3, max: 4 },
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,

@@ -21,6 +21,12 @@ impl Command for JsonArrAppendCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRAPPEND",
+            docs: frogdb_core::CommandDocs {
+                summary: "Appends one or more values to the end of a JSON array.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -74,6 +80,12 @@ impl Command for JsonArrIndexCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRINDEX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the index of the first occurrence of a value in a JSON array.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -127,6 +139,12 @@ impl Command for JsonArrInsertCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRINSERT",
+            docs: frogdb_core::CommandDocs {
+                summary: "Inserts one or more values into a JSON array before a given index.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -181,6 +199,12 @@ impl Command for JsonArrLenCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRLEN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the number of elements in a JSON array.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
@@ -226,6 +250,12 @@ impl Command for JsonArrPopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Removes and returns an element of a JSON array.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
@@ -278,6 +308,12 @@ impl Command for JsonArrTrimCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "JSON.ARRTRIM",
+            docs: frogdb_core::CommandDocs {
+                summary: "Trims a JSON array to the given inclusive index range.",
+                since: "1.0.0",
+                group: "json",
+                complexity: None,
+            },
             arity: Arity::Fixed(4),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,

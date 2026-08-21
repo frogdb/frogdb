@@ -21,6 +21,14 @@ impl Command for ZpopminCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZPOPMIN",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the lowest-scoring members from a sorted set after removing them. Deletes the sorted set if the last member was popped.",
+                since: "5.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)*M) with N being the number of elements in the sorted set, and M being the number of elements popped.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -88,6 +96,14 @@ impl Command for ZpopmaxCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZPOPMAX",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the highest-scoring members from a sorted set after removing them. Deletes the sorted set if the last member was popped.",
+                since: "5.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(log(N)*M) with N being the number of elements in the sorted set, and M being the number of elements popped.",
+                ),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::WRITE.union(CommandFlags::FAST),
             keys: KeySpec::First,
@@ -155,6 +171,14 @@ impl Command for ZmpopCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZMPOP",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns the highest- or lowest-scoring members from one or more sorted sets after removing them. Deletes the sorted set if the last member was popped.",
+                since: "7.0.0",
+                group: "sorted-set",
+                complexity: Some(
+                    "O(K) + O(M*log(N)) where K is the number of provided keys, N being the number of elements in the sorted set, and M being the number of elements popped.",
+                ),
+            },
             arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::NumkeysAt {
@@ -292,6 +316,12 @@ impl Command for ZrandmemberCommand {
     fn spec(&self) -> &'static CommandSpec {
         static SPEC: CommandSpec = CommandSpec {
             name: "ZRANDMEMBER",
+            docs: frogdb_core::CommandDocs {
+                summary: "Returns one or more random members from a sorted set.",
+                since: "6.2.0",
+                group: "sorted-set",
+                complexity: Some("O(N) where N is the number of members returned"),
+            },
             arity: Arity::AtLeast(1),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
