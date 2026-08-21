@@ -785,6 +785,7 @@ impl ReplicaSession {
             checksum,
             replication_id: replication_id.to_string(),
             replication_offset,
+            coverage: crate::fullsync::ShardCoverage::none(),
         };
         CheckpointStreamCodec::write_metadata(stream, &metadata).await?;
 
@@ -894,6 +895,7 @@ impl ReplicaSession {
                 checksum: combined.finalize(),
                 replication_id: replication_id.to_string(),
                 replication_offset,
+                coverage: crate::fullsync::ShardCoverage::none(),
             },
         )
         .await?;

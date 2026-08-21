@@ -179,6 +179,7 @@ mod tests {
             checksum,
             replication_id: "repl-stager".to_string(),
             replication_offset: offset,
+            coverage: crate::fullsync::ShardCoverage::none(),
         }
     }
 

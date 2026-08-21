@@ -40,9 +40,112 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufW
 /// arithmetic here.
 const CHUNK_SIZE: usize = 64 * 1024;
 
+/// Per-shard coverage watermarks for one full-sync payload — the `Y_s` vector.
+///
+/// `Y_s` is the offset of the **last write shard `s` broadcast** at the moment
+/// that shard's contribution to the payload was captured: its drain-ack on the
+/// checkpoint path, its export message on the live-dataset path. Both capture
+/// points are messages the shard task itself processes, and a shard task is
+/// single-threaded with `ReplicationBroadcast` as the terminal write effect
+/// (`core/src/shard/post_execution.rs`), so every write in shard `s`'s half of
+/// the payload was broadcast at or below `Y_s` and none above it was.
+///
+/// That is the fact the single trailer offset cannot express. `replication_offset`
+/// is captured before *any* shard is touched, so it is only a lower bound on what
+/// the payload holds (FM-REPLICATION-004's `offset <= data` direction); the
+/// replica installing it therefore replays `(replication_offset, current]` over a
+/// keyspace that already holds part of that range. The vector is the exact upper
+/// bound, per shard, that makes the replay dedupable — see FM-REPLICATION-066.
+///
+/// Indexed by the **sender's** shard id, which is what every replication frame
+/// carries (`ReplicationFrame::shard_id`), so a replica with a different shard
+/// count still reads the right watermark. An index past the end has *no*
+/// watermark rather than a zero one: absent means "apply it", never "skip it".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShardCoverage(Vec<u64>);
+
+impl ShardCoverage {
+    /// The vector for a payload whose shard `s` last broadcast at `watermarks[s]`.
+    pub fn from_watermarks(watermarks: Vec<u64>) -> Self {
+        Self(watermarks)
+    }
+
+    /// No watermarks at all — a payload that carries no coverage claim, so the
+    /// replica installs no floors and behaves exactly as it did before
+    /// FM-REPLICATION-066.
+    pub fn none() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn as_slice(&self) -> &[u64] {
+        &self.0
+    }
+
+    /// Shard `shard`'s watermark, or `None` when this vector does not describe
+    /// that shard (a control-shard frame, or a sender with fewer shards).
+    pub fn watermark(&self, shard: u16) -> Option<u64> {
+        self.0.get(usize::from(shard)).copied()
+    }
+
+    /// The highest watermark in the vector, or `0` when it is empty — the point
+    /// at or above which the replica's applied head has caught up with
+    /// everything the payload covered, and the floors stop mattering.
+    pub fn max(&self) -> u64 {
+        self.0.iter().copied().max().unwrap_or(0)
+    }
+
+    /// The wire/JSON rendering: watermarks in shard order, comma-separated. An
+    /// empty vector renders as the empty string, which is why the trailer's
+    /// field count does not change with the shard count.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for (i, w) in self.0.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            use std::fmt::Write;
+            let _ = write!(out, "{w}");
+        }
+        out
+    }
+
+    /// Parse [`Self::render`]'s output. A malformed watermark is an error rather
+    /// than a dropped field: a floor vector that silently lost a shard would let
+    /// that shard's half of the payload be replayed a second time.
+    pub fn parse(s: &str) -> io::Result<Self> {
+        if s.is_empty() {
+            return Ok(Self::none());
+        }
+        let mut out = Vec::new();
+        for part in s.split(',') {
+            out.push(part.parse::<u64>().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid shard coverage watermark",
+                )
+            })?);
+        }
+        Ok(Self(out))
+    }
+}
+
 /// Metadata frame sent at the end of a checkpoint stream.
 ///
-/// Wire format: `<rdb_size>:<checksum_hex>:<replication_id>:<replication_offset>`
+/// Wire format:
+/// `<rdb_size>:<checksum_hex>:<replication_id>:<replication_offset>:<coverage>`
+///
+/// The trailing `coverage` field is [`ShardCoverage::render`] — comma-separated
+/// per-shard watermarks, possibly empty. It is a fifth `:`-delimited field
+/// rather than an optional suffix, so a sender that ships no coverage and one
+/// whose message was truncated are different bytes, not the same ones.
 #[derive(Debug, Clone)]
 pub struct FullSyncMetadata {
     /// Total byte size of the RDB / checkpoint payload.
@@ -53,6 +156,8 @@ pub struct FullSyncMetadata {
     pub replication_id: String,
     /// Replication offset at time of checkpoint.
     pub replication_offset: u64,
+    /// Per-shard coverage watermarks for this payload (FM-REPLICATION-066).
+    pub coverage: ShardCoverage,
 }
 
 impl FullSyncMetadata {
@@ -60,8 +165,12 @@ impl FullSyncMetadata {
         let mut buf = BytesMut::with_capacity(128);
         let checksum_hex = hex::encode(self.checksum);
         let data = format!(
-            "{}:{}:{}:{}",
-            self.rdb_size, checksum_hex, self.replication_id, self.replication_offset
+            "{}:{}:{}:{}:{}",
+            self.rdb_size,
+            checksum_hex,
+            self.replication_id,
+            self.replication_offset,
+            self.coverage.render()
         );
         buf.extend_from_slice(data.as_bytes());
         buf.freeze()
@@ -72,7 +181,7 @@ impl FullSyncMetadata {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid UTF-8 in metadata"))?;
 
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
+        if parts.len() != 5 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "malformed metadata",
@@ -96,11 +205,13 @@ impl FullSyncMetadata {
         let replication_offset: u64 = parts[3].parse().map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "invalid replication_offset")
         })?;
+        let coverage = ShardCoverage::parse(parts[4])?;
         Ok(Self {
             rdb_size,
             checksum,
             replication_id,
             replication_offset,
+            coverage,
         })
     }
 }
@@ -522,6 +633,7 @@ mod tests {
             checksum: [0xAB; 32],
             replication_id: "abc123".to_string(),
             replication_offset: 500,
+            coverage: crate::fullsync::ShardCoverage::none(),
         };
         let bytes = metadata.to_bytes();
         let parsed = FullSyncMetadata::from_bytes(&bytes).unwrap();
@@ -529,6 +641,56 @@ mod tests {
         assert_eq!(parsed.checksum, [0xAB; 32]);
         assert_eq!(parsed.replication_id, "abc123");
         assert_eq!(parsed.replication_offset, 500);
+        assert!(parsed.coverage.is_empty());
+    }
+
+    #[test]
+    fn a_coverage_vector_round_trips_through_the_trailer() {
+        let metadata = FullSyncMetadata {
+            rdb_size: 1000,
+            checksum: [0xAB; 32],
+            replication_id: "abc123".to_string(),
+            replication_offset: 500,
+            coverage: ShardCoverage::from_watermarks(vec![700, 0, u64::MAX]),
+        };
+        let parsed = FullSyncMetadata::from_bytes(&metadata.to_bytes()).unwrap();
+        assert_eq!(parsed.coverage.as_slice(), &[700, 0, u64::MAX]);
+    }
+
+    #[test]
+    fn a_trailer_without_the_coverage_field_is_refused() {
+        // Four fields is the pre-FM-REPLICATION-066 trailer. It is refused
+        // rather than read as an empty vector: an empty vector is a positive
+        // claim ("this payload covers nothing"), and inferring it from a
+        // missing field would let a truncated message install no floors and
+        // silently double-apply the overshipped range.
+        let four_fields = format!("1000:{}:abc123:500", hex::encode([0xABu8; 32]));
+        assert!(FullSyncMetadata::from_bytes(four_fields.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_malformed_watermark_fails_the_whole_vector() {
+        assert!(ShardCoverage::parse("10,,30").is_err());
+        assert!(ShardCoverage::parse("10,nope").is_err());
+        assert!(ShardCoverage::parse("-1").is_err());
+    }
+
+    #[test]
+    fn an_empty_coverage_field_parses_as_no_watermarks() {
+        let parsed = ShardCoverage::parse("").unwrap();
+        assert!(parsed.is_empty());
+        assert_eq!(parsed.render(), "");
+        assert_eq!(parsed.max(), 0);
+        assert_eq!(parsed.watermark(0), None);
+    }
+
+    #[test]
+    fn a_watermark_past_the_end_of_the_vector_is_absent_not_zero() {
+        let coverage = ShardCoverage::from_watermarks(vec![7]);
+        assert_eq!(coverage.watermark(0), Some(7));
+        assert_eq!(coverage.watermark(1), None);
+        assert_eq!(coverage.watermark(u16::MAX), None);
+        assert_eq!(coverage.max(), 7);
     }
 
     #[test]
@@ -656,6 +818,7 @@ mod tests {
             checksum: [0xAB; 32],
             replication_id: "repl-1".to_string(),
             replication_offset: 99,
+            coverage: crate::fullsync::ShardCoverage::none(),
         }
     }
 
@@ -767,6 +930,7 @@ mod tests {
             checksum: send_checksum.finalize(),
             replication_id: "repl-agreement".to_string(),
             replication_offset: 7,
+            coverage: crate::fullsync::ShardCoverage::none(),
         };
         CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
             .await
@@ -830,7 +994,7 @@ mod tests {
     #[tokio::test]
     async fn test_checkpoint_codec_golden_bytes() {
         let metadata = sample_metadata();
-        let meta_str = format!("42:{}:repl-1:99", hex::encode([0xAB; 32]));
+        let meta_str = format!("42:{}:repl-1:99:", hex::encode([0xAB; 32]));
 
         let mut expected: Vec<u8> = Vec::new();
         expected.extend_from_slice(b"$FROGDB_CHECKPOINT\r\n");

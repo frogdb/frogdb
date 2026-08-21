@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use bytes::Bytes;
 
 use crate::frame::{FRAME_VERSION, FrameFlags, ReplicationFrame};
-use crate::fullsync::FullSyncMetadata;
+use crate::fullsync::{FullSyncMetadata, ShardCoverage};
 
 /// Where the fixtures live. `CARGO_MANIFEST_DIR` rather than `include_str!`
 /// so the regeneration mode ([`updating`]) can write them back.
@@ -210,6 +210,10 @@ fn assert_metadata_golden(name: &str, metadata: &FullSyncMetadata) {
         decoded.replication_offset, metadata.replication_offset,
         "{name}: replication_offset mismatch on decode"
     );
+    assert_eq!(
+        decoded.coverage, metadata.coverage,
+        "{name}: shard coverage mismatch on decode"
+    );
 }
 
 /// One [`ReplicationFrame`] fixture per field and per flag bit, plus a
@@ -354,7 +358,12 @@ fn frame_fixtures() -> Vec<(&'static str, ReplicationFrame)> {
 /// checksum with max integers, a sequential-byte checksum that pins hex
 /// encoding byte order, and a realistic-looking replication id — plus the
 /// empty-string `replication_id` edge, which the wire format's `:`-split
-/// parser must still see as exactly four fields.
+/// parser must still see as exactly five fields.
+///
+/// The `coverage` field (FM-REPLICATION-066) is pinned at both ends: the
+/// empty vector, which renders as an empty trailing field and is what a
+/// coverage-less payload ships, and a multi-shard vector including a zero and
+/// a `u64::MAX` watermark, which pins the `,` separator and the shard order.
 fn metadata_fixtures() -> Vec<(&'static str, FullSyncMetadata)> {
     let mut sequential = [0u8; 32];
     for (i, byte) in sequential.iter_mut().enumerate() {
@@ -369,6 +378,7 @@ fn metadata_fixtures() -> Vec<(&'static str, FullSyncMetadata)> {
                 checksum: sequential,
                 replication_id: "repl-basic-fixture".to_string(),
                 replication_offset: 987_654_321,
+                coverage: ShardCoverage::none(),
             },
         ),
         (
@@ -378,6 +388,7 @@ fn metadata_fixtures() -> Vec<(&'static str, FullSyncMetadata)> {
                 checksum: [0u8; 32],
                 replication_id: String::new(),
                 replication_offset: 0,
+                coverage: ShardCoverage::none(),
             },
         ),
         (
@@ -387,6 +398,7 @@ fn metadata_fixtures() -> Vec<(&'static str, FullSyncMetadata)> {
                 checksum: [0xFFu8; 32],
                 replication_id: "z".repeat(64),
                 replication_offset: u64::MAX,
+                coverage: ShardCoverage::from_watermarks(vec![u64::MAX; 4]),
             },
         ),
         (
@@ -400,6 +412,20 @@ fn metadata_fixtures() -> Vec<(&'static str, FullSyncMetadata)> {
                 ],
                 replication_id: "3b9f1c2a4d5e6f708192a3b4c5d6e7f809101112".to_string(),
                 replication_offset: 555,
+                coverage: ShardCoverage::from_watermarks(vec![555]),
+            },
+        ),
+        (
+            "metadata-coverage-multi",
+            FullSyncMetadata {
+                rdb_size: 4096,
+                checksum: sequential,
+                replication_id: "repl-coverage-fixture".to_string(),
+                replication_offset: 700,
+                // Deliberately not sorted and not all equal: the vector is
+                // indexed by shard id, so a sender that sorted or deduped it
+                // would hand the replica the wrong shard's floor.
+                coverage: ShardCoverage::from_watermarks(vec![900, 0, 700, 1_000_000]),
             },
         ),
     ]
@@ -411,7 +437,7 @@ fn metadata_fixtures() -> Vec<(&'static str, FullSyncMetadata)> {
 /// dropped while editing this file shrinks the count and fails loudly,
 /// rather than silently narrowing coverage.
 const FRAME_FIXTURE_COUNT: usize = 11;
-const METADATA_FIXTURE_COUNT: usize = 4;
+const METADATA_FIXTURE_COUNT: usize = 5;
 
 #[cfg(test)]
 mod tests {

@@ -911,6 +911,7 @@ mod tests {
             checksum: combined.finalize(),
             replication_id: replication_id.to_string(),
             replication_offset: offset,
+            coverage: crate::fullsync::ShardCoverage::none(),
         };
         CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
             .await
@@ -1153,6 +1154,7 @@ mod tests {
             checksum: combined.finalize(),
             replication_id: replication_id.to_string(),
             replication_offset: offset,
+            coverage: crate::fullsync::ShardCoverage::none(),
         };
         CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
             .await

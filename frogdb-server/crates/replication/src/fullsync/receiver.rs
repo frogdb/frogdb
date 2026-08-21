@@ -93,6 +93,7 @@ mod tests {
             checksum,
             replication_id: "repl-receiver".to_string(),
             replication_offset: 123,
+            coverage: crate::fullsync::ShardCoverage::none(),
         };
         CheckpointStreamCodec::write_metadata(&mut buf, &metadata)
             .await

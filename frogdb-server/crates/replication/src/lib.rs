@@ -68,7 +68,7 @@ pub use frame::{
     CONTROL_SHARD, FRAME_MAGIC, FRAME_VERSION, ReplicationFrame, ReplicationFrameCodec,
     serialize_command_to_resp,
 };
-pub use fullsync::FullSyncMetadata;
+pub use fullsync::{FullSyncMetadata, ShardCoverage};
 pub use identity::{ReplicationIdentity, SharedReplicationState};
 pub use net_bytes::{NetByteCounters, NetByteCountersSnapshot};
 pub use offset_coordinator::OffsetCoordinator;
