@@ -61,7 +61,7 @@ CMD_FULL = "cmd-full"
 # file (relative to repo root) -> expected number of ship-shaped lines. Checked
 # in both directions: see module docstring.
 EXPECTED_COUNTS: dict[str, int] = {
-    "Justfile": 2,  # cross-build (x86_64), cross-build-arm (aarch64)
+    "Justfile": 3,  # release (self-built), cross-build (x86_64), cross-build-arm (aarch64)
     "frogdb-server/docker/Dockerfile.builder": 1,  # in-Docker release build
     ".github/workflows/workflow_gen/src/workflow_gen/workflows/release.py": 1,  # macOS tarball job
     "website/src/content/docs/getting-started/installation.mdx": 1,  # .deb build-the-binaries step

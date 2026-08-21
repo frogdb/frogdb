@@ -65,9 +65,11 @@ build:
 build-debug:
     {{dyld-env}} {{rocksdb-env}} CARGO_PROFILE_DEV_DEBUG=2 cargo build
 
-# Build release
+# Build release. Ships the full command surface (cmd-full — ADR-0005 ruling 1): this is
+# the self-built distributable a user gets by following the install docs, so it must not
+# silently ship the core-profile dev default.
 release:
-    {{dyld-env}} {{rocksdb-env}} cargo build --release
+    {{dyld-env}} {{rocksdb-env}} cargo build --release --bin frogdb-server --features cmd-full
 
 # =============================================================================
 # Rust: Test
@@ -1833,10 +1835,10 @@ lint-continuation-lock:
 lint-script-write-seam:
     ./scripts/script-write-seam.py
 
-# Gate: every distributable frogdb-server build (cross-compiled binaries,
-# in-Docker release build, macOS release tarball, the deb build-the-binaries
-# doc step) passes --features cmd-full (ADR-0005 ruling 1). Finds every
-# `cargo build`/`cargo zigbuild --bin frogdb-server` invocation in the tree
+# Gate: every distributable frogdb-server build (the self-built `just release`,
+# cross-compiled binaries, in-Docker release build, macOS release tarball, the deb
+# build-the-binaries doc step) passes --features cmd-full (ADR-0005 ruling 1). Finds
+# every `cargo build`/`cargo zigbuild --bin frogdb-server` invocation in the tree
 # and demands cmd-full on it; a count pin catches a ship site moving or
 # disappearing without the pin following it. See scripts/ship-cmd-full.py.
 lint-ship-cmd-full:
