@@ -2818,6 +2818,8 @@
           "since": "1.0.0",
           "summary": "Retrieves runtime configuration options",
           "complexity": "O(1)",
+          "deprecated_since": "8.0.0",
+          "replaced_by": "CONFIG GET",
           "arguments": [
             {
               "name": "option",
@@ -2833,6 +2835,8 @@
           "since": "1.0.0",
           "summary": "Help description of runtime configuration options",
           "complexity": "O(1)",
+          "deprecated_since": "8.0.0",
+          "replaced_by": "CONFIG HELP",
           "arguments": [
             {
               "name": "option",
@@ -2848,6 +2852,8 @@
           "since": "1.0.0",
           "summary": "Sets runtime configuration options",
           "complexity": "O(1)",
+          "deprecated_since": "8.0.0",
+          "replaced_by": "CONFIG SET",
           "arguments": [
             {
               "name": "option",
@@ -2867,6 +2873,9 @@
           "since": "1.1.0",
           "summary": "Deletes a cursor",
           "complexity": "O(1)",
+          "command_tips": [
+            "REQUEST_POLICY:SPECIAL"
+          ],
           "arguments": [
             {
               "name": "index",
@@ -2887,6 +2896,9 @@
           "since": "1.1.0",
           "summary": "Reads from a cursor",
           "complexity": "O(1)",
+          "command_tips": [
+            "REQUEST_POLICY:SPECIAL"
+          ],
           "arguments": [
             {
               "name": "index",
@@ -3859,6 +3871,7 @@
           "since": "2.0.0",
           "summary": "Return the count for one or more items are in a sketch",
           "complexity": "O(n) where n is the number of items",
+          "deprecated_since": "2.4",
           "arguments": [
             {
               "name": "key",
@@ -4345,6 +4358,7 @@
           "since": "1.0.0",
           "summary": "Multiplies the numeric value at path by a value",
           "complexity": "O(1) when path is evaluated to a single value, O(N) when path is evaluated to multiple values, where N is the size of the key",
+          "deprecated_since": "2.0",
           "arguments": [
             {
               "name": "key",
@@ -4402,6 +4416,7 @@
           "since": "1.0.0",
           "summary": "Returns the JSON value at path in Redis Serialization Protocol (RESP)",
           "complexity": "O(N) when path is evaluated to a single value, where N is the size of the value, O(N) when path is evaluated to multiple values, where N is the size of the key",
+          "deprecated_since": "2.6",
           "arguments": [
             {
               "name": "key",

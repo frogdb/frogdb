@@ -944,6 +944,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`BLMOVE` with the `RIGHT` and `LEFT` arguments",
       "arguments": [
         {
           "name": "source",
@@ -1175,6 +1180,9 @@
         "LOADING",
         "STALE",
         "SENTINEL"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
       ]
     },
     {
@@ -1270,6 +1278,10 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:AGG_SUM"
       ]
     },
     {
@@ -1285,6 +1297,9 @@
         "LOADING",
         "STALE",
         "PROTECTED"
+      ],
+      "doc_flags": [
+        "SYSCMD"
       ]
     },
     {
@@ -1382,6 +1397,10 @@
       "arity": -2,
       "command_flags": [
         "WRITE"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD",
+        "RESPONSE_POLICY:AGG_SUM"
       ],
       "key_specs": [
         {
@@ -1542,6 +1561,9 @@
       "arity": 2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -1850,6 +1872,10 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD",
+        "RESPONSE_POLICY:AGG_SUM"
       ],
       "key_specs": [
         {
@@ -2256,6 +2282,10 @@
       "command_flags": [
         "WRITE"
       ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:ALL_SUCCEEDED"
+      ],
       "arguments": [
         {
           "name": "flush-type",
@@ -2297,6 +2327,10 @@
       "arity": -1,
       "command_flags": [
         "WRITE"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:ALL_SUCCEEDED"
       ],
       "arguments": [
         {
@@ -2658,6 +2692,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` argument",
       "arguments": [
         {
           "name": "key",
@@ -2858,6 +2897,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` and `FROMMEMBER` arguments",
       "arguments": [
         {
           "name": "key",
@@ -3014,6 +3058,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`GEOSEARCH` with the `BYRADIUS` and `FROMMEMBER` arguments",
       "arguments": [
         {
           "name": "key",
@@ -3149,6 +3198,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`GEOSEARCH` with the `BYRADIUS` argument",
       "arguments": [
         {
           "name": "key",
@@ -3959,6 +4013,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`SET` with the `!GET` argument",
       "arguments": [
         {
           "name": "key",
@@ -4404,6 +4463,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -4687,6 +4749,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -4829,6 +4894,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "4.0.0",
+      "replaced_by": "`HSET` with multiple field-value pairs",
       "arguments": [
         {
           "name": "key",
@@ -5158,6 +5228,9 @@
         "READONLY",
         "FAST"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -5213,6 +5286,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -5267,6 +5343,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -5595,6 +5674,9 @@
         "READONLY",
         "FAST"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -5649,6 +5731,9 @@
       "arity": 2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
       "key_specs": [
         {
@@ -5821,6 +5906,11 @@
         "STALE",
         "SENTINEL"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT",
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:SPECIAL"
+      ],
       "arguments": [
         {
           "name": "section",
@@ -5846,6 +5936,10 @@
       "command_flags": [
         "READONLY"
       ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "NONDETERMINISTIC_OUTPUT_ORDER"
+      ],
       "arguments": [
         {
           "name": "pattern",
@@ -5864,6 +5958,9 @@
         "LOADING",
         "STALE",
         "FAST"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ]
     },
     {
@@ -6685,6 +6782,9 @@
         "READONLY",
         "FAST"
       ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6723,6 +6823,9 @@
       "arity": -6,
       "command_flags": [
         "WRITE"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -6952,6 +7055,10 @@
         "WRITE",
         "DENYOOM"
       ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD",
+        "RESPONSE_POLICY:ALL_SUCCEEDED"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7001,6 +7108,10 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD",
+        "RESPONSE_POLICY:ALL_SUCCEEDED"
       ],
       "key_specs": [
         {
@@ -7519,6 +7630,9 @@
           }
         }
       ],
+      "doc_flags": [
+        "SYSCMD"
+      ],
       "arguments": [
         {
           "name": "subcommand",
@@ -7605,6 +7719,9 @@
       "arity": 1,
       "command_flags": [
         "ADMIN"
+      ],
+      "doc_flags": [
+        "SYSCMD"
       ]
     },
     {
@@ -7617,6 +7734,10 @@
       "command_flags": [
         "FAST",
         "SENTINEL"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:ALL_SUCCEEDED"
       ],
       "arguments": [
         {
@@ -7657,6 +7778,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "2.6.12",
+      "replaced_by": "`SET` with the `PX` argument",
       "arguments": [
         {
           "name": "key",
@@ -7729,6 +7855,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -7836,7 +7965,12 @@
         "STALE",
         "FAST",
         "NO_AUTH"
-      ]
+      ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "7.2.0",
+      "replaced_by": "just closing the connection"
     },
     {
       "name": "RANDOMKEY",
@@ -7848,6 +7982,11 @@
       "command_flags": [
         "READONLY",
         "TOUCHES_ARBITRARY_KEYS"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:SPECIAL",
+        "NONDETERMINISTIC_OUTPUT"
       ]
     },
     {
@@ -8021,6 +8160,9 @@
         "LOADING",
         "STALE",
         "ALLOW_BUSY"
+      ],
+      "doc_flags": [
+        "SYSCMD"
       ]
     },
     {
@@ -8212,6 +8354,9 @@
           }
         }
       ],
+      "doc_flags": [
+        "SYSCMD"
+      ],
       "arguments": [
         {
           "name": "key",
@@ -8387,6 +8532,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`LMOVE` with the `RIGHT` and `LEFT` arguments",
       "arguments": [
         {
           "name": "source",
@@ -8578,6 +8728,11 @@
         "READONLY",
         "TOUCHES_ARBITRARY_KEYS"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT",
+        "REQUEST_POLICY:SPECIAL",
+        "RESPONSE_POLICY:SPECIAL"
+      ],
       "arguments": [
         {
           "name": "cursor",
@@ -8666,6 +8821,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
       "key_specs": [
         {
@@ -9025,6 +9183,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "2.6.12",
+      "replaced_by": "`SET` with the `EX` argument",
       "arguments": [
         {
           "name": "key",
@@ -9073,6 +9236,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "2.6.12",
+      "replaced_by": "`SET` with the `NX` argument",
       "arguments": [
         {
           "name": "key",
@@ -9143,6 +9311,7 @@
         "WRITE",
         "EXPERIMENTAL"
       ],
+      "command_tips": [],
       "arguments": [
         {
           "name": "data",
@@ -9250,6 +9419,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
       "key_specs": [
         {
@@ -9447,6 +9619,11 @@
         "NOSCRIPT",
         "STALE"
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "5.0.0",
+      "replaced_by": "`REPLICAOF`",
       "arguments": [
         {
           "name": "args",
@@ -9504,6 +9681,9 @@
       "arity": 2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
       "key_specs": [
         {
@@ -9892,6 +10072,9 @@
         "WRITE",
         "FAST"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9986,6 +10169,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -10086,6 +10272,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -10262,6 +10451,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "2.0.0",
+      "replaced_by": "`GETRANGE`",
       "arguments": [
         {
           "name": "key",
@@ -10287,6 +10481,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
       "key_specs": [
         {
@@ -10468,6 +10665,9 @@
         "LOADING",
         "STALE",
         "FAST"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ]
     },
     {
@@ -10480,6 +10680,10 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD",
+        "RESPONSE_POLICY:AGG_SUM"
       ],
       "key_specs": [
         {
@@ -10558,6 +10762,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -10642,6 +10849,10 @@
         "WRITE",
         "FAST"
       ],
+      "command_tips": [
+        "REQUEST_POLICY:MULTI_SHARD",
+        "RESPONSE_POLICY:AGG_SUM"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -10719,6 +10930,10 @@
       "command_flags": [
         "BLOCKING"
       ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:AGG_MIN"
+      ],
       "arguments": [
         {
           "name": "numreplicas",
@@ -10739,6 +10954,10 @@
       "arity": 4,
       "command_flags": [
         "BLOCKING"
+      ],
+      "command_tips": [
+        "REQUEST_POLICY:ALL_SHARDS",
+        "RESPONSE_POLICY:AGG_MIN"
       ],
       "arguments": [
         {
@@ -10938,6 +11157,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -11148,6 +11370,9 @@
         "WRITE",
         "FAST"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -11291,6 +11516,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -11559,6 +11787,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -11975,6 +12206,9 @@
       "arity": -4,
       "command_flags": [
         "WRITE"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {
@@ -12938,6 +13172,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -13113,6 +13350,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`ZRANGE` with the `BYLEX` argument",
       "arguments": [
         {
           "name": "key",
@@ -13175,6 +13417,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`ZRANGE` with the `BYSCORE` argument",
       "arguments": [
         {
           "name": "key",
@@ -13602,6 +13849,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`ZRANGE` with the `REV` argument",
       "arguments": [
         {
           "name": "key",
@@ -13654,6 +13906,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`ZRANGE` with the `REV` and `BYLEX` arguments",
       "arguments": [
         {
           "name": "key",
@@ -13716,6 +13973,11 @@
           }
         }
       ],
+      "doc_flags": [
+        "DEPRECATED"
+      ],
+      "deprecated_since": "6.2.0",
+      "replaced_by": "`ZRANGE` with the `REV` and `BYSCORE` arguments",
       "arguments": [
         {
           "name": "key",
@@ -13824,6 +14086,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "command_tips": [
+        "NONDETERMINISTIC_OUTPUT"
       ],
       "key_specs": [
         {

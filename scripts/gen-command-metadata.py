@@ -210,10 +210,14 @@ def emit_command(cmd: dict, source: str, publishes_key_specs: bool, indent: str)
         f"{pad}since: {rust_str(cmd.get('since', ''))},\n"
         f"{pad}summary: {rust_str(cmd.get('summary', ''))},\n"
         f"{pad}complexity: {rust_opt_str(cmd.get('complexity'))},\n"
+        f"{pad}doc_flags: {rust_str_slice(cmd.get('doc_flags', []))},\n"
+        f"{pad}deprecated_since: {rust_opt_str(cmd.get('deprecated_since'))},\n"
+        f"{pad}replaced_by: {rust_opt_str(cmd.get('replaced_by'))},\n"
         f"{pad}arity: "
         + (f"Some({int(arity)}),\n" if arity is not None else "None,\n")
         + f"{pad}command_flags: "
         + (f"Some({rust_str_slice(flags)}),\n" if flags is not None else "None,\n")
+        + f"{pad}command_tips: {rust_str_slice(cmd.get('command_tips', []))},\n"
         + f"{pad}has_subcommands: {str(bool(cmd.get('has_subcommands'))).lower()},\n"
         + f"{pad}key_specs: {emit_key_specs(cmd, publishes_key_specs, pad)},\n"
         f"{pad}arguments: {emit_args(cmd.get('arguments', []), pad)},\n"

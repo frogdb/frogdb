@@ -154,6 +154,14 @@ pub struct UpstreamCommand {
     pub since: &'static str,
     pub summary: &'static str,
     pub complexity: Option<&'static str>,
+    /// Upstream documentation flags, verbatim and uppercase (`DEPRECATED`,
+    /// `SYSCMD`); empty where upstream declares none.
+    pub doc_flags: &'static [&'static str],
+    /// Release that deprecated the command, set iff `doc_flags` says
+    /// `DEPRECATED`.
+    pub deprecated_since: Option<&'static str>,
+    /// Markdown prose naming the replacement, alongside `deprecated_since`.
+    pub replaced_by: Option<&'static str>,
     /// Redis wire arity: positive is exact, negative is "at least `-arity`",
     /// both counting the command name. `None` where upstream omits it.
     pub arity: Option<i32>,
@@ -161,6 +169,12 @@ pub struct UpstreamCommand {
     /// omits them (never `Some(&[])` for a command that simply has none —
     /// upstream omits the field in that case too).
     pub command_flags: Option<&'static [&'static str]>,
+    /// Upstream command tips, verbatim and uppercase
+    /// (`REQUEST_POLICY:ALL_SHARDS`, `NONDETERMINISTIC_OUTPUT`, ...); empty
+    /// where upstream declares none. Tips are claims about *routing* and
+    /// *reply determinism*, so unlike arity they are not automatically true of
+    /// FrogDB — see [`crate::command_meta::TIP_AUDIT`] for which ones we repeat.
+    pub command_tips: &'static [&'static str],
     /// True when upstream documents this command's real key specs and argument
     /// trees on subcommand rows the vendor step skips (`ACL`, `OBJECT`, `XINFO`
     /// ...). Such a row's empty `key_specs` means "not vendored here", not

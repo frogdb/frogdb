@@ -13,9 +13,10 @@ Two vendored snapshots come out of this script, both pinned to
     Fetched from `src/commands/*.json` in `redis/redis` at the
     `REDIS_COMPAT_TARGET` tag. Carries the `matrix-gen.py` join keys (name,
     group, since), the human-facing documentation the command registry
-    serves through `COMMAND DOCS` (summary, complexity, arguments, history),
-    and the machine-checkable dispatch metadata `COMMAND INFO` serves
-    (arity, command_flags, key_specs).
+    serves through `COMMAND DOCS` (summary, complexity, arguments, history,
+    doc_flags, deprecated_since, replaced_by), and the machine-checkable
+    dispatch metadata `COMMAND INFO` serves (arity, command_flags,
+    key_specs, command_tips).
 
 `website/src/data/redis-module-commands-8x.json` (extension families)
     Fetched from the root `commands.json` of every module Redis bundles:
@@ -39,9 +40,12 @@ Two vendored snapshots come out of this script, both pinned to
     module and its verification tests treat "absent" as "nothing to check"
     rather than as "no keys" or "arity 0".
 
-    RediSearch's `command_tips` is deliberately dropped: tips are routing
-    hints that must be judged against FrogDB's own routing rather than
-    copied (ADR-0005, `.scratch/redis-feel/issues/open/12-*.md`).
+    `command_tips` is vendored for both snapshots, but vendoring is not
+    adoption: tips are routing/aggregation hints and reply-determinism
+    claims that only hold for FrogDB where FrogDB's own execution matches.
+    `COMMAND INFO` emits a tip only for the commands an explicit audit
+    cleared (ADR-0005; the audit table lives in
+    `.scratch/redis-feel/issues/done/12-*.md`).
 
 Trimming philosophy: keep what FrogDB actually consumes, drop the rest.
 Dropped from core: `reply_schema` (large, and FrogDB's replies are
@@ -81,9 +85,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import date
@@ -99,6 +105,10 @@ REDIS_VERSION_PATH = REPO_ROOT / "frogdb-server" / "crates" / "types" / "src" / 
 REDIS_COMPAT_TARGET_RE = re.compile(r'pub const REDIS_COMPAT_TARGET:\s*&str\s*=\s*"([^"]+)"')
 MODULE_VERSION_RE = re.compile(r"^MODULE_VERSION\s*=\s*(\S+)", re.MULTILINE)
 MODULE_REPO_RE = re.compile(r"^MODULE_REPO\s*=\s*(\S+)", re.MULTILINE)
+
+# Retry budget for a single GET (see `fetch`).
+FETCH_ATTEMPTS = 5
+FETCH_BACKOFF_SECONDS = 1.0
 
 GITHUB_API = "https://api.github.com/repos/redis/redis/contents/src/commands"
 GITHUB_TREE = "https://github.com/redis/redis/tree"
@@ -126,7 +136,11 @@ IN_TREE_MODULES = {
 CORE_FIELDS = (
     "arity",
     "command_flags",
+    "command_tips",
     "key_specs",
+    "doc_flags",
+    "deprecated_since",
+    "replaced_by",
     "arguments",
     "history",
 )
@@ -139,6 +153,10 @@ CORE_FIELDS = (
 MODULE_FIELDS = (
     "arity",
     "command_flags",
+    "command_tips",
+    "doc_flags",
+    "deprecated_since",
+    "replaced_by",
     "arguments",
     "history",
 )
@@ -154,9 +172,28 @@ def get_redis_compat_target() -> str:
 
 
 def fetch(url: str) -> bytes:
+    """GET `url`, retrying transient failures.
+
+    One run makes a few hundred requests, so a single truncated response
+    (`IncompleteRead`) or a rate-limit blip would otherwise throw away the
+    whole vendoring pass. `HTTPError` is re-raised immediately for the
+    statuses callers turn into actionable messages ("does that tag exist?");
+    only 429/5xx are worth retrying.
+    """
     request = urllib.request.Request(url, headers={"User-Agent": "frogdb-docs-gen"})
-    with urllib.request.urlopen(request) as response:  # noqa: S310 (pinned https:// host)
-        return response.read()
+    last: Exception | None = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request) as response:  # noqa: S310 (pinned https:// host)
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 and exc.code < 500:
+                raise
+            last = exc
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError) as exc:
+            last = exc
+        time.sleep(FETCH_BACKOFF_SECONDS * (attempt + 1))
+    raise SystemExit(f"Failed to fetch {url} after {FETCH_ATTEMPTS} attempts: {last}")
 
 
 def fetch_json(url: str) -> object:
