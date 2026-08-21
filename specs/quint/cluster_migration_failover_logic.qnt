@@ -807,6 +807,18 @@ module cluster_migration_failover_logic {
   // shape `inv_no_serve_before_attestation` exempts), or a replica of it, would be
   // stranded by the clear. Such an entry stays until that copy is gone.
   //
+  // It is phrased as a **difference** — holders that are untracked *after* the clear and
+  // were not untracked before — and not as "no untracked holder of `s` exists", which is
+  // what it said first. The absolute form re-created the very wedge this arm exists to
+  // undo: a stray copy of `s` at some node in another shard is untracked with or without
+  // this entry, the entry cannot make it tracked, and the entry can do nothing about it —
+  // so gating on the absolute set leaves the entry permanently unclearable again. The
+  // steered walk found it in one pass (seed 20260819,
+  // `inv_residue_has_an_effective_remover`: entry `{source: 2, target: 4, promoted:
+  // false}` on slot 3 owned by 2, wedged by node 1's unrelated stale copy of slot 3).
+  // Only the copies this clear would *newly* strand are this entry's business, which is
+  // also how `strandedBy` reasons about the same obligation on the write side.
+  //
   // Design-doc gap, recorded rather than assumed: the doc's `ClearSlotResidue` verb carries
   // `entry.promoted == true` unconditionally, so the doc has no exit for a rolled-back
   // entry either. This arm is a model addition made under R9; it is flagged in the Q4
@@ -819,7 +831,8 @@ module cluster_migration_failover_logic {
           r.promoted,
           and {
             slotMap.get(s) == Some(r.source),
-            untrackedHoldersOf(allNodes, slotMap, migs, res.set(s, None), s) == Set(),
+            untrackedHoldersOf(allNodes, slotMap, migs, res.set(s, None), s)
+              .exclude(untrackedHoldersOf(allNodes, slotMap, migs, res, s)) == Set(),
           },
         }
       | None => false

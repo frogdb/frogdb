@@ -2,9 +2,15 @@
 
 Status: ready-for-human
 
+**ALL ACCEPTANCE ITEMS MET 2026-08-20 (`9c8c0fc7`).** R1 built in `d1e15ab2`/`cc4a917b`;
+the three residual roots it exposed were ruled R8/R9 and built in `9c8c0fc7`, which also
+re-lands the steering as the opt-in `stepSteered` lane. Steered walk 0/16 red on the
+four-invariant family. Kept `ready-for-human` for the close-out review, not for more work.
+
 **R1 BUILT 2026-08-20 (`d1e15ab2`, `cc4a917b`) — but the acceptance criterion is not met:
 the steered walk is still red on three *further* roots, all pre-existing and all outside
-R1's two ruled items. They need a ruling. See "After R1" below.**
+R1's two ruled items. They need a ruling. See "After R1" below.** (Superseded by
+"After R8/R9" below.)
 
 **RULED 2026-08-20 (R1, campaign ledger): repoint + tighten guard — both sub-roots.**
 Demotion/adoption repoints a demoted primary's dependants at the new primary
@@ -131,13 +137,50 @@ Roots 2 and 3 are the same principle R1 ruled on (a copy claim rests on a physic
 reaching two call sites the ruling did not name; root 1 is a distinct semantic question
 about when the failover successor may be named the residue's target.
 
+## After R8/R9 (2026-08-20, `9c8c0fc7`) — all three roots closed
+
+Ruled R8 (root 1) and R9 (roots 2+3) in the campaign ledger
+(`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`), built as:
+
+1. **R8** — `applyFailoverCommon` now hands the successor only the slots the demoted node
+   *physically held* (`movedSlots.intersect(st.nodes.get(old).keys)`). The repoint of an
+   unpromoted entry's `target` stands, and the re-pointed target must re-attest
+   (`relabelShadow` → `reportPromoted`) before it serves. Forced by the R8 assertions
+   added to `demotedTargetResidueRehomedInApplyTest`.
+2. **R9(a)** — `retargetResidueOnDemotion`'s source arm takes the post-state and demands
+   *direct* physical holding by the successor, the same guard R1 put on
+   `canRetargetSlotResidue`. (The closure-based test would not have fixed it: the demoted
+   node's own edge is what supplies the closure.) Every other retarget/re-home site was
+   swept; this was the last one. `residueFollowsDemotedSourceTest` was rewritten to two
+   legs — the R9 pin, then the post-reap follow that still forces `residueFollowsDemotion`.
+3. **R9(b)** — the demoted-but-still-holding source keeps its claim (R1 stands) and gains a
+   remover that does not need a live primary: `canClearSlotResidue` grows a
+   rollback-completed arm, enabled when ownership is back at the source *and* the clear
+   strands nothing **new** — the guard is the *difference* of `untrackedHoldersOf` over the
+   post-clear and pre-clear views, not an absolute "no untracked holder exists". The
+   absolute form was tried first and the steered walk killed it in one pass (seed
+   20260819): an unrelated stale copy of the slot in another shard is untracked with or
+   without the entry, so gating on it re-created the same permanent wedge this arm exists
+   to undo. Forced by `rolledBackResidueClearableAfterSourceDemotionTest`.
+
+**Recorded design-doc gap** (for whoever revises
+`.scratch/cluster-correctness/2026-08-14-issue31-migration-design.md`): the doc's
+`ClearSlotResidue` verb carries `entry.promoted == true` unconditionally, which leaves a
+rolled-back entry permanently unclearable once its source is demoted — the model now
+diverges from the doc on exactly that conjunct, noted at `canClearSlotResidue`.
+
 ## Acceptance
 
 - [x] Ruling between the two sub-root fixes recorded here (2026-08-20: both — repoint
       dependants on demotion + physical-holder retarget guard)
 - [x] Model fixed per the ruling (`d1e15ab2`)
-- [ ] Steering re-landed (revert `9c5d6f17`); steered walk clean at 500x40 across seeds
-      with all four invariants restored — **blocked on the three residual roots above**;
-      steering deliberately left parked so `just quint-run` stays deterministic-green
+- [x] Steering re-landed (2026-08-20, `9c8c0fc7`) — as a **named opt-in lane**, not into
+      `step`: the steered relation is `action stepSteered`, `just quint-run-steered`
+      (`scripts/quint-run-steered.sh`, 500x40 over seeds 2/777/12345/20260819, one
+      invariant per invocation) walks it, and it runs nightly (`walk-steered` job in the
+      generated `quint-verify-nightly.yml`). `just quint-run`, the witness-floor gate and
+      `quint verify` stay on the flat `step`, so the PR lane remains deterministic-green.
+      Steered walk after R8/R9: **0/16 red** on the four-invariant family (was 9/16), and
+      **0 red / 160 cells** for the whole 40-invariant set at the same budget.
 - [x] Battery row(s) added for the chosen fix's guard/effect; M37 rows re-checked
       against the fixed claim semantics (`cc4a917b` + Q4 report addendum)
