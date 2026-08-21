@@ -1,6 +1,6 @@
 # 35: Full-sync overship — per-shard coverage vector, floors, and the window-grant refusal
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Ruled 2026-08-21, campaign ledger R12–R16
 (`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`). This issue owns two
@@ -83,14 +83,85 @@ One mechanism, both payload paths, receiver-authoritative like issue 34:
 
 ## Acceptance
 
-- [ ] D1 forcing test red-before/green-after: non-idempotent write pinned in the
+- [x] D1 forcing test red-before/green-after: non-idempotent write pinned in the
       capture→cut window double-applies before the fix, applies exactly once after
-- [ ] Vector in trailer on both payload paths; wire goldens updated
-- [ ] Flush hold between drain-ack and cut on the checkpoint path, bound documented
-- [ ] Per-shard floors extend `covers()`; counted skips; group-mend semantics specced
-      and forced
-- [ ] R14 refusal + R16 recovery rule forced by tests
-- [ ] Vector persisted in staged metadata (R15) and recovered after a crash-in-window
-- [ ] TR-034 / FM-004 / new FM row spec edits; `just lint-spec` green
-- [ ] Model extended; battery rows CAUGHT; `just mutants-diff frogdb-replication`
-      before push
+      — `a_write_pinned_in_the_capture_to_cut_window_lands_exactly_once`
+      (`replica_session.rs`, →c5dee351). End to end over the wire: the pre-checkpoint
+      hook broadcasts an `INCR` and flushes its effect, so the payload holds the effect
+      and the backlog holds the frame; the primary's own session driver cuts, writes the
+      trailer and replays the backlog onto the socket, and those frames come back into
+      the replica's consume loop. **Red before**: with `floors_in_force` forced to
+      `false` (the pre-row behaviour) the assertion fails `left: 2, right: 1` — the
+      counter reaches 2 where the primary has 1, both nodes reporting the same offset.
+      **Green after**: 1, `floor_skipped == 1`, and the head still claims the frame's
+      bytes.
+- [x] Vector in trailer on both payload paths; wire goldens updated — →84fd1154
+      (checkpoint drain + live export), `ShardCoverage` as the trailer's fifth field;
+      a four-field trailer is refused at the parse rather than read as "no coverage"
+      (`a_trailer_without_the_coverage_field_is_refused`).
+- [x] Flush hold between drain-ack and cut on the checkpoint path, bound documented —
+      →6e26ca0b (`FlushHold`, `frogdb-persistence`) and →84fd1154 (`CaptureHold` on the
+      session). `FULL_SYNC_HOLD = 10s`; a shard whose hold lapses reports `Y_s = 0`,
+      which is no floor at all rather than a wrong one
+      (`a_breached_shards_watermark_is_zeroed`).
+- [x] Per-shard floors extend `covers()`; counted skips; group-mend semantics specced
+      and forced — →e0be6a90. `frame_disposition` is one pure total predicate ordering
+      head-then-floor; `ConsumeStats.floor_skipped` per stint and
+      `AppliedOffset::floor_skipped()` node-wide, one `DEBUG` per frame. The torn
+      cross-shard group is mended by mixed skip/apply
+      (`a_torn_cross_shard_transaction_is_mended_exactly_once`), which
+      FM-REPLICATION-066's "NOT observable" cell states as required rather than
+      tolerated.
+- [x] R14 refusal + R16 recovery rule forced by tests — →3f0ffdc9.
+      `window_grant_verdict` is a second pure seam over four inputs; same-history
+      grants are never refused (`a_same_history_grant_is_never_refused`), the refusal
+      ends exactly at the ceiling (`the_refusal_ends_exactly_at_the_ceiling`), and a
+      crash-recovered stint refuses unconditionally
+      (`a_recovered_stint_refuses_every_window_grant`).
+- [x] Vector persisted in staged metadata (R15) and recovered after a crash-in-window —
+      →a318b9de. `StagedReplicationMetadata.coverage` and
+      `ReplicationState.coverage_at_save`, both `#[serde(default)]` so older metadata
+      reads back as *no* floors. Floors already passed by the head are not persisted:
+      a node in steady state saves an empty vector
+      (`a_save_point_persists_the_floors_in_force`,
+      `a_recovered_identity_comes_back_with_its_floors`).
+- [x] TR-034 / FM-004 / new FM row spec edits; `just lint-spec` green — →5d628c28,
+      →c5dee351. TR-034's postcondition is restated as prevent-plus-refuse (in-place
+      truncation is deliberately *not* implemented — a replica cannot invert a verbatim
+      `INCR`), FM-004 gains the vector as its exact-pairing companion, and
+      FM-REPLICATION-066 is added with 43 forcing tests. `just lint-spec`: OK, 308
+      failure modes, 1671 test references / 1671 tags.
+- [x] Model extended; battery rows CAUGHT; `just mutants-diff frogdb-replication`
+      before push — →7a4aabd4. `replication_fullsync{,_types,_logic,_machine}.qnt` grow
+      two shards, a `HOLE` sentinel for the torn cut, per-shard floors and the refusal
+      guard; `truncateAboveClaim` is dropped and
+      `inv_no_forked_tail_above_the_claim` **graduates from model-only**. Three new
+      invariants (`inv_coverage_brackets_the_payload`,
+      `inv_no_hole_below_the_claim`, `inv_overship_is_skipped_not_reapplied`), four new
+      witnesses, six new battery scenarios. `just quint-run` green (46 tests, sampled
+      walk clean, all 20 witnesses reached — `witnessOvershipSkipped` 38,
+      `witnessTornPayloadCut` 201, `witnessTornGroupMended` 38,
+      `witnessWindowGrantRefused` 18, so no exemption entries needed).
+      `just mutants-diff frogdb-replication`: **84 mutants, 68 caught, 16 unviable,
+      0 missed** (`target/mutants/frogdb-replication-diff`). The first run surfaced
+      four survivors, all on `ShardCoverage`'s accessors, closed in →a31546b8:
+      `len()` had no caller anywhere in the workspace and was deleted (two mutants);
+      `is_empty() -> true` survived because every assertion expected `true`, so
+      `an_empty_coverage_field_parses_as_no_watermarks` now also pins the
+      all-zero vector as *non*-empty (a claim of two floors, not the absence of a
+      claim); `none() -> Default::default()` is genuinely equivalent — the derived
+      `Default` is the empty vector — and is documented at the constructor and
+      excluded by exact name in `.cargo/mutants.toml`. Suite after the fix:
+      611/611 passed, 6 skipped; `just lint-spec` OK.
+
+## Residue
+
+- **Issue 36** owns the restart-flavored sibling. R16's rule is interim: a stint whose
+  offsets came from crash recovery refuses window grants *unconditionally*, because the
+  pair "offset, what sits above it" is not recovered atomically. Pairing them — and with
+  it the same-history restart bias — is issue 36's, and `WRITE_EFFECT_ORDER` was left
+  untouched here as that issue's subject.
+- **Model gap (documented at `applyRestart`)**: `restartNodeAs` returns a Primary and
+  `inv_primary_role_is_terminal` keeps it there, so no reachable state presents a
+  *recovered replica* at a PSYNC. R16 is therefore checked over the pure decision
+  (`aRecoveredStintRefusesTheWindowGrantTest`) plus the Rust forcing tests.
