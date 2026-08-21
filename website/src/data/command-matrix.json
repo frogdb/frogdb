@@ -336,9 +336,8 @@
           "name": "QUIT",
           "status": "supported",
           "arity": {
-            "kind": "fixed",
-            "min": 0,
-            "max": 0
+            "kind": "at_least",
+            "min": 0
           },
           "note": ""
         },
@@ -961,7 +960,7 @@
           "status": "supported",
           "arity": {
             "kind": "at_least",
-            "min": 4
+            "min": 6
           },
           "note": ""
         },
@@ -970,7 +969,7 @@
           "status": "supported",
           "arity": {
             "kind": "at_least",
-            "min": 5
+            "min": 7
           },
           "note": ""
         }
@@ -1198,7 +1197,7 @@
           "status": "supported",
           "arity": {
             "kind": "at_least",
-            "min": 6
+            "min": 5
           },
           "note": ""
         },
@@ -1288,8 +1287,8 @@
           "status": "supported",
           "arity": {
             "kind": "fixed",
-            "min": 1,
-            "max": 1
+            "min": 0,
+            "max": 0
           },
           "note": ""
         }
@@ -3092,7 +3091,7 @@
           "status": "supported",
           "arity": {
             "kind": "at_least",
-            "min": 2
+            "min": 3
           },
           "note": ""
         }

@@ -278,7 +278,8 @@
         "min": 1
       },
       "flags": [
-        "READONLY"
+        "READONLY",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -350,7 +351,6 @@
       },
       "flags": [
         "WRITE",
-        "FAST",
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
@@ -365,7 +365,6 @@
       },
       "flags": [
         "WRITE",
-        "FAST",
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
@@ -747,7 +746,6 @@
         "min": 0
       },
       "flags": [
-        "READONLY",
         "LOADING",
         "STALE"
       ],
@@ -929,7 +927,6 @@
         "max": 1
       },
       "flags": [
-        "READONLY",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -1096,7 +1093,8 @@
       },
       "flags": [
         "LOADING",
-        "STALE"
+        "STALE",
+        "SKIP_SLOWLOG"
       ],
       "execution_strategy": "connection_level",
       "full": false,
@@ -1796,7 +1794,7 @@
       "name": "GEOSEARCH",
       "arity": {
         "kind": "at_least",
-        "min": 4
+        "min": 6
       },
       "flags": [
         "READONLY"
@@ -1809,7 +1807,7 @@
       "name": "GEOSEARCHSTORE",
       "arity": {
         "kind": "at_least",
-        "min": 5
+        "min": 7
       },
       "flags": [
         "WRITE",
@@ -2273,7 +2271,7 @@
       "name": "HSETEX",
       "arity": {
         "kind": "at_least",
-        "min": 6
+        "min": 5
       },
       "flags": [
         "WRITE",
@@ -2398,7 +2396,6 @@
         "min": 0
       },
       "flags": [
-        "READONLY",
         "LOADING",
         "STALE"
       ],
@@ -2735,7 +2732,6 @@
         "max": 0
       },
       "flags": [
-        "READONLY",
         "FAST",
         "LOADING",
         "STALE"
@@ -2981,8 +2977,7 @@
         "min": 1
       },
       "flags": [
-        "READONLY",
-        "RANDOM"
+        "READONLY"
       ],
       "execution_strategy": "connection_level",
       "full": false,
@@ -3254,11 +3249,10 @@
       "name": "PFSELFTEST",
       "arity": {
         "kind": "fixed",
-        "min": 1,
-        "max": 1
+        "min": 0,
+        "max": 0
       },
       "flags": [
-        "READONLY",
         "ADMIN"
       ],
       "execution_strategy": "standard",
@@ -3273,7 +3267,6 @@
         "max": 1
       },
       "flags": [
-        "READONLY",
         "FAST",
         "LOADING",
         "STALE"
@@ -3291,8 +3284,7 @@
       },
       "flags": [
         "WRITE",
-        "DENYOOM",
-        "FAST"
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3393,12 +3385,10 @@
     {
       "name": "QUIT",
       "arity": {
-        "kind": "fixed",
-        "min": 0,
-        "max": 0
+        "kind": "at_least",
+        "min": 0
       },
       "flags": [
-        "READONLY",
         "FAST",
         "LOADING",
         "STALE"
@@ -3415,8 +3405,7 @@
         "max": 0
       },
       "flags": [
-        "READONLY",
-        "RANDOM"
+        "READONLY"
       ],
       "execution_strategy": "server_wide",
       "full": true,
@@ -3476,7 +3465,8 @@
         "max": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3553,7 +3543,6 @@
         "max": 0
       },
       "flags": [
-        "READONLY",
         "FAST",
         "NOSCRIPT",
         "LOADING",
@@ -3747,8 +3736,7 @@
       },
       "flags": [
         "WRITE",
-        "DENYOOM",
-        "FAST"
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3763,8 +3751,7 @@
       },
       "flags": [
         "WRITE",
-        "DENYOOM",
-        "FAST"
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3779,8 +3766,7 @@
       },
       "flags": [
         "WRITE",
-        "DENYOOM",
-        "FAST"
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3958,7 +3944,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -4001,7 +3988,6 @@
       "flags": [
         "WRITE",
         "FAST",
-        "RANDOM",
         "NONDETERMINISTIC"
       ],
       "execution_strategy": "standard",
@@ -4206,7 +4192,6 @@
         "max": 0
       },
       "flags": [
-        "READONLY",
         "NOSCRIPT",
         "ADMIN"
       ],
@@ -4401,7 +4386,6 @@
         "max": 0
       },
       "flags": [
-        "READONLY",
         "FAST",
         "LOADING",
         "STALE"
@@ -4957,7 +4941,8 @@
         "max": 3
       },
       "flags": [
-        "READONLY"
+        "READONLY",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5013,7 +4998,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5040,6 +5026,7 @@
         "max": 2
       },
       "flags": [
+        "BLOCKING",
         "NOSCRIPT"
       ],
       "execution_strategy": "standard",
@@ -5125,7 +5112,8 @@
         "min": 5
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5138,7 +5126,8 @@
         "min": 5
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5248,6 +5237,7 @@
       },
       "flags": [
         "READONLY",
+        "BLOCKING",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "blocking",
@@ -5262,6 +5252,7 @@
       },
       "flags": [
         "WRITE",
+        "BLOCKING",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "blocking",
@@ -5291,7 +5282,8 @@
       },
       "flags": [
         "WRITE",
-        "DENYOOM"
+        "DENYOOM",
+        "FAST"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5301,7 +5293,7 @@
       "name": "XTRIM",
       "arity": {
         "kind": "at_least",
-        "min": 2
+        "min": 3
       },
       "flags": [
         "WRITE"
