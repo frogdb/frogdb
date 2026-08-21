@@ -200,19 +200,11 @@ const KEYWORD_ARGV: &[(&str, &[&str])] = &[
 /// Commands whose vendored key specs genuinely disagree with FrogDB's key
 /// extraction, each with the reason. A stale entry (the divergence went away)
 /// fails the test, so the list can only shrink by accident.
-const KEY_SPEC_EXEMPTIONS: &[(&str, &str)] = &[
-    (
-        "MOVE",
-        "MOVE is a deliberate stub (`commands::stub`, `is_stub()`), and stubs are \
+const KEY_SPEC_EXEMPTIONS: &[(&str, &str)] = &[(
+    "MOVE",
+    "MOVE is a deliberate stub (`commands::stub`, `is_stub()`), and stubs are \
          registered keyless because they reject before touching the keyspace",
-    ),
-    (
-        "SUNSUBSCRIBE",
-        "FrogDB registers SUNSUBSCRIBE with `KeySpec::None` while SSUBSCRIBE/SPUBLISH \
-         route their shard channels through key extraction, so no slot check runs on \
-         unsubscribe — a real gap, tracked for the shard-pubsub follow-up",
-    ),
-];
+)];
 
 /// How many keys the synthetic argv declares for a `keynum` spec.
 const SYNTHETIC_KEYNUM: i32 = 2;

@@ -459,7 +459,7 @@ fn command_info_tips(name: &str) -> Vec<Response> {
 /// which is where each entry's reason lives and which asserts the two lists
 /// name the same commands — a divergence the join test tolerates must never be
 /// one this emitter repeats as if it were ours.
-pub const KEY_SPEC_DIVERGENCES: &[&str] = &["MOVE", "SUNSUBSCRIBE"];
+pub const KEY_SPEC_DIVERGENCES: &[&str] = &["MOVE"];
 
 /// The vendored key specs `COMMAND INFO` may repeat for `name`, or `None` when
 /// the reply has to be derived from our own key spec instead.

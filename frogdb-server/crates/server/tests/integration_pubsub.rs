@@ -1728,6 +1728,136 @@ async fn test_ssubscribe_redirect_matches_keyed_path() {
     harness.shutdown_all().await;
 }
 
+/// SUNSUBSCRIBE is the other half of SSUBSCRIBE's shard-channel pair: upstream
+/// gives both the same NOT_KEY key spec and slot-routes both, so unsubscribing
+/// from a *named* shard channel must take the same redirect subscribing to it
+/// took. On a node that does not own the channel's slot, `SUNSUBSCRIBE <chan>`
+/// returns the exact MOVED target `GET <chan>` returns.
+///
+/// The no-arg form ("drop every shard channel I hold") names no channel, so it
+/// carries no slot to check and is served locally on every node — Redis derives
+/// the redirect from argv, and a bare SUNSUBSCRIBE has none. Redirecting the
+/// *expanded* subscription set instead would strand a client's own
+/// registrations on a node that stopped owning their slot.
+#[tokio::test]
+async fn test_sunsubscribe_redirect_matches_keyed_path() {
+    use frogdb_test_harness::cluster_harness::ClusterTestHarness;
+    use frogdb_test_harness::cluster_helpers::is_moved_redirect;
+
+    let mut harness = ClusterTestHarness::new();
+    harness.start_cluster(3).await.unwrap();
+    harness
+        .wait_for_leader(Duration::from_secs(10))
+        .await
+        .unwrap();
+    harness
+        .wait_for_cluster_convergence(Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    // The same string is the key (GET) and the shard channel (SUNSUBSCRIBE), so
+    // both hash to the same slot.
+    let channel = "sunsub_parity_chan";
+    let node_ids = harness.node_ids();
+
+    // Same bounded retry as `test_ssubscribe_redirect_matches_keyed_path`: the
+    // GET and the SUNSUBSCRIBE are separate round-trips, so a routing-view
+    // update between them can make two correct answers differ. A genuine parity
+    // break disagrees persistently.
+    const MAX_ATTEMPTS: usize = 10;
+    let mut checked_a_non_owner = false;
+    for &nid in &node_ids {
+        let node = harness.node(nid).unwrap();
+        if is_moved_redirect(&node.send("GET", &[channel]).await).is_none() {
+            continue; // this node owns the slot (GET served locally)
+        }
+        checked_a_non_owner = true;
+
+        let mut last_pair = None;
+        let mut agreed = false;
+        for _ in 0..MAX_ATTEMPTS {
+            let get_resp = node.send("GET", &[channel]).await;
+            let Some(get_moved) = is_moved_redirect(&get_resp) else {
+                // Node became the owner mid-retry: transient, try again.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            };
+
+            let mut client = node.connect().await;
+            let sunsub_resp = client.command(&["SUNSUBSCRIBE", channel]).await;
+            let sunsub_moved = is_moved_redirect(&sunsub_resp).unwrap_or_else(|| {
+                panic!(
+                    "SUNSUBSCRIBE on a non-owner must MOVED-redirect like GET, got: {:?}",
+                    sunsub_resp
+                )
+            });
+
+            if get_moved == sunsub_moved {
+                agreed = true;
+                break;
+            }
+            last_pair = Some((get_moved, sunsub_moved));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert!(
+            agreed,
+            "SUNSUBSCRIBE redirect (slot + addr) must match the keyed-path redirect; \
+             still disagreed after {} attempts: {:?}",
+            MAX_ATTEMPTS, last_pair
+        );
+
+        // Bare SUNSUBSCRIBE on that same non-owner node: no channel named, so
+        // no slot to check — one null-channel confirmation, never a redirect.
+        let mut client = node.connect().await;
+        let bare = client.command(&["SUNSUBSCRIBE"]).await;
+        assert!(
+            is_moved_redirect(&bare).is_none(),
+            "bare SUNSUBSCRIBE names no channel and must not redirect, got: {:?}",
+            bare
+        );
+        let Response::Array(items) = bare else {
+            panic!("bare SUNSUBSCRIBE must reply with a confirmation array");
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("sunsubscribe"))));
+        assert_eq!(items[2], Response::Integer(0));
+        break;
+    }
+
+    assert!(
+        checked_a_non_owner,
+        "expected at least one non-owner node to MOVED-redirect GET {}",
+        channel
+    );
+
+    // The owner still serves the pair end to end: SSUBSCRIBE then SUNSUBSCRIBE
+    // for the same channel, both confirmed locally rather than redirected.
+    for &nid in &node_ids {
+        let node = harness.node(nid).unwrap();
+        if is_moved_redirect(&node.send("GET", &[channel]).await).is_some() {
+            continue; // not the owner
+        }
+        let mut client = node.connect().await;
+        let sub = client.command(&["SSUBSCRIBE", channel]).await;
+        assert!(
+            is_moved_redirect(&sub).is_none(),
+            "SSUBSCRIBE on the slot owner must be served locally, got: {:?}",
+            sub
+        );
+        let unsub = client.command(&["SUNSUBSCRIBE", channel]).await;
+        let Response::Array(items) = unsub else {
+            panic!("SUNSUBSCRIBE on the slot owner must reply with a confirmation array");
+        };
+        assert_eq!(items[0], Response::Bulk(Some(Bytes::from("sunsubscribe"))));
+        assert_eq!(items[1], Response::Bulk(Some(Bytes::from(channel))));
+        assert_eq!(items[2], Response::Integer(0));
+        break;
+    }
+
+    harness.shutdown_all().await;
+}
+
 /// Importing-target parity: when a slot is IMPORTING on this node and the client
 /// has sent ASKING, SSUBSCRIBE must serve the subscription *locally* instead of
 /// redirecting — exactly like a keyed GET does under the same ASKING+IMPORTING

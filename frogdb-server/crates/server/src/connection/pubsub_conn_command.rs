@@ -25,6 +25,7 @@
 //! protocol through `PubSubIo`, never `ConnCtx::protocol_version`).
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -43,7 +44,7 @@ use crate::connection::deps::{ClusterDeps, CoreDeps};
 use crate::connection::permission_guard::PermissionGuard;
 use crate::connection::state::{ConnectionState, SubKind, SubscribeOutcome};
 use crate::scatter::{CountByKey, DedupSorted, SumIntegers};
-use crate::slot_migration::RouteOutcome;
+use crate::slot_migration::{RouteOutcome, SlotMigrationCoordinator};
 
 /// The broadcast pub/sub coordinator shard. Defined in `frogdb-core` because
 /// the cluster bus routes a peer's `PUBLISH` to the same shard; re-exported
@@ -79,8 +80,12 @@ struct SubKindSpec {
     kind: SubKind,
     /// Where shard registrations are routed.
     routing: SubRouting,
-    /// Command name used for cluster slot routing (sharded kind only).
-    route_command: &'static str,
+    /// Command names used for cluster slot routing (sharded kind only), one
+    /// per half of the pair. `route()` consults the name solely for its
+    /// RESTORE special case, but each half passes the command the client
+    /// actually sent so the routing call never misreports itself.
+    subscribe_route_command: &'static str,
+    unsubscribe_route_command: &'static str,
     /// Arity error for the subscribe command.
     arity_error: &'static str,
     /// Error returned when the per-connection limit is hit.
@@ -102,7 +107,8 @@ struct SubKindSpec {
 static CHANNEL_SPEC: SubKindSpec = SubKindSpec {
     kind: SubKind::Channel,
     routing: SubRouting::Broadcast,
-    route_command: "SUBSCRIBE",
+    subscribe_route_command: "SUBSCRIBE",
+    unsubscribe_route_command: "UNSUBSCRIBE",
     arity_error: "ERR wrong number of arguments for 'subscribe' command",
     limit_error: "ERR max subscriptions reached",
     subscribe_msg: |channels, conn_id, sender, response_tx| PubSubMsg::Subscribe {
@@ -124,7 +130,8 @@ static CHANNEL_SPEC: SubKindSpec = SubKindSpec {
 static PATTERN_SPEC: SubKindSpec = SubKindSpec {
     kind: SubKind::Pattern,
     routing: SubRouting::Broadcast,
-    route_command: "PSUBSCRIBE",
+    subscribe_route_command: "PSUBSCRIBE",
+    unsubscribe_route_command: "PUNSUBSCRIBE",
     arity_error: "ERR wrong number of arguments for 'psubscribe' command",
     limit_error: "ERR max pattern subscriptions reached",
     subscribe_msg: |patterns, conn_id, sender, response_tx| PubSubMsg::PSubscribe {
@@ -146,7 +153,8 @@ static PATTERN_SPEC: SubKindSpec = SubKindSpec {
 static SHARDED_SPEC: SubKindSpec = SubKindSpec {
     kind: SubKind::Sharded,
     routing: SubRouting::ByChannelKey,
-    route_command: "SSUBSCRIBE",
+    subscribe_route_command: "SSUBSCRIBE",
+    unsubscribe_route_command: "SUNSUBSCRIBE",
     arity_error: "ERR wrong number of arguments for 'ssubscribe' command",
     limit_error: "ERR max sharded subscriptions reached",
     subscribe_msg: |channels, conn_id, sender, response_tx| PubSubMsg::ShardedSubscribe {
@@ -298,6 +306,27 @@ impl<'a> PubSubIo<'a> {
         guard.check_channels(channels)
     }
 
+    /// The cluster slot router for a shard-channel command, or `None` when
+    /// there is no slot decision to make: standalone mode, or a broadcast kind
+    /// (a plain channel/pattern is not slot-routed — it is served by whichever
+    /// node the client is attached to).
+    ///
+    /// The `Arc` is cloned rather than borrowed so the router outlives the
+    /// `&mut self` the per-channel loops need for the subscription set.
+    fn shard_channel_router(
+        &self,
+        routing: SubRouting,
+    ) -> Option<(Arc<SlotMigrationCoordinator>, u64)> {
+        match routing {
+            SubRouting::ByChannelKey => self
+                .cluster
+                .slot_migration
+                .clone()
+                .zip(self.cluster.node_id),
+            SubRouting::Broadcast => None,
+        }
+    }
+
     /// Subscribe to channels/patterns of one kind.
     ///
     /// Owns the invariants shared by all three subscribe commands:
@@ -331,14 +360,7 @@ impl<'a> PubSubIo<'a> {
         // one-shot flag, consumed once for the whole command (not per
         // channel). SSUBSCRIBE is not READONLY-flagged, so the READONLY
         // override never applies (`readonly_eligible` is always false).
-        let cluster_router = match spec.routing {
-            SubRouting::ByChannelKey => self
-                .cluster
-                .slot_migration
-                .clone()
-                .zip(self.cluster.node_id),
-            SubRouting::Broadcast => None,
-        };
+        let cluster_router = self.shard_channel_router(spec.routing);
         let asking = if cluster_router.is_some() {
             self.state.take_asking()
         } else {
@@ -352,7 +374,7 @@ impl<'a> PubSubIo<'a> {
             if let Some((coordinator, node_id)) = &cluster_router {
                 let slot = slot_for_key(channel);
                 if let RouteOutcome::Reply(resp) = coordinator
-                    .route(slot, spec.route_command, asking, *node_id)
+                    .route(slot, spec.subscribe_route_command, asking, *node_id)
                     .to_response(false)
                 {
                     responses.push(resp);
@@ -408,10 +430,33 @@ impl<'a> PubSubIo<'a> {
     /// Owns the invariants shared by all three unsubscribe commands:
     /// - no args means "all current subscriptions of this kind"; none at all
     ///   yields the single null-channel confirmation;
+    /// - a *named* shard channel is slot-routed exactly as SSUBSCRIBE routes
+    ///   it, so subscribe and unsubscribe cannot disagree about which node
+    ///   serves a channel;
     /// - each destination shard receives exactly one batched deregistration
     ///   message, acked before the confirmations are returned;
     /// - the 80% warning latch is re-armed after every unsubscribe batch.
     async fn unsubscribe_kind(&mut self, spec: &SubKindSpec, args: &[Bytes]) -> Vec<Response> {
+        // Only channels the client *named* are slot-routed. Redis derives the
+        // redirect from argv (`getNodeByQuery` over the command's legacy range
+        // spec), so a bare SUNSUBSCRIBE — which names none — carries no slot to
+        // check and is always served locally. Routing the expanded
+        // subscription set instead would strand a client's own registrations
+        // on a node that stopped owning their slot after it subscribed, with no
+        // way to drop them. ASKING is a one-shot flag, consumed once for the
+        // whole command; SUNSUBSCRIBE is not READONLY-flagged, so the READONLY
+        // override never applies (`readonly_eligible` is always false).
+        let cluster_router = if args.is_empty() {
+            None
+        } else {
+            self.shard_channel_router(spec.routing)
+        };
+        let asking = if cluster_router.is_some() {
+            self.state.take_asking()
+        } else {
+            false
+        };
+
         // If no args, unsubscribe from all channels/patterns of this kind.
         let channels: Vec<Bytes> = if args.is_empty() {
             self.state.subscriptions(spec.kind)
@@ -425,8 +470,20 @@ impl<'a> PubSubIo<'a> {
         }
 
         let mut responses = Vec::with_capacity(channels.len());
+        let mut removed = Vec::with_capacity(channels.len());
 
         for channel in &channels {
+            if let Some((coordinator, node_id)) = &cluster_router {
+                let slot = slot_for_key(channel);
+                if let RouteOutcome::Reply(resp) = coordinator
+                    .route(slot, spec.unsubscribe_route_command, asking, *node_id)
+                    .to_response(false)
+                {
+                    responses.push(resp);
+                    continue;
+                }
+            }
+
             // Remove from local tracking; the confirmation count is the
             // per-connection count.
             let count = self.state.remove_subscription(spec.kind, channel);
@@ -434,12 +491,14 @@ impl<'a> PubSubIo<'a> {
                 (spec.unsubscribed)(Some(channel.clone()), count)
                     .to_response(self.state.protocol_version),
             );
+            removed.push(channel.clone());
         }
 
         // One batched deregistration message per destination shard, acked so
         // the shard-side removal is visible before the client sees the
-        // confirmations.
-        for (shard, channels) in group_channels_by_shard(spec.routing, channels, self.num_shards) {
+        // confirmations. Redirected channels were never removed, so they are
+        // not in this batch.
+        for (shard, channels) in group_channels_by_shard(spec.routing, removed, self.num_shards) {
             let (response_tx, response_rx) = oneshot::channel();
             let _ = self.core.shard_senders[shard]
                 .send((spec.unsubscribe_msg)(channels, self.state.id, response_tx))
@@ -834,9 +893,17 @@ static SUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
         group: "pubsub",
         complexity: Some("O(N) where N is the number of shard channels to unsubscribe."),
     },
+    // Arity stays `AtLeast(0)`: bare SUNSUBSCRIBE unsubscribes from every shard
+    // channel this connection holds. `KeySpec::All` extracts nothing from an
+    // empty argument list, so the no-arg form is keyless — exactly as upstream's
+    // `index: 1, lastkey: -1` spec is over a one-element argv.
     Arity::AtLeast(0),
     PUBSUB_FLAGS,
-    KeySpec::None,
+    // Same NOT_KEY shard-channel spec as SSUBSCRIBE: upstream calls these "not
+    // keyspace keys" but still slot-routes them through key extraction, and so
+    // does FrogDB. Declaring `KeySpec::None` here left unsubscribe the only half
+    // of the pair with no slot to check.
+    KeySpec::All,
 );
 static PUBLISH_SPEC: CommandSpec = pubsub_spec(
     "PUBLISH",
