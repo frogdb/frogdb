@@ -30,6 +30,15 @@ rocksdb-env := if use-system-rocksdb != "" { "ROCKSDB_LIB_DIR=" + system-lib-dir
 sccache-default := `which sccache 2>/dev/null || echo ""`
 export RUSTC_WRAPPER := env("RUSTC_WRAPPER", sccache-default)
 
+# quint (mise-managed, see .mise.toml) is only on PATH once a contributor has
+# mise's shims dir there or has run `mise activate` in their shell — `mise
+# doctor` reports `shims_on_path: no` by default, and non-interactive
+# invocations of `just` (CI, editor tasks) never source shell rc files at
+# all. Prefer an already-resolved `quint` on PATH (so an explicit override
+# still wins), else resolve it through mise directly — this works regardless
+# of shim/activation setup since `quint` is declared in .mise.toml.
+quint := `command -v quint 2>/dev/null || mise which quint 2>/dev/null || echo quint`
+
 # Shorthand for frogdb-server subdirectory
 server-dir := justfile_directory() / "frogdb-server"
 
@@ -395,7 +404,7 @@ quint-check:
     status=0
     for model in "${models[@]}"; do
         echo "quint typecheck $model"
-        quint typecheck "$model" || status=1
+        {{quint}} typecheck "$model" || status=1
     done
     exit $status
 
@@ -435,10 +444,10 @@ quint-run:
     status=0
     while read -r model; do
         echo "quint test $model"
-        quint test "$model" || status=1
+        {{quint}} test "$model" || status=1
         invariants=$(scripts/quint-invariants.sh "$model") || { status=1; continue; }
         echo "quint run $model --max-samples=200 --max-steps=20 --invariants $invariants"
-        quint run "$model" --max-samples=200 --max-steps=20 --invariants $invariants || status=1
+        {{quint}} run "$model" --max-samples=200 --max-steps=20 --invariants $invariants || status=1
     done <<< "$models"
     # Run last and fold into `status` rather than sitting in a `just` dependency:
     # a failing gate must not stop the invariant lanes from reporting, the same
@@ -565,7 +574,7 @@ quint-verify-model model MAX_STEPS='6' TIMEOUT='1200':
         # ignores it — an orphaned JVM otherwise keeps contending for
         # CPU/memory with the next invariant's run and can cascade into a
         # second, false timeout (final-review minor 8).
-        "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} quint verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
+        "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} {{quint}} verify "{{model}}" --invariant="$inv" --max-steps={{MAX_STEPS}}
         rc=$?
         if [ $rc -eq 0 ]; then
             # `quint verify` exits 0 when it proves the invariant holds to the
@@ -699,7 +708,7 @@ quint-verify-temporal MAX_STEPS='6' TIMEOUT='900' BACKEND='tlc':
     violations=0
     for prop in $props; do
         echo "=== quint verify $model --temporal=$prop --backend={{BACKEND}} --max-steps={{MAX_STEPS}} (timeout {{TIMEOUT}}s) ==="
-        yes y | "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} quint verify "$model" \
+        yes y | "$TIMEOUT_BIN" -k 30 {{TIMEOUT}} {{quint}} verify "$model" \
             --main="$main" --temporal="$prop" \
             --max-steps={{MAX_STEPS}} --backend={{BACKEND}} >"$log" 2>&1
         rc=${PIPESTATUS[1]}
