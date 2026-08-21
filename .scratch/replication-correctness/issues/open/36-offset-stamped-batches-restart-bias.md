@@ -1,6 +1,8 @@
 # 36: Offset-stamped batches (S) — the artifact self-describes its coverage; restart bias closed
 
-Status: needs-triage (sequenced after issue 35)
+Status: needs-triage
+
+Sequenced after issue 35.
 
 Ruled 2026-08-21, campaign ledger R13/R16
 (`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`): the follow-up half
