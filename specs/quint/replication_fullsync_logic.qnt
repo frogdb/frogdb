@@ -72,6 +72,17 @@ module replication_fullsync_logic {
   // True when the partial grant was served out of the inherited (replid2)
   // window rather than the primary's own id — the failover-resume path of
   // FM-REPLICATION-019.
+  //
+  // The `optExists` conjunct is an **equivalent mutant** at the single call site
+  // (`psyncRequestAs`'s `coverage.partialViaSecondary` latch, guarded by `arm ==
+  // PartialGrant`) and no test can kill dropping it — battery row F17, resolved
+  // 2026-08-20. `PartialGrant` means `windowContains(p, r.replid, r.applied)`
+  // held, and its only two disjuncts are the primary's own id and the inherited
+  // one; the first is false exactly when `p.replid != r.replid`, so the second
+  // must have held and `optExists` is already implied. The conjunct stays
+  // because this predicate is read on its own — its *name* promises the
+  // secondary window, and a future caller without the `PartialGrant` guard would
+  // need it.
   pure def grantedViaSecondary(p: NodeState, r: NodeState): bool =
     p.replid != r.replid and optExists(p.replid2, g => g == r.replid)
 

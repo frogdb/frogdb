@@ -1188,4 +1188,48 @@ module replication_fullsync {
         inv_restart_pairs_offset,
         inv_replid_offset_paired,
       }))
+
+  // Row M61: the full-sync streaming ghost is latched by the *splice*, not by
+  // the arm the grant carried, so a replica that acquires its history and then
+  // loses the session before splicing takes its first splice on the partial arm
+  // with the ghost still dark. `deliverPayloadAt` is what writes `replid`;
+  // `endSessionAt`'s only guard is `phase != Disconnected`, so it fires at
+  // `PayloadInstalled`. This is the negative assertion the T10b battery's row
+  // M61 lacked: without it, latching the ghost unconditionally is undetectable.
+  run partialSpliceLeavesFullSyncGhostDarkTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(check(sessions.get(1).arm == FullSnapshot and sessions.get(1).grant_offset == 2))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(check(and {
+        // The history is the replica's already, one transition before any splice.
+        nodes.get(2).replid == FIRST_GEN,
+        nodes.get(2).applied == 2,
+        not(coverage.fullSyncStreaming),
+      }))
+      .then(endSessionAt(1))
+      .then(check(nodes.get(2).link == None and sessions.get(1).phase == Disconnected))
+      .then(psyncRequestAs(2, 1, true, 2))
+      // …so `decideArm` now reads a real `replid`, and both the window and the
+      // floor admit it.
+      .then(check(sessions.get(2).arm == PartialGrant and sessions.get(2).grant_offset == 2))
+      .then(spliceStreamAt(2))
+      .then(check(and {
+        sessions.get(2).phase == Streaming,
+        // The row's assertion: a splice happened and the ghost is still dark.
+        not(coverage.fullSyncStreaming),
+        // …on a lawful path, not a defect one.
+        not(defects.spliceGap),
+        not(defects.spliceDiverged),
+        not(defects.grantBelowFloor),
+        not(defects.grantForeignHistory),
+        not(defects.tornIdentity),
+        not(defects.forkedTailApplied),
+        inv_splice_continuity,
+        inv_applied_covered_by_data,
+        inv_no_acked_write_lost_across_fullsync,
+      }))
 }
