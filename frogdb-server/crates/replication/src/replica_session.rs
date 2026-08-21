@@ -3619,7 +3619,6 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let granted: u64 = line
-            .trim()
             .split_whitespace()
             .nth(2)
             .expect("+FULLRESYNC <id> <offset>")
