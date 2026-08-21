@@ -1,6 +1,6 @@
 # 41: Residue copy-claim lost under chained demotion (one-hop shard closure)
 
-Status: ready-for-human
+Status: done (user sign-off 2026-08-21)
 
 **ALL ACCEPTANCE ITEMS MET 2026-08-20 (`9c8c0fc7`).** R1 built in `d1e15ab2`/`cc4a917b`;
 the three residual roots it exposed were ruled R8/R9 and built in `9c8c0fc7`, which also
