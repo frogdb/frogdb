@@ -307,7 +307,7 @@ mod tests {
         let flipped = intact.replacen("900", "9000000", 1);
         std::fs::write(&path, &flipped).unwrap();
         assert_eq!(
-            flipped.trim().split_whitespace().nth(1),
+            flipped.split_whitespace().nth(1),
             Some("9000000"),
             "the corruption really did land in the sequence field"
         );
