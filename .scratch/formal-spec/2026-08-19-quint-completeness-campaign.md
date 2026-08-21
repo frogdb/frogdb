@@ -203,3 +203,35 @@ sender-side accounting bug. New failure-mode row + forcing test in `frogdb-repli
 FM-REPLICATION-001's corrected non-guarantee bullet (landed `a2334b00`) upgrades to a
 guarantee once the row lands; model's `inv_reapply_is_a_noop` graduates from abstraction
 guard to modeled behavior. Tracked as replication-correctness issue 34.
+
+### R8 — steered-walk residual root 1: repoint resets attestation
+
+`retargetResidueOnDemotion`'s target arm may re-point an unpromoted dependant at the
+failover successor (which legitimately holds the slot's keys post-`applyFailoverCommon`),
+but the repointed dependant must re-attest against its new home before serving.
+Serve-before-attest is the violation; the repoint itself is sound. Trace:
+`demoteNode(4, 2)`, seed 777.
+
+### R9 — steered-walk residual roots 2+3: extend R1 family-wide
+
+R1's physical-holder principle applies at every retarget/re-home site, not only
+`canRetargetSlotResidue`: (2) the source arm must not re-home onto a successor whose
+hold exists only through the demoted node's closure edge; (3) a source demoted while
+still holding keeps the claim but must retain a remover disjunct — the removal path
+cannot be gated on a live primary (`canFailPromotion`), or the residue is unreapable.
+Consistent with the slot-handoff-barrier family-sweep precedent.
+
+### R10 — R2 absent cell: model the forget-identity arm
+
+`stored_identity` gains a clearing arm (reset/forget) so the absent-operand cell of
+`identityOrderOk` is reachable by the walk, not only by constructed-view test. Model
+completeness ruling — land regardless of whether Rust exposes an equivalent path today;
+if Rust has a real forget path (CLUSTER RESET / state-file loss), align the arm's guard
+with it.
+
+### R11 — steering disposition: opt-in lane + nightly
+
+Steered walk lands as a dedicated recipe (`just quint-run-steered` or similar) plus a
+nightly CI lane; default `just quint-run` stays deterministic-green unsteered. Batteries
+and campaigns run the steered lane. Re-land gated on the steered walk coming back clean
+after R8/R9 fixes.
