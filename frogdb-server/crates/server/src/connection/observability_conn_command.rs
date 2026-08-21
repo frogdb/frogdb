@@ -15,7 +15,7 @@
 //! [`CommandSpec`], registered separately via
 //! [`frogdb_core::CommandRegistry::register_connection`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 use frogdb_core::{
@@ -783,7 +783,10 @@ async fn latency_latest(ctx: &ConnCtx<'_>) -> Response {
     Response::Array(entries)
 }
 
-/// LATENCY RESET [event...] — clear latency data.
+/// LATENCY RESET [event...] — clear latency data. Redis replies with the
+/// number of latency event time series that were reset (0 with no args and
+/// nothing tracked; with args, the count of the named events that existed
+/// and were reset), not `+OK`.
 async fn latency_reset(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     // Parse event names
     let events: Vec<LatencyEvent> = args
@@ -794,16 +797,21 @@ async fn latency_reset(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
         })
         .collect();
 
-    // Broadcast reset to all shards. Await-and-discard: the replies are only a
-    // barrier confirming every shard reset. Bounded by the shared deadline.
-    let _ = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
+    // Broadcast reset to all shards. Each shard keeps an independent series
+    // for the same logical event name (aggregated for HISTORY/LATEST), so an
+    // event that existed on several shards must still count once — matching
+    // single-node Redis's one dict entry per event name — hence the dedup by
+    // event identity across shard replies rather than summing shard counts.
+    let per_shard = ScatterGather::new(ctx.shard_senders, DEFAULT_SCATTER_GATHER_TIMEOUT, 0)
         .gather_all(|_shard, response_tx| ObservabilityMsg::LatencyReset {
             events: events.clone(),
             response_tx,
         })
         .await;
 
-    Response::ok()
+    let reset_events: HashSet<LatencyEvent> = per_shard.into_iter().flatten().collect();
+
+    Response::Integer(reset_events.len() as i64)
 }
 
 // =============================================================================
@@ -1198,12 +1206,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latency_reset_with_no_shards_is_ok() {
+    async fn latency_reset_with_no_shards_is_zero() {
+        // Redis replies with the count of event series reset, not +OK; with
+        // no shards to reply (and thus nothing tracked), that count is 0.
         let fx = Fixture::new();
         let resp = LatencyConnCommand
             .execute(&mut fx.ctx(), &[arg("RESET")])
             .await;
-        assert_eq!(resp, Response::ok());
+        assert_eq!(resp, Response::Integer(0));
+    }
+
+    #[tokio::test]
+    async fn latency_reset_specific_event_with_no_shards_is_zero() {
+        let fx = Fixture::new();
+        let resp = LatencyConnCommand
+            .execute(&mut fx.ctx(), &[arg("RESET"), arg("command")])
+            .await;
+        assert_eq!(resp, Response::Integer(0));
     }
 
     #[tokio::test]

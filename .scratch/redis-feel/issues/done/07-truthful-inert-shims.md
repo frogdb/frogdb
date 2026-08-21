@@ -1,6 +1,6 @@
 # Truthful-inert shims: `CONFIG GET appendonly`, `LATENCY HISTORY`, `OBJECT FREQ`
 
-Status: ready-for-agent
+Status: done
 Type: bug (introspection accuracy)
 Area: config / latency / object
 
@@ -50,3 +50,7 @@ return Redis's error string when the policy isn't LFU.
       recorded, not silently skipped)
 
 Size: S
+
+## Resolution
+
+appendonly noop param answers 'no' (golden counts 124->125, 77->78); LATENCY HISTORY unknown event returns empty array; OBJECT FREQ errors without an LFU policy with Redis's exact text. AOF/RDB param sweep declined all values that would fabricate state. Wave 1, commit 2f71b949; LATENCY RESET integer-reply fix followed in wave 3.

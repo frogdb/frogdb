@@ -1,6 +1,6 @@
 # Advertise `redis_version:8.6.0` / HELLO `version 8.6.0`
 
-Status: ready-for-agent
+Status: done
 Type: bug (version fidelity)
 Area: info / protocol
 
@@ -39,3 +39,7 @@ issues — not something this issue needs to additionally guard against.
 - [ ] `just docs-gen --check` stays green
 
 Size: S
+
+## Resolution
+
+ADVERTISED_REDIS_VERSION = 8.6.0 constant feeds INFO redis_version and HELLO version; server stays frogdb, frogdb_version keeps product version; versions.json regenerated. Wave 1, commit 2f71b949.

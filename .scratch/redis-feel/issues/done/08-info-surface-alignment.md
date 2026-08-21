@@ -1,6 +1,6 @@
 # Default `INFO` output is missing sections Redis 8.6 emits by default
 
-Status: ready-for-agent
+Status: done
 Type: bug (introspection accuracy)
 Area: info
 
@@ -45,3 +45,7 @@ Align the default section list with Redis 8.6's defaults:
       not
 
 Size: S-M
+
+## Resolution
+
+INFO default list matches Redis 8 (errorstats, cluster, modules, threads, hotkeys join default; commandstats/latencystats in all); truthful Cluster/Modules/Threads/Hotkeys sections added. Wave 1, commit 2f71b949.

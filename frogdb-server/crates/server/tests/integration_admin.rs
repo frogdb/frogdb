@@ -1,6 +1,8 @@
 //! Integration tests for admin commands (SLOWLOG, BGSAVE, LASTSAVE, MEMORY, LATENCY, CONFIG).
 
-use crate::common::response_helpers::{assert_ok, unwrap_array, unwrap_bulk, unwrap_integer};
+use crate::common::response_helpers::{
+    assert_integer_eq, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer,
+};
 use crate::common::test_server::{TestServer, TestServerConfig};
 use frogdb_protocol::Response;
 use std::time::Duration;
@@ -700,9 +702,10 @@ async fn test_latency_reset() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // LATENCY RESET should return OK
+    // LATENCY RESET replies with the count of event series reset (Redis
+    // semantics), not +OK. No events are tracked on a fresh server, so 0.
     let response = client.command(&["LATENCY", "RESET"]).await;
-    assert_ok(&response);
+    assert_integer_eq(&response, 0);
 
     server.shutdown().await;
 }
@@ -712,9 +715,10 @@ async fn test_latency_reset_specific_event() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // LATENCY RESET with specific event
+    // LATENCY RESET with specific event: count of named events that existed
+    // and were reset. None have been recorded, so 0.
     let response = client.command(&["LATENCY", "RESET", "command"]).await;
-    assert_ok(&response);
+    assert_integer_eq(&response, 0);
 
     server.shutdown().await;
 }

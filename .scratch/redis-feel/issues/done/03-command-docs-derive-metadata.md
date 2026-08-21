@@ -1,6 +1,6 @@
 # `COMMAND DOCS` is placeholder text, not real metadata
 
-Status: ready-for-agent
+Status: done
 Type: bug (introspection accuracy)
 Area: commands / registry / macros
 
@@ -59,3 +59,7 @@ follow-up issue once this lands, not blocking it.
 - [ ] `just docs-gen --check` stays green
 
 Size: M/L — the bulk is the ~500-attribute-site sweep (commands plus subcommand structs)
+
+## Resolution
+
+CommandSpec gained a required CommandDocs field (compile-enforced coverage; the #[derive(Command)] macro named here was dead code). 419 sites: 251 vendored from redis-commands-8x.json, 134 hand-written extension summaries. COMMAND DOCS emits Redis-8-shaped summary/since/group/complexity. Wave 2, commit 81103aeb. arguments/history residue in issue 12.

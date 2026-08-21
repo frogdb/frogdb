@@ -704,8 +704,9 @@ pub enum ObservabilityMsg {
     LatencyReset {
         /// Events to reset (empty = all).
         events: Vec<LatencyEvent>,
-        /// Response channel.
-        response_tx: oneshot::Sender<()>,
+        /// Response channel: the events that existed on this shard and were
+        /// reset (see [`crate::LatencyMonitor::reset`]).
+        response_tx: oneshot::Sender<Vec<LatencyEvent>>,
     },
 
     // =========================================================================

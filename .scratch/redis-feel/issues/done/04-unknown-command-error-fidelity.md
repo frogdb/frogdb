@@ -1,6 +1,6 @@
 # Unknown-command error uppercases the name and never lists the offending args
 
-Status: ready-for-agent
+Status: done
 Type: bug (error-message fidelity)
 Area: connection / protocol
 
@@ -42,3 +42,7 @@ seam-lint family (`agents/seam-lints.md`).
 - [ ] All four call sites covered by a regression test asserting the exact error string
 
 Size: S/M
+
+## Resolution
+
+Shared frogdb_protocol::format_unknown_command_error at all four emit sites; original case, quoted-args clause, 128-byte truncation — verified byte-for-byte against Redis 8.6.1. Wave 1, commit 2f71b949.

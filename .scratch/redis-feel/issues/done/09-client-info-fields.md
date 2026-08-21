@@ -1,6 +1,6 @@
 # `CLIENT INFO` is missing fields Redis 8.6 emits
 
-Status: ready-for-agent
+Status: done
 Type: bug (introspection accuracy)
 Area: connection / client
 
@@ -66,3 +66,7 @@ Implemented `watch`, `tot-net-in`, `tot-net-out`, `rbs`, `rbp`; `io-thread` omit
   bound to any single OS thread the way Redis's io-thread field describes. Reporting the
   home-shard id under the `io-thread` key would imply a threading guarantee FrogDB doesn't make,
   so the field is left out rather than mapped to something misleading.
+
+## Resolution
+
+CLIENT INFO/LIST emit the Redis 8 field set with truthful values; watch= wired to real counts via the periodic stats sync; io-thread deliberately omitted (no honest mapping). Wave 1, commit 2f71b949.

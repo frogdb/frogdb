@@ -1,6 +1,6 @@
 # Shipped artifacts build `core-profile` only — 371-command matrix, unknown-command errors on every binary
 
-Status: ready-for-agent
+Status: done
 Type: bug (release / compat surface)
 Area: build / release
 
@@ -48,3 +48,7 @@ Shipped binary size and build time increase with `cmd-full`. Ruled acceptable in
       generator output, not a hand-edit of the YAML)
 - [ ] New `just run-full` recipe exists and starts a server with the full command surface
 - [ ] `just docs-gen --check` (compat-matrix drift check, per ADR-0005 consequences) stays green
+
+## Resolution
+
+Every ship path builds cmd-full: Dockerfile.builder, cross-build/cross-build-arm, macOS release job (via workflow_gen); deb/homebrew/jepsen inherit from those artifacts. New `just run-full` dev recipe. Wave 1, commit 2f71b949.

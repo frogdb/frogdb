@@ -1,6 +1,6 @@
 # `COMMAND INFO` returns hardcoded placeholder metadata
 
-Status: ready-for-agent
+Status: done
 Type: bug (introspection accuracy)
 Area: commands / registry
 
@@ -51,3 +51,7 @@ to that diff to avoid re-churning the same match arm twice.
 - [ ] Regression coverage for at least one command per `KeySpec` variant
 
 Size: S
+
+## Resolution
+
+COMMAND / COUNT / INFO derive real 10-element replies from registry data (arity, flags, key triplets via KeySpec::command_info_triplet, ACL categories, key-specs, movablekeys). Wave 1, commit 2f71b949. Depth residue (key-spec flags, tips) tracked in issue 12.

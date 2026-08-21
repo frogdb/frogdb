@@ -67,8 +67,8 @@ impl ShardWorker {
                 events,
                 response_tx,
             } => {
-                self.observability.latency_monitor_mut().reset(&events);
-                let _ = response_tx.send(());
+                let reset_events = self.observability.latency_monitor_mut().reset(&events);
+                let _ = response_tx.send(reset_events);
             }
             ObservabilityMsg::ResetStats { response_tx } => {
                 self.observability.reset_stats();

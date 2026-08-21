@@ -1,6 +1,6 @@
 # `OBJECT ENCODING` on a missing key returns a doubled "ERR ERR no such key" error, not nil
 
-Status: ready-for-agent
+Status: done
 Type: bug (error fidelity)
 Area: commands / generic
 
@@ -39,3 +39,7 @@ not left passing against the old behavior.
 - [ ] `OBJECT ENCODING` on an existing key is unaffected (regression-tested)
 
 Size: S
+
+## Resolution
+
+OBJECT ENCODING (and FREQ) on a missing key return nil, matching Redis 8.6.1 source; regression test flipped; three more double-ERR sites fixed (DELEX x2, XSETID). Wave 1, commit 2f71b949.

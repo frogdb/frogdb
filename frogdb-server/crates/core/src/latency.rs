@@ -246,20 +246,22 @@ impl LatencyMonitor {
             .unwrap_or_default()
     }
 
-    /// Reset history for specific events, or all if empty.
-    pub fn reset(&mut self, events: &[LatencyEvent]) {
+    /// Reset history for specific events, or all if empty. Returns the events
+    /// that existed (had a tracked series) and were reset, matching Redis's
+    /// `LATENCY RESET`: a per-event dict entry is dropped entirely on reset,
+    /// not just cleared, so a later reset of the same untouched event reports
+    /// it as not having existed until a new sample is recorded.
+    pub fn reset(&mut self, events: &[LatencyEvent]) -> Vec<LatencyEvent> {
         if events.is_empty() {
-            // Reset all
-            for history in self.histories.values_mut() {
-                history.reset();
-            }
+            let reset: Vec<LatencyEvent> = self.histories.keys().copied().collect();
+            self.histories.clear();
+            reset
         } else {
-            // Reset specific events
-            for event in events {
-                if let Some(history) = self.histories.get_mut(event) {
-                    history.reset();
-                }
-            }
+            events
+                .iter()
+                .copied()
+                .filter(|event| self.histories.remove(event).is_some())
+                .collect()
         }
     }
 
@@ -712,10 +714,17 @@ mod tests {
         monitor.record_with_timestamp(LatencyEvent::ExpireCycle, 1001, 100);
 
         // Reset all
-        monitor.reset(&[]);
+        let reset = monitor.reset(&[]);
 
+        assert_eq!(reset.len(), 2);
+        assert!(reset.contains(&LatencyEvent::Command));
+        assert!(reset.contains(&LatencyEvent::ExpireCycle));
         assert!(monitor.history(LatencyEvent::Command).is_empty());
         assert!(monitor.history(LatencyEvent::ExpireCycle).is_empty());
+
+        // A second reset finds nothing left to reset: the series were dropped,
+        // not merely cleared (matches Redis dropping the dict entry).
+        assert!(monitor.reset(&[]).is_empty());
     }
 
     #[test]
@@ -726,10 +735,14 @@ mod tests {
         monitor.record_with_timestamp(LatencyEvent::ExpireCycle, 1001, 100);
 
         // Reset only Command
-        monitor.reset(&[LatencyEvent::Command]);
+        let reset = monitor.reset(&[LatencyEvent::Command]);
 
+        assert_eq!(reset, vec![LatencyEvent::Command]);
         assert!(monitor.history(LatencyEvent::Command).is_empty());
         assert_eq!(monitor.history(LatencyEvent::ExpireCycle).len(), 1);
+
+        // Resetting an event that was never recorded reports no reset.
+        assert!(monitor.reset(&[LatencyEvent::Fork]).is_empty());
     }
 
     #[test]

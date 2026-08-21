@@ -1,6 +1,6 @@
 # Docs claim strict Lua `KEYS[]` enforcement that the code doesn't implement
 
-Status: ready-for-agent
+Status: done
 Type: doc bug
 Area: website / compatibility docs
 
@@ -38,3 +38,7 @@ enforcement standalone, cross-slot-only enforcement in cluster mode, with the
       Redis-parity) behavior
 
 Size: S
+
+## Resolution
+
+overview.mdx strict-keys section rewritten to the actual gate behavior (Redis-parity undeclared access; cluster shebang slot cohesion only); appendonly shim documented; Debian build docs gained cmd-full. Wave 1, commit 2f71b949.
