@@ -460,6 +460,23 @@ jobs:
         shared-key: stable
     - name: Check command matrix is up to date
       run: just matrix-gen-check
+  command-metadata-gen-check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.website == 'true' || needs.changes.outputs.python == 'true'
+    name: Command Metadata Generation Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: python uv just
+        cache: 'true'
+        experimental: 'true'
+    - name: Check generated upstream metadata is up to date
+      run: just command-metadata-gen-check
   docs-path-check:
     needs: changes
     if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.operator == 'true' || needs.changes.outputs.testing == 'true' || needs.changes.outputs.website == 'true'
@@ -552,6 +569,7 @@ jobs:
     - compat-gen-check
     - spec-gen-check
     - matrix-gen-check
+    - command-metadata-gen-check
     - docs-path-check
     - workflow-gen-check
     - python-lint

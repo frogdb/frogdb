@@ -380,7 +380,10 @@ impl Command for GeosearchCommand {
                     "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
                 ),
             },
-            arity: Arity::AtLeast(4),
+            // Both the FROM* and BY* clauses are mandatory, so
+            // `GEOSEARCH key FROMMEMBER m BYRADIUS 1 km` — six arguments — is
+            // the shortest legal form, matching upstream's -7.
+            arity: Arity::AtLeast(6),
             flags: CommandFlags::READONLY,
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
@@ -426,7 +429,9 @@ impl Command for GeosearchstoreCommand {
                     "O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape",
                 ),
             },
-            arity: Arity::AtLeast(5),
+            // Destination and source plus the mandatory FROM*/BY* clauses:
+            // seven arguments minimum, matching upstream's -8.
+            arity: Arity::AtLeast(7),
             flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             // Destination (key 0) is overwritten; the source (key 1) is read-only.

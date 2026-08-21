@@ -99,7 +99,10 @@ impl Command for QuitCommand {
                 group: "connection",
                 complexity: Some("O(1)"),
             },
-            arity: Arity::Fixed(0),
+            // Upstream's arity is -1: `quitCommand` ignores whatever follows,
+            // so a client that sends `QUIT` with trailing junk still gets +OK
+            // and a closed connection rather than a wrong-arity error.
+            arity: Arity::AtLeast(0),
             flags: CommandFlags::READONLY
                 .union(CommandFlags::FAST)
                 .union(CommandFlags::LOADING)
@@ -925,7 +928,11 @@ fn build_command_info(spec: &CommandSpec) -> Response {
 /// `Arity::Fixed(1)` — one argument after the name — is wire arity `2`);
 /// open-ended/ranged arities are negative minimums, matching how Redis
 /// reports e.g. `SET` as `-3` and `PING` as `-1`.
-fn command_info_arity(arity: Arity) -> i64 {
+///
+/// Public so the upstream-metadata join test can cross-check vendored arities
+/// against the very function that answers `COMMAND INFO`, rather than against
+/// a second copy of this encoding.
+pub fn command_info_arity(arity: Arity) -> i64 {
     match arity {
         Arity::Fixed(n) => n as i64 + 1,
         Arity::AtLeast(n) => -(n as i64 + 1),

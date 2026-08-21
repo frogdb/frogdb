@@ -46,3 +46,18 @@ async fn quit_pipelined_commands_after_quit_exceed_read_buffer() {
     let mut client2 = server.connect().await;
     assert_nil(&client2.command(&["GET", "foo"]).await);
 }
+
+/// Regression: upstream's `QUIT` arity is `-1` — `quitCommand` ignores whatever
+/// follows the command name — but FrogDB registered `Fixed(0)` and answered a
+/// wrong-arity error, so a client sending trailing junk never got its +OK or a
+/// clean close. Found by the vendored-metadata arity cross-check.
+#[tokio::test]
+async fn quit_tolerates_trailing_arguments() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    assert_ok(&client.command(&["QUIT", "ignored"]).await);
+
+    let resp = client.read_response(Duration::from_millis(200)).await;
+    assert!(resp.is_none(), "connection should be closed after QUIT");
+}

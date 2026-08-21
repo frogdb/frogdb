@@ -368,7 +368,9 @@ impl Command for XtrimCommand {
                     "O(N), with N being the number of evicted entries. Constant times are very small however, since entries are organized in macro nodes containing multiple entries that can be released with a single deallocation.",
                 ),
             },
-            arity: Arity::AtLeast(2),
+            // `XTRIM key MAXLEN 5` is the shortest legal form, matching
+            // upstream's -4.
+            arity: Arity::AtLeast(3),
             flags: CommandFlags::WRITE,
             keys: KeySpec::First,
             access: AccessSpec::Uniform,

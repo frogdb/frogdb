@@ -234,3 +234,30 @@ async fn test_object_encoding_hash_listpack_to_hashtable() {
 
     server.shutdown().await;
 }
+
+/// Regression: `HSETEX key FIELDS 1 field value` is the minimal legal form —
+/// both the FNX/FXX condition and the expiry clause are optional, which is why
+/// upstream's arity is `-6`. FrogDB declared `AtLeast(6)` and rejected the
+/// no-expiry form with a wrong-arity error. Found by the vendored-metadata
+/// arity cross-check.
+#[tokio::test]
+async fn test_hsetex_without_expiry_clause() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let response = client
+        .command(&["HSETEX", "myhash", "FIELDS", "1", "field1", "value1"])
+        .await;
+    assert_eq!(response, Response::Integer(1));
+
+    let response = client.command(&["HGET", "myhash", "field1"]).await;
+    assert_eq!(response, Response::Bulk(Some(Bytes::from("value1"))));
+
+    // No expiry clause means no field TTL.
+    let response = client
+        .command(&["HTTL", "myhash", "FIELDS", "1", "field1"])
+        .await;
+    assert_eq!(response, Response::Array(vec![Response::Integer(-1)]));
+
+    server.shutdown().await;
+}

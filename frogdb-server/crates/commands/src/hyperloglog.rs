@@ -352,7 +352,8 @@ impl Command for PfselftestCommand {
                 group: "hyperloglog",
                 complexity: Some("N/A"),
             },
-            arity: Arity::Fixed(1),
+            // Upstream's arity is 1 — the command name and nothing else.
+            arity: Arity::Fixed(0),
             flags: CommandFlags::READONLY.union(CommandFlags::ADMIN),
             keys: KeySpec::None,
             access: AccessSpec::Uniform,

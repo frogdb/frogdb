@@ -55,6 +55,7 @@ pub mod tdigest;
 pub mod timeseries;
 #[cfg(feature = "topk")]
 pub mod topk;
+pub mod upstream;
 pub mod utils;
 #[cfg(feature = "vectorset")]
 pub mod vectorset;

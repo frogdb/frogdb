@@ -586,6 +586,31 @@ def test_workflow() -> Workflow:
         ),
     )
 
+    command_metadata_gen_check = w.job(
+        "command-metadata-gen-check",
+        Job(
+            name="Command Metadata Generation Check",
+            runs_on=RUNS_ON,
+            needs="changes",
+            # Pure Python — reads the vendored JSON under website/src/data and
+            # compares against the checked-in Rust module under frogdb-server,
+            # so a hand-edit of either side must fail CI.
+            if_=(
+                "needs.changes.outputs.rust == 'true' || "
+                "needs.changes.outputs.website == 'true' || "
+                "needs.changes.outputs.python == 'true'"
+            ),
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_PYTHON_WORKFLOW_GEN),
+                run_step(
+                    name="Check generated upstream metadata is up to date",
+                    run="just command-metadata-gen-check",
+                ),
+            ],
+        ),
+    )
+
     docs_path_check = w.job(
         "docs-path-check",
         Job(
@@ -695,6 +720,7 @@ def test_workflow() -> Workflow:
                 compat_gen_check,
                 spec_gen_check,
                 matrix_gen_check,
+                command_metadata_gen_check,
                 docs_path_check,
                 workflow_gen_check,
                 python_lint,

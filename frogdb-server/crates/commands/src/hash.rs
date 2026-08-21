@@ -2120,7 +2120,9 @@ impl Command for HsetexCommand {
                 group: "hash",
                 complexity: Some("O(N) where N is the number of fields being set."),
             },
-            arity: Arity::AtLeast(6),
+            // `HSETEX key FIELDS 1 field value` — the condition and expiry
+            // clauses are both optional, matching upstream's -6.
+            arity: Arity::AtLeast(5),
             flags: CommandFlags::WRITE
                 .union(CommandFlags::FAST)
                 .union(CommandFlags::DENYOOM),

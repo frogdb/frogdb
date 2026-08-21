@@ -11,6 +11,8 @@ mod shard_supervisor;
 mod shards;
 mod startup;
 mod subsystems;
+#[cfg(test)]
+mod upstream_metadata_tests;
 pub(crate) mod util;
 
 pub use listeners::{BoundListeners, bind_listeners};

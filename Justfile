@@ -1310,11 +1310,22 @@ spec-gen:
 spec-gen-check:
     uv run website/scripts/spec-gen.py --check
 
-# Re-vendor the upstream Redis command list (name/group/since) pinned to
-# REDIS_COMPAT_TARGET. Requires network access; not part of docs-build/CI —
-# run manually when REDIS_COMPAT_TARGET bumps.
+# Re-vendor the upstream Redis command metadata (core commands plus the module
+# families the release bundles) pinned to REDIS_COMPAT_TARGET. Requires network
+# access; not part of docs-build/CI — run manually when REDIS_COMPAT_TARGET
+# bumps, then re-run `just command-metadata-gen`.
 redis-commands-vendor:
     uv run website/scripts/vendor-redis-commands.py
+
+# Regenerate the checked-in Rust view of the vendored upstream metadata
+# (frogdb-server/crates/commands/src/upstream/generated.rs). Reads the vendored
+# JSON only — no network, no cargo.
+command-metadata-gen:
+    uv run scripts/gen-command-metadata.py
+
+# Verify the generated upstream metadata module matches the vendored JSON (CI)
+command-metadata-gen-check:
+    uv run scripts/gen-command-metadata.py --check
 
 # Generate the command compatibility matrix by joining commands.json, the
 # vendored Redis command list, and compat-exclusions.json. Must run after

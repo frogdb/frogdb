@@ -24,6 +24,11 @@ impl Command for XinfoCommand {
                 group: "stream",
                 complexity: Some("Depends on subcommand."),
             },
+            // Upstream's -2 admits `XINFO HELP`, but upstream also keeps its
+            // key specs on the subcommand rows. FrogDB models the container as
+            // one command whose key sits at index 1, and `CommandSpec::validate`
+            // requires the arity minimum to cover that index
+            // (`ArityTooSmallForKeys`), so the honest minimum here is 2.
             arity: Arity::AtLeast(2),
             flags: CommandFlags::READONLY,
             keys: KeySpec::Index(1),

@@ -1933,8 +1933,9 @@ async fn tcl_xsetid_errors_on_negative_offset() {
 // arguments" error. FrogDB's XGROUP HELP currently ignores extra arguments and
 // returns the help array; per task guidance we sanity-check the Array shape
 // rather than the exact message. FrogDB's XGROUP arity requires
-// `AtLeast(2)` arguments, so we pass `XGROUP HELP xxx` to exercise the
-// intended code path.
+// `AtLeast(2)` arguments — the container's key sits at index 1 and the spec
+// invariant makes the arity cover it — so we pass `XGROUP HELP xxx` to
+// exercise the intended code path.
 
 #[tokio::test]
 async fn tcl_xgroup_help_should_not_have_unexpected_options() {
