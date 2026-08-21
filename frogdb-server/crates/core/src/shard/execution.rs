@@ -2524,7 +2524,7 @@ mod transaction_admission_tests {
             _args: &[Bytes],
         ) -> Result<Response, frogdb_types::CommandError> {
             self.0.store(true, Ordering::Relaxed);
-            Ok(Response::Simple(Bytes::from_static(b"OK")))
+            Ok(Response::ok())
         }
     }
 
@@ -2782,7 +2782,7 @@ mod oom_gate_tests {
                     _ctx: &mut CommandContext,
                     _args: &[Bytes],
                 ) -> Result<Response, frogdb_types::CommandError> {
-                    Ok(Response::Simple(Bytes::from_static(b"OK")))
+                    Ok(Response::ok())
                 }
             }
         };

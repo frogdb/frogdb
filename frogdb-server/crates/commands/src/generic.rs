@@ -16,7 +16,7 @@ use frogdb_core::{
     EventSpec, ExecutionStrategy, KeyAccessFlag, KeySpec, KeyType, KeyspaceEventFlags, LookupSpec,
     ScatterGatherOp, ServerWideOp, Value, WaiterWake, WalStrategy, shard_for_key,
 };
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 // ============================================================================
 // TYPE - Get key type
@@ -61,7 +61,7 @@ impl Command for TypeCommand {
         } else {
             KeyType::None
         };
-        Ok(Response::Simple(Bytes::from(key_type.as_str())))
+        Ok(Response::Simple(SafeStatus::sanitized(key_type.as_str())))
     }
 }
 

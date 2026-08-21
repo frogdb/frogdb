@@ -429,10 +429,7 @@ async fn an_exec_parked_by_the_barrier_wakes_up_redirected() {
     // execution, not `MULTI`.
     let mut probe = source.connect().await;
     assert_eq!(probe.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        probe.command(&["DEL", &key]).await,
-        Response::Simple("QUEUED".into())
-    );
+    assert_eq!(probe.command(&["DEL", &key]).await, Response::queued());
 
     probe.send_only(&["EXEC"]).await;
     assert!(
@@ -555,10 +552,7 @@ async fn an_exec_on_an_unbarriered_slot_runs_while_the_barrier_is_up() {
     let key = key_for_slot(free);
     let mut probe = source.connect().await;
     assert_eq!(probe.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        probe.command(&["SET", &key, "v"]).await,
-        Response::Simple("QUEUED".into())
-    );
+    assert_eq!(probe.command(&["SET", &key, "v"]).await, Response::queued());
 
     probe.send_only(&["EXEC"]).await;
     let reply = probe
@@ -578,7 +572,7 @@ async fn an_exec_on_an_unbarriered_slot_runs_while_the_barrier_is_up() {
     assert_eq!(blocked.command(&["MULTI"]).await, Response::ok());
     assert_eq!(
         blocked.command(&["SET", &barriered_key, "v"]).await,
-        Response::Simple("QUEUED".into())
+        Response::queued()
     );
     blocked.send_only(&["EXEC"]).await;
     assert!(

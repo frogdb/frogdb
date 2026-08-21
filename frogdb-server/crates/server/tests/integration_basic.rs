@@ -2,7 +2,7 @@
 
 use crate::common::test_server::TestServer;
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use frogdb_telemetry::testing::get_counter;
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ async fn test_ping_pong() {
     let mut client = server.connect().await;
 
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     server.shutdown().await;
 }
@@ -51,7 +51,7 @@ async fn test_set_get() {
 
     // SET
     let response = client.command(&["SET", "foo", "bar"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // GET
     let response = client.command(&["GET", "foo"]).await;
@@ -227,7 +227,10 @@ async fn test_type_command_string() {
     client.command(&["SET", "mykey", "value"]).await;
 
     let response = client.command(&["TYPE", "mykey"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("string")));
+    assert_eq!(
+        response,
+        Response::Simple(SafeStatus::from_static("string"))
+    );
 
     server.shutdown().await;
 }
@@ -238,7 +241,7 @@ async fn test_type_nonexistent() {
     let mut client = server.connect().await;
 
     let response = client.command(&["TYPE", "nonexistent"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("none")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("none")));
 
     server.shutdown().await;
 }

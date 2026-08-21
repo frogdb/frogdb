@@ -37,7 +37,7 @@ use frogdb_core::{
     LookupSpec, PauseMode, SetValue, SortedSetValue, StreamValue, StringValue, TimeSeriesValue,
     Value, WaiterWake, WalStrategy,
 };
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 /// The `CommandSpec` for DEBUG — arity `AtLeast(1)`, `ADMIN | NOSCRIPT | LOADING
 /// | STALE | MOVABLEKEYS`, `KeySpec::Dynamic`, strategy `ConnectionLevel(Admin)`.
@@ -399,7 +399,7 @@ fn debug_hashing(num_shards: usize, args: &[Bytes]) -> Response {
     };
 
     if keys.len() == 1 {
-        Response::Simple(Bytes::from(format_key(&keys[0])))
+        Response::Simple(SafeStatus::sanitized(format_key(&keys[0])))
     } else {
         Response::Array(
             keys.iter()

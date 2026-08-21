@@ -225,7 +225,7 @@ async fn assert_blocking_multishard_crossslot_no_block(
     let ping = client.command(&["PING"]).await;
     assert_eq!(
         ping,
-        Response::Simple(bytes::Bytes::from_static(b"PONG")),
+        Response::pong(),
         "{context}: connection must still be clean (no stray frames) after the CROSSSLOT reply"
     );
 }

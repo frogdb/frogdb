@@ -2,7 +2,7 @@
 
 use crate::common::test_server::TestServer;
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 #[tokio::test]
 async fn test_hset_hget() {
@@ -208,7 +208,7 @@ async fn test_type_command_hash() {
     client.command(&["HSET", "myhash", "f1", "v1"]).await;
 
     let response = client.command(&["TYPE", "myhash"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("hash")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("hash")));
 
     server.shutdown().await;
 }

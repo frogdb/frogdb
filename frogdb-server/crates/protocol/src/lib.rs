@@ -19,8 +19,8 @@ pub use format::format_float;
 pub use limits::{MAX_INTERNAL_FRAME_LEN, PROTO_MAX_BULK_LEN, PROTO_MAX_MULTIBULK_LEN};
 pub use reply::MapReply;
 pub use response::{
-    BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, SlotMigrationKind,
-    WireResponse, WireResult, sanitize_error_message,
+    BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, SafeStatus,
+    SlotMigrationKind, WireResponse, WireResult, sanitize_error_message,
 };
 pub use unknown_command::format_unknown_command_error;
 pub use version::ProtocolVersion;

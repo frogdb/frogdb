@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
-use frogdb_protocol::{ProtocolVersion, Response};
+use frogdb_protocol::{ProtocolVersion, Response, SafeStatus};
 use frogdb_scripting::FunctionFlags;
 use mlua::{MultiValue, Value};
 use tracing::{debug, info, warn};
@@ -396,7 +396,12 @@ impl ScriptExecutor {
                     return Response::Error(Bytes::from(e));
                 }
                 if let Ok(o) = t.get::<String>("ok") {
-                    return Response::Simple(Bytes::from(o));
+                    // Redis 8.6.1 security fix (`addReplyStatusSafe` in `luaReplyToRedisReply`):
+                    // a script can return attacker-authored bytes as a status
+                    // (`return {ok = redis.call('GET', KEYS[1])}`), and a simple
+                    // string is CRLF-framed, so an unsanitized CR/LF would put a
+                    // forged second frame on the wire.
+                    return Response::Simple(SafeStatus::sanitized(o));
                 }
 
                 // In RESP3, detect map-like tables (non-sequential keys).
@@ -901,7 +906,7 @@ mod tests {
         ) -> Result<Response, crate::error::CommandError> {
             ctx.store
                 .set(Bytes::from_static(b"n"), crate::types::Value::string("v1"));
-            Ok(Response::Simple(Bytes::from_static(b"OK")))
+            Ok(Response::ok())
         }
     }
 
@@ -972,6 +977,44 @@ mod tests {
         match outcome.result {
             Ok(Response::Bulk(Some(ref v))) => assert_eq!(v.as_ref(), b"v1"),
             other => panic!("re-entrant redis.call must round-trip the store, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lua_ok_status_is_crlf_sanitized() {
+        // Redis-feel issue 18 / Redis 8.6.1 `addReplyStatusSafe`. A script's
+        // `{ok = ...}` becomes a CRLF-framed `+…` reply, and its content can be
+        // attacker-authored (`return {ok = redis.call('GET', KEYS[1])}`), so an
+        // unsanitized CR/LF would put a forged second frame on the wire. The
+        // `SafeStatus` payload type makes that unconstructable; this pins that
+        // this producer routes through the *sanitizing* constructor and not the
+        // literal one.
+        let mut e = ScriptExecutor::new(ScriptingConfig::default()).unwrap();
+        let mut store = crate::store::HashMapStore::new();
+        let shard_senders: Arc<Vec<crate::shard::ShardSender>> = Arc::new(vec![]);
+        let registry = crate::registry::CommandRegistry::new();
+        let mut ctx = test_command_context(&mut store, &shard_senders);
+
+        let outcome = e.eval(
+            br#"return {ok = "OK\r\n-WRONGPASS forged\r\n"}"#,
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false,
+        );
+
+        match outcome.result {
+            Ok(Response::Simple(ref s)) => {
+                assert_eq!(
+                    s.as_ref(),
+                    b"OK  -WRONGPASS forged  ",
+                    "each CR and LF must become one space, byte-length preserved"
+                );
+                assert!(!s.iter().any(|b| matches!(b, b'\r' | b'\n')));
+            }
+            other => panic!("expected a sanitized status reply, got {other:?}"),
         }
     }
 

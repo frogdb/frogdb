@@ -2,7 +2,7 @@
 
 use crate::common::test_server::{TestClient, TestServer, TestServerConfig};
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use futures::StreamExt;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::time::{Duration, Instant};
@@ -2183,10 +2183,7 @@ async fn test_subscribe_confirmation_in_multi_exec_resp2() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["SUBSCRIBE", "ch"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["SUBSCRIBE", "ch"]).await, Response::queued());
 
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
@@ -2249,10 +2246,7 @@ async fn test_ssubscribe_inside_multi_rejected() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["SSUBSCRIBE", "sch"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["SSUBSCRIBE", "sch"]).await, Response::queued());
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
@@ -2292,10 +2286,7 @@ async fn test_subscribe_inside_multi_executes() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["SUBSCRIBE", "ch"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["SUBSCRIBE", "ch"]).await, Response::queued());
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
@@ -2322,10 +2313,7 @@ async fn test_psubscribe_inside_multi_executes() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["PSUBSCRIBE", "ch.*"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["PSUBSCRIBE", "ch.*"]).await, Response::queued());
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
@@ -2354,10 +2342,7 @@ async fn test_unsubscribe_inside_multi_executes() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["UNSUBSCRIBE"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["UNSUBSCRIBE"]).await, Response::queued());
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
@@ -2384,10 +2369,7 @@ async fn test_punsubscribe_inside_multi_executes() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["PUNSUBSCRIBE"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["PUNSUBSCRIBE"]).await, Response::queued());
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
@@ -2425,7 +2407,7 @@ async fn test_sunsubscribe_inside_multi_executes() {
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
     assert_eq!(
         c.command(&["SUNSUBSCRIBE", "sch"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
+        Response::queued()
     );
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
@@ -2456,10 +2438,7 @@ async fn test_pubsub_inside_multi_executes() {
     let mut c = server.connect().await;
 
     assert_eq!(c.command(&["MULTI"]).await, Response::ok());
-    assert_eq!(
-        c.command(&["PUBSUB", "NUMPAT"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
-    );
+    assert_eq!(c.command(&["PUBSUB", "NUMPAT"]).await, Response::queued());
     match c.command(&["EXEC"]).await {
         Response::Array(items) => {
             assert_eq!(items.len(), 1);
@@ -4241,7 +4220,7 @@ async fn test_eval_scripted_set_emits_set_event() {
             "v",
         ])
         .await;
-    assert_eq!(resp, Response::Simple(Bytes::from("OK")));
+    assert_eq!(resp, Response::ok());
 
     assert_keyevent_keys(&mut subscriber, "set", &["evset"]).await;
     server.shutdown().await;
@@ -4921,7 +4900,7 @@ async fn test_slow_subscriber_output_buffer_bound_disconnects() {
     // The server must stay responsive throughout — no OOM, no wedge. A separate
     // connection completes a round trip while the flood is in flight.
     let pong = control.command(&["PING"]).await;
-    assert_eq!(pong, Response::Simple(Bytes::from("PONG")));
+    assert_eq!(pong, Response::pong());
 
     // Now let the subscriber drain. It receives the bounded prefix that fit in
     // the kernel buffers and then hits EOF: the server tore the connection down
@@ -4974,7 +4953,7 @@ async fn test_slow_subscriber_output_buffer_bound_disconnects() {
 
     // Control connection is still fully functional after the storm.
     let pong = control.command(&["PING"]).await;
-    assert_eq!(pong, Response::Simple(Bytes::from("PONG")));
+    assert_eq!(pong, Response::pong());
 
     server.shutdown().await;
 }
@@ -5111,7 +5090,7 @@ async fn test_pubsub_mode_resp2_reset_exits_pubsub_mode() {
     // RESET itself is allowed while subscribed (it's in the 9-command set).
     assert_eq!(
         c.command(&["RESET"]).await,
-        Response::Simple(Bytes::from("RESET"))
+        Response::Simple(SafeStatus::from_static("RESET"))
     );
 
     // Pub/sub mode is exited: a plain data command now succeeds instead of

@@ -2,7 +2,7 @@
 
 use crate::common::test_server::TestServer;
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 #[tokio::test]
 async fn test_lpush_rpush() {
@@ -140,7 +140,7 @@ async fn test_lindex_lset() {
 
     // LSET
     let response = client.command(&["LSET", "mylist", "1", "updated"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client.command(&["LINDEX", "mylist", "1"]).await;
     assert_eq!(response, Response::Bulk(Some(Bytes::from("updated"))));
@@ -158,7 +158,7 @@ async fn test_ltrim() {
         .await;
 
     let response = client.command(&["LTRIM", "mylist", "1", "3"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client.command(&["LRANGE", "mylist", "0", "-1"]).await;
     match response {
@@ -231,7 +231,7 @@ async fn test_type_command_list() {
     client.command(&["RPUSH", "mylist", "a"]).await;
 
     let response = client.command(&["TYPE", "mylist"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("list")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("list")));
 
     server.shutdown().await;
 }

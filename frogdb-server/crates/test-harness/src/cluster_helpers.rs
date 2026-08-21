@@ -416,7 +416,7 @@ mod tests {
         let result = is_moved_redirect(&moved);
         assert_eq!(result, Some((3999, "127.0.0.1:6381".to_string())));
 
-        let ok = Response::Simple(Bytes::from("OK"));
+        let ok = Response::ok();
         assert_eq!(is_moved_redirect(&ok), None);
     }
 
@@ -432,7 +432,7 @@ mod tests {
         let down = Response::Error(Bytes::from("CLUSTERDOWN The cluster is down"));
         assert!(is_cluster_down(&down));
 
-        let ok = Response::Simple(Bytes::from("OK"));
+        let ok = Response::ok();
         assert!(!is_cluster_down(&ok));
     }
 }

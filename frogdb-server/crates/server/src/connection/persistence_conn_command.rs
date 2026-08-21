@@ -16,7 +16,7 @@ use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnectionCommand,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 /// The `CommandSpec` for BGSAVE. Declared here alongside the executor (rather
 /// than in a stub `Command` impl) so the connection command is a single
@@ -128,10 +128,10 @@ fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     match ctx.snapshot_coordinator.request_snapshot(mode) {
         SnapshotRequest::Started(epoch) => {
             tracing::info!(epoch, "BGSAVE started");
-            Response::Simple(Bytes::from_static(b"Background saving started"))
+            Response::Simple(SafeStatus::from_static("Background saving started"))
         }
         SnapshotRequest::Coalesced => {
-            Response::Simple(Bytes::from_static(b"Background saving scheduled"))
+            Response::Simple(SafeStatus::from_static("Background saving scheduled"))
         }
         SnapshotRequest::AlreadyRunning => {
             // KNOWN DIVERGENCE FROM REDIS (pinned by
@@ -146,7 +146,9 @@ fn handle_bgsave(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
             // as-is for now; switching to `Response::Error` to match Redis is a
             // follow-up decision (it changes client-visible behavior), out of
             // scope for this test-only pass.
-            Response::Simple(Bytes::from_static(b"Background save already in progress"))
+            Response::Simple(SafeStatus::from_static(
+                "Background save already in progress",
+            ))
         }
     }
 }
@@ -260,7 +262,7 @@ mod tests {
         let resp = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             resp,
-            Response::Simple(Bytes::from_static(b"Background saving started"))
+            Response::Simple(SafeStatus::from_static("Background saving started"))
         );
     }
 
@@ -275,12 +277,12 @@ mod tests {
         let first = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             first,
-            Response::Simple(Bytes::from_static(b"Background saving started"))
+            Response::Simple(SafeStatus::from_static("Background saving started"))
         );
         let second = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             second,
-            Response::Simple(Bytes::from_static(b"Background saving started"))
+            Response::Simple(SafeStatus::from_static("Background saving started"))
         );
     }
 
@@ -297,7 +299,7 @@ mod tests {
             .await;
         assert_eq!(
             resp,
-            Response::Simple(Bytes::from_static(b"Background saving started"))
+            Response::Simple(SafeStatus::from_static("Background saving started"))
         );
     }
 
@@ -472,7 +474,7 @@ mod tests {
         let first = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             first,
-            Response::Simple(Bytes::from_static(b"Background saving started")),
+            Response::Simple(SafeStatus::from_static("Background saving started")),
             "first BGSAVE must claim the idle slot and start"
         );
 
@@ -488,7 +490,9 @@ mod tests {
         let second = BgsaveConnCommand.execute(&mut fx.ctx(), &[]).await;
         assert_eq!(
             second,
-            Response::Simple(Bytes::from_static(b"Background save already in progress")),
+            Response::Simple(SafeStatus::from_static(
+                "Background save already in progress"
+            )),
             "overlapping BGSAVE must observe AlreadyRunning's pinned (Redis-diverging) reply"
         );
 

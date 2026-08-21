@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use frogdb_core::ClusterState;
 use frogdb_core::cluster::ClusterRaft;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use frogdb_server::net::tcp_listener_reusable;
 use frogdb_server::{Config, Server, ServerListeners};
 use futures::{SinkExt, StreamExt};
@@ -1342,7 +1342,7 @@ impl Resp3TestClient {
 /// Convert a BytesFrame to our Response type.
 pub fn frame_to_response(frame: BytesFrame) -> Response {
     match frame {
-        BytesFrame::SimpleString(s) => Response::Simple(s),
+        BytesFrame::SimpleString(s) => Response::Simple(SafeStatus::sanitized(s)),
         BytesFrame::Error(e) => Response::Error(e.into_inner()),
         BytesFrame::Integer(n) => Response::Integer(n),
         BytesFrame::BulkString(b) => Response::Bulk(Some(b)),

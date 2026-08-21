@@ -2,7 +2,7 @@
 
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 // ============================================================================
 // JSON Command Tests
@@ -17,7 +17,7 @@ async fn test_json_set_get() {
     let response = client
         .command(&["JSON.SET", "doc", "$", r#"{"name":"test","count":0}"#])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // JSON.GET retrieves the value
     let response = client.command(&["JSON.GET", "doc", "$"]).await;
@@ -41,7 +41,7 @@ async fn test_json_set_nx_xx() {
     let response = client
         .command(&["JSON.SET", "doc", "$", r#"{"value":1}"#, "NX"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // NX - should fail because key exists
     let response = client
@@ -53,7 +53,7 @@ async fn test_json_set_nx_xx() {
     let response = client
         .command(&["JSON.SET", "doc", "$", r#"{"value":3}"#, "XX"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // XX on new key - should fail
     let response = client
@@ -532,7 +532,7 @@ async fn test_json_merge() {
     let response = client
         .command(&["JSON.MERGE", "doc", "$", r#"{"a":10,"b":{"d":4},"e":5}"#])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify
     let response = client.command(&["JSON.GET", "doc", "$"]).await;
@@ -639,7 +639,7 @@ async fn test_json_nested_path() {
     let response = client
         .command(&["JSON.SET", "doc", "$.level1.level2.level3.value", "100"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify
     let response = client
@@ -720,7 +720,10 @@ async fn test_json_type_key() {
 
     // TYPE command should return "ReJSON-RL"
     let response = client.command(&["TYPE", "jsonkey"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("ReJSON-RL")));
+    assert_eq!(
+        response,
+        Response::Simple(SafeStatus::from_static("ReJSON-RL"))
+    );
 
     server.shutdown().await;
 }
@@ -885,7 +888,7 @@ async fn test_json_set_respects_configured_max_depth() {
         .await;
     assert_eq!(
         ok,
-        Response::Simple(Bytes::from("OK")),
+        Response::ok(),
         "document within configured max-depth should be accepted"
     );
 
@@ -932,7 +935,7 @@ async fn test_json_set_respects_configured_max_size() {
         .await;
     assert_eq!(
         ok,
-        Response::Simple(Bytes::from("OK")),
+        Response::ok(),
         "document within configured max-size should be accepted"
     );
 
@@ -983,7 +986,7 @@ async fn test_json_set_existing_key_respects_configured_max_depth() {
 
     // Seed a shallow document so the key exists (existing-key branch on re-SET).
     let ok = client.command(&["JSON.SET", "k", "$", r#"{"a":1}"#]).await;
-    assert_eq!(ok, Response::Simple(Bytes::from("OK")));
+    assert_eq!(ok, Response::ok());
 
     // Re-SET the existing key with a depth-5 document (> 4): must be rejected.
     let too_deep = client
@@ -1020,7 +1023,7 @@ async fn test_json_merge_growth_respects_configured_max_size() {
 
     // 7-byte document (<= 20): accepted.
     let ok = client.command(&["JSON.SET", "k", "$", r#"{"a":1}"#]).await;
-    assert_eq!(ok, Response::Simple(Bytes::from("OK")));
+    assert_eq!(ok, Response::ok());
 
     // Patch fragment is 16 bytes (<= 20) so it passes the ingest check, but the
     // merged result `{"a":1,"b":"aaaaaaaa"}` is 22 bytes (> 20): rejected.
@@ -1057,7 +1060,7 @@ async fn test_json_arrappend_growth_respects_configured_max_size() {
 
     // 3-byte array document (<= 20): accepted.
     let ok = client.command(&["JSON.SET", "k", "$", "[1]"]).await;
-    assert_eq!(ok, Response::Simple(Bytes::from("OK")));
+    assert_eq!(ok, Response::ok());
 
     // Appended value is an 18-byte JSON string (<= 20) so it passes ingest, but
     // the resulting array `[1,"aaaaaaaaaaaaaaaa"]` is 22 bytes (> 20): rejected.
@@ -1131,7 +1134,7 @@ async fn test_json_set_via_eval_respects_configured_max_depth() {
         .await;
     assert_eq!(
         ok,
-        Response::Simple(Bytes::from("OK")),
+        Response::ok(),
         "scripted JSON.SET within max-depth must succeed"
     );
 

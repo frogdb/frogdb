@@ -115,8 +115,12 @@ pub enum SlotMigrationKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WireResponse {
     // === RESP2 Types ===
-    /// Simple string (+OK\r\n)
-    Simple(Bytes),
+    /// Simple string (+OK\r\n).
+    ///
+    /// The payload is a [`SafeStatus`] rather than a raw `Bytes`: a simple string
+    /// is CRLF-framed, so an unsanitized CR/LF in the body would put a second frame
+    /// on the wire. See [`SafeStatus`].
+    Simple(SafeStatus),
 
     /// Error (-ERR message\r\n)
     Error(Bytes),
@@ -222,10 +226,150 @@ pub fn sanitize_error_message(msg: Bytes) -> Str {
     }
 }
 
+/// The payload of a simple-status reply: bytes proven free of CR and LF.
+///
+/// **This type is the chokepoint for status replies, the way
+/// [`sanitize_error_message`] is the chokepoint for error replies.** A simple
+/// string is framed as `+<body>\r\n`, so a body containing CR or LF puts *extra
+/// frames* on the wire and desynchronizes the client's reply stream — the same
+/// confused-deputy class round-2 issue 38 closed for errors. The reachable path
+/// here is Lua: a script returning `{ok = redis.call('GET', KEYS[1])}` puts a
+/// stored, attacker-authored value straight into a `+…` frame.
+///
+/// Rather than sanitize at the encoder (which would tax the hottest reply on the
+/// write path, `+OK`), the invariant lives in the type: [`WireResponse::Simple`]
+/// and [`Response::Simple`] carry a `SafeStatus`, whose field is private and
+/// whose only two constructors are
+///
+/// - [`SafeStatus::from_static`] — `const fn`, for author-written literals. The
+///   CR/LF scan is const-evaluable, so a literal carrying CR/LF is a compile
+///   error, and on the hot path the scan folds away to nothing.
+/// - [`SafeStatus::sanitized`] — for dynamic content, mapping CR/LF away.
+///
+/// So an unsanitized dynamic status is unconstructable, and the encode paths
+/// (`to_resp2_frame` / `to_resp3_frame`) stay pass-through.
+///
+/// Upstream parallel: Redis 8.6.1 added `addReplyStatusSafe` and routed
+/// `luaReplyToRedisReply`'s `ok` field and `RM_ReplyWithSimpleString` through it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SafeStatus(Bytes);
+
+impl SafeStatus {
+    /// Build a status from an author-written `&'static str` literal.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the literal contains CR or LF. In a `const` context — and, in
+    /// practice, whenever the argument is a literal, since the scan constant-folds
+    /// — this is a *compile-time* rejection, not a runtime one. The argument is
+    /// author-controlled by construction (the `lint-status-sanitize` seam gate
+    /// requires a string literal at every call site), so the runtime panic is
+    /// unreachable from client input.
+    pub const fn from_static(status: &'static str) -> Self {
+        let bytes = status.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Spelled out rather than `matches!`: a plain `panic!` with a literal
+            // message is what makes this const-evaluable.
+            if bytes[i] == b'\r' || bytes[i] == b'\n' {
+                panic!("SafeStatus::from_static: status literal contains CR or LF");
+            }
+            i += 1;
+        }
+        SafeStatus(Bytes::from_static(bytes))
+    }
+
+    /// Build a status from dynamic content, mapping CR and LF away.
+    ///
+    /// # Semantics
+    ///
+    /// Every `\r` byte and every `\n` byte becomes a single space, in place:
+    /// byte-length preserving, no truncation, no escaping. That is Redis's
+    /// `sdsmapchars(s, "\r\n", "  ", 2)`, and it is exactly what
+    /// [`sanitize_error_message`] does to an error payload — the two chokepoints
+    /// agree on the mapping so a status and an error built from the same hostile
+    /// bytes come out the same shape.
+    ///
+    /// Deliberate divergence from [`sanitize_error_message`]: no lossy UTF-8
+    /// replacement. That function must produce a [`Str`] because RESP2's simple
+    /// error frame is UTF-8-typed; a simple *string* frame is `Bytes`, so there is
+    /// no UTF-8 requirement to satisfy. CR and LF are ASCII and never occur inside
+    /// a multi-byte sequence, so the byte-level map is the same transform while
+    /// preserving a non-UTF-8 payload instead of mangling it.
+    ///
+    /// A payload with nothing to map is handed through untouched — no scan-and-copy,
+    /// no allocation.
+    pub fn sanitized(status: impl Into<Bytes>) -> Self {
+        let bytes: Bytes = status.into();
+        if !bytes.iter().any(|b| matches!(b, b'\r' | b'\n')) {
+            return SafeStatus(bytes);
+        }
+        let mapped: Vec<u8> = bytes
+            .iter()
+            .map(|&b| if b == b'\r' || b == b'\n' { b' ' } else { b })
+            .collect();
+        SafeStatus(Bytes::from(mapped))
+    }
+
+    /// The CR/LF-free payload bytes.
+    pub fn as_bytes(&self) -> &Bytes {
+        &self.0
+    }
+
+    /// Consume the status, yielding its CR/LF-free payload bytes.
+    pub fn into_bytes(self) -> Bytes {
+        self.0
+    }
+}
+
+impl std::ops::Deref for SafeStatus {
+    type Target = Bytes;
+
+    fn deref(&self) -> &Bytes {
+        &self.0
+    }
+}
+
+impl AsRef<[u8]> for SafeStatus {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for SafeStatus {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for SafeStatus {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<[u8]> for SafeStatus {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<SafeStatus> for str {
+    fn eq(&self, other: &SafeStatus) -> bool {
+        other.0 == self
+    }
+}
+
+impl std::fmt::Display for SafeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&String::from_utf8_lossy(&self.0))
+    }
+}
+
 impl WireResponse {
     /// Create a simple "OK" response.
     pub fn ok() -> Self {
-        WireResponse::Simple(Bytes::from_static(b"OK"))
+        WireResponse::Simple(SafeStatus::from_static("OK"))
     }
 
     /// Create an error response.
@@ -245,12 +389,12 @@ impl WireResponse {
 
     /// Create a "PONG" response.
     pub fn pong() -> Self {
-        WireResponse::Simple(Bytes::from_static(b"PONG"))
+        WireResponse::Simple(SafeStatus::from_static("PONG"))
     }
 
     /// Create a "QUEUED" response (for transactions).
     pub fn queued() -> Self {
-        WireResponse::Simple(Bytes::from_static(b"QUEUED"))
+        WireResponse::Simple(SafeStatus::from_static("QUEUED"))
     }
 
     /// Convert to a RESP2 frame.
@@ -273,7 +417,11 @@ impl WireResponse {
     /// top level, so a nested null array is encoded as the nested null `$-1\r\n`.
     pub fn to_resp2_frame(self) -> Resp2BytesFrame {
         match self {
-            WireResponse::Simple(s) => Resp2BytesFrame::SimpleString(s),
+            // Pass-through by design: a `SafeStatus` is CR/LF-free by
+            // construction, so the encoder has nothing left to check. Contrast
+            // `WireResponse::Error`, whose payload is a raw `Bytes` and must be
+            // sanitized here.
+            WireResponse::Simple(s) => Resp2BytesFrame::SimpleString(s.into_bytes()),
             WireResponse::Error(e) => Resp2BytesFrame::Error(sanitize_error_message(e)),
             WireResponse::Integer(i) => Resp2BytesFrame::Integer(i),
             WireResponse::Bulk(Some(b)) => Resp2BytesFrame::BulkString(b),
@@ -340,8 +488,9 @@ impl WireResponse {
     /// This method CANNOT panic - all variants are wire-serializable.
     pub fn to_resp3_frame(self) -> Resp3BytesFrame {
         match self {
+            // Pass-through by design — see the RESP2 arm.
             WireResponse::Simple(s) => Resp3BytesFrame::SimpleString {
-                data: s,
+                data: s.into_bytes(),
                 attributes: None,
             },
             WireResponse::Error(e) => Resp3BytesFrame::SimpleError {
@@ -676,8 +825,12 @@ pub enum RaftClusterOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Response {
     // === RESP2 Types (Implemented) ===
-    /// Simple string (+OK\r\n)
-    Simple(Bytes),
+    /// Simple string (+OK\r\n).
+    ///
+    /// The payload is a [`SafeStatus`] rather than a raw `Bytes`: a simple string
+    /// is CRLF-framed, so an unsanitized CR/LF in the body would put a second frame
+    /// on the wire. See [`SafeStatus`].
+    Simple(SafeStatus),
 
     /// Error (-ERR message\r\n)
     Error(Bytes),
@@ -915,7 +1068,7 @@ impl Response {
 impl Response {
     /// Create a simple "OK" response.
     pub fn ok() -> Self {
-        Response::Simple(Bytes::from_static(b"OK"))
+        Response::Simple(SafeStatus::from_static("OK"))
     }
 
     /// Create an error response.
@@ -935,12 +1088,12 @@ impl Response {
 
     /// Create a "PONG" response.
     pub fn pong() -> Self {
-        Response::Simple(Bytes::from_static(b"PONG"))
+        Response::Simple(SafeStatus::from_static("PONG"))
     }
 
     /// Create a "QUEUED" response (for transactions).
     pub fn queued() -> Self {
-        Response::Simple(Bytes::from_static(b"QUEUED"))
+        Response::Simple(SafeStatus::from_static("QUEUED"))
     }
 
     /// Safely convert to a RESP2 frame, returning None for internal actions.
@@ -1796,5 +1949,130 @@ mod tests {
         // "sanitize everything" change.
         let frame = WireResponse::BlobError(Bytes::from_static(b"ERR a\r\nb")).to_resp3_frame();
         assert_eq!(encode_resp3(&frame).as_ref(), b"!8\r\nERR a\r\nb\r\n");
+    }
+
+    // -------------------------------------------------------------------
+    // Redis-feel issue 18: the *status* half of the same framing invariant.
+    //
+    // A simple string is `+<body>\r\n`, so a body carrying CR/LF spans
+    // multiple frames exactly like an unsanitized error did. The reachable
+    // path is Lua — `return {ok = redis.call('GET', KEYS[1])}` puts a stored,
+    // attacker-authored value straight into a `+…` frame. Redis 8.6.1 closed
+    // this upstream with `addReplyStatusSafe`; here the invariant lives in
+    // `SafeStatus`, so the encoder stays pass-through.
+    // -------------------------------------------------------------------
+
+    /// The error-payload table, re-read as hostile *status* bodies: a Lua
+    /// `{ok = ...}` can carry any of these.
+    fn crlf_status_payloads() -> Vec<(&'static str, Vec<u8>)> {
+        crlf_injection_payloads()
+    }
+
+    /// Assert `encoded` is exactly one simple-string frame: a `+`, a body free
+    /// of CR and LF, and one terminating `\r\n`.
+    fn assert_single_status_frame(label: &str, encoded: &[u8]) {
+        assert_eq!(
+            encoded.first().copied(),
+            Some(b'+'),
+            "[{label}] expected a simple-string frame prefix '+', got {:?}",
+            String::from_utf8_lossy(encoded)
+        );
+        assert!(
+            encoded.ends_with(b"\r\n"),
+            "[{label}] frame must terminate with CRLF, got {:?}",
+            String::from_utf8_lossy(encoded)
+        );
+        let body = &encoded[1..encoded.len() - 2];
+        assert!(
+            !body.contains(&b'\r') && !body.contains(&b'\n'),
+            "[{label}] interior CR/LF survived encoding — the reply spans \
+             multiple frames: {:?}",
+            String::from_utf8_lossy(encoded)
+        );
+    }
+
+    #[test]
+    fn resp2_status_encodes_as_exactly_one_frame() {
+        for (label, payload) in crlf_status_payloads() {
+            let frame = WireResponse::Simple(SafeStatus::sanitized(payload)).to_resp2_frame();
+            assert_single_status_frame(label, &encode_resp2(&frame));
+        }
+    }
+
+    #[test]
+    fn resp3_status_encodes_as_exactly_one_frame() {
+        for (label, payload) in crlf_status_payloads() {
+            let frame = WireResponse::Simple(SafeStatus::sanitized(payload)).to_resp3_frame();
+            assert_single_status_frame(label, &encode_resp3(&frame));
+        }
+    }
+
+    #[test]
+    fn status_sanitizer_maps_crlf_to_spaces_like_the_error_sanitizer() {
+        // Same `sdsmapchars(s, "\r\n", "  ", 2)` semantics as
+        // `sanitize_error_message`: one space per CR and per LF, in place,
+        // byte-length preserving, no truncation.
+        let status = SafeStatus::sanitized(Bytes::from_static(b"a\rb\nc\r\nd"));
+        assert_eq!(status.as_ref(), b"a b c  d");
+        assert_eq!(status.len(), "a\rb\nc\r\nd".len());
+        assert_eq!(
+            status.as_ref(),
+            sanitize_error_message(Bytes::from_static(b"a\rb\nc\r\nd")).as_bytes(),
+            "the status and error chokepoints must agree on the mapping"
+        );
+
+        // The issue's exact injection: a forged error frame after a status.
+        let forged = SafeStatus::sanitized(Bytes::from_static(b"OK\r\n-WRONGPASS forged\r\n"));
+        assert_eq!(forged.as_ref(), b"OK  -WRONGPASS forged  ");
+    }
+
+    #[test]
+    fn status_sanitizer_passes_clean_payloads_through_untouched() {
+        let clean = Bytes::from_static(b"Background saving started");
+        let status = SafeStatus::sanitized(clean.clone());
+        assert_eq!(status.as_bytes(), &clean);
+        assert_eq!(
+            status.as_bytes().as_ptr(),
+            clean.as_ptr(),
+            "a payload with nothing to map must not be copied"
+        );
+    }
+
+    #[test]
+    fn status_sanitizer_preserves_non_utf8_bytes() {
+        // Deliberate divergence from `sanitize_error_message`, which must
+        // produce a `Str` and so replaces invalid UTF-8 lossily. A simple
+        // string is `Bytes`: CR/LF are ASCII and never occur inside a
+        // multi-byte sequence, so mapping them preserves everything else.
+        let status = SafeStatus::sanitized(Bytes::from_static(b"\xff\xfe\r\n\xfd"));
+        assert_eq!(status.as_ref(), b"\xff\xfe  \xfd");
+    }
+
+    #[test]
+    fn static_status_constructor_is_const_and_crlf_free() {
+        // Evaluated at compile time: a literal carrying CR/LF would not build.
+        const OK: SafeStatus = SafeStatus::from_static("OK");
+        assert_eq!(OK.as_ref(), b"OK");
+        assert!(!OK.iter().any(|b| matches!(b, b'\r' | b'\n')));
+    }
+
+    #[test]
+    #[should_panic(expected = "status literal contains CR or LF")]
+    fn static_status_constructor_rejects_crlf() {
+        // The runtime face of the const check. Unreachable from client input —
+        // `lint-status-sanitize` requires a string literal at every call site —
+        // but pinned so the check itself cannot be deleted silently.
+        let _ = SafeStatus::from_static("OK\r\n+FORGED");
+    }
+
+    #[test]
+    fn ok_pong_queued_are_crlf_free_statuses() {
+        for resp in [
+            WireResponse::ok(),
+            WireResponse::pong(),
+            WireResponse::queued(),
+        ] {
+            assert_single_status_frame("builtin", &encode_resp2(&resp.to_resp2_frame()));
+        }
     }
 }

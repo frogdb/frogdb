@@ -802,7 +802,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-ship-cmd-full
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-ship-cmd-full
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1824,6 +1824,17 @@ lint-nested-config:
 # and deliberately exempt. See scripts/error-sanitize.py.
 lint-error-sanitize:
     ./scripts/error-sanitize.py
+
+# Gate: the status-reply half of the same CRLF-framing invariant. A simple string
+# is framed `+<body>\r\n`, so `WireResponse::Simple`/`Response::Simple` carry a
+# `SafeStatus` newtype (private field, two constructors: a const `from_static`
+# for author-written literals and a CR/LF-mapping `sanitized` for dynamic
+# content) instead of a raw `Bytes`. The encoder stays pass-through and an
+# unsanitized dynamic status is unconstructable. Pins the variant payload types,
+# the newtype's privacy, the raw-construction sites, and that every
+# `from_static` argument is a string literal. See scripts/status-sanitize.py.
+lint-status-sanitize:
+    ./scripts/status-sanitize.py
 
 # Gate: every mutating shard-dispatch arm states a continuation-lock disposition.
 # The 64 arms of the 11 shard `*Msg` enums are count-pinned per enum; the arms

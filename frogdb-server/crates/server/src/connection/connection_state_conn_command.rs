@@ -34,7 +34,7 @@ use frogdb_core::{
     AccessSpec, Arity, BoxFuture, CommandFlags, CommandSpec, ConnCtx, ConnectionCommand,
     ConnectionLevelOp, EventSpec, ExecutionStrategy, KeySpec, LookupSpec, WaiterWake, WalStrategy,
 };
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 use crate::connection::PubSubMsg;
 use crate::scatter::ScatterGather;
@@ -159,7 +159,7 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
     // INFO/LIST at once rather than waiting on the next periodic stats sync.
     client_registry.update_multi_state(conn_id, false, 0);
 
-    Response::Simple(Bytes::from_static(b"RESET"))
+    Response::Simple(SafeStatus::from_static("RESET"))
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +390,7 @@ mod tests {
         fx.state.name = Some(Bytes::from_static(b"worker-1"));
 
         let resp = ResetConnCommand.execute(&mut fx.ctx_mut(), &[]).await;
-        assert_eq!(resp, Response::Simple(Bytes::from_static(b"RESET")));
+        assert_eq!(resp, Response::Simple(SafeStatus::from_static("RESET")));
         assert!(
             !fx.state.protocol_version.is_resp3(),
             "RESET reverts to RESP2"

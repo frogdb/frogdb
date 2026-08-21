@@ -363,8 +363,11 @@ redis.register_function(
     // redis.call('ping') returns a status reply; accept both Simple and Bulk
     let resp = client.command(&["FCALL", "f1", "0"]).await;
     match &resp {
-        Response::Simple(b) | Response::Bulk(Some(b)) => {
-            assert_eq!(b.as_ref(), b"PONG", "expected PONG, got {:?}", resp);
+        Response::Simple(s) => {
+            assert_eq!(s.as_ref(), b"PONG", "expected PONG, got {resp:?}");
+        }
+        Response::Bulk(Some(b)) => {
+            assert_eq!(b.as_ref(), b"PONG", "expected PONG, got {resp:?}");
         }
         _ => panic!("expected PONG response, got {resp:?}"),
     }

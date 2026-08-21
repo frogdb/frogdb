@@ -851,7 +851,7 @@ impl ConnectionHandler {
                             let mut write_err = false;
                             for event in &events {
                                 let formatted = crate::monitor::MonitorBroadcaster::format_event(event);
-                                if self.feed_response(WireResponse::Simple(bytes::Bytes::from(formatted))).await.is_err() {
+                                if self.feed_response(WireResponse::Simple(frogdb_protocol::SafeStatus::sanitized(formatted))).await.is_err() {
                                     write_err = true;
                                     break;
                                 }

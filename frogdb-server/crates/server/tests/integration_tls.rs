@@ -11,7 +11,7 @@ async fn test_tls_ping() {
     let mut client = server.connect_tls(&fixture).await;
 
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(bytes::Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     server.shutdown().await;
 }
@@ -39,7 +39,7 @@ async fn test_plaintext_still_works() {
     // Plaintext port should still accept connections
     let mut client = server.connect().await;
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(bytes::Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     server.shutdown().await;
 }
@@ -89,7 +89,7 @@ async fn test_mtls_required_with_cert() {
     // Client with cert should succeed
     let mut client = server.connect_tls_with_client_cert(&fixture).await;
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(bytes::Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     server.shutdown().await;
 }
@@ -146,12 +146,12 @@ async fn test_mtls_optional_both_paths() {
     // With client cert
     let mut client = server.connect_tls_with_client_cert(&fixture).await;
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(bytes::Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     // Without client cert (should also succeed for Optional mode)
     let mut client = server.connect_tls(&fixture).await;
     let response = client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(bytes::Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     server.shutdown().await;
 }

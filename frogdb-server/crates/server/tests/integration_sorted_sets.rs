@@ -2,7 +2,7 @@
 
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use frogdb_server::config::server::SortedSetIndexConfig;
 use rstest::rstest;
 
@@ -622,7 +622,7 @@ async fn test_type_command_zset(#[case] backend: SortedSetIndexConfig) {
     client.command(&["ZADD", "myzset", "1", "one"]).await;
 
     let response = client.command(&["TYPE", "myzset"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("zset")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("zset")));
 
     server.shutdown().await;
 }

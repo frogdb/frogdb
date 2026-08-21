@@ -5,7 +5,7 @@
 
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use frogdb_telemetry::testing::{MetricsDelta, MetricsSnapshot};
 use proptest::prelude::*;
 use tokio::runtime::Runtime;
@@ -372,12 +372,12 @@ proptest! {
 
             for _ in 0..reset_count {
                 let response = client.command(&["RESET"]).await;
-                prop_assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+                prop_assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
             }
 
             // Connection should still work
             let response = client.command(&["PING"]).await;
-            prop_assert_eq!(response, Response::Simple(Bytes::from("PONG")));
+            prop_assert_eq!(response, Response::pong());
 
             server.shutdown().await;
             Ok(())
@@ -408,7 +408,7 @@ proptest! {
 
             // RESET
             let response = client.command(&["RESET"]).await;
-            prop_assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+            prop_assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
             // Verify clean state: no name
             let response = client.command(&["CLIENT", "GETNAME"]).await;
@@ -416,7 +416,7 @@ proptest! {
 
             // Verify clean state: not in transaction (can start new MULTI)
             let response = client.command(&["MULTI"]).await;
-            prop_assert_eq!(response, Response::Simple(Bytes::from("OK")));
+            prop_assert_eq!(response, Response::ok());
             client.command(&["DISCARD"]).await;
 
             // Verify clean state: key was not set

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use frogdb_core::{CoreMsg, PartialResult, ScatterOp, shard_for_key};
-use frogdb_protocol::{ParsedCommand, Response};
+use frogdb_protocol::{ParsedCommand, Response, SafeStatus};
 
 use crate::connection::ConnectionHandler;
 use crate::migrate::{MigrateArgs, MigrateClient, MigrateError};
@@ -176,7 +176,7 @@ impl ConnectionHandler {
         }
 
         if migrated_count == 0 && !migrate_args.keys.is_empty() {
-            Response::Simple(Bytes::from("NOKEY"))
+            Response::Simple(SafeStatus::from_static("NOKEY"))
         } else {
             Response::ok()
         }
@@ -192,7 +192,7 @@ impl ConnectionHandler {
 
         // Check if we have any keys to migrate
         if parsed.keys.is_empty() {
-            return Response::Simple(Bytes::from_static(b"NOKEY"));
+            return Response::Simple(SafeStatus::from_static("NOKEY"));
         }
 
         // Group keys by shard
@@ -244,7 +244,7 @@ impl ConnectionHandler {
 
         // If no keys actually exist, return NOKEY
         if dumps.is_empty() {
-            return Response::Simple(Bytes::from_static(b"NOKEY"));
+            return Response::Simple(SafeStatus::from_static("NOKEY"));
         }
 
         // Connect to target server

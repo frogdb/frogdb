@@ -1181,7 +1181,7 @@ mod tests {
                 Bytes::from_static(b"seam"),
                 crate::types::Value::string("v1"),
             );
-            Ok(Response::Simple(Bytes::from_static(b"OK")))
+            Ok(Response::ok())
         }
     }
 
@@ -1225,7 +1225,7 @@ mod tests {
         ) -> Result<Response, crate::error::CommandError> {
             ctx.store
                 .set(args[0].clone(), crate::types::Value::string("v1"));
-            Ok(Response::Simple(Bytes::from_static(b"OK")))
+            Ok(Response::ok())
         }
     }
 
@@ -1505,7 +1505,7 @@ mod tests {
                     response_tx, ..
                 }) = env.message
             {
-                let _ = response_tx.send(Response::Simple(Bytes::from_static(b"OK")));
+                let _ = response_tx.send(Response::ok());
             }
         });
 

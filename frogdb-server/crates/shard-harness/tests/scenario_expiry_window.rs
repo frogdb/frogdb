@@ -23,7 +23,7 @@
 //! One `#[test]` per command, so a partial fix cannot pass.
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 use frogdb_core::store::BackdateExpiryResult;
 use frogdb_shard_harness::harness::ShardDriver;
@@ -149,7 +149,7 @@ async fn type_of_expired_key_is_none() {
 
     assert_eq!(
         d.execute(0, "TYPE", &["k"]).await,
-        Response::Simple(Bytes::from_static(b"none")),
+        Response::Simple(SafeStatus::from_static("none")),
         "TYPE must not report the type of a logically dead key"
     );
 }

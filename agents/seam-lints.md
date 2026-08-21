@@ -1,17 +1,17 @@
 # Seam lints: chokepoint gates
 
 A seam lint states an invariant of the form **"every X must go through Y"**, where `Y` is the one
-implementation that gets it right, and fails the build on any `X` that does not. Seventeen of these
+implementation that gets it right, and fails the build on any `X` that does not. Eighteen of these
 ship today, plus `lint-failover-atomicity`'s sibling checks; each is a `just lint-<rule>` recipe
 and all but one run in well under a second because they are `grep`/`awk` over source text, not
 compiled Rust.
 
-`just lint-gates` runs the compile-free sixteen of them in one shot. It is wired into
+`just lint-gates` runs the compile-free seventeen of them in one shot. It is wired into
 lefthook `pre-commit` **unconditionally** — no `CLAUDECODE=1` skip, unlike `rust-clippy`, because
 these are greps, not a workspace compile — and into CI as the `seam-gates` job
 (`.github/workflows/workflow_gen/src/workflow_gen/workflows/test.py`, rendered to
 `.github/workflows/test.yml`), listed in `ci-pass`'s required-jobs array. `just lint` runs the
-full sixteen (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
+full seventeen (plus the turmoil lints) as part of `just check`/CI's `lint` job — it *depends on*
 `lint-gates` rather than re-listing its members, because the two hand-maintained lists had
 already drifted (three gates ran on every commit but not under `just lint`).
 
@@ -33,12 +33,13 @@ already drifted (three gates ran on every commit but not under `just lint`).
 | `lint-durable-ack` | a single-file pin on `cluster/src/storage.rs`: each openraft storage method that acks durability (`save`, `save_vote`, `append`) issues its RocksDB write with sync options (`write_opt(..)` + `set_sync(true)`), never a plain `db.write`/`db.flush` that returns before the WAL is fsynced (durability is acked by a callback, not a value a grep can see, so this is a hand-crafted pin, not an `rg` rule) | yes |
 | `lint-nested-config` | no figment `.nested()` on a config source anywhere under `frogdb-server` — it files a TOML file's top-level tables under non-default profiles that an `extract()` under `Profile::Default` never reads (round-2 issue 49); the one known site rides the named-gap warn idiom until the fix lands | yes |
 | `lint-error-sanitize` | a single-file pin on `protocol/src/response.rs`: every CRLF-framed error frame (`Resp2BytesFrame::Error`, `Resp3BytesFrame::SimpleError`) takes its payload from `sanitize_error_message(..)` so a client's error text cannot inject a second wire frame (#38); the length-framed `Resp3BytesFrame::BlobError` is deliberately exempt | yes |
+| `lint-status-sanitize` | the status-reply half of the same CRLF-framing invariant, pinned as a *type* rather than a call: `WireResponse::Simple` / `Response::Simple` carry a `SafeStatus` (private field; two constructors — a `const` `from_static` for author-written literals, a CR/LF-mapping `sanitized` for dynamic content), so the encoder stays pass-through and an unsanitized dynamic status — a Lua `{ok = <attacker bytes>}` — is unconstructable (redis-feel 18; Redis 8.6.1 `addReplyStatusSafe`). Pins the two variant payload types, the newtype's privacy, the raw-construction sites, and, repo-wide, that every `SafeStatus::from_static(..)` argument is a string literal | yes |
 | `lint-continuation-lock` | every mutating shard-dispatch arm states a disposition against `ShardWorker::can_execute_during_lock` — GATE (calls it, in the arm body), EXEMPT (reason + a forcing test that must still exist), or a tracked named-gap bypass; the 64 arms of the 11 shard `*Msg` enums are count-pinned per enum, so a new or renamed arm cannot land without a classification | yes |
 | `lint-script-write-seam` | a script's writes reach the store only through `ShardWriteSeam::admit` (`specs/txn.md` FM-TXN-051): `ScriptCommandGate::dispatch` admits *before* it runs the sub-command and before it marks the script write-dirty, `invoker.run_local`/`run_remote` appear only in `gate.rs`, the seam is assembled only by `ShardWorker::write_seam` (live cluster state / node id / quorum checker / tracker), the two admission bypasses (`pre_authorized` for replica apply, `internal` for the shard harness) are pinned to their file, and every shard message carrying writes the connection never gauntleted declares an `admission` | yes |
 | `lint-ship-cmd-full` | every distributable frogdb-server build (the self-built `just release`, cross-compiled binaries, in-Docker release build, macOS release tarball, the deb doc's build-the-binaries step) passes `--features cmd-full` (ADR-0005 ruling 1) — `core-profile` is the dev-only default. Greps the whole tracked tree for a cargo invocation naming `frogdb-server` as a release-mode build target and demands `cmd-full` appear on it; a count pin (`EXPECTED_COUNTS` in `scripts/ship-cmd-full.py`) catches a ship site moving or disappearing without the pin following it | yes |
 
 Two recipes sit next to this family but are out of scope for both `lint-gates` and this doc's
-"the 16": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
+"the 17": `lint-turmoil` (a `cargo clippy --features turmoil` pass — compiles) and
 `lint-turmoil-features` (checks the turmoil cargo-feature is forwarded through every dependent
 manifest — does not compile, but polices the turmoil feature rather than a seam, and the
 originating issue named "the turmoil lints" as excluded alongside the one that compiles). Both

@@ -6,7 +6,7 @@ use crate::common::response_helpers::{
 };
 use crate::common::test_server::TestServer;
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 // ============================================================================
 // ACL Integration Tests
@@ -82,7 +82,7 @@ async fn test_reset_deauthenticates_with_requirepass() {
 
     // RESET replies +RESET and deauthenticates.
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from_static(b"RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     // A subsequent non-AUTH command now returns NOAUTH.
     let response = client.command(&["GET", "foo"]).await;
@@ -108,7 +108,7 @@ async fn test_reset_stays_authenticated_without_requirepass() {
     assert_ok(&response);
 
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from_static(b"RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     // Still able to run data commands without AUTH.
     let response = client.command(&["GET", "foo"]).await;
@@ -1723,7 +1723,7 @@ async fn test_acl_denial_in_multi_poisons_the_transaction() {
 
     assert_ok(&user.command(&["MULTI"]).await);
     let response = user.command(&["SET", "allowed:k", "v"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     assert_error_prefix(&user.command(&["GET", "denied:k"]).await, "NOPERM");
 
     let response = user.command(&["EXEC"]).await;

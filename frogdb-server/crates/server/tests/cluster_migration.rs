@@ -3218,7 +3218,7 @@ async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     let source = harness.node(source_id).unwrap();
     assert_eq!(
         source.send("SET", &[&key, "v0"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "seeding the key on its owner must succeed"
     );
 
@@ -3227,17 +3227,17 @@ async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "MULTI should succeed"
     );
     assert_eq!(
         client.command(&["SET", &key, "v1"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "queue-time slot validation passes: this node still owns the slot"
     );
     assert_eq!(
         client.command(&["GET", &key]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "the read is queued for the same, still-owned slot"
     );
 
@@ -3302,7 +3302,7 @@ async fn test_multi_exec_after_completed_slot_migration_redirects_with_moved() {
     // bad command", the bare redirect means "ask another node".
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "the connection is usable again after EXEC"
     );
     let resp = client.command(&["SET", &key, "v2"]).await;
@@ -3362,7 +3362,7 @@ async fn test_watch_on_a_slot_this_node_does_not_own_is_moved() {
     // The owner still accepts it — the check refuses foreign slots, not WATCH.
     assert_eq!(
         harness.node(owner_id).unwrap().send("WATCH", &[&key]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "WATCH on the slot's owner must still succeed"
     );
 
@@ -3428,7 +3428,7 @@ async fn test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch() 
     let source = harness.node(source_id).unwrap();
     assert_eq!(
         source.send("SET", &[&key, "v0"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "seeding the watched key on its owner must succeed"
     );
 
@@ -3436,17 +3436,17 @@ async fn test_watch_then_slot_reassignment_then_keyless_exec_aborts_the_watch() 
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["WATCH", &key]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "WATCH on the current owner must succeed"
     );
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "MULTI should succeed"
     );
     assert_eq!(
         client.command(&["PING"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "a keyless command is queued without any slot verdict"
     );
 
@@ -3540,19 +3540,19 @@ async fn test_multi_exec_during_in_flight_slot_migration_asks_when_keys_migrated
     let target = harness.node(target_id).unwrap();
     assert_eq!(
         source.send("SET", &[&key, "v0"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "seeding the key on its owner must succeed"
     );
 
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "MULTI should succeed"
     );
     assert_eq!(
         client.command(&["SET", &key, "v1"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "queue-time slot validation passes: the slot is still stable and local"
     );
 
@@ -3638,13 +3638,13 @@ async fn test_multi_exec_during_migration_with_split_keys_returns_tryagain() {
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "MULTI should succeed"
     );
     for k in [&key_gone, &key_here] {
         assert_eq!(
             client.command(&["SET", k, "v1"]).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+            frogdb_protocol::Response::queued(),
             "both keys hash to the same, still-stable slot at queue time"
         );
     }
@@ -3706,15 +3706,15 @@ async fn test_multi_exec_during_migration_serves_when_keys_still_local() {
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
     assert_eq!(
         client.command(&["SET", &key, "v1"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+        frogdb_protocol::Response::queued()
     );
     assert_eq!(
         client.command(&["GET", &key]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+        frogdb_protocol::Response::queued()
     );
 
     // Slot opened, but nothing migrated yet.
@@ -3723,7 +3723,7 @@ async fn test_multi_exec_during_migration_serves_when_keys_still_local() {
     assert_eq!(
         client.command(&["EXEC"]).await,
         frogdb_protocol::Response::Array(vec![
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::ok(),
             frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
         ]),
         "an open migration whose keys are all still local must serve the batch"
@@ -3773,23 +3773,23 @@ async fn test_multi_exec_on_import_target_with_asking_serves_the_batch() {
     assert!(!is_error(&client.command(&["ASKING"]).await));
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
     assert_eq!(
         client.command(&["SET", &key, "v1"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "ASKING lets the import target queue for a slot it does not own yet"
     );
     assert_eq!(
         client.command(&["GET", &key]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "ASKING is sticky: the second queued command must not find it consumed"
     );
 
     assert_eq!(
         client.command(&["EXEC"]).await,
         frogdb_protocol::Response::Array(vec![
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::ok(),
             frogdb_protocol::Response::Bulk(Some(bytes::Bytes::from_static(b"v1"))),
         ]),
         "EXEC on the import target must still see ASKING and serve the batch"
@@ -3837,7 +3837,7 @@ async fn test_keyless_multi_exec_is_never_redirected() {
     let mut client = harness.node(node_id).unwrap().connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
     // A spread of the shapes the fold must keep exempt: the hard-coded name
     // list (PING/TIME), a connection-level command (ECHO), and a server-wide one
@@ -3847,7 +3847,7 @@ async fn test_keyless_multi_exec_is_never_redirected() {
     for args in queued {
         assert_eq!(
             client.command(args).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+            frogdb_protocol::Response::queued(),
             "{args:?} must queue without a slot verdict"
         );
     }
@@ -3900,7 +3900,7 @@ async fn test_multi_exec_scatter_gather_batch_is_slot_validated() {
     for k in [&key_a, &key_b] {
         assert_eq!(
             source.send("SET", &[k, "v0"]).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::ok(),
             "seeding {k} on its owner must succeed"
         );
     }
@@ -3908,7 +3908,7 @@ async fn test_multi_exec_scatter_gather_batch_is_slot_validated() {
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
     let queued: [&[&str]; 3] = [
         &["MSET", &key_a, "v1", &key_b, "v1"],
@@ -3918,7 +3918,7 @@ async fn test_multi_exec_scatter_gather_batch_is_slot_validated() {
     for args in queued {
         assert_eq!(
             client.command(args).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+            frogdb_protocol::Response::queued(),
             "{args:?} must queue: this node still owns the slot"
         );
     }
@@ -3988,18 +3988,18 @@ async fn test_multi_exec_eval_with_declared_keys_is_slot_validated() {
     let source = harness.node(source_id).unwrap();
     assert_eq!(
         source.send("SET", &[&key, "v0"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
 
     let mut client = source.connect().await;
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
     let script = "return redis.call('SET', KEYS[1], 'v1')";
     assert_eq!(
         client.command(&["EVAL", script, "1", &key]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "the script queues: this node still owns the declared key's slot"
     );
 
@@ -4061,7 +4061,7 @@ async fn test_multi_exec_readonly_does_not_rescue_a_scatter_write() {
     for k in [&key_a, &key_b] {
         assert_eq!(
             source.send("SET", &[k, "v0"]).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+            frogdb_protocol::Response::ok()
         );
     }
 
@@ -4069,15 +4069,15 @@ async fn test_multi_exec_readonly_does_not_rescue_a_scatter_write() {
     assert!(!is_error(&client.command(&["READONLY"]).await));
     assert_eq!(
         client.command(&["MULTI"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
+        frogdb_protocol::Response::ok()
     );
     assert_eq!(
         client.command(&["GET", &key_b]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+        frogdb_protocol::Response::queued()
     );
     assert_eq!(
         client.command(&["MSET", &key_a, "v1"]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "the write queues: this node still owns the slot"
     );
 
@@ -4155,7 +4155,7 @@ async fn test_single_key_write_on_migrating_source_asks_and_never_orphans() {
     for k in [&key_a, &key_b] {
         assert_eq!(
             source.send("SET", &[k, "v0"]).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+            frogdb_protocol::Response::ok(),
             "seeding {k} on its owner must succeed"
         );
     }

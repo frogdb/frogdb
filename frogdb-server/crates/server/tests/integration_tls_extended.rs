@@ -64,7 +64,7 @@ async fn test_http_plaintext_default_when_tls_enabled() {
     // TLS RESP port should also work
     let mut tls_client = server.connect_tls(&fixture).await;
     let response = tls_client.command(&["PING"]).await;
-    assert_eq!(response, Response::Simple(bytes::Bytes::from("PONG")));
+    assert_eq!(response, Response::pong());
 
     server.shutdown().await;
 }

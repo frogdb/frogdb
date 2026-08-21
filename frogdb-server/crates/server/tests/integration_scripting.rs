@@ -30,7 +30,7 @@ async fn test_eval_redis_call_set_get() {
             "myvalue",
         ])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Use redis.call to GET the value
     let response = client
@@ -205,7 +205,7 @@ async fn test_eval_redis_pcall_success() {
             "myvalue",
         ])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     server.shutdown().await;
 }
@@ -318,9 +318,16 @@ async fn test_eval_pcall_server_wide_caught() {
     let response = client.command(&["EVAL", script, "0"]).await;
 
     match response {
-        Response::Bulk(Some(b)) | Response::Simple(b) => {
+        Response::Bulk(Some(b)) => {
             assert_eq!(
                 String::from_utf8_lossy(&b),
+                "caught",
+                "pcall must catch the server-wide deny as an error table"
+            );
+        }
+        Response::Simple(s) => {
+            assert_eq!(
+                String::from_utf8_lossy(&s),
                 "caught",
                 "pcall must catch the server-wide deny as an error table"
             );
@@ -525,7 +532,7 @@ async fn test_evalsha_after_script_load() {
     let response = client
         .command(&["EVALSHA", &sha, "1", "shakey", "shavalue"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify the value was set
     let response = client.command(&["GET", "shakey"]).await;
@@ -597,7 +604,7 @@ async fn test_script_load_caches_on_every_shard() {
         let resp = client.command(&["EVALSHA", &sha, "1", key, "value"]).await;
         assert_eq!(
             resp,
-            Response::Simple(Bytes::from("OK")),
+            Response::ok(),
             "EVALSHA for key {key} (shard {}) must hit a shard-local cache, got: {resp:?}",
             shard_for_key(key.as_bytes(), num_shards)
         );
@@ -609,6 +616,116 @@ async fn test_script_load_caches_on_every_shard() {
     // present after a full-broadcast load.
     let exists = client.command(&["SCRIPT", "EXISTS", &sha]).await;
     assert_eq!(exists, Response::Array(vec![Response::Integer(1)]));
+
+    server.shutdown().await;
+}
+
+// =============================================================================
+// Status-reply CRLF framing (redis-feel issue 18)
+// =============================================================================
+
+/// Encode a command as a RESP2 array of bulk strings.
+fn resp2_command(args: &[&[u8]]) -> Vec<u8> {
+    let mut out = format!("*{}\r\n", args.len()).into_bytes();
+    for a in args {
+        out.extend_from_slice(format!("${}\r\n", a.len()).as_bytes());
+        out.extend_from_slice(a);
+        out.extend_from_slice(b"\r\n");
+    }
+    out
+}
+
+/// Read whatever the server has to say, stopping once it goes quiet.
+///
+/// A short quiet period is the point: the injection this test guards against
+/// shows up as *extra bytes after the first frame*, so the read must not stop
+/// at the first `\r\n`.
+async fn drain_reply(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+
+    let mut buf = Vec::new();
+    loop {
+        let mut chunk = [0u8; 4096];
+        match tokio::time::timeout(Duration::from_millis(250), stream.read(&mut chunk)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => buf.extend_from_slice(&chunk[..n]),
+            Ok(Err(e)) => panic!("read failed: {e}"),
+            // Quiet for 250ms with something already buffered: that is the
+            // whole reply.
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+/// A Lua script returning `{ok = <attacker bytes>}` must put exactly one
+/// simple-string frame on the wire, and the connection must stay usable.
+///
+/// Redis 8.6.1's security advisory: "a user can manipulate data read by a
+/// connection by injecting `\r\n` sequences". `luaReplyToRedisReply`'s `ok`
+/// field now goes through `addReplyStatusSafe`; FrogDB's equivalent is the
+/// `SafeStatus` payload type on `Response::Simple`. Without it, the stored
+/// value's `\r\n-WRONGPASS forged\r\n` splits the reply into three frames and
+/// the client's *next* read consumes an attacker-authored error.
+#[tokio::test]
+async fn test_eval_ok_status_cannot_inject_a_second_frame() {
+    use tokio::io::AsyncWriteExt;
+
+    let server = TestServer::start_standalone().await;
+
+    let mut stream = tokio::net::TcpStream::connect(server.addr())
+        .await
+        .expect("connect");
+
+    // Store an attacker-authored value: a forged error frame plus a bulk reply.
+    let hostile = b"OK\r\n-WRONGPASS forged\r\n$3\r\nfoo\r\n";
+    stream
+        .write_all(&resp2_command(&[b"SET", b"crlfkey", hostile]))
+        .await
+        .unwrap();
+    assert_eq!(drain_reply(&mut stream).await, b"+OK\r\n");
+
+    // Return it as a *status*, the reachable injection path.
+    stream
+        .write_all(&resp2_command(&[
+            b"EVAL",
+            b"return {ok = redis.call('GET', KEYS[1])}",
+            b"1",
+            b"crlfkey",
+        ]))
+        .await
+        .unwrap();
+    let reply = drain_reply(&mut stream).await;
+
+    assert_eq!(
+        reply.first().copied(),
+        Some(b'+'),
+        "expected a simple-string reply, got {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert!(
+        reply.ends_with(b"\r\n"),
+        "reply must terminate with CRLF, got {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+    let body = &reply[1..reply.len() - 2];
+    assert!(
+        !body.contains(&b'\r') && !body.contains(&b'\n'),
+        "interior CR/LF survived — the reply spans multiple frames: {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+    // Length-preserving CR/LF -> space mapping, matching Redis's sdsmapchars.
+    assert_eq!(
+        body,
+        b"OK  -WRONGPASS forged  $3  foo  ",
+        "got {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+
+    // The connection is not desynchronized: the next command's reply is its
+    // own, not a leftover forged frame.
+    stream.write_all(&resp2_command(&[b"PING"])).await.unwrap();
+    assert_eq!(drain_reply(&mut stream).await, b"+PONG\r\n");
 
     server.shutdown().await;
 }

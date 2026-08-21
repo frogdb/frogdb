@@ -644,7 +644,7 @@ impl PreDispatchView<'_> {
         // Queue the command
         self.state.push_queued_command(cmd.clone());
 
-        Response::Simple(Bytes::from_static(b"QUEUED"))
+        Response::queued()
     }
 
     /// Check if a command is exempt from slot validation in cluster mode.

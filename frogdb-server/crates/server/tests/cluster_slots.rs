@@ -852,7 +852,7 @@ async fn test_multi_exec_readonly_batch_eligibility_is_all_or_nothing() {
     for k in [&key_a, &key_b] {
         assert_eq!(
             client.command(&["GET", k]).await,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+            frogdb_protocol::Response::queued()
         );
     }
     let exec = client.command(&["EXEC"]).await;
@@ -866,7 +866,7 @@ async fn test_multi_exec_readonly_batch_eligibility_is_all_or_nothing() {
     assert!(!is_error(&client.command(&["MULTI"]).await));
     assert_eq!(
         client.command(&["GET", &key_a]).await,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
+        frogdb_protocol::Response::queued()
     );
     let queued_write = client.command(&["SET", &key_b, "v1"]).await;
     assert!(
@@ -1286,7 +1286,7 @@ async fn test_multi_exec_cross_slot_returns_error() {
     let multi_resp = client.command(&["MULTI"]).await;
     assert_eq!(
         multi_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "MULTI should succeed"
     );
 
@@ -1294,7 +1294,7 @@ async fn test_multi_exec_cross_slot_returns_error() {
     let set_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
     assert_eq!(
         set_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "the first, non-cross-slot command must be QUEUED"
     );
 
@@ -1323,15 +1323,9 @@ async fn test_multi_exec_cross_slot_returns_error() {
     // DISCARD after a queue-time-aborted transaction clears connection state
     // cleanly: a fresh MULTI immediately afterwards behaves normally.
     let multi_resp = client.command(&["MULTI"]).await;
-    assert_eq!(
-        multi_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
-    );
+    assert_eq!(multi_resp, frogdb_protocol::Response::ok());
     let set_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
-    assert_eq!(
-        set_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED"))
-    );
+    assert_eq!(set_resp, frogdb_protocol::Response::queued());
     let rename_resp = client
         .command(&["RENAME", key_a.as_str(), key_b.as_str()])
         .await;
@@ -1339,20 +1333,20 @@ async fn test_multi_exec_cross_slot_returns_error() {
     let discard_resp = client.command(&["DISCARD"]).await;
     assert_eq!(
         discard_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "DISCARD must succeed even after a queue-time-aborted transaction"
     );
 
     let multi_resp = client.command(&["MULTI"]).await;
     assert_eq!(
         multi_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK")),
+        frogdb_protocol::Response::ok(),
         "MULTI immediately after DISCARD must succeed (no lingering abort state)"
     );
     let get_resp = client.command(&["GET", key_a.as_str()]).await;
     assert_eq!(
         get_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "a plain queued command in the fresh MULTI must not inherit the prior abort"
     );
     let exec_resp = client.command(&["EXEC"]).await;
@@ -1394,22 +1388,19 @@ async fn test_multi_exec_two_single_key_commands_different_slots_defers_crossslo
     let mut client = node.connect().await;
 
     let multi_resp = client.command(&["MULTI"]).await;
-    assert_eq!(
-        multi_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"OK"))
-    );
+    assert_eq!(multi_resp, frogdb_protocol::Response::ok());
 
     let set1_resp = client.command(&["SET", key_a.as_str(), "v1"]).await;
     assert_eq!(
         set1_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "first single-key command queues normally"
     );
 
     let set2_resp = client.command(&["SET", key_b.as_str(), "v2"]).await;
     assert_eq!(
         set2_resp,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"QUEUED")),
+        frogdb_protocol::Response::queued(),
         "second single-key command (different slot) ALSO queues normally -- \
          each command's own keys validate independently of what's already queued"
     );
@@ -1526,7 +1517,7 @@ async fn assert_blocking_multikey_crossslot_no_block(
     let ping = client.command(&["PING"]).await;
     assert_eq!(
         ping,
-        frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"PONG")),
+        frogdb_protocol::Response::pong(),
         "{context}: connection must still be clean (no stray frames) after the CROSSSLOT reply"
     );
 

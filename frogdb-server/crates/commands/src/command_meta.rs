@@ -21,7 +21,7 @@
 
 use bytes::Bytes;
 use frogdb_core::{AccessSpec, Arity, CommandFlags, CommandSpec, KeyAccessFlag};
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 use crate::upstream::{self, BeginSearch, FindKeys, UpstreamArg, UpstreamKeySpec};
 
@@ -34,7 +34,7 @@ fn text(value: &'static str) -> Response {
 }
 
 fn status(value: &'static str) -> Response {
-    Response::Simple(Bytes::from_static(value.as_bytes()))
+    Response::Simple(SafeStatus::sanitized(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ fn command_info_categories(name: &str) -> Vec<Response> {
             .unwrap_or(ACL_CATEGORY_ORDER.len())
     });
     cats.into_iter()
-        .map(|cat| Response::Simple(Bytes::from(format!("@{cat}"))))
+        .map(|cat| Response::Simple(SafeStatus::sanitized(format!("@{cat}"))))
         .collect()
 }
 
@@ -699,7 +699,7 @@ pub fn build_command_docs(spec: &CommandSpec) -> Response {
             Response::Array(
                 cmd.doc_flags
                     .iter()
-                    .map(|flag| Response::Simple(Bytes::from(flag.to_lowercase())))
+                    .map(|flag| Response::Simple(SafeStatus::sanitized(flag.to_lowercase())))
                     .collect(),
             ),
         ));

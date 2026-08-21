@@ -30,25 +30,25 @@ async fn test_multi_exec_basic() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue commands (use hash tags to colocate keys on same shard)
     let response = client.command(&["SET", "{k}key1", "value1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["SET", "{k}key2", "value2"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["GET", "{k}key1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Execute transaction
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 3);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
-            assert_eq!(results[1], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
+            assert_eq!(results[1], Response::ok());
             assert_eq!(results[2], Response::Bulk(Some(Bytes::from("value1"))));
         }
         _ => panic!("Expected array response from EXEC"),
@@ -72,7 +72,7 @@ async fn test_multi_exec_empty() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Execute with no commands
     let response = client.command(&["EXEC"]).await;
@@ -92,15 +92,15 @@ async fn test_multi_discard() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue a command
     let response = client.command(&["SET", "foo", "modified"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Discard transaction
     let response = client.command(&["DISCARD"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify value was not modified
     let response = client.command(&["GET", "foo"]).await;
@@ -141,7 +141,7 @@ async fn test_nested_multi() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Try to start another transaction
     let response = client.command(&["MULTI"]).await;
@@ -166,22 +166,22 @@ async fn test_watch_exec_success() {
 
     // Watch the key
     let response = client.command(&["WATCH", "watched_key"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue commands
     let response = client.command(&["SET", "watched_key", "updated"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Execute (should succeed since no one else modified the key)
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 1);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
         }
         _ => panic!("Expected array response from EXEC"),
     }
@@ -205,7 +205,7 @@ async fn test_watch_exec_abort() {
 
     // Client 1 watches the key
     let response = client1.command(&["WATCH", "watched_key"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Client 2 modifies the key
     client2
@@ -214,13 +214,13 @@ async fn test_watch_exec_abort() {
 
     // Client 1 starts transaction
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue commands
     let response = client1
         .command(&["SET", "watched_key", "modified_by_client1"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Execute (should fail/abort because the watched key was modified)
     let response = client1.command(&["EXEC"]).await;
@@ -252,18 +252,18 @@ async fn test_rewatch_does_not_rearm_a_dirty_watch() {
 
     // First WATCH: the CAS snapshot client1 must be held to.
     let response = client1.command(&["WATCH", "rewatched"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Another client dirties the watch.
     client2.command(&["SET", "rewatched", "by_client2"]).await;
 
     // Second WATCH of the same key — must be a no-op for the snapshot.
     let response = client1.command(&["WATCH", "rewatched"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     client1.command(&["MULTI"]).await;
     let response = client1.command(&["SET", "rewatched", "by_client1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client1.command(&["EXEC"]).await;
     assert_eq!(
@@ -283,7 +283,7 @@ async fn test_rewatch_does_not_rearm_a_dirty_watch() {
     let response = client1.command(&["EXEC"]).await;
     assert_eq!(
         response,
-        Response::Array(vec![Response::Simple(Bytes::from("OK"))]),
+        Response::Array(vec![Response::ok()]),
         "a re-WATCH of an untouched key must not abort either"
     );
 
@@ -304,7 +304,7 @@ async fn test_noop_pfadd_does_not_bump_watch_version() {
 
     // Client 1 watches the HLL key.
     let response = client1.command(&["WATCH", "{t}hll"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Client 2 issues a duplicate PFADD: no register moves, so the watched
     // key's version must NOT be bumped.
@@ -313,10 +313,10 @@ async fn test_noop_pfadd_does_not_bump_watch_version() {
 
     // Client 1 runs a transaction touching a colocated key.
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client1.command(&["SET", "{t}x", "1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // EXEC must succeed (array response, not nil) because the no-op PFADD did
     // not invalidate the WATCH.
@@ -324,7 +324,7 @@ async fn test_noop_pfadd_does_not_bump_watch_version() {
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 1);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
         }
         other => panic!("Expected array response from EXEC, got {:?}", other),
     }
@@ -346,7 +346,7 @@ async fn test_changing_pfadd_aborts_watch() {
 
     // Client 1 watches the HLL key.
     let response = client1.command(&["WATCH", "{t}hll"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Client 2 adds a new element: a register moves, so the version is bumped.
     let response = client2.command(&["PFADD", "{t}hll", "b"]).await;
@@ -354,10 +354,10 @@ async fn test_changing_pfadd_aborts_watch() {
 
     // Client 1 runs a transaction touching a colocated key.
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client1.command(&["SET", "{t}x", "1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // EXEC must abort (nil) because the watched key changed.
     let response = client1.command(&["EXEC"]).await;
@@ -374,7 +374,7 @@ async fn test_watch_inside_multi_error() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Try to WATCH inside MULTI (should error)
     let response = client.command(&["WATCH", "somekey"]).await;
@@ -400,27 +400,27 @@ async fn test_unwatch() {
 
     // Client 1 watches the key
     let response = client1.command(&["WATCH", "key"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Client 1 unwatches
     let response = client1.command(&["UNWATCH"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Client 2 modifies the key
     client2.command(&["SET", "key", "modified"]).await;
 
     // Client 1 starts transaction (should still succeed because UNWATCH cleared watches)
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client1.command(&["SET", "key", "from_client1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client1.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 1);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
         }
         _ => panic!("Expected array response from EXEC"),
     }
@@ -453,11 +453,11 @@ async fn test_unwatch_in_multi_clears_stale_cross_shard_watch_fold() {
     // (FM-TXN-020), so watching an absent key here would commit instead.
     client.command(&["SET", "{t0}kv0", "seed"]).await;
     let response = client.command(&["WATCH", "{t0}kv0"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["SET", "{t1}kv1", "v"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Error(e) => assert!(
@@ -470,19 +470,19 @@ async fn test_unwatch_in_multi_clears_stale_cross_shard_watch_fold() {
 
     // --- Regression: same setup but UNWATCH inside MULTI must let EXEC commit. ---
     let response = client.command(&["WATCH", "{t0}kv0"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     // UNWATCH inside MULTI executes immediately, clearing the watch set.
     let response = client.command(&["UNWATCH"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["SET", "{t1}kv1", "v"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 1, "one queued command");
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
         }
         other => panic!("EXEC after UNWATCH must commit (no stale CROSSSLOT fold), got {other:?}"),
     }
@@ -506,7 +506,7 @@ async fn test_dead_cross_shard_watch_commits_instead_of_crossslot() {
     let (absent, written) = cross_shard_key_pair(4);
 
     let response = client.command(&["WATCH", &absent]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     client.command(&["MULTI"]).await;
     client.command(&["SET", &written, "v"]).await;
 
@@ -514,7 +514,7 @@ async fn test_dead_cross_shard_watch_commits_instead_of_crossslot() {
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 1, "one queued command");
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
         }
         other => panic!("a dead cross-shard watch must not CROSSSLOT, got {other:?}"),
     }
@@ -541,7 +541,7 @@ async fn test_dead_cross_shard_watch_still_aborts_when_the_key_is_created() {
     let (absent, written) = cross_shard_key_pair(4);
 
     let response = client1.command(&["WATCH", &absent]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Another client creates the watched-nonexistent key on its own shard.
     client2.command(&["SET", &absent, "raced"]).await;
@@ -577,7 +577,7 @@ async fn test_batched_cross_shard_watch_is_not_crossslot() {
     let response = client.command(&["WATCH", &first, &second]).await;
     assert_eq!(
         response,
-        Response::Simple(Bytes::from("OK")),
+        Response::ok(),
         "a watch set spanning internal shards must be accepted"
     );
 
@@ -610,7 +610,7 @@ async fn test_batched_cross_shard_watch_probes_each_key_on_its_own_shard() {
     // (FM-TXN-020) and the EXEC below is a single-shard batch on `first`'s
     // shard — `second`'s watch is checked by a round-trip of its own.
     let response = watcher.command(&["WATCH", &first, &second]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Dirty only the second key — the one whose shard is not the batch's target.
     writer.command(&["SET", &second, "created"]).await;
@@ -641,7 +641,7 @@ async fn test_batched_live_cross_shard_watch_defers_crossslot_to_exec() {
     client.command(&["SET", &second, "seed"]).await;
 
     let response = client.command(&["WATCH", &first, &second]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     client.command(&["MULTI"]).await;
     client.command(&["SET", &first, "v"]).await;
@@ -668,28 +668,28 @@ async fn test_transaction_with_error() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue a command that will succeed
     let response = client.command(&["SET", "{k}foo", "bar"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Queue a command that will fail at runtime (LPUSH on a string)
     let response = client.command(&["LPUSH", "{k}mystring", "value"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Queue another command that will succeed
     let response = client.command(&["SET", "{k}baz", "qux"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Execute - all commands run, one returns error
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 3);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK"))); // SET {k}foo bar
+            assert_eq!(results[0], Response::ok()); // SET {k}foo bar
             assert!(matches!(results[1], Response::Error(ref e) if e.starts_with(b"WRONGTYPE"))); // LPUSH {k}mystring
-            assert_eq!(results[2], Response::Simple(Bytes::from("OK"))); // SET {k}baz qux
+            assert_eq!(results[2], Response::ok()); // SET {k}baz qux
         }
         _ => panic!("Expected array response from EXEC"),
     }
@@ -715,10 +715,10 @@ async fn test_unknown_command_in_multi_aborts_the_transaction() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client.command(&["SET", "unknowncmdkey", "bar"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["NOSUCHCOMMAND", "a", "b"]).await;
     assert!(
@@ -747,11 +747,11 @@ async fn test_transaction_syntax_error_aborts() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue a valid command
     let response = client.command(&["SET", "foo", "bar"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Queue a command with wrong number of arguments (syntax error)
     let response = client.command(&["GET"]).await; // GET requires 1 argument
@@ -805,7 +805,7 @@ async fn test_multi_wrong_arity_error_names_command_lowercase() {
         ),
     ] {
         let response = client.command(&["MULTI"]).await;
-        assert_eq!(response, Response::Simple(Bytes::from("OK")));
+        assert_eq!(response, Response::ok());
 
         let response = client.command(&cmd).await;
         assert_eq!(
@@ -852,7 +852,7 @@ async fn test_transaction_connection_level_merge_order() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Interleave connection-level (CONFIG GET) with shard commands.
     for cmd in [
@@ -863,7 +863,7 @@ async fn test_transaction_connection_level_merge_order() {
         vec!["CONFIG", "GET", "maxmemory"], // index 4: deferred
     ] {
         let response = client.command(&cmd).await;
-        assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+        assert_eq!(response, Response::queued());
     }
 
     let response = client.command(&["EXEC"]).await;
@@ -878,7 +878,7 @@ async fn test_transaction_connection_level_merge_order() {
                     results[i]
                 );
             }
-            assert_eq!(results[1], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[1], Response::ok());
             assert_eq!(results[3], Response::Integer(1));
         }
         other => panic!("Expected array response from EXEC, got {other:?}"),
@@ -897,12 +897,12 @@ async fn test_watch_with_only_connection_level_commands_success() {
 
     client.command(&["SET", "watched_key", "initial"]).await;
     let response = client.command(&["WATCH", "watched_key"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["CONFIG", "GET", "maxmemory"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["EXEC"]).await;
     match response {
@@ -926,15 +926,15 @@ async fn test_watch_with_only_connection_level_commands_abort() {
 
     client1.command(&["SET", "watched_key", "initial"]).await;
     let response = client1.command(&["WATCH", "watched_key"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Another client touches the watched key before EXEC.
     client2.command(&["SET", "watched_key", "modified"]).await;
 
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client1.command(&["CONFIG", "GET", "maxmemory"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Nil reply: the deferred commands never ran.
     let response = client1.command(&["EXEC"]).await;
@@ -957,13 +957,13 @@ async fn test_watch_then_empty_multi_exec_aborts_when_the_key_was_written() {
 
     client1.command(&["SET", "watched_key", "initial"]).await;
     let response = client1.command(&["WATCH", "watched_key"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Another client dirties the watch before EXEC.
     client2.command(&["SET", "watched_key", "modified"]).await;
 
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Nothing queued, but the CAS still has to be answered.
     let response = client1.command(&["EXEC"]).await;
@@ -1012,19 +1012,19 @@ async fn test_transaction_conn_command_hotkeys_ftcursor_execute() {
     let started = client
         .command(&["HOTKEYS", "START", "METRICS", "1", "cpu"])
         .await;
-    assert_eq!(started, Response::Simple(Bytes::from("OK")));
+    assert_eq!(started, Response::ok());
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Index 0: HOTKEYS GET — a connection-level command.
     let response = client.command(&["HOTKEYS", "GET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // Index 1: FT.CURSOR DEL on a nonexistent cursor (id 0) — deterministic
     // "Cursor not found" reply, another connection-level command.
     let response = client.command(&["FT.CURSOR", "DEL", "idx", "0"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["EXEC"]).await;
     match response {
@@ -1079,12 +1079,12 @@ async fn test_transaction_increments() {
 
     // Start transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue multiple increments
     for _ in 0..5 {
         let response = client.command(&["INCR", "counter"]).await;
-        assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+        assert_eq!(response, Response::queued());
     }
 
     // Execute
@@ -1122,7 +1122,7 @@ async fn test_scripted_write_dirties_watch() {
     client1.command(&["SET", "evwatch", "initial"]).await;
 
     let response = client1.command(&["WATCH", "evwatch"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Client 2 modifies the watched key via a script.
     let response = client2
@@ -1134,12 +1134,12 @@ async fn test_scripted_write_dirties_watch() {
             "scripted",
         ])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client1.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client1.command(&["SET", "evwatch", "txn"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // EXEC must abort: the scripted write dirtied the watched key.
     let response = client1.command(&["EXEC"]).await;
@@ -1178,13 +1178,13 @@ async fn test_multi_exec_keys_spans_all_shards() {
     for i in 0..20 {
         let key = format!("mxkeys:{i}");
         let response = client.command(&["SET", &key, "v"]).await;
-        assert_eq!(response, Response::Simple(Bytes::from("OK")));
+        assert_eq!(response, Response::ok());
     }
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["KEYS", "mxkeys:*"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["EXEC"]).await;
     let results = match response {
@@ -1221,15 +1221,15 @@ async fn test_multi_exec_flushdb_clears_all_shards() {
     assert_eq!(response, Response::Integer(20));
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["FLUSHDB"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 1);
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
         }
         other => panic!("Expected array response from EXEC, got {other:?}"),
     }
@@ -1258,9 +1258,9 @@ async fn test_multi_exec_scan_returns_full_cursor_reply() {
     }
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["SCAN", "0", "COUNT", "100"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["EXEC"]).await;
     let results = match response {
@@ -1321,11 +1321,11 @@ async fn test_multi_exec_ft_search_unknown_index_errors() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client
         .command(&["FT.SEARCH", "mx-nonexistent-index", "x"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     let response = client.command(&["EXEC"]).await;
     let results = match response {
@@ -1356,14 +1356,14 @@ async fn test_multi_exec_server_wide_reply_ordering() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     for cmd in [
         &["SET", "mxorder:key", "value1"][..],
         &["KEYS", "mxorder:*"][..],
         &["GET", "mxorder:key"][..],
     ] {
         let response = client.command(cmd).await;
-        assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+        assert_eq!(response, Response::queued());
     }
 
     let response = client.command(&["EXEC"]).await;
@@ -1372,7 +1372,7 @@ async fn test_multi_exec_server_wide_reply_ordering() {
         other => panic!("Expected array response from EXEC, got {other:?}"),
     };
     assert_eq!(results.len(), 3, "one reply per queued command");
-    assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
+    assert_eq!(results[0], Response::ok());
     assert_eq!(
         results[1],
         Response::Array(vec![Response::Bulk(Some(Bytes::from("mxorder:key")))]),
@@ -1401,13 +1401,13 @@ async fn test_exec_nested_null_array_encodes_as_nested_null_resp2() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // ZRANK on a missing key WITHSCORE queues and yields Response::NullArray.
     let response = client
         .command(&["ZRANK", "nokey", "nomember", "WITHSCORE"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // EXEC wraps the reply in an array: Response::Array([NullArray]). The RESP2
     // encoder must not panic; the wire shape `*1\r\n$-1\r\n` decodes to a
@@ -1461,11 +1461,11 @@ async fn test_multi_cross_shard_plain_keys_crossslot_default_config() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["SET", k1.as_str(), "v1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["SET", k2.as_str(), "v2"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["EXEC"]).await;
     assert_crossslot(
         &response,
@@ -1508,17 +1508,17 @@ async fn test_multi_cross_shard_crossslot_with_allow_cross_slot_standalone() {
         .await;
     assert_eq!(
         response,
-        Response::Simple(Bytes::from("OK")),
+        Response::ok(),
         "cross-shard MSET must scatter-succeed when allow_cross_slot_standalone=true"
     );
 
     // But a MULTI over the same two shards must still CROSSSLOT at EXEC.
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["SET", k1.as_str(), "tx1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["SET", k2.as_str(), "tx2"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["EXEC"]).await;
     assert_crossslot(
         &response,
@@ -1555,11 +1555,11 @@ async fn test_multi_cross_shard_crossslot_with_flag_disabled() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     let response = client.command(&["SET", k1.as_str(), "v1"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["SET", k2.as_str(), "v2"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["EXEC"]).await;
     assert_crossslot(
         &response,
@@ -1583,18 +1583,18 @@ async fn test_multi_single_shard_commits_with_allow_cross_slot_standalone() {
     let mut client = server.connect().await;
 
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
     // Distinct keys, same hash tag -> same slot -> same shard (colocated).
     let response = client.command(&["SET", "{tag}foo", "a"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["SET", "{tag}bar", "b"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
     let response = client.command(&["EXEC"]).await;
     match response {
         Response::Array(results) => {
             assert_eq!(results.len(), 2, "both queued commands run");
-            assert_eq!(results[0], Response::Simple(Bytes::from("OK")));
-            assert_eq!(results[1], Response::Simple(Bytes::from("OK")));
+            assert_eq!(results[0], Response::ok());
+            assert_eq!(results[1], Response::ok());
         }
         other => panic!("hash-tag-colocated MULTI must commit, got {other:?}"),
     }

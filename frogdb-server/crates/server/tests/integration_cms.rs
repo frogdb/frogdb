@@ -4,8 +4,7 @@ use crate::common::response_helpers::{
     assert_error_prefix, assert_ok, unwrap_array, unwrap_bulk, unwrap_integer,
 };
 use crate::common::test_server::TestServer;
-use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 // ============================================================================
 // CMS.INITBYDIM tests
@@ -389,7 +388,7 @@ async fn test_cms_type_command() {
         .await;
 
     let resp = client.command(&["TYPE", "{cms}key"]).await;
-    assert_eq!(resp, Response::Simple(Bytes::from("cms")));
+    assert_eq!(resp, Response::Simple(SafeStatus::from_static("cms")));
 
     server.shutdown().await;
 }

@@ -2,7 +2,7 @@
 
 use crate::common::test_server::TestServer;
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 
 #[tokio::test]
 async fn test_sadd_smembers() {
@@ -222,7 +222,7 @@ async fn test_type_command_set() {
     client.command(&["SADD", "myset", "a"]).await;
 
     let response = client.command(&["TYPE", "myset"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("set")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("set")));
 
     server.shutdown().await;
 }

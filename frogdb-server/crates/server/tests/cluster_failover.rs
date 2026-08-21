@@ -59,7 +59,7 @@ async fn test_leader_failover() {
         let resp = node.send("PING", &[]).await;
         assert_eq!(
             resp,
-            frogdb_protocol::Response::Simple(bytes::Bytes::from_static(b"PONG")),
+            frogdb_protocol::Response::pong(),
             "Node {} should respond to PING after leader failover",
             node_id
         );

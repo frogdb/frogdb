@@ -5,7 +5,7 @@ use crate::common::response_helpers::{
 };
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use std::time::Duration;
 
 /// Helper: build a persistence-enabled config pointing at the given directory.
@@ -237,10 +237,7 @@ async fn test_empty_restart_no_data() {
     let mut client = server.connect().await;
 
     assert_eq!(client.command(&["DBSIZE"]).await, Response::Integer(0));
-    assert_eq!(
-        client.command(&["PING"]).await,
-        Response::Simple(Bytes::from_static(b"PONG"))
-    );
+    assert_eq!(client.command(&["PING"]).await, Response::pong());
 
     drop(client);
     server.shutdown().await;
@@ -250,10 +247,7 @@ async fn test_empty_restart_no_data() {
     let mut client = server.connect().await;
 
     assert_eq!(client.command(&["DBSIZE"]).await, Response::Integer(0));
-    assert_eq!(
-        client.command(&["PING"]).await,
-        Response::Simple(Bytes::from_static(b"PONG"))
-    );
+    assert_eq!(client.command(&["PING"]).await, Response::pong());
 
     server.shutdown().await;
 }
@@ -2327,10 +2321,7 @@ async fn test_concurrent_bgsave_stress_restores_cleanly() {
     }
 
     // Server is still responsive after the storm.
-    assert_eq!(
-        setup.command(&["PING"]).await,
-        Response::Simple(Bytes::from("PONG"))
-    );
+    assert_eq!(setup.command(&["PING"]).await, Response::pong());
     // A final quiescent BGSAVE to guarantee a fresh, complete artifact.
     let _ = setup.command(&["BGSAVE"]).await;
     let _ = wait_for_snapshot_checkpoint(snapshot_root.path()).await;
@@ -2505,7 +2496,7 @@ async fn test_tiered_spill_survives_restart() {
     );
     assert_eq!(
         client.command(&["TYPE", "str:typed"]).await,
-        Response::Simple("string".into())
+        Response::Simple(SafeStatus::from_static("string"))
     );
 
     let list = unwrap_array(client.command(&["LRANGE", "list:typed", "0", "-1"]).await);
@@ -2516,7 +2507,7 @@ async fn test_tiered_spill_survives_restart() {
     );
     assert_eq!(
         client.command(&["TYPE", "list:typed"]).await,
-        Response::Simple("list".into())
+        Response::Simple(SafeStatus::from_static("list"))
     );
 
     assert_eq!(
@@ -2525,7 +2516,7 @@ async fn test_tiered_spill_survives_restart() {
     );
     assert_eq!(
         client.command(&["TYPE", "hash:typed"]).await,
-        Response::Simple("hash".into())
+        Response::Simple(SafeStatus::from_static("hash"))
     );
 
     assert_eq!(
@@ -2536,7 +2527,7 @@ async fn test_tiered_spill_survives_restart() {
     );
     assert_eq!(
         client.command(&["TYPE", "set:typed"]).await,
-        Response::Simple("set".into())
+        Response::Simple(SafeStatus::from_static("set"))
     );
 
     assert_eq!(
@@ -2547,7 +2538,7 @@ async fn test_tiered_spill_survives_restart() {
     );
     assert_eq!(
         client.command(&["TYPE", "zset:typed"]).await,
-        Response::Simple("zset".into())
+        Response::Simple(SafeStatus::from_static("zset"))
     );
 
     // TTL survives the spill+restart: still present and still counting down.

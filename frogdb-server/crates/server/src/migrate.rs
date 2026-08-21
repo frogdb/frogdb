@@ -3,7 +3,7 @@
 //! Provides TCP client for migrating keys to another Redis-compatible server.
 
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use futures::{SinkExt, StreamExt};
 use redis_protocol::codec::Resp2;
 use redis_protocol::resp2::types::BytesFrame;
@@ -356,7 +356,7 @@ impl MigrateClient {
 /// Convert a BytesFrame to our Response type.
 fn frame_to_response(frame: BytesFrame) -> Response {
     match frame {
-        BytesFrame::SimpleString(s) => Response::Simple(s),
+        BytesFrame::SimpleString(s) => Response::Simple(SafeStatus::sanitized(s)),
         BytesFrame::Error(e) => Response::Error(e.into_inner()),
         BytesFrame::Integer(n) => Response::Integer(n),
         BytesFrame::BulkString(b) => Response::Bulk(Some(b)),

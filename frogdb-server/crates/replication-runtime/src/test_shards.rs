@@ -154,7 +154,7 @@ pub async fn serve_command(rx: ShardRx<'_>, reply: Reply) -> Seen {
         }) => {
             match reply {
                 Reply::Ok => {
-                    let _ = response_tx.send(Response::Simple(Bytes::from_static(b"OK")));
+                    let _ = response_tx.send(Response::ok());
                 }
                 Reply::Error(e) => {
                     let _ = response_tx.send(Response::Error(Bytes::from_static(e.as_bytes())));

@@ -253,7 +253,7 @@ end)
 
     // Delete the library
     let response = client.command(&["FUNCTION", "DELETE", "deletelib"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Function should no longer work
     let response = client.command(&["FCALL", "todelete", "0"]).await;
@@ -286,7 +286,7 @@ end)
 
     // Flush all functions
     let response = client.command(&["FUNCTION", "FLUSH"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Function should no longer work
     let response = client.command(&["FCALL", "toflush", "0"]).await;
@@ -390,7 +390,7 @@ end)
     let func = Bytes::from("FUNCTION");
     let restore = Bytes::from("RESTORE");
     let response = client.command_raw(&[&func, &restore, &dump_data]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Function should work again
     let response = client.command(&["FCALL", "backup_func", "0"]).await;

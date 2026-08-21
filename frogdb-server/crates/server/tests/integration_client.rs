@@ -2,7 +2,7 @@
 
 use crate::common::test_server::{TestServer, TestServerConfig};
 use bytes::Bytes;
-use frogdb_protocol::Response;
+use frogdb_protocol::{Response, SafeStatus};
 use futures::StreamExt;
 use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use std::time::Duration;
@@ -19,11 +19,11 @@ async fn test_reset_basic() {
 
     // RESET should return "RESET" simple string
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     // RESET is idempotent - can be called multiple times
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     server.shutdown().await;
 }
@@ -42,7 +42,7 @@ async fn test_reset_exits_pubsub_mode() {
 
     // RESET should exit pub/sub mode
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     // Now GET should work
     let response = client.command(&["GET", "foo"]).await;
@@ -61,11 +61,11 @@ async fn test_reset_exits_pattern_pubsub_mode() {
 
     // RESET should exit pub/sub mode
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     // Now normal commands should work
     let response = client.command(&["SET", "foo", "bar"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     server.shutdown().await;
 }
@@ -78,15 +78,15 @@ async fn test_reset_aborts_transaction() {
 
     // Start a transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Queue a SET command
     let response = client.command(&["SET", "txkey", "txvalue"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("QUEUED")));
+    assert_eq!(response, Response::queued());
 
     // RESET aborts the transaction
     let response = client.command(&["RESET"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("RESET")));
+    assert_eq!(response, Response::Simple(SafeStatus::from_static("RESET")));
 
     // Key should not exist (transaction was aborted)
     let response = client.command(&["GET", "txkey"]).await;
@@ -94,7 +94,7 @@ async fn test_reset_aborts_transaction() {
 
     // Should be able to start a new transaction
     let response = client.command(&["MULTI"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     server.shutdown().await;
 }
@@ -442,10 +442,7 @@ async fn test_client_list_reports_multi_queue_state() {
     );
 
     // Client A opens a transaction and queues two commands.
-    assert_eq!(
-        client_a.command(&["MULTI"]).await,
-        Response::Simple(Bytes::from("OK"))
-    );
+    assert_eq!(client_a.command(&["MULTI"]).await, Response::ok());
     let row = client_list_row(&mut observer, a_id).await;
     assert!(
         row.contains("multi=0"),
@@ -461,7 +458,7 @@ async fn test_client_list_reports_multi_queue_state() {
     // code path not under test here).
     assert_eq!(
         client_a.command(&["SET", "{txn}key1", "v1"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
+        Response::queued()
     );
     let row = client_list_row(&mut observer, a_id).await;
     assert!(
@@ -471,7 +468,7 @@ async fn test_client_list_reports_multi_queue_state() {
 
     assert_eq!(
         client_a.command(&["SET", "{txn}key2", "v2"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
+        Response::queued()
     );
     let row = client_list_row(&mut observer, a_id).await;
     assert!(
@@ -512,13 +509,10 @@ async fn test_client_list_reports_discard_clears_multi_state() {
         other => panic!("Expected integer, got {:?}", other),
     };
 
-    assert_eq!(
-        client_a.command(&["MULTI"]).await,
-        Response::Simple(Bytes::from("OK"))
-    );
+    assert_eq!(client_a.command(&["MULTI"]).await, Response::ok());
     assert_eq!(
         client_a.command(&["SET", "txkey", "v"]).await,
-        Response::Simple(Bytes::from("QUEUED"))
+        Response::queued()
     );
     let row = client_list_row(&mut observer, a_id).await;
     assert!(
@@ -530,10 +524,7 @@ async fn test_client_list_reports_discard_clears_multi_state() {
         "expected MULTI flag while queuing: {row}"
     );
 
-    assert_eq!(
-        client_a.command(&["DISCARD"]).await,
-        Response::Simple(Bytes::from("OK"))
-    );
+    assert_eq!(client_a.command(&["DISCARD"]).await, Response::ok());
 
     let row = client_list_row(&mut observer, a_id).await;
     assert!(
@@ -714,7 +705,7 @@ async fn test_client_setinfo_lib_name() {
     let response = client
         .command(&["CLIENT", "SETINFO", "LIB-NAME", "my-test-lib"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify it appears in CLIENT INFO
     let response = client.command(&["CLIENT", "INFO"]).await;
@@ -740,7 +731,7 @@ async fn test_client_setinfo_lib_ver() {
     let response = client
         .command(&["CLIENT", "SETINFO", "LIB-VER", "1.2.3"])
         .await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify it appears in CLIENT INFO
     let response = client.command(&["CLIENT", "INFO"]).await;
@@ -763,11 +754,11 @@ async fn test_client_no_evict() {
 
     // Enable NO-EVICT
     let response = client.command(&["CLIENT", "NO-EVICT", "ON"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Disable NO-EVICT
     let response = client.command(&["CLIENT", "NO-EVICT", "OFF"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Invalid argument
     let response = client.command(&["CLIENT", "NO-EVICT", "INVALID"]).await;
@@ -784,11 +775,11 @@ async fn test_client_no_touch() {
 
     // Enable NO-TOUCH
     let response = client.command(&["CLIENT", "NO-TOUCH", "ON"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Disable NO-TOUCH
     let response = client.command(&["CLIENT", "NO-TOUCH", "OFF"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     server.shutdown().await;
 }
@@ -801,7 +792,7 @@ async fn test_client_reply_on() {
 
     // CLIENT REPLY ON should be accepted (normal mode)
     let response = client.command(&["CLIENT", "REPLY", "ON"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Verify commands still work
     let response = client.command(&["PING"]).await;
@@ -867,10 +858,10 @@ async fn test_client_caching() {
     client.command(&["CLIENT", "TRACKING", "ON", "OPTIN"]).await;
 
     let response = client.command(&["CLIENT", "CACHING", "YES"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     let response = client.command(&["CLIENT", "CACHING", "NO"]).await;
-    assert_eq!(response, Response::Simple(Bytes::from("OK")));
+    assert_eq!(response, Response::ok());
 
     // Invalid argument
     let response = client.command(&["CLIENT", "CACHING", "INVALID"]).await;

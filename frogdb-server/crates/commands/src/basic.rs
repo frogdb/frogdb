@@ -941,6 +941,7 @@ mod command_info_tests {
     use crate::string::MsetCommand;
     use frogdb_core::{CommandRegistry, HashMapStore};
     use frogdb_protocol::ProtocolVersion;
+    use frogdb_protocol::SafeStatus;
     use std::sync::Arc;
 
     fn ctx_with_registry() -> CommandContext<'static> {
@@ -975,11 +976,11 @@ mod command_info_tests {
     }
 
     fn flag(name: &'static str) -> Response {
-        Response::Simple(Bytes::from_static(name.as_bytes()))
+        Response::Simple(SafeStatus::sanitized(name))
     }
 
     fn category(name: &str) -> Response {
-        Response::Simple(Bytes::from(format!("@{name}")))
+        Response::Simple(SafeStatus::sanitized(format!("@{name}")))
     }
 
     /// The structured key-specs array for a command with exactly one
