@@ -66,6 +66,20 @@ outcome), but a genuine counterexample when it fires. Full write-up:
 .scratch/formal-spec/t6-findings.md. This job is the only sanctioned caller of
 `quint verify --temporal` — the campaign ruling scopes it to the nightly lane,
 never the dev loop or a commit gate.
+
+A fourth job, `walk-steered`, runs the **steered sampled walk** (`just
+quint-run-steered`, campaign ruling R11). It is not an Apalache lane at all —
+it is `quint run` with the sampler pointed at a model's `stepSteered` relation
+instead of its flat `step`, at a deeper budget (500x40 over four pinned seeds)
+than the PR lane can afford. Steering changes only the sampling *distribution*
+(the steered relation groups the same actions and gates cheap churn behind a
+coin), so every steered trace is a legal trace of `step` and a red cell is a
+real counterexample. It sits here rather than in the PR lane deliberately:
+`quint-run`, the witness-floor gate and `quint verify` stay on the flat `step`
+so their verdicts are not coupled to sampler tuning. It earns its slot — the
+uniform PR lane had been green for months over issue 41's residue family while
+the steered walk found three real defects (R8/R9a/R9b) in one pass. No JVM
+involved, so no setup-java step, and it finishes in minutes rather than hours.
 """
 
 from workflow_gen.helpers import (
@@ -183,6 +197,32 @@ def quint_verify_workflow() -> Workflow:
                     name="TLC verify: cluster_migration_failover_temporal.qnt (liveness, report-only)",
                     run=script("""\
                         just quint-verify-temporal
+                    """),
+                ),
+            ],
+        ),
+    )
+
+    w.job(
+        "walk-steered",
+        Job(
+            name="Steered walk: sampled invariants (deep budget)",
+            runs_on=RUNS_ON,
+            needs=gate,
+            if_="needs.gate.outputs.skip != 'true'",
+            # Sampling, not SMT: 13 invariants x 4 seeds at 500x40 runs in
+            # single-digit minutes on the migration/failover model. The cap is
+            # generous headroom for a model growing invariants, not a sizing
+            # estimate. A violation fails the job — unlike the temporal lane,
+            # this one produces conclusive verdicts.
+            timeout_minutes=60,
+            steps=[
+                checkout_step(),
+                mise_setup_step(install_args=MISE_JUST_QUINT),
+                run_step(
+                    name="Steered sampled walk: every model declaring stepSteered",
+                    run=script("""\
+                        just quint-run-steered
                     """),
                 ),
             ],

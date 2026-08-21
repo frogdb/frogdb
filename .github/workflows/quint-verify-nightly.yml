@@ -117,3 +117,22 @@ jobs:
     - name: 'TLC verify: cluster_migration_failover_temporal.qnt (liveness, report-only)'
       run: |
         just quint-verify-temporal
+  walk-steered:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    name: 'Steered walk: sampled invariants (deep budget)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - name: Checkout
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - name: Set up mise toolchain
+      uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      with:
+        install: 'true'
+        install_args: just npm:@informalsystems/quint
+        cache: 'true'
+        experimental: 'true'
+    - name: 'Steered sampled walk: every model declaring stepSteered'
+      run: |
+        just quint-run-steered
