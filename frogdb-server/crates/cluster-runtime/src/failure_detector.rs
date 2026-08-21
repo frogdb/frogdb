@@ -1983,6 +1983,7 @@ mod tests {
         }
         state
             .apply_local(ClusterCommand::AssignSlots {
+                // seam-exempt: test topology seeding
                 node_id: 2,
                 slots: vec![frogdb_core::cluster::SlotRange::new(7, 7)],
             })
@@ -2519,6 +2520,7 @@ mod tests {
     fn arm_handoff(state: &ClusterState, primary: NodeId, target: NodeId) {
         state
             .apply_local(ClusterCommand::AssignSlots {
+                // seam-exempt: test topology seeding
                 node_id: primary,
                 slots: vec![frogdb_core::cluster::SlotRange::new(7, 7)],
             })

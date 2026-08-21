@@ -444,6 +444,26 @@ quint-run:
     scripts/quint-witness-gate.sh || status=1
     exit $status
 
+# Steered sampled walk (opt-in) — the *finder* lane next to `quint-run`'s uniform
+# sampler. A model opts in by declaring `action stepSteered`; the steered relation
+# groups the same actions into a nested `any` and gates cheap churn behind a coin, so
+# every steered trace is still a legal trace of `step` — only the sampling
+# distribution differs. It runs a deeper budget (500x40 over four pinned seeds), one
+# invariant per invocation so a red cell names its own invariant.
+#
+# Deliberately NOT part of `quint-run`, the witness-floor gate or `quint verify`:
+# those three are the deterministic contract, and coupling "which invariant is
+# checked" to "how the sampler was tuned" is how a steering tweak silently becomes a
+# semantics change. This lane exists because uniform sampling is a weak finder — issue
+# 41's three residue defects (R8/R9a/R9b) lived in states 200x20 uniform sampling had
+# never visited, and the steered walk found all three in one pass. It runs nightly
+# (see .github/workflows/workflow_gen — never hand-edit the generated yaml) and on
+# demand while working on a model.
+#
+# Budget/seeds/action name are env-overridable — see scripts/quint-run-steered.sh.
+quint-run-steered *models:
+    scripts/quint-run-steered.sh {{models}}
+
 # Witness-floor gate: fail when a model declares a `val witness*` that the
 # sampled walk reaches in **0** traces. Runs as part of `quint-run`; also
 # callable on its own (optionally against specific models) while iterating on
@@ -1634,7 +1654,18 @@ lint-failover-atomicity:
         status=1
     fi
     saga_files="{{server-dir}}/crates/cluster-runtime/src/failure_detector.rs $src/connection/cluster.rs"
-    if matches=$(grep -nE 'ClusterCommand::(RemoveNode|AssignSlots|SetRole)' $saga_files); then
+    # `// seam-exempt:` marks test-only topology seeding (direct apply_local on a
+    # locally-constructed state), which is not a failover saga on a live cluster.
+    # The marker counts on the match line or the line after it (rustfmt moves a
+    # trailing comment on `Variant {` into the block body).
+    matches=$(awk '
+        buf != "" { if ($0 !~ /seam-exempt:/) print buf; buf = "" }
+        /ClusterCommand::(RemoveNode|AssignSlots|SetRole)/ && $0 !~ /seam-exempt:/ {
+            buf = FILENAME ":" FNR ":" $0
+        }
+        END { if (buf != "") print buf }
+    ' $saga_files)
+    if [ -n "$matches" ]; then
         echo "ERROR: failover paths must use the atomic ClusterCommand::Failover, not" >&2
         echo "       hand-rolled RemoveNode/SetRole/AssignSlots sequences:" >&2
         echo "$matches" >&2
