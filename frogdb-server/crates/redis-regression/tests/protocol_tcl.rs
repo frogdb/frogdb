@@ -795,7 +795,7 @@ async fn tcl_hello_advertises_the_compat_version() {
     let resp = client.command(&["HELLO"]).await;
     let items = unwrap_array(resp);
     assert!(
-        items.len() % 2 == 0,
+        items.len().is_multiple_of(2),
         "HELLO reply must be an even-length array"
     );
 

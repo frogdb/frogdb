@@ -1758,9 +1758,11 @@ mod tests {
     // per-connection values rather than always-0 placeholders.
     #[test]
     fn test_client_info_reports_real_watch_net_and_buffer_fields() {
-        let mut stats = ClientStats::default();
-        stats.bytes_recv = 512;
-        stats.bytes_sent = 2048;
+        let stats = ClientStats {
+            bytes_recv: 512,
+            bytes_sent: 2048,
+            ..Default::default()
+        };
 
         let info = ClientInfo {
             id: 7,
