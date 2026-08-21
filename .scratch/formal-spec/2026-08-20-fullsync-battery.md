@@ -952,3 +952,109 @@ streaming, discarding nothing. The spec row naming the model is **TR-REPLICATION
    the *applied* head, or the checkpoint cut must not overship.
 6. **The promotion-path residue (boundary 1) is unruled.** Whether a promoted node should truncate
    above its own `recv` is the same question R5 answered for the accept path, and it is open.
+
+---
+
+## Addendum — 2026-08-20: follow-up 2 resolved (M61 is reachable)
+
+**Append-only.** Nothing above is rewritten: row M61's `MISSED` verdict and its class-6 analysis
+stand as the record of what pass 2 observed. This section records the answer to the reachability
+question that analysis left open.
+
+**Verdict: the distinguishing trace is reachable, and it is not the shape the follow-up guessed.**
+M61 is therefore an ordinary missing-assertion row, not an equivalent mutant, and it closes with one
+additive `run` test. No model defect is implied.
+
+### Where the original reasoning went wrong
+
+The class-6 note argued the mutation is undetectable because "every replica in this model bootstraps
+through a full snapshot", so `coverage.fullSyncStreaming` is always already true before any partial
+splice. That conflates two different events:
+
+- a replica **acquires a history** in `deliverPayloadAt` — `applyInstallPayload` writes
+  `replid: s.granted_gen` along with `recv`/`applied`/`data`;
+- the ghost **latches** in `spliceStreamAt`, one transition later.
+
+Anything that ends the session in between leaves a replica holding a history that never took a
+full-arm splice. Its next `psyncRequestAs` then evaluates `decideArm` against a real `replid`, and
+when the window and the floor both admit it the arm is `PartialGrant` — so the replica's *first ever*
+splice is a partial one and the ghost is still dark. `endSessionAt` is the cheapest such gap: its
+only guard is `phase != Disconnected`, so it fires at `PayloadInstalled` and simply clears the link.
+(The follow-up's own suggestion — "install the payload, then abandon the splice before the trailer" —
+is not quite coherent, since `deliverPayloadAt` *is* the trailer install; `abandonSpliceAt` also
+works from `PayloadInstalled`, but it needs the floor to have climbed past the grant offset, which
+then blocks the partial arm on the same primary. The plain session end has no such tension.)
+
+### The trace
+
+Verified on a scratch copy of `specs/quint/` (quint 0.32.0), pristine model otherwise:
+
+```
+init
+  → writeOnPrimaryAs(1) ×2                  P1: recv=applied=2, floor=0
+  → psyncRequestAs(2, 1, true, 1)           arm=FullSnapshot, grant_offset=2
+  → cutCheckpointAt(1) → deliverPayloadAt(1)  R2: replid=FIRST_GEN, recv=applied=2
+                                            coverage.fullSyncStreaming still false
+  → endSessionAt(1)                          R2.link=None, session 1 Disconnected
+  → psyncRequestAs(2, 1, true, 2)           windowContains(P1, FIRST_GEN, 2) ∧ floorAdmits(P1, 2)
+                                            ⇒ arm=PartialGrant, grant_offset=2, phase=Connecting
+  → spliceStreamAt(2)                        spliceRangeAvailable(P1, 2): 2 >= P1.recv ⇒ Streaming
+                                            arm == PartialGrant ⇒ ghost stays dark
+```
+
+End state also asserted lawful: `defects.spliceGap/spliceDiverged/grantBelowFloor/
+grantForeignHistory/tornIdentity/forkedTailApplied` all false, and `inv_splice_continuity`,
+`inv_applied_covered_by_data`, `inv_no_acked_write_lost_across_fullsync` all hold.
+
+### Evidence
+
+| check | result |
+| --- | --- |
+| probe `run` test on the pristine model | passes; whole suite 40/40 (39 existing + probe) |
+| same probe with M61's mutation (`latch(…, true)`) applied to `spliceStreamAt` | probe is the **only** failure — 39 pass, 1 fail, at the `not(coverage.fullSyncStreaming)` assertion |
+| randomized reachability, `--max-samples=4000 --max-steps=40 --seed=0x1`, witness `SIDS.exists(k => phase == Streaming ∧ arm == PartialGrant) ∧ not(coverage.fullSyncStreaming)` | witnessed in **520 / 4000 traces (13.0%)** |
+
+So the state is not a corner the walk barely touches — one trace in eight already reaches it. The
+existing suite misses M61 purely because no scenario asserts the ghost is *dark* anywhere.
+
+### The closing test (verified, not landed)
+
+Landing this in `specs/quint/replication_fullsync.qnt` is additive only — one `run` test, no new
+invariant, ghost, or state field — and flips M61 `MISSED → CAUGHT`. It is **not** landed here: the
+brief for this investigation was to answer the question, not to edit the model. Verbatim, as run:
+
+```quint
+  run m61PartialSpliceWithoutFullSpliceTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(check(sessions.get(1).arm == FullSnapshot and sessions.get(1).grant_offset == 2))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(check(and {
+        nodes.get(2).replid == FIRST_GEN,
+        nodes.get(2).applied == 2,
+        not(coverage.fullSyncStreaming),
+      }))
+      .then(endSessionAt(1))
+      .then(check(nodes.get(2).link == None and sessions.get(1).phase == Disconnected))
+      .then(psyncRequestAs(2, 1, true, 2))
+      .then(check(sessions.get(2).arm == PartialGrant and sessions.get(2).grant_offset == 2))
+      .then(spliceStreamAt(2))
+      .then(check(and {
+        sessions.get(2).phase == Streaming,
+        not(coverage.fullSyncStreaming),
+      }))
+```
+
+### Knock-on for F17
+
+Row F17 (`grantedViaSecondary` over-latches `coverage.partialViaSecondary`) was deferred to M61 for
+the same reason — "a negative coverage assertion … needs a trace this model cannot produce". That
+premise is now void: the trace above ends on a partial grant served from the primary's **own** id,
+which is exactly the same-id partial F17 wanted. Its remaining obstacle (whether the dropped
+`optExists(p.replid2, …)` conjunct is genuinely equivalent at the call site) is a separate argument
+and is untouched by this note, but "no such trace exists" is no longer part of it.
+
+Follow-up 2 above is **resolved**; follow-ups 1 and 3 stand.
