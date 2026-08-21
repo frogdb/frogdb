@@ -121,9 +121,6 @@ define_command_errors! {
     /// General syntax error.
     SyntaxError => "ERR syntax error",
 
-    /// Unknown command.
-    UnknownCommand { name: String } => "ERR unknown command '{name}', with args beginning with:",
-
     // === Type Errors ===
     /// Operation against wrong value type.
     WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",

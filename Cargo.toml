@@ -25,7 +25,6 @@ members = [
     "frogdb-server/crates/config-derive",
     "frogdb-server/crates/testing",
     "frogdb-server/crates/browser-tests",
-    "frogdb-server/crates/frogdb-macros",
     "frogdb-server/benchmarks",
     "frogdb-server/ops/helm/helm-gen",
     "frogdb-server/ops/grafana/dashboard-gen",

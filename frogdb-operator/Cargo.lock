@@ -1280,6 +1280,8 @@ dependencies = [
 name = "frogdb-cluster"
 version = "0.1.0"
 dependencies = [
+ "frogdb-protocol",
+ "frogdb-types",
  "futures",
  "openraft",
  "parking_lot",
@@ -1295,16 +1297,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-cluster-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-config",
+ "frogdb-core",
+ "frogdb-net",
+ "openraft",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-commands"
 version = "0.1.0"
 dependencies = [
  "bitvec",
  "bytes",
+ "frogdb-acl",
  "frogdb-core",
  "frogdb-protocol",
  "hex",
  "rand 0.10.0",
- "ryu",
  "serde_json",
  "smallvec",
  "tracing",
@@ -1352,6 +1367,7 @@ dependencies = [
  "frogdb-search",
  "frogdb-types",
  "frogdb-vll",
+ "futures",
  "griddle",
  "hex",
  "linked-hash-map",
@@ -1389,7 +1405,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "frogdb-macros"
+name = "frogdb-metrics-derive"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
@@ -1398,12 +1414,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "frogdb-metrics-derive"
+name = "frogdb-net"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
+ "socket2",
+ "tokio",
 ]
 
 [[package]]
@@ -1441,6 +1456,7 @@ dependencies = [
  "frogdb-config",
  "frogdb-types",
  "parking_lot",
+ "rand 0.10.0",
  "rocksdb",
  "serde",
  "serde_json",
@@ -1448,6 +1464,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tracing",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1457,8 +1474,21 @@ dependencies = [
  "bytes",
  "bytes-utils",
  "redis-protocol",
+ "ryu",
  "thiserror 2.0.18",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "frogdb-recovery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "frogdb-config",
+ "frogdb-core",
+ "frogdb-types",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -1480,6 +1510,19 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "frogdb-replication-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "frogdb-config",
+ "frogdb-core",
+ "frogdb-protocol",
+ "frogdb-replication",
+ "tokio",
  "tracing",
 ]
 
@@ -1517,6 +1560,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
+ "async-trait",
  "axum",
  "bitvec",
  "bytes",
@@ -1525,15 +1569,19 @@ dependencies = [
  "dashmap",
  "figment",
  "frogdb-cluster",
+ "frogdb-cluster-runtime",
  "frogdb-commands",
  "frogdb-config",
  "frogdb-core",
  "frogdb-debug",
- "frogdb-macros",
+ "frogdb-net",
  "frogdb-protocol",
+ "frogdb-recovery",
  "frogdb-replication",
+ "frogdb-replication-runtime",
  "frogdb-search",
  "frogdb-telemetry",
+ "frogdb-txn",
  "frogdb-vll",
  "futures",
  "hex",
@@ -1552,7 +1600,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "socket2",
  "thiserror 2.0.18",
  "tikv-jemallocator",
  "tokio",
@@ -1615,6 +1662,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "frogdb-txn"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "frogdb-core",
+ "frogdb-protocol",
+ "frogdb-telemetry",
+ "tracing",
+]
+
+[[package]]
 name = "frogdb-types"
 version = "0.1.0"
 dependencies = [
@@ -1629,6 +1688,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "usearch",
  "xxhash-rust",

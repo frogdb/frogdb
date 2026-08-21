@@ -124,7 +124,6 @@ frogdb-commands.workspace = true
 frogdb-search.workspace = true
 frogdb-telemetry.workspace = true
 frogdb-net.workspace = true
-frogdb-macros = { path = "../frogdb-macros" }
 async-trait.workspace = true
 bytes.workspace = true
 rand.workspace = true

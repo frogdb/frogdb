@@ -212,10 +212,13 @@ Four core areas are **locked** behind failure-mode specs and mutation gates: **t
 - Put the forcing test in the mutated crate: `cargo mutants -p <crate>` runs only that
   package's own tests, so a row forced solely from `frogdb-server` integration tests
   contributes nothing to the owning crate's score.
-- Command families are cargo features (`frogdb-commands`): default `core-profile` covers the
-  common families; exotic ones (`json`, `stream`, `geo`, ...) need `full`/`cmd-full`, which
-  only docs-gen and allowlisted tooling may request (linted). Don't alternate feature flags
-  between commands in an iteration loop — it thrashes the build cache.
+- Command families are cargo features (`frogdb-commands`): `core-profile` (common families) is the
+  dev default, kept small to keep iteration builds and the build cache fast. Exotic families
+  (`json`, `stream`, `geo`, ...) live behind `full`/`cmd-full`. Every distributable artifact —
+  Docker image, cross-built binaries, macOS tarballs, deb, Homebrew — builds `cmd-full`
+  (ADR-0005 ruling 1), enforced by the `lint-ship-cmd-full` seam lint (`agents/seam-lints.md`).
+  Don't alternate feature flags between commands in an iteration loop — it thrashes the build
+  cache.
 
 ### Issue tracker
 
