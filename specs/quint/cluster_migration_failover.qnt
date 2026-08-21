@@ -222,6 +222,10 @@ module cluster_migration_failover {
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
   import cluster_migration_failover_logic.* from "./cluster_migration_failover_logic"
   import cluster_migration_failover_machine.* from "./cluster_migration_failover_machine"
+  // The shared helper library (formal-spec issue 01) — `import M.*` is not transitive, so
+  // the satellite modules' own imports of these do not carry them here.
+  import lib_option.* from "./lib_option"
+  import lib_monotone.* from "./lib_monotone"
 
   // ---------------------------------------------------------------------------
   // Deliberately not modeled.
@@ -293,10 +297,7 @@ module cluster_migration_failover {
   // Reworked: "drained" is now the record's `Draining` phase (ext-4), reached by
   // `confirmDrained` sealing the drain, not a `handoff.drained` flag.
   val witnessHandoffDrainedNotComplete: bool =
-    SLOTS.exists(s => match migrations.get(s) {
-      | Some(m) => m.phase == Draining
-      | None => false
-    })
+    SLOTS.exists(s => optExists(migrations.get(s), m => m.phase == Draining))
 
   // Backed by `coverage.gracefulPruned`, set only inside `failoverGraceful`'s own
   // execution when it actually prunes a migration open on one of the slots it moves.
@@ -325,10 +326,7 @@ module cluster_migration_failover {
   // repatriation's place — ownership has moved but the source still holds its copy and
   // the promotion has not been attested.
   val witnessResiduePending: bool =
-    SLOTS.exists(s => match residue.get(s) {
-      | Some(r) => not(r.promoted)
-      | None => false
-    })
+    SLOTS.exists(s => optExists(residue.get(s), r => not(r.promoted)))
 
   // --- Q2 witnesses ----------------------------------------------------------
 
@@ -338,15 +336,12 @@ module cluster_migration_failover {
   // progress abandons the drain, so this is precisely the "still holding, not yet
   // abandoned" state the bound exists to bound.
   val witnessDrainingHeldForKTicks: bool =
-    SLOTS.exists(s => match migrations.get(s) {
-      | Some(m) => and {
-          m.phase == Draining,
-          barrierArmed(s),
-          m.observations >= DRAINING_OBSERVATIONS - 1,
-          not(isAbortableByBound(m)),
-        }
-      | None => false
-    })
+    SLOTS.exists(s => optExists(migrations.get(s), m => and {
+      m.phase == Draining,
+      barrierArmed(s),
+      m.observations >= DRAINING_OBSERVATIONS - 1,
+      not(isAbortableByBound(m)),
+    }))
 
   // ext-4, backed by `coverage.healthyAborted`: a *lawfully progressing-in-principle*
   // pre-`Confirm` migration — its target still had records to ingest — taken by the
@@ -362,11 +357,8 @@ module cluster_migration_failover {
   // ext-9 (N-C5): `Complete`'s guard holds on a slot that never took a write — the quiet
   // slot, where no traffic drives the drain and the coverage batch is the only advance.
   val witnessCompleteEnabledOnQuietSlot: bool =
-    SLOTS.exists(s => match migrations.get(s) {
-      | Some(m) => canCompleteMigration(nodes, migrations, s, m.attempt)
-                     and stream_history.get(s) == Set()
-      | None => false
-    })
+    SLOTS.exists(s => optExists(migrations.get(s), m => canCompleteMigration(nodes, migrations, s, m.attempt)
+      and stream_history.get(s) == Set()))
 
   // ext-9 (V4-M1), backed by `coverage.emptyBatch`: a zero-advance coverage batch was
   // admitted as a no-op rather than refused.
@@ -413,7 +405,7 @@ module cluster_migration_failover {
   val witnessStagedFlipCompletesAcrossCrash: bool =
     NODES.exists(n => and {
       not(nodes.get(n).booted),
-      match nodes.get(n).record { | Some(rec) => rec.adopted | None => false },
+      optExists(nodes.get(n).record, rec => rec.adopted),
     })
 
   // ext-17 (V15-M4): a replica that lost `synced` to a re-parent and re-earned it by
@@ -424,7 +416,7 @@ module cluster_migration_failover {
       nodes.get(n).role == Replica,
       nodes.get(n).synced,
       nodes.get(n).parent_seq > 0,
-      match nodes.get(n).parent { | Some(p) => isLivePrimary(nodes, p) | None => false },
+      optExists(nodes.get(n).parent, p => isLivePrimary(nodes, p)),
     })
 
   // ext-18 (V28-m3): the fence *clears* — a node that a staged flip fenced is unfenced,
@@ -492,32 +484,26 @@ module cluster_migration_failover {
   // so the conjunction below (no progress observed, yet the tick would still reset the
   // counter) is false by construction. Restoring the v4 arm makes it reachable.
   val witnessDrainingWedgedBeforeConfirm: bool =
-    SLOTS.exists(s => match migrations.get(s) {
-      | Some(m) => and {
-          m.phase == Streaming,
-          m.drained_pos == None,
-          nodes.get(m.source).cannot_drain,
-          not(hasObservedProgress(m)),
-          applyReconcileTick(m).observations == 0,
-        }
-      | None => false
-    })
+    SLOTS.exists(s => optExists(migrations.get(s), m => and {
+      m.phase == Streaming,
+      m.drained_pos == None,
+      nodes.get(m.source).cannot_drain,
+      not(hasObservedProgress(m)),
+      applyReconcileTick(m).observations == 0,
+    }))
 
   // ext-13's post-seal mirror, and the sharper of the two: a record whose `Complete` is
   // *already admissible* and whose hold region is still latched, with the target silent
   // — the shape where a counter that never advances would hold client writes forever.
   // Same contradiction, same single revert reaches it.
   val witnessDrainingWedgedWithCompletableToken: bool =
-    SLOTS.exists(s => match migrations.get(s) {
-      | Some(m) => and {
-          canCompleteMigration(nodes, migrations, s, m.attempt),
-          held.get(m.source) != Set(),
-          nodes.get(m.target).silent,
-          not(hasObservedProgress(m)),
-          applyReconcileTick(m).observations == 0,
-        }
-      | None => false
-    })
+    SLOTS.exists(s => optExists(migrations.get(s), m => and {
+      canCompleteMigration(nodes, migrations, s, m.attempt),
+      held.get(m.source) != Set(),
+      nodes.get(m.target).silent,
+      not(hasObservedProgress(m)),
+      applyReconcileTick(m).observations == 0,
+    }))
 
   // V12-M1, ruled 2026-08-19: the *non-vacuity* half of
   // `inv_no_hold_during_staged_flip`. The invariant alone is satisfied by a model in which
@@ -566,24 +552,18 @@ module cluster_migration_failover {
   // INV-REF-1: every assigned slot's owner exists as a current member. This model does
   // not claim the owner holds the Primary role — see the header for why.
   val inv_slot_owner_valid: bool =
-    SLOTS.forall(s => match slots.get(s) {
-      | Some(n) => nodes.get(n).member
-      | None => true
-    })
+    SLOTS.forall(s => optForall(slots.get(s), n => nodes.get(n).member))
 
   // INV-MIG-1: an open migration's source currently owns the slot, *or the slot is
   // currently unassigned* (check_mig_1's own `?`-early-return exempts a migrating slot
   // with no recorded owner); source != target; both endpoints are members.
   val inv_migration_endpoints_valid: bool =
-    SLOTS.forall(s => match migrations.get(s) {
-      | Some(m) => and {
-          slots.get(s) == Some(m.source) or slots.get(s) == None,
-          m.source != m.target,
-          nodes.get(m.source).member,
-          nodes.get(m.target).member,
-        }
-      | None => true
-    })
+    SLOTS.forall(s => optForall(migrations.get(s), m => and {
+      slots.get(s) == Some(m.source) or slots.get(s) == None,
+      m.source != m.target,
+      nodes.get(m.source).member,
+      nodes.get(m.target).member,
+    }))
 
   // INV-HANDOFF-1, in all three halves. The catalog's bound ("the counter dominates every
   // live seq") *is* stateable as `m.attempt <= ctl.handoff_seq` even across ext-10's
@@ -595,14 +575,11 @@ module cluster_migration_failover {
   // the bound survive a rewind rather than merely coincide with it. The unminted-0 half
   // is verbatim: a sealed source always carries a real stamp.
   val inv_handoff_owned: bool =
-    SLOTS.forall(s => match migrations.get(s) {
-      | Some(m) => and {
-          m.attempt <= ctl.handoff_seq,
-          m.attempt >= 1 implies spent.exists(t => t.epoch == ctl.reset_epoch and t.seq == m.attempt),
-          m.fenced implies m.attempt >= 1,
-        }
-      | None => true
-    })
+    SLOTS.forall(s => optForall(migrations.get(s), m => and {
+      m.attempt <= ctl.handoff_seq,
+      m.attempt >= 1 implies spent.exists(t => t.epoch == ctl.reset_epoch and t.seq == m.attempt),
+      m.fenced implies m.attempt >= 1,
+    }))
 
   // INV-HANDOFF-2's distinctness half: no handoff sequence number is ever spent twice
   // *under the same reset epoch*. Checked via the `defects.seqReuse` ghost, recomputed
@@ -761,14 +738,11 @@ module cluster_migration_failover {
   // deletes a keyspace entry, so a former owner keeps its copy indefinitely — is exempt,
   // while a copy that *appeared* under an unpromoted entry is not.
   val inv_no_serve_before_attestation: bool =
-    SLOTS.forall(s => match residue.get(s) {
-      | Some(r) => or {
-          r.promoted,
-          not(nodes.get(r.target).keys.contains(s)),
-          ctl.prev_keys.get(r.target).contains(s),
-        }
-      | None => true
-    })
+    SLOTS.forall(s => optForall(residue.get(s), r => or {
+      r.promoted,
+      not(nodes.get(r.target).keys.contains(s)),
+      ctl.prev_keys.get(r.target).contains(s),
+    }))
 
   // ext-12, source-authoritative-until-commit's other half: while an entry is
   // unpromoted, the source's shard still physically holds the copy — the reaper's
@@ -780,10 +754,7 @@ module cluster_migration_failover {
   // *marked*, ext-12 hands it to the operator arms, and a departure that also detaches
   // the holder from the shard leaves the copy tracked by nothing this model can walk to.
   val inv_source_keeps_its_copy_until_promotion_attested: bool =
-    SLOTS.forall(s => match residue.get(s) {
-      | Some(r) => r.promoted or r.source_gone or shardHoldsCopy(nodes, r.source, s)
-      | None => true
-    })
+    SLOTS.forall(s => optForall(residue.get(s), r => r.promoted or r.source_gone or shardHoldsCopy(nodes, r.source, s)))
 
   // ext-7/ext-12: a slot any tracking object still claims — assigned, or carrying a
   // residue entry — is physically held by *someone*. The reaper is the model's only
@@ -838,13 +809,8 @@ module cluster_migration_failover {
   // reset epoch — Begin's discard-then-ingest re-mints whatever the slot carried, so an
   // orphan shadow from a pre-reset epoch can never wedge the next migration's ingest.
   val inv_no_orphan_shadow_blocks_ingest: bool =
-    SLOTS.forall(s => match migrations.get(s) {
-      | Some(m) => match shadow.get(s) {
-          | Some(t) => t.mig == m.id and t.epoch == ctl.reset_epoch
-          | None => true
-        }
-      | None => true
-    })
+    SLOTS.forall(s => optForall(migrations.get(s), m =>
+      optForall(shadow.get(s), t => t.mig == m.id and t.epoch == ctl.reset_epoch)))
 
   // ext-9. COINED (the doc states it as "neither the batch nor the fault discards the
   // shadow" without naming a property): an open record always has its shadow. A batch
@@ -884,11 +850,8 @@ module cluster_migration_failover {
   // have matched. Dropping either half of `refusalBinds` lets a refusal minted for a dead
   // stage clear a record minted after a forget-and-rejoin, and that shows up here.
   val inv_no_live_record_disposed_by_a_foreign_refusal: bool =
-    NODES.forall(n => match nodes.get(n).last_disposition {
-      | Some(d) => d.refusal_stage_id == d.record_stage_id
-                     and d.refusal_reg_seq == d.record_reg_seq
-      | None => true
-    })
+    NODES.forall(n => optForall(nodes.get(n).last_disposition, d => d.refusal_stage_id == d.record_stage_id
+      and d.refusal_reg_seq == d.record_reg_seq))
 
   // ext-17 (V16-C1): the parent pointer is only ever written through the single funnel
   // that also moves the parenting token. Stated across the step against `ctl.prev_parents`:
@@ -903,10 +866,7 @@ module cluster_migration_failover {
   // no cell carries a generation the cluster has not issued, which is what makes
   // `staged_reg_seq` a usable pairing partner for a stage id.
   val inv_registration_gen_monotone: bool =
-    NODES.forall(n => match nodes.get(n).registration_seq {
-      | Some(r) => r < ctl.next_reg
-      | None => true
-    })
+    NODES.forall(n => optForall(nodes.get(n).registration_seq, r => r < ctl.next_reg))
 
   // ext-18 + V12-M1, ruled 2026-08-19: **the staged-fence level rule**. In every state
   // with a pending transition record, that node's held set is empty — a write scheduled
@@ -970,10 +930,7 @@ module cluster_migration_failover {
     init
       .then(beginMigration(1, 1, 4, false))
       .expect(and {
-        match migrations.get(1) {
-          | Some(m) => m.source == 1 and m.target == 4 and m.attempt == 0 and m.phase == Streaming
-          | None => false
-        },
+        optExists(migrations.get(1), m => m.source == 1 and m.target == 4 and m.attempt == 0 and m.phase == Streaming),
         // ext-10: Begin ingests under the current reset epoch.
         shadow.get(1) == Some({ mig: 1, epoch: 0 }),
       })
@@ -981,10 +938,10 @@ module cluster_migration_failover {
       .expect(and {
         barrierArmed(1),
         held.get(1) == Set(1),
-        match migrations.get(1) { | Some(m) => m.attempt == 1 and m.fenced | None => false },
+        optExists(migrations.get(1), m => m.attempt == 1 and m.fenced),
       })
       .then(confirmDrained(1, 1))
-      .expect(match migrations.get(1) { | Some(m) => m.phase == Draining | None => false })
+      .expect(optExists(migrations.get(1), m => m.phase == Draining))
       .then(completeMigration(1, 1))
       .expect(and {
         slots.get(1) == Some(4),
@@ -1003,7 +960,7 @@ module cluster_migration_failover {
       .then(reportPromoted(1))
       .expect(and {
         nodes.get(4).keys.contains(1),
-        match residue.get(1) { | Some(r) => r.promoted | None => false },
+        optExists(residue.get(1), r => r.promoted),
       })
       .then(reapSlots(1))
       .expect(and { not(nodes.get(1).keys.contains(1)), nodes.get(4).keys.contains(1) })
@@ -1040,7 +997,7 @@ module cluster_migration_failover {
         shadow.get(1) == None,
         nodes.get(1).keys.contains(1),
         not(nodes.get(4).keys.contains(1)),
-        match residue.get(1) { | Some(r) => not(r.promoted) | None => false },
+        optExists(residue.get(1), r => not(r.promoted)),
       })
   }
 
@@ -1060,7 +1017,7 @@ module cluster_migration_failover {
       .then(removeNode(1, true, false))
       .expect(and {
         not(nodes.get(1).member),
-        match residue.get(1) { | Some(r) => r.source_gone and not(r.promoted) | None => false },
+        optExists(residue.get(1), r => r.source_gone and not(r.promoted)),
       })
       .then(failPromotion(1).fail())
   }
@@ -1099,7 +1056,7 @@ module cluster_migration_failover {
       .then(reportPromoted(1))
       .then(removeNode(4, true, false))
       .expect(and {
-        match residue.get(1) { | Some(r) => r.promoted and r.target_gone | None => false },
+        optExists(residue.get(1), r => r.promoted and r.target_gone),
         // Marked, never removed.
         residue.get(1) != None,
         nodes.get(1).keys.contains(1),
@@ -1161,7 +1118,7 @@ module cluster_migration_failover {
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
-      .expect(match migrations.get(1) { | Some(m) => m.phase == Draining | None => false })
+      .expect(optExists(migrations.get(1), m => m.phase == Draining))
       .then(armFailoverFence(1))
       .then(failoverGraceful(1, 3, 0, Primary))
       .expect(and {
@@ -1208,15 +1165,13 @@ module cluster_migration_failover {
       .then(confirmDrained(1, 1))
       .then(abortHandoff(1, 1))
       .expect(and {
-        match migrations.get(1) {
-          | Some(m) => m.attempt == 0 and not(m.fenced) and m.phase == Streaming and m.drained_pos == None
-          | None => false
-        },
+        optExists(migrations.get(1), m =>
+          m.attempt == 0 and not(m.fenced) and m.phase == Streaming and m.drained_pos == None),
         not(barrierArmed(1)),
         held.get(1) == Set(),
       })
       .then(prepareHandoff(1))
-      .expect(match migrations.get(1) { | Some(m) => m.attempt == 2 and m.fenced | None => false })
+      .expect(optExists(migrations.get(1), m => m.attempt == 2 and m.fenced))
   }
 
   // (c2) Re-preparing over a live handoff supersedes it (FM-CLUSTER-085): the old attempt
@@ -1226,9 +1181,9 @@ module cluster_migration_failover {
     init
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
-      .expect(match migrations.get(1) { | Some(m) => m.attempt == 1 | None => false })
+      .expect(optExists(migrations.get(1), m => m.attempt == 1))
       .then(prepareHandoff(1))
-      .expect(match migrations.get(1) { | Some(m) => m.attempt == 2 and m.phase == Streaming | None => false })
+      .expect(optExists(migrations.get(1), m => m.attempt == 2 and m.phase == Streaming))
       .then(confirmDrained(1, 1).fail())
   }
 
@@ -1244,7 +1199,7 @@ module cluster_migration_failover {
       .then(targetRestart(4))
       .expect(and {
         nodes.get(4).run_id == 5,
-        match migrations.get(1) { | Some(m) => m.target_copy.run_id == 4 | None => false },
+        optExists(migrations.get(1), m => m.target_copy.run_id == 4),
       })
       .then(completeMigration(1, 1).fail())
   }
@@ -1274,16 +1229,13 @@ module cluster_migration_failover {
       .expect(and {
         // Everything the commit reads except the tag comparison.
         isLivePrimary(nodes, 4),
-        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
-        match migrations.get(1) {
-          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining,
-                             m.target_copy.run_id == nodes.get(4).run_id,
-                             m.drained_pos == Some({ run_id: 5, pos: 0 }),
-                             // ... and the one operand that is false: the drain was
-                             // minted under run 5, the log under run 1.
-                             m.source_log.run_id == 1 }
-          | None => false
-        },
+        optExists(migrations.get(1), m => sourceRunIdentityOk(nodes, m)),
+        optExists(migrations.get(1), m => and { m.attempt == 1, m.fenced, m.phase == Draining,
+          m.target_copy.run_id == nodes.get(4).run_id,
+          m.drained_pos == Some({ run_id: 5, pos: 0 }),
+          // ... and the one operand that is false: the drain was
+          // minted under run 5, the log under run 1.
+          m.source_log.run_id == 1 }),
       })
       .then(completeMigration(1, 1).fail())
   }
@@ -1307,16 +1259,13 @@ module cluster_migration_failover {
       .then(localReleaseOnCapBreach(1))
       .expect(and {
         isLivePrimary(nodes, 4),
-        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
-        match migrations.get(1) {
-          | Some(m) => and { m.attempt == 1, m.phase == Draining,
-                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
-                             m.target_copy.run_id == nodes.get(4).run_id,
-                             m.target_copy.pos >= 0,
-                             // The one false operand.
-                             not(m.fenced) }
-          | None => false
-        },
+        optExists(migrations.get(1), m => sourceRunIdentityOk(nodes, m)),
+        optExists(migrations.get(1), m => and { m.attempt == 1, m.phase == Draining,
+          m.drained_pos == Some({ run_id: 1, pos: 0 }),
+          m.target_copy.run_id == nodes.get(4).run_id,
+          m.target_copy.pos >= 0,
+          // The one false operand.
+          not(m.fenced) }),
       })
       .then(completeMigration(1, 1).fail())
   }
@@ -1333,16 +1282,13 @@ module cluster_migration_failover {
       .then(prepareHandoff(1))
       .expect(and {
         isLivePrimary(nodes, 4),
-        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
-        match migrations.get(1) {
-          | Some(m) => and { m.attempt == 2, m.fenced,
-                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
-                             m.source_log.run_id == 1,
-                             m.target_copy.run_id == nodes.get(4).run_id,
-                             // The one false operand.
-                             m.phase == Streaming }
-          | None => false
-        },
+        optExists(migrations.get(1), m => sourceRunIdentityOk(nodes, m)),
+        optExists(migrations.get(1), m => and { m.attempt == 2, m.fenced,
+          m.drained_pos == Some({ run_id: 1, pos: 0 }),
+          m.source_log.run_id == 1,
+          m.target_copy.run_id == nodes.get(4).run_id,
+          // The one false operand.
+          m.phase == Streaming }),
       })
       .then(completeMigration(1, 2).fail())
   }
@@ -1362,14 +1308,11 @@ module cluster_migration_failover {
         nodes.get(4).role == Replica,
         nodes.get(4).member,
         not(nodes.get(4).fail),
-        match migrations.get(1) { | Some(m) => sourceRunIdentityOk(nodes, m) | None => false },
-        match migrations.get(1) {
-          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining,
-                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
-                             m.target_copy.run_id == nodes.get(4).run_id,
-                             m.target_copy.pos >= 0 }
-          | None => false
-        },
+        optExists(migrations.get(1), m => sourceRunIdentityOk(nodes, m)),
+        optExists(migrations.get(1), m => and { m.attempt == 1, m.fenced, m.phase == Draining,
+          m.drained_pos == Some({ run_id: 1, pos: 0 }),
+          m.target_copy.run_id == nodes.get(4).run_id,
+          m.target_copy.pos >= 0 }),
       })
       .then(completeMigration(1, 1).fail())
   }
@@ -1386,21 +1329,12 @@ module cluster_migration_failover {
       .then(applyAtTarget(1))
       .then(makeTargetDurable(1))
       .then(applyAtTarget(1))
-      .expect(match migrations.get(1) {
-        | Some(m) => m.target_applied == 2 and m.target_durable == 1
-        | None => false
-      })
+      .expect(optExists(migrations.get(1), m => m.target_applied == 2 and m.target_durable == 1))
       .then(reportTargetIngest(1))
-      .expect(match migrations.get(1) {
-        | Some(m) => m.target_copy == { run_id: 4, pos: 1 }
-        | None => false
-      })
+      .expect(optExists(migrations.get(1), m => m.target_copy == { run_id: 4, pos: 1 }))
       // And the restart takes exactly the volatile half back.
       .then(targetRestart(4))
-      .expect(match migrations.get(1) {
-        | Some(m) => m.target_applied == 1 and m.target_durable == 1
-        | None => false
-      })
+      .expect(optExists(migrations.get(1), m => m.target_applied == 1 and m.target_durable == 1))
   }
 
   // ext-1/ext-5 (N-C2): the restart-then-write window *within one record* — the state a
@@ -1472,14 +1406,11 @@ module cluster_migration_failover {
         nodes.get(4).keys.contains(1),
         canRetargetSlotResidue(nodes, residue, 1),
         inv_residue_has_an_effective_remover,
-        match residue.get(1) { | Some(r) => r.source == 1 | None => false },
+        optExists(residue.get(1), r => r.source == 1),
       })
       .then(retargetSlotResidue(1))
       .expect(and {
-        match residue.get(1) {
-          | Some(r) => and { r.source == 4, not(r.source_gone), r.target == 4 }
-          | None => false
-        },
+        optExists(residue.get(1), r => and { r.source == 4, not(r.source_gone), r.target == 4 }),
         // The entry's new source holds the copy in its own keyspace — the re-home moved
         // the claim onto the data, not onto a closure edge.
         nodes.get(4).keys.contains(1),
@@ -1517,7 +1448,7 @@ module cluster_migration_failover {
       // left the physical holder, the claim does not depend on either edge.
       .then(setRole(3, Replica, Some(4)))
       .expect(and {
-        match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
+        optExists(residue.get(1), r => r.source == 1 and not(r.promoted)),
         nodes.get(1).keys.contains(1),
         nodes.get(1).parent == Some(4),
         inv_source_keeps_its_copy_until_promotion_attested,
@@ -1546,7 +1477,7 @@ module cluster_migration_failover {
       .then(stageFlip(1, 3))
       .expect(and {
         not(isLivePrimary(nodes, 3)),
-        match nodes.get(1).record { | Some(rec) => rec.upstream == 3 | None => false },
+        optExists(nodes.get(1).record, rec => rec.upstream == 3),
         nodes.get(1).role == Primary,
         refusals == Set(),
         inv_source_keeps_its_copy_until_promotion_attested,
@@ -1638,7 +1569,7 @@ module cluster_migration_failover {
       .expect(and {
         demotedTo(nodes, 1, 2),
         // R9: the claim stays on the physical holder, not on the successor.
-        match residue.get(1) { | Some(r) => r.source == 1 | None => false },
+        optExists(residue.get(1), r => r.source == 1),
         not(nodes.get(2).keys.contains(1)),
         nodes.get(1).keys.contains(1),
         inv_source_keeps_its_copy_until_promotion_attested,
@@ -1648,14 +1579,14 @@ module cluster_migration_failover {
       .then(reportPromoted(1))
       .then(reapSlots(1))
       .expect(and {
-        match residue.get(1) { | Some(r) => r.promoted and r.source == 1 | None => false },
+        optExists(residue.get(1), r => r.promoted and r.source == 1),
         not(nodes.get(1).keys.contains(1)),
         nodes.get(4).keys.contains(1),
       })
       .then(setRole(1, Replica, Some(4)))
       .expect(and {
         // The claim followed the copy into node 4's shard.
-        match residue.get(1) { | Some(r) => r.source == 4 | None => false },
+        optExists(residue.get(1), r => r.source == 4),
         shardHoldsCopy(nodes, 4, 1),
         inv_source_keeps_its_copy_until_promotion_attested,
         inv_slot_copy_survives_until_owned_and_served,
@@ -1676,7 +1607,7 @@ module cluster_migration_failover {
       .then(confirmDrained(1, 1))
       .then(completeMigration(1, 1))
       .expect(and {
-        match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
+        optExists(residue.get(1), r => r.source == 1 and not(r.promoted)),
         nodes.get(1).keys.contains(1),
         not(canClearSlotResidue(nodes, slots, migrations, residue, 1)),
         // ... and the reap-then-clear terminal state is not available either.
@@ -1706,14 +1637,14 @@ module cluster_migration_failover {
       .expect(and {
         // Ownership is home; the entry survives the rollback unpromoted.
         slots.get(1) == Some(1),
-        match residue.get(1) { | Some(r) => not(r.promoted) and r.source == 1 | None => false },
+        optExists(residue.get(1), r => not(r.promoted) and r.source == 1),
         canClearSlotResidue(nodes, slots, migrations, residue, 1),
       })
       .then(attachTargetReplica(1, 4))
       .expect(and {
         demotedTo(nodes, 1, 4),
         // R1: the claim stays on the physical holder ...
-        match residue.get(1) { | Some(r) => r.source == 1 | None => false },
+        optExists(residue.get(1), r => r.source == 1),
         nodes.get(1).keys.contains(1),
         // ... and every live-primary-gated remover is now false ...
         not(canFailPromotion(nodes, residue, 1)),
@@ -1769,10 +1700,7 @@ module cluster_migration_failover {
       .then(demoteNode(4, 2))
       .expect(and {
         slots.get(1) == Some(2),
-        match residue.get(1) {
-          | Some(r) => and { r.target == 2, not(r.target_gone), not(r.promoted), r.source == 1 }
-          | None => false
-        },
+        optExists(residue.get(1), r => and { r.target == 2, not(r.target_gone), not(r.promoted), r.source == 1 }),
         // R8 (issue 41), ruled 2026-08-20: the successor inherits the *slot*, not the
         // *copy*. Node 4 had never attested for slot 1, so it held nothing to hand on;
         // `applyFailoverCommon`'s key union used to give node 2 a copy anyway, and the
@@ -1817,12 +1745,9 @@ module cluster_migration_failover {
         // Untouched by the restart itself: still the same sealed, drained record, still
         // behind an armed barrier.
         barrierArmed(1),
-        match migrations.get(1) {
-          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining,
-                             m.drained_pos == Some({ run_id: 1, pos: 0 }),
-                             m.source_log.run_id == 1 }
-          | None => false
-        },
+        optExists(migrations.get(1), m => and { m.attempt == 1, m.fenced, m.phase == Draining,
+          m.drained_pos == Some({ run_id: 1, pos: 0 }),
+          m.source_log.run_id == 1 }),
       })
       .then(reportRunIdentity(1, Boot, Primary, 0, false))
       .expect(and {
@@ -1861,10 +1786,7 @@ module cluster_migration_failover {
         nodes.get(1).identity_seq == 1,
         not(nodes.get(1).booted),
         // ...and nothing was cancelled.
-        match migrations.get(1) {
-          | Some(m) => and { m.attempt == 1, m.fenced, m.phase == Draining }
-          | None => false
-        },
+        optExists(migrations.get(1), m => and { m.attempt == 1, m.fenced, m.phase == Draining }),
         barrierArmed(1),
       })
       .then(completeMigration(1, 1))
@@ -1922,7 +1844,7 @@ module cluster_migration_failover {
       .then(removeNode(4, true, false))
       .expect(and {
         slots.get(1) == None,
-        match residue.get(1) { | Some(r) => r.promoted and r.target_gone | None => false },
+        optExists(residue.get(1), r => r.promoted and r.target_gone),
         nodes.get(1).keys.contains(1),
       })
       .then(rehomeOrphanSlot(1, 1))
@@ -1951,10 +1873,7 @@ module cluster_migration_failover {
       .expect(and {
         slots.get(1) == Some(2),
         nodes.get(2).keys.contains(1),
-        match residue.get(1) {
-          | Some(r) => and { r.source == 1, r.target == 2, r.promoted, not(r.target_gone) }
-          | None => false
-        },
+        optExists(residue.get(1), r => and { r.source == 1, r.target == 2, r.promoted, not(r.target_gone) }),
         // The source still holds its copy — the re-home is not itself a reap.
         nodes.get(1).keys.contains(1),
       })
@@ -2050,7 +1969,7 @@ module cluster_migration_failover {
         not(barrierArmed(1)),
         held.get(1) == Set(),
         // The seal drops; the phase does not.
-        match migrations.get(1) { | Some(m) => not(m.fenced) and m.phase == Streaming | None => false },
+        optExists(migrations.get(1), m => not(m.fenced) and m.phase == Streaming),
       })
   }
 
@@ -2149,7 +2068,7 @@ module cluster_migration_failover {
       .then(beginMigration(2, 4, 2, false))
       .then(prepareHandoff(2))
       .expect(and {
-        match migrations.get(2) { | Some(m) => m.attempt == 1 | None => false },
+        optExists(migrations.get(2), m => m.attempt == 1),
         spent == Set({ epoch: 0, seq: 1 }, { epoch: 1, seq: 1 }),
         not(defects.seqReuse),
       })
@@ -2341,13 +2260,13 @@ module cluster_migration_failover {
       .then(beginMigration(1, 1, 4, false))
       .then(prepareHandoff(1))
       .then(confirmDrained(1, 1))
-      .expect(match migrations.get(1) { | Some(m) => m.observations == 0 | None => false })
+      .expect(optExists(migrations.get(1), m => m.observations == 0))
       .then(reconcileTick(1))
       .then(reconcileTick(1))
       .then(reconcileTick(1))
       .expect(and {
         witnessDrainingHeldForKTicks,
-        match migrations.get(1) { | Some(m) => m.observations == DRAINING_OBSERVATIONS - 1 | None => false },
+        optExists(migrations.get(1), m => m.observations == DRAINING_OBSERVATIONS - 1),
         not(defects.boundAbort),
       })
   }
@@ -2367,10 +2286,8 @@ module cluster_migration_failover {
       .then(reconcileTick(1))
       .then(reconcileTick(1))
       .expect(and {
-        match migrations.get(1) {
-          | Some(m) => and { m.phase == Streaming, isAbortableByBound(m), m.target_applied < m.source_log.pos }
-          | None => false
-        },
+        optExists(migrations.get(1), m => and {
+          m.phase == Streaming, isAbortableByBound(m), m.target_applied < m.source_log.pos }),
         not(defects.boundAbort),
       })
       .then(boundAbort(1))
@@ -2385,16 +2302,12 @@ module cluster_migration_failover {
     init
       .then(attachTargetReplica(2, 4))
       .then(beginMigration(1, 1, 4, true))
-      .expect(match migrations.get(1) { | Some(m) => m.require_replica_ack | None => false })
+      .expect(optExists(migrations.get(1), m => m.require_replica_ack))
       .then(sourceWrite(1))
       .then(applyAtTarget(1))
       .then(makeTargetDurable(1))
       .then(reportTargetIngest(1))
-      .expect(match migrations.get(1) {
-        // Lagging but progressing: the counted replica is behind the target's own copy.
-        | Some(m) => nodes.get(2).replica_copy < m.target_applied
-        | None => false
-      })
+      .expect(optExists(migrations.get(1), m => nodes.get(2).replica_copy < m.target_applied))
       // ext-4 (V7-C3) / ext-14 (V8-M2): the pre-seal wait is *spent*. Four ticks — the
       // first sees the ingest progress and resets, the next three accrue — leave the
       // counter at the `draining_observations` bound while the migration is still healthy
@@ -2405,10 +2318,8 @@ module cluster_migration_failover {
       .then(reconcileTick(1))
       .then(reconcileTick(1))
       .then(reconcileTick(1))
-      .expect(match migrations.get(1) {
-        | Some(m) => and { m.observations == DRAINING_OBSERVATIONS, not(isAbortableByBound(m)) }
-        | None => false
-      })
+      .expect(optExists(migrations.get(1), m =>
+        and { m.observations == DRAINING_OBSERVATIONS, not(isAbortableByBound(m)) }))
       .then(feedTargetReplica(2))
       .then(reportReplicaAck(1, 2))
       .then(prepareHandoff(1))
@@ -2417,14 +2328,12 @@ module cluster_migration_failover {
       // replica-ack counter reset it stands for) leaves the accrued pre-seal count in
       // place, which is already at the bound — the abort-every-lawful-drain defect, and
       // the reason the witness below is unreachable without it.
-      .expect(match migrations.get(1) {
-        | Some(m) => and { m.observations == 0, not(isAbortableByBound(m)), not(defects.sealCounter) }
-        | None => false
-      })
+      .expect(optExists(migrations.get(1), m =>
+        and { m.observations == 0, not(isAbortableByBound(m)), not(defects.sealCounter) }))
       // The drain waits one more observation for the ack it already has; with the counter
       // reset this is free, without it the record is abortable here.
       .then(reconcileTick(1))
-      .expect(match migrations.get(1) { | Some(m) => not(isAbortableByBound(m)) | None => false })
+      .expect(optExists(migrations.get(1), m => not(isAbortableByBound(m))))
       .then(completeMigration(1, 1))
       .expect(and {
         witnessKnobOnMigrationCompletes,
@@ -2461,23 +2370,17 @@ module cluster_migration_failover {
         // Every `Complete` conjunct is satisfied here, the replica pair included.
         countedReplicasOf(nodes, 4) == Set(2),
         canCompleteMigration(nodes, migrations, 1, 1),
-        match migrations.get(1) {
-          | Some(m) => and { m.phase == Draining, m.require_replica_ack,
-                             m.drained_pos == Some({ run_id: 1, pos: 1 }),
-                             m.target_copy.run_id == nodes.get(4).run_id,
-                             m.target_copy.pos >= 1,
-                             m.target_replica_ack >= 1 }
-          | None => false
-        },
+        optExists(migrations.get(1), m => and { m.phase == Draining, m.require_replica_ack,
+          m.drained_pos == Some({ run_id: 1, pos: 1 }),
+          m.target_copy.run_id == nodes.get(4).run_id,
+          m.target_copy.pos >= 1,
+          m.target_replica_ack >= 1 }),
       })
       .then(detachTargetReplica(2))
       .expect(and {
         // Only the counted set changed — the recorded ack still covers the drained point.
         countedReplicasOf(nodes, 4) == Set(),
-        match migrations.get(1) {
-          | Some(m) => m.target_replica_ack >= 1
-          | None => false
-        },
+        optExists(migrations.get(1), m => m.target_replica_ack >= 1),
         not(canCompleteMigration(nodes, migrations, 1, 1)),
       })
       .then(completeMigration(1, 1).fail())
@@ -2529,7 +2432,7 @@ module cluster_migration_failover {
       .then(stageFlip(3, 4))
       .expect(and { nodes.get(3).node_fenced, not(nodes.get(3).reply_emitted) })
       .then(reportRunIdentity(3, Demotion, Replica, 0, false))
-      .expect(match nodes.get(3).record { | Some(rec) => rec.adopted | None => false })
+      .expect(optExists(nodes.get(3).record, rec => rec.adopted))
       .then(sourceRestart(3))
       .expect(and { witnessStagedFlipCompletesAcrossCrash, not(nodes.get(3).booted) })
       .then(completeAdoption(3))
@@ -2816,10 +2719,7 @@ module cluster_migration_failover {
   run foreignRefusalDoesNotDisposeTest: bool = {
     init
       .then(stageFlip(3, 4))
-      .expect(match nodes.get(3).record {
-        | Some(rec) => rec.stage_id == 1 and rec.staged_reg_seq == 3
-        | None => false
-      })
+      .expect(optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 3))
       // The store loss goes with the departure: the counter rewinds, the record does not
       // (ext-18 — that survival is what makes the collision expressible).
       .then(removeNode(3, false, true))
@@ -2831,10 +2731,7 @@ module cluster_migration_failover {
       .expect(nodes.get(3).registration_seq == Some(5))
       // Same stage id (the counter was wiped), different registration.
       .then(stageFlip(3, 4))
-      .expect(match nodes.get(3).record {
-        | Some(rec) => rec.stage_id == 1 and rec.staged_reg_seq == 5
-        | None => false
-      })
+      .expect(optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 5))
       .then(observeRefusal(3, { node: 3, stage_id: 1, reg_seq: 3,
                                 class: Membership, terminal: true }))
       .expect(and {
@@ -2855,10 +2752,7 @@ module cluster_migration_failover {
   run competingStageRefusedTest: bool = {
     init
       .then(stageFlip(3, 4))
-      .expect(match nodes.get(3).record {
-        | Some(rec) => and { rec.upstream == 4, rec.stage_id == 1, not(rec.adopted) }
-        | None => false
-      })
+      .expect(optExists(nodes.get(3).record, rec => and { rec.upstream == 4, rec.stage_id == 1, not(rec.adopted) }))
       .then(stageFlip(3, 2).fail())
   }
 
@@ -2874,10 +2768,7 @@ module cluster_migration_failover {
       .expect(and {
         nodes.get(3).role == Replica,
         nodes.get(3).admitted_stage == None,
-        match nodes.get(3).record {
-          | Some(rec) => and { rec.upstream == 4, not(rec.adopted) }
-          | None => false
-        },
+        optExists(nodes.get(3).record, rec => and { rec.upstream == 4, not(rec.adopted) }),
       })
       .then(completeAdoption(3).fail())
   }

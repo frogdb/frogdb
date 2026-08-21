@@ -44,6 +44,11 @@
 module cluster_migration_failover_logic {
   import cluster_common_types.* from "./cluster_common_types"
   import cluster_migration_failover_types.* from "./cluster_migration_failover_types"
+  // The shared helper library (formal-spec issue 01). `import M.*` is not transitive in
+  // Quint, so every module that reads an `Option` or advances a watermark imports these
+  // for itself — the machine and main modules below repeat both lines.
+  import lib_option.* from "./lib_option"
+  import lib_monotone.* from "./lib_monotone"
 
   // The bundle `applyFailoverCommon` (and the demotion transitions that share its
   // postcondition) read and rewrite. Grouped as one record so the postcondition is a
@@ -65,7 +70,8 @@ module cluster_migration_failover_logic {
   // Small pure helpers.
   // ---------------------------------------------------------------------------
 
-  pure def max2(a: int, b: int): int = if (a > b) a else b
+  // `max2` used to be declared here; it now comes from lib_monotone (issue 04's retrofit),
+  // which is also where `lexGt` and the ghost `latch` below come from.
 
   pure def ownsAnySlot(slotMap: SlotId -> Option[NodeId], n: NodeId): bool =
     SLOTS.exists(s => slotMap.get(s) == Some(n))
@@ -146,10 +152,7 @@ module cluster_migration_failover_logic {
   // postcondition, generalized to every failover per issue 15's ruling ("keyed to the
   // failover transition itself, NOT node removal") and to TR-CLUSTER-003's own prune.
   pure def slotsNaming(migs: SlotId -> Option[Migration], node: NodeId): Set[SlotId] =
-    SLOTS.filter(s => match migs.get(s) {
-      | Some(m) => m.source == node or m.target == node
-      | None => false
-    })
+    SLOTS.filter(s => optExists(migs.get(s), m => m.source == node or m.target == node))
 
   // Drops every migration entry naming `node` (issue 15's prune; also TR-CLUSTER-003's).
   pure def prunedMigrations(migs: SlotId -> Option[Migration], node: NodeId): SlotId -> Option[Migration] =
@@ -164,10 +167,7 @@ module cluster_migration_failover_logic {
   // field write cancels (see `cancelledBySource`), and the set whose hold region that
   // cancel has to release.
   pure def slotsSourcedBy(migs: SlotId -> Option[Migration], node: NodeId): Set[SlotId] =
-    SLOTS.filter(s => match migs.get(s) {
-      | Some(m) => m.source == node
-      | None => false
-    })
+    SLOTS.filter(s => optExists(migs.get(s), m => m.source == node))
 
   // ext-15 (V10-M1), the replicated form of "a source restart aborts the migration":
   // applying a run-identity **field write** for a node that is the *source* of any open
@@ -244,10 +244,7 @@ module cluster_migration_failover_logic {
     val ns = allNodes.get(n)
     or {
       ns.local_parent == ns.parent,
-      ns.parent == None and match ns.local_parent {
-        | Some(u) => not(allNodes.get(u).member)
-        | None => false
-      },
+      ns.parent == None and optExists(ns.local_parent, u => not(allNodes.get(u).member)),
     }
   }
 
@@ -378,10 +375,7 @@ module cluster_migration_failover_logic {
   pure def canSetRole(allNodes: NodeId -> NodeState, n: NodeId, role: RoleTag, parent: Option[NodeId]): bool =
     allNodes.get(n).member and (
       if (role == Primary) parent == None
-      else match parent {
-        | Some(p) => p != n and isLivePrimary(allNodes, p)
-        | None => true
-      }
+      else optForall(parent, p => p != n and isLivePrimary(allNodes, p))
     )
 
   // TR-CLUSTER-003, ruled + amended (issue 20): refused unless the node is already
@@ -400,10 +394,17 @@ module cluster_migration_failover_logic {
   // ordering conjunct is false and the report is refused `Ordering` — which is precisely
   // what makes arm 4b of `isRefusalTerminal` (`Ordering` against an absent cell) live
   // rather than a contradiction of its own classifier.
+  //
+  // The `Some` arm is `lib_monotone`'s `lexGt` on the `(incarnation, identity_seq)` pair —
+  // the same strict lexicographic domination the replication models advance a
+  // (generation, offset) pair by. The `match` around it stays longhand on purpose: since
+  // R2 the absent-operand arm is *kind-dependent* (`kind != Demotion`), so it is neither
+  // `optExists`' conservative `false` nor `optForall`' vacuous `true`, and writing it as
+  // either would change what an empty cell means.
   pure def identityOrderOk(stored: Option[RunIdentity], kind: TransitionKind,
                            inc: int, seq: int): bool =
     match stored {
-      | Some(st) => inc > st.inc or (inc == st.inc and seq > st.seq)
+      | Some(st) => lexGt((inc, seq), (st.inc, st.seq))
       | None => kind != Demotion
     }
 
@@ -492,10 +493,7 @@ module cluster_migration_failover_logic {
   // ext-18: the clearing clause, level-triggered — enabled whenever the record's staged
   // registration no longer matches the live cell (or the node has left the membership).
   pure def isRecordStale(ns: NodeState): bool =
-    match ns.record {
-      | Some(rec) => ns.registration_seq != Some(rec.staged_reg_seq) or not(ns.member)
-      | None => false
-    }
+    optExists(ns.record, rec => ns.registration_seq != Some(rec.staged_reg_seq) or not(ns.member))
 
   // ---------------------------------------------------------------------------
   // Slot-map logic.
@@ -593,18 +591,15 @@ module cluster_migration_failover_logic {
   // same tagged space as `source_log` and carries the proposer's current run.
   pure def canConfirmDrained(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
                              s: SlotId, attempt: int, p: Pos): bool =
-    match migs.get(s) {
-      | Some(m) => and {
-          m.attempt == attempt,
-          m.attempt > 0,
-          m.phase == Streaming,
-          m.fenced,
-          not(allNodes.get(m.source).cannot_drain),
-          p.run_id == allNodes.get(m.source).run_id,
-          p.pos == m.source_log.pos,
-        }
-      | None => false
-    }
+    optExists(migs.get(s), m => and {
+      m.attempt == attempt,
+      m.attempt > 0,
+      m.phase == Streaming,
+      m.fenced,
+      not(allNodes.get(m.source).cannot_drain),
+      p.run_id == allNodes.get(m.source).run_id,
+      p.pos == m.source_log.pos,
+    })
 
   // TR-CLUSTER-012 postcondition + ext-4 (V7-C3): the seal **resets the observation
   // counter** and clears `last_observation`, so the post-`Confirm` bound is not consumed
@@ -633,10 +628,7 @@ module cluster_migration_failover_logic {
   // it, catching the record whose tag was minted under a run the replicated cell has since
   // moved off. A node with no stored identity has no run to match, so it is refused.
   pure def sourceRunIdentityOk(allNodes: NodeId -> NodeState, m: Migration): bool =
-    match allNodes.get(m.source).stored_identity {
-      | Some(st) => st.run_id == m.source_log.run_id
-      | None => false
-    }
+    optExists(allNodes.get(m.source).stored_identity, st => st.run_id == m.source_log.run_id)
 
   // TR-CLUSTER-013, ruled (issue 17) + ext-1/2/3/5/12/14. Admitted on:
   //   - the attempt stamp matching (ext-3),
@@ -653,34 +645,28 @@ module cluster_migration_failover_logic {
   // No wall-clock `barrier_ms` window appears anywhere in this guard.
   pure def canCompleteMigration(allNodes: NodeId -> NodeState, migs: SlotId -> Option[Migration],
                        s: SlotId, attempt: int): bool =
-    match migs.get(s) {
-      | Some(m) => and {
-          m.attempt == attempt,
-          m.attempt > 0,
-          m.phase == Draining,
-          m.fenced,
-          isLivePrimary(allNodes, m.target),
-          // The design's `record.run_id == nodes[record.source].run_identity`.
-          sourceRunIdentityOk(allNodes, m),
-          match m.drained_pos {
-            | Some(d) => and {
-                // ext-1 (V4-C2): the drain's position and the log it drained are compared
-                // within **one** tag space — the record's own.
-                d.run_id == m.source_log.run_id,
-                m.target_copy.run_id == allNodes.get(m.target).run_id,
-                m.target_copy.pos >= d.pos,
-                // ext-14: the optional durability conjunct exists iff the migration's
-                // own captured parameter says so — never a config read at admission.
-                not(m.require_replica_ack) or and {
-                  countedReplicasOf(allNodes, m.target) != Set(),
-                  m.target_replica_ack >= d.pos,
-                },
-              }
-            | None => false
-          },
-        }
-      | None => false
-    }
+    optExists(migs.get(s), m => and {
+      m.attempt == attempt,
+      m.attempt > 0,
+      m.phase == Draining,
+      m.fenced,
+      isLivePrimary(allNodes, m.target),
+      // The design's `record.run_id == nodes[record.source].run_identity`.
+      sourceRunIdentityOk(allNodes, m),
+      optExists(m.drained_pos, d => and {
+        // ext-1 (V4-C2): the drain's position and the log it drained are compared
+        // within **one** tag space — the record's own.
+        d.run_id == m.source_log.run_id,
+        m.target_copy.run_id == allNodes.get(m.target).run_id,
+        m.target_copy.pos >= d.pos,
+        // ext-14: the optional durability conjunct exists iff the migration's
+        // own captured parameter says so — never a config read at admission.
+        not(m.require_replica_ack) or and {
+          countedReplicasOf(allNodes, m.target) != Set(),
+          m.target_replica_ack >= d.pos,
+        },
+      }),
+    })
 
   // ext-15 (V11-C1)'s exit-row precedence: every held-set release action carries the
   // serving-primary guard — the acting source must still own the slot and still be a
@@ -697,10 +683,7 @@ module cluster_migration_failover_logic {
   // migration itself survives.
   pure def canAbortHandoff(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                            migs: SlotId -> Option[Migration], s: SlotId, attempt: int): bool =
-    match migs.get(s) {
-      | Some(m) => and { m.attempt == attempt, m.attempt > 0, isServingPrimary(allNodes, slotMap, m, s) }
-      | None => false
-    }
+    optExists(migs.get(s), m => and { m.attempt == attempt, m.attempt > 0, isServingPrimary(allNodes, slotMap, m, s) })
 
   // TR-CLUSTER-015, reworked: with the source authoritative until commit there is
   // nothing to stream back — Cancel simply removes the record (the target's shadow is
@@ -708,10 +691,7 @@ module cluster_migration_failover_logic {
   // ext-3 stamps it with the attempt so a stale cancel is refused.
   pure def canCancelMigration(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                      migs: SlotId -> Option[Migration], s: SlotId, attempt: int): bool =
-    match migs.get(s) {
-      | Some(m) => m.attempt == attempt and isServingPrimary(allNodes, slotMap, m, s)
-      | None => false
-    }
+    optExists(migs.get(s), m => m.attempt == attempt and isServingPrimary(allNodes, slotMap, m, s))
 
   // ---------------------------------------------------------------------------
   // ext-4: the observation counter and its bound.
@@ -724,10 +704,7 @@ module cluster_migration_failover_logic {
   // v4's "(or `drained_pos` unset)" arm is gone — it made a source that never proposes
   // `Confirm` (`sourceCannotDrain`) wedge the counter forever.
   pure def hasObservedProgress(m: Migration): bool =
-    match m.last_observation {
-      | Some(p) => m.target_copy.pos > p
-      | None => true
-    }
+    optForall(m.last_observation, p => m.target_copy.pos > p)
 
   pure def applyReconcileTick(m: Migration): Migration =
     if (hasObservedProgress(m)) { ...m, observations: 0, last_observation: Some(m.target_copy.pos) }
@@ -747,10 +724,7 @@ module cluster_migration_failover_logic {
     SLOTS.filter(s => and {
       allNodes.get(n).keys.contains(s),
       migs.get(s) == None,
-      match res.get(s) {
-        | Some(r) => and { r.source == n, r.promoted, not(r.target_gone) }
-        | None => false
-      },
+      optExists(res.get(s), r => and { r.source == n, r.promoted, not(r.target_gone) }),
     })
 
   // ext-12: the rollback arm's own guard. A rollback hands the slot **back to the entry's
@@ -762,10 +736,7 @@ module cluster_migration_failover_logic {
   // level-triggered source arm exists.
   pure def canFailPromotion(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue],
                             s: SlotId): bool =
-    match res.get(s) {
-      | Some(r) => not(r.promoted) and isLivePrimary(allNodes, r.source)
-      | None => false
-    }
+    optExists(res.get(s), r => not(r.promoted) and isLivePrimary(allNodes, r.source))
 
   // ext-8: §5's stated predicate — a shadow may be discarded only when no live record
   // and no residue entry claim it. Reverting the residue half is what makes
@@ -826,17 +797,14 @@ module cluster_migration_failover_logic {
   pure def canClearSlotResidue(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                                migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
                                s: SlotId): bool =
-    match res.get(s) {
-      | Some(r) => or {
-          r.promoted,
-          and {
-            slotMap.get(s) == Some(r.source),
-            untrackedHoldersOf(allNodes, slotMap, migs, res.set(s, None), s)
-              .exclude(untrackedHoldersOf(allNodes, slotMap, migs, res, s)) == Set(),
-          },
-        }
-      | None => false
-    }
+    optExists(res.get(s), r => or {
+      r.promoted,
+      and {
+        slotMap.get(s) == Some(r.source),
+        untrackedHoldersOf(allNodes, slotMap, migs, res.set(s, None), s)
+          .exclude(untrackedHoldersOf(allNodes, slotMap, migs, res, s)) == Set(),
+      },
+    })
 
   // ext-12 (V8-C4, source arm only per V10-C4): level-triggered re-home of an entry
   // whose `source` is no longer a primary — admissible whenever that node's shard
@@ -854,13 +822,8 @@ module cluster_migration_failover_logic {
   // tracking hole into modelled copy loss. An entry whose shard primary does not hold the
   // slot simply stays pinned to the physical holder, which is where the copy is.
   pure def canRetargetSlotResidue(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue], s: SlotId): bool =
-    match res.get(s) {
-      | Some(r) => match shardPrimary(allNodes, r.source) {
-          | Some(p) => p != r.source and allNodes.get(p).keys.contains(s)
-          | None => false
-        }
-      | None => false
-    }
+    optExists(res.get(s), r =>
+      optExists(shardPrimary(allNodes, r.source), p => p != r.source and allNodes.get(p).keys.contains(s)))
 
   // ext-12 (V7-M6): the **orphan re-home arm** — the recovery action of
   // `inv_slot_copy_survives_until_owned_and_served`. A `promoted` entry whose target has
@@ -875,15 +838,12 @@ module cluster_migration_failover_logic {
   //     is what puts the entry back on the ordinary reap-then-clear path.
   pure def canRehomeOrphanSlot(allNodes: NodeId -> NodeState, res: SlotId -> Option[Residue],
                                s: SlotId, dest: NodeId): bool =
-    match res.get(s) {
-      | Some(r) => and {
-          r.promoted,
-          r.target_gone,
-          isLivePrimary(allNodes, dest),
-          dest == r.source implies allNodes.get(r.source).keys.contains(s),
-        }
-      | None => false
-    }
+    optExists(res.get(s), r => and {
+      r.promoted,
+      r.target_gone,
+      isLivePrimary(allNodes, dest),
+      dest == r.source implies allNodes.get(r.source).keys.contains(s),
+    })
 
   // ---------------------------------------------------------------------------
   // Q2 property operands. These are read by the invariants and witnesses in the main
@@ -918,8 +878,8 @@ module cluster_migration_failover_logic {
   pure def trackedDirectly(slotMap: SlotId -> Option[NodeId], migs: SlotId -> Option[Migration],
                            res: SlotId -> Option[Residue], n: NodeId, s: SlotId): bool = or {
     slotMap.get(s) == Some(n),
-    match migs.get(s) { | Some(m) => m.source == n or m.target == n | None => false },
-    match res.get(s) { | Some(r) => r.source == n or r.target == n | None => false },
+    optExists(migs.get(s), m => m.source == n or m.target == n),
+    optExists(res.get(s), r => r.source == n or r.target == n),
   }
 
   // ext-10: "member `n`'s copy of `s` is reached by *something*". Either the slot is
@@ -936,10 +896,7 @@ module cluster_migration_failover_logic {
                         n: NodeId, s: SlotId): bool = or {
     isUnclaimedSlot(slotMap, migs, res, s),
     trackedDirectly(slotMap, migs, res, n, s),
-    match shardPrimary(allNodes, n) {
-      | Some(p) => p != n and trackedDirectly(slotMap, migs, res, p, s)
-      | None => false
-    },
+    optExists(shardPrimary(allNodes, n), p => p != n and trackedDirectly(slotMap, migs, res, p, s)),
   }
 
   // The members holding an untracked copy of `s` in the given (post-)state.
@@ -988,35 +945,32 @@ module cluster_migration_failover_logic {
   pure def hasEffectiveRemover(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
                                migs: SlotId -> Option[Migration],
                                res: SlotId -> Option[Residue], s: SlotId): bool =
-    match res.get(s) {
-      | Some(r) => or {
-          // the entry is promoted, or its rollback has completed (R9): `ClearSlotResidue`
-          // is admissible now,
-          canClearSlotResidue(allNodes, slotMap, migs, res, s),
-          // the rollback arm,
-          canFailPromotion(allNodes, res, s),
-          // the level-triggered re-home onto the source's shard primary,
-          canRetargetSlotResidue(allNodes, res, s),
-          // the orphan arm,
-          NODES.exists(d => canRehomeOrphanSlot(allNodes, res, s, d)),
-          // or the attestation path: the target still owns the slot and is a member, so
-          // `relabelShadow`/`reportPromoted` drive the entry to `promoted` and the first
-          // disjunct then applies. Membership rather than `canAct` on purpose — an
-          // unbooted target's boot report is itself always admissible (ext-15).
-          and { not(r.promoted), slotMap.get(s) == Some(r.target), allNodes.get(r.target).member },
-          // or the entry is marked, and the design hands marked entries to its operator
-          // arms. The model carries two such arms — `rehomeOrphanSlot` (the disjunct above)
-          // and R9's rollback-completed clear — but still none for an *unpromoted*
-          // doubly-marked entry whose slot was never rolled back: the design resolves that
-          // one with `ClearSlotResidue`'s "no effective automatic remover" admission, which
-          // this model does not carry (V9-M4 narrowed `canClearSlotResidue` to `promoted`,
-          // and R9 widened it only to the rolled-back shape, not to the doc's escape).
-          // Admitted here as a declared terminal disjunct and flagged in the Q2 report.
-          r.source_gone,
-          r.target_gone,
-        }
-      | None => true
-    }
+    optForall(res.get(s), r => or {
+      // the entry is promoted, or its rollback has completed (R9): `ClearSlotResidue`
+      // is admissible now,
+      canClearSlotResidue(allNodes, slotMap, migs, res, s),
+      // the rollback arm,
+      canFailPromotion(allNodes, res, s),
+      // the level-triggered re-home onto the source's shard primary,
+      canRetargetSlotResidue(allNodes, res, s),
+      // the orphan arm,
+      NODES.exists(d => canRehomeOrphanSlot(allNodes, res, s, d)),
+      // or the attestation path: the target still owns the slot and is a member, so
+      // `relabelShadow`/`reportPromoted` drive the entry to `promoted` and the first
+      // disjunct then applies. Membership rather than `canAct` on purpose — an
+      // unbooted target's boot report is itself always admissible (ext-15).
+      and { not(r.promoted), slotMap.get(s) == Some(r.target), allNodes.get(r.target).member },
+      // or the entry is marked, and the design hands marked entries to its operator
+      // arms. The model carries two such arms — `rehomeOrphanSlot` (the disjunct above)
+      // and R9's rollback-completed clear — but still none for an *unpromoted*
+      // doubly-marked entry whose slot was never rolled back: the design resolves that
+      // one with `ClearSlotResidue`'s "no effective automatic remover" admission, which
+      // this model does not carry (V9-M4 narrowed `canClearSlotResidue` to `promoted`,
+      // and R9 widened it only to the rolled-back shape, not to the doc's escape).
+      // Admitted here as a declared terminal disjunct and flagged in the Q2 report.
+      r.source_gone,
+      r.target_gone,
+    })
 
   // ext-12 (V8-C6): does the slot map hand a slot to `n` while `n` holds the Replica
   // role? Recomputed on the *post-state* view inside the writers the redesign owns
