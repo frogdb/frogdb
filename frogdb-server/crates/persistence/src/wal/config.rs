@@ -114,6 +114,17 @@ pub struct WalConfig {
     /// cell. `None` (tests, and any caller that does not care) keeps the old
     /// behaviour of seeding a private atomic from `batch_size_threshold`.
     pub batch_size_threshold_handle: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    /// Shared handle for this shard's full-sync flush hold.
+    ///
+    /// When `Some`, the flush thread suppresses its own size/timeout commit
+    /// triggers while the hold is armed, so a `FULLRESYNC` checkpoint cut
+    /// cannot capture writes above the per-shard coverage watermark the drain
+    /// already claimed (see [`super::FlushHold`]). The shard task arms it at
+    /// the drain and the full-sync coordinator releases it after the cut, both
+    /// through this same `Arc`. `None` (tests, and any shard that never serves
+    /// a full sync) keeps the pre-coverage behaviour: nothing is ever
+    /// suppressed.
+    pub flush_hold_handle: Option<std::sync::Arc<super::FlushHold>>,
 }
 impl Default for WalConfig {
     fn default() -> Self {
@@ -123,6 +134,7 @@ impl Default for WalConfig {
             batch_timeout_ms: 10,
             channel_capacity: 8192,
             batch_size_threshold_handle: None,
+            flush_hold_handle: None,
         }
     }
 }

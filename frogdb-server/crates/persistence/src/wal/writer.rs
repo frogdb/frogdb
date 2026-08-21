@@ -69,7 +69,12 @@ impl RocksWalWriter {
                 Arc::clone(&lag),
                 Arc::clone(&outcomes),
                 metrics_recorder,
-            );
+            )
+            // Adopted the same way as the batch-size handle: the shard task
+            // arms this cell at the pre-checkpoint drain and the full-sync
+            // coordinator releases it after the cut, so the flush thread and
+            // both of them must see one `FlushHold`, not a copy.
+            .with_flush_hold(config.flush_hold_handle.clone());
             let bst = Arc::clone(&batch_size_threshold);
             let bt = Duration::from_millis(config.batch_timeout_ms);
             std::thread::Builder::new()

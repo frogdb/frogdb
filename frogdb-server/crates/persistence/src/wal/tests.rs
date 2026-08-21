@@ -316,6 +316,14 @@ struct TestWal {
 
 impl TestWal {
     fn spawn(batch_size_threshold: usize, batch_timeout: Duration) -> Self {
+        Self::spawn_with_hold(batch_size_threshold, batch_timeout, None)
+    }
+
+    fn spawn_with_hold(
+        batch_size_threshold: usize,
+        batch_timeout: Duration,
+        flush_hold: Option<Arc<FlushHold>>,
+    ) -> Self {
         let committed = Arc::new(Mutex::new(Vec::new()));
         let fail_commits = Arc::new(AtomicUsize::new(0));
         let fail_stages = Arc::new(AtomicUsize::new(0));
@@ -338,7 +346,8 @@ impl TestWal {
             Arc::clone(&lag),
             Arc::clone(&outcomes),
             Arc::new(NoopMetricsRecorder::new()),
-        );
+        )
+        .with_flush_hold(flush_hold);
         let (tx, rx) = flume::bounded(64);
         let batch_size_threshold = Arc::new(AtomicUsize::new(batch_size_threshold));
         let handle = std::thread::spawn(move || {
@@ -2664,5 +2673,135 @@ async fn the_trait_objects_group_markers_reach_the_writer() {
     assert!(
         rocks.get(0, b"tg2").unwrap().is_some(),
         "the group commits as one batch, not one key at a time"
+    );
+}
+
+// ============================================================================
+// The full-sync flush hold
+// ============================================================================
+//
+// A `FULLRESYNC` payload claims a per-shard coverage watermark `Y_s` and the
+// replica installs it as a skip floor. The hold is what makes the *upper*
+// direction true — no shard-`s` write above `Y_s` in the cut — by suppressing
+// the flush engine's own commit triggers between the drain and the cut. See
+// `wal::hold`.
+
+/// The engine's own size trigger is suppressed while the hold is armed, and
+/// resumes the moment it is released. Without this the writes that land during
+/// the checkpoint window commit into RocksDB, land in the cut, and are then
+/// skipped by a floor that does not cover them.
+#[test]
+fn a_held_engine_does_not_commit_on_a_size_trigger() {
+    let hold = Arc::new(FlushHold::new());
+    // Threshold 10 bytes, so a single 100-byte entry meets the size trigger.
+    let mut wal = TestWal::spawn_with_hold(10, Duration::from_secs(60), Some(Arc::clone(&hold)));
+
+    hold.arm(frogdb_types::clock::now() + Duration::from_secs(60));
+    wal.put(1, b"during-the-window", 100);
+    wal.assert_no_commit_for("the full-sync hold is armed", Duration::from_millis(150));
+
+    assert!(!hold.release(), "an in-deadline release is not a breach");
+    // The next command wakes the loop; the size trigger it re-evaluates is no
+    // longer suppressed.
+    wal.put(2, b"after-the-cut", 100);
+    wal.wait_until("the released engine to commit", || {
+        !wal.committed_batches().is_empty()
+    });
+    wal.shutdown();
+    let ops: Vec<TestOp> = wal.committed_batches().into_iter().flatten().collect();
+    assert_eq!(
+        ops,
+        vec![
+            TestOp::Put(b"during-the-window".to_vec(), b"v".to_vec()),
+            TestOp::Put(b"after-the-cut".to_vec(), b"v".to_vec()),
+        ],
+        "the hold delays the commit, it never drops the entries"
+    );
+}
+
+/// An explicit `Flush` — `flush_async`, and the `flush_through` behind a
+/// `sync`-durability write ack — owes its caller a durability answer, so it
+/// cannot be suppressed like a size trigger. It waits instead. This is the
+/// documented cost of the hold.
+#[test]
+fn an_explicit_flush_blocks_until_the_hold_is_released() {
+    let hold = Arc::new(FlushHold::new());
+    let wal = TestWal::spawn_with_hold(
+        1024 * 1024,
+        Duration::from_secs(60),
+        Some(Arc::clone(&hold)),
+    );
+    hold.arm(frogdb_types::clock::now() + Duration::from_secs(60));
+    wal.put(1, b"k", 10);
+
+    std::thread::scope(|scope| {
+        let flusher = scope.spawn(|| wal.flush());
+        wal.assert_no_commit_for(
+            "an explicit flush waits on the armed hold",
+            Duration::from_millis(150),
+        );
+        assert!(!hold.release());
+        flusher
+            .join()
+            .expect("flush thread")
+            .expect("the flush itself succeeds");
+    });
+
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![TestOp::Put(b"k".to_vec(), b"v".to_vec())]],
+        "the flush commits once the hold lifts"
+    );
+}
+
+/// A hold that is never released expires on its own deadline and marks itself
+/// breached: a wedged full-sync must not wedge the write path. The capture that
+/// armed it learns its floor is unsafe and degrades that shard's watermark
+/// to `0`.
+#[test]
+fn the_deadline_expires_the_hold_and_marks_it_breached() {
+    let hold = Arc::new(FlushHold::new());
+    let wal = TestWal::spawn_with_hold(
+        1024 * 1024,
+        Duration::from_secs(60),
+        Some(Arc::clone(&hold)),
+    );
+    // Nobody will ever release this one.
+    hold.arm(frogdb_types::clock::now() + Duration::from_millis(50));
+    wal.put(1, b"k", 10);
+
+    wal.flush().expect("the flush completes on the deadline");
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![TestOp::Put(b"k".to_vec(), b"v".to_vec())]],
+        "a lapsed hold does not suppress anything"
+    );
+    assert!(
+        hold.release(),
+        "the capture must learn the cut may hold data above its watermark"
+    );
+}
+
+/// The disconnect drain ignores the hold outright: the producer is gone, so
+/// nothing will ever release it and the staged entries have nowhere else to go.
+#[test]
+fn the_disconnect_drain_ignores_the_hold() {
+    let hold = Arc::new(FlushHold::new());
+    let mut wal = TestWal::spawn_with_hold(
+        1024 * 1024,
+        Duration::from_secs(60),
+        Some(Arc::clone(&hold)),
+    );
+    hold.arm(frogdb_types::clock::now() + Duration::from_secs(3600));
+    wal.put(1, b"k", 10);
+    wal.assert_no_commit_for("the hold is armed", Duration::from_millis(100));
+
+    // Joins the flush thread, so returning at all proves the drain did not park
+    // on the hour-long hold.
+    wal.shutdown();
+    assert_eq!(
+        wal.committed_batches(),
+        vec![vec![TestOp::Put(b"k".to_vec(), b"v".to_vec())]],
+        "the shutdown drain commits what is staged, hold or not"
     );
 }

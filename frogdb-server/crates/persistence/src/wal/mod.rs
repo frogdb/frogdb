@@ -2,6 +2,7 @@
 pub mod config;
 mod fake;
 mod flush;
+mod hold;
 mod sink;
 #[cfg(test)]
 mod tests;
@@ -9,5 +10,6 @@ mod writer;
 pub use config::{DurabilityMode, WalConfig, WalFailurePolicy, WalLagStats};
 pub use fake::{FakeFailure, FakeWalLog, FakeWalSink, RecordedWalEffect, WalEffectKind};
 pub use flush::spawn_periodic_sync;
+pub use hold::{FULL_SYNC_HOLD, FlushHold};
 pub use sink::WalSink;
 pub use writer::RocksWalWriter;

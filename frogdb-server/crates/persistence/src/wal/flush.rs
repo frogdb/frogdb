@@ -522,6 +522,12 @@ pub(super) struct FlushEngine<S: WriteSink> {
     /// non-zero the engine's own flush triggers are suppressed, so a group's
     /// entries cannot be cut across two committed batches.
     group_depth: usize,
+    /// The full-sync flush hold, when one is wired for this shard. While it is
+    /// armed the engine's *own* size/timeout triggers are suppressed so a
+    /// `FULLRESYNC` checkpoint cannot capture writes above the coverage
+    /// watermark it already claimed (see [`super::FlushHold`]). Mandatory
+    /// flushes wait on it rather than skipping it.
+    flush_hold: Option<Arc<super::FlushHold>>,
     lag: Arc<WalLagAtomics>,
     outcomes: Arc<FlushOutcomes>,
     metrics: Arc<dyn frogdb_types::traits::MetricsRecorder>,
@@ -553,10 +559,49 @@ impl<S: WriteSink> FlushEngine<S> {
             last_flush: clock::now(),
             last_error_log: None,
             group_depth: 0,
+            flush_hold: None,
             lag,
             outcomes,
             metrics,
         }
+    }
+
+    /// Adopt the shard's full-sync flush hold.
+    ///
+    /// Separate from [`Self::new`] so the many engines that never participate
+    /// in a full-sync capture (every test harness, the fake sink) keep their
+    /// constructor untouched: an engine with no hold behaves exactly as it did
+    /// before FM-REPLICATION-066.
+    pub(super) fn with_flush_hold(mut self, hold: Option<Arc<super::FlushHold>>) -> Self {
+        self.flush_hold = hold;
+        self
+    }
+
+    /// Whether the full-sync hold currently suppresses this engine's own
+    /// size/timeout triggers.
+    pub(super) fn hold_is_held(&self) -> bool {
+        self.flush_hold.as_ref().is_some_and(|h| h.is_held())
+    }
+
+    /// Block until the full-sync hold lifts (or its deadline expires).
+    ///
+    /// Every *mandatory* commit path calls this: an explicit
+    /// [`WalCommand::Flush`] owes a caller a durability answer, and a
+    /// [`WalEntry::Clear`] barrier's range bound is only correct against
+    /// committed state. Neither may simply be suppressed, so they wait — which
+    /// is why the hold carries its own deadline.
+    pub(super) fn wait_for_hold_release(&self) {
+        if let Some(hold) = self.flush_hold.as_ref() {
+            hold.wait_for_release();
+        }
+    }
+
+    /// Stop honouring the full-sync hold, permanently.
+    ///
+    /// Called once the command channel disconnects: the producer is gone, so
+    /// the hold can never be released and every remaining commit is mandatory.
+    pub(super) fn forget_flush_hold(&mut self) {
+        self.flush_hold = None;
     }
 
     fn staged_size(&self) -> usize {
@@ -606,13 +651,15 @@ impl<S: WriteSink> FlushEngine<S> {
     }
 
     /// Whether the staged batch has met a flush trigger — size threshold or
-    /// batch timeout — *and* is allowed to commit (no open group).
+    /// batch timeout — *and* is allowed to commit (no open group, no full-sync
+    /// hold armed).
     pub(super) fn should_flush(
         &self,
         batch_size_threshold: usize,
         batch_timeout: Duration,
     ) -> bool {
         !self.in_group()
+            && !self.hold_is_held()
             && (self.staged_size() >= batch_size_threshold
                 || self.since_last_flush() >= batch_timeout)
     }
@@ -713,6 +760,12 @@ impl<S: WriteSink> FlushEngine<S> {
         if self.discard_poisoned(seq, size_estimate) {
             return;
         }
+        // A clear commits unconditionally, so it is a *mandatory* flush as far
+        // as the full-sync hold is concerned: suppressing it would leave the
+        // range bound computed against uncommitted state, and letting it
+        // through would put post-watermark data in the cut. It waits instead,
+        // exactly like an explicit `Flush`.
+        self.wait_for_hold_release();
         // (1) Barrier: drain all lower-seq entries to disk.
         let _ = self.flush();
 
@@ -910,6 +963,12 @@ impl<S: WriteSink> FlushEngine<S> {
 ///   channel, so it never sends a flush inside its own group.
 /// * A disconnect drains and commits whatever is staged, group or not:
 ///   the producer is gone, so the group can never be closed.
+///
+/// The full-sync flush hold ([`super::FlushHold`]) rides the same rules with
+/// one difference: an explicit `Flush` cannot be suppressed *or* skipped, so it
+/// **waits** for the hold to lift instead. The disconnect drain ignores the
+/// hold entirely — the producer is gone, so nothing will ever release it and
+/// the staged entries have nowhere else to go.
 pub(super) fn flush_thread_loop<S: WriteSink>(
     rx: flume::Receiver<WalCommand>,
     mut engine: FlushEngine<S>,
@@ -924,6 +983,7 @@ pub(super) fn flush_thread_loop<S: WriteSink>(
                     WalCommand::GroupBegin => engine.begin_group(),
                     WalCommand::GroupEnd => engine.end_group(),
                     WalCommand::Flush { done_tx } => {
+                        engine.wait_for_hold_release();
                         let _ = done_tx.send(engine.flush());
                         continue;
                     }
@@ -948,6 +1008,7 @@ pub(super) fn flush_thread_loop<S: WriteSink>(
                         Ok(WalCommand::GroupBegin) => engine.begin_group(),
                         Ok(WalCommand::GroupEnd) => engine.end_group(),
                         Ok(WalCommand::Flush { done_tx }) => {
+                            engine.wait_for_hold_release();
                             let _ = done_tx.send(engine.flush());
                             break;
                         }
@@ -960,12 +1021,21 @@ pub(super) fn flush_thread_loop<S: WriteSink>(
             }
             Err(flume::RecvTimeoutError::Timeout) => {
                 // Suppressed mid-group: the entries staged so far are only half
-                // of a batch that must land atomically.
-                if !engine.in_group() {
+                // of a batch that must land atomically. Suppressed under a
+                // full-sync hold for the mirror reason: committing here would
+                // put writes the payload does not cover into the cut.
+                if !engine.in_group() && !engine.hold_is_held() {
                     engine.flush_detached();
                 }
             }
             Err(flume::RecvTimeoutError::Disconnected) => {
+                // The producer is gone, so nothing will ever release the
+                // full-sync hold and the staged entries have nowhere else to
+                // go. Drop the hold outright rather than guarding each commit
+                // below: it makes "the disconnect drain ignores the hold" true
+                // for the explicit-`Flush` and `Clear`-barrier paths too, which
+                // would otherwise each park for the arm's full deadline.
+                engine.forget_flush_hold();
                 while let Ok(cmd) = rx.try_recv() {
                     match cmd {
                         WalCommand::Write(e) => engine.apply(e),
