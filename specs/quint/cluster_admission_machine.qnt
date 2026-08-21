@@ -22,6 +22,9 @@ module cluster_admission_machine {
   import cluster_common_types.* from "./cluster_common_types"
   import cluster_admission_types.* from "./cluster_admission_types"
   import cluster_admission_logic.* from "./cluster_admission_logic"
+  // The shared helper library (formal-spec issue 01) — `import M.*` is not transitive, so
+  // this module imports the ghost latch it uses for itself.
+  import lib_monotone.* from "./lib_monotone"
 
   // Keyed by the *durable node-local record* (the data directory), not by the node's
   // cluster-visible id — that id is `NodeState.effective_id` and may be a different number
@@ -113,10 +116,9 @@ module cluster_admission_machine {
       nodes' = nodes.set(n, rebooted),
       next_id' = if (mintsFreshId(cfg)) next_id + 1 else next_id,
       defects' = { ...defects,
-        restartIntentWrite: defects.restartIntentWrite or rebooted.intent != ns.intent,
-        restartIdentityRemint: defects.restartIdentityRemint
-          or rebooted.member_of != ns.member_of
-          or rebooted.raft_origin != ns.raft_origin,
+        restartIntentWrite: latch(defects.restartIntentWrite, rebooted.intent != ns.intent),
+        restartIdentityRemint: latch(defects.restartIdentityRemint,
+          rebooted.member_of != ns.member_of or rebooted.raft_origin != ns.raft_origin),
       },
     }
   }

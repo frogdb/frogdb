@@ -154,6 +154,9 @@ module cluster_admission {
   import cluster_common_types.* from "./cluster_common_types"
   import cluster_admission_types.* from "./cluster_admission_types"
   import cluster_admission_machine.* from "./cluster_admission_machine"
+  // The shared helper library (formal-spec issue 01). As the note above says, `import` is
+  // not transitive, so the machine module's own import of these does not carry them here.
+  import lib_option.* from "./lib_option"
 
   // ---------------------------------------------------------------------------
   // Witnesses — is each shape of the admission window actually reached?
@@ -292,7 +295,7 @@ module cluster_admission {
   val inv_configured_id_stable: bool =
     NODES.forall(n => {
       val ns = nodes.get(n)
-      match ns.configured_id { | Some(c) => ns.effective_id == Some(c) | None => true }
+      optForall(ns.configured_id, c => ns.effective_id == Some(c))
     })
 
   // The mint device's own soundness, asserted rather than assumed (see the header's
