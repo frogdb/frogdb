@@ -30,6 +30,44 @@ module replication_fullsync_logic {
     else if (n > d.length() or n > hist.length()) false
     else 0.to(n - 1).forall(i => d.nth(i) == hist.nth(i))
 
+  // --- Shards and coverage vectors (issue 35, rulings R13/R14) ---
+
+  // Which shard executed a write. Keys hash to shards; the model does not carry
+  // keys, and what the coverage rules turn on is only that *consecutive offsets
+  // can belong to different shards* — so alternating by write id is the whole
+  // content of this definition.
+  pure def shardOf(w: WriteId): ShardId = if (w % 2 == 1) 1 else 2
+
+  pure val noFloors: Coverage = SHARDS.mapBy(_ => NO_FLOOR)
+
+  // `max(Y_s)`: the offset at which the whole vector retires. Below it some
+  // shard's payload half reaches past the claim, so the floors are still in
+  // force and a window grant is refused (ruling R14).
+  pure def maxFloor(c: Coverage): Offset =
+    SHARDS.fold(NO_FLOOR, (acc, s) => max2(acc, c.get(s)))
+
+  // A vector that does not describe every shard at the same offset — the torn
+  // checkpoint. The mixed skip/apply inside one cross-shard group is exactly
+  // what mends it.
+  pure def coverageIsTorn(c: Coverage): bool =
+    SHARDS.exists(a => SHARDS.exists(b => c.get(a) != c.get(b)))
+
+  // The highest offset at or below `bound` that `d` holds for shard `sh`, or
+  // `NO_FLOOR`. `HOLE` positions are not attributed to any shard: they are the
+  // absence of a write, not a write of shard `shardOf(HOLE)`.
+  pure def lastOffsetOfShard(d: List[WriteId], sh: ShardId, bound: Offset): Offset =
+    d.indices().fold(NO_FLOOR, (acc, i) =>
+      if (i + 1 <= bound and d.nth(i) != HOLE and shardOf(d.nth(i)) == sh)
+        max2(acc, i + 1)
+      else acc)
+
+  // The vector a payload's content actually justifies. Both directions matter:
+  // claiming above the content makes the replica skip a frame it does not hold
+  // (loss), claiming below it makes the replica re-execute one it does (the D1
+  // double-apply).
+  pure def coverageOfPayload(d: List[WriteId]): Coverage =
+    SHARDS.mapBy(sh => lastOffsetOfShard(d, sh, d.length()))
+
   // --- PSYNC arm decision (TR-REPLICATION-001, FM-REPLICATION-013) ---
 
   // `window_contains`: the two-bound check, replid-first. The primary arm needs
@@ -51,13 +89,49 @@ module replication_fullsync_logic {
   pure def floorAdmits(p: NodeState, off: Offset): bool =
     p.floor != UNARMED and off >= p.floor
 
+  // Ruling R14 — the refusal, and the exact cell it applies to. A `+CONTINUE`
+  // whose grant carries a *different* replication id than the replica presented
+  // is a window grant: the primary is serving history it inherited, not history
+  // it wrote. That is the only cell where effects sitting above the replica's
+  // claim are dangerous, because the granting history may never reproduce them.
+  //
+  //   * same-history grant: refusing would be wrong, not merely wasteful — the
+  //     overshipped effects are a prefix of exactly what will be replayed, and
+  //     the floors dedup them exactly;
+  //   * window grant at `applied >= max(Y_s)`: a clean shared-prefix state,
+  //     nothing above the claim, stays partial;
+  //   * window grant at `applied < max(Y_s)`: refused, degrade to a full resync,
+  //     which replaces the dataset and wipes the residue.
+  //
+  // Ruling R16 adds the second disjunct: a crash-recovered stint has a keyspace
+  // possibly ahead of its claim and *no vector at all*, so the floor guard is
+  // blind there and every window grant is refused until issue 36 lands.
+  pure def windowGrantRefused(p: NodeState, r: NodeState): bool =
+    and {
+      p.replid != r.replid,
+      r.recovered or r.applied < maxFloor(r.floors),
+    }
+
   // The ordered decision of FM-REPLICATION-013: no history at all, then the
-  // replid-first window check, then — last and unconditionally — the floor.
+  // replid-first window check, then the floor, then — last — the R14/R16
+  // refusal, which turns a grant the primary *would* serve into a full resync
+  // on the replica's own evidence about its keyspace.
   pure def decideArm(p: NodeState, r: NodeState): Arm =
     if (r.replid == NO_HISTORY) FullSnapshot
     else if (not(windowContains(p, r.replid, r.applied))) FullSnapshot
     else if (not(floorAdmits(p, r.applied))) FullSnapshot
+    else if (windowGrantRefused(p, r)) FullSnapshot
     else PartialGrant
+
+  // True when the *only* reason the arm degraded was the R14/R16 refusal — the
+  // coverage ghost for the refusal path.
+  pure def degradedByRefusal(p: NodeState, r: NodeState): bool =
+    and {
+      r.replid != NO_HISTORY,
+      windowContains(p, r.replid, r.applied),
+      floorAdmits(p, r.applied),
+      windowGrantRefused(p, r),
+    }
 
   // True when the *only* reason the arm degraded to a full snapshot was the
   // floor — the FM-REPLICATION-016 backlog-eviction path
@@ -115,7 +189,29 @@ module replication_fullsync_logic {
   // structural: `grant_offset <= payload.length()`. The historical defect (the
   // pre-checkpoint drain missing) is the opposite direction, and is what
   // `cutBelowGrant` below detects.
-  pure def cutPayload(p: NodeState): List[WriteId] = p.data
+  // Issue 35 / ruling R13: the cut is *per shard*. Each shard's half of the
+  // artefact is captured at that shard's own drain-ack (checkpoint path) or
+  // export message (live path), and the flush engine is held between the ack
+  // and the cut, so the watermark is exact: everything the shard had broadcast
+  // by then is in, nothing later is. Different shards ack at different offsets,
+  // which is what tears the payload.
+  //
+  // `bounds` is that per-shard capture point. `cutCoverage` is the vector the
+  // trailer carries — the highest offset each shard actually contributed, which
+  // is at or below its bound (a shard's last write can predate its ack).
+  pure def cutCoverage(p: NodeState, bounds: Coverage): Coverage =
+    SHARDS.mapBy(sh => lastOffsetOfShard(p.data, sh, bounds.get(sh)))
+
+  // The artefact those watermarks describe: position `k` carries the write iff
+  // that write's own shard was captured at or above `k`. Everything else is a
+  // `HOLE` — a position the payload does not hold, which the replay must fill.
+  // The list stops at `max(Y_s)`; nothing above any watermark is in the payload
+  // by construction, which is the half of exactness the flush hold buys.
+  pure def cutPayloadWith(d: List[WriteId], y: Coverage): List[WriteId] =
+    range(1, maxFloor(y) + 1).foldl(List(), (acc, k) =>
+      acc.append(
+        if (d.nth(k - 1) != HOLE and k <= y.get(shardOf(d.nth(k - 1)))) d.nth(k - 1)
+        else HOLE))
 
   pure def cutBelowGrant(payload: List[WriteId], grant: Offset): bool =
     payload.length() < grant
@@ -129,6 +225,12 @@ module replication_fullsync_logic {
   // step: id, window and both offsets move together (issue-24 atomic pairing,
   // FM-REPLICATION-020). TR-REPLICATION-020 clears the failover window — a full
   // resync closes any window inherited from a prior promotion.
+  // The trailer's coverage vector is installed in the same step as the offsets
+  // it belongs to (issue 35): the floors describe *this* payload, so a vector
+  // that outlived its payload would be describing a keyspace that no longer
+  // exists. Installing also clears `recovered` — the stint's offsets now come
+  // from a completed sync, and the vector says exactly how far past them the
+  // keyspace reaches.
   pure def applyInstallPayload(r: NodeState, s: Session): NodeState = {
     ...r,
     data: s.payload,
@@ -137,6 +239,8 @@ module replication_fullsync_logic {
     second_offset: NO_WINDOW,
     recv: s.grant_offset,
     applied: s.grant_offset,
+    floors: s.coverage,
+    recovered: false,
   }
 
   // Postcondition of a lawful install: nothing is left half-written. A mutation
@@ -149,6 +253,8 @@ module replication_fullsync_logic {
       post.second_offset == NO_WINDOW,
       post.recv == s.grant_offset,
       post.applied == s.grant_offset,
+      post.floors == s.coverage,
+      not(post.recovered),
     }
 
   // --- Splice (TR-REPLICATION-002, FM-REPLICATION-012) ---
@@ -178,17 +284,25 @@ module replication_fullsync_logic {
   // both sides assert they hold the same history, so different content there is
   // a defect (`defects.spliceDiverged`). Above it the shape is the
   // FM-REPLICATION-004 overshipped tail — payload data the replica installed
-  // past the granted offset. R5 (2026-08-20) removes that class at the accept
-  // (`truncateAboveClaim`), so reaching it is now also a defect
-  // (`defects.forkedTailApplied`, pinned by `overshippedTailMeetsFailoverTest`).
+  // past the granted offset. Issue 35 removes that class ahead of the accept —
+  // the floors prevent the re-execution and `windowGrantRefused` refuses the one
+  // grant that could leave the residue forked — so reaching it is now also a
+  // defect (`defects.forkedTailApplied`, pinned by
+  // `overshippedTailMeetsFailoverTest`).
   //
   // Note the split from `frameIsCovered` below: `Reapplied` is a position the
   // replica's *data* already holds but its applied head does not cover (the
   // checkpoint overship). A position the head *covers* never reaches this
   // classification at all — the receiver skips it first.
+  // Issue 35 adds the `HOLE` case: a position inside the installed payload's
+  // span that the payload did not carry, because the cut caught that position's
+  // shard earlier than the shard next to it. Filling it is an ordinary landing —
+  // there is nothing there to re-apply or to contradict — and it is the other
+  // half of the torn-checkpoint mend.
   pure def classifyApply(d: List[WriteId], k: Offset, w: WriteId): ApplyOutcome =
     if (k == d.length() + 1) Appended
     else if (k > d.length() + 1) Gapped
+    else if (d.nth(k - 1) == HOLE) Appended
     else if (d.nth(k - 1) == w) Reapplied
     else Diverged
 
@@ -197,15 +311,18 @@ module replication_fullsync_logic {
   // that as a no-op would be a fidelity bug: it would leave the replica showing
   // a replaced history's content at a position the live history has since
   // rewritten, and every downstream property would read that as divergence.
-  // R5 (2026-08-20 ruling): Raft-style divergence truncation on a partial-resync
-// accept. Everything strictly above the offset the replica claims is dropped
-// before the splice, so a position the replica holds but does not claim can
-// never survive into a history that will not overwrite it. The claimed prefix
-// is untouched — it is what the grant asserts agreement on.
-pure def truncateAboveClaim(d: List[WriteId], claim: Offset): List[WriteId] =
-  if (claim < d.length()) d.slice(0, claim) else d
-
-pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId] =
+  // R5's in-place truncation at the partial-resync accept was **superseded by
+  // issue 35** (2026-08-21). A replica cannot invert a landed effect: the stream
+  // propagates verbatim, so "drop everything above the claim" would have to undo
+  // an `INCR` or an `LPUSH` it never recorded the pre-image of. TR-REPLICATION-034's
+  // postcondition is therefore implemented as *prevent plus refuse* —
+  // `frameCoveredByFloor` prevents the tail from being re-executed, and
+  // `windowGrantRefused` refuses the one grant under which residue above the
+  // claim could be left forked. This model tracks the same class with the same
+  // ghost (`defects.forkedTailApplied`), so
+  // `inv_no_forked_tail_above_the_claim` now states an implemented rule rather
+  // than a model-only one.
+  pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId] =
     if (k == d.length() + 1) d.append(w) else d.replaceAt(k - 1, w)
 
   // --- Receiver-side skip (R7, FM-REPLICATION-065) ---
@@ -226,6 +343,48 @@ pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId
   // leaves the operator with no evidence of the sender bug).
   pure def applySkip(n: NodeState): NodeState =
     { ...n, frames_skipped: n.frames_skipped + 1 }
+
+  // --- Per-shard skip floors (issue 35, FM-REPLICATION-066) ---
+  //
+  // The floors extend `covers()` past the applied head, one shard at a time. A
+  // shard-`s` frame ending at or below `floors[s]` was executed on the primary
+  // *before* shard `s` was captured, so its effect is already in the installed
+  // keyspace; re-executing it is the D1 double-apply, silent for `SET` and
+  // corruption for `INCR`.
+  //
+  // The comparison is inclusive and against the frame's *own* shard's floor:
+  // frames are shard-local, so a frame never straddles `Y_s` — it is that
+  // shard's own frame boundary. That is what makes mixed skip/apply inside one
+  // cross-shard group correct rather than a hole: each half is measured against
+  // the watermark that describes it.
+  pure def frameCoveredByFloor(n: NodeState, k: Offset, w: WriteId): bool =
+    w != HOLE and k <= n.floors.get(shardOf(w))
+
+  // The receiver's whole decision, in order: the applied head first
+  // (FM-REPLICATION-065, whoever sent it), then this frame's shard's floor, then
+  // the landing.
+  pure def frameDisposition(n: NodeState, k: Offset, w: WriteId): FrameDisposition =
+    if (frameIsCovered(n, k)) CoveredByHead
+    else if (frameCoveredByFloor(n, k, w)) CoveredByFloor
+    else Land
+
+  // A floor-skipped frame is not a dropped frame: it *claims its bytes*. The
+  // offset it ends at is exactly the head the replica now holds, so the applied
+  // position advances over it while the dataset stays untouched — anything else
+  // would stall the stream or lose the position.
+  pure def applyFloorSkip(n: NodeState, k: Offset): NodeState =
+    { ...n, applied: k, floor_skipped: n.floor_skipped + 1 }
+
+  // Recomputed from the outcome, defects-family convention: a mutation that
+  // lands the frame anyway, that forgets to advance the head, or that drops the
+  // count shows up as a defect rather than passing silently.
+  pure def floorSkipDisposedOk(pre: NodeState, post: NodeState, k: Offset): bool =
+    and {
+      post.data == pre.data,
+      post.applied == k,
+      post.recv == pre.recv,
+      post.floor_skipped == pre.floor_skipped + 1,
+    }
 
   // Recomputed from the outcome so a mutation that lands a covered frame — or
   // drops it without counting — shows up in the defect ghost rather than
@@ -296,13 +455,28 @@ pure def applyFrameToData(d: List[WriteId], k: Offset, w: WriteId): List[WriteId
   // commits in the same atomic unit as the write it names). Modelling them as
   // one assignment is the ruling; `restartOffsetPairedOk` is what a mutation
   // separating them would trip.
+  // Ruling R16 (issue 35): a restarted node's offsets come from crash recovery,
+  // so the stint is marked `recovered` and the floors it may have held do not
+  // survive — the vector described a payload, and what came back off disk is not
+  // that payload. Only an install clears the mark.
+  //
+  // *Model gap, deliberate.* `restartNodeAs` comes back as a Primary and
+  // `inv_primary_role_is_terminal` keeps it there, so no reachable state in this
+  // model presents a *recovered replica* at a PSYNC. R16's guard is therefore
+  // stated and checked over the pure decision
+  // (`recoveredStintRefusesTheWindowGrantTest`) rather than driven through the
+  // machine, and the reachable half lives in the implementation's own forcing
+  // tests (`a_recovered_stint_refuses_every_window_grant`,
+  // `a_recovered_identity_comes_back_with_its_floors`).
   pure def applyRestart(pre: NodeState, unclean: bool, keep: Offset, freshGen: Gen): NodeState =
     if (restartKeepsIdentity(pre, unclean, keep))
       { ...pre, role: Primary, data: pre.data.slice(0, keep), recv: keep, applied: keep,
-        floor: UNARMED, link: None, last_departure: None }
+        floor: UNARMED, link: None, last_departure: None,
+        floors: noFloors, recovered: true }
     else
       { ...pre, role: Primary, data: pre.data.slice(0, keep), recv: keep, applied: keep,
         floor: UNARMED, link: None, last_departure: None,
+        floors: noFloors, recovered: true,
         replid: freshGen, replid2: Some(pre.replid), second_offset: keep }
 
   pure def restartOffsetPairedOk(post: NodeState): bool =

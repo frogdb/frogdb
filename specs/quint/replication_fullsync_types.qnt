@@ -26,6 +26,7 @@
 //   FM-REPLICATION-016  backlog eviction raises the floor to the evicted end
 //   FM-REPLICATION-019  promotion mints a new history, freezes the inherited one
 //   FM-REPLICATION-020  no reader observes a half-updated identity pair
+//   FM-REPLICATION-066  per-shard coverage vector, receiver floors, refusal
 //   INV-OFFSET-1        landed <= applied <= live
 //   INV-REPLID-1        the failover window is whole or absent
 //
@@ -57,6 +58,19 @@ module replication_fullsync_types {
   // One replicated write. Unique across the run, so a divergent history is
   // detectable by comparing contents at the same position.
   type WriteId = int
+
+  // The shard that executed a write (issue 35, ruling R13). A dataset is a list
+  // indexed by offset, so a payload that holds some shards further than others —
+  // the torn checkpoint the coverage vector exists to describe — needs a way to
+  // say "this position is not in the payload". `HOLE` is that: a position the
+  // artefact does not carry.
+  type ShardId = int
+
+  // Per-shard coverage watermark `Y_s`: the last offset shard `s` had broadcast
+  // when its half of the payload was captured (its drain-ack on the checkpoint
+  // path, its export message on the live path). `NO_FLOOR` means "this shard
+  // contributed nothing", which is a real state — a shard that never wrote.
+  type Coverage = ShardId -> Offset
 
   // A byte offset in the replication stream. One write == one unit.
   type Offset = int
@@ -105,6 +119,14 @@ module replication_fullsync_types {
     | Gapped
     | Diverged
 
+  // What the receiver decides to do with a frame *before* it classifies any
+  // landing (issue 35). The head check comes first (FM-REPLICATION-065), then
+  // the frame's own shard's floor (FM-REPLICATION-066), then the landing.
+  type FrameDisposition =
+    | Land
+    | CoveredByHead
+    | CoveredByFloor
+
   type NodeState = {
     role: Role,
     // The dataset, as the ordered sequence of replicated writes it holds. For a
@@ -133,6 +155,20 @@ module replication_fullsync_types {
     // resync does not clear it, because what it counts is a *sender* bug the
     // operator has to see across the reconnect that hides it.
     frames_skipped: int,
+    // Issue 35 / FM-REPLICATION-066: the per-shard skip floors installed with
+    // the payload. A shard-`s` frame ending at or below `floors[s]` is already
+    // in the installed keyspace and must not be executed again. Replaced whole
+    // at each install; in force until `applied >= max(floors)`.
+    floors: Coverage,
+    // Floor skips, counted rather than silent (the R-21 "ignore + count" shape).
+    // Distinct from `frames_skipped`: that one counts a *sender* bug, this one
+    // counts the lawful mend of a payload that reached past the claim.
+    floor_skipped: int,
+    // Ruling R16: this node's offsets came from crash recovery rather than from
+    // a completed sync, so its keyspace may sit above what it claims and it
+    // holds no vector describing by how much. Such a stint refuses window grants
+    // unconditionally until issue 36 (offset-stamped batches) lands.
+    recovered: bool,
   }
 
   type Session = {
@@ -151,8 +187,13 @@ module replication_fullsync_types {
     // partial grant.
     grant_offset: Offset,
     // What the checkpoint cut actually materialised. Empty until the cut.
+    // Positions the cut did not reach for their shard carry `HOLE`: the cut is
+    // per-shard, so a payload can hold offset 3 and not offset 2.
     payload: List[WriteId],
     payload_cut: bool,
+    // The trailer's per-shard coverage vector, computed at the cut and installed
+    // by the replica as its skip floors (issue 35, ruling R13).
+    coverage: Coverage,
     // AckedOffset for this session (TR-REPLICATION-018).
     acked: Offset,
     // ResumeOffset, seeded at the splice (TR-REPLICATION-002).
@@ -213,4 +254,20 @@ module replication_fullsync_types {
 
   // The id a replica that has never held a history presents (`PSYNC ? -1`).
   pure val NO_HISTORY: Gen = 0
+
+  // Two shards. One cannot tear a checkpoint (a single drain-ack covers
+  // everything), and three add no shape the second does not already give: the
+  // whole subject is "some shards were captured further than others", which two
+  // express, plus the mixed skip/apply inside one cross-shard group.
+  pure val SHARDS: Set[ShardId] = Set(1, 2)
+
+  // A shard that contributed nothing to the payload floors nothing. Zero rather
+  // than a sentinel because it is a real offset bound — every frame ends above
+  // it — and the implementation's `ShardCoverage` says the same with the same
+  // value.
+  pure val NO_FLOOR: Offset = 0
+
+  // A payload position the cut did not reach for that position's shard. Not a
+  // write id: `WriteId`s are minted from 1.
+  pure val HOLE: WriteId = 0
 }

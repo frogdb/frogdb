@@ -68,9 +68,20 @@ module replication_fullsync_machine {
     // R5 (2026-08-20 ruling): a streamed frame landed with different content on
     // a position *above* the grant's claim — a forked tail that survived into
     // the splice. Before the ruling this was lawful correction and lived in
-    // `coverage`; `truncateAboveClaim` now removes the class at accept time, so
-    // reaching it means the truncation did not happen.
+    // `coverage`. Issue 35 (2026-08-21) supersedes R5's in-place truncation with
+    // prevent-plus-refuse — the floors keep the tail from being re-executed and
+    // `windowGrantRefused` refuses the one grant that could leave it forked — so
+    // reaching this now means a floor or the refusal is missing.
     forkedTailApplied: bool,
+    // Issue 35 / D1: a frame the installed payload already carried was executed
+    // again. The double-apply is invisible in a log abstraction — the position
+    // is overwritten with the same id — so this ghost is what makes it
+    // falsifiable: under verbatim propagation an `INCR` re-executed here is
+    // corruption, not a no-op.
+    overshipDoubleApplied: bool,
+    // Issue 35: a frame the floors covered was not disposed of as a floor skip —
+    // it landed, the head did not advance over it, or the skip went uncounted.
+    floorSkipMisdisposed: bool,
     // R4 (2026-08-20 ruling): re-delivery of a position the replica already
     // holds must be a no-op. Latches if a `Reapplied` landing changed the data.
     reapplyChangedData: bool,
@@ -97,11 +108,21 @@ module replication_fullsync_machine {
 
   var coverage: {
     overshipped: bool,
-    reapplied: bool,
-    // R5: a partial-resync accept dropped at least one position the replica
-    // held above its claim — the FM-REPLICATION-004 overshipped tail being
-    // discarded before the splice rather than overwritten after it.
-    overshipTruncated: bool,
+    // Issue 35: the replica skipped a frame the installed payload already
+    // carried — the overship being mended by its shard's floor instead of being
+    // re-executed. This is what R4's `reapplied` witness became once the floors
+    // landed: the same shape, disposed of the other way.
+    overshipSkipped: bool,
+    // Issue 35: a floor skip under a *torn* vector — the shard being skipped and
+    // the shard being applied inside one cross-shard group were captured at
+    // different offsets. The mend the whole per-shard design exists for.
+    tornGroupMended: bool,
+    // Ruling R14: a window grant was refused over an unaccounted tail and
+    // degraded to a full resync.
+    windowGrantRefused: bool,
+    // Issue 35: a payload that reached past the claim for one shard but not the
+    // other — the torn checkpoint itself, as cut.
+    tornPayloadCut: bool,
     spliceAbandoned: bool,
     partialViaSecondary: bool,
     evictionForcedFull: bool,
@@ -124,7 +145,7 @@ module replication_fullsync_machine {
   pure def freshSession(p: NodeId, r: NodeId): Session = {
     primary: p, replica: r, identity: None, phase: Disconnected, arm: FullSnapshot,
     granted_gen: NO_HISTORY, grant_offset: 0, payload: List(), payload_cut: false,
-    acked: 0, resume_offset: 0,
+    coverage: noFloors, acked: 0, resume_offset: 0,
   }
 
   // The (generation, live offset, role) shadow the pairing invariant compares
@@ -183,12 +204,14 @@ module replication_fullsync_machine {
         { role: Primary, data: List(), replid: FIRST_GEN, replid2: None,
           second_offset: NO_WINDOW, recv: 0, applied: 0, floor: UNARMED,
           link: None, last_departure: None, acks_ignored: 0,
-          frames_skipped: 0 }
+          frames_skipped: 0, floors: noFloors, floor_skipped: 0,
+          recovered: false }
       else
         { role: Replica, data: List(), replid: NO_HISTORY, replid2: None,
           second_offset: NO_WINDOW, recv: 0, applied: 0, floor: UNARMED,
           link: None, last_departure: None, acks_ignored: 0,
-          frames_skipped: 0 })
+          frames_skipped: 0, floors: noFloors, floor_skipped: 0,
+          recovered: false })
     all {
       nodes' = n0,
       sessions' = SIDS.mapBy(_ => freshSession(INITIAL_PRIMARY, INITIAL_PRIMARY)),
@@ -207,10 +230,12 @@ module replication_fullsync_machine {
         grantForeignHistory: false, tornIdentity: false, restartOffsetTorn: false,
         supersededDeparture: false, forkedTailApplied: false,
         reapplyChangedData: false, replayRegressedApplied: false,
-        skippedFrameLanded: false,
+        skippedFrameLanded: false, overshipDoubleApplied: false,
+        floorSkipMisdisposed: false,
       },
       coverage' = {
-        overshipped: false, reapplied: false, overshipTruncated: false,
+        overshipped: false, overshipSkipped: false, tornGroupMended: false,
+        windowGrantRefused: false, tornPayloadCut: false,
         frameSkipped: false,
         spliceAbandoned: false,
         partialViaSecondary: false, evictionForcedFull: false, ackIgnored: false,
@@ -275,6 +300,8 @@ module replication_fullsync_machine {
       grant_offset: if (arm == PartialGrant) rn.applied else pn.recv,
       payload: List(),
       payload_cut: false,
+      // Filled at the cut, from the shards' own capture points.
+      coverage: noFloors,
       acked: 0,
       resume_offset: 0,
     }
@@ -289,12 +316,15 @@ module replication_fullsync_machine {
       // with it: the replica resumes from what it applied, not what it received.
       recv: if (arm == PartialGrant) rn.applied else 0,
       applied: if (arm == PartialGrant) rn.applied else 0,
-      // R5: divergence truncation at the accept. A partial grant asserts
-      // agreement only up to the claimed offset, so anything the replica holds
-      // above it is discarded here rather than being left to be overwritten (or
-      // not) by whatever the granting history happens to write next. The full
-      // arm needs no rule: the trailer install replaces the dataset wholesale.
-      data: if (arm == PartialGrant) truncateAboveClaim(rn.data, rn.applied) else rn.data,
+      // The dataset survives the accept untouched, on both arms. R5's in-place
+      // truncation was superseded by issue 35: a replica cannot invert a landed
+      // effect (the stream is verbatim — there is no pre-image of an `INCR` to
+      // restore), so the tail above the claim is handled by *prevention* — the
+      // floors keep it from being executed twice — and by *refusal* — a window
+      // grant that would leave it forked never happens (`decideArm`). The full
+      // arm needs no rule either way: the trailer install replaces the dataset
+      // wholesale.
+      data: rn.data,
     }
     val nodesPost = nodes.set(r, rPost)
     all {
@@ -325,29 +355,53 @@ module replication_fullsync_machine {
         evictionForcedFull: latch(coverage.evictionForcedFull,
           arm == FullSnapshot and degradedByFloor(pn, rn)),
         superseded: latch(coverage.superseded, victims.size() > 0),
-        overshipTruncated: latch(coverage.overshipTruncated,
-          arm == PartialGrant and rn.data.length() > rn.applied),
+        windowGrantRefused: latch(coverage.windowGrantRefused,
+          arm == FullSnapshot and degradedByRefusal(pn, rn)),
       },
     }
   }
 
   // --- Checkpoint cut (TR-REPLICATION-003, FM-REPLICATION-004) ---
 
-  action cutCheckpointAt(sid: SessionId): bool = {
+  // Issue 35 / ruling R13: the cut is per-shard. `b1`/`b2` are the offsets at
+  // which each shard's half was captured — its drain-ack (checkpoint path) or
+  // its export message (live path). Both are at or above the granted offset
+  // because the capture happens *after* the offset is taken, and at or below the
+  // primary's head because a shard cannot have broadcast what has not been
+  // written. Between those bounds they are free and independent, which is
+  // exactly the torn checkpoint: shard 1 caught at offset 1 while shard 2 was
+  // caught at offset 3.
+  action cutCheckpointTornAt(sid: SessionId, b1: Offset, b2: Offset): bool = {
     val s = sessions.get(sid)
     val pn = nodes.get(s.primary)
-    val payload = cutPayload(pn)
+    val bounds = SHARDS.mapBy(sh => if (sh == 1) b1 else b2)
+    val cov = cutCoverage(pn, bounds)
+    val payload = cutPayloadWith(pn.data, cov)
     all {
       s.phase == PreparingCheckpoint,
+      b1 >= s.grant_offset,
+      b2 >= s.grant_offset,
+      b1 <= pn.recv,
+      b2 <= pn.recv,
       keepNodes,
       sessions' = sessions.set(sid,
-        { ...s, phase: StreamingCheckpoint, payload: payload, payload_cut: true }),
+        { ...s, phase: StreamingCheckpoint, payload: payload, payload_cut: true,
+          coverage: cov }),
       keepCtl,
       defects' = { ...defects,
         cutBelowGrant: latch(defects.cutBelowGrant, cutBelowGrant(payload, s.grant_offset)) },
       coverage' = { ...coverage,
-        overshipped: latch(coverage.overshipped, cutAboveGrant(payload, s.grant_offset)) },
+        overshipped: latch(coverage.overshipped, cutAboveGrant(payload, s.grant_offset)),
+        tornPayloadCut: latch(coverage.tornPayloadCut,
+          coverageIsTorn(cov) and cutAboveGrant(payload, s.grant_offset)) },
     }
+  }
+
+  // The untorn cut: every shard captured at the primary's head. The ordinary
+  // shape, and the one the pre-issue-35 scenarios were written against.
+  action cutCheckpointAt(sid: SessionId): bool = {
+    val pn = nodes.get(sessions.get(sid).primary)
+    cutCheckpointTornAt(sid, pn.recv, pn.recv)
   }
 
   // --- Trailer install (TR-REPLICATION-005/015/020) ---
@@ -436,33 +490,57 @@ module replication_fullsync_machine {
     // the action whenever the sentinel would be used, so it never commits.
     val w = if (k <= pn.data.length()) pn.data.nth(k - 1) else NO_HISTORY
     val outcome = classifyApply(rn.data, k, w)
+    // Issue 35: the frame's own shard's floor is consulted before anything
+    // lands. `k == rn.applied + 1` here, so the head branch cannot fire on this
+    // action — the head case is `redeliverFrameAt`'s.
+    val disposition = frameDisposition(rn, k, w)
+    val rnPost =
+      if (disposition == CoveredByFloor) applyFloorSkip(rn, k)
+      else { ...rn, data: applyFrameToData(rn.data, k, w), applied: k }
     all {
       s.phase == Streaming,
       linkIs(rn, sid),
       rn.applied < rn.recv,
       k <= pn.data.length(),
-      nodes' = nodes.set(s.replica,
-        { ...rn, data: applyFrameToData(rn.data, k, w), applied: k }),
+      nodes' = nodes.set(s.replica, rnPost),
       keepSessions,
       keepCtl,
       defects' = { ...defects,
-        spliceGap: latch(defects.spliceGap, outcome == Gapped),
+        spliceGap: latch(defects.spliceGap,
+          disposition == Land and outcome == Gapped),
         // Divergence inside the window the grant claims. See `classifyApply`.
         spliceDiverged: latch(defects.spliceDiverged,
-          outcome == Diverged and k <= s.resume_offset),
-        // R5: divergence *above* the claim. Unreachable once the accept
-        // truncates, which is exactly what makes this a falsifiable pin.
+          disposition == Land and outcome == Diverged and k <= s.resume_offset),
+        // Divergence *above* the claim: a forked tail that survived into the
+        // splice. Issue 35 removes the class by prevention (the floors) plus
+        // refusal (`windowGrantRefused`), so reaching it means one of the two is
+        // missing — which is what makes this a falsifiable pin rather than a
+        // construction note.
         forkedTailApplied: latch(defects.forkedTailApplied,
-          outcome == Diverged and k > s.resume_offset),
+          disposition == Land and outcome == Diverged and k > s.resume_offset),
+        // Issue 35 / D1: the position was already in the installed payload and
+        // the frame was executed against it anyway. Under a verbatim stream that
+        // is a double-apply, not a no-op; the floors are what must have caught
+        // it first.
+        overshipDoubleApplied: latch(defects.overshipDoubleApplied,
+          disposition == Land and outcome == Reapplied),
+        // Issue 35: the ruled disposition of a floor-covered frame, recomputed
+        // from the outcome.
+        floorSkipMisdisposed: latch(defects.floorSkipMisdisposed,
+          disposition == CoveredByFloor and not(floorSkipDisposedOk(rn, rnPost, k))),
         // R4: a re-delivered position must land as a no-op, and the applied
         // position must not move backwards on a landing.
         reapplyChangedData: latch(defects.reapplyChangedData,
-          outcome == Reapplied and applyFrameToData(rn.data, k, w) != rn.data),
+          disposition == Land and outcome == Reapplied
+            and applyFrameToData(rn.data, k, w) != rn.data),
         replayRegressedApplied: latch(defects.replayRegressedApplied,
           k <= rn.applied) },
       coverage' = { ...coverage,
-        reapplied: latch(coverage.reapplied, outcome == Reapplied),
-        tailApplied: latch(coverage.tailApplied, true) },
+        overshipSkipped: latch(coverage.overshipSkipped,
+          disposition == CoveredByFloor),
+        tornGroupMended: latch(coverage.tornGroupMended,
+          disposition == CoveredByFloor and coverageIsTorn(rn.floors)),
+        tailApplied: latch(coverage.tailApplied, disposition == Land) },
     }
   }
 
@@ -707,7 +785,17 @@ module replication_fullsync_machine {
     psyncRequestAs(r, p, announced, sid)
   }
 
-  action cutStep: bool = { nondet sid = liveSidCands.oneOf() cutCheckpointAt(sid) }
+  // The capture point of each shard is free between the granted offset and the
+  // primary's head (see `cutCheckpointTornAt`), so the walk picks both from the
+  // whole admissible range rather than only the untorn extreme — otherwise the
+  // torn payload, which is the entire subject of the coverage vector, would be
+  // unreachable outside the deterministic scenarios.
+  action cutStep: bool = {
+    nondet sid = liveSidCands.oneOf()
+    nondet b1 = 0.to(MAX_WRITES).oneOf()
+    nondet b2 = 0.to(MAX_WRITES).oneOf()
+    cutCheckpointTornAt(sid, b1, b2)
+  }
   action deliverStep: bool = { nondet sid = liveSidCands.oneOf() deliverPayloadAt(sid) }
   action spliceStep: bool = { nondet sid = liveSidCands.oneOf() spliceStreamAt(sid) }
   action abandonStep: bool = { nondet sid = liveSidCands.oneOf() abandonSpliceAt(sid) }

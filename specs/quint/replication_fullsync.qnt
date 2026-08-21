@@ -35,7 +35,10 @@
 //   TR-REPLICATION-021  uncleanRestartMintsFreshIdTest, inv_restart_pairs_offset
 //   TR-REPLICATION-022  inv_one_session_per_announced_identity,
 //                       inv_superseded_records_no_departure
-//   TR-REPLICATION-034  inv_no_forked_tail_above_the_claim (R5, model-only)
+//   TR-REPLICATION-034  inv_no_forked_tail_above_the_claim
+//   FM-REPLICATION-066  inv_coverage_brackets_the_payload,
+//                       inv_overship_is_skipped_not_reapplied,
+//                       inv_no_hole_below_the_claim
 //   FM-REPLICATION-001  inv_reapply_is_a_noop (R4)
 //   FM-REPLICATION-065  inv_reapply_is_a_noop (R7, the receiver-side skip)
 //   FM-REPLICATION-004  inv_payload_covers_grant, inv_applied_covered_by_data
@@ -69,10 +72,11 @@
 // issue-24's amendment point 2 narrows to what it actually forces — the
 // persisted offset commits atomically with the write it names
 // (`inv_restart_pairs_offset`). The model asserts the licensed half:
-// `inv_reapply_is_a_noop` makes the no-op falsifiable rather than incidental,
-// and `coverage.reapplied` (`witnessReappliedOverlap`, pinned deterministically
-// by `writeDuringTransferSurvivesTest`) is the witness that the overlap is
-// exercised at all.
+// `inv_reapply_is_a_noop` makes the no-op falsifiable rather than incidental.
+// Issue 35 narrows R4's licence further: the overlap is no longer *replayed* at
+// all, it is skipped against the per-shard coverage vector, and
+// `coverage.overshipSkipped` (`witnessOvershipSkipped`, pinned deterministically
+// by `writeDuringTransferSurvivesTest`) witnesses that the range is exercised.
 //
 // **R7 (2026-08-19 ruling, issue 34) — the skip is receiver-authoritative.**
 // R4's follow-up is ruled and shipped. The sender-side checks R4 leaned on —
@@ -96,33 +100,57 @@
 // "everything else propagates verbatim") has no such property, and
 // FM-REPLICATION-015's own not-observable says so: re-applying a boundary
 // command "for a non-idempotent replicated command ... is corruption, not a
-// no-op". That range is R5's subject, not R7's: `truncateAboveClaim` removes
-// the class at the partial-resync accept (`inv_no_forked_tail_above_the_claim`,
-// TR-REPLICATION-034), which is where the residue is tracked.
+// no-op". That range is issue 35's subject, not R7's, and it is tracked under
+// `inv_no_forked_tail_above_the_claim` (TR-REPLICATION-034).
 //
-// **R5 (2026-08-20 ruling) — the overshipped tail is truncated above the claim.**
+// **Issue 35 (R12–R16, 2026-08-21) — the overship is described, not replayed.**
 // A replica that installs a payload covering more than its granted offset holds
-// writes its own offset does not claim. If the primary's history is replaced
-// before the replay reconciles that tail — a lossy restart, a promotion — the
-// replica is still inside the failover window at its *claimed* offset and is
-// granted a partial resync. R5 rules that the accept discards everything above
-// the claim before splicing (Raft-style divergence truncation,
-// `truncateAboveClaim`), which removes by construction both the overwrite and
-// the residue class the model previously could not see: a forked position the
-// *new* history never reaches, which no reconnect would ever ask for again.
-// What was tracked as lawful correction is now forbidden
-// (`inv_no_forked_tail_above_the_claim`), and `coverage.overshipTruncated`
-// records the drop. `overshippedTailMeetsFailoverTest` pins the whole sequence.
-// The rule is **model-only today**: the Rust `+CONTINUE` accept
-// (`replica/connection.rs:300`) shifts the replication id and resumes, and
-// discards nothing.
+// writes its own offset does not claim, and until this ruling nothing told it
+// where that residue ended. The replay resumed at the granted offset and
+// re-executed every effect the payload already carried: harmless for the unit
+// writes this model logs, corruption for a verbatim `INCR` or `LPUSH`. That is
+// D1 (R12), and it is what FM-REPLICATION-066 forces.
 //
-// R5 governs the partial-resync **accept** and nothing else. `applyPromote`
-// does not truncate, so a node promoted while holding an overshipped tail still
-// carries positions above its own `recv`; that path is
+// The fix is a **per-shard coverage vector** `Y_s`, captured at each shard's
+// drain-ack with the flush engine held between drain-ack and cut, shipped in the
+// full-sync metadata and installed as per-shard skip floors. The vector is
+// *exact* in both directions — `inv_coverage_brackets_the_payload` states that
+// equality — because either error is a defect: underclaiming re-executes the
+// overship (D1 again), overclaiming skips a frame whose effect the replica does
+// not hold and leaves a hole under the claimed prefix
+// (`inv_no_hole_below_the_claim`). A frame is measured against *its own* shard's
+// floor, so a torn checkpoint is mended frame by frame with mixed skip/apply
+// inside one cross-shard group; that is the required behaviour, not a
+// compromise, and `tornCheckpointIsMendedExactlyOnceTest` pins it.
+//
+// Shards are captured independently, so the vector is per-shard rather than
+// scalar: a global watermark would have to pick the minimum (re-executing
+// everything above it) or the maximum (dropping writes below it).
+//
+// The residue class the earlier ruling could not remove — a forked position the
+// *new* history never reaches — is closed by **refusal** rather than
+// truncation. A replica cannot undo a verbatim `INCR` it holds no pre-image of,
+// so the accept does not truncate; instead a **window** grant (`+CONTINUE` under
+// a different replication id) is refused while `applied < max(Y_s)`, degrading
+// to a full resync that replaces the dataset wholesale (R14,
+// `windowGrantRefused`). Same-history grants are never refused: the overship is
+// a prefix of what that primary will replay and the floors dedup it exactly.
+// R16 adds the blind case — a stint whose offsets came from crash recovery has
+// residue and no vector describing it, so it refuses every window grant until
+// issue 36 makes the artefact self-describing.
+//
+// Prevention plus refusal is now in the implementation
+// (TR-REPLICATION-034, FM-REPLICATION-066), so
+// `inv_no_forked_tail_above_the_claim` has **graduated from model-only**.
+// `overshippedTailMeetsFailoverTest` pins the refusal,
+// `sameHistoryGrantIsNeverRefusedTest` and `theRefusalEndsAtTheCeilingTest` pin
+// its two boundaries.
+//
+// The rule governs the partial-resync **accept** and nothing else.
+// `applyPromote` does not truncate, so a node promoted while holding an
+// overshipped tail still carries positions above its own `recv`; that path is
 // `promotedOvershipDoesNotServeForkedTailTest`, and it stays governed by the
-// serve-side properties (a promoted node does not serve above its head), not by
-// the truncation rule.
+// serve-side properties (a promoted node does not serve above its head).
 module replication_fullsync {
   import cluster_common_types.* from "./cluster_common_types"
   import lib_option.* from "./lib_option"
@@ -187,12 +215,52 @@ module replication_fullsync {
       and not(defects.replayRegressedApplied)
       and not(defects.skippedFrameLanded)
 
-  // R5: no frame ever lands on a divergent position *above* the offset its
-  // grant claims. The partial-resync accept truncates the replica's data to its
-  // claim (`truncateAboveClaim`), so a forked tail cannot survive into the
-  // splice to be overwritten — or, worse, to be left as residue the new history
-  // never reaches.
+  // No frame ever lands on a divergent position *above* the offset its grant
+  // claims. R5 stated this over an in-place truncation at the accept and it was
+  // model-only; issue 35 implements it as prevent-plus-refuse — the per-shard
+  // floors stop the tail being re-executed, and `windowGrantRefused` refuses the
+  // one grant under which the residue could be left forked (a history that
+  // replaced the one the tail came from and may never reach those positions).
+  // Both halves are now in the implementation (TR-REPLICATION-034,
+  // FM-REPLICATION-066), so this invariant has graduated from model-only.
   val inv_no_forked_tail_above_the_claim: bool = not(defects.forkedTailApplied)
+
+  // --- Per-shard coverage (issue 35, FM-REPLICATION-066) ---
+
+  // The trailer's vector describes the artefact it rides on, exactly. Both
+  // directions are failures with names: a watermark *above* what the payload
+  // holds makes the replica skip a frame whose effect it does not have (silent
+  // loss), and one *below* it makes the replica execute a frame whose effect it
+  // already has (the D1 double-apply, corruption under a verbatim `INCR`).
+  //
+  // Stated as an equality against the payload's own content rather than as two
+  // inequalities, because that is the exactness ruling R13 buys with the flush
+  // hold: shards are single-threaded and `ReplicationBroadcast` is the terminal
+  // write effect, so at the drain-ack every executed write has been broadcast
+  // and the watermark is neither behind nor ahead.
+  val inv_coverage_brackets_the_payload: bool =
+    SIDS.forall(k => {
+      val s = sessions.get(k)
+      s.payload_cut implies (s.coverage == coverageOfPayload(s.payload))
+    })
+
+  // The consequence on the receiver, and the one an operator would see: no node
+  // has a gap below the offset it claims. A floor that overclaims turns a frame
+  // the replica needed into a skip, and the hole it leaves sits under the
+  // claimed prefix — the range every downstream reader, and every later grant,
+  // treats as agreed history.
+  val inv_no_hole_below_the_claim: bool =
+    NODES.forall(n => {
+      val d = nodes.get(n).data
+      val claim = nodes.get(n).applied
+      d.indices().forall(i => (i + 1 <= claim) implies (d.nth(i) != HOLE))
+    })
+
+  // D1: a frame whose effect the installed payload already carried was executed
+  // again, and the ruled disposition of a floor-covered frame (skip, advance the
+  // head over it, count it) held on every skip.
+  val inv_overship_is_skipped_not_reapplied: bool =
+    not(defects.overshipDoubleApplied) and not(defects.floorSkipMisdisposed)
 
   // --- Partial-resync soundness ---
 
@@ -401,8 +469,10 @@ module replication_fullsync {
 
   val witnessFullSyncStreaming: bool = coverage.fullSyncStreaming
   val witnessWriteDuringTransfer: bool = coverage.overshipped
-  val witnessReappliedOverlap: bool = coverage.reapplied
-  val witnessOvershipTruncated: bool = coverage.overshipTruncated
+  val witnessOvershipSkipped: bool = coverage.overshipSkipped
+  val witnessTornPayloadCut: bool = coverage.tornPayloadCut
+  val witnessTornGroupMended: bool = coverage.tornGroupMended
+  val witnessWindowGrantRefused: bool = coverage.windowGrantRefused
   val witnessTailApplied: bool = coverage.tailApplied
   val witnessPartialViaSecondary: bool = coverage.partialViaSecondary
   val witnessEvictionForcedFullResync: bool = coverage.evictionForcedFull
@@ -460,6 +530,12 @@ module replication_fullsync {
   // 2. A write acknowledged *after* the offset was captured and *before* the cut
   //    survives the handoff: it rides the payload, the backlog replay re-ships
   //    it, and the replica ends holding the primary's whole history.
+  //
+  //    This is D1's exact shape (issue 35). Before the coverage vector the
+  //    re-shipped frame was *executed* against a keyspace that already held its
+  //    effect — invisible in this model's write-log abstraction, corruption on a
+  //    verbatim `INCR`. Now its shard's floor covers it: the frame is skipped,
+  //    the head advances over it, and the skip is counted.
   run writeDuringTransferSurvivesTest =
     init
       .then(writeOnPrimaryAs(1))
@@ -469,21 +545,31 @@ module replication_fullsync {
       .then(cutCheckpointAt(1))
       .then(check(coverage.overshipped and not(defects.cutBelowGrant)))
       .then(deliverPayloadAt(1))
-      .then(check(nodes.get(2).applied == 1 and nodes.get(2).data.length() == 2))
+      .then(check(and {
+        nodes.get(2).applied == 1,
+        nodes.get(2).data.length() == 2,
+        // The trailer's vector: shard 1 contributed offset 1, shard 2 offset 2.
+        nodes.get(2).floors == Map(1 -> 1, 2 -> 2),
+        // Still in force — the payload reaches past what the replica claims.
+        nodes.get(2).applied < maxFloor(nodes.get(2).floors),
+        inv_coverage_brackets_the_payload,
+      }))
       .then(spliceStreamAt(1))
       .then(receiveFrameAt(1))
       .then(applyFrameAt(1))
       .then(check(and {
         nodes.get(2).applied == 2,
         nodes.get(2).data == nodes.get(1).data,
-        coverage.reapplied,
-        coverage.tailApplied,
+        // Skipped by shard 2's floor, not executed: the frame claimed its bytes
+        // (the head advanced over it) and the skip was counted.
+        coverage.overshipSkipped,
+        nodes.get(2).floor_skipped == 1,
+        not(coverage.tailApplied),
+        inv_overship_is_skipped_not_reapplied,
         inv_no_acked_write_lost_across_fullsync,
+        inv_no_hole_below_the_claim,
         inv_splice_continuity,
         inv_applied_covered_by_data,
-        // R4: the deterministic floor under `witnessReappliedOverlap`. The
-        // re-landing of offset 2 — already in the payload — changed nothing,
-        // and the applied position advanced rather than regressing.
         inv_reapply_is_a_noop,
       }))
 
@@ -768,8 +854,8 @@ module replication_fullsync {
         inv_offsets_ordered,
       }))
 
-  // The FM-REPLICATION-004 overshipped tail meeting a failover, and R5's
-  // truncation removing it. Pinned deterministically because the random walk
+  // The FM-REPLICATION-004 overshipped tail meeting a failover, and ruling R14's
+  // refusal removing it. Pinned deterministically because the random walk
   // reaches the shape in roughly 0.2% of traces at 4000x40 and not at all at the
   // gate's depth — it needs an overship, a lossy restart, and a re-grant of the
   // *same* replica, in that order, before the replay has reconciled the tail.
@@ -778,16 +864,20 @@ module replication_fullsync {
   // offset is 1, so it holds a write its own offset does not claim. Primary 1
   // then restarts having recovered only offset 1, mints a new history, and
   // writes a *different* write at offset 2. The replica is inside the failover
-  // window at offset 1, so it is granted a partial resync.
+  // window at offset 1, so the primary *would* serve it a partial resync.
   //
-  // R5 (2026-08-20) rules what happens next. Before the ruling the forked
-  // position survived the accept and was overwritten by the replay — lawful
-  // correction, tracked in `coverage`, and silent about the residue case where
-  // the new history never reaches that position at all. Now the accept
-  // truncates to the claim, so the fork is gone *before* the splice: the replay
-  // appends rather than overwriting, `inv_no_forked_tail_above_the_claim` holds,
-  // and no position the new history will not reach can be left behind.
-  // `coverage.overshipTruncated` records the drop.
+  // Issue 35 (2026-08-21) rules what happens next, superseding R5's in-place
+  // truncation — a replica cannot invert a landed effect, so "discard above the
+  // claim" is not implementable at the accept. The replica refuses the grant
+  // instead: the id it is being handed is not the id it presented (a window
+  // grant), and its floors are still in force (`applied < max(Y_s)`), so the
+  // effects above its claim came from a history this primary may never
+  // reproduce. It degrades to a full resync, which replaces the dataset
+  // wholesale and takes the residue with it.
+  //
+  // Note what is *not* refused: the same-history reconnect. There the
+  // overshipped effects are a prefix of exactly what will be replayed and the
+  // floors dedup them — `writeDuringTransferSurvivesTest` is that case.
   run overshippedTailMeetsFailoverTest =
     init
       .then(writeOnPrimaryAs(1))
@@ -801,30 +891,33 @@ module replication_fullsync {
         nodes.get(2).applied == 1,
         coverage.overshipped,
         not(defects.cutBelowGrant),
+        // …and the vector says so, which is what makes the refusal possible.
+        nodes.get(2).floors == Map(1 -> 1, 2 -> 2),
       }))
       .then(restartNodeAs(1, true, 1))
       .then(writeOnPrimaryAs(1))
       .then(psyncRequestAs(2, 1, true, 2))
       .then(check(and {
-        sessions.get(2).arm == PartialGrant,
-        sessions.get(2).grant_offset == 1,
-        coverage.partialViaSecondary,
-        // R5: the accept dropped the forked position rather than leaving it for
-        // the replay. The replica now holds exactly what it claims.
-        coverage.overshipTruncated,
-        nodes.get(2).data.length() == 1,
-        nodes.get(2).applied == 1,
-        prefixAgrees(nodes.get(2).data, nodes.get(1).data, nodes.get(2).applied),
+        // Refused: a window grant while the floors still reach past the claim.
+        sessions.get(2).arm == FullSnapshot,
+        coverage.windowGrantRefused,
+        // The primary would have served it — the request is inside the frozen
+        // window and above the armed floor. Nothing on the sender side changed.
+        windowContains(nodes.get(1), FIRST_GEN, 1),
+        floorAdmits(nodes.get(1), 1),
+        // The tail is still there; the accept discarded nothing, because a
+        // verbatim stream leaves nothing to discard it with.
+        nodes.get(2).data.length() == 2,
       }))
-      .then(spliceStreamAt(2))
-      .then(receiveFrameAt(2))
-      .then(applyFrameAt(2))
+      .then(cutCheckpointAt(2))
+      .then(deliverPayloadAt(2))
       .then(check(and {
-        // The new history's offset 2 *appended* — there was nothing left above
-        // the claim to overwrite, so the forked-tail defect never latches.
-        inv_no_forked_tail_above_the_claim,
+        // The full resync replaced the dataset, residue and all.
         nodes.get(2).data == nodes.get(1).data,
-        inv_splice_continuity,
+        nodes.get(2).applied == 2,
+        inv_no_forked_tail_above_the_claim,
+        inv_no_hole_below_the_claim,
+        inv_coverage_brackets_the_payload,
         inv_no_acked_write_lost_across_fullsync,
         prefixAgrees(nodes.get(2).data, nodes.get(1).data, nodes.get(2).applied),
       }))
@@ -1232,4 +1325,210 @@ module replication_fullsync {
         inv_applied_covered_by_data,
         inv_no_acked_write_lost_across_fullsync,
       }))
+
+  // --- Scenarios for the per-shard coverage vector (issue 35) ---
+
+  // The torn checkpoint, mended exactly once. Shard 1 was captured at offset 1
+  // and shard 2 at offset 4, so the payload holds offsets 1, 2 and 4 and has a
+  // *hole* at 3 — a position inside its own span that the artefact does not
+  // carry. The replay covers 3 and 4 in one contiguous range and the replica
+  // treats them differently: 3 lands (shard 1's floor is below it), 4 is skipped
+  // (shard 2's floor covers it).
+  //
+  // Mixed skip/apply inside one cross-shard group is not a compromise here, it
+  // is the requirement. Frames are shard-local, so a frame never straddles a
+  // watermark; measuring each frame against *its own* shard's floor is what
+  // makes the mend exact, and measuring them all against one global watermark
+  // would either re-execute offset 4 or lose offset 3.
+  run tornCheckpointIsMendedExactlyOnceTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(check(sessions.get(1).grant_offset == 2))
+      .then(writeOnPrimaryAs(1))
+      .then(writeOnPrimaryAs(1))
+      // Shard 1 drained at offset 2, shard 2 at offset 4.
+      .then(cutCheckpointTornAt(1, 2, 4))
+      .then(check(and {
+        sessions.get(1).coverage == Map(1 -> 1, 2 -> 4),
+        sessions.get(1).payload == List(1, 2, HOLE, 4),
+        coverage.tornPayloadCut,
+        inv_coverage_brackets_the_payload,
+      }))
+      .then(deliverPayloadAt(1))
+      .then(check(and {
+        nodes.get(2).applied == 2,
+        nodes.get(2).floors == Map(1 -> 1, 2 -> 4),
+        // The hole is above the claim, where a hole is lawful.
+        inv_no_hole_below_the_claim,
+      }))
+      .then(spliceStreamAt(1))
+      .then(receiveFrameAt(1))
+      .then(applyFrameAt(1))
+      .then(check(and {
+        // Offset 3 landed: shard 1's watermark is below it, so the payload did
+        // not carry its effect.
+        nodes.get(2).data.nth(2) == 3,
+        nodes.get(2).applied == 3,
+        nodes.get(2).floor_skipped == 0,
+        coverage.tailApplied,
+      }))
+      .then(receiveFrameAt(1))
+      .then(applyFrameAt(1))
+      .then(check(and {
+        // Offset 4 was skipped: shard 2's watermark covers it. It still claimed
+        // its bytes — the head advanced over it — and the skip was counted.
+        nodes.get(2).applied == 4,
+        nodes.get(2).floor_skipped == 1,
+        coverage.overshipSkipped,
+        coverage.tornGroupMended,
+        // Whole, with no position executed twice and none missing.
+        nodes.get(2).data == nodes.get(1).data,
+        inv_overship_is_skipped_not_reapplied,
+        inv_no_hole_below_the_claim,
+        inv_no_acked_write_lost_across_fullsync,
+        inv_splice_continuity,
+      }))
+
+  // Ruling R14's safe side, and the reason the refusal is scoped to window
+  // grants: a reconnect to the *same* history is granted a partial resync while
+  // the floors are still in force, and that is correct. The overshipped effects
+  // are a prefix of exactly what this primary will replay, and the floors dedup
+  // them exactly. Refusing here would cost a full resync on every reconnect
+  // that interrupts a replay.
+  run sameHistoryGrantIsNeverRefusedTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(writeOnPrimaryAs(1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      // The link dies before the replay reconciles the overship.
+      .then(endSessionAt(1))
+      .then(check(and {
+        nodes.get(2).applied == 1,
+        nodes.get(2).applied < maxFloor(nodes.get(2).floors),
+      }))
+      .then(psyncRequestAs(2, 1, true, 2))
+      .then(check(and {
+        // Same history: granted, floors in force or not.
+        sessions.get(2).arm == PartialGrant,
+        sessions.get(2).grant_offset == 1,
+        not(coverage.windowGrantRefused),
+        // The floors survived the reconnect — they describe the keyspace, which
+        // the reconnect did not touch.
+        nodes.get(2).floors == Map(1 -> 1, 2 -> 2),
+      }))
+      .then(spliceStreamAt(2))
+      .then(receiveFrameAt(2))
+      .then(applyFrameAt(2))
+      .then(check(and {
+        // …and they did their job on the replayed prefix.
+        nodes.get(2).floor_skipped == 1,
+        nodes.get(2).data == nodes.get(1).data,
+        inv_overship_is_skipped_not_reapplied,
+        inv_no_acked_write_lost_across_fullsync,
+      }))
+
+  // The refusal ends exactly at the ceiling. Once the replica's head reaches
+  // `max(Y_s)` nothing above its claim is unaccounted for any more, so a window
+  // grant at that offset is a clean shared-prefix state and stays partial. This
+  // is the boundary a `<=` in place of `<` would move.
+  run theRefusalEndsAtTheCeilingTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(writeOnPrimaryAs(1))
+      .then(cutCheckpointAt(1))
+      .then(deliverPayloadAt(1))
+      .then(spliceStreamAt(1))
+      .then(receiveFrameAt(1))
+      // The floor skip carries the head up to the ceiling.
+      .then(applyFrameAt(1))
+      .then(check(nodes.get(2).applied == maxFloor(nodes.get(2).floors)))
+      // A lossy restart replaces the history and freezes the old one at 2.
+      .then(restartNodeAs(1, true, 2))
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 2))
+      .then(check(and {
+        // A window grant — and it is *not* refused.
+        coverage.partialViaSecondary,
+        sessions.get(2).arm == PartialGrant,
+        not(coverage.windowGrantRefused),
+        nodes.get(2).applied == 2,
+      }))
+
+  // Ruling R16, over the decision itself. The machine cannot reach the state —
+  // `restartNodeAs` comes back as a Primary and `inv_primary_role_is_terminal`
+  // keeps it there, so no *recovered replica* ever presents a PSYNC here — so
+  // the rule is checked where it is decided. The reachable half is forced in the
+  // implementation (`a_recovered_stint_refuses_every_window_grant`).
+  //
+  // A crash-recovered stint has a keyspace possibly ahead of its claim and no
+  // vector describing by how much, so the floor guard is blind: it refuses every
+  // window grant until issue 36 makes the artefact self-describing. What it must
+  // *not* do is refuse a same-history grant — that would be a full resync on
+  // every restart of the primary a healthy replica is following.
+  run aRecoveredStintRefusesTheWindowGrantTest =
+    init
+      .then(check(
+        val p = { ...nodes.get(1), replid: 7 }
+        val clean = { ...nodes.get(2), replid: 3, applied: 5,
+                      floors: noFloors, recovered: false }
+        val crashed = { ...clean, recovered: true }
+        and {
+          // Clean stint, nothing above the claim: the window grant stands.
+          not(windowGrantRefused(p, clean)),
+          // Same stint after a crash recovery: refused, with no vector to
+          // consult.
+          windowGrantRefused(p, crashed),
+          // Same history is never refused, recovered or not — R14's scope.
+          not(windowGrantRefused({ ...p, replid: 3 }, crashed)),
+          // And the floor guard is the other, independent trigger.
+          windowGrantRefused(p, { ...clean, floors: Map(1 -> 0, 2 -> 6) }),
+        }))
+
+  // Why the vector has to be *exact*, stated as the two ways it can be wrong.
+  // `inv_coverage_brackets_the_payload` is the invariant that separates the
+  // exact vector from both, and this is what each error does to a frame.
+  run anInexactVectorLosesOrDoubleAppliesTest =
+    init
+      .then(check(
+        // Offsets 1 (shard 1) and 2 (shard 2), both in the payload.
+        val payload = List(1, 2)
+        val exact = coverageOfPayload(payload)
+        val r = { ...nodes.get(2), data: payload, applied: 1, floors: exact }
+        and {
+          exact == Map(1 -> 1, 2 -> 2),
+          // The head outranks the floors: a frame at or below the claim is the
+          // FM-REPLICATION-065 skip, whatever the vector says.
+          frameDisposition(r, 1, 1) == CoveredByHead,
+          // Exact: the overshipped frame is skipped, not executed again.
+          frameDisposition(r, 2, 2) == CoveredByFloor,
+          // Underclaimed by one: the same frame is executed against a keyspace
+          // that already holds its effect — D1, corruption on a verbatim `INCR`.
+          frameDisposition({ ...r, floors: Map(1 -> 1, 2 -> 1) }, 2, 2) == Land,
+          // Overclaimed: a frame whose effect the replica does *not* hold is
+          // skipped, leaving a hole under the claimed prefix.
+          frameDisposition({ ...r, floors: Map(1 -> 1, 2 -> 4) }, 4, 4) == CoveredByFloor,
+          // Only the exact vector brackets the payload.
+          exact == coverageOfPayload(payload),
+          Map(1 -> 1, 2 -> 1) != coverageOfPayload(payload),
+          Map(1 -> 1, 2 -> 4) != coverageOfPayload(payload),
+        }))
+
+  // A shard's capture point never precedes the granted offset: the offset is
+  // taken first and the drain-ack follows, so every watermark is at or above it.
+  // The action is disabled below that bound, which is what keeps
+  // `defects.cutBelowGrant` about a missing drain rather than about a legal cut.
+  run captureNeverPrecedesTheGrantTest =
+    init
+      .then(writeOnPrimaryAs(1))
+      .then(writeOnPrimaryAs(1))
+      .then(psyncRequestAs(2, 1, true, 1))
+      .then(check(sessions.get(1).grant_offset == 2))
+      .then(cutCheckpointTornAt(1, 1, 2))
+      .fail()
 }
