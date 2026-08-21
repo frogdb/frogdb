@@ -2664,10 +2664,11 @@ module cluster_migration_failover {
   // the arm to `| None => true` flips the Ordering assertion and reverting the kind scope
   // (`| None => kind != Boot`, say) flips the Boot control.
   //
-  // Forced from a **constructed view** rather than walked to: no action in this model ever
-  // clears `stored_identity` (`init` mints one per node; `meetNode` and `restarted` carry it
-  // through), so the absent cell is not a reachable state here. That gap is in the *state
-  // space*, not the rule — see the note at `isRefusalTerminal`.
+  // Stated here from a **constructed view**, which keeps the rule checkable in one place
+  // and in both directions (Demotion vs Boot, absent vs present cell) without a five-action
+  // prefix. The absent cell is *also* a reachable state since R10 gave the record-deleting
+  // actions their identity-clearing arm — `demotionAgainstAbsentCellAfterForgetTest` below
+  // walks to it, so this view is a statement of the rule, not a substitute for reachability.
   run demotionAgainstAbsentCellIsTerminalTest: bool = {
     init
       .expect({
@@ -2690,6 +2691,53 @@ module cluster_migration_failover {
           // is the absent-cell case alone rather than "every ordering refusal".
           not(isRefusalTerminal(ns.stored_identity, Ordering)),
         }
+      })
+  }
+
+  // **R10** (ruled 2026-08-20), the reachability half of the arm above: the absent cell is
+  // a state the walk can stand in, not only a view the test constructs. The replicated run
+  // identity is a field of the node record, so deleting the record deletes it — `removeNode`
+  // is CLUSTER FORGET's `inner.nodes.remove(&node_id)` — and a `meetNode` rejoin
+  // re-registers against an empty cell. The node's staged record is node-local and
+  // crash-durable, so it survives the round trip (ext-18) and its next `Demotion`
+  // re-proposal has both a record to bind to and nothing to order itself against: refused
+  // `Ordering`, terminally.
+  //
+  // The two neighbouring controls are the point of the sequence. Before the removal the
+  // same report would be refused `Fenced`/admitted against a present cell; straight after
+  // the removal it is refused `Membership` (the arm `terminalRefusalDisposesRecordTest`
+  // walks), which is terminal for a different reason. Only the rejoin isolates arm 4b.
+  // Reverting R10 (dropping `stored_identity: None` from `removeNode`) turns this refusal
+  // back into `Fenced` and fails the test.
+  run demotionAgainstAbsentCellAfterForgetTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(nodes.get(3).stored_identity != None)
+      .then(removeNode(3, false, false))
+      .expect(and {
+        // The forget cleared the cell along with the rest of the record.
+        nodes.get(3).stored_identity == None,
+        not(nodes.get(3).member),
+        // The record is node-local and outlives the record deletion.
+        nodes.get(3).record != None,
+      })
+      .then(meetNode(3))
+      .expect(and {
+        // A member again, still with no identity cell: the absent-operand state.
+        nodes.get(3).member,
+        nodes.get(3).stored_identity == None,
+        // Membership is satisfied, so the classifier reaches the ordering conjunct.
+        refusalClassOf(nodes, 3, Demotion, nodes.get(3).incarnation,
+                       nodes.get(3).identity_seq + 1, nodes.get(3).role,
+                       nodes.get(3).epoch_own) == Ordering,
+      })
+      .then(reportRunIdentity(3, Demotion, Primary, 0, false))
+      .expect(and {
+        // Arm 4b, walked to: refused `Ordering` and classified terminal.
+        refusals.exists(r => r.node == 3 and r.class == Ordering and r.terminal),
+        // Refused, so nothing was written and nothing was cancelled.
+        nodes.get(3).stored_identity == None,
+        nodes.get(3).role == Primary,
       })
   }
 

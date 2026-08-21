@@ -472,11 +472,14 @@ module cluster_migration_failover_logic {
   // `Ordering` against an absent cell for a Demotion report and the arm is live in the
   // classifier — the wedge exit V19-M1/V20-C1/V21-M2/V28-M5 are built on.
   //
-  // What remains unmodelled is the *state*, not the rule: nothing in this model ever
-  // clears `stored_identity` (`init` mints one per node, `meetNode` and `restarted` both
-  // carry it through), so the absent-cell classification is forced from a constructed view
-  // in `demotionAgainstAbsentCellIsTerminalTest` rather than walked to. Modelling a cell
-  // that can go absent (a forget-the-replicated-identity arm) is a separate ruling.
+  // **R10 (ruled 2026-08-20)** supplies the missing *state*: the cell is a field of the
+  // replicated node record, so the two actions that delete a record — `removeNode`
+  // (CLUSTER FORGET) and `resetCluster` (CLUSTER RESET, for everyone it ejects) — clear it,
+  // and a `meetNode` rejoin re-registers against an empty cell. The absent-cell
+  // classification is therefore walk-reachable, and carried deterministically by
+  // `demotionAgainstAbsentCellAfterForgetTest`; the constructed view in
+  // `demotionAgainstAbsentCellIsTerminalTest` stays as the direct statement of the rule.
+  // There is no field-level forget in Rust to model — see `removeNode`'s comment.
   pure def isRefusalTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
     class == Membership or (class == Ordering and stored == None)
 

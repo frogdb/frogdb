@@ -441,11 +441,26 @@ module cluster_migration_failover_machine {
       // `inv_role_written_only_by_declared_writers` still sees the token move. The
       // keyspace is deliberately *not* cleared: ext-12's mark-don't-remove keeps a
       // departing node's copies (V8-C1).
+      //
+      // R10, ruled 2026-08-20: the **replicated run identity goes with the record**. It is
+      // a field of the deleted `NodeInfo`, not a node-local durable like `stage_counter`,
+      // so a removal that "deletes the node record" cannot leave the cell standing. Rust
+      // has no field-level forget path at all — there is no run-identity cell in
+      // `NodeInfo` yet (`frogdb-server/crates/cluster/src/types.rs`), and the two paths
+      // that clear peer state clear the whole record: `ClusterCommand::RemoveNode` ->
+      // `inner.nodes.remove(&node_id)` (commands.rs) for CLUSTER FORGET, and
+      // `ResetCluster` -> `inner.nodes.clear()` for CLUSTER RESET. Both project onto
+      // `stored_identity: None` **plus** the node leaving `member`, which is exactly this
+      // arm and `resetCluster`'s below. That makes `identityOrderOk`'s absent-operand cell
+      // walk-reachable (remove, then rejoin via `meetNode`, then report a Demotion), so
+      // `isRefusalTerminal` arm 4b is forced by the walk rather than only by a constructed
+      // view. A rejoin re-registers from nothing, which is what the empty cell says.
       nodes' = detached.set(n, {
         ...writeParentPointer(detached.get(n), Replica, None, false, None, None),
         member: false, registration_seq: None,
         epoch_own: 0,
         booted: false, counted: false,
+        stored_identity: None,
         stage_counter: if (wipe) 0 else detached.get(n).stage_counter,
       }),
       // A target departure unassigns the slot (V7-M6) — as does any departure of an
@@ -480,10 +495,14 @@ module cluster_migration_failover_machine {
   // that is FM-CLUSTER-010's documented non-monotonicity, and encoding it here would
   // falsify `inv_epoch_never_decreases` by design rather than by defect.
   action resetCluster(n: NodeId): bool = {
+    // R10: the ejected members' records are *deleted* by the reset (Rust's
+    // `inner.nodes.clear()`), so their replicated run identity goes with them — same
+    // record-scoped forget as `removeNode` above, where the reasoning is written out.
     val cleared = NODES.fold(nodes, (acc, m) =>
       if (m == n) acc
       else acc.set(m, { ...writeParentPointer(acc.get(m), acc.get(m).role, None, false, None, None),
-                        member: false, registration_seq: None, booted: false, counted: false }))
+                        member: false, registration_seq: None, booted: false, counted: false,
+                        stored_identity: None }))
     val departed = NODES.filter(m => m != n and nodes.get(m).member)
     all {
       canResetCluster(nodes, n),
