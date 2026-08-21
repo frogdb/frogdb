@@ -235,3 +235,61 @@ Steered walk lands as a dedicated recipe (`just quint-run-steered` or similar) p
 nightly CI lane; default `just quint-run` stays deterministic-green unsteered. Batteries
 and campaigns run the steered lane. Re-land gated on the steered walk coming back clean
 after R8/R9 fixes.
+
+### R12 — D1: the normal full-sync handoff double-applies the overshipped range (new defect, own issue)
+
+Investigation of TR-REPLICATION-034's premise (2026-08-21) closed a chain worse than the
+row's own precondition — no link break and no failover needed. `snapshot_offset` is
+captured before drain and cut (`replica_session.rs:1199`), writes landing during the
+drain enter the checkpoint above it (`checkpoint_quiesce.rs:34-35`), the offset
+`fetch_add` sits in `ReplicationBroadcast` (the *last* write effect) so a write is
+drainable before it is even counted, and the handoff then replays
+`(snapshot_offset, current]` — re-executing the overshipped writes the installed
+keyspace already holds. FM-REPLICATION-065's skip is at-or-below the head only; these
+sit above. Verbatim non-idempotent stream ⇒ silent divergence in the healthy path. No
+test pins it (the FM-004 forcing tests prove no-loss only; the integration test uses
+idempotent `SET`s). Ruling: file as its own replication-correctness issue with a
+forcing-test mandate; TR-REPLICATION-034 folds into the same fix campaign.
+
+### R13 — fix direction: per-shard coverage vector now (V), offset-stamped batches later (S)
+
+Three flavors of one root (payload/keyspace coverage runs ahead of the claimed offset):
+fullsync overship (D1), restart offset-bias (`replication.md:360`, ruled-not-implemented),
+and TR-034's replaced-history residue (D2). Ruling: **V now** — the full-sync trailer
+carries per-shard coverage watermarks `Y_s` (each shard's last-broadcast offset at its
+drain-ack / export-message capture point; exact because shards are single-threaded), the
+replica installs them as per-shard skip floors extending `covers()`, and a refusal rule
+handles D2. **S later, separate issue** — offset-stamped RocksDB batches (per-shard stamp
+keys; a single global key would overclaim) make the artifact self-describing and fix the
+restart bias; it is a *sender-side source swap* under V's unchanged wire format and
+replica logic, not an alternative (the live-dataset path needs V's capture regardless).
+Checkpoint path additionally holds the flush engine between a shard's drain-ack and the
+cut so nothing above `Y_s` slips into RocksDB (cut is hard-link-fast).
+
+### R14 — refusal scope: window grants only, guarded by `applied < max(Y_s)`
+
+Same-history `+CONTINUE` is safe at any applied head: same replid ⇒ the overshipped
+effects are a prefix of exactly what will be replayed, and the floors dedup them exactly
+(a shard-`s` frame never straddles `Y_s` — it is that shard's own frame boundary; mixed
+skip/apply inside a cross-shard group is correct because it mends the torn checkpoint
+exactly once). A window grant with `applied ≥ max(Y_s)` is a clean shared-prefix state
+(exactly-once already holds for `[0, applied]`, and the window gives `applied ≤
+second_repl_offset`). The only unsafe cell is a window grant with
+`applied < max(Y_s)` — old-history effects above the claim may never be reproduced by
+the granting history — and that cell is refused (degrade to full resync). Floors reset
+at each install, so stale vectors cannot linger across successive full syncs.
+
+### R15 — the floor vector persists with the staged install metadata
+
+The `Y_s` vector rides in the FM-PERSISTENCE-039 staged `replication_metadata.json`
+(stamped by the replica at install), so a crash between install and reconcile recovers
+the floors instead of reopening the D1 window on a persistence-enabled replica.
+
+### R16 — interim recovery rule: a floorless crash-recovered stint refuses window grants
+
+A stint whose offsets came from crash-recovery (not from a completed sync or clean
+shutdown) has a keyspace possibly ahead of its claim and no vector — V's guard is blind
+there. Until S lands, such a stint refuses window grants unconditionally (one extra full
+resync in the rare crash+failover shape). The same-history restart bias itself — the
+offset stamped low against RocksDB contents — has no sound interim short of full resync
+on every restart and stays a documented gap owned by the S issue.
