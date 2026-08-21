@@ -777,8 +777,50 @@ module cluster_migration_failover_logic {
   // ext-15 (V9-M4): `ClearSlotResidue` gains the `promoted == true` conjunct. Clearing a
   // `promoted == false` entry drops the tracking of the source's still-authoritative
   // copy while the rollback arm that requires the entry is still owed.
-  pure def canClearSlotResidue(res: SlotId -> Option[Residue], s: SlotId): bool =
-    match res.get(s) { | Some(r) => r.promoted | None => false }
+  //
+  // R9 (issue 41), ruled 2026-08-20 — the **rollback-completed** arm, the second half of
+  // the ruling ("a source demoted while still holding keeps the claim but must retain a
+  // remover disjunct; the removal path cannot be gated on a live primary"). V9-M4's
+  // conjunct on its own leaves a rolled-back entry with no exit at all: `failPromotion`
+  // hands ownership back to the source and *keeps* the entry unpromoted, and the
+  // attestation path that would set `promoted` needs `slots[s] == Some(r.target)`, which
+  // the rollback just took away. What was left was `canFailPromotion` re-firing — an
+  // idempotent re-assert that removes nothing — and once the source is demoted while still
+  // holding the copy (R1 correctly pins the claim to it, and `canRetargetSlotResidue`
+  // correctly refuses a shard primary that holds nothing) even that goes: every disjunct of
+  // `hasEffectiveRemover` is false and the entry is unreapable (root 3 of issue 41, trace
+  // `completeMigration` -> `failPromotion` -> `attachTargetReplica(1, 3)` at seed 2).
+  //
+  // Once the slot is assigned back to the entry's **source** the entry's tracking job is
+  // over — the slot map itself now reaches the source's copy — so V9-M4's reason for the
+  // conjunct ("the rollback arm the entry is still owed goes with it") has expired: the
+  // rollback is *done*. Deliberately not gated on the source's role, which is the point of
+  // the ruling: this arm writes no slot assignment, so unlike `canFailPromotion` it can
+  // never land a slot on a Replica or a non-member.
+  //
+  // The second conjunct is ext-10's tracking obligation lifted into the guard instead of
+  // being left to the `defects.untracked` ghost: an entry is the tracking object for its
+  // *target* leg too, so a target still carrying a stale copy of `s` (the `prev_keys`
+  // shape `inv_no_serve_before_attestation` exempts), or a replica of it, would be
+  // stranded by the clear. Such an entry stays until that copy is gone.
+  //
+  // Design-doc gap, recorded rather than assumed: the doc's `ClearSlotResidue` verb carries
+  // `entry.promoted == true` unconditionally, so the doc has no exit for a rolled-back
+  // entry either. This arm is a model addition made under R9; it is flagged in the Q4
+  // report and in issue 41.
+  pure def canClearSlotResidue(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                               migs: SlotId -> Option[Migration], res: SlotId -> Option[Residue],
+                               s: SlotId): bool =
+    match res.get(s) {
+      | Some(r) => or {
+          r.promoted,
+          and {
+            slotMap.get(s) == Some(r.source),
+            untrackedHoldersOf(allNodes, slotMap, migs, res.set(s, None), s) == Set(),
+          },
+        }
+      | None => false
+    }
 
   // ext-12 (V8-C4, source arm only per V10-C4): level-triggered re-home of an entry
   // whose `source` is no longer a primary — admissible whenever that node's shard
@@ -928,11 +970,13 @@ module cluster_migration_failover_logic {
   // it is admissible *in this very state* — an admissible-in-principle verb whose own
   // admission is false here is not a remover. The disjuncts are the design's own list.
   pure def hasEffectiveRemover(allNodes: NodeId -> NodeState, slotMap: SlotId -> Option[NodeId],
+                               migs: SlotId -> Option[Migration],
                                res: SlotId -> Option[Residue], s: SlotId): bool =
     match res.get(s) {
       | Some(r) => or {
-          // the entry is promoted: `ClearSlotResidue` is admissible now,
-          canClearSlotResidue(res, s),
+          // the entry is promoted, or its rollback has completed (R9): `ClearSlotResidue`
+          // is admissible now,
+          canClearSlotResidue(allNodes, slotMap, migs, res, s),
           // the rollback arm,
           canFailPromotion(allNodes, res, s),
           // the level-triggered re-home onto the source's shard primary,
@@ -945,12 +989,13 @@ module cluster_migration_failover_logic {
           // unbooted target's boot report is itself always admissible (ext-15).
           and { not(r.promoted), slotMap.get(s) == Some(r.target), allNodes.get(r.target).member },
           // or the entry is marked, and the design hands marked entries to its operator
-          // arms. The model carries one such arm (`rehomeOrphanSlot`, the disjunct above)
-          // and no arm at all for an *unpromoted* doubly-marked entry — the design resolves
-          // that one with `ClearSlotResidue`'s "no effective automatic remover" admission,
-          // which this model does not carry (V9-M4 narrowed `canClearSlotResidue` to
-          // `promoted` and no escape arm was modelled). Admitted here as a declared
-          // terminal disjunct and flagged in the Q2 report.
+          // arms. The model carries two such arms — `rehomeOrphanSlot` (the disjunct above)
+          // and R9's rollback-completed clear — but still none for an *unpromoted*
+          // doubly-marked entry whose slot was never rolled back: the design resolves that
+          // one with `ClearSlotResidue`'s "no effective automatic remover" admission, which
+          // this model does not carry (V9-M4 narrowed `canClearSlotResidue` to `promoted`,
+          // and R9 widened it only to the rolled-back shape, not to the doc's escape).
+          // Admitted here as a declared terminal disjunct and flagged in the Q2 report.
           r.source_gone,
           r.target_gone,
         }
@@ -982,10 +1027,32 @@ module cluster_migration_failover_logic {
   // ext-12: the in-apply re-home a demotion (or a failover's demote arm) performs — the
   // source arm re-points at the successor and clears the mark; the **target** arm
   // re-points an *unpromoted* entry (V10-C4's in-apply target totality).
-  pure def retargetResidueOnDemotion(res: SlotId -> Option[Residue], old: NodeId, succ: NodeId): SlotId -> Option[Residue] =
+  //
+  // R9 (issue 41), ruled 2026-08-20 — R1's physical-holding principle applies at *every*
+  // retarget site, not only at `canRetargetSlotResidue`. The **source** arm moves the
+  // entry's copy claim, so it may only name a successor that physically holds the slot in
+  // the post-state (`post` is the failover's own promoted node map, so the successor's
+  // inherited copies are already in it). Without the conjunct the claim came to rest on a
+  // successor holding the slot *only* through the demoted node's closure edge — the
+  // demoted node is now a Replica of the successor and still holds the copy — and any
+  // later role change that cuts that edge lost the claim with nothing deleted (root 2 of
+  // issue 41, `inv_source_keeps_its_copy_until_promotion_attested`, trace
+  // `demoteNode(1, 3)` at seed 2). An entry whose successor does not hold the slot stays
+  // pinned to the demoted node, which is where the copy is; `residueFollowsDemotion` and
+  // `canRetargetSlotResidue` pick it up from there once a real holder appears.
+  //
+  // The **target** arm is unconditional and stays so (V10-C4's totality): it moves no copy
+  // claim — the target leg is the node that will *receive* the slot — and the successor
+  // now inherits ownership without the copy (R8, see `applyFailoverCommon`), so the
+  // re-pointed target has to re-attest before it serves.
+  pure def retargetResidueOnDemotion(res: SlotId -> Option[Residue], old: NodeId, succ: NodeId,
+                                     post: NodeId -> NodeState): SlotId -> Option[Residue] =
     SLOTS.fold(res, (acc, s) => match res.get(s) {
       | Some(r) =>
-          if (r.source == old) acc.set(s, Some({ ...r, source: succ, source_gone: false }))
+          if (r.source == old)
+            if (post.get(succ).keys.contains(s))
+              acc.set(s, Some({ ...r, source: succ, source_gone: false }))
+            else acc
           else if (r.target == old and not(r.promoted)) acc.set(s, Some({ ...r, target: succ, target_gone: false }))
           else acc
       | None => acc
@@ -1062,7 +1129,23 @@ module cluster_migration_failover_logic {
     )
     val demoted = reparented.set(old, writeParentPointer(reparented.get(old), Replica, Some(succ), false, None, None))
     val promotedNs = writeParentPointer(demoted.get(succ), Primary, None, true, None, Some(old))
-    val promoted = demoted.set(succ, { ...promotedNs, epoch_own: newEpoch, keys: promotedNs.keys.union(movedSlots) })
+    // R8 (issue 41), ruled 2026-08-20: the successor inherits the moved slots in the slot
+    // map, but their **copies** only where the demoted node physically held them. The
+    // union with the whole moved set fabricated a copy for the one slot shape whose owner
+    // lawfully holds nothing: a slot carrying an *unpromoted* residue entry that names the
+    // owner as its target — a slot the demoted node had itself not yet attested for. The
+    // same apply re-points that entry's target leg at the successor
+    // (`retargetResidueOnDemotion`), so the successor came out of the failover holding the
+    // slot's keys with the entry still `promoted == false`: serving before attesting
+    // (`inv_no_serve_before_attestation`, root 1 of issue 41, trace `demoteNode(4, 2)` at
+    // seed 777). The repoint is sound and stands — with the copy withheld the re-pointed
+    // target owns the slot, holds nothing, and has to go the ordinary
+    // `relabelShadow`/`reportPromoted` way to re-attest against its new home before it
+    // serves, which is the disjunct `hasEffectiveRemover` already carries for it.
+    // Everything the demoted node did hold still moves, and its replicas' copies follow it
+    // through the sibling re-parent above, so the intersection loses no lawful copy.
+    val promoted = demoted.set(succ, { ...promotedNs, epoch_own: newEpoch,
+                                       keys: promotedNs.keys.union(movedSlots.intersect(st.nodes.get(old).keys)) })
     val prunedSet = slotsNaming(st.migrations, old)
     val newMigrations = prunedMigrations(st.migrations, old)
     val newArmed = st.armed.filter(s => not(prunedSet.contains(s)))
@@ -1073,7 +1156,7 @@ module cluster_migration_failover_logic {
       nodes: promoted,
       slots: newSlots,
       migrations: newMigrations,
-      residue: retargetResidueOnDemotion(st.residue, old, succ),
+      residue: retargetResidueOnDemotion(st.residue, old, succ, promoted),
       armed: newArmed,
       disconnected: newDisconnected,
       feed_bytes: newFeedBytes,

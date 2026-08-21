@@ -1372,7 +1372,7 @@ module cluster_migration_failover_machine {
   }
 
   action clearSlotResidue(s: SlotId): bool = all {
-    canClearSlotResidue(residue, s),
+    canClearSlotResidue(nodes, slots, migrations, residue, s),
     residue' = residue.set(s, None),
     // ext-10 (V9-M4), recomputed per write from the *outcome*: dropping the entry retires
     // the last tracking object that reached the source's copy. With the attestation
@@ -1713,9 +1713,65 @@ module cluster_migration_failover_machine {
   action stutter = all { keepGraph, keepMigAll, keepBar, keepAux, keepCtl }
 
   // ---------------------------------------------------------------------------
-  // step — nondeterministic choice over every action, with the candidate sets biased
-  // toward currently-interesting values (see the logic module's note: biasing changes
-  // only what the random walk is likely to try, never what is legal).
+  // The two step relations. Both are nondeterministic choices over every action, with the
+  // candidate sets biased toward currently-interesting values (see the logic module's
+  // note: biasing changes only what the random walk is likely to try, never what is
+  // legal). They differ only in the *sampling distribution*:
+  //
+  //   - `step` — the flat arm list, the default the whole toolchain uses (`quint run`'s
+  //     own default, `just quint-run`, the witness-floor gate, `quint verify`). Its budget
+  //     is the PR lane's, and it is deterministic-green there.
+  //   - `stepSteered` — the steered walk, R11 (issue 41, ruled 2026-08-20): an **opt-in**
+  //     lane (`just quint-run-steered`, `quint run --step stepSteered`) that batteries,
+  //     campaigns and the nightly CI job run at a deep budget. It reaches protocol states
+  //     the flat walk samples in ~0% of traces — that is how issue 41's four-invariant
+  //     family was found — at the cost of a run time the PR lane cannot carry.
+  //
+  // Neither relation is a subset of the other's *behaviour*: `stepSteered` offers the flat
+  // arm list as one of its groups, so nothing it can do is unreachable from `step` and
+  // vice versa (one deliberate widening, noted below).
+  //
+  // Walk steering (issue 03 [t2 N2], measured 2026-08-19). Everything in `stepSteered`
+  // changes the *distribution* the simulator samples, never the transition relation: the
+  // flat arm list at the bottom of it is unchanged and still offers every action over every
+  // candidate domain it had, so every behaviour reachable before is reachable now. Two
+  // mechanisms, both of them redrawn on every step:
+  //
+  //   1. A 1-in-4 coin (`churnCoin`) gates the two `removeNode` arms. `removeNode` was
+  //      selected in ~39.8% of sampled steps and emptied the cluster before anything
+  //      interesting happened; the coin makes it four times rarer without making any
+  //      removal unreachable (`churnCoin == 0` is drawn on a quarter of all steps).
+  //   2. `stepSteered`'s top level is an `any` over three *groups* rather than over ~65 flat
+  //      arms. The simulator picks uniformly among the enabled arms of an `any`, so a
+  //      group carries ~1/3 of the walk's weight whenever it has an enabled arm, instead
+  //      of the (arms in group)/65 share the flat list gave it. The two focused groups
+  //      are the commit chain (Begin -> Prepare -> Confirm -> Complete) and, nested one
+  //      level deeper so its small sub-families are not outvoted, the support around it:
+  //      ingest/observation, the counted-replica trio, and the record/staged-flip/
+  //      adoption family — the deep protocol states the flat walk reached in ~0% of
+  //      traces. The third group is the flat arm list itself, so no action loses its
+  //      unbiased instance.
+  //      Every focused arm is an action the flat list also offers; it differs only in
+  //      *which* candidate value it is handed — the slot's own owner, the slot carrying
+  //      a live record, that record's own attempt stamp and target, a live-primary
+  //      target, a node that can still be counted against it — the values that keep the
+  //      chain moving rather than an independent uniform pick that almost never matches.
+  //      The flat arms keep the unbiased draws, so the stale-stamp and wrong-endpoint
+  //      refusal behaviours they exercise are untouched.
+  //
+  // One deliberate *widening* comes with (2): `beginSlotCands` is not narrowed by an
+  // open record elsewhere, so the focused Begin can open a second, concurrent migration
+  // on another slot — a state the flat arm alone could not reach, because `slotCands`
+  // collapses to the slots that already carry one. Steering may not take behaviour away;
+  // handing some back is fine, and the full invariant set holds over it (2000 x 40).
+  //
+  // Measured over 2000 samples x 40 steps, seed 12345, before -> after: the commit
+  // family goes from 0 traces to `witnessResiduePending` 131, `witnessKnobOnMigration-
+  // Completes` 50, `witnessCompleteEnabledOnQuietSlot` 280, `witnessBeginRefusedOver-
+  // Residue` 131, `witnessDrainingHeldForKTicks` 14, `witnessHealthyDrainAbortedByBound`
+  // 1; `witnessNodeRemoved` drops 1984 -> 789, and no witness that was reached before
+  // is reached in 0 traces after. The only two still at 0 are the pair this model
+  // declares unreachable by design.
   // ---------------------------------------------------------------------------
 
   val nodeCands: Set[NodeId] = {
@@ -1733,6 +1789,229 @@ module cluster_migration_failover_machine {
   val refusalCands: Set[Refusal] =
     if (refusals == Set()) Set({ node: 0, stage_id: 0, reg_seq: 0, class: Whole, terminal: false })
     else refusals
+
+  // --- Steering candidates ---------------------------------------------------
+  //
+  // Each of these answers "which value would let the next step of the protocol fire?".
+  // They feed the focused groups only; every one of them falls back to the full domain
+  // so `oneOf` always has a non-empty set and the focused arm degrades into an ordinary
+  // (possibly disabled) instance of the same action rather than into undefined behaviour.
+
+  // Slots a `Begin` could open right now: owned, with neither a live record nor a
+  // residue entry. `slotCands` deliberately points the other way — at slots that already
+  // carry one — so the flat `beginMigration` arm can only propose over an *open* slot
+  // once any migration exists.
+  val beginSlotCands: Set[SlotId] = {
+    val c = SLOTS.filter(s => and {
+      slots.get(s) != None,
+      migrations.get(s) == None,
+      residue.get(s) == None,
+    })
+    if (c == Set()) SLOTS else c
+  }
+
+  // `canBeginMigration` requires the source to *be* the slot's owner.
+  def ownerCands(s: SlotId): Set[NodeId] =
+    match slots.get(s) {
+      | Some(o) => Set(o)
+      | None => NODES
+    }
+
+  // `canCompleteMigration` requires the target to be a live primary, and
+  // `canBeginMigration` requires it to differ from the source: a target drawn uniformly
+  // is the wrong value ~3 times in 4 and wedges the chain short of its commit.
+  def primaryTargetCands(s: SlotId): Set[NodeId] = {
+    val c = NODES.filter(n => and {
+      isLivePrimary(nodes, n),
+      canAct(nodes, n),
+      slots.get(s) != Some(n),
+    })
+    if (c == Set()) NODES else c
+  }
+
+  // The attempt stamp the slot's own record is carrying — the one value `Confirm` and
+  // `Complete` admit. The flat arms keep drawing from the stale/forged set.
+  def liveAttemptOf(s: SlotId): int =
+    match migrations.get(s) {
+      | Some(m) => m.attempt
+      | None => ctl.handoff_seq
+    }
+
+  // The open record's target — the node `attachTargetReplica`/`reportReplicaAck` have to
+  // name for `Complete`'s counted-replica conjunct (ext-14) to be satisfiable.
+  def migTargetCands(s: SlotId): Set[NodeId] =
+    match migrations.get(s) {
+      | Some(m) => Set(m.target)
+      | None => NODES
+    }
+
+  // Nodes `attachTargetReplica` could newly count against target `t`, and nodes already
+  // counted against it (what `feedTargetReplica`/`reportReplicaAck` need). Uniform `n2`
+  // names the right node about a quarter of the time, which is what left
+  // `witnessKnobOnMigrationCompletes` — a `require_replica_ack` migration that actually
+  // commits — at the edge of visibility in a 200-trace run.
+  def attachableCands(t: NodeId): Set[NodeId] = {
+    val c = NODES.filter(n => and { n != t, nodes.get(n).member, not(nodes.get(n).counted) })
+    if (c == Set()) NODES else c
+  }
+
+  def countedOfCands(t: NodeId): Set[NodeId] = {
+    val c = countedReplicasOf(nodes, t)
+    if (c == Set()) NODES else c
+  }
+
+  // Slots carrying a *live record*, which is narrower than `slotCands` (it also holds
+  // shadow- and residue-only slots, where every lifecycle arm is a no-op). The focused
+  // groups draw their slot here so a committed slot's leftover residue does not halve
+  // the odds that the next chain step is proposed over the slot that can take it.
+  val recordSlotCands: Set[SlotId] = {
+    val c = SLOTS.filter(s => migrations.get(s) != None)
+    if (c == Set()) slotCands else c
+  }
+
+  action stepSteered = {
+    nondet n1 = nodeCands.oneOf()
+    nondet n2 = NODES.oneOf()
+    nondet s = slotCands.oneOf()
+    nondet r = refusalCands.oneOf()
+    nondet flag = Bool.oneOf()
+    nondet kind = Set(Boot, Demotion).oneOf()
+    nondet role = Set(Primary, Replica).oneOf()
+    // The candidate's *observed* epoch and role: mostly the truth, sometimes stale — the
+    // fence conjuncts only matter when a stale observation is reachable.
+    nondet obsEpoch = Set(nodes.get(n1).epoch_own, nodes.get(n1).epoch_own - 1, ctl.epoch).oneOf()
+    nondet obsRole = Set(Primary, Replica).oneOf()
+    nondet obsSeq = Set(nodes.get(n2).parent_seq, nodes.get(n2).parent_seq - 1).oneOf()
+    nondet obsReg = Set(0, 1, 2, 3, 4, 5, 6).oneOf()
+    // ext-3: the attempt stamp a proposal carries — the live one, or a stale/forged one.
+    nondet att = Set(ctl.handoff_seq, ctl.handoff_seq - 1, 0).oneOf()
+    // Steering draws (see the header above). `bs`/`bsrc`/`btgt` are the Begin triple,
+    // `ms` the slot carrying a live record and `rep` that record's target; `churnCoin`
+    // is the `removeNode` gate.
+    nondet bs = beginSlotCands.oneOf()
+    nondet bsrc = ownerCands(bs).oneOf()
+    nondet btgt = primaryTargetCands(bs).oneOf()
+    nondet ms = recordSlotCands.oneOf()
+    nondet rep = migTargetCands(ms).oneOf()
+    nondet rAttach = attachableCands(rep).oneOf()
+    nondet rCounted = countedOfCands(rep).oneOf()
+    nondet churnCoin = Set(0, 1, 2, 3).oneOf()
+    any {
+      // --- focused group 1: the commit chain, ~1/3 of the walk's weight ---------
+      any {
+        beginMigration(bs, bsrc, btgt, flag),
+        prepareHandoff(ms),
+        confirmDrained(ms, liveAttemptOf(ms)),
+        completeMigration(ms, liveAttemptOf(ms)),
+      },
+      // --- focused group 2: what the chain needs around it, ~1/3 ----------------
+      // Three sub-groups so the small ones are not outvoted by the large one: the
+      // counted-replica trio is three actions' worth of setup that `Complete`'s ext-14
+      // durability conjunct needs (a *non-empty* counted set, V5-M3), and the record
+      // family is the staged-flip/adoption region the flat walk also starved.
+      any {
+        // ingest and observation, on the slot carrying a live record
+        any {
+          sourceWrite(ms),
+          applyAtTarget(ms),
+          makeTargetDurable(ms),
+          reportTargetIngest(ms),
+          coverageBatch(ms),
+          reconcileTick(ms),
+          boundAbort(ms),
+        },
+        // the counted replicas of that record's target
+        any {
+          attachTargetReplica(rAttach, rep),
+          feedTargetReplica(rCounted),
+          reportReplicaAck(ms, rCounted),
+        },
+        // the record / staged-flip / adoption family
+        any {
+          stageFlip(n1, n2),
+          observeRefusal(n1, r),
+          completeAdoption(n1),
+          adoptReplicatedRole(n1),
+          reconcileIdentity(n1),
+          clearStaleRecord(n1),
+        },
+      },
+      // --- the unbiased arm list, unchanged, ~1/3 ------------------------------
+      any {
+        // membership / identity
+        meetNode(n1),
+        all { churnCoin == 0, removeNode(n1, flag, false) },
+        all { churnCoin == 0, removeNode(n1, flag, true) },
+        resetCluster(n1),
+        setRole(n1, role, if (role == Primary) None else Some(n2)),
+        reportRunIdentity(n1, kind, obsRole, obsEpoch, flag),
+        loseIncarnationCounter(n1),
+        attestReplicaSynced(n2, n1, obsSeq, obsReg),
+        // ext-15 two-plane convergence
+        adoptReplicatedRole(n1),
+        reconcileIdentity(n1),
+        // ext-18 record lifecycle
+        stageFlip(n1, n2),
+        observeRefusal(n1, r),
+        clearStaleRecord(n1),
+        completeAdoption(n1),
+        // slot map
+        assignSlot(s, n1),
+        removeSlot(s),
+        // migration lifecycle
+        beginMigration(s, n1, n2, flag),
+        prepareHandoff(s),
+        feedBuffer(s),
+        disconnectFeed(s),
+        localReleaseOnCapBreach(s),
+        selfFenceRelease(s),
+        sourceWrite(s),
+        applyAtTarget(s),
+        makeTargetDurable(s),
+        reportTargetIngest(s),
+        confirmDrained(s, att),
+        coverageBatch(s),
+        batchFault(s),
+        reconcileTick(s),
+        boundAbort(s),
+        completeMigration(s, att),
+        abortHandoff(s, att),
+        cancelMigration(s, att),
+        // shadow / promotion / residue
+        relabelShadow(s),
+        reportPromoted(s),
+        failPromotion(s),
+        discardShadow(s),
+        reapSlots(n1),
+        clearSlotResidue(s),
+        retargetSlotResidue(s),
+        rehomeOrphanSlot(s, n2),
+        // replicas
+        attachTargetReplica(n2, n1),
+        detachTargetReplica(n2),
+        feedTargetReplica(n2),
+        reportReplicaAck(s, n2),
+        crashDuringShadowSection(n2),
+        // roles, failover, restarts
+        markNodeFailed(n1),
+        markNodeRecovered(n1),
+        armFailoverFence(n1),
+        failoverGraceful(n1, n2, obsEpoch, obsRole),
+        failoverAuto(n1, n2, obsEpoch, obsRole),
+        failoverForced(n1, n2, obsEpoch, obsRole),
+        sourceFailover(n1, n2),
+        demoteNode(n1, n2),
+        demoteNodeExternal(n1),
+        sourceRestart(n1),
+        targetRestart(n2),
+        // knobs
+        setSourceCannotApply(n1, flag),
+        setSourceCannotDrain(n1, flag),
+        setTargetSilent(n2, flag),
+        stutter,
+      },
+    }
+  }
 
   action step = {
     nondet n1 = nodeCands.oneOf()

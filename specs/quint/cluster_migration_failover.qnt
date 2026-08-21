@@ -806,7 +806,7 @@ module cluster_migration_failover {
   // is false here is not a remover. See `hasEffectiveRemover` for the disjunct list and
   // for the two marked-entry terminal disjuncts, which are declared weakenings.
   val inv_residue_has_an_effective_remover: bool =
-    SLOTS.forall(s => hasEffectiveRemover(nodes, slots, residue, s))
+    SLOTS.forall(s => hasEffectiveRemover(nodes, slots, migrations, residue, s))
 
   // ext-12: no second migration is ever opened over a slot whose residue entry is still
   // outstanding — the state form of `canBeginMigration`'s residue conjunct, and what
@@ -1611,14 +1611,23 @@ module cluster_migration_failover {
   }
 
   // R1 (issue 41), the companion of the repoint: the residue follows the demotion when —
-  // and only when — the copy has moved out of the source's own closure. The failover hands
-  // node 2 the moved slots and their keys, leaving node 1 a replica of node 2 holding the
-  // still-claimed copy of slot 1. Demoting node 2 under node 4 repoints node 1 there too,
-  // so the entry's `source` must follow: node 2 holds nothing, and `shardHoldsCopy` reads
-  // the *downward* closure, which a demoted node no longer has. Pinning the entry to node 2
-  // is what makes `inv_source_keeps_its_copy_until_promotion_attested` false with nothing
-  // deleted; moving it to a shard that does not reach the copy would be the M37 escalation
-  // the ruling forbids, so the move is conditioned on the post-state closure.
+  // and only when — the copy has moved out of the source's own closure. Both halves of that
+  // rule are in one trace, and R9 (issue 41, 2026-08-20) is what re-cut the first half.
+  //
+  // Leg 1, the **pin** (R9's source arm, root 2). The failover moves node 1's own slots to
+  // node 2, but not slot 1 — that one is already owned by the migration target — and node 1
+  // keeps the only copy of it. `retargetResidueOnDemotion` used to move the entry's `source`
+  // to node 2 anyway, leaving the copy claim resting on the single closure edge `1 -> 2`
+  // that the next role change cuts. It now refuses: node 2 does not hold slot 1, so the
+  // entry stays pinned to node 1, which does.
+  //
+  // Leg 2, the **follow** (R1-4a). Once the promotion is attested and node 1 has reaped its
+  // copy, node 1 no longer holds slot 1 and node 4 does. Re-parenting node 1 under node 4
+  // now moves the entry's `source` with the copy: `residueFollowsDemotion`'s two post-state
+  // conjuncts are both satisfied. Pinning it to a node holding nothing would leave the entry
+  // naming a node with no copy; moving it to a shard that does not reach the copy would be
+  // the M37 escalation the ruling forbids, which is why the move is conditioned on the
+  // post-state closure and not on the demotion alone.
   run residueFollowsDemotedSourceTest: bool = {
     init
       .then(beginMigration(1, 1, 4, false))
@@ -1628,16 +1637,24 @@ module cluster_migration_failover {
       .then(demoteNode(1, 2))
       .expect(and {
         demotedTo(nodes, 1, 2),
-        match residue.get(1) { | Some(r) => r.source == 2 | None => false },
-        // The copy is on node 1, reachable only through the shard edge `1 -> 2`.
+        // R9: the claim stays on the physical holder, not on the successor.
+        match residue.get(1) { | Some(r) => r.source == 1 | None => false },
         not(nodes.get(2).keys.contains(1)),
         nodes.get(1).keys.contains(1),
         inv_source_keeps_its_copy_until_promotion_attested,
+        inv_residue_has_an_effective_remover,
       })
-      .then(setRole(2, Replica, Some(4)))
+      .then(relabelShadow(1))
+      .then(reportPromoted(1))
+      .then(reapSlots(1))
       .expect(and {
-        // Node 1 followed node 2's demotion (the repoint), and the claim followed the copy.
-        nodes.get(1).parent == Some(4),
+        match residue.get(1) { | Some(r) => r.promoted and r.source == 1 | None => false },
+        not(nodes.get(1).keys.contains(1)),
+        nodes.get(4).keys.contains(1),
+      })
+      .then(setRole(1, Replica, Some(4)))
+      .expect(and {
+        // The claim followed the copy into node 4's shard.
         match residue.get(1) { | Some(r) => r.source == 4 | None => false },
         shardHoldsCopy(nodes, 4, 1),
         inv_source_keeps_its_copy_until_promotion_attested,
@@ -1661,12 +1678,61 @@ module cluster_migration_failover {
       .expect(and {
         match residue.get(1) { | Some(r) => r.source == 1 and not(r.promoted) | None => false },
         nodes.get(1).keys.contains(1),
-        not(canClearSlotResidue(residue, 1)),
+        not(canClearSlotResidue(nodes, slots, migrations, residue, 1)),
         // ... and the reap-then-clear terminal state is not available either.
         not(reapableSlots(nodes, migrations, residue, 1).contains(1)),
         inv_member_keyspace_is_tracked,
       })
       .then(clearSlotResidue(1).fail())
+  }
+
+  // R9 (issue 41), ruled 2026-08-20 — the **rollback-completed** clear arm, and the state
+  // that says why it cannot be gated on a live primary. `failPromotion` hands slot 1 back
+  // to the entry's source and keeps the entry unpromoted; the attestation path that would
+  // set `promoted` is gone with the ownership, so V9-M4's `promoted` conjunct on its own
+  // leaves the entry with nothing but `canFailPromotion` re-firing — an idempotent
+  // re-assert that removes nothing. Demoting the source (which R1 correctly leaves holding
+  // the copy and the claim) takes even that away: before this arm every disjunct of
+  // `hasEffectiveRemover` was false and the entry was unreapable, which is root 3 of
+  // issue 41. The clear writes no slot assignment, so the reason `canFailPromotion` is
+  // role-gated does not apply to it.
+  run rolledBackResidueClearableAfterSourceDemotionTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .then(confirmDrained(1, 1))
+      .then(completeMigration(1, 1))
+      .then(failPromotion(1))
+      .expect(and {
+        // Ownership is home; the entry survives the rollback unpromoted.
+        slots.get(1) == Some(1),
+        match residue.get(1) { | Some(r) => not(r.promoted) and r.source == 1 | None => false },
+        canClearSlotResidue(nodes, slots, migrations, residue, 1),
+      })
+      .then(attachTargetReplica(1, 4))
+      .expect(and {
+        demotedTo(nodes, 1, 4),
+        // R1: the claim stays on the physical holder ...
+        match residue.get(1) { | Some(r) => r.source == 1 | None => false },
+        nodes.get(1).keys.contains(1),
+        // ... and every live-primary-gated remover is now false ...
+        not(canFailPromotion(nodes, residue, 1)),
+        not(canRetargetSlotResidue(nodes, residue, 1)),
+        not(reapableSlots(nodes, migrations, residue, 1).contains(1)),
+        // ... leaving R9's arm as the entry's only exit.
+        canClearSlotResidue(nodes, slots, migrations, residue, 1),
+        inv_residue_has_an_effective_remover,
+      })
+      .then(clearSlotResidue(1))
+      .expect(and {
+        residue.get(1) == None,
+        // The slot map is what tracks the copy now, which is why the clear strands nothing.
+        nodes.get(1).keys.contains(1),
+        slots.get(1) == Some(1),
+        not(defects.untracked),
+        inv_member_keyspace_is_tracked,
+        inv_slot_copy_survives_until_owned_and_served,
+      })
   }
 
   // The **in-apply target arm** (V10-C4). An unpromoted entry whose target is demoted is
@@ -1689,6 +1755,14 @@ module cluster_migration_failover {
           | Some(r) => and { r.target == 2, not(r.target_gone), not(r.promoted), r.source == 1 }
           | None => false
         },
+        // R8 (issue 41), ruled 2026-08-20: the successor inherits the *slot*, not the
+        // *copy*. Node 4 had never attested for slot 1, so it held nothing to hand on;
+        // `applyFailoverCommon`'s key union used to give node 2 a copy anyway, and the
+        // re-pointed entry was still unpromoted — the new target served before it attested.
+        // It now has to run the attestation path below against its new home first.
+        not(nodes.get(2).keys.contains(1)),
+        not(ctl.prev_keys.get(2).contains(1)),
+        inv_no_serve_before_attestation,
         inv_residue_has_an_effective_remover,
         inv_slots_only_assigned_to_primaries,
       })
