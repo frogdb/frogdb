@@ -925,7 +925,7 @@ bitflags! {
         /// SREM, FLUSHALL, expiry commands) deliberately lack the flag so the
         /// operator can still recover an instance that has hit its limit under
         /// `noeviction`. Assignments for Redis-compatible commands mirror
-        /// `CMD_DENYOOM` in redis/redis 8.6.0 `src/commands/*.json`; FrogDB
+        /// `CMD_DENYOOM` in redis/redis 8.6.1 `src/commands/*.json`; FrogDB
         /// extension commands follow the same rule (allocating writes carry
         /// it, freeing writes do not).
         const DENYOOM = 0b100_0000_0000_0000_0000;

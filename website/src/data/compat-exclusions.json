@@ -4,7 +4,7 @@
     "total_tests": 2308,
     "total_exclusions": 546,
     "broken_tests": 1,
-    "upstream_version": "Redis 8.6.0"
+    "upstream_version": "Redis 8.6.1"
   },
   "categories": {
     "redis-specific": {

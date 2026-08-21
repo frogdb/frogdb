@@ -7,21 +7,23 @@
 //!   by the regression suite and the docs site's compatibility reporting.
 //!
 //! These are allowed to diverge — FrogDB can widen its compatibility target
-//! ahead of bumping the version it advertises to clients. As of the 8.6.0
-//! advertise bump (ADR-0005 / issue 06) the two happen to agree; that is
-//! coincidence, not an invariant — expect them to diverge again as the
-//! compat target moves ahead of the next advertise bump.
+//! ahead of bumping the version it advertises to clients. As of the 8.6.1
+//! bump the two happen to agree (ADR-0005 / issue 06 set them both to 8.6.0;
+//! 8.6.1 moved them together because the vendored metadata pipeline and the
+//! acceptance comparison now both run against 8.6.1); that is coincidence,
+//! not an invariant — expect them to diverge again as the compat target moves
+//! ahead of the next advertise bump.
 
 /// The Redis version FrogDB advertises to clients: `INFO`'s `redis_version`
 /// field, the Lua `redis.REDIS_VERSION` binding, and HELLO's `version` reply
 /// field. This is the single source of truth for all three — never hardcode
 /// the string at a call site.
-pub const ADVERTISED_REDIS_VERSION: &str = "8.6.0";
+pub const ADVERTISED_REDIS_VERSION: &str = "8.6.1";
 
 /// The upstream Redis version FrogDB's command compatibility is measured
 /// against, used by the regression suite and the docs site's compatibility
 /// tables.
-pub const REDIS_COMPAT_TARGET: &str = "8.6.0";
+pub const REDIS_COMPAT_TARGET: &str = "8.6.1";
 
 /// [`ADVERTISED_REDIS_VERSION`] packed as `(major << 16) | (minor << 8) |
 /// patch`, matching Redis's `REDIS_VERSION_NUM` encoding. Derived at compile
@@ -70,8 +72,8 @@ mod tests {
 
     #[test]
     fn advertised_version_num_matches_advertised_version() {
-        // 8.6.0 -> (8 << 16) | (6 << 8) | 0
-        assert_eq!(ADVERTISED_REDIS_VERSION_NUM, 0x0008_0600);
+        // 8.6.1 -> (8 << 16) | (6 << 8) | 1
+        assert_eq!(ADVERTISED_REDIS_VERSION_NUM, 0x0008_0601);
     }
 
     #[test]

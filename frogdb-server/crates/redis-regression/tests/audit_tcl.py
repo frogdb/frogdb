@@ -5,8 +5,10 @@
 # ///
 """Redis TCL test coverage audit (Rust-side tracker).
 
-Parses upstream Redis 8.6.0 .tcl test files and the Rust port files in
-this directory, diffs test names via token-based fuzzy matching, and
+Parses the upstream Redis .tcl test files for `REDIS_COMPAT_TARGET`
+(`frogdb-server/crates/types/src/redis_version.rs`, the single source of
+truth) and the Rust port files in this directory, diffs test names via
+token-based fuzzy matching, and
 classifies missing tests against the per-port `## Intentional exclusions`
 sections plus upstream tag-based exclusion rules.
 
@@ -25,8 +27,26 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REDIS_ROOT = Path("/tmp/claude/redis-tcl/redis-8.6.0")
 REGRESSION_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).resolve().parents[4]
+REDIS_VERSION_PATH = REPO_ROOT / "frogdb-server" / "crates" / "types" / "src" / "redis_version.rs"
+
+
+def _redis_compat_target() -> str:
+    """Read REDIS_COMPAT_TARGET from frogdb-types, the single source of truth."""
+    match = re.search(
+        r'pub const REDIS_COMPAT_TARGET:\s*&str\s*=\s*"([^"]+)"',
+        REDIS_VERSION_PATH.read_text(),
+    )
+    if not match:
+        raise SystemExit(f"Could not find REDIS_COMPAT_TARGET in {REDIS_VERSION_PATH}")
+    return match.group(1)
+
+
+# Where the upstream tarball for the compat target is expected to be extracted:
+#   curl -sL https://github.com/redis/redis/archive/refs/tags/<target>.tar.gz \
+#     | tar -xz -C /tmp/claude/redis-tcl
+REDIS_ROOT = Path("/tmp/claude/redis-tcl") / f"redis-{_redis_compat_target()}"
 
 # Maps upstream .tcl relative path → Rust port filename. A single Rust file can
 # cover multiple upstream files (e.g. list_tcl.rs → list/list-2/list-3).

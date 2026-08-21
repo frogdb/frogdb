@@ -6,6 +6,6 @@
   },
   "workspace_version": "0.1.0",
   "rust_toolchain": "1.92.0",
-  "advertised_redis_version": "8.6.0",
-  "redis_compat_target": "8.6.0"
+  "advertised_redis_version": "8.6.1",
+  "redis_compat_target": "8.6.1"
 }

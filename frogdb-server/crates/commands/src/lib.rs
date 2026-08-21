@@ -485,7 +485,7 @@ mod denyoom_tests {
     /// `noeviction` is over its limit.
     ///
     /// The expected values are Redis's own `CMD_DENYOOM` bits, read from
-    /// redis/redis 8.6.0 `src/commands/*.json` (as compiled into
+    /// redis/redis 8.6.1 `src/commands/*.json` (as compiled into
     /// `src/commands.def`) — the same upstream revision `website/src/data/
     /// redis-commands-8x.json` is vendored from.
     #[test]
@@ -537,7 +537,7 @@ mod denyoom_tests {
             let got = entry.flags().contains(CommandFlags::DENYOOM);
             assert_eq!(
                 got, want,
-                "{name}: DENYOOM should be {want} (Redis 8.6.0 `CMD_DENYOOM`), got {got}"
+                "{name}: DENYOOM should be {want} (Redis 8.6.1 `CMD_DENYOOM`), got {got}"
             );
         }
     }

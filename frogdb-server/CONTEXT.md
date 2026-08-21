@@ -155,7 +155,7 @@ _Avoid_: "stub" (implies fake data); answering with values that could mislead to
 
 **Advertised Compat Version**:
 The Redis version FrogDB reports to clients for feature detection — `redis_version` in INFO and
-`version` in HELLO, both fixed at the regression-tested compat target (8.6.0). Distinct from
+`version` in HELLO, both fixed at the regression-tested compat target (8.6.1). Distinct from
 `frogdb_version` (the product version) and from HELLO's `server` field, which stays `frogdb`.
 See ADR-0005.
 

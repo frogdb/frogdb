@@ -5,7 +5,7 @@
 //! `website/src/data/redis-commands-8x.json` and
 //! `website/src/data/redis-module-commands-8x.json`, which
 //! `website/scripts/vendor-redis-commands.py` fetches from
-//! `redis/redis@8.6.0` and the module repos that release pins.
+//! `redis/redis@8.6.1` and the module repos that release pins.
 //!
 //! `just command-metadata-gen-check` fails if this file has drifted from the
 //! snapshots. To refresh the snapshots themselves (network access required),
@@ -20,9 +20,9 @@ use super::{
 };
 
 /// The `REDIS_COMPAT_TARGET` the snapshots were vendored at.
-pub const REDIS_VERSION: &str = "8.6.0";
+pub const REDIS_VERSION: &str = "8.6.1";
 
-/// Every top-level `redis/redis@8.6.0` command, sorted by name.
+/// Every top-level `redis/redis@8.6.1` command, sorted by name.
 #[rustfmt::skip]
 pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
     UpstreamCommand {
@@ -33996,7 +33996,7 @@ static REDISTIMESERIES_CONTAINERS: &[&str] = &[];
 #[cfg(not(feature = "timeseries"))]
 static REDISTIMESERIES_CONTAINERS: &[&str] = &[];
 
-/// `VectorSets` commands, vendored from https://github.com/redis/redis@8.6.0.
+/// `VectorSets` commands, vendored from https://github.com/redis/redis@8.6.1.
 #[cfg(feature = "vectorset")]
 #[rustfmt::skip]
 static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
@@ -35019,7 +35019,7 @@ pub static MODULE_FAMILIES: &[ModuleFamilyTable] = &[
     ModuleFamilyTable {
         family: "VectorSets",
         repo: "https://github.com/redis/redis",
-        tag: "8.6.0",
+        tag: "8.6.1",
         features: &["vectorset"],
         commands: VECTORSETS_COMMANDS,
         containers: VECTORSETS_CONTAINERS,

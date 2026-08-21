@@ -13,9 +13,11 @@ or fabricated answers. We ruled three linked decisions:
    *development* default solely to keep iteration builds and the build cache small — it is a
    build-speed tier, not a product tier, and the published compat matrix describes shipped
    binaries.
-2. **Advertise the tested compat target everywhere.** INFO reports `redis_version:8.6.0` and
-   HELLO reports `version 8.6.0` — the version the 2,298-test regression port actually
-   validates — so version-gating clients enable the 8.x features we implement. HELLO's
+2. **Advertise the tested compat target everywhere.** INFO's `redis_version` and HELLO's
+   `version` both report `ADVERTISED_REDIS_VERSION`
+   (`frogdb-server/crates/types/src/redis_version.rs`, `8.6.0` when this was ruled) — the
+   version the 2,298-test regression port actually validates — so version-gating clients
+   enable the 8.x features we implement. HELLO's
    `server` field stays `frogdb` and `frogdb_version` carries the product version (Valkey
    precedent: honest identity, compat version in the version fields). Alternatives rejected:
    staying at 7.2.0 permanently under-advertises implemented features; reporting the product
@@ -27,10 +29,18 @@ or fabricated answers. We ruled three linked decisions:
    observability-accuracy-over-parity rule to the compat surface: a probe may get a modest
    answer, but never a misleading one.
 
-Consequences: claiming 8.6.0 makes every unadvertised gap a bug by definition — the compat
-matrix and its CI drift-check (`docs-gen --check`) are the enforcement mechanism, and new
+Consequences: claiming the compat target makes every unadvertised gap a bug by definition — the
+compat matrix and its CI drift-check (`docs-gen --check`) are the enforcement mechanism, and new
 Redis-version bumps are deliberate events (retarget suite, then bump the advertised version).
 Shipped-image size and build time grow with `cmd-full`. The shim policy gives tooling
 compatibility without an "everything Redis says" mimicry table; the cost is that each new
 probe needs a truthfulness judgment call rather than a copy-paste answer (glossary:
 Truthful-Inert Shim, `frogdb-server/CONTEXT.md`).
+
+**2026-08-21 — target moved to 8.6.1.** The side-by-side session that produced this ADR ran
+against Redis 8.6.1 while the vendored metadata and the advertised version sat at 8.6.0; both
+constants now read `8.6.1`, closing that skew. Upstream 8.6.1 is a four-commit patch release:
+in the trimmed command projection FrogDB vendors, the only change is the added `HOTKEYS HELP`
+subcommand (a row the vendor script skips, so `generated.rs` is byte-identical apart from
+provenance). The behavior deltas are a CRLF-injection fix in error and status replies, an
+always-emitted `# Hotkeys` INFO header, and an RDB-load hash-table expansion fix.
