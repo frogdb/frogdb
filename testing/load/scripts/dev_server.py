@@ -32,7 +32,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 STATE_FILE = REPO_ROOT / ".dev-server.json"
-STARTUP_TIMEOUT = 60  # generous for debug builds
+MEMTIER_LOG_FILE = REPO_ROOT / ".dev-server-memtier.log"
+# Readiness-only: the build phase (see build_server()) runs first and unbounded, so by the time
+# this clock starts the binary has already been compiled and spawned. This is just "how long may
+# the process take to open its listening socket."
+STARTUP_TIMEOUT = 60
 
 WORKLOAD_RATIOS = {
     "read-heavy": "19:1",
@@ -87,6 +91,35 @@ def kill_existing() -> None:
     STATE_FILE.unlink(missing_ok=True)
 
 
+def build_server(build_type: str) -> bool:
+    """Build the server binary as its own phase, output visible, no deadline.
+
+    Runs before the server is spawned so a cold/throttled compile never eats into the
+    readiness-wait timeout (see wait_for_port).
+    """
+    print(f"==> Building FrogDB ({build_type})...")
+    result = subprocess.run(["just", "build-server", build_type], cwd=REPO_ROOT)
+    if result.returncode != 0:
+        print(f"Error: build failed (exit {result.returncode})", file=sys.stderr)
+        return False
+    print("==> Build complete.")
+    return True
+
+
+def print_log_tail(path: Path, lines: int = 40) -> None:
+    """Print the last N lines of a log file to stderr, for post-mortem on a nonzero exit."""
+    try:
+        content = path.read_text()
+    except OSError as exc:
+        print(f"  (could not read {path}: {exc})", file=sys.stderr)
+        return
+    tail = content.splitlines()[-lines:]
+    print(f"--- last {len(tail)} line(s) of {path} ---", file=sys.stderr)
+    for line in tail:
+        print(f"  {line}", file=sys.stderr)
+    print("--- end of log ---", file=sys.stderr)
+
+
 def write_state(pid: int, port: int, http_port: int) -> None:
     """Write the dev server state file."""
     STATE_FILE.write_text(
@@ -99,6 +132,13 @@ def write_state(pid: int, port: int, http_port: int) -> None:
 
 
 def main() -> int:
+    # Without this, stdout is fully block-buffered whenever it isn't a TTY (redirected to a
+    # file, piped, or captured by a harness) — our phase-transition prints would then sit in
+    # Python's buffer and only appear all at once at process exit, interleaved wrong relative
+    # to the subprocess output (cargo/server/memtier write directly, unbuffered) they're meant
+    # to bracket. Line-buffering keeps them appearing in real time.
+    sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(
         description="Start FrogDB with continuous low-volume traffic",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -145,16 +185,22 @@ def main() -> int:
 
     ratio = WORKLOAD_RATIOS[args.workload]
     run_recipe = "run-release" if args.release else "run"
+    build_type = "release" if args.release else "debug"
 
-    # Start the server via just (inherits DYLD/ROCKSDB env from justfile)
+    # Build first, as its own unbounded phase (see build_server()) — the binary is fully
+    # compiled before we spawn it or start the readiness clock.
+    if not build_server(build_type):
+        return 1
+
+    # Start the server via just (inherits DYLD/ROCKSDB env from justfile). The build above
+    # already finished, so this just launches the (already up to date) binary.
     server_env = {
         **os.environ,
         "FROGDB_SERVER__PORT": str(server_port),
         "FROGDB_HTTP__PORT": str(http_port),
     }
     server_args = ["just", run_recipe] + extra
-    build_type = "release" if args.release else "debug"
-    print(f"Building and starting FrogDB ({build_type})...")
+    print(f"==> Starting FrogDB ({build_type})...")
 
     server_proc = subprocess.Popen(
         server_args,
@@ -164,6 +210,7 @@ def main() -> int:
     )
 
     memtier_proc = None
+    memtier_log = None
 
     def cleanup(signum=None, frame=None):
         """Shut down memtier then server."""
@@ -173,6 +220,8 @@ def main() -> int:
                 memtier_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 memtier_proc.kill()
+        if memtier_log and not memtier_log.closed:
+            memtier_log.close()
 
         if server_proc.poll() is None:
             server_proc.terminate()
@@ -187,8 +236,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, cleanup)
 
     try:
-        # Wait for server to be ready
-        print(f"Waiting for FrogDB on port {server_port}...")
+        # Wait for server to be ready. The build already finished (build_server(), above) and
+        # the binary is already spawned (server_proc, above), so this clock times only the
+        # process's own startup (config load, storage open, listener bind) — not compile time.
+        print(f"==> Waiting for FrogDB to be ready on port {server_port}...")
         if not wait_for_port(server_port):
             print("Error: FrogDB failed to start within timeout", file=sys.stderr)
             cleanup()
@@ -231,14 +282,14 @@ def main() -> int:
             "999999",
             "--rate-limiting",
             str(args.rate),
-            "--print-interval",
-            "10",
             "--hide-histogram",
         ]
+        print(f"==> Starting memtier load generator (log: {MEMTIER_LOG_FILE})...")
+        memtier_log = open(MEMTIER_LOG_FILE, "w")
         memtier_proc = subprocess.Popen(
             memtier_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=memtier_log,
+            stderr=subprocess.STDOUT,
         )
 
         # Wait for either process to exit
@@ -248,6 +299,9 @@ def main() -> int:
                 break
             if memtier_proc.poll() is not None:
                 print(f"\nLoad generator exited (code {memtier_proc.returncode})")
+                if memtier_proc.returncode != 0:
+                    memtier_log.flush()
+                    print_log_tail(MEMTIER_LOG_FILE)
                 break
             time.sleep(0.5)
 
