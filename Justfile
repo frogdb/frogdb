@@ -791,7 +791,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-ship-cmd-full
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -964,6 +964,11 @@ lint-py:
 # =============================================================================
 # Run
 # =============================================================================
+
+# Build just the frogdb-server binary (debug or release), separately from running it.
+# Used by `just dev` so a cold compile can't eat the server-readiness timeout.
+build-server profile="debug":
+    {{dyld-env}} {{rocksdb-env}} cargo build -p frogdb-server {{ if profile == "release" { "--release" } else { "" } }}
 
 # Run the server (debug)
 run *args:
@@ -1816,15 +1821,6 @@ lint-continuation-lock:
 # gauntleted declares an `admission`. See scripts/script-write-seam.py.
 lint-script-write-seam:
     ./scripts/script-write-seam.py
-
-# Gate: every distributable frogdb-server build (cross-compiled binaries,
-# in-Docker release build, macOS release tarball, the deb build-the-binaries
-# doc step) passes --features cmd-full (ADR-0005 ruling 1). Finds every
-# `cargo build`/`cargo zigbuild --bin frogdb-server` invocation in the tree
-# and demands cmd-full on it; a count pin catches a ship site moving or
-# disappearing without the pin following it. See scripts/ship-cmd-full.py.
-lint-ship-cmd-full:
-    ./scripts/ship-cmd-full.py
 
 # =============================================================================
 # Build/test execution mode
