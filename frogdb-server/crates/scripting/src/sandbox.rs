@@ -32,7 +32,12 @@ use mlua::{HookTriggers, IntoLua, Lua, Result as LuaResult, StdLib, Table, Value
 pub const REDIS_VERSION: &str = frogdb_types::ADVERTISED_REDIS_VERSION;
 /// Redis version reported to scripts as `redis.REDIS_VERSION_NUM`
 /// (`(major << 16) | (minor << 8) | patch`).
-pub const REDIS_VERSION_NUM: i64 = 0x0007_0200;
+///
+/// Single-sourced from [`frogdb_types::ADVERTISED_REDIS_VERSION_NUM`], which
+/// is itself derived from [`frogdb_types::ADVERTISED_REDIS_VERSION`], so this
+/// can never drift from [`REDIS_VERSION`] the way it once did (this constant
+/// stayed hand-pinned to 7.2.0 across the 8.6.0 advertise bump).
+pub const REDIS_VERSION_NUM: i64 = frogdb_types::ADVERTISED_REDIS_VERSION_NUM;
 
 /// Instruction-count interval between timeout-hook checks.
 const HOOK_INSTRUCTION_INTERVAL: u32 = 10_000;

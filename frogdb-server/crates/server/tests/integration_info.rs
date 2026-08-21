@@ -62,7 +62,11 @@ async fn info_default_renders_sections_in_canonical_order() {
 
     let info = info_text(&mut client, &[]).await;
     let headers = section_headers(&info);
-    // Ratelimit renders nothing while inactive, so the default set is:
+    // Mirrors Redis 8.6's own default list (server/clients/memory/
+    // persistence/stats/replication/threads/cpu/module_list/errorstats/
+    // cluster/keyspace/keysizes), with FrogDB's own `hotkeys` extra appended.
+    // `ratelimit` is in the default set too but renders nothing while
+    // inactive, so it never shows up as a header here.
     assert_eq!(
         headers,
         vec![
@@ -72,8 +76,14 @@ async fn info_default_renders_sections_in_canonical_order() {
             "# Persistence",
             "# Stats",
             "# Replication",
+            "# Threads",
             "# CPU",
+            "# Modules",
+            "# Errorstats",
+            "# Cluster",
             "# Keyspace",
+            "# Keysizes",
+            "# Hotkeys",
         ],
         "full INFO:\n{info}"
     );

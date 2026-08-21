@@ -51,7 +51,9 @@ pub use json::{
     DEFAULT_JSON_MAX_DEPTH, DEFAULT_JSON_MAX_SIZE, JsonError, JsonLimits, JsonType, JsonValue,
     estimate_json_size,
 };
-pub use redis_version::{ADVERTISED_REDIS_VERSION, REDIS_COMPAT_TARGET};
+pub use redis_version::{
+    ADVERTISED_REDIS_VERSION, ADVERTISED_REDIS_VERSION_NUM, REDIS_COMPAT_TARGET,
+};
 pub use sync::{LockError, MutexExt, RwLockExt};
 pub use tdigest::TDigestValue;
 pub use timeseries::{
