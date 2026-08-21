@@ -48,6 +48,21 @@ exclude_re = [
     # substitution is excluded; every other `ShardCoverage` mutation stays in
     # scope.
     "replace ShardCoverage::none -> Self with Default::default\\(\\)",
+    # `FlushHold::shared` wraps `Self::new()`, which is verbatim what the
+    # `Default` impl forwards to, so swapping in `Default::default()` is an
+    # equivalent mutant (see the comment at the constructor). Only this one
+    # substitution is excluded; every other `FlushHold` mutation stays in scope.
+    "replace FlushHold::shared -> Arc<Self> with Arc::new\\(Default::default\\(\\)\\)",
+    # `arm` keeps the *later* of the two deadlines. `>` and `>=` select the same
+    # instant when the two are equal, so this one relaxation is equivalent; the
+    # other four mutations of the same comparison are killed by
+    # `a_later_arm_never_shortens_the_deadline` / `a_later_deadline_extends_the_hold`.
+    "replace > with >= in FlushHold::arm",
+    # `FlushEngine::forget_flush_hold` guards a path flume cannot produce: the
+    # post-disconnect `try_recv` drain is the only remaining hold-consulting
+    # site, and `Disconnected` is only returned for an *empty* closed channel
+    # (see the comment at the method). Unobservable, kept as depth-in-defence.
+    "replace FlushEngine<S>::forget_flush_hold with \\(\\)",
     "::record_gauge",
     "::record_histogram",
     "::record_command_latency_ms",

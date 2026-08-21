@@ -124,6 +124,12 @@ impl FlushHold {
     }
 
     /// A shared handle, the shape every consumer stores.
+    ///
+    /// `Self::new()` here is exactly what `Default::default()` returns — the
+    /// `Default` impl above forwards to it — so the mutant that swaps one for
+    /// the other is equivalent and no observation can kill it. It is excluded
+    /// by name in `.cargo/mutants.toml`; every other `FlushHold` mutation
+    /// stays in scope.
     pub fn shared() -> Arc<Self> {
         Arc::new(Self::new())
     }
@@ -141,6 +147,13 @@ impl FlushHold {
             state.breached = false;
         }
         state.depth += 1;
+        // The effective deadline is the *latest* one armed: a second capture
+        // must never shorten the first's protection, and a first capture must
+        // never cap the second's. `>` and `>=` pick the same value when the two
+        // instants are equal, so that one substitution is an equivalent mutant
+        // (excluded by name in `.cargo/mutants.toml`); every other comparison
+        // here is forced by `a_later_arm_never_shortens_the_deadline` and
+        // `a_later_deadline_extends_the_hold`.
         state.until = Some(match state.until {
             Some(existing) if existing > until => existing,
             _ => until,
@@ -325,6 +338,70 @@ mod tests {
         assert!(!hold.is_held());
         assert!(hold.release(), "first capture learns its floor is unsafe");
         assert!(hold.release(), "so does the second");
+    }
+
+    /// The effective deadline is the latest one armed, so a second capture
+    /// cannot shorten the first's protection — even one whose own deadline is
+    /// already in the past.
+    #[test]
+    fn a_later_arm_never_shortens_the_deadline() {
+        let hold = FlushHold::new();
+        hold.arm(clock::now() + Duration::from_secs(60));
+        hold.arm(clock::now() - Duration::from_millis(1));
+        assert!(
+            hold.is_held(),
+            "the first capture's minute still protects both"
+        );
+    }
+
+    /// …and symmetrically, a capture armed behind a deadline that has already
+    /// passed pushes it out rather than inheriting the lapse.
+    #[test]
+    fn a_later_deadline_extends_the_hold() {
+        let hold = FlushHold::new();
+        hold.arm(clock::now() - Duration::from_millis(1));
+        hold.arm(clock::now() + Duration::from_secs(60));
+        assert!(
+            hold.is_held(),
+            "the second capture's minute is the effective deadline"
+        );
+    }
+
+    /// A capture that arms while another is still live inherits that hold's
+    /// breach: the flush it let through sits above *this* capture's watermark
+    /// too, because this capture's drain point is the arm, not the flush. Only
+    /// a hold going idle (`depth == 0`) clears the flag.
+    #[test]
+    fn arming_behind_a_live_breached_hold_inherits_the_breach() {
+        let hold = FlushHold::new();
+        hold.arm(clock::now() - Duration::from_millis(1));
+        assert!(!hold.is_held(), "the first arm's deadline has passed");
+
+        hold.arm(clock::now() + Duration::from_secs(60));
+        assert!(hold.is_held(), "the second arm suppresses again");
+        assert!(
+            hold.release(),
+            "the capture armed behind the breach learns about it"
+        );
+        assert!(hold.release(), "and so does the one that was breached");
+        assert!(!hold.is_held());
+    }
+
+    /// The deadline instant is *past* the hold, not inside it: at `now ==
+    /// until` the hold has lapsed. Only a paused clock can land exactly there,
+    /// which is the whole reason this test exists — the boundary is otherwise
+    /// unreachable and the rule silently untested.
+    #[tokio::test(start_paused = true)]
+    async fn the_deadline_instant_is_already_past_the_hold() {
+        let hold = FlushHold::new();
+        // The clock is frozen and nothing awaits below, so every later
+        // `clock::now()` reads back exactly this instant.
+        hold.arm(clock::now());
+        assert!(
+            !hold.is_held(),
+            "a hold whose deadline is this very instant is no longer in force"
+        );
+        assert!(hold.release(), "and landing on it is a breach");
     }
 
     /// A lapse nobody sampled is still a lapse: the release itself applies the

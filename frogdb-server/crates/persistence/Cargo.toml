@@ -38,7 +38,9 @@ xxhash-rust.workspace = true
 tokio-metrics = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+# `test-util` for the paused clock: `FlushHold`'s deadline rule is exclusive at
+# its own instant, and `now == until` is only reachable on a frozen clock.
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 tempfile.workspace = true
 # Captures emitted tracing events so the flush path's rate-limited failure
 # logging (severity, not just occurrence) is assertable.

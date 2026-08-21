@@ -600,6 +600,16 @@ impl<S: WriteSink> FlushEngine<S> {
     ///
     /// Called once the command channel disconnects: the producer is gone, so
     /// the hold can never be released and every remaining commit is mandatory.
+    ///
+    /// Belt to the disconnect arm's braces, and no test can prove otherwise:
+    /// the only hold-consulting path left after this call is `apply_clear`'s
+    /// wait inside the post-disconnect `try_recv` drain, and flume returns
+    /// `RecvTimeoutError::Disconnected` only when the channel is *empty* and
+    /// closed, so that drain never sees a command. The mutant that empties this
+    /// body is therefore unobservable and is excluded by name in
+    /// `.cargo/mutants.toml`. It stays because the invariant it rests on
+    /// belongs to flume, not to us: if a drain ever does carry a clear, this is
+    /// what keeps it from parking for the arm's full deadline.
     pub(super) fn forget_flush_hold(&mut self) {
         self.flush_hold = None;
     }
