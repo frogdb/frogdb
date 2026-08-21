@@ -690,6 +690,7 @@ fn the_apply_staged_metadata_seam_is_hooked() {
         replication_id: "nonsense".to_string(),
         replication_offset: 10,
         checksum: None,
+        coverage: Default::default(),
     });
 }
 

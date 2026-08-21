@@ -102,8 +102,10 @@ impl ReplicationIdentity {
         // by construction, so the keyspace that came back with it may hold
         // effects above the claim and nothing describes which
         // (FM-REPLICATION-066 / ruling R16).
-        let applied =
-            AppliedOffset::recovered_over(Arc::new(AtomicU64::new(live.load(Ordering::Acquire))));
+        let applied = AppliedOffset::recovered_over(
+            Arc::new(AtomicU64::new(live.load(Ordering::Acquire))),
+            state.coverage_at_save.clone(),
+        );
         Self {
             state: Arc::new(RwLock::new(state)),
             live,
@@ -115,7 +117,8 @@ impl ReplicationIdentity {
     /// wiring with no tracker.
     pub fn detached(state: ReplicationState) -> Self {
         let live = Arc::new(AtomicU64::new(state.offset_at_save));
-        let applied = AppliedOffset::recovered(state.offset_at_save);
+        let applied =
+            AppliedOffset::recovered_with(state.offset_at_save, state.coverage_at_save.clone());
         Self {
             state: Arc::new(RwLock::new(state)),
             live,
@@ -165,12 +168,53 @@ impl ReplicationIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fullsync::ShardCoverage;
     use crate::state::generate_replication_id;
 
     fn state_at(offset_at_save: u64) -> ReplicationState {
         let mut state = ReplicationState::new();
         state.offset_at_save = offset_at_save;
         state
+    }
+
+    /// A crash between an install and the reconcile comes back with a keyspace
+    /// that holds effects above its claim. Both halves of that fact are
+    /// persisted, so both come back: the offset *and* the floors that describe
+    /// what sits above it (ruling R15).
+    // FM-REPLICATION-066
+    #[test]
+    fn a_recovered_identity_comes_back_with_its_floors() {
+        let mut state = state_at(4242);
+        state.coverage_at_save = ShardCoverage::from_watermarks(vec![4_900, 4_300]);
+        let identity = ReplicationIdentity::detached(state);
+        let applied = identity.applied();
+
+        assert_eq!(applied.floor_for(0), Some(4_900));
+        assert_eq!(applied.floor_for(1), Some(4_300));
+        assert_eq!(
+            applied.floor_for(2),
+            None,
+            "a shard the vector does not describe has no floor"
+        );
+        assert_eq!(
+            applied.provenance(),
+            crate::replica::OffsetProvenance::Recovered,
+            "recovered floors do not make the recovered offset an installed one: \
+             the persisted offset still lags the applied head (ruling R16)"
+        );
+    }
+
+    /// Floors that the node had already caught up with are not floors any more:
+    /// a save point below the ceiling is the only one that recovers them.
+    // FM-REPLICATION-066
+    #[test]
+    fn floors_the_head_has_passed_do_not_come_back() {
+        let mut state = state_at(5_000);
+        state.coverage_at_save = ShardCoverage::from_watermarks(vec![4_900, 4_300]);
+        let identity = ReplicationIdentity::detached(state);
+
+        assert_eq!(identity.applied().floor_for(0), None);
+        assert_eq!(identity.applied().floor_ceiling(), 0);
     }
 
     /// The identity is built from the state the node recovered, and every

@@ -5,6 +5,7 @@
 //! - Secondary replication ID (for PSYNC continuity after failover)
 //! - Current replication offset
 
+use crate::fullsync::ShardCoverage;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -40,6 +41,16 @@ pub struct StagedReplicationMetadata {
     /// Hex-encoded checkpoint checksum (informational; not validated here).
     #[serde(default)]
     pub checksum: Option<String>,
+    /// The payload's per-shard coverage watermarks (`Y_s`), staged with the
+    /// offset they belong to so a crash between the install and the reconcile
+    /// recovers the skip floors rather than replaying the overshipped range
+    /// over a keyspace that already holds it (ruling R15, FM-REPLICATION-066).
+    ///
+    /// `default` for the same reason `checksum` has one: metadata staged by an
+    /// older build carries no vector, and an absent vector is no floors — the
+    /// pre-issue-35 behaviour, not a silent skip.
+    #[serde(default)]
+    pub coverage: ShardCoverage,
 }
 
 /// Read staged full-sync replication metadata from a data directory, if present.
@@ -201,6 +212,16 @@ pub struct ReplicationState {
     #[serde(default)]
     pub active_version: Option<String>,
 
+    /// The skip floors in force at the last save point — the companion to
+    /// [`Self::offset_at_save`], persisted for the same reason: a node that
+    /// crashes while its keyspace still holds effects above its claim recovers
+    /// both halves of that fact or neither (ruling R15, FM-REPLICATION-066).
+    ///
+    /// Empty once the applied head has caught up with `max(Y_s)`, which is what
+    /// a node in steady state persists.
+    #[serde(default)]
+    pub coverage_at_save: ShardCoverage,
+
     /// Primary host (runtime-only, not persisted). Set when running as a replica.
     #[serde(skip)]
     pub master_host: Option<String>,
@@ -225,6 +246,7 @@ impl ReplicationState {
             offset_at_save: 0,
             secondary_offset: -1,
             active_version: None,
+            coverage_at_save: ShardCoverage::none(),
             master_host: None,
             master_port: None,
         }
@@ -476,8 +498,12 @@ impl ReplicationState {
         // any failover window this node carried described a stream it no longer
         // holds, so it goes with it.
         self.adopt_replication_history_inner(meta.replication_id.clone());
-        // A staged checkpoint offset *is* a save-point offset.
+        // A staged checkpoint offset *is* a save-point offset, and the vector
+        // travels with it: the pair describes one payload, and adopting the
+        // offset without the floors is exactly the double-apply this row exists
+        // to stop.
         self.offset_at_save = meta.replication_offset;
+        self.coverage_at_save = meta.coverage.clone();
         self.check_invariants("ReplicationState::apply_staged_metadata");
     }
 }
@@ -1008,11 +1034,17 @@ mod tests {
             replication_id: generate_replication_id(),
             replication_offset: 4242,
             checksum: None,
+            coverage: ShardCoverage::from_watermarks(vec![4300, 4290]),
         };
         state.apply_staged_metadata(&meta);
 
         assert_eq!(state.replication_id, meta.replication_id);
         assert_eq!(state.offset_at_save, 4242);
+        assert_eq!(
+            state.coverage_at_save,
+            ShardCoverage::from_watermarks(vec![4300, 4290]),
+            "the floors travel with the offset they qualify (FM-REPLICATION-066)"
+        );
         assert!(state.secondary_id.is_none());
         assert!(!state.window_contains(&old, 50, 4242));
     }

@@ -61,7 +61,12 @@ const CHUNK_SIZE: usize = 64 * 1024;
 /// carries (`ReplicationFrame::shard_id`), so a replica with a different shard
 /// count still reads the right watermark. An index past the end has *no*
 /// watermark rather than a zero one: absent means "apply it", never "skip it".
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Serialized transparently as the bare list, because it rides in the staged
+/// `replication_metadata.json` (ruling R15) and in the persisted replication
+/// state, where a wrapper object would buy nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct ShardCoverage(Vec<u64>);
 
 impl ShardCoverage {
@@ -644,6 +649,7 @@ mod tests {
         assert!(parsed.coverage.is_empty());
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn a_coverage_vector_round_trips_through_the_trailer() {
         let metadata = FullSyncMetadata {
@@ -657,6 +663,7 @@ mod tests {
         assert_eq!(parsed.coverage.as_slice(), &[700, 0, u64::MAX]);
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn a_trailer_without_the_coverage_field_is_refused() {
         // Four fields is the pre-FM-REPLICATION-066 trailer. It is refused
@@ -668,6 +675,7 @@ mod tests {
         assert!(FullSyncMetadata::from_bytes(four_fields.as_bytes()).is_err());
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn a_malformed_watermark_fails_the_whole_vector() {
         assert!(ShardCoverage::parse("10,,30").is_err());
@@ -675,6 +683,7 @@ mod tests {
         assert!(ShardCoverage::parse("-1").is_err());
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn an_empty_coverage_field_parses_as_no_watermarks() {
         let parsed = ShardCoverage::parse("").unwrap();
@@ -684,6 +693,7 @@ mod tests {
         assert_eq!(parsed.watermark(0), None);
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn a_watermark_past_the_end_of_the_vector_is_absent_not_zero() {
         let coverage = ShardCoverage::from_watermarks(vec![7]);

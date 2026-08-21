@@ -414,7 +414,10 @@ impl ReplicaConnection {
         self.state
             .write()
             .adopt_replication_history(metadata.replication_id.clone());
-        if !self.offsets.reset_to(metadata.replication_offset) {
+        if !self
+            .offsets
+            .reset_to_payload(metadata.replication_offset, metadata.coverage.clone())
+        {
             return Err(io::Error::other(
                 "replication stream retired during dataset sync",
             ));
@@ -485,7 +488,10 @@ impl ReplicaConnection {
         self.state
             .write()
             .adopt_replication_history(outcome.replication_id.clone());
-        if !self.offsets.reset_to(outcome.replication_offset) {
+        if !self
+            .offsets
+            .reset_to_payload(outcome.replication_offset, outcome.coverage.clone())
+        {
             // The stream was retired mid-sync, so adopting the checkpoint's
             // offset would overwrite a frozen boundary.
             return Err(io::Error::other(

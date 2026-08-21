@@ -23,6 +23,7 @@
 //! opposite side of the wire and is deliberately not folded together with this.
 
 use crate::fullsync::FullSyncMetadata;
+use crate::fullsync::ShardCoverage;
 use crate::state::StagedReplicationMetadata;
 use frogdb_persistence::DataDirLayout;
 use frogdb_persistence::rocks::staged::StagedCheckpoint;
@@ -45,6 +46,9 @@ use tokio::fs;
 pub struct StagedOutcome {
     pub replication_id: String,
     pub replication_offset: u64,
+    /// The payload's per-shard coverage watermarks, handed back with the offset
+    /// they belong to so the caller installs the pair (FM-REPLICATION-066).
+    pub coverage: ShardCoverage,
 }
 
 /// Owns verify -> commit -> metadata for one full-sync checkpoint, against the
@@ -147,6 +151,7 @@ impl CheckpointStager {
             replication_id: meta.replication_id.clone(),
             replication_offset: meta.replication_offset,
             checksum: Some(hex::encode(meta.checksum)),
+            coverage: meta.coverage.clone(),
         };
         match serde_json::to_string(&staged_meta) {
             Ok(json) => {
@@ -163,6 +168,7 @@ impl CheckpointStager {
         Ok(StagedOutcome {
             replication_id: meta.replication_id.clone(),
             replication_offset: meta.replication_offset,
+            coverage: meta.coverage.clone(),
         })
     }
 }
@@ -172,6 +178,43 @@ mod tests {
     use super::*;
     use frogdb_persistence::rocks::staged::STAGED_REPLICATION_METADATA_FILE;
     use tempfile::tempdir;
+
+    /// The vector is staged with the offset it qualifies, so a crash between
+    /// the install and the reconcile recovers both halves or neither
+    /// (ruling R15). A stage that dropped it would leave the next boot replaying
+    /// the overshipped range over a keyspace that already holds it.
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn the_stage_carries_the_payloads_coverage_vector() {
+        let dir = tempdir().unwrap();
+        let stager = CheckpointStager::new(dir.path());
+        let incoming = populate_incoming(&stager).await;
+        let coverage = ShardCoverage::from_watermarks(vec![900, 0, 1_400]);
+        let mut meta = meta_with([0xAB; 32], 777);
+        meta.coverage = coverage.clone();
+
+        let outcome = stager
+            .commit(incoming, [0xAB; 32], &meta)
+            .await
+            .expect("stage");
+
+        assert_eq!(
+            outcome.coverage, coverage,
+            "the caller installs the pair, so the stager hands back both halves"
+        );
+        let staged = StagedCheckpoint::in_data_dir(dir.path());
+        let json = fs::read_to_string(staged.dir().join(STAGED_REPLICATION_METADATA_FILE))
+            .await
+            .unwrap();
+        let parsed: StagedReplicationMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.coverage, coverage);
+
+        // Metadata staged by a build that predates the vector reads back as no
+        // floors -- absent means "apply it", never "skip it".
+        let older = r#"{"replication_id":"repl-stager","replication_offset":777}"#;
+        let parsed: StagedReplicationMetadata = serde_json::from_str(older).unwrap();
+        assert_eq!(parsed.coverage, ShardCoverage::none());
+    }
 
     fn meta_with(checksum: [u8; 32], offset: u64) -> FullSyncMetadata {
         FullSyncMetadata {
@@ -238,6 +281,7 @@ mod tests {
             StagedOutcome {
                 replication_id: "repl-stager".to_string(),
                 replication_offset: 777,
+                coverage: ShardCoverage::none(),
             }
         );
 

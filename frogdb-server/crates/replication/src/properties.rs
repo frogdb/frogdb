@@ -817,6 +817,7 @@ impl LinkNode {
                     replication_id,
                     replication_offset: self.resolve_offset(offset),
                     checksum: None,
+                    coverage: Default::default(),
                 };
                 let path = ReplicationState::staged_metadata_path(self.dir.path());
                 if std::fs::write(&path, serde_json::to_vec(&meta).expect("serialize")).is_err() {
@@ -1353,6 +1354,7 @@ fn round_trip(node: &LinkNode, vehicle: Vehicle) -> Result<Carried, String> {
                 replication_id: before.replication_id.clone(),
                 replication_offset: before.offset_at_save,
                 checksum: None,
+                coverage: before.coverage_at_save.clone(),
             };
             // The trailer lands inside the db dir of the layout, which a bare
             // scratch data dir does not have yet (FM-PERSISTENCE-057).

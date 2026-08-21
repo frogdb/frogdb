@@ -698,6 +698,7 @@ impl Model for Promotion {
                     replication_id: pending.granted_id,
                     replication_offset: pending.granted_offset,
                     checksum: None,
+                    coverage: Default::default(),
                 };
                 sys.nodes[r].state.apply_staged_metadata(&meta);
                 sys.nodes[r].history = pending.payload;

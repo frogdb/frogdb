@@ -224,13 +224,21 @@ impl AppliedOffset {
     /// A zero seed is exempt: a node that has never held anything has nothing
     /// above its claim to be wrong about, and marking it recovered would refuse
     /// window grants for the rest of a fresh node's life.
-    pub(crate) fn recovered_over(applied: Arc<AtomicU64>) -> Self {
+    pub(crate) fn recovered_over(applied: Arc<AtomicU64>, coverage: ShardCoverage) -> Self {
         let provenance = if applied.load(Ordering::Acquire) == 0 {
             OffsetProvenance::Installed
         } else {
             OffsetProvenance::Recovered
         };
-        Self::over_with(applied, provenance)
+        let offsets = Self::over_with(applied, provenance);
+        // The floors that were in force at the last save point come back with
+        // the offset they were saved next to (ruling R15): a crash between an
+        // install and the reconcile leaves a keyspace holding effects above its
+        // claim, and the reconnect replays exactly the range they describe.
+        let ceiling = coverage.max();
+        *offsets.floors.lock() = coverage;
+        offsets.floor_ceiling.store(ceiling, Ordering::Release);
+        offsets
     }
 
     fn over_with(applied: Arc<AtomicU64>, provenance: OffsetProvenance) -> Self {
@@ -264,7 +272,13 @@ impl AppliedOffset {
     /// [`Self::detached`] positioned as a node that recovered `seed` from the
     /// persisted state rather than installing it (ruling R16).
     pub fn recovered(seed: u64) -> Self {
-        Self::recovered_over(Arc::new(AtomicU64::new(seed)))
+        Self::recovered_with(seed, ShardCoverage::none())
+    }
+
+    /// [`Self::recovered`] carrying the floors that were persisted next to the
+    /// seed (ruling R15).
+    pub fn recovered_with(seed: u64, coverage: ShardCoverage) -> Self {
+        Self::recovered_over(Arc::new(AtomicU64::new(seed)), coverage)
     }
 
     /// Advance by `n` stream bytes of this node's **own** writes — the primary
@@ -542,8 +556,13 @@ impl AppliedOffset {
         self.floors.lock().watermark(shard)
     }
 
-    /// The floors currently installed, for persistence and for tests.
+    /// The floors still **in force**, for persistence and for tests — empty once
+    /// the applied head has caught up with the ceiling, which is what a node in
+    /// steady state persists.
     pub fn floors(&self) -> ShardCoverage {
+        if !self.floors_in_force() {
+            return ShardCoverage::none();
+        }
         self.floors.lock().clone()
     }
 
@@ -917,7 +936,12 @@ impl ReplicaOffset {
     /// [`offset_at_save`]: ReplicationState::offset_at_save
     pub async fn reconcile_for_persist(&self) -> ReplicationState {
         let offset = self.applied.current();
+        // The floors are persisted with the offset they qualify, never without
+        // it: recovering an offset whose residue is undescribed is the very
+        // shape FM-REPLICATION-066 refuses window grants over.
+        let floors = self.applied.floors();
         let mut state = self.state.write();
+        state.coverage_at_save = floors;
         // Monotone bump as a `max`, not a compare-and-assign: the two forms of
         // the guard (`>` / `>=`) differ only in whether they redundantly
         // re-store the value the field already holds.
@@ -1421,6 +1445,7 @@ mod tests {
     // Full-sync coverage floors (FM-REPLICATION-066).
     // ---------------------------------------------------------------------
 
+    // FM-REPLICATION-066
     #[test]
     fn a_frame_at_or_below_its_floor_is_covered_by_it() {
         assert_eq!(
@@ -1439,6 +1464,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn an_absent_floor_never_covers_anything() {
         // The reading that costs a re-apply, never the one that drops a write.
@@ -1449,6 +1475,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn the_head_outranks_the_floor() {
         // Both cover it. The head's branch claims nothing; the floor's claims
@@ -1463,6 +1490,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn an_install_adopts_the_payloads_floors_with_its_offset() {
         let applied = AppliedOffset::detached(0);
@@ -1476,6 +1504,7 @@ mod tests {
         assert_eq!(applied.floor_ceiling(), 40, "the ceiling is max(Y_s)");
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn a_shard_the_vector_does_not_describe_has_no_floor() {
         let applied = AppliedOffset::detached(0);
@@ -1495,6 +1524,7 @@ mod tests {
         );
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn floors_retire_once_the_head_reaches_the_ceiling() {
         let applied = AppliedOffset::detached(0);
@@ -1514,6 +1544,7 @@ mod tests {
         assert_eq!(applied.floor_ceiling(), 0, "and the vector is retired");
     }
 
+    // FM-REPLICATION-066
     #[test]
     fn a_rewind_clears_the_floors() {
         let applied = AppliedOffset::detached(0);
@@ -1561,5 +1592,32 @@ mod tests {
         let offsets = ReplicaOffset::new(state_with_save(5_000), live, applied.clone());
         assert!(offsets.reset_to_payload(9_000, ShardCoverage::from_watermarks(vec![9_400])));
         assert_eq!(applied.provenance(), OffsetProvenance::Installed);
+    }
+
+    /// The save point persists the floors next to the offset they qualify, so a
+    /// restart recovers a claim and a description of what sits above it -- never
+    /// one without the other (ruling R15).
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn a_save_point_persists_the_floors_in_force() {
+        let state = state_with_save(0);
+        let offsets = ReplicaOffset::new(state.clone(), seeded(0), AppliedOffset::detached(0));
+        assert!(offsets.reset_to_payload(500, ShardCoverage::from_watermarks(vec![900, 700])));
+
+        let saved = offsets.reconcile_for_persist().await;
+        assert_eq!(saved.offset_at_save, 500);
+        assert_eq!(
+            saved.coverage_at_save,
+            ShardCoverage::from_watermarks(vec![900, 700])
+        );
+
+        // Once the head has caught up with the ceiling there is nothing above
+        // the claim left to describe, and the save point says so.
+        let stint = offsets.applied().begin_replica_stint();
+        assert_eq!(claim_now(&stint, 400), Claim::Granted);
+        stint.land();
+        let saved = offsets.reconcile_for_persist().await;
+        assert_eq!(saved.offset_at_save, 900);
+        assert_eq!(saved.coverage_at_save, ShardCoverage::none());
     }
 }

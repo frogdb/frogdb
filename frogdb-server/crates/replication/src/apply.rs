@@ -2216,6 +2216,7 @@ mod tests {
     /// the first one's effect is already in the payload. Without the floor the
     /// counter reaches 2 where the primary has 1, with both nodes reporting the
     /// same offset.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_frame_the_installed_payload_already_holds_is_not_re_applied() {
         let (stint, offsets, applied) = resyncable();
@@ -2250,6 +2251,7 @@ mod tests {
     /// frame is *above* the head, so its bytes must be claimed. A replica that
     /// stepped over it without claiming would stall below its own data and
     /// re-ask for a range it already holds.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_floor_skipped_frame_claims_its_bytes() {
         let (stint, offsets, applied) = resyncable();
@@ -2274,6 +2276,7 @@ mod tests {
 
     /// The boundary, inclusive on both sides: a frame ending exactly at `Y_s`
     /// is wholly inside the payload, and the very next byte is not.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn the_floor_boundary_is_inclusive() {
         let (stint, offsets, applied) = resyncable();
@@ -2292,6 +2295,7 @@ mod tests {
     /// Each frame is measured against **its own** shard's watermark. A single
     /// scalar bound would either skip shard 1's fresh write (loss) or re-apply
     /// shard 0's overshipped one (the defect).
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_frame_is_measured_against_its_own_shards_floor() {
         let (stint, offsets, applied) = resyncable();
@@ -2320,6 +2324,7 @@ mod tests {
     /// holds one half and not the other. Stepping over the half it holds while
     /// applying the half it does not is what makes the whole transaction land
     /// exactly once.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_torn_cross_shard_transaction_is_mended_exactly_once() {
         let (stint, offsets, applied) = resyncable();
@@ -2365,6 +2370,7 @@ mod tests {
     /// dispositions disagree about the frame's bytes — the head has already
     /// claimed them — so claiming them again would push this node's offset past
     /// the primary's.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn the_head_is_consulted_before_the_floor() {
         let (stint, offsets, applied) = resyncable();
@@ -2390,6 +2396,7 @@ mod tests {
     /// Floors belong to the dataset they arrived with. A second install
     /// replaces them wholesale — keeping them would step over frames whose
     /// effects the *new* payload does not contain.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn floors_are_replaced_at_the_next_install() {
         let (_stint, offsets, applied) = resyncable();
@@ -2404,6 +2411,7 @@ mod tests {
     /// Floor skips are counted, not silent — the same discipline FM-065's skips
     /// are held to, on a counter of their own because the two mean opposite
     /// things.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn floor_skips_are_counted_on_the_stats_and_the_node() {
         let (stint, offsets, applied) = resyncable();
