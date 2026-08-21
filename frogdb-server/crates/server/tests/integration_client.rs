@@ -396,6 +396,158 @@ async fn test_client_info() {
     server.shutdown().await;
 }
 
+/// Fetch `CLIENT LIST` from `observer` and return the row for `target_id`
+/// (Redis-style: one row per connection, `id=<n> ...` first field).
+async fn client_list_row(
+    observer: &mut crate::common::test_server::TestClient,
+    target_id: i64,
+) -> String {
+    let response = observer.command(&["CLIENT", "LIST"]).await;
+    let data = match response {
+        Response::Bulk(Some(data)) => data,
+        other => panic!("Expected bulk string response, got {:?}", other),
+    };
+    let list_str = String::from_utf8_lossy(&data);
+    let needle = format!("id={target_id} ");
+    list_str
+        .lines()
+        .find(|line| line.contains(&needle))
+        .unwrap_or_else(|| panic!("no CLIENT LIST row for id={target_id}, got:\n{list_str}"))
+        .to_string()
+}
+
+// FM-TXN parity: CLIENT INFO/LIST's `multi=`/`x` flag must reflect the real
+// per-connection MULTI state (was stale — `update_multi_state` was defined
+// but never wired to any transaction transition).
+#[tokio::test]
+async fn test_client_list_reports_multi_queue_state() {
+    let server = TestServer::start_standalone().await;
+    let mut client_a = server.connect().await;
+    let mut observer = server.connect().await;
+
+    let a_id = match client_a.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    // Before MULTI: Redis reports multi=-1 and no 'x' flag.
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=-1"),
+        "expected multi=-1 before MULTI: {row}"
+    );
+    assert!(
+        !row.contains("flags=x"),
+        "expected no MULTI flag before MULTI: {row}"
+    );
+
+    // Client A opens a transaction and queues two commands.
+    assert_eq!(
+        client_a.command(&["MULTI"]).await,
+        Response::Simple(Bytes::from("OK"))
+    );
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=0"),
+        "expected multi=0 right after MULTI: {row}"
+    );
+    assert!(
+        row.contains("flags=x"),
+        "expected MULTI flag after MULTI: {row}"
+    );
+
+    // Hash-tagged keys so both queued SETs colocate on the same internal
+    // shard (EXEC across shards is a cross-shard transaction, a different
+    // code path not under test here).
+    assert_eq!(
+        client_a.command(&["SET", "{txn}key1", "v1"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=1"),
+        "expected multi=1 after 1 queued cmd: {row}"
+    );
+
+    assert_eq!(
+        client_a.command(&["SET", "{txn}key2", "v2"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=2"),
+        "expected multi=2 after 2 queued cmds: {row}"
+    );
+    assert!(
+        row.contains("flags=x"),
+        "expected MULTI flag while queuing: {row}"
+    );
+
+    // EXEC clears the transaction state.
+    let response = client_a.command(&["EXEC"]).await;
+    assert!(matches!(response, Response::Array(_)));
+
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=-1"),
+        "expected multi=-1 after EXEC: {row}"
+    );
+    assert!(
+        !row.contains("flags=x"),
+        "expected no MULTI flag after EXEC: {row}"
+    );
+
+    server.shutdown().await;
+}
+
+// FM-TXN parity: DISCARD must also clear the CLIENT INFO/LIST MULTI state.
+#[tokio::test]
+async fn test_client_list_reports_discard_clears_multi_state() {
+    let server = TestServer::start_standalone().await;
+    let mut client_a = server.connect().await;
+    let mut observer = server.connect().await;
+
+    let a_id = match client_a.command(&["CLIENT", "ID"]).await {
+        Response::Integer(id) => id,
+        other => panic!("Expected integer, got {:?}", other),
+    };
+
+    assert_eq!(
+        client_a.command(&["MULTI"]).await,
+        Response::Simple(Bytes::from("OK"))
+    );
+    assert_eq!(
+        client_a.command(&["SET", "txkey", "v"]).await,
+        Response::Simple(Bytes::from("QUEUED"))
+    );
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=1"),
+        "expected multi=1 while queuing: {row}"
+    );
+    assert!(
+        row.contains("flags=x"),
+        "expected MULTI flag while queuing: {row}"
+    );
+
+    assert_eq!(
+        client_a.command(&["DISCARD"]).await,
+        Response::Simple(Bytes::from("OK"))
+    );
+
+    let row = client_list_row(&mut observer, a_id).await;
+    assert!(
+        row.contains("multi=-1"),
+        "expected multi=-1 after DISCARD: {row}"
+    );
+    assert!(
+        !row.contains("flags=x"),
+        "expected no MULTI flag after DISCARD: {row}"
+    );
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_client_kill_by_id() {
     let server = TestServer::start_standalone().await;

@@ -154,6 +154,10 @@ async fn handle_reset(ctx: &mut ConnCtx<'_>) -> Response {
     // `reset()`). lib_name/lib_ver are intentionally NOT cleared (Redis
     // semantics: client libraries retain their identity across RESET).
     client_registry.update_name(conn_id, None);
+    // `reset()` also clears any open MULTI (`ConnectionState::clear_transaction`,
+    // via `reset`'s `clear_transaction` call) — reflect that in CLIENT
+    // INFO/LIST at once rather than waiting on the next periodic stats sync.
+    client_registry.update_multi_state(conn_id, false, 0);
 
     Response::Simple(Bytes::from_static(b"RESET"))
 }

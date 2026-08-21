@@ -534,7 +534,20 @@ impl ConnectionHandler {
             // MULTI (not executed immediately). Blocking commands are also queued —
             // at EXEC time they run with timeout=0 (non-blocking), matching Redis.
             DispatchStage::TransactionQueue => {
-                match self.pre_dispatch_view().try_queue_in_transaction(cmd) {
+                let result = self.pre_dispatch_view().try_queue_in_transaction(cmd);
+                // Re-sync the queue length CLIENT INFO/LIST reports whenever a
+                // MULTI is still open afterward — covers both a successful
+                // queue (length grows) and a queue-time abort (unknown
+                // command, arity, ACL denial, cross-slot), which poisons the
+                // transaction without changing its queued count. A no-op
+                // outside a transaction.
+                if self.state.in_transaction() {
+                    let queue_len = self.state.queued_commands().map_or(0, <[_]>::len);
+                    self.admin
+                        .client_registry
+                        .update_multi_state(self.state.id, true, queue_len);
+                }
+                match result {
                     Some(responses) => StageOutcome::ShortCircuit(responses),
                     None => StageOutcome::Continue,
                 }

@@ -1700,8 +1700,10 @@ mod tests {
 
     // issue 09: `watch` in CLIENT INFO/LIST comes from this method, wired
     // from the periodic memory-sync path (see
-    // `ConnectionHandler::maybe_sync_stats`) rather than
-    // `update_multi_state`'s currently-unwired call site.
+    // `ConnectionHandler::maybe_sync_stats`) rather than from the transaction
+    // transitions `update_multi_state` is wired to (MULTI/queue/EXEC/
+    // DISCARD/RESET — see `transaction_conn_command.rs`, `transaction.rs`,
+    // `dispatch.rs`, and `connection_state_conn_command.rs`).
     #[test]
     fn test_update_watch_count() {
         let registry = Arc::new(ClientRegistry::new());

@@ -40,6 +40,14 @@ impl ConnectionHandler {
         let Some(summary) = self.state.take_transaction() else {
             return vec![Response::error("ERR EXEC without MULTI")];
         };
+        // `take_transaction` always clears the connection's MULTI state before
+        // `frogdb_txn::handle_exec` runs, whichever way EXEC ends up resolving
+        // (normal completion, EXECABORT, or a WATCH-triggered Nil array) — so
+        // one update here covers every outcome. Make it visible to CLIENT
+        // INFO/LIST at once, not just on the next periodic stats sync.
+        self.admin
+            .client_registry
+            .update_multi_state(self.state.id, false, 0);
         frogdb_txn::handle_exec(self, summary).await
     }
 

@@ -107,11 +107,18 @@ impl ConnectionCommand for MultiConnCommand {
         _args: &'a [Bytes],
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
+            // Copy the client registry out before taking the mutable
+            // `conn_state` borrow so the two disjoint uses do not overlap
+            // (mirrors AUTH/RESET).
+            let client_registry = ctx.client_registry;
             let state = ctx
                 .conn_state
                 .as_deref_mut()
                 .expect("MULTI is dispatched with a mutable conn_state");
             if state.begin_multi() {
+                // Make the new transaction visible to CLIENT INFO/LIST at
+                // once, not just on the next periodic stats sync.
+                client_registry.update_multi_state(state.id(), true, 0);
                 Response::ok()
             } else {
                 Response::error("ERR MULTI calls can not be nested")
@@ -214,15 +221,21 @@ impl ConnectionCommand for DiscardConnCommand {
         _args: &'a [Bytes],
     ) -> BoxFuture<'a, Response> {
         Box::pin(async move {
-            // Copy the shared metrics recorder out before taking the mutable
-            // `conn_state` borrow so the two disjoint uses do not overlap.
+            // Copy the shared metrics recorder and client registry out before
+            // taking the mutable `conn_state` borrow so the disjoint uses do
+            // not overlap.
             let recorder = ctx.metrics_recorder;
+            let client_registry = ctx.client_registry;
             let state = ctx
                 .conn_state
                 .as_deref_mut()
                 .expect("DISCARD is dispatched with a mutable conn_state");
+            let conn_id = state.id();
             match state.discard() {
                 Some(metrics) => {
+                    // Reflect the dropped transaction in CLIENT INFO/LIST at
+                    // once, not just on the next periodic stats sync.
+                    client_registry.update_multi_state(conn_id, false, 0);
                     // Record the `discarded` transaction metric. DISCARD is the
                     // only transaction outcome recorded outside
                     // `frogdb_txn::handle_exec` (it has no EXEC handler to run
