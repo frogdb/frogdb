@@ -202,11 +202,17 @@ pub async fn serve_command(rx: ShardRx<'_>, reply: Reply) -> Seen {
     }
 }
 
-/// Answer the export this shard is asked for.
+/// Answer the export this shard is asked for, claiming no coverage.
 pub async fn serve_export(rx: ShardRx<'_>, blob: Result<Vec<u8>, String>) {
+    serve_export_at(rx, blob, 0).await
+}
+
+/// Answer the export, reporting `watermark` as the offset of the last write
+/// this shard broadcast — the coverage claim that rides with the blob.
+pub async fn serve_export_at(rx: ShardRx<'_>, blob: Result<Vec<u8>, String>, watermark: u64) {
     match next(rx).await {
         ShardMessage::Replication(ReplicationMsg::ExportSnapshot { response_tx }) => {
-            let _ = response_tx.send(blob);
+            let _ = response_tx.send(blob.map(|blob| (blob, watermark)));
         }
         other => panic!("the export seam sent an unexpected message: {other:?}"),
     }

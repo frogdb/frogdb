@@ -154,6 +154,12 @@ impl FlushHold {
         if state.depth == 0 {
             return false;
         }
+        // The lapse rule runs here too, so a deadline that has already passed is
+        // reported as a breach whether or not anyone happened to observe it. The
+        // window between expiry and this call is one the engine was free to
+        // commit in; assuming it did not, merely because nothing sampled the
+        // hold, would be the one wrong guess this type cannot make.
+        self.still_held(&mut state);
         state.depth -= 1;
         let breached = state.breached;
         if state.depth == 0 {
@@ -313,5 +319,16 @@ mod tests {
         assert!(!hold.is_held());
         assert!(hold.release(), "first capture learns its floor is unsafe");
         assert!(hold.release(), "so does the second");
+    }
+
+    /// A lapse nobody sampled is still a lapse: the release itself applies the
+    /// deadline rule, so a capture cannot keep an unsafe floor just because the
+    /// engine happened to be idle while the hold expired.
+    #[test]
+    fn release_reports_a_breach_even_if_nothing_observed_the_lapse() {
+        let hold = FlushHold::new();
+        hold.arm(clock::now() - Duration::from_millis(1));
+        assert!(hold.release(), "the expired deadline is a breach");
+        assert!(!hold.is_held());
     }
 }

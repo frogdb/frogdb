@@ -30,6 +30,7 @@ use crate::BoxedStream;
 use crate::ReplicationBroadcaster;
 use crate::feed_gate::ReplicaFeedGate;
 use crate::frame::{CONTROL_SHARD, ReplconfCodec, ReplicationFrame, serialize_command_to_resp};
+use crate::fullsync::ShardCoverage;
 use crate::identity::ReplicationIdentity;
 use crate::offset_coordinator::OffsetCoordinator;
 use crate::replica_session::{ReplicaAnnouncement, SyncKind};
@@ -43,6 +44,84 @@ pub use promotion::{StintPlan, plan_primary_stint};
 pub use replay::{BacklogTtl, FullResyncReason, PartialSyncReplay, ReplayDecision, ReplayGrant};
 pub use ring_buffer::{BacklogConfig, BacklogGeometry, BacklogTruncated, ReplicationRingBuffer};
 
+/// What the drain reports back: how much of the stream the payload about to be
+/// cut already contains, plus the hold that keeps that claim true until the cut.
+///
+/// The coverage is the payload's per-shard watermark vector `Y_s` — the offset
+/// of the last write each shard broadcast at the moment its contribution was
+/// captured. The replica installs it as per-shard skip floors, so the
+/// `(snapshot_offset, current]` backlog replay that follows the handoff does not
+/// re-execute a write the payload already holds. The stream is verbatim and
+/// non-idempotent (`INCR`, `LPUSH`, `APPEND`), so a re-execution is silent
+/// divergence, not a harmless retry.
+pub struct FullSyncCapture {
+    /// Per-shard coverage watermarks for the payload this capture describes.
+    pub coverage: ShardCoverage,
+    /// Released after the cut. Opaque so this crate keeps no dependency on
+    /// `frogdb-persistence`; [`Self::release_hold`] is the only way to lift it.
+    pub hold: Option<Box<dyn CaptureHold>>,
+}
+
+/// The half of a [`FullSyncCapture`] the shard owner supplies: whatever keeps
+/// the storage engine from committing new writes into the payload between the
+/// drain and the cut.
+pub trait CaptureHold: Send + Sync {
+    /// Lift the hold on every shard. Returns the ids of the shards whose hold
+    /// lapsed before this call — those shards may have committed a write above
+    /// their watermark into the payload, so their claim can no longer be
+    /// trusted. Idempotent: a second call releases nothing and names nobody.
+    fn release(&self) -> Vec<u16>;
+}
+
+impl FullSyncCapture {
+    /// A capture that claims nothing — the payload carries no coverage, so the
+    /// replica replays the whole `(snapshot_offset, current]` window.
+    pub fn none() -> Self {
+        Self {
+            coverage: ShardCoverage::none(),
+            hold: None,
+        }
+    }
+
+    /// Lift the hold and reconcile the claim with what actually happened.
+    ///
+    /// A shard whose hold lapsed before the cut may have committed a write
+    /// above its watermark into the payload. Its watermark is therefore reset
+    /// to `0` — the "claim nothing" value — which costs that shard a replay of
+    /// the whole window (the pre-existing, safe-but-doubling behaviour) instead
+    /// of asserting a floor the payload may not honour. The element is zeroed
+    /// rather than dropped: the vector is positional, so removing one would
+    /// silently reassign every later shard's watermark.
+    ///
+    /// Called after the cut, on success *and* on failure: a failed cut still
+    /// has to let the flush engine go.
+    pub fn release_hold(&mut self) {
+        let Some(hold) = self.hold.take() else {
+            return;
+        };
+        let breached = hold.release();
+        if breached.is_empty() {
+            return;
+        }
+        let mut watermarks = self.coverage.as_slice().to_vec();
+        for shard in breached {
+            if let Some(watermark) = watermarks.get_mut(shard as usize) {
+                *watermark = 0;
+            }
+        }
+        self.coverage = ShardCoverage::from_watermarks(watermarks);
+    }
+}
+
+impl std::fmt::Debug for FullSyncCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FullSyncCapture")
+            .field("coverage", &self.coverage)
+            .field("hold", &self.hold.is_some())
+            .finish()
+    }
+}
+
 /// Injected work that must complete before a `FULLRESYNC` checkpoint is cut.
 ///
 /// The replication crate owns no shards, so it cannot itself make the primary's
@@ -54,8 +133,15 @@ pub use ring_buffer::{BacklogConfig, BacklogGeometry, BacklogTruncated, Replicat
 /// and nothing in the backlog can replay the writes the hook did not flush, so
 /// an incomplete drain would hand the replica a permanent, undetectable hole;
 /// dropping the connection instead costs one reconnect backoff (issue 05).
-pub type PreCheckpointHook =
-    Arc<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send + Sync>;
+///
+/// On success it reports a [`FullSyncCapture`]: how much of the stream the
+/// checkpoint about to be cut already contains, and the hold that keeps that
+/// true until `create_checkpoint` returns.
+pub type PreCheckpointHook = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = io::Result<FullSyncCapture>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Injected access to the primary's live keyspace, one serialized dataset blob
 /// per shard, used when a `FULLRESYNC` has no RocksDB to checkpoint.
@@ -66,9 +152,16 @@ pub type PreCheckpointHook =
 /// `create_checkpoint` when `persistence.enabled = false`. The blobs are opaque
 /// here — their framing belongs to `frogdb_persistence::serialization::dataset`,
 /// so shard-level types never cross into this crate.
+///
+/// It reports a [`ShardCoverage`] with the blobs, for the same reason the
+/// checkpoint path does: each blob is serialized inside its shard's own task,
+/// so the watermark read in that same message is the exact offset up to which
+/// that blob's writes are already applied. No hold is needed here — there is no
+/// flush engine between the shard and the payload, so the capture is atomic.
 pub type LiveSnapshotSource = Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = io::Result<Vec<Vec<u8>>>> + Send>>
-        + Send
+    dyn Fn() -> std::pin::Pin<
+            Box<dyn Future<Output = io::Result<(Vec<Vec<u8>>, ShardCoverage)>> + Send>,
+        > + Send
         + Sync,
 >;
 

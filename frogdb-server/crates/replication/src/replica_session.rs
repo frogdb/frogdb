@@ -50,9 +50,11 @@ use crate::feed_sequencer::{FeedAction, FeedInput, FeedSequencer};
 use crate::frame::{ReplconfCodec, ReplicationFrame};
 use crate::fullsync::{
     CheckpointChecksum, CheckpointFileHeader, CheckpointStreamCodec, FullSyncMetadata,
-    calculate_bytes_checksum, calculate_file_checksum, stream_file_to_writer,
+    ShardCoverage, calculate_bytes_checksum, calculate_file_checksum, stream_file_to_writer,
 };
-use crate::primary::{LAG_CHECK_INTERVAL, LagThresholds, PrimaryReplicationHandler};
+use crate::primary::{
+    FullSyncCapture, LAG_CHECK_INTERVAL, LagThresholds, PrimaryReplicationHandler,
+};
 use crate::session_machine::{
     BeginSync, Effect, LinkOutcome, ResumeSource, SessionEvent, SessionView, StepOutcome,
     SyncFailure, Transition, step,
@@ -720,6 +722,7 @@ impl ReplicaSession {
         checkpoint_path: &Path,
         replication_id: &str,
         replication_offset: u64,
+        coverage: ShardCoverage,
     ) -> io::Result<()> {
         // Enumerate all files in the checkpoint directory.
         let mut files: Vec<(String, u64, PathBuf)> = Vec::new();
@@ -785,7 +788,7 @@ impl ReplicaSession {
             checksum,
             replication_id: replication_id.to_string(),
             replication_offset,
-            coverage: crate::fullsync::ShardCoverage::none(),
+            coverage,
         };
         CheckpointStreamCodec::write_metadata(stream, &metadata).await?;
 
@@ -855,6 +858,7 @@ impl ReplicaSession {
         blobs: &[Vec<u8>],
         replication_id: &str,
         replication_offset: u64,
+        coverage: ShardCoverage,
     ) -> io::Result<()> {
         let total_size: u64 = blobs.iter().map(|b| b.len() as u64).sum();
         self.inner.write().sync_started_at = Some(clock::now());
@@ -895,7 +899,7 @@ impl ReplicaSession {
                 checksum: combined.finalize(),
                 replication_id: replication_id.to_string(),
                 replication_offset,
-                coverage: crate::fullsync::ShardCoverage::none(),
+                coverage,
             },
         )
         .await?;
@@ -1171,6 +1175,12 @@ struct SessionDriver<'a> {
     /// Produced by [`Effect::ExportLiveDataset`], consumed by
     /// [`Effect::SendLiveDataset`].
     blobs: Option<Vec<Vec<u8>>>,
+    /// What the payload about to be cut already covers, plus the hold that
+    /// keeps that true. Produced by [`Effect::DrainBeforeCheckpoint`] (or, with
+    /// no hold, by [`Effect::ExportLiveDataset`]); the hold is dropped by
+    /// [`Effect::CutCheckpoint`] and the coverage travels on into the trailer
+    /// written by [`Effect::SendCheckpoint`] / [`Effect::SendLiveDataset`].
+    capture: Option<FullSyncCapture>,
 }
 
 impl<'a> SessionDriver<'a> {
@@ -1207,6 +1217,7 @@ impl<'a> SessionDriver<'a> {
             sync,
             stream: Some(stream),
             blobs: None,
+            capture: None,
         }
     }
 
@@ -1317,14 +1328,24 @@ impl<'a> SessionDriver<'a> {
                 // the replica is missing them forever. So: drain first, cut
                 // second. Same contract the snapshot coordinator's pre-snapshot
                 // hook honours (issue 13).
+                //
+                // The drain also reports what the checkpoint will already
+                // contain (its per-shard coverage watermarks) and leaves the
+                // flush engines held until the cut, so a write landing in
+                // between cannot enter the payload *above* the offset the
+                // replica was granted and then be replayed a second time from
+                // the backlog.
                 let outcome = match self.handler.pre_checkpoint_hook() {
                     Some(drain) => match drain().await {
-                        Ok(()) => StepOutcome::Ok,
+                        Ok(capture) => {
+                            self.capture = Some(capture);
+                            StepOutcome::Ok
+                        }
                         Err(e) => StepOutcome::Failed(e.to_string()),
                     },
                     // The machine only asks for a drain when the view said one
                     // was wired; an unwiring in between is a drain that had
-                    // nothing to do.
+                    // nothing to do — and a payload that claims no coverage.
                     None => StepOutcome::Ok,
                 };
                 Ok(Next::Event(SessionEvent::Drained(outcome)))
@@ -1336,11 +1357,21 @@ impl<'a> SessionDriver<'a> {
                         "checkpoint source disappeared between the decision and the cut",
                     ));
                 };
-                // A join failure is the runtime going away under the session,
-                // not a checkpoint verdict, so it leaves the machine entirely.
                 let cut = tokio::task::spawn_blocking(move || rocks.create_checkpoint(&path))
                     .await
-                    .map_err(io::Error::other)?;
+                    .map_err(io::Error::other);
+                // The cut is done, so the flush engines go free — on success and
+                // on failure alike. Holding past this point would stall this
+                // node's `sync`-durability write acks for nothing. A shard whose
+                // hold lapsed before we got here loses its coverage claim, which
+                // is what `release_hold` reconciles.
+                if let Some(capture) = self.capture.as_mut() {
+                    capture.release_hold();
+                }
+                // A join failure is the runtime going away under the session,
+                // not a checkpoint verdict, so it leaves the machine entirely —
+                // after the release above.
+                let cut = cut?;
                 Ok(Next::Event(SessionEvent::CheckpointCut(match cut {
                     Ok(()) => StepOutcome::Ok,
                     Err(e) => StepOutcome::Failed(e.to_string()),
@@ -1364,8 +1395,16 @@ impl<'a> SessionDriver<'a> {
                     .stream
                     .as_mut()
                     .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                // The coverage the drain reported, reconciled at the release.
+                // A session that never drained claims nothing, which is the
+                // pre-existing behaviour: replay the whole window.
+                let coverage = self
+                    .capture
+                    .as_ref()
+                    .map(|c| c.coverage.clone())
+                    .unwrap_or_default();
                 session
-                    .stream_checkpoint(stream, handler, &path, &replication_id, offset)
+                    .stream_checkpoint(stream, handler, &path, &replication_id, offset, coverage)
                     .await?;
                 Ok(Next::Event(SessionEvent::PayloadSent))
             }
@@ -1374,7 +1413,13 @@ impl<'a> SessionDriver<'a> {
                 let Some(source) = self.handler.live_snapshot_source() else {
                     return Err(io::Error::other(SyncFailure::NoLiveSnapshotSource.reason()));
                 };
-                let blobs = source().await?;
+                let (blobs, coverage) = source().await?;
+                // No hold on this path: each blob is serialized inside its own
+                // shard's task, so its watermark is exact by construction.
+                self.capture = Some(FullSyncCapture {
+                    coverage,
+                    hold: None,
+                });
                 // Published before the phase moves on, exactly as they were when
                 // this ran inline, so `progress_percent` never reports the
                 // previous sync's totals against this one's transfer.
@@ -1401,8 +1446,13 @@ impl<'a> SessionDriver<'a> {
                     .stream
                     .as_mut()
                     .ok_or_else(|| io::Error::other("session stream already handed off"))?;
+                let coverage = self
+                    .capture
+                    .as_ref()
+                    .map(|c| c.coverage.clone())
+                    .unwrap_or_default();
                 session
-                    .stream_live_dataset(stream, handler, &blobs, &replication_id, offset)
+                    .stream_live_dataset(stream, handler, &blobs, &replication_id, offset, coverage)
                     .await?;
                 Ok(Next::Event(SessionEvent::PayloadSent))
             }
@@ -2072,7 +2122,7 @@ mod tests {
     fn with_live_dataset(handler: &Arc<PrimaryReplicationHandler>, blobs: Vec<Vec<u8>>) {
         handler.set_live_snapshot_source(Arc::new(move || {
             let blobs = blobs.clone();
-            Box::pin(async move { Ok(blobs) })
+            Box::pin(async move { Ok((blobs, ShardCoverage::none())) })
         }));
     }
 
@@ -3043,7 +3093,7 @@ mod tests {
                         ran_before_the_cut.store(!checkpoint_path.exists(), Ordering::SeqCst);
                     }
                     store.put(0, b"drained", b"v").unwrap();
-                    Ok(())
+                    Ok(FullSyncCapture::none())
                 })
             }));
         }
@@ -3234,6 +3284,213 @@ mod tests {
         assert_eq!(
             checkpoint.get(0, b"early").unwrap().as_deref(),
             Some(&b"v"[..])
+        );
+    }
+
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use tokio::io::{AsyncBufReadExt as _, BufReader};
+
+    /// A hold that records when it was released, so a test can prove the
+    /// release happens *after* the cut rather than merely happening.
+    struct RecordingHold {
+        released: Arc<AtomicUsize>,
+        /// Whether the checkpoint existed at release time.
+        cut_first: Arc<AtomicBool>,
+        checkpoint_path: PathBuf,
+        breached: Vec<u16>,
+    }
+
+    impl crate::primary::CaptureHold for RecordingHold {
+        fn release(&self) -> Vec<u16> {
+            if self.released.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.cut_first
+                    .store(self.checkpoint_path.exists(), Ordering::SeqCst);
+            }
+            self.breached.clone()
+        }
+    }
+
+    /// The drain's coverage vector reaches the replica: it is what the trailer
+    /// carries, so the replica can install per-shard skip floors and not
+    /// re-apply the writes the checkpoint already holds. And the hold that made
+    /// that claim true is released once the cut is done — the engines must not
+    /// stay pinned for the whole payload transfer.
+    #[tokio::test]
+    async fn the_drains_coverage_reaches_the_trailer_and_the_hold_is_released_after_the_cut() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(
+            RocksStore::open(&dir.path().join("rocks"), 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"k", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), Some(store), dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let session = tracker.register_replica(addr());
+        let checkpoint_path = dir.path().join(format!("fullsync_{}", session.id()));
+
+        let released = Arc::new(AtomicUsize::new(0));
+        let cut_first = Arc::new(AtomicBool::new(false));
+        {
+            let released = released.clone();
+            let cut_first = cut_first.clone();
+            let checkpoint_path = checkpoint_path.clone();
+            handler.set_pre_checkpoint_hook(Arc::new(move || {
+                let hold = RecordingHold {
+                    released: released.clone(),
+                    cut_first: cut_first.clone(),
+                    checkpoint_path: checkpoint_path.clone(),
+                    breached: Vec::new(),
+                };
+                Box::pin(async move {
+                    Ok(FullSyncCapture {
+                        coverage: ShardCoverage::from_watermarks(vec![7, 11]),
+                        hold: Some(Box::new(hold)),
+                    })
+                })
+            }));
+        }
+
+        let (client, server) = tokio::io::duplex(1024 * 1024);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
+        });
+
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+
+        // Envelope: header, file count, then each file's name/size/body.
+        let mut header = String::new();
+        reader.read_line(&mut header).await.unwrap();
+        assert_eq!(header.trim(), "$FROGDB_CHECKPOINT");
+        let mut count_line = String::new();
+        reader.read_line(&mut count_line).await.unwrap();
+        let file_count: usize = count_line.trim().parse().unwrap();
+        for _ in 0..file_count {
+            let mut discard = String::new();
+            reader.read_line(&mut discard).await.unwrap(); // $<name_len>
+            discard.clear();
+            reader.read_line(&mut discard).await.unwrap(); // <name>
+            let mut size_line = String::new();
+            reader.read_line(&mut size_line).await.unwrap();
+            let size: usize = size_line.trim().trim_start_matches('$').parse().unwrap();
+            let mut body = vec![0u8; size];
+            reader.read_exact(&mut body).await.unwrap();
+        }
+        let mut mlen_line = String::new();
+        reader.read_line(&mut mlen_line).await.unwrap();
+        let mlen: usize = mlen_line.trim().trim_start_matches('$').parse().unwrap();
+        let mut meta_buf = vec![0u8; mlen];
+        reader.read_exact(&mut meta_buf).await.unwrap();
+        let metadata = FullSyncMetadata::from_bytes(&meta_buf).expect("metadata parses");
+
+        assert_eq!(
+            metadata.coverage.as_slice(),
+            &[7, 11],
+            "the trailer carries the drain's per-shard coverage watermarks"
+        );
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            1,
+            "the hold is released exactly once, before the payload is streamed"
+        );
+        assert!(
+            cut_first.load(Ordering::SeqCst),
+            "the release must come after the cut — releasing earlier would let a \
+             write land in the checkpoint above the watermark the trailer claims"
+        );
+
+        drop(reader);
+        let _ = task.await.unwrap();
+    }
+
+    /// A cut that fails still lets the flush engines go. The hold is a hold, not
+    /// a latch: leaving it armed on the failure path would stall this node's
+    /// `sync`-durability write acks until the deadline for a sync that is
+    /// already over.
+    #[tokio::test]
+    async fn a_failed_cut_still_releases_the_hold() {
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(
+            RocksStore::open(&dir.path().join("rocks"), 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+        store.put(0, b"k", b"v").unwrap();
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler(tracker.clone(), Some(store), dir.path().to_path_buf());
+        let repl_id = handler.state.read().replication_id.clone();
+        let session = tracker.register_replica(addr());
+        let checkpoint_path = dir.path().join(format!("fullsync_{}", session.id()));
+        // RocksDB refuses to check a checkpoint into a path that already exists,
+        // so this is a cut that fails for a reason the session cannot control.
+        std::fs::create_dir_all(&checkpoint_path).unwrap();
+
+        let released = Arc::new(AtomicUsize::new(0));
+        {
+            let released = released.clone();
+            let checkpoint_path = checkpoint_path.clone();
+            handler.set_pre_checkpoint_hook(Arc::new(move || {
+                let hold = RecordingHold {
+                    released: released.clone(),
+                    cut_first: Arc::new(AtomicBool::new(false)),
+                    checkpoint_path: checkpoint_path.clone(),
+                    breached: Vec::new(),
+                };
+                Box::pin(async move {
+                    Ok(FullSyncCapture {
+                        coverage: ShardCoverage::from_watermarks(vec![7]),
+                        hold: Some(Box::new(hold)),
+                    })
+                })
+            }));
+        }
+
+        let (mut client, server) = tokio::io::duplex(64);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
+        });
+        let line = read_response_line(&mut client).await;
+        assert!(line.starts_with("+FULLRESYNC"), "got: {line:?}");
+        drop(client);
+        let _ = task.await.unwrap();
+
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            1,
+            "a failed cut releases the hold exactly as a successful one does"
         );
     }
 

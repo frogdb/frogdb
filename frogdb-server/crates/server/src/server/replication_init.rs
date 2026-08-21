@@ -176,7 +176,12 @@ pub(super) fn init_replication(
                 // its acknowledged writes would be missing from the replica's
                 // base dataset with nothing in the backlog to replay them, so
                 // the handshake is dropped and the replica retries.
-                super::checkpoint_quiesce::quiesce_shards_for_checkpoint(&senders)
+                //
+                // The full-sync variant of the quiesce: it also collects each
+                // shard's coverage watermark and holds its flush engine until
+                // the cut, so nothing above that watermark can slip into the
+                // checkpoint and be replayed a second time from the backlog.
+                super::checkpoint_quiesce::quiesce_shards_for_full_sync(&senders)
                     .await
                     .map_err(std::io::Error::other)
             })

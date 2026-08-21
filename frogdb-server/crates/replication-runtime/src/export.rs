@@ -14,6 +14,7 @@ use std::io;
 
 use frogdb_core::sync::Arc;
 use frogdb_core::{ReplicationMsg, ShardSender};
+use frogdb_replication::fullsync::ShardCoverage;
 use frogdb_replication::primary::LiveSnapshotSource;
 use tokio::sync::oneshot;
 
@@ -39,27 +40,38 @@ pub fn live_snapshot_source(shard_senders: Arc<Vec<ShardSender>>) -> LiveSnapsho
 /// a complete replacement of the receiving shard's keyspace, so a missing or
 /// partial one is silent data loss on the replica — strictly worse than a
 /// failed sync the replica retries.
-async fn export_live_dataset(senders: &[ShardSender]) -> io::Result<Vec<Vec<u8>>> {
+///
+/// **Each blob reports its own coverage watermark.** The shard reads the offset
+/// of the last write it broadcast in the same message that serializes the blob,
+/// with no `.await` between, so the watermark is exact for that blob: every
+/// write in it was broadcast at or below the watermark, and nothing above it has
+/// executed on that shard. The replica installs the vector as per-shard skip
+/// floors, so the `(offset, current]` backlog replay does not re-apply a write
+/// the blob already carries. No flush hold is needed on this path — there is no
+/// engine between the shard and the payload to hold.
+async fn export_live_dataset(senders: &[ShardSender]) -> io::Result<(Vec<Vec<u8>>, ShardCoverage)> {
     let mut blobs = Vec::with_capacity(senders.len());
+    let mut watermarks = Vec::with_capacity(senders.len());
     for (shard_id, sender) in senders.iter().enumerate() {
         let (response_tx, response_rx) = oneshot::channel();
         sender
             .send(ReplicationMsg::ExportSnapshot { response_tx })
             .await
             .map_err(|_| io::Error::other(format!("shard {shard_id} is gone")))?;
-        let blob = response_rx
+        let (blob, watermark) = response_rx
             .await
             .map_err(|_| io::Error::other(format!("shard {shard_id} dropped the export ack")))?
             .map_err(io::Error::other)?;
         blobs.push(blob);
+        watermarks.push(watermark);
     }
-    Ok(blobs)
+    Ok((blobs, ShardCoverage::from_watermarks(watermarks)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_shards::{drop_export_ack, fake_shards, serve_export};
+    use crate::test_shards::{drop_export_ack, fake_shards, serve_export, serve_export_at};
 
     // FM-REPLICATION-001
     /// One blob per shard, in shard order, is the whole contract: the trailer's
@@ -71,19 +83,24 @@ mod tests {
         let source = live_snapshot_source(shards.senders());
 
         let (exported, ()) = tokio::join!(source(), async {
-            serve_export(shards.shard(0), Ok(b"shard-zero".to_vec())).await;
+            serve_export_at(shards.shard(0), Ok(b"shard-zero".to_vec()), 7).await;
             // An empty shard still owes a blob: its slot is what tells the
             // receiving side that shard held nothing, rather than that the
             // dataset stopped early.
-            serve_export(shards.shard(1), Ok(Vec::new())).await;
-            serve_export(shards.shard(2), Ok(b"shard-two".to_vec())).await;
+            serve_export_at(shards.shard(1), Ok(Vec::new()), 0).await;
+            serve_export_at(shards.shard(2), Ok(b"shard-two".to_vec()), 11).await;
         });
 
-        let blobs = exported.expect("every shard answered, so the export succeeds");
+        let (blobs, coverage) = exported.expect("every shard answered, so the export succeeds");
         assert_eq!(
             blobs,
             vec![b"shard-zero".to_vec(), Vec::new(), b"shard-two".to_vec()],
             "the dataset is every shard's blob, in shard order"
+        );
+        assert_eq!(
+            coverage.as_slice(),
+            &[7, 0, 11],
+            "each blob's coverage watermark rides with it, in the same order"
         );
     }
 
