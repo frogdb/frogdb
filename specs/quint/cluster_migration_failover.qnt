@@ -1722,6 +1722,24 @@ module cluster_migration_failover {
         // ... leaving R9's arm as the entry's only exit.
         canClearSlotResidue(nodes, slots, migrations, residue, 1),
         inv_residue_has_an_effective_remover,
+        // Both halves of R9's strand test, as constructed views of this same state (the
+        // walk reaches the second one — seed 20260819 — but neither is a state the run
+        // test can *build*, since no action hands a node a stray copy).
+        //
+        // (a) The arm is not unconditional: give the entry's target the copy and the
+        // clear would newly strand it (the residue is the only object naming node 4),
+        // so the arm must refuse.
+        not(canClearSlotResidue(
+          nodes.set(4, { ...nodes.get(4), keys: nodes.get(4).keys.union(Set(1)) }),
+          slots, migrations, residue, 1)),
+        // (b) The arm is a *difference*, not an absolute "nobody holds an untracked
+        // copy": a detached primary sitting on a stray copy of the slot is untracked
+        // with and without this entry, so the entry — which cannot make that copy
+        // tracked and does not make it worse — still clears.
+        canClearSlotResidue(
+          nodes.set(2, { ...nodes.get(2), role: Primary, parent: None,
+                         keys: nodes.get(2).keys.union(Set(1)) }),
+          slots, migrations, residue, 1),
       })
       .then(clearSlotResidue(1))
       .expect(and {
@@ -2738,6 +2756,28 @@ module cluster_migration_failover {
         // Refused, so nothing was written and nothing was cancelled.
         nodes.get(3).stored_identity == None,
         nodes.get(3).role == Primary,
+      })
+  }
+
+  // R10, the other record-scoped forget: `CLUSTER RESET` deletes every *other* member's
+  // cell (Rust's `inner.nodes.clear()`), so their replicated run identity goes with the
+  // record, while the resetting node keeps its own cell — and its own identity, because
+  // a reset is not a restart.
+  run resetClearsEjectedIdentityTest: bool = {
+    init
+      .expect(and {
+        nodes.get(1).stored_identity != None,
+        nodes.get(3).stored_identity != None,
+        nodes.get(2).stored_identity != None,
+      })
+      .then(resetCluster(2))
+      .expect(and {
+        // Ejected: no cell, therefore no stored identity.
+        not(nodes.get(1).member), nodes.get(1).stored_identity == None,
+        not(nodes.get(3).member), nodes.get(3).stored_identity == None,
+        not(nodes.get(4).member), nodes.get(4).stored_identity == None,
+        // The resetting node keeps both.
+        nodes.get(2).member, nodes.get(2).stored_identity != None,
       })
   }
 

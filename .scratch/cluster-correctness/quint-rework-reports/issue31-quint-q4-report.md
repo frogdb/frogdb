@@ -434,3 +434,77 @@ mutation was applied and reverted by an exact string replacement from a scratch 
 
 Baseline, unmutated: `quint test` -> 84 passing, 0 failing; `just quint-check` green; the
 40-invariant walk at 500x20 clean on seeds 2 and 777.
+
+## Addendum — 2026-08-20 rows for the R8/R9/R10 rulings
+
+R8 (the failover successor is handed only the slots the demoted node physically held) and
+R9 (a: the failover re-home demands direct holding; b: a demoted-but-still-holding source
+gains a live-primary-free remover) landed in `9c8c0fc7`, amended by `0ef46ae7` (R9(b)'s
+strand test is a *difference*, not an absolute). R10 (the run-identity cell goes with the
+deleted node record) landed in `90f4fa85`.
+
+Detectors per row: `quint test` (all run tests); the 40-invariant unsteered walk at 500x20
+on seeds 2 and 777; and — new in this addendum — the **steered** lane
+(`just quint-run-steered`, `--step=stepSteered`) at 500x40 on the four-invariant issue-41
+family over seeds 2, 777 and 20260819.
+
+| Row | Mutation (single exact replacement) | Verdict | Evidence |
+|---|---|---|---|
+| R8-1 | `applyFailoverCommon` hands the successor the whole moved set again (`movedSlots` for `movedSlots.intersect(st.nodes.get(old).keys)`) | **CAUGHT-T + P** | `demotedTargetResidueRehomedInApplyTest` fails; steered walk red on `inv_no_serve_before_attestation` (seed 777); unsteered silent |
+| R9a-1 | drop the direct-holding guard from `retargetResidueOnDemotion`'s source arm (`if (true)`) | **CAUGHT-T + P** | `residueFollowsDemotedSourceTest` fails; steered walk red on `inv_source_keeps_its_copy_until_promotion_attested` (seed 777); unsteered silent |
+| R9b-1 | delete the rollback-completed arm (`false` for `slotMap.get(s) == Some(r.source)`) | **CAUGHT-T + P** | `rolledBackResidueClearableAfterSourceDemotionTest` fails; steered walk red on `inv_residue_has_an_effective_remover` (seed 20260819); unsteered silent |
+| R9b-2 | drop the strand conjunct entirely (`true` for the `untrackedHoldersOf` difference) — the arm clears even when the clear strands the target's copy | **CAUGHT-T** (was MISSED) | no detector fired at first pass; leg (a) added to `rolledBackResidueClearableAfterSourceDemotionTest`, row now dies deterministically |
+| R9b-3 | make the strand test absolute again (drop the `.exclude(...)` of the pre-state holders) | **CAUGHT-T + P** (was CAUGHT-P only) | steered walk red on `inv_residue_has_an_effective_remover` (seed 20260819) — this is the live counterexample that forced `0ef46ae7`; leg (b) added to the same test, row now also dies deterministically |
+| R10-1 | `removeNode`'s tombstone keeps the identity cell (drop `stored_identity: None`) | **CAUGHT-T** | `demotionAgainstAbsentCellAfterForgetTest` fails; both walks silent |
+| R10-2 | `resetCluster` keeps each ejected member's identity (`stored_identity: acc.get(m).stored_identity`) | **CAUGHT-T** (was MISSED) | no detector fired at first pass; `resetClearsEjectedIdentityTest` added, row now dies deterministically |
+
+### What the two first-pass misses were, and what closed them
+
+Both misses were the same shape: a *guard direction* no run test constrained from the
+refusing side.
+
+- **R9b-2** — every existing test exercised the arm in a state where clearing stranded
+  nothing, so weakening the guard to `true` changed no test outcome. The new leg (a) is a
+  constructed view of the test's own state with the entry's target holding the copy: the
+  residue is the only object naming that node, so the clear would newly strand it and the
+  arm must refuse. It is a constructed view because no action hands a node a stray copy —
+  `reapSlots` is the model's only keyspace deleter and nothing grants an untracked one.
+- **R9b-3** — the absolute form is *stricter*, so no positive test noticed. The steered walk
+  did (seed 20260819), which is how the defect was found in the first place; leg (b) pins
+  it deterministically with a detached primary sitting on a stray copy — untracked with and
+  without the entry, therefore none of the entry's business.
+- **R10-2** — `resetCluster`'s clearing had no test at all; `demotionAgainstAbsentCellAfterForgetTest`
+  only walks `removeNode`. `resetClearsEjectedIdentityTest` asserts both directions: the
+  ejected members lose cell *and* identity, the resetting node keeps both (a reset is not a
+  restart).
+
+### The steered lane changes the picture for this family
+
+Three of the seven rows are CAUGHT-P as well as CAUGHT-T, all three on the issue-41 family
+and all three silent under the unsteered walk at the same-or-larger budget. That is the
+first time a walk detector has fired for these mechanisms — the previous addendum recorded
+eight of nine rows as CAUGHT-T with a silent walk. The steering is now an opt-in lane
+(`just quint-run-steered`, nightly `walk-steered` job); the PR-lane walk still uses the flat
+`step`, so these rows still need their deterministic tests.
+
+### Repro and hygiene
+
+Same commands as the previous addenda, scoped to `cluster_migration_failover.qnt`. Every
+mutation was applied and reverted by an exact single-occurrence string replacement from a
+scratch backup; `cmp` reports byte-identity against the backup for all three migration
+`.qnt` files after every row, and `git status --short -- specs/quint/` is clean.
+
+One hygiene note for concurrent work in a shared tree: a mutated file was picked up by
+another agent's `git add` during the run and had to be unstaged (`git restore --staged`)
+after the battery. Worktree content was unaffected — the `cmp` check is what caught it.
+
+### Counts after `0ef46ae7`
+
+| | 2026-08-20 (`cc4a917b`) | 2026-08-20 (`0ef46ae7` + this addendum) |
+|---|---|---|
+| `val inv_*` (auto-discovered) | 40 | 40 |
+| run tests, migration model | 84 | **87** |
+
+Baseline, unmutated: `quint test` -> 87 passing, 0 failing; `just quint-check` and
+`just quint-run` green; `just quint-run-steered` **0 red / 160 cells** (40 invariants x
+seeds 2/777/12345/20260819 at 500x40).

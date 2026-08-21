@@ -183,4 +183,7 @@ diverges from the doc on exactly that conjunct, noted at `canClearSlotResidue`.
       Steered walk after R8/R9: **0/16 red** on the four-invariant family (was 9/16), and
       **0 red / 160 cells** for the whole 40-invariant set at the same budget.
 - [x] Battery row(s) added for the chosen fix's guard/effect; M37 rows re-checked
-      against the fixed claim semantics (`cc4a917b` + Q4 report addendum)
+      against the fixed claim semantics (`cc4a917b` + Q4 report addendum). R8/R9/R10 rows
+      (R8-1, R9a-1, R9b-1/2/3, R10-1/2) are in the second Q4 addendum: all seven CAUGHT-T,
+      three of them CAUGHT-P on the steered lane, and the two first-pass misses closed with
+      new deterministic legs rather than exemptions.
