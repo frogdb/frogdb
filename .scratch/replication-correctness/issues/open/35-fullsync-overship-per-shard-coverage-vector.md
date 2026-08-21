@@ -101,9 +101,20 @@ One mechanism, both payload paths, receiver-authoritative like issue 34:
       (`a_trailer_without_the_coverage_field_is_refused`).
 - [x] Flush hold between drain-ack and cut on the checkpoint path, bound documented —
       →6e26ca0b (`FlushHold`, `frogdb-persistence`) and →84fd1154 (`CaptureHold` on the
-      session). `FULL_SYNC_HOLD = 10s`; a shard whose hold lapses reports `Y_s = 0`,
-      which is no floor at all rather than a wrong one
-      (`a_breached_shards_watermark_is_zeroed`).
+      session). `FULL_SYNC_HOLD = 10s`. **Amended 2026-08-21: breach aborts the sync
+      (user ruling).** A shard whose hold lapses before the cut fails the whole full
+      sync — `release_hold` names the breached shards and downgrades nothing, the driver
+      turns that into `SessionEvent::CoverageBreached` →
+      `SyncFailure::CoverageHoldBreached`, so the payload and its trailer are never
+      written, the link drops and the replica retries from scratch (the staged directory
+      is owned first, so the abort cleans it). The landed behaviour — report `Y_s = 0`
+      for that shard and ship anyway — was wrong: `0` is not a weaker floor but *no*
+      floor, so that shard's overshipped range re-executes and D1's silent divergence
+      returns in the slow-cut shape, invisible to both nodes. `0` stays representable on
+      the wire for `serde(default)` reads; no sender ever produces one this way.
+      (`a_breached_hold_names_its_shard_and_downgrades_no_claim`,
+      `a_breached_coverage_hold_abandons_the_sync_and_owns_the_directory`,
+      `a_breached_hold_aborts_the_sync`.)
 - [x] Per-shard floors extend `covers()`; counted skips; group-mend semantics specced
       and forced — →e0be6a90. `frame_disposition` is one pure total predicate ordering
       head-then-floor; `ConsumeStats.floor_skipped` per stint and
