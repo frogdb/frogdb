@@ -3315,6 +3315,7 @@ mod tests {
     /// re-apply the writes the checkpoint already holds. And the hold that made
     /// that claim true is released once the cut is done — the engines must not
     /// stay pinned for the whole payload transfer.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn the_drains_coverage_reaches_the_trailer_and_the_hold_is_released_after_the_cut() {
         let dir = TempDir::new().unwrap();
@@ -3426,6 +3427,7 @@ mod tests {
     /// a latch: leaving it armed on the failure path would stall this node's
     /// `sync`-durability write acks until the deadline for a sync that is
     /// already over.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_failed_cut_still_releases_the_hold() {
         let dir = TempDir::new().unwrap();
@@ -3492,6 +3494,250 @@ mod tests {
             1,
             "a failed cut releases the hold exactly as a successful one does"
         );
+    }
+
+    /// The acceptance test for the defect this row closes, end to end over the
+    /// wire, with a **non-idempotent** write pinned inside the capture→cut
+    /// window: `INCR n` executes after `snapshot_offset` was captured and before
+    /// the checkpoint is cut, so its effect is in the payload the replica
+    /// installs *and* its frame is inside the `(snapshot_offset, current]`
+    /// range the handoff replays out of the backlog.
+    ///
+    /// Before FM-REPLICATION-066 the replica had nothing to tell it the payload
+    /// already held that effect, so it re-executed the `INCR` and its counter
+    /// reached 2 where the primary's is 1 — with both nodes reporting the same
+    /// offset, which is what made the divergence silent. The trailer's coverage
+    /// vector describes the pinned write's offset exactly, and the frame is
+    /// skipped against its shard's floor instead.
+    ///
+    /// Everything between the two halves is real: the primary's own session
+    /// driver cuts the checkpoint, writes the trailer and replays the backlog
+    /// onto the socket, and the frames come back off that socket into the
+    /// replica's own consume loop.
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn a_write_pinned_in_the_capture_to_cut_window_lands_exactly_once() {
+        use crate::ReplicationBroadcaster;
+        use crate::apply::{ApplyError, ReplicaApplier, StreamedFrame, consume_frames};
+        use crate::frame::ReplicationFrameCodec;
+        use crate::replica::AppliedOffset;
+        use crate::replica::offset::ReplicaOffset;
+        use frogdb_protocol::ParsedCommand;
+        use std::sync::atomic::AtomicI64;
+        use tokio::sync::mpsc;
+        use tokio_util::codec::Decoder;
+
+        /// The replica's keyspace, reduced to the one counter this test is
+        /// about. `INCR` is the whole point: re-applying it is not a no-op.
+        #[derive(Clone, Default)]
+        struct Counter(Arc<AtomicI64>);
+
+        impl ReplicaApplier for Counter {
+            async fn apply_group(
+                &self,
+                _shard_id: u16,
+                commands: Vec<ParsedCommand>,
+            ) -> Result<(), ApplyError> {
+                for command in commands {
+                    assert_eq!(
+                        String::from_utf8_lossy(&command.name).to_uppercase(),
+                        "INCR"
+                    );
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(())
+            }
+
+            async fn apply_control(&self, _command: ParsedCommand) -> Result<(), ApplyError> {
+                Ok(())
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let store = Arc::new(
+            RocksStore::open(&dir.path().join("rocks"), 1, &RocksConfig::default())
+                .expect("open rocksdb for test"),
+        );
+
+        let tracker = Arc::new(ReplicationTrackerImpl::new());
+        let handler = make_handler_with_backlog(
+            tracker.clone(),
+            Some(store.clone()),
+            dir.path().to_path_buf(),
+        );
+        let repl_id = handler.state.read().replication_id.clone();
+        let session = tracker.register_replica(addr());
+
+        // The pin. The hook runs where the real drain runs — after the grant's
+        // offset is captured, before the cut — so a write executed here is
+        // exactly the shape this row is about: broadcast (so it is in the
+        // backlog window the handoff replays) *and* flushed into the store the
+        // checkpoint is about to be cut from (so the payload holds its effect).
+        let pinned = Arc::new(AtomicU64::new(0));
+        {
+            let handler_for_hook = handler.clone();
+            let store = store.clone();
+            let pinned = pinned.clone();
+            handler.set_pre_checkpoint_hook(Arc::new(move || {
+                let handler = handler_for_hook.clone();
+                let store = store.clone();
+                let pinned = pinned.clone();
+                Box::pin(async move {
+                    let after =
+                        handler.broadcast_command_on_shard(0, "INCR", &[Bytes::from_static(b"n")]);
+                    store.put(0, b"n", b"1").unwrap();
+                    pinned.store(after, Ordering::SeqCst);
+                    Ok(FullSyncCapture {
+                        coverage: ShardCoverage::from_watermarks(vec![after]),
+                        hold: None,
+                    })
+                })
+            }));
+        }
+
+        let (client, server) = tokio::io::duplex(1024 * 1024);
+        let task = tokio::spawn({
+            let session = session.clone();
+            let handler = handler.clone();
+            let repl_id = repl_id.clone();
+            let server: BoxedStream = Box::new(server);
+            async move {
+                SessionDriver::new(
+                    session,
+                    server,
+                    SyncKind::Full {
+                        replication_id: repl_id,
+                    },
+                    &handler,
+                )
+                .drive()
+                .await
+            }
+        });
+
+        let mut reader = BufReader::new(client);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let granted: u64 = line
+            .trim()
+            .split_whitespace()
+            .nth(2)
+            .expect("+FULLRESYNC <id> <offset>")
+            .parse()
+            .expect("offset parses");
+
+        // Envelope, then the trailer.
+        let mut header = String::new();
+        reader.read_line(&mut header).await.unwrap();
+        assert_eq!(header.trim(), "$FROGDB_CHECKPOINT");
+        let mut count_line = String::new();
+        reader.read_line(&mut count_line).await.unwrap();
+        let file_count: usize = count_line.trim().parse().unwrap();
+        for _ in 0..file_count {
+            let mut discard = String::new();
+            reader.read_line(&mut discard).await.unwrap(); // $<name_len>
+            discard.clear();
+            reader.read_line(&mut discard).await.unwrap(); // <name>
+            let mut size_line = String::new();
+            reader.read_line(&mut size_line).await.unwrap();
+            let size: usize = size_line.trim().trim_start_matches('$').parse().unwrap();
+            let mut body = vec![0u8; size];
+            reader.read_exact(&mut body).await.unwrap();
+        }
+        let mut mlen_line = String::new();
+        reader.read_line(&mut mlen_line).await.unwrap();
+        let mlen: usize = mlen_line.trim().trim_start_matches('$').parse().unwrap();
+        let mut meta_buf = vec![0u8; mlen];
+        reader.read_exact(&mut meta_buf).await.unwrap();
+        let metadata = FullSyncMetadata::from_bytes(&meta_buf).expect("metadata parses");
+        let mut crlf = [0u8; 2];
+        reader.read_exact(&mut crlf).await.unwrap();
+        assert_eq!(&crlf, b"\r\n", "the trailer closes the envelope");
+
+        let pinned_at = pinned.load(Ordering::SeqCst);
+        assert_eq!(
+            metadata.replication_offset, granted,
+            "the trailer's offset is the offset the grant named"
+        );
+        assert!(
+            pinned_at > granted,
+            "the pinned write is above the grant: {pinned_at} <= {granted}"
+        );
+        assert_eq!(
+            metadata.coverage.as_slice(),
+            &[pinned_at],
+            "and the vector says how far above -- exactly, per shard"
+        );
+
+        // The replica installs the payload: its keyspace holds `n = 1`, its
+        // claim is the granted offset, and its floors are the vector.
+        let counter = Counter(Arc::new(AtomicI64::new(1)));
+        let applied = AppliedOffset::detached(0);
+        let offsets = ReplicaOffset::new(
+            Arc::new(RwLock::new(ReplicationState::new())),
+            Arc::new(AtomicU64::new(0)),
+            applied.clone(),
+        );
+        assert!(offsets.reset_to_payload(metadata.replication_offset, metadata.coverage.clone()));
+        let stint = applied.begin_replica_stint();
+
+        // The handoff replay comes off the same socket the payload did.
+        let mut codec = ReplicationFrameCodec::new();
+        let mut buf = BytesMut::new();
+        let mut frames = Vec::new();
+        while frames.is_empty() {
+            while let Some(frame) = codec.decode(&mut buf).unwrap() {
+                frames.push(frame);
+            }
+            if !frames.is_empty() {
+                break;
+            }
+            let read = reader.read_buf(&mut buf).await.unwrap();
+            assert!(read > 0, "stream closed before the handoff replay arrived");
+        }
+        assert_eq!(frames.len(), 1, "the replayed window holds the pinned INCR");
+        assert_eq!(frames[0].sequence, pinned_at);
+
+        let (tx, rx) = mpsc::channel(8);
+        let epoch = applied.epoch();
+        for frame in frames {
+            tx.send(StreamedFrame::new(epoch, frame)).await.unwrap();
+        }
+        drop(tx);
+        let stats = consume_frames(
+            rx,
+            counter.clone(),
+            Arc::new(AtomicBool::new(true)),
+            None,
+            stint,
+            Arc::new(crate::apply::ReplicaTxnBound::default()),
+        )
+        .await;
+
+        assert_eq!(
+            counter.0.load(Ordering::SeqCst),
+            1,
+            "the pinned INCR is in the payload, so replaying it must not run it \
+             again -- 2 here is the silent divergence this row closes"
+        );
+        assert_eq!(
+            stats.floor_skipped, 1,
+            "and the skip is counted, not silent"
+        );
+        assert_eq!(stats.frames_processed, 0);
+        assert_eq!(
+            applied.current(),
+            pinned_at,
+            "the skip still claims the frame's bytes, so the head tracks the primary"
+        );
+        assert_eq!(
+            applied.floors(),
+            ShardCoverage::none(),
+            "the head reached the ceiling, so the floors retire with nothing left above the claim"
+        );
+
+        drop(reader);
+        let _ = task.await;
     }
 
     #[test]

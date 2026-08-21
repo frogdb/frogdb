@@ -417,6 +417,7 @@ mod tests {
     /// order, and leaves every shard's flush engine held until the capture is
     /// released — the two things the `BGSAVE` entry point deliberately does not
     /// do.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn full_sync_quiesce_reports_one_watermark_per_shard_and_holds_the_engines() {
         let holds: Vec<_> = (0..3).map(|_| FlushHold::shared()).collect();
@@ -452,6 +453,7 @@ mod tests {
     /// above its watermark into the payload, so its claim is reset to `0` —
     /// claiming nothing — while the other shards keep theirs. The element is
     /// zeroed, never dropped: the vector is positional.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_breached_shards_watermark_is_zeroed() {
         let held = FlushHold::shared();
@@ -478,6 +480,7 @@ mod tests {
 
     /// `BGSAVE` arms nothing: the drain is the whole contract there, and a
     /// recovery artifact that picks up a few extra writes is still correct.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn the_bgsave_entry_point_never_arms_a_hold() {
         let hold = FlushHold::shared();

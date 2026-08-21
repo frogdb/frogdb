@@ -2015,6 +2015,7 @@ mod tests {
     /// The watermark folds in every broadcast as a **maximum**, and the WAL
     /// drain ack reports exactly that value — not the broadcaster's node-wide
     /// offset, which can sit above this shard's last frame.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn the_wal_drain_ack_reports_the_shards_max_broadcast_offset() {
         // Deliberately not monotonic: the last frame is assigned a *lower*
@@ -2055,6 +2056,7 @@ mod tests {
     /// A `FULLRESYNC` drain arms the shard's flush hold, in the same message as
     /// the watermark it reports, and hands the coordinator the handle it will
     /// release the hold through after the checkpoint cut.
+    // FM-REPLICATION-066
     #[tokio::test]
     async fn a_fullresync_drain_arms_the_flush_hold_and_hands_back_the_handle() {
         let bc = Arc::new(ScriptedBroadcaster::new([4]));

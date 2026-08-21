@@ -2035,8 +2035,11 @@ mod tests {
     /// The other side of the boundary, and the limit of what this rule claims:
     /// coverage is of the *whole* span. A frame ending above the head is applied
     /// even when its span starts below one — the replica cannot tell from an
-    /// offset that part of it is already in its keyspace, and the overship that
-    /// produces that shape is TR-REPLICATION-034's to remove, not this rule's.
+    /// offset that part of it is already in its keyspace. The one shape that
+    /// really does produce a frame whose effect is already held above the head
+    /// — the full-sync overship — is not this rule's to catch: it is described
+    /// exactly by the payload's per-shard coverage vector and skipped against
+    /// the floors instead (FM-REPLICATION-066).
     // FM-REPLICATION-065
     #[tokio::test]
     async fn a_frame_ending_above_the_applied_head_is_applied() {
