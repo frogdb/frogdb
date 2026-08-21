@@ -6118,7 +6118,7 @@ Field writers (every field has exactly one writing transition):
 | attempts_reset_used | `BeginSlotMigration` (false); re-issue arm (sets true when it resets `attempts`) | one-shot reset latch; V6-M4 |
 | observations | `ObserveMigration` (+1); **reset by a `ReportMigrationIngest` that advances `target_ingested_pos` to a value still below a *set* `drained_pos`** (N-M6, narrowed per V4-M2/V5-M1 — no reset while `drained_pos` is unset); **reset by a `ReportTargetReplicaAck` that advances `target_replicas_acked_pos` to a value still below a *set* `drained_pos`** (V8-M2 — same toward-the-token rule); **reset by `ConfirmSlotHandoffDrained`'s apply** (V7-C3 — the seal switches the applicable bound from `preconfirm_observations` to the smaller `draining_observations`, a phase change in all but name; carrying pre-seal ticks across it would abort every lawful drain longer than the small bound at stock defaults); and by phase change | replicated; survives leader change |
 | last_observation | `ObserveMigration`; **cleared by `ConfirmSlotHandoffDrained`'s apply** (with the counter — V7-C3) | dedup state for the counter (N-M5) |
-| handoff_residue entry | `CompleteSlotMigration` (creates); `ReportSlotPromoted` (sets promoted); `ConfirmSlotDeleted` (removes); membership prune (sets `source_gone` on source-departure, sets `target_gone` on target-departure that unassigns the slot, re-targets on target failover — V5-M2/V7-C2/V7-M6); demotion transitions (re-target `source`/`target` to the admission-validated successor — V6-C3/V9-C1); `RetargetSlotResidue` (re-writes `source` to the shard's current primary — V8-C4; **source arm only** — the V9-M1 target arm is removed, V10-C4: target re-home is exclusively the demotion transitions' in-apply re-target); `AssignSlots` rollback arm (removes; clears `target_gone` when re-homing an orphaned `promoted == true` entry — V7-M5/M6); `ClearSlotResidue` (removes — V7; `promoted == true` only, V9-M4); `ResetCluster` (clears map) | replicated, snapshot-carried |
+| handoff_residue entry | `CompleteSlotMigration` (creates); `ReportSlotPromoted` (sets promoted); `ConfirmSlotDeleted` (removes); membership prune (sets `source_gone` on source-departure, sets `target_gone` on target-departure that unassigns the slot, re-targets on target failover — V5-M2/V7-C2/V7-M6); demotion transitions (re-target `source`/`target` to the admission-validated successor — V6-C3/V9-C1); `RetargetSlotResidue` (re-writes `source` to the shard's current primary — V8-C4; **source arm only** — the V9-M1 target arm is removed, V10-C4: target re-home is exclusively the demotion transitions' in-apply re-target); `AssignSlots` rollback arm (removes; clears `target_gone` when re-homing an orphaned `promoted == true` entry — V7-M5/M6); `ClearSlotResidue` (removes — V7; `promoted == true`, V9-M4, **widened by campaign ruling R9, 2026-08-20 — see the amendment at the end of this document**: also admissible for a rolled-back entry whose clear strands no holder); `ResetCluster` (clears map) | replicated, snapshot-carried |
 
 The four `NodeInfo` fields this design adds (V14, **re-based on `primary_id`
 writes in V15**; `parent_seq` added in V16) have several declared writers each, so
@@ -6477,7 +6477,7 @@ Applied to every fail-closed rule in this design:
 | **Gate 3 (d)'s node-local refusals** (`upstream-validity`, `shard-relationship`, `fence`, `ordering`, `membership`) | up and serving (or converged to the role the refusal implies); un-fenced on every terminal arm | all of it | already covered: each arm's error names the lawful path, and §3's exit list is checked for reply tokens by the rule above |
 | **All-replicas-unsynced escape** (§5) | up; slots held; writes refused for the affected shard | all of it | already has its row: LOCKED TR-CLUSTER-020 `CLUSTER FAILOVER force: true`, cited at the escape |
 | **Plane-split self-fence** (§3 demotion-disposition row) | up; answering `-TRYAGAIN` for the affected slots | all of it | already has its row, with the stated caution that these are guidance for a bug state, not verified-lossless rules |
-| **`handoff_residue` escapes** (§7) | up and serving; the residue entry is replicated state, not a node state | all of it | already covered by the residue lifecycle rules: `RetargetSlotResidue`, the `AssignSlots` rollback arm, and `ClearSlotResidue` (`promoted == true` only) — each a replicated transition proposed at a serving node |
+| **`handoff_residue` escapes** (§7) | up and serving; the residue entry is replicated state, not a node state | all of it | already covered by the residue lifecycle rules: `RetargetSlotResidue`, the `AssignSlots` rollback arm, and `ClearSlotResidue` (`promoted == true`, or the R9-widened rolled-back shape — see the 2026-08-20 amendment at the end of this document) — each a replicated transition proposed at a serving node |
 
 **Four** rules in the table are **down**-state rules, and they fail the
 recovery-row rule's (2) in **different** ways — which is why each was added
@@ -12553,3 +12553,29 @@ Every touched row gets an explicit verdict in the spec change; summary:
   dead — the two orderings become distinguishable by the client, which is the
   commutation revision 20 asserted at this arm over state alone
   (`membership_refusal_and_removal_of_self_answer_the_client_once`, V21-M2).
+
+## Amendment — 2026-08-20 (campaign ruling R9: `ClearSlotResidue` admits the rolled-back shape)
+
+The quint completeness campaign's steered walk (ruling ledger:
+`../formal-spec/2026-08-19-quint-completeness-campaign.md`, rulings R8/R9) found a
+permanent wedge this document's `ClearSlotResidue` verb cannot clear: a source demoted
+*while still holding* the slot's copy keeps the residue claim (correct — the claim
+follows the physical holder), but every remover disjunct then dies — `FailPromotion`
+requires a live primary, the re-target guard correctly refuses a derivative holder, and
+`ClearSlotResidue`'s unconditional `entry.promoted == true` (V9-M4) refuses a rolled-back
+entry outright. Trace: `completeMigration` → `failPromotion` → `setRole` demoting the
+holding source (steered seed 2; Q4 battery addendum).
+
+**Ruling R9(b)**: `ClearSlotResidue` is additionally admissible for a **rolled-back**
+entry — the slot map assigns the slot to `entry.source` again — provided the clear
+strands no holder: the set of untracked holders *after* the clear, minus the set
+untracked *before* it, is empty (the difference form; the absolute form was killed by
+the steered walk — an unrelated stale copy elsewhere wedged the entry permanently,
+steered seed 20260819). `promoted == true` remains the only other admission; the
+"no effective automatic remover" escape admission this document sketches elsewhere is
+still **not** adopted.
+
+Model: `canClearSlotResidue` in `specs/quint/cluster_migration_failover_logic.qnt`
+(commits `9c8c0fc7` + `0ef46ae7`), forced by `inv_residue_has_an_effective_remover`
+under the steered lane and battery rows R9b-1/2/3. V9-M4's parenthetical in the
+residue-lifecycle table and the §7 escapes row are updated to point here.
