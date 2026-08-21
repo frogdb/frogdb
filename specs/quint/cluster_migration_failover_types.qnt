@@ -246,6 +246,24 @@ module cluster_migration_failover_types {
   // This model's node/slot universes — bounded-checking sizing knobs, deliberately NOT
   // shared with the admission model even though the two agree on 4 nodes today (see
   // cluster_common_types.qnt's "does not belong here" note).
+  //
+  // These are `pure val`, not `const`, and that is a **tool limitation, not a
+  // preference**. Making them `const` (so a shrunk instance — 3 nodes, 2 slots — could be
+  // handed to Apalache for a deeper bound) requires an instance module per sizing, which
+  // means every module between here and the instance must be instantiated too. Quint
+  // 0.32.0 (the latest release as of 2026-08-20) cannot evaluate that: an *unqualified*
+  // instance (`import M(C = C).*`) nested more than two levels below the concrete
+  // instance leaves the innermost module's consts unbound at run time —
+  //
+  //     Error [QNT500]: Uninitialized const N. Use: import <moduleName>(N=<value>).*
+  //
+  // on both the `rust` and `typescript` backends, and `quint verify` crashes outright on
+  // the same shape. This family is four modules deep (types <- logic <- machine <- main),
+  // i.e. three nested instances. *Qualified* instances (`import M(C = C) as M1`, then
+  // `M1::def` at every use) do evaluate correctly, so the conversion is possible in
+  // principle — at the price of prefixing every cross-module reference in the machine and
+  // main modules, which is most of the model's text. Not paid without a ruling that wants
+  // it at that price. Until then a shrunk run means editing the two lines below.
   pure val NODES: Set[NodeId] = Set(1, 2, 3, 4)
   pure val SLOTS: Set[SlotId] = Set(1, 2, 3, 4)
   pure val HOLD_BYTE_CAP: int = 6
