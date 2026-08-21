@@ -118,7 +118,7 @@ impl Command for JsonMergeCommand {
                 complexity: None,
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

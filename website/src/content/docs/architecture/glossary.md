@@ -128,7 +128,7 @@ Wire error strings are quoted from source; the canonical registry is
 | `-MOVED` | `MOVED <slot> <host>:<port>` | Slot owned by another node (redirect) |
 | `-ASK` | `ASK <slot> <host>:<port>` | Key being migrated (one-shot redirect) |
 | `-WRONGTYPE` | `WRONGTYPE Operation against a key holding the wrong kind of value` | Wrong data type for command |
-| `-OOM` | `OOM command not allowed when used memory > 'maxmemory'` | Write rejected under maxmemory |
+| `-OOM` | `OOM command not allowed when used memory > 'maxmemory'.` | Allocating (`denyoom`) write rejected under maxmemory |
 | `-CLUSTERDOWN` | `CLUSTERDOWN The cluster is down` | Cluster unavailable / slot unserved |
 | `-TRYAGAIN` | `TRYAGAIN Multiple keys request during rehashing of slot` | Multi-key op mid-migration |
 | `-READONLY` | `READONLY You can't write against a read only replica.` | Write sent to a replica |

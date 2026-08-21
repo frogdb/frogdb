@@ -41,7 +41,9 @@ impl Command for LpushCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -91,7 +93,9 @@ impl Command for RpushCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -140,7 +144,9 @@ impl Command for LpushxCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -189,7 +195,9 @@ impl Command for RpushxCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -574,7 +582,7 @@ impl Command for LsetCommand {
                 ),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -632,7 +640,7 @@ impl Command for LinsertCommand {
                 ),
             },
             arity: Arity::Fixed(4),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -907,7 +915,7 @@ impl Command for RpoplpushCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,
@@ -987,7 +995,7 @@ impl Command for LmoveCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(4),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,

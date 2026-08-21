@@ -29,7 +29,9 @@ impl Command for PfaddCommand {
                 complexity: Some("O(1) to add every element."),
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             // On a dense existing HLL, execute deposits the raised registers on
@@ -183,7 +185,7 @@ impl Command for PfmergeCommand {
                 complexity: Some("O(N) to merge N HyperLogLogs, but with high constant times."),
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::All,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::R]),
             wal: WalStrategy::PersistFirstKey,

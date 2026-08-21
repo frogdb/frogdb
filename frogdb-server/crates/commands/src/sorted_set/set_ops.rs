@@ -229,7 +229,7 @@ impl Command for ZunionstoreCommand {
                 ),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::DestThenNumkeys {
                 numkeys: 1,
                 first: 2,
@@ -437,7 +437,7 @@ impl Command for ZinterstoreCommand {
                 ),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::DestThenNumkeys {
                 numkeys: 1,
                 first: 2,
@@ -768,7 +768,7 @@ impl Command for ZdiffstoreCommand {
                 ),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::DestThenNumkeys {
                 numkeys: 1,
                 first: 2,

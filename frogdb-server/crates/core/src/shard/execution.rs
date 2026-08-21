@@ -152,10 +152,18 @@ impl ShardWorker {
             );
         }
 
-        // Check memory before write operations
         let is_write = handler
             .flags()
             .contains(crate::command::CommandFlags::WRITE);
+
+        // The `maxmemory` gate keys off `DENYOOM`, not `WRITE`: a write that can
+        // only free memory (DEL, LPOP, SREM, FLUSHALL, the expiry family) must
+        // stay available precisely when the instance is over its limit under
+        // `noeviction`, which is when the operator needs it to recover. Redis
+        // makes the same distinction (`CMD_DENYOOM` in `processCommand`).
+        let denies_oom = handler
+            .flags()
+            .contains(crate::command::CommandFlags::DENYOOM);
 
         // Per-shard windowed op-rate accounting for hot-shard detection. Counted
         // once the command is known and its arity accepted — i.e. for every
@@ -177,7 +185,7 @@ impl ShardWorker {
             return (Response::error(super::types::WAL_POISONED_ERROR), None);
         }
 
-        if is_write && let Err(err) = self.check_memory_for_write().await {
+        if denies_oom && let Err(err) = self.check_memory_for_write().await {
             return (err.to_response(), None);
         }
 
@@ -2697,5 +2705,271 @@ mod transaction_admission_tests {
             "an unchanged routing generation must commit, got {result:?}"
         );
         assert!(ran.load(Ordering::Relaxed), "the batch must have run");
+    }
+}
+
+/// The `maxmemory` gate is keyed on `CommandFlags::DENYOOM`, never on
+/// `CommandFlags::WRITE`.
+///
+/// Under `noeviction` the pre-DENYOOM dispatcher refused *every* write once the
+/// limit was crossed, including the memory-freeing ones — so the commands an
+/// operator needs to climb back under the limit (DEL, FLUSHALL, LPOP, SREM …)
+/// were refused exactly when they were needed. These tests pin the split.
+///
+/// `frogdb-core` cannot depend on `frogdb-commands`, so the fixtures below are
+/// mocks carrying the same flags the real specs declare; the companion test
+/// `denyoom_matches_redis_for_known_commands` in `frogdb-commands` pins those
+/// real declarations so the two cannot drift apart unnoticed.
+#[cfg(test)]
+mod oom_gate_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+
+    use bytes::Bytes;
+    use frogdb_protocol::{ParsedCommand, ProtocolVersion, Response};
+    use tokio::sync::{mpsc, oneshot};
+
+    use crate::command::{
+        Arity, Command, CommandContext, CommandFlags, ConnMutation, ExecutionStrategy, WaiterWake,
+        WalStrategy,
+    };
+    use crate::command_spec::{
+        AccessSpec, CommandSpec, EventSpec, KeySpec, LookupSpec, ReindexSpec,
+    };
+    use crate::eviction::{EvictionConfig, EvictionPolicy};
+    use crate::noop::NoopMetricsRecorder;
+    use crate::registry::CommandRegistry;
+    use crate::replication::NoopBroadcaster;
+    use crate::shard::ShardWorker;
+    use crate::shard::message::{CoreMsg, ShardReceiver, ShardSender};
+    use crate::store::Store;
+    use crate::types::Value;
+
+    /// A keyless no-op command with the given name and flags. Only the flags
+    /// matter to the gate under test.
+    macro_rules! mock_command {
+        ($ty:ident, $name:literal, $flags:expr, $event:expr) => {
+            struct $ty;
+
+            impl Command for $ty {
+                fn spec(&self) -> &'static CommandSpec {
+                    static SPEC: CommandSpec = CommandSpec {
+                        name: $name,
+                        docs: crate::command_spec::CommandDocs {
+                            summary: "Test-fixture command; not registered on a running server.",
+                            since: "1.0.0",
+                            group: "generic",
+                            complexity: None,
+                        },
+                        arity: Arity::AtLeast(0),
+                        flags: $flags,
+                        keys: KeySpec::None,
+                        access: AccessSpec::Uniform,
+                        wal: WalStrategy::NoOp,
+                        wakes: WaiterWake::None,
+                        event: $event,
+                        requires_same_slot: false,
+                        reindex: ReindexSpec::None,
+                        lookup: LookupSpec::None,
+                        mutation: ConnMutation::None,
+                        strategy: ExecutionStrategy::Standard,
+                    };
+                    &SPEC
+                }
+
+                fn execute(
+                    &self,
+                    _ctx: &mut CommandContext,
+                    _args: &[Bytes],
+                ) -> Result<Response, frogdb_types::CommandError> {
+                    Ok(Response::Simple(Bytes::from_static(b"OK")))
+                }
+            }
+        };
+    }
+
+    // Allocating write: DENYOOM, like the real SET.
+    mock_command!(
+        MockSet,
+        "SET",
+        CommandFlags::WRITE
+            .union(CommandFlags::FAST)
+            .union(CommandFlags::DENYOOM),
+        EventSpec::Suppressed
+    );
+    // Freeing writes: no DENYOOM, like the real DEL / FLUSHALL / LPOP.
+    mock_command!(
+        MockDel,
+        "DEL",
+        CommandFlags::WRITE.union(CommandFlags::FAST),
+        EventSpec::Suppressed
+    );
+    mock_command!(
+        MockFlushAll,
+        "FLUSHALL",
+        CommandFlags::WRITE,
+        EventSpec::Suppressed
+    );
+    mock_command!(
+        MockLpop,
+        "LPOP",
+        CommandFlags::WRITE.union(CommandFlags::FAST),
+        EventSpec::Suppressed
+    );
+    // A read, which never consulted the gate either way. `EventSpec::Suppressed`
+    // is reserved for writes (`CommandSpec::validate`), so reads declare
+    // `NotApplicable`.
+    mock_command!(
+        MockGet,
+        "GET",
+        CommandFlags::READONLY.union(CommandFlags::FAST),
+        EventSpec::NotApplicable
+    );
+
+    /// A single shard whose store is already over a 1-byte `maxmemory` limit,
+    /// under `noeviction` (so the gate rejects rather than evicting).
+    fn over_limit_worker() -> ShardWorker {
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        registry.register(MockDel);
+        registry.register(MockFlushAll);
+        registry.register(MockLpop);
+        registry.register(MockGet);
+
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        let mut worker = ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(registry),
+            EvictionConfig {
+                maxmemory: 1,
+                policy: EvictionPolicy::NoEviction,
+                ..EvictionConfig::default()
+            },
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        );
+        // One resident key is enough to put the store over one byte.
+        worker
+            .store
+            .set(Bytes::from_static(b"resident"), Value::string("v"));
+        assert!(
+            worker.store.memory_used() as u64 > 1,
+            "fixture must actually be over the limit"
+        );
+        worker
+    }
+
+    async fn execute(worker: &mut ShardWorker, name: &'static str) -> Response {
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::Execute {
+                command: Arc::new(ParsedCommand::new(
+                    Bytes::from_static(name.as_bytes()),
+                    vec![],
+                )),
+                conn_id: 1,
+                txid: None,
+                protocol_version: ProtocolVersion::Resp2,
+                track_reads: false,
+                no_touch: false,
+                response_tx: tx,
+            })
+            .await;
+        rx.await.expect("shard replied")
+    }
+
+    fn assert_oom(response: &Response, command: &str) {
+        match response {
+            Response::Error(msg) => assert_eq!(
+                msg, "OOM command not allowed when used memory > 'maxmemory'.",
+                "{command} must be refused with Redis's verbatim -OOM message"
+            ),
+            other => panic!("{command} should have been refused with -OOM, got {other:?}"),
+        }
+    }
+
+    fn assert_ok(response: &Response, command: &str) {
+        match response {
+            Response::Simple(s) => assert_eq!(&s[..], b"OK", "{command} replied {response:?}"),
+            other => panic!(
+                "{command} frees memory and carries no DENYOOM flag, so it must run even over \
+                 the limit; got {other:?}"
+            ),
+        }
+    }
+
+    /// The half that must keep rejecting: an allocating write over the limit.
+    #[tokio::test]
+    async fn denyoom_write_is_rejected_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = execute(&mut worker, "SET").await;
+        assert_oom(&response, "SET");
+    }
+
+    /// DEL is the canonical recovery command: refusing it under `noeviction`
+    /// left the operator with no in-band way to get back under `maxmemory`.
+    #[tokio::test]
+    async fn del_is_admitted_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = execute(&mut worker, "DEL").await;
+        assert_ok(&response, "DEL");
+    }
+
+    /// The bulk-recovery escape hatch, for the same reason.
+    #[tokio::test]
+    async fn flushall_is_admitted_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = execute(&mut worker, "FLUSHALL").await;
+        assert_ok(&response, "FLUSHALL");
+    }
+
+    /// A per-element freeing write — the family that shows the rule is about
+    /// the DENYOOM flag rather than a hand-listed set of recovery commands.
+    #[tokio::test]
+    async fn non_denyoom_write_is_admitted_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = execute(&mut worker, "LPOP").await;
+        assert_ok(&response, "LPOP");
+    }
+
+    /// Reads were never gated and still are not.
+    #[tokio::test]
+    async fn reads_are_admitted_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = execute(&mut worker, "GET").await;
+        assert_ok(&response, "GET");
+    }
+
+    /// The gate only fires over the limit: with `maxmemory` unset a DENYOOM
+    /// write runs normally, so the flag is not a blanket refusal.
+    #[tokio::test]
+    async fn denyoom_write_is_admitted_under_the_limit() {
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        let mut worker = ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(registry),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        );
+
+        let response = execute(&mut worker, "SET").await;
+        assert_ok(&response, "SET");
     }
 }

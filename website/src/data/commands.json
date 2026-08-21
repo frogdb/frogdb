@@ -26,6 +26,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -70,6 +71,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "BF",
@@ -130,7 +132,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "BF",
       "execution_strategy": "standard",
@@ -145,7 +148,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "BF",
       "execution_strategy": "standard",
@@ -159,7 +163,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "BF",
       "execution_strategy": "standard",
@@ -187,7 +192,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "BF",
       "execution_strategy": "standard",
@@ -258,7 +264,8 @@
         "min": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -284,7 +291,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -313,6 +321,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
@@ -372,6 +381,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "BLOCKING"
       ],
       "execution_strategy": "blocking",
@@ -431,6 +441,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "CF",
@@ -447,6 +458,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "CF",
@@ -524,7 +536,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CF",
       "execution_strategy": "standard",
@@ -538,7 +551,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CF",
       "execution_strategy": "standard",
@@ -553,7 +567,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CF",
       "execution_strategy": "standard",
@@ -581,7 +596,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CF",
       "execution_strategy": "standard",
@@ -639,6 +655,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "CMS",
@@ -669,7 +686,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CMS",
       "execution_strategy": "standard",
@@ -684,7 +702,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CMS",
       "execution_strategy": "standard",
@@ -698,7 +717,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "CMS",
       "execution_strategy": "standard",
@@ -757,7 +777,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -804,6 +825,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -819,6 +841,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -934,7 +957,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "ES",
       "execution_strategy": "standard",
@@ -993,7 +1017,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "ES",
       "execution_strategy": "standard",
@@ -1271,7 +1296,8 @@
         "max": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
@@ -1301,7 +1327,8 @@
         "max": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
@@ -1315,7 +1342,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
@@ -1343,7 +1371,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
@@ -1371,7 +1400,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
@@ -1527,7 +1557,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "standard",
@@ -1600,7 +1631,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "FT",
       "execution_strategy": "server_wide",
@@ -1657,7 +1689,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -1711,6 +1744,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "standard",
@@ -1725,6 +1759,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "standard",
@@ -1777,7 +1812,8 @@
         "min": 5
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -1865,6 +1901,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2024,6 +2061,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2039,6 +2077,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2096,6 +2135,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2222,6 +2262,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2236,6 +2277,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2251,6 +2293,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2309,6 +2352,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2324,6 +2368,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2339,6 +2384,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2367,7 +2413,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "JSON",
       "execution_strategy": "standard",
@@ -2395,7 +2442,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "JSON",
       "execution_strategy": "standard",
@@ -2512,7 +2560,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "JSON",
       "execution_strategy": "standard",
@@ -2598,7 +2647,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "JSON",
       "execution_strategy": "standard",
@@ -2612,7 +2662,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "JSON",
       "execution_strategy": "standard",
@@ -2744,7 +2795,8 @@
         "max": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -2773,7 +2825,8 @@
         "max": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -2842,6 +2895,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2856,6 +2910,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -2898,7 +2953,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3011,7 +3067,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "scatter_gather",
       "full": true,
@@ -3025,6 +3082,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "standard",
@@ -3038,7 +3096,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3142,6 +3201,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3183,7 +3243,8 @@
         "min": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3230,6 +3291,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3476,7 +3538,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3523,7 +3586,8 @@
         "max": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3537,6 +3601,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3551,6 +3616,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3565,6 +3631,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3649,7 +3716,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3679,6 +3747,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3694,6 +3763,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3709,6 +3779,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3724,6 +3795,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -3738,7 +3810,8 @@
         "max": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3794,7 +3867,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -3898,6 +3972,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "standard",
@@ -4086,7 +4161,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -4145,7 +4221,8 @@
         "min": 2
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
@@ -4173,7 +4250,8 @@
         "min": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
@@ -4218,7 +4296,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
@@ -4277,7 +4356,8 @@
         "max": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TDIGEST",
       "execution_strategy": "standard",
@@ -4338,6 +4418,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "TOPK",
@@ -4368,6 +4449,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "TOPK",
@@ -4428,7 +4510,8 @@
         "max": 5
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TOPK",
       "execution_strategy": "standard",
@@ -4457,6 +4540,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "TS",
@@ -4471,7 +4555,8 @@
         "min": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TS",
       "execution_strategy": "standard",
@@ -4485,7 +4570,8 @@
         "min": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TS",
       "execution_strategy": "standard",
@@ -4515,6 +4601,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "TS",
@@ -4576,6 +4663,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "family": "TS",
@@ -4605,7 +4693,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "family": "TS",
       "execution_strategy": "standard",
@@ -4778,7 +4867,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5021,6 +5111,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -5199,7 +5290,8 @@
         "max": 5
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5226,6 +5318,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -5282,7 +5375,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5297,6 +5391,7 @@
       },
       "flags": [
         "WRITE",
+        "DENYOOM",
         "FAST"
       ],
       "execution_strategy": "standard",
@@ -5336,7 +5431,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5471,7 +5567,8 @@
         "min": 4
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5648,7 +5745,8 @@
         "min": 3
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,

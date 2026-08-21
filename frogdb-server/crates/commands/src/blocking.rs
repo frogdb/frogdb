@@ -215,7 +215,9 @@ impl Command for BlmoveCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(5),
-            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::BLOCKING)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,
@@ -825,7 +827,9 @@ impl Command for BrpoplpushCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::BLOCKING),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::BLOCKING)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::RW, KeyAccessFlag::W]),
             wal: WalStrategy::MoveKeys,

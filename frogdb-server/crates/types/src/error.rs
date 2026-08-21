@@ -162,7 +162,7 @@ define_command_errors! {
 
     // === System Errors ===
     /// Out of memory.
-    OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'",
+    OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
 
     /// Internal server error.
     Internal { message: String } => "ERR {message}",

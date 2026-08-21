@@ -46,7 +46,9 @@ impl Command for HsetCommand {
                 ),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -116,7 +118,9 @@ impl Command for HsetnxCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -288,7 +292,9 @@ impl Command for HmsetCommand {
                 complexity: Some("O(N) where N is the number of fields being set."),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -661,7 +667,9 @@ impl Command for HincrbyCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -709,7 +717,9 @@ impl Command for HincrbyfloatCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -2111,7 +2121,9 @@ impl Command for HsetexCommand {
                 complexity: Some("O(N) where N is the number of fields being set."),
             },
             arity: Arity::AtLeast(6),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

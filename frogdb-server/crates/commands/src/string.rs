@@ -43,7 +43,9 @@ impl Command for SetnxCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -94,7 +96,9 @@ impl Command for SetexCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -148,7 +152,9 @@ impl Command for PsetexCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -202,7 +208,9 @@ impl Command for AppendCommand {
                 ),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -360,7 +368,7 @@ impl Command for SetrangeCommand {
                 ),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -606,7 +614,9 @@ impl Command for IncrCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(1),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -660,7 +670,9 @@ impl Command for DecrCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(1),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -714,7 +726,9 @@ impl Command for IncrbyCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -769,7 +783,9 @@ impl Command for DecrbyCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -828,7 +844,9 @@ impl Command for IncrbyfloatCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -949,7 +967,7 @@ impl Command for MsetCommand {
                 complexity: Some("O(N) where N is the number of keys to set."),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::Stride { step: 2 },
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -998,7 +1016,7 @@ impl Command for MsetnxCommand {
                 complexity: Some("O(N) where N is the number of keys to set."),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::Stride { step: 2 },
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -1311,7 +1329,9 @@ impl Command for GetsetCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -1557,7 +1577,9 @@ impl Command for MsetexCommand {
                 complexity: Some("O(N) where N is the number of keys to set."),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::MOVABLEKEYS)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::Dynamic,
             access: AccessSpec::Uniform,
             wal: WalStrategy::Dynamic,

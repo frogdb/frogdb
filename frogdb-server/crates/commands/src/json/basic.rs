@@ -28,7 +28,7 @@ impl Command for JsonSetCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

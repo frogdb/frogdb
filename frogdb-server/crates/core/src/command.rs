@@ -917,6 +917,19 @@ bitflags! {
         /// Command only reads data (GET, ZRANGE).
         const READONLY = 0b0000_0000_0010;
 
+        /// Command may increase memory use, so it is refused when `maxmemory`
+        /// is exceeded and the policy cannot free space (Redis `denyoom`).
+        ///
+        /// This — not [`Self::WRITE`] — is what the shard's OOM gate consults
+        /// (`shard/execution.rs`). Writes that only free memory (DEL, LPOP,
+        /// SREM, FLUSHALL, expiry commands) deliberately lack the flag so the
+        /// operator can still recover an instance that has hit its limit under
+        /// `noeviction`. Assignments for Redis-compatible commands mirror
+        /// `CMD_DENYOOM` in redis/redis 8.6.0 `src/commands/*.json`; FrogDB
+        /// extension commands follow the same rule (allocating writes carry
+        /// it, freeing writes do not).
+        const DENYOOM = 0b100_0000_0000_0000_0000;
+
         /// O(1) operation, suitable for latency-sensitive paths.
         const FAST = 0b0000_0000_0100;
 

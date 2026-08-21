@@ -27,7 +27,9 @@ impl Command for ZaddCommand {
                 ),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -414,7 +416,9 @@ impl Command for ZincrbyCommand {
                 complexity: Some("O(log(N)) where N is the number of elements in the sorted set."),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,

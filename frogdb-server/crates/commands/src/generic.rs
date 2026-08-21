@@ -594,7 +594,7 @@ impl Command for CopyCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             access: AccessSpec::Positional(&[KeyAccessFlag::R, KeyAccessFlag::OW]),
             wal: WalStrategy::PersistDestination,

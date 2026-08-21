@@ -475,7 +475,7 @@ impl Command for SetCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE.union(CommandFlags::FAST).union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             // VARIABLE_FLAGS in Redis: the `GET` option makes SET read the old
             // value (key becomes `RW,ACCESS`), while a plain `SET k v` is a blind
@@ -938,7 +938,7 @@ fn command_info_arity(arity: Arity) -> i64 {
 /// `movablekeys` fact (which may be true even when `CommandFlags::
 /// MOVABLEKEYS` itself is unset for this spec — see `build_command_info`).
 /// Only flags this registry actually tracks are emitted; flags Redis has but
-/// FrogDB's `CommandFlags` does not model (e.g. `deny-oom`) are never
+/// FrogDB's `CommandFlags` does not model (e.g. `may_replicate`) are never
 /// fabricated.
 fn command_info_flags(flags: CommandFlags, movablekeys: bool) -> Vec<Response> {
     let mut flag_strs: Vec<Response> = Vec::new();
@@ -947,6 +947,9 @@ fn command_info_flags(flags: CommandFlags, movablekeys: bool) -> Vec<Response> {
     }
     if flags.contains(CommandFlags::READONLY) {
         flag_strs.push(Response::Simple(Bytes::from_static(b"readonly")));
+    }
+    if flags.contains(CommandFlags::DENYOOM) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"denyoom")));
     }
     if flags.contains(CommandFlags::FAST) {
         flag_strs.push(Response::Simple(Bytes::from_static(b"fast")));
@@ -1267,7 +1270,7 @@ mod command_info_tests {
             Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"set")),
                 Response::Integer(-3),
-                Response::Array(vec![flag("write"), flag("fast")]),
+                Response::Array(vec![flag("write"), flag("denyoom"), flag("fast")]),
                 Response::Integer(1),
                 Response::Integer(1),
                 Response::Integer(1),
@@ -1290,7 +1293,7 @@ mod command_info_tests {
             Response::Array(vec![
                 Response::bulk(Bytes::from_static(b"mset")),
                 Response::Integer(-3),
-                Response::Array(vec![flag("write")]),
+                Response::Array(vec![flag("write"), flag("denyoom")]),
                 Response::Integer(1),
                 Response::Integer(-1),
                 Response::Integer(2),

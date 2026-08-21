@@ -37,7 +37,8 @@ ERROR-CODE TABLE — rebuild against source. Corrections:
 - `-CROSSSLOT`, `-MOVED slot host:port`, `-ASK slot host:port`, `-WRONGTYPE`,
   `-OOM`, `-NOSCRIPT`, `-BUSY`, `-READONLY` — all real; verify the exact message
   text against source (e.g. OOM is "OOM command not allowed when used memory >
-  'maxmemory'"; CROSSSLOT is "Keys in request don't hash to the same slot").
+  'maxmemory'." — trailing period included; CROSSSLOT is "Keys in request don't
+  hash to the same slot").
 - `-TIMEOUT` ("VLL queue … waiting for locks") — **DELETE**. No `-TIMEOUT` code and
   no VLL lock-timeout error exists. Timeouts are emitted with the generic `ERR`
   prefix (`ERR timeout`, `ERR scan timeout`, …). If the page documents timeout

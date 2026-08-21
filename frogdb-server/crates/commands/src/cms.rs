@@ -26,7 +26,7 @@ impl Command for CmsInitByDim {
                 complexity: None,
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -97,7 +97,7 @@ impl Command for CmsInitByProb {
                 complexity: None,
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -174,7 +174,9 @@ impl Command for CmsIncrBy {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -288,7 +290,7 @@ impl Command for CmsMerge {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::DestThenNumkeys {
                 numkeys: 1,
                 first: 2,

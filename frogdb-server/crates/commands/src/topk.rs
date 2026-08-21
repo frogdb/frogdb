@@ -26,7 +26,7 @@ impl Command for TopkReserve {
                 complexity: None,
             },
             arity: Arity::Range { min: 2, max: 5 },
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -135,7 +135,9 @@ impl Command for TopkAdd {
                 complexity: None,
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -186,7 +188,9 @@ impl Command for TopkIncrby {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

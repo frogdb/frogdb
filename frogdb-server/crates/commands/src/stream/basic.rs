@@ -28,7 +28,9 @@ impl Command for XaddCommand {
                 ),
             },
             arity: Arity::AtLeast(4),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -422,7 +424,7 @@ impl Command for XsetidCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Range { min: 2, max: 5 },
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

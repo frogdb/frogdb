@@ -462,7 +462,7 @@ impl Command for SortCommand {
                 complexity: Some("O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N)."),
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS).union(CommandFlags::DENYOOM),
             keys: KeySpec::Dynamic,
             access: AccessSpec::Dynamic,
             wal: WalStrategy::Dynamic,

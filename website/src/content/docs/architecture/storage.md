@@ -139,11 +139,11 @@ the full mechanism.
 
 ## Eviction
 
-When `maxmemory` is exceeded, FrogDB either rejects writes (OOM) or evicts keys according to the configured `EvictionPolicy` (`frogdb-server/crates/core/src/eviction/policy.rs`). The policy names match Redis:
+When `maxmemory` is exceeded, FrogDB either rejects memory-allocating writes (OOM) or evicts keys according to the configured `EvictionPolicy` (`frogdb-server/crates/core/src/eviction/policy.rs`). The policy names match Redis:
 
 | Policy | Scope | Selection |
 |--------|-------|-----------|
-| `noeviction` | — | Reject writes with an OOM error (default) |
+| `noeviction` | — | Reject allocating writes with an OOM error (default) |
 | `volatile-lru` | Keys with a TTL | Least recently used |
 | `allkeys-lru` | Any key | Least recently used |
 | `volatile-lfu` | Keys with a TTL | Least frequently used |
@@ -153,6 +153,12 @@ When `maxmemory` is exceeded, FrogDB either rejects writes (OOM) or evicts keys 
 | `volatile-ttl` | Keys with a TTL | Shortest remaining TTL first |
 | `tiered-lru` | Any key | Least recently used |
 | `tiered-lfu` | Any key | Least frequently used |
+
+### Which writes an OOM rejection covers
+
+Only commands carrying the `denyoom` flag (visible in `COMMAND INFO`) are rejected when memory is over the limit and the policy cannot free space. `denyoom` marks commands that can grow memory — `SET`, `APPEND`, `LPUSH`, `HSET`, `ZADD`, `XADD`, and so on. Writes that can only release memory — `DEL`, `UNLINK`, `LPOP`, `SREM`, `HDEL`, `LTRIM`, `EXPIRE`, `FLUSHALL` — keep working, so an operator can bring a `noeviction` instance back under its limit without restarting it. Redis draws the same line, and FrogDB's assignments for Redis-compatible commands mirror the `DENYOOM` flag in the upstream command table.
+
+Rejected commands reply with `OOM command not allowed when used memory > 'maxmemory'.`
 
 **Tiered policies** are FrogDB extensions. Instead of deleting the selected value, a tiered policy *spills* it to a warm on-disk tier (`is_tiered()` on the policy). A later access transparently unspills the value back to the hot in-memory tier. This trades some access latency for a larger effective working set; the other policies delete the value outright.
 

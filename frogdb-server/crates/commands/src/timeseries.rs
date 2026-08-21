@@ -118,7 +118,7 @@ impl Command for TsCreateCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -220,7 +220,7 @@ impl Command for TsAlterCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -327,7 +327,9 @@ impl Command for TsAddCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -462,7 +464,7 @@ impl Command for TsMaddCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::Stride { step: 3 },
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -553,7 +555,9 @@ impl Command for TsIncrbyCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -588,7 +592,9 @@ impl Command for TsDecrbyCommand {
                 complexity: None,
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,

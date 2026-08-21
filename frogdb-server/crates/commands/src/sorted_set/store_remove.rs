@@ -27,7 +27,7 @@ impl Command for ZrangestoreCommand {
                 ),
             },
             arity: Arity::AtLeast(4),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             // Destination (key 0) is overwritten; the source (key 1) is read-only.
             access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),

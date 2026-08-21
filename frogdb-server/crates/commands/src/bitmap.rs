@@ -35,7 +35,9 @@ impl Command for SetbitCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(3),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::PersistFirstKey,
@@ -241,7 +243,7 @@ impl Command for BitopCommand {
                 complexity: Some("O(N)"),
             },
             arity: Arity::AtLeast(3),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::Skip(1),
             // Destination (key 0 of the `Skip(1)` extraction, args[1]) is
             // overwritten; the source keys are read-only.
@@ -430,7 +432,7 @@ impl Command for BitfieldCommand {
                 complexity: Some("O(1) for each subcommand specified"),
             },
             arity: Arity::AtLeast(1),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             // VARIABLE_FLAGS in Redis: the required perm depends on the
             // sub-operations. A `GET` sub-op reads (`ACCESS`), `SET`/`INCRBY`

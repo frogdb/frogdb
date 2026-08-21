@@ -56,7 +56,7 @@ impl Command for GeoaddCommand {
                 ),
             },
             arity: Arity::AtLeast(4),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -427,7 +427,7 @@ impl Command for GeosearchstoreCommand {
                 ),
             },
             arity: Arity::AtLeast(5),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::FirstTwo,
             // Destination (key 0) is overwritten; the source (key 1) is read-only.
             access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
@@ -518,7 +518,9 @@ impl Command for GeoradiusCommand {
                 ),
             },
             arity: Arity::AtLeast(5),
-            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::MOVABLEKEYS)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::Dynamic,
             access: AccessSpec::Dynamic,
             wal: WalStrategy::Dynamic,
@@ -664,7 +666,9 @@ impl Command for GeoradiusbymemberCommand {
                 ),
             },
             arity: Arity::AtLeast(4),
-            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::MOVABLEKEYS)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::Dynamic,
             access: AccessSpec::Dynamic,
             wal: WalStrategy::Dynamic,

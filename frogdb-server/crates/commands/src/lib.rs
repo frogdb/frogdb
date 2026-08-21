@@ -471,3 +471,94 @@ pub fn register_all(registry: &mut frogdb_core::CommandRegistry) {
         registry.register(event_sourcing::EsAllCommand);
     }
 }
+
+#[cfg(test)]
+mod denyoom_tests {
+    use super::register_all;
+    use frogdb_core::{CommandFlags, CommandRegistry};
+
+    /// `DENYOOM` is what the shard's `maxmemory` gate consults
+    /// (`frogdb-core`, `shard/execution.rs`), so these declarations decide
+    /// which commands an operator can still run once an instance under
+    /// `noeviction` is over its limit.
+    ///
+    /// The expected values are Redis's own `CMD_DENYOOM` bits, read from
+    /// redis/redis 8.6.0 `src/commands/*.json` (as compiled into
+    /// `src/commands.def`) — the same upstream revision `website/src/data/
+    /// redis-commands-8x.json` is vendored from.
+    #[test]
+    fn denyoom_matches_redis_for_known_commands() {
+        let mut registry = CommandRegistry::new();
+        register_all(&mut registry);
+
+        // (command, expected DENYOOM). Only `core-profile` commands belong in
+        // the always-checked table — the family features (stream, json, ...)
+        // are off by default, and a missing entry would read as a failure.
+        // `mut` is only exercised by the feature-gated extensions below.
+        #[allow(unused_mut)]
+        let mut expected: Vec<(&str, bool)> = vec![
+            // Allocating writes: refused over the limit.
+            ("SET", true),
+            ("APPEND", true),
+            ("SETRANGE", true),
+            ("INCR", true),
+            ("HSET", true),
+            ("LPUSH", true),
+            ("SADD", true),
+            ("ZADD", true),
+            // Freeing writes: still admitted over the limit, which is the
+            // whole point of the flag — these are the recovery commands.
+            ("DEL", false),
+            ("UNLINK", false),
+            ("LPOP", false),
+            ("RPOP", false),
+            ("SREM", false),
+            ("ZREM", false),
+            ("HDEL", false),
+            ("LTRIM", false),
+            ("EXPIRE", false),
+            ("GETDEL", false),
+            // Reads never carry it.
+            ("GET", false),
+            ("MGET", false),
+            ("STRLEN", false),
+            ("LRANGE", false),
+        ];
+
+        #[cfg(feature = "stream")]
+        expected.extend([("XADD", true), ("XDEL", false)]);
+
+        for (name, want) in expected {
+            let entry = registry
+                .get_entry(name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            let got = entry.flags().contains(CommandFlags::DENYOOM);
+            assert_eq!(
+                got, want,
+                "{name}: DENYOOM should be {want} (Redis 8.6.0 `CMD_DENYOOM`), got {got}"
+            );
+        }
+    }
+
+    /// `DENYOOM` is only meaningful on a write: the gate never runs for a
+    /// read, so a read carrying the flag would be a lie in `COMMAND INFO`.
+    #[test]
+    fn denyoom_is_never_declared_without_write() {
+        let mut registry = CommandRegistry::new();
+        register_all(&mut registry);
+
+        let offenders: Vec<&str> = registry
+            .iter()
+            .filter(|(_, entry)| {
+                entry.flags().contains(CommandFlags::DENYOOM)
+                    && !entry.flags().contains(CommandFlags::WRITE)
+            })
+            .map(|(name, _)| name)
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "DENYOOM without WRITE is unreachable by the gate: {offenders:?}"
+        );
+    }
+}

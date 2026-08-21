@@ -52,7 +52,9 @@ impl Command for SaddCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE.union(CommandFlags::FAST),
+            flags: CommandFlags::WRITE
+                .union(CommandFlags::FAST)
+                .union(CommandFlags::DENYOOM),
             keys: KeySpec::First,
             access: AccessSpec::Uniform,
             wal: WalStrategy::PersistFirstKey,
@@ -562,7 +564,7 @@ impl Command for SunionstoreCommand {
                 complexity: Some("O(N) where N is the total number of elements in all given sets."),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::All,
             // Destination (key 0) is overwritten; the source keys are read-only.
             access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
@@ -633,7 +635,7 @@ impl Command for SinterstoreCommand {
                 ),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::All,
             // Destination (key 0) is overwritten; the source keys are read-only.
             access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
@@ -714,7 +716,7 @@ impl Command for SdiffstoreCommand {
                 complexity: Some("O(N) where N is the total number of elements in all given sets."),
             },
             arity: Arity::AtLeast(2),
-            flags: CommandFlags::WRITE,
+            flags: CommandFlags::WRITE.union(CommandFlags::DENYOOM),
             keys: KeySpec::All,
             // Destination (key 0) is overwritten; the source keys are read-only.
             access: AccessSpec::Positional(&[KeyAccessFlag::OW, KeyAccessFlag::R]),
