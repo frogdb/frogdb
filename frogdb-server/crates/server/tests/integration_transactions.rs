@@ -770,6 +770,78 @@ async fn test_transaction_syntax_error_aborts() {
     server.shutdown().await;
 }
 
+/// The wrong-arity error raised while *queuing* inside MULTI must render the
+/// command name lowercase, exactly like the non-MULTI path does. Redis stores
+/// `c->cmd->fullname` lowercase and replies `'get'` / `'eval_ro'`; FrogDB's
+/// registry entries carry the uppercase spec names, so the queue path used to
+/// leak `'GET'` / `'EVAL_RO'` to clients that parse the error text.
+///
+/// Deliberately untagged: FM-TXN-006 already forces the abort *outcome* of this
+/// path, and its Observable does not reach the error text. See the follow-up
+/// note at the fix site in `connection/guards.rs::queue_command`.
+#[tokio::test]
+async fn test_multi_wrong_arity_error_names_command_lowercase() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    // A generic shard command and a connection-level scripting command, typed
+    // in upper *and* lower case, all report the canonical lowercase name.
+    for (cmd, expected) in [
+        (
+            vec!["GET"],
+            "ERR wrong number of arguments for 'get' command",
+        ),
+        (
+            vec!["get"],
+            "ERR wrong number of arguments for 'get' command",
+        ),
+        (
+            vec!["EVAL_RO", "return 1"],
+            "ERR wrong number of arguments for 'eval_ro' command",
+        ),
+        (
+            vec!["eval_ro", "return 1"],
+            "ERR wrong number of arguments for 'eval_ro' command",
+        ),
+    ] {
+        let response = client.command(&["MULTI"]).await;
+        assert_eq!(response, Response::Simple(Bytes::from("OK")));
+
+        let response = client.command(&cmd).await;
+        assert_eq!(
+            response,
+            Response::Error(Bytes::from(expected)),
+            "queuing {cmd:?} inside MULTI must report the lowercase command name"
+        );
+
+        // The rejection still poisons the transaction (FM-TXN-006 behavior).
+        let response = client.command(&["EXEC"]).await;
+        assert!(
+            matches!(&response, Response::Error(e) if e.starts_with(b"EXECABORT")),
+            "a wrong-arity rejection must still abort at EXEC, got {response:?}"
+        );
+    }
+
+    // Outside MULTI the same commands already rendered lowercase — pin it so the
+    // two paths cannot drift apart again.
+    let response = client.command(&["GET"]).await;
+    assert_eq!(
+        response,
+        Response::Error(Bytes::from(
+            "ERR wrong number of arguments for 'get' command"
+        ))
+    );
+    let response = client.command(&["EVAL_RO", "return 1"]).await;
+    assert_eq!(
+        response,
+        Response::Error(Bytes::from(
+            "ERR wrong number of arguments for 'eval_ro' command"
+        ))
+    );
+
+    server.shutdown().await;
+}
+
 // FM-TXN-037
 /// Connection-level commands (CONFIG, INFO, ...) are deferred out of the shard
 /// transaction and merged back afterwards. Their results must land at their

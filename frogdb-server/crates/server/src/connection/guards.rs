@@ -566,11 +566,20 @@ impl PreDispatchView<'_> {
             }
         };
 
-        // Validate arity
+        // Validate arity. The name is lowercased to match Redis (`c->cmd->fullname`
+        // is stored lowercase) and to match every other arity rejection in the
+        // server — `command_lookup_check` above, `shard::execution`, and the
+        // scripting gate all render `name().to_ascii_lowercase()`. Registry entry
+        // names are the uppercase spec names, so skipping this leaks `'GET'`.
+        //
+        // Follow-up: FM-TXN-006's Observable only requires the EXECABORT outcome,
+        // so the spec did not force the error *text*. Tightening that row to pin
+        // the lowercase rendering would make this class of drift spec-visible; the
+        // txn failure-mode spec is LOCKED, so that is a separate spec-first change.
         if !entry.arity().check(cmd.args.len()) {
             let msg = format!(
                 "ERR wrong number of arguments for '{}' command",
-                entry.name()
+                entry.name().to_ascii_lowercase()
             );
             self.state.abort_transaction(Some(msg.clone()));
             return Response::error(msg);
