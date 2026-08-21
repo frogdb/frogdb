@@ -19,6 +19,7 @@
 use std::io;
 
 use crate::fullsync::{CHECKPOINT_MARKER, SNAPSHOT_MARKER};
+use crate::replica::offset::OffsetProvenance;
 
 /// Build the `(replication_id, offset)` pair for a reconnect `PSYNC` request
 /// from the replica's **live applied** offset. A live offset of 0 means the
@@ -115,6 +116,72 @@ pub fn select_psync_arm(line: &str) -> io::Result<PsyncArm> {
             format!("unexpected PSYNC response: {}", line),
         ))
     }
+}
+
+/// Why a window grant was refused — the reason the connection logs and the
+/// discriminator the tests assert on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowGrantRefusal {
+    /// The node's keyspace still holds effects above its claim, because the
+    /// payload it installed covered further than the applied head has reached
+    /// (`applied < max(Y_s)`). Resuming here would leave those effects under a
+    /// history that may never rewrite them.
+    AboveTheClaim { applied: u64, floor_ceiling: u64 },
+    /// The offsets were recovered from the persisted state rather than installed
+    /// with a keyspace, so nothing describes what sits above the claim
+    /// (ruling R16).
+    RecoveredOffsets,
+}
+
+/// Whether a `+CONTINUE` may be adopted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowGrantVerdict {
+    /// Adopt the grant and keep streaming.
+    Accept,
+    /// Degrade to a full resync, which replaces the keyspace and with it the
+    /// residue this node could not account for.
+    Refuse(WindowGrantRefusal),
+}
+
+/// Decide a `+CONTINUE` reply (FM-REPLICATION-066, TR-REPLICATION-034). Pure
+/// over its four inputs; performs no I/O and takes no lock.
+///
+/// The refusal is scoped to **window grants** — a `+CONTINUE` carrying an id,
+/// i.e. one whose granting primary replaced the history. Everything up to this
+/// node's claim is shared with that history, but anything *above* the claim was
+/// written under the old one and the new history is under no obligation to
+/// rewrite it. Two things can put effects above the claim:
+///
+/// - a full-sync payload that covered further than the applied head has reached
+///   (the overship this issue's floors describe): the floors dedup the range
+///   exactly, but only for the history the payload came from;
+/// - a restart, which recovers a keyspace next to a lagging persisted offset
+///   with nothing describing the gap (ruling R16).
+///
+/// A **bare** `+CONTINUE` is never refused. Same history means the stream about
+/// to arrive is the very one that wrote the residue, so it re-sends exactly the
+/// frames the floors skip and the head catches up with the ceiling by itself —
+/// refusing there would turn every healthy reconnect during a floor window into
+/// a full resync for nothing.
+pub fn window_grant_verdict(
+    granted_id: Option<&str>,
+    provenance: OffsetProvenance,
+    applied: u64,
+    floor_ceiling: u64,
+) -> WindowGrantVerdict {
+    if granted_id.is_none() {
+        return WindowGrantVerdict::Accept;
+    }
+    if provenance == OffsetProvenance::Recovered {
+        return WindowGrantVerdict::Refuse(WindowGrantRefusal::RecoveredOffsets);
+    }
+    if applied < floor_ceiling {
+        return WindowGrantVerdict::Refuse(WindowGrantRefusal::AboveTheClaim {
+            applied,
+            floor_ceiling,
+        });
+    }
+    WindowGrantVerdict::Accept
 }
 
 /// Select the payload a `+FULLRESYNC` envelope names, from the trimmed `$…`
@@ -309,6 +376,79 @@ mod tests {
                 "expected a checkpoint or dataset marker",
                 "a line that is not an envelope at all fails before the marker \
                  vocabulary is consulted: {line}"
+            );
+        }
+    }
+
+    /// A bare `+CONTINUE` is the same history re-sending its own stream, so it
+    /// is accepted whatever the floors say — the frames the floors skip are the
+    /// frames this very history wrote.
+    // FM-REPLICATION-066
+    #[test]
+    fn a_same_history_grant_is_never_refused() {
+        for (provenance, applied, ceiling) in [
+            (OffsetProvenance::Installed, 0, 900),
+            (OffsetProvenance::Recovered, 0, 0),
+            (OffsetProvenance::Recovered, 10, 900),
+        ] {
+            assert_eq!(
+                window_grant_verdict(None, provenance, applied, ceiling),
+                WindowGrantVerdict::Accept,
+                "{provenance:?} {applied} {ceiling}"
+            );
+        }
+    }
+
+    /// The refusal proper: a history-replacing grant taken while the installed
+    /// payload still covers ground the applied head has not reached.
+    // FM-REPLICATION-066
+    #[test]
+    fn a_window_grant_under_uncovered_floors_is_refused() {
+        assert_eq!(
+            window_grant_verdict(Some("newid"), OffsetProvenance::Installed, 500, 900),
+            WindowGrantVerdict::Refuse(WindowGrantRefusal::AboveTheClaim {
+                applied: 500,
+                floor_ceiling: 900,
+            })
+        );
+    }
+
+    /// The boundary is `applied >= max(Y_s)`: at the ceiling the node holds
+    /// exactly its claim and the state is a clean shared prefix, so the grant
+    /// stays partial. One below it, it is not.
+    // FM-REPLICATION-066
+    #[test]
+    fn the_refusal_ends_exactly_at_the_ceiling() {
+        let at = |applied| {
+            window_grant_verdict(Some("newid"), OffsetProvenance::Installed, applied, 900)
+        };
+        assert!(matches!(at(899), WindowGrantVerdict::Refuse(_)));
+        assert_eq!(at(900), WindowGrantVerdict::Accept);
+        assert_eq!(at(901), WindowGrantVerdict::Accept);
+    }
+
+    /// Retired floors (`ceiling == 0`) leave the window grant alone: there is
+    /// nothing above the claim left to be wrong about.
+    // FM-REPLICATION-066
+    #[test]
+    fn a_window_grant_with_no_floors_in_force_is_accepted() {
+        assert_eq!(
+            window_grant_verdict(Some("newid"), OffsetProvenance::Installed, 0, 0),
+            WindowGrantVerdict::Accept
+        );
+    }
+
+    /// R16: recovered offsets refuse window grants unconditionally — including
+    /// at an offset that would otherwise sail through, because the vector that
+    /// would have described the residue did not survive the restart.
+    // FM-REPLICATION-066
+    #[test]
+    fn a_recovered_stint_refuses_every_window_grant() {
+        for (applied, ceiling) in [(0, 0), (5_000, 0), (5_000, 900)] {
+            assert_eq!(
+                window_grant_verdict(Some("newid"), OffsetProvenance::Recovered, applied, ceiling),
+                WindowGrantVerdict::Refuse(WindowGrantRefusal::RecoveredOffsets),
+                "{applied} {ceiling}"
             );
         }
     }

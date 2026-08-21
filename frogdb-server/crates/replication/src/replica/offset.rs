@@ -6,7 +6,28 @@ use crate::offset_coordinator::OffsetCoordinator;
 use crate::state::ReplicationState;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Where the offsets a node is measuring a window grant against came from.
+///
+/// The distinction matters only for `+CONTINUE` grants that *replace* the
+/// history (FM-REPLICATION-066 / TR-REPLICATION-034): such a grant resumes the
+/// stream over whatever the node already holds, so it is safe only when the node
+/// can say that what it holds stops at its claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffsetProvenance {
+    /// Established in this process by a full-sync install: the offsets and the
+    /// keyspace were adopted together from one payload, and the payload's
+    /// coverage vector describes exactly what sits above the claim.
+    Installed,
+    /// Seeded from the persisted replication state at boot. The persisted offset
+    /// lags the applied head by construction (it is reconciled at save points),
+    /// so a keyspace recovered alongside it may hold effects above the claim —
+    /// and nothing recovered with it describes *which*. Until issue 36 pairs the
+    /// two atomically, such a node refuses window grants outright (ruling R16);
+    /// the same-history restart bias is a documented gap owned by that issue.
+    Recovered,
+}
 
 /// The applier's admission gate, guarding the counter it is paired with.
 ///
@@ -109,6 +130,10 @@ pub struct AppliedOffset {
     /// dataset: an install that adopted the offset without the floors would
     /// replay the overshipped range verbatim, and floors without their offset
     /// would be read against the wrong head.
+    /// Where this node's offsets came from — see [`OffsetProvenance`]. Shared
+    /// with the counter it describes, because the question the refusal asks is
+    /// about *these* offsets, not about the connection reading them.
+    recovered: Arc<AtomicBool>,
     floors: Arc<Mutex<ShardCoverage>>,
     /// `max(Y_s)` over [`Self::floors`], or `0` when no floors are installed.
     ///
@@ -189,7 +214,28 @@ impl AppliedOffset {
     /// Adopt the node's shared applied atomic (from
     /// [`crate::ReplicationIdentity::applied`]).
     pub(crate) fn over(applied: Arc<AtomicU64>) -> Self {
+        Self::over_with(applied, OffsetProvenance::Installed)
+    }
+
+    /// [`Self::over`] for the boot path: these offsets were recovered from the
+    /// persisted state, not established alongside a keyspace
+    /// ([`OffsetProvenance::Recovered`], ruling R16).
+    ///
+    /// A zero seed is exempt: a node that has never held anything has nothing
+    /// above its claim to be wrong about, and marking it recovered would refuse
+    /// window grants for the rest of a fresh node's life.
+    pub(crate) fn recovered_over(applied: Arc<AtomicU64>) -> Self {
+        let provenance = if applied.load(Ordering::Acquire) == 0 {
+            OffsetProvenance::Installed
+        } else {
+            OffsetProvenance::Recovered
+        };
+        Self::over_with(applied, provenance)
+    }
+
+    fn over_with(applied: Arc<AtomicU64>, provenance: OffsetProvenance) -> Self {
         Self {
+            recovered: Arc::new(AtomicBool::new(provenance == OffsetProvenance::Recovered)),
             landed: Arc::new(AtomicU64::new(applied.load(Ordering::Acquire))),
             applied,
             gate: Arc::new(Mutex::new(ApplyGate {
@@ -208,9 +254,17 @@ impl AppliedOffset {
     }
 
     /// A standalone counter with no node behind it — unit tests and wiring that
-    /// has no identity to share.
+    /// has no identity to share. The seed is treated as a position this counter
+    /// established itself; a counter that stands in for a *restarted* node is
+    /// built with [`Self::recovered`].
     pub fn detached(seed: u64) -> Self {
         Self::over(Arc::new(AtomicU64::new(seed)))
+    }
+
+    /// [`Self::detached`] positioned as a node that recovered `seed` from the
+    /// persisted state rather than installing it (ruling R16).
+    pub fn recovered(seed: u64) -> Self {
+        Self::recovered_over(Arc::new(AtomicU64::new(seed)))
     }
 
     /// Advance by `n` stream bytes of this node's **own** writes — the primary
@@ -395,6 +449,11 @@ impl AppliedOffset {
         let ceiling = coverage.max();
         *self.floors.lock() = coverage;
         self.floor_ceiling.store(ceiling, Ordering::Release);
+        // An install is the one event that pairs a keyspace with an offset, so
+        // it is the one event that ends a recovered stint's uncertainty about
+        // what sits above the claim — including a rewind to 0, which throws the
+        // recovered keyspace away in favour of the full resync that follows.
+        self.recovered.store(false, Ordering::Release);
         live.store(offset, Ordering::Release);
         self.applied.store(offset, Ordering::Release);
         // The installed dataset *is* applied, so the landed head is level with
@@ -434,6 +493,16 @@ impl AppliedOffset {
     /// `+CONTINUE` that replaces the history would resume over them.
     pub fn floor_ceiling(&self) -> u64 {
         self.floor_ceiling.load(Ordering::Acquire)
+    }
+
+    /// Where these offsets came from — the second input to the window-grant
+    /// refusal (ruling R16, FM-REPLICATION-066).
+    pub fn provenance(&self) -> OffsetProvenance {
+        if self.recovered.load(Ordering::Acquire) {
+            OffsetProvenance::Recovered
+        } else {
+            OffsetProvenance::Installed
+        }
     }
 
     /// Whether floors are still in force — i.e. whether the applied head has yet
@@ -1458,5 +1527,39 @@ mod tests {
             None,
             "the dataset those floors described has been thrown away"
         );
+    }
+
+    /// A node that boots with a persisted offset cannot say what its recovered
+    /// keyspace holds above that offset, and says so.
+    // FM-REPLICATION-066
+    #[test]
+    fn offsets_seeded_from_the_persisted_state_are_recovered() {
+        assert_eq!(
+            AppliedOffset::recovered(5_000).provenance(),
+            OffsetProvenance::Recovered
+        );
+    }
+
+    /// A zero seed is a node that has never held anything: there is no residue
+    /// above a claim of nothing, so it is not treated as recovered.
+    // FM-REPLICATION-066
+    #[test]
+    fn a_node_that_has_never_synced_is_not_recovered() {
+        assert_eq!(
+            AppliedOffset::recovered(0).provenance(),
+            OffsetProvenance::Installed
+        );
+    }
+
+    /// An install is what ends the uncertainty: it adopts a keyspace and an
+    /// offset together.
+    // FM-REPLICATION-066
+    #[test]
+    fn an_install_clears_the_recovered_provenance() {
+        let applied = AppliedOffset::recovered(5_000);
+        let live = seeded(5_000);
+        let offsets = ReplicaOffset::new(state_with_save(5_000), live, applied.clone());
+        assert!(offsets.reset_to_payload(9_000, ShardCoverage::from_watermarks(vec![9_400])));
+        assert_eq!(applied.provenance(), OffsetProvenance::Installed);
     }
 }

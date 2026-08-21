@@ -30,9 +30,12 @@ use crate::state::ReplicationState;
 use connection::SyncType;
 pub use connection::{ConnectionState, ReplicaConnection};
 use offset::ReplicaOffset;
-pub use offset::{AppliedOffset, Claim, FrameDisposition, ReplicaApplyStint, frame_disposition};
+pub use offset::{
+    AppliedOffset, Claim, FrameDisposition, OffsetProvenance, ReplicaApplyStint, frame_disposition,
+};
 pub use psync::{
-    FullResyncPayload, PsyncArm, psync_request_args, select_full_resync_payload, select_psync_arm,
+    FullResyncPayload, PsyncArm, WindowGrantRefusal, WindowGrantVerdict, psync_request_args,
+    select_full_resync_payload, select_psync_arm, window_grant_verdict,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::offset::ReplicaOffset;
 use super::payload_reader::PayloadReader;
 use super::psync::{
-    FullResyncPayload, PsyncArm, psync_request_args, select_full_resync_payload, select_psync_arm,
+    FullResyncPayload, PsyncArm, WindowGrantVerdict, psync_request_args,
+    select_full_resync_payload, select_psync_arm, window_grant_verdict,
 };
 use super::{FullSyncPayload, InstallError, SnapshotInstaller};
 use parking_lot::RwLock;
@@ -298,6 +299,33 @@ impl ReplicaConnection {
                 }
             }
             PsyncArm::Continue { granted_id } => {
+                let applied = self.offsets.applied();
+                if let WindowGrantVerdict::Refuse(reason) = window_grant_verdict(
+                    granted_id.as_deref(),
+                    applied.provenance(),
+                    applied.current(),
+                    applied.floor_ceiling(),
+                ) {
+                    // Same rewind-and-drop the FULLRESYNC arm uses, and for the
+                    // same reason: at 0 the reconnect sends `PSYNC ? -1` and is
+                    // answered with a dataset, which replaces the residue this
+                    // node could not account for. Retaining the head instead
+                    // would have the next reconnect granted `+CONTINUE` again,
+                    // refused again, and looping (FM-REPLICATION-066).
+                    if !self.offsets.reset_to(0) {
+                        return Err(io::Error::other(
+                            "replication stream retired during CONTINUE",
+                        ));
+                    }
+                    tracing::warn!(
+                        ?reason,
+                        replication_id = ?granted_id,
+                        "Refusing a window grant over an unaccounted tail; degrading to full resync"
+                    );
+                    return Err(io::Error::other(
+                        "refused a window grant over an unaccounted tail",
+                    ));
+                }
                 if let Some(granted_id) = granted_id {
                     // The primary shifted its id (it was promoted) but the stream is
                     // continuous: everything up to the current offset is identical
@@ -554,7 +582,7 @@ mod tests {
     use crate::frame::ReplicationFrame;
     use crate::fullsync::{
         CHECKPOINT_MARKER, CheckpointChecksum, CheckpointFileHeader, FullSyncMetadata,
-        SNAPSHOT_MARKER, calculate_bytes_checksum,
+        SNAPSHOT_MARKER, ShardCoverage, calculate_bytes_checksum,
     };
     use crate::replica::offset::{AppliedOffset, ReplicaOffset};
     use std::future::Future;
@@ -666,14 +694,25 @@ mod tests {
         state: Arc<RwLock<ReplicationState>>,
         seed: u64,
     ) -> (io::Result<SyncType>, ReplicaOffset) {
-        let (mut client, server) = tokio::io::duplex(64 * 1024);
-        client.write_all(script).await.unwrap();
-
         let offsets = ReplicaOffset::new(
             state.clone(),
             Arc::new(AtomicU64::new(seed)),
             AppliedOffset::detached(seed),
         );
+        psync_against_offsets(script, state, offsets).await
+    }
+
+    /// [`psync_against`] over heads the caller built — for the cases where the
+    /// *provenance* of the offsets, or the floors installed over them, is the
+    /// thing under test (FM-REPLICATION-066).
+    async fn psync_against_offsets(
+        script: &[u8],
+        state: Arc<RwLock<ReplicationState>>,
+        offsets: ReplicaOffset,
+    ) -> (io::Result<SyncType>, ReplicaOffset) {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        client.write_all(script).await.unwrap();
+
         let mut conn = ReplicaConnection {
             stream: Box::new(server),
             _primary_addr: "127.0.0.1:6379".parse().unwrap(),
@@ -690,6 +729,121 @@ mod tests {
         };
         let verdict = conn.psync().await;
         (verdict, offsets)
+    }
+
+    /// A window grant taken while the installed payload still covers ground the
+    /// applied head has not reached is refused, and the refusal rewinds: the
+    /// stream this connection was granted would have resumed *over* the
+    /// unreached tail under a history that need never rewrite it. At 0 the next
+    /// reconnect asks `PSYNC ? -1` and is answered with a dataset, so the
+    /// refusal cannot loop.
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn a_window_grant_over_an_uncovered_tail_is_refused_and_rewinds() {
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let held = state.read().replication_id.clone();
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(500)),
+            AppliedOffset::detached(500),
+        );
+        assert!(offsets.reset_to_payload(500, ShardCoverage::from_watermarks(vec![900, 700])));
+
+        let (verdict, offsets) = psync_against_offsets(
+            b"+CONTINUE cafebabecafebabecafebabecafebabecafebabe\r\n",
+            state.clone(),
+            offsets,
+        )
+        .await;
+
+        let e = verdict.expect_err("the grant must be refused");
+        assert_eq!(
+            e.to_string(),
+            "refused a window grant over an unaccounted tail"
+        );
+        assert_eq!(
+            offsets.current(),
+            0,
+            "the refusal rewinds so the reconnect asks for a dataset"
+        );
+        let st = state.read();
+        assert_eq!(
+            st.replication_id, held,
+            "a refused grant is not adopted as this node's identity"
+        );
+        assert_eq!(
+            st.secondary_id, None,
+            "nor minted as a failover window over a tail this node cannot account for"
+        );
+    }
+
+    /// Same node, same floors, a *bare* `+CONTINUE`: the history did not change,
+    /// so the stream about to arrive is the very one that wrote the tail and the
+    /// floors dedup it exactly. Refusing here would turn every healthy reconnect
+    /// during a floor window into a full resync.
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn a_same_history_continue_is_granted_over_the_very_same_floors() {
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(500)),
+            AppliedOffset::detached(500),
+        );
+        assert!(offsets.reset_to_payload(500, ShardCoverage::from_watermarks(vec![900, 700])));
+
+        let (verdict, offsets) =
+            psync_against_offsets(b"+CONTINUE\r\n", state.clone(), offsets).await;
+
+        assert!(matches!(verdict.unwrap(), SyncType::PartialSync));
+        assert_eq!(offsets.current(), 500, "and the head is left where it was");
+    }
+
+    /// Ruling R16: a node whose offsets came back from the persisted state
+    /// refuses window grants outright, even with no floors in force — the vector
+    /// that would have described what sits above its claim did not survive the
+    /// restart.
+    // FM-REPLICATION-066
+    #[tokio::test]
+    async fn a_restarted_node_refuses_a_window_grant_it_cannot_account_for() {
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(700)),
+            AppliedOffset::recovered(700),
+        );
+
+        let (verdict, offsets) = psync_against_offsets(
+            b"+CONTINUE cafebabecafebabecafebabecafebabecafebabe\r\n",
+            state.clone(),
+            offsets,
+        )
+        .await;
+
+        assert_eq!(
+            verdict
+                .expect_err("a recovered stint must refuse the grant")
+                .to_string(),
+            "refused a window grant over an unaccounted tail"
+        );
+        assert_eq!(offsets.current(), 0);
+
+        // The same node, once a full sync has paired its keyspace with an
+        // offset, takes the very same grant.
+        let state = Arc::new(RwLock::new(ReplicationState::new()));
+        let offsets = ReplicaOffset::new(
+            state.clone(),
+            Arc::new(AtomicU64::new(700)),
+            AppliedOffset::recovered(700),
+        );
+        assert!(offsets.reset_to_payload(700, ShardCoverage::none()));
+        let (verdict, _offsets) = psync_against_offsets(
+            b"+CONTINUE cafebabecafebabecafebabecafebabecafebabe\r\n",
+            state.clone(),
+            offsets,
+        )
+        .await;
+        assert!(matches!(verdict.unwrap(), SyncType::PartialSync));
     }
 
     /// The marker decides which receive path the caller drives, and the two

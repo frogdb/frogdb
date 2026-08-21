@@ -98,7 +98,12 @@ impl ReplicationIdentity {
         live.fetch_max(state.offset_at_save, Ordering::AcqRel);
         // Recovered state describes data on disk, so at boot the node holds
         // everything it has received: applied starts level with live.
-        let applied = AppliedOffset::over(Arc::new(AtomicU64::new(live.load(Ordering::Acquire))));
+        // Recovered, not installed: the persisted offset lags the applied head
+        // by construction, so the keyspace that came back with it may hold
+        // effects above the claim and nothing describes which
+        // (FM-REPLICATION-066 / ruling R16).
+        let applied =
+            AppliedOffset::recovered_over(Arc::new(AtomicU64::new(live.load(Ordering::Acquire))));
         Self {
             state: Arc::new(RwLock::new(state)),
             live,
@@ -110,7 +115,7 @@ impl ReplicationIdentity {
     /// wiring with no tracker.
     pub fn detached(state: ReplicationState) -> Self {
         let live = Arc::new(AtomicU64::new(state.offset_at_save));
-        let applied = AppliedOffset::detached(state.offset_at_save);
+        let applied = AppliedOffset::recovered(state.offset_at_save);
         Self {
             state: Arc::new(RwLock::new(state)),
             live,
