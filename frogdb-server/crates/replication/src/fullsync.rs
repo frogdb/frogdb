@@ -78,16 +78,20 @@ impl ShardCoverage {
     /// No watermarks at all — a payload that carries no coverage claim, so the
     /// replica installs no floors and behaves exactly as it did before
     /// FM-REPLICATION-066.
+    ///
+    /// Mutating this to `Default::default()` is an equivalent mutant: the
+    /// derived `Default` *is* the empty vector, so no observation can separate
+    /// the two. The name is kept because "no claim" is the meaning at every
+    /// call site, and the mutant is excluded by name in `.cargo/mutants.toml`.
     pub fn none() -> Self {
         Self(Vec::new())
     }
 
+    /// Whether this vector makes no claim at all. Not the same question as
+    /// "are all its watermarks zero": a vector of zeros claims that each of
+    /// those shards contributed nothing above 0, which is a floor.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
     }
 
     pub fn as_slice(&self) -> &[u64] {
@@ -691,6 +695,16 @@ mod tests {
         assert_eq!(parsed.render(), "");
         assert_eq!(parsed.max(), 0);
         assert_eq!(parsed.watermark(0), None);
+
+        // A vector of zeros is not the same answer: it claims two shards
+        // contributed nothing above 0, and that claim is a pair of floors.
+        let zeros = ShardCoverage::parse("0,0").unwrap();
+        assert!(
+            !zeros.is_empty(),
+            "an all-zero vector still makes a claim, so it is not the empty one"
+        );
+        assert_eq!(zeros.max(), 0);
+        assert_eq!(zeros.watermark(1), Some(0));
     }
 
     // FM-REPLICATION-066

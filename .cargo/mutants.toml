@@ -41,6 +41,13 @@ exclude_re = [
     # `CfTier::label` exists only to name the tier in two `error!` fields; no
     # caller branches on it.
     "CfTier::label",
+    # `ShardCoverage::none()` returns the empty vector, which is exactly what
+    # the type's derived `Default` returns — so replacing the body with
+    # `Default::default()` is an equivalent mutant no observation can kill (see
+    # the comment at the constructor, FM-REPLICATION-066). Only this one
+    # substitution is excluded; every other `ShardCoverage` mutation stays in
+    # scope.
+    "replace ShardCoverage::none -> Self with Default::default\\(\\)",
     "::record_gauge",
     "::record_histogram",
     "::record_command_latency_ms",
