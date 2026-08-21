@@ -973,6 +973,13 @@ run *args:
 run-release *args:
     {{dyld-env}} {{rocksdb-env}} cargo run --release -p frogdb-server -- {{args}}
 
+# Run the server with the full command surface (cmd-full: streams, JSON, geo, HLL, ...) —
+# every shipped binary builds this way (ADR-0005 ruling 1), but the `core-profile` dev
+# default doesn't, so local acceptance/regression/feel-test runs against the full surface
+# need this instead of `just run`.
+run-full *args:
+    {{dyld-env}} {{rocksdb-env}} cargo run -p frogdb-server --features cmd-full -- {{args}}
+
 # Start server with continuous low-volume traffic for development (debug UI at http://127.0.0.1:9090/debug)
 dev workload="mixed" rate="500" *args:
     uv run testing/load/scripts/dev_server.py -w {{workload}} --rate {{rate}} {{args}}
@@ -1192,13 +1199,14 @@ jepsen-shell:
 cross-install:
     cargo install cargo-zigbuild
 
-# Cross-compile for Linux x86_64 using zig
+# Cross-compile for Linux x86_64 using zig (ships with the full command surface — ADR-0005
+# ruling 1: every distributable artifact builds `cmd-full`, not the `core-profile` dev default)
 cross-build:
-    cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server
+    cargo zigbuild --release --target x86_64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
-# Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon)
+# Cross-compile for Linux ARM64 using zig (for benchmarks on Apple Silicon; cmd-full — see cross-build)
 cross-build-arm:
-    cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server
+    cargo zigbuild --release --target aarch64-unknown-linux-gnu --bin frogdb-server --features cmd-full
 
 # Verify binary is valid Linux ELF
 cross-verify:

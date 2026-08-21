@@ -41,8 +41,8 @@ impl ConnectionHandler {
             Some(h) => h,
             None => {
                 return Response::error(format!(
-                    "ERR unknown command '{}', with args beginning with:",
-                    cmd_name
+                    "ERR {}",
+                    frogdb_protocol::format_unknown_command_error(&cmd.name, &cmd.args)
                 ));
             }
         };

@@ -116,7 +116,7 @@ jobs:
       with:
         shared-key: release-${{ matrix.target }}
     - name: Build
-      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frogctl --bin frogdb-admin
+      run: cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frogctl --bin frogdb-admin --features frogdb-server/cmd-full
     - name: Create release archive
       run: |-
         cd target/${{ matrix.target }}/release

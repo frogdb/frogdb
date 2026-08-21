@@ -10,6 +10,7 @@ mod format;
 mod limits;
 mod reply;
 mod response;
+mod unknown_command;
 mod version;
 
 pub use command::ParsedCommand;
@@ -21,6 +22,7 @@ pub use response::{
     BlockingOp, BytesFrame, Direction, InternalAction, RaftClusterOp, Response, SlotMigrationKind,
     WireResponse, WireResult, sanitize_error_message,
 };
+pub use unknown_command::format_unknown_command_error;
 pub use version::ProtocolVersion;
 
 // Re-export RESP3 frame type for protocol-aware sending

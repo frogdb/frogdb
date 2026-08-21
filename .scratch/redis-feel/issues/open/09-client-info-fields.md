@@ -42,3 +42,27 @@ subcommands, adjacent to where the existing field list is built).
 - [ ] `CLIENT INFO`/`CLIENT LIST` regression coverage for whichever fields are added
 
 Size: S
+
+## Comments
+
+Implemented `watch`, `tot-net-in`, `tot-net-out`, `rbs`, `rbp`; `io-thread` omitted.
+
+- `watch` — real live count from `ConnectionState::watched_key_iter()`, synced into the client
+  registry on the same periodic cadence as memory stats (`ClientRegistry::update_watch_count`,
+  wired from `ConnectionHandler::maybe_sync_stats`).
+- `tot-net-in`/`tot-net-out` — sourced from the already-tracked `ClientStats::bytes_recv`/
+  `bytes_sent`; the registry just wasn't attaching `stats` to the `ClientInfo` it built for
+  `list()`/`get()` (`stats: None` unconditionally) — now `Some(entry.stats.clone())`.
+- `rbs`/`rbp` — `rbs` reuses the real current `query_buf_size` (same value FrogDB already tracked
+  for `qbuf`); `rbp` is a new high-water mark (`ConnectionState::query_buf_peak`), sampled at the
+  same periodic memory-sync point rather than every read. It's a real observed peak over sampled
+  points, not a fabricated buffer capacity — cheaper than Redis's continuous tracking but never
+  dishonest.
+- `io-thread` — **omitted**. FrogDB does assign each connection a round-robin "home shard"
+  at accept time (`acceptor.rs`'s `RoundRobinAssigner`, threaded through as
+  `ConnectionHandler::shard_id` / `connection/routing.rs:78`), but that id is a *data-shard*
+  routing default for keyless commands, not an I/O-thread pin: FrogDB runs on tokio's
+  multi-threaded scheduler, and a connection's actual socket I/O and command execution are not
+  bound to any single OS thread the way Redis's io-thread field describes. Reporting the
+  home-shard id under the `io-thread` key would imply a threading guarantee FrogDB doesn't make,
+  so the field is left out rather than mapped to something misleading.

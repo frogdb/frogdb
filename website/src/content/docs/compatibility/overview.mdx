@@ -26,6 +26,7 @@ FrogDB advertises `redis_version:{versions.advertised_redis_version}` in `INFO` 
 FrogDB persists data through RocksDB rather than Redis RDB snapshots and AOF logs:
 
 - **No RDB or AOF files.** Data lives in RocksDB SST files fronted by a write-ahead log.
+- **`CONFIG GET appendonly` returns `no`.** There is no AOF behind it to report on, so this is a truthful answer rather than a fabricated one; `CONFIG SET appendonly` is accepted and ignored. Use `persistence.enabled` (see [Configuration](#configuration) below) to control FrogDB's own durability.
 - **Forkless `BGSAVE`.** `BGSAVE` triggers a snapshot without a `fork()` of the server process.
 - **No `BGREWRITEAOF`.** RocksDB manages WAL rotation and compaction internally.
 - **Durability modes** are `async`, `periodic`, and `sync` (`persistence.durability-mode`), replacing Redis `appendfsync always/everysec/no`. In `sync` mode the server waits for an fsync before acknowledging a write.
@@ -86,17 +87,18 @@ In **cluster mode**, multi-key commands (`MGET`, `MSET`, and similar) require al
 
 FrogDB runs scripts on an embedded Lua 5.4 interpreter (Redis uses Lua 5.1), which introduces a few edge-case syntax and semantic differences at the language level. The FrogDB-specific behavioral differences are:
 
-### Strict key declaration
+### Undeclared key access
 
-Every key a script accesses must be declared through `KEYS[]`. Accessing an undeclared key returns an error (`script tried to access undeclared key`). Redis permits undeclared key access but documents it as unsupported.
+FrogDB does not require a script to declare every key it touches through `KEYS[]`. A `redis.call` against a key that was never declared succeeds, matching Redis, which permits undeclared key access but documents it as unsupported.
 
 ```lua
--- Works: the key is declared
-EVAL "return redis.call('GET', KEYS[1])" 1 mykey
-
--- Errors in FrogDB (accepted by Redis): 'mykey' is not declared
+-- Works in both Redis and FrogDB, even though 'mykey' is never declared
 EVAL "return redis.call('GET', 'mykey')" 0
 ```
+
+The one key-safety check a script is subject to is slot cohesion, and it applies only to `#!lua`-shebang scripts running in cluster mode: every key the script touches — declared or undeclared — must hash to the same slot as the first key seen, or the call fails with `Script attempted to access keys that do not hash to the same slot` (Redis's own cluster-mode scripting error). Add `allow-cross-slot-keys` to the shebang's `flags=` list to opt out, matching Redis's `SCRIPT_ALLOW_CROSS_SLOT`. Standalone mode has no such check: a script may touch any key on any shard.
+
+This is a separate concern from the [single-shard requirement](#single-shard-requirement) below, which governs the keys a script *declares* through `numkeys`, not the keys `redis.call` touches while it runs.
 
 ### Single-shard requirement
 

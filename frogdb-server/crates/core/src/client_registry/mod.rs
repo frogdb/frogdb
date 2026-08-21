@@ -318,6 +318,9 @@ pub enum UnblockMode {
 pub struct ClientMemoryUsage {
     /// Query buffer size (bytes in codec read buffer).
     pub query_buf_size: usize,
+    /// High-water mark of `query_buf_size`, sampled at each memory sync.
+    /// Backs CLIENT INFO/LIST's `rbp` field.
+    pub query_buf_peak: usize,
     /// Argv memory (parsed command args, transient during execution).
     pub argv_mem: usize,
     /// Multi buffer memory (serialized size of queued MULTI commands).
@@ -381,6 +384,9 @@ struct ClientEntry {
     in_multi: bool,
     /// Number of commands queued in MULTI.
     multi_queue_len: usize,
+    /// Number of keys currently watched (WATCH). Backs CLIENT INFO/LIST's
+    /// `watch` field.
+    watch_count: usize,
     /// Watch channel sender for kill signal (true = killed).
     kill_tx: watch::Sender<bool>,
     /// Watch channel sender for unblock signal (Some = unblocked, with mode).
@@ -459,6 +465,7 @@ impl ClientEntry {
             ssub_count: 0,
             in_multi: false,
             multi_queue_len: 0,
+            watch_count: 0,
             kill_tx,
             unblock_tx,
             lib_name: None,
@@ -679,6 +686,7 @@ impl ClientRegistry {
             ssub_count: 0,
             in_multi: false,
             multi_queue_len: 0,
+            watch_count: 0,
             kill_tx,
             unblock_tx,
             lib_name: None,
@@ -735,9 +743,10 @@ impl ClientRegistry {
                 ssub_count: entry.ssub_count,
                 in_multi: entry.in_multi,
                 multi_queue_len: entry.multi_queue_len,
+                watch_count: entry.watch_count,
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
-                stats: None,
+                stats: Some(entry.stats.clone()),
                 current_cmd: entry.current_cmd.clone(),
                 memory: entry.memory.clone(),
             })
@@ -760,9 +769,10 @@ impl ClientRegistry {
             ssub_count: entry.ssub_count,
             in_multi: entry.in_multi,
             multi_queue_len: entry.multi_queue_len,
+            watch_count: entry.watch_count,
             lib_name: entry.lib_name.clone(),
             lib_ver: entry.lib_ver.clone(),
-            stats: None,
+            stats: Some(entry.stats.clone()),
             current_cmd: entry.current_cmd.clone(),
             memory: entry.memory.clone(),
         })
@@ -828,6 +838,7 @@ impl ClientRegistry {
                 ssub_count: entry.ssub_count,
                 in_multi: entry.in_multi,
                 multi_queue_len: entry.multi_queue_len,
+                watch_count: entry.watch_count,
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
                 stats: None,
@@ -918,6 +929,14 @@ impl ClientRegistry {
     /// Update MULTI/EXEC state.
     pub fn update_multi_state(&self, id: u64, in_multi: bool, queue_len: usize) {
         self.with_client_mut(id, |entry| entry.set_multi(in_multi, queue_len));
+    }
+
+    /// Update the number of keys currently watched (WATCH). Synced
+    /// periodically alongside memory usage — see
+    /// [`crate::client_registry::ClientMemoryUsage`] and CLIENT INFO/LIST's
+    /// `watch` field.
+    pub fn update_watch_count(&self, id: u64, watch_count: usize) {
+        self.with_client_mut(id, |entry| entry.watch_count = watch_count);
     }
 
     /// Arm the node-global pause (`CLIENT PAUSE`).
@@ -1186,6 +1205,7 @@ impl ClientRegistry {
                     ssub_count: entry.ssub_count,
                     in_multi: entry.in_multi,
                     multi_queue_len: entry.multi_queue_len,
+                    watch_count: entry.watch_count,
                     lib_name: entry.lib_name.clone(),
                     lib_ver: entry.lib_ver.clone(),
                     stats: Some(entry.stats.clone()),
@@ -1214,6 +1234,7 @@ impl ClientRegistry {
                 ssub_count: entry.ssub_count,
                 in_multi: entry.in_multi,
                 multi_queue_len: entry.multi_queue_len,
+                watch_count: entry.watch_count,
                 lib_name: entry.lib_name.clone(),
                 lib_ver: entry.lib_ver.clone(),
                 stats: Some(entry.stats.clone()),
@@ -1677,6 +1698,21 @@ mod tests {
         assert!(info.flags.contains(ClientFlags::MULTI));
     }
 
+    // issue 09: `watch` in CLIENT INFO/LIST comes from this method, wired
+    // from the periodic memory-sync path (see
+    // `ConnectionHandler::maybe_sync_stats`) rather than
+    // `update_multi_state`'s currently-unwired call site.
+    #[test]
+    fn test_update_watch_count() {
+        let registry = Arc::new(ClientRegistry::new());
+        let _handle = registry.register(1, test_addr(1001), None);
+
+        registry.update_watch_count(1, 4);
+
+        let info = registry.get(1).unwrap();
+        assert_eq!(info.watch_count, 4);
+    }
+
     #[test]
     fn test_client_info_to_list_entry() {
         let info = ClientInfo {
@@ -1692,6 +1728,7 @@ mod tests {
             ssub_count: 3,
             in_multi: false,
             multi_queue_len: 0,
+            watch_count: 0,
             lib_name: Some(Bytes::from_static(b"testlib")),
             lib_ver: Some(Bytes::from_static(b"1.0.0")),
             stats: None,
@@ -1707,6 +1744,55 @@ mod tests {
         assert!(entry.contains("ssub=3"));
         assert!(entry.contains("lib-name=testlib"));
         assert!(entry.contains("lib-ver=1.0.0"));
+        // issue 09: watch/tot-net-*/rbs/rbp/redir must be present in every
+        // entry, never silently dropped.
+        assert!(entry.contains("watch=0"));
+        assert!(entry.contains("tot-net-in=0"));
+        assert!(entry.contains("tot-net-out=0"));
+        assert!(entry.contains("rbs=0"));
+        assert!(entry.contains("rbp=0"));
+        assert!(entry.contains("redir=-1"));
+    }
+
+    // issue 09: watch/tot-net-in/tot-net-out/rbs/rbp report real, non-zero
+    // per-connection values rather than always-0 placeholders.
+    #[test]
+    fn test_client_info_reports_real_watch_net_and_buffer_fields() {
+        let mut stats = ClientStats::default();
+        stats.bytes_recv = 512;
+        stats.bytes_sent = 2048;
+
+        let info = ClientInfo {
+            id: 7,
+            addr: test_addr(1),
+            local_addr: None,
+            name: None,
+            created_at: Instant::now(),
+            last_command_at: Instant::now(),
+            flags: ClientFlags::NONE,
+            sub_count: 0,
+            psub_count: 0,
+            ssub_count: 0,
+            in_multi: false,
+            multi_queue_len: 0,
+            watch_count: 3,
+            lib_name: None,
+            lib_ver: None,
+            stats: Some(stats),
+            current_cmd: None,
+            memory: ClientMemoryUsage {
+                query_buf_size: 64,
+                query_buf_peak: 256,
+                ..Default::default()
+            },
+        };
+
+        let entry = info.to_client_list_entry();
+        assert!(entry.contains("watch=3"), "{entry}");
+        assert!(entry.contains("tot-net-in=512"), "{entry}");
+        assert!(entry.contains("tot-net-out=2048"), "{entry}");
+        assert!(entry.contains("rbs=64"), "{entry}");
+        assert!(entry.contains("rbp=256"), "{entry}");
     }
 
     #[test]

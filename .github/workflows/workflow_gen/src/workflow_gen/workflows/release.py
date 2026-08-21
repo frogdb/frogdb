@@ -111,8 +111,12 @@ def release_workflow() -> Workflow:
             rust_toolchain_step(targets="${{ matrix.target }}"),
             cargo_cache_step(shared_key="release-${{ matrix.target }}"),
             run_step(
+                # `frogdb-server/cmd-full` (package-qualified: this selects bins from
+                # three packages and only frogdb-server has the feature) ships the
+                # complete command surface — every distributable artifact builds
+                # `cmd-full` (ADR-0005 ruling 1); `core-profile` is dev-only.
                 name="Build",
-                run="cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frogctl --bin frogdb-admin",
+                run="cargo build --release --target ${{ matrix.target }} --bin frogdb-server --bin frogctl --bin frogdb-admin --features frogdb-server/cmd-full",
             ),
             run_step(
                 name="Create release archive",

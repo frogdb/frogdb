@@ -450,7 +450,7 @@ impl Command for XsetidCommand {
             None => {
                 // XSETID on a nonexistent key returns an error in Redis 7+
                 Err(CommandError::InvalidArgument {
-                    message: "ERR The XSETID target key does not exist".to_string(),
+                    message: "The XSETID target key does not exist".to_string(),
                 })
             }
         }

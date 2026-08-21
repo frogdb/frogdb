@@ -114,14 +114,18 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/app/target \
     cargo chef cook --profile docker --recipe-path recipe.json
 
-# Build the actual project, verify linkage, and copy binary out of cache mount
+# Build the actual project, verify linkage, and copy binary out of cache mount.
+# `frogdb-server/cmd-full` (package-qualified: this build selects three packages'
+# bins, and only frogdb-server declares the feature) ships the complete command
+# surface — every distributable artifact builds `cmd-full` (ADR-0005 ruling 1);
+# `core-profile` stays the dev-only default.
 COPY Cargo.toml Cargo.lock ./
 COPY frogdb-server/ frogdb-server/
 COPY frogctl/ frogctl/
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --profile docker --bin frogdb-server --bin frogctl --bin frogdb-admin && \
+    cargo build --profile docker --bin frogdb-server --bin frogctl --bin frogdb-admin --features frogdb-server/cmd-full && \
     cp target/docker/frogdb-server /usr/local/bin/frogdb-server && \
     cp target/docker/frogctl /usr/local/bin/frogctl && \
     cp target/docker/frogdb-admin /usr/local/bin/frogdb-admin && \

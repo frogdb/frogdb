@@ -131,6 +131,40 @@ impl KeySpec {
         }
     }
 
+    /// The `COMMAND INFO` `(first_key, last_key, key_step, movablekeys)`
+    /// tuple for this key spec — the wire-level summary of *where* a
+    /// command's keys sit, independent of any concrete arguments.
+    ///
+    /// Positions are 1-based and count the command name as position 0 (so
+    /// `args[0]`, the first argument *after* the name, is Redis position 1),
+    /// matching Redis's own `firstkey`/`lastkey`/`step` convention. `-1`
+    /// means "the last argument". `movablekeys` is `true` exactly when the
+    /// static triplet cannot describe every key the command reads:
+    /// [`KeySpec::NumkeysAt`] and [`KeySpec::Dynamic`] report `(0, 0, 0)`
+    /// (no fixed position is knowable at all — e.g. EVAL, SINTERCARD);
+    /// [`KeySpec::DestThenNumkeys`] still has one static key (the
+    /// destination at position 1) but the source keys are movable (e.g.
+    /// ZUNIONSTORE), matching Redis's own `COMMAND INFO` for that command
+    /// family. Verified against a live Redis 8.6.1 for the commands named
+    /// above.
+    pub fn command_info_triplet(&self) -> (i64, i64, i64, bool) {
+        match *self {
+            KeySpec::None => (0, 0, 0, false),
+            KeySpec::First => (1, 1, 1, false),
+            KeySpec::FirstTwo => (1, 2, 1, false),
+            KeySpec::All => (1, -1, 1, false),
+            // BLPOP/BRPOP/BZPOPMIN: the trailing timeout is not a key, so the
+            // last key is the second-to-last argument.
+            KeySpec::AllButLast => (1, -2, 1, false),
+            KeySpec::Stride { step } => (1, -1, step.max(1) as i64, false),
+            KeySpec::Skip(n) => (n as i64 + 1, -1, 1, false),
+            KeySpec::Index(idx) => (idx as i64 + 1, idx as i64 + 1, 1, false),
+            KeySpec::NumkeysAt { .. } => (0, 0, 0, true),
+            KeySpec::DestThenNumkeys { .. } => (1, 1, 1, true),
+            KeySpec::Dynamic => (0, 0, 0, true),
+        }
+    }
+
     /// The highest fixed argument index this spec reads, if statically known.
     ///
     /// Used by [`CommandSpec::validate`] to check that the declared arity
@@ -1087,6 +1121,107 @@ mod tests {
     fn extract_dynamic_is_empty() {
         // Dynamic is resolved by the command, not here.
         assert!(KeySpec::Dynamic.extract(&args(&[b"a", b"b"])).is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // `command_info_triplet` — one case per variant, cross-checked against a
+    // live Redis 8.6.1's `COMMAND INFO` for the named command.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn command_info_triplet_none() {
+        // PING: no keys.
+        assert_eq!(KeySpec::None.command_info_triplet(), (0, 0, 0, false));
+    }
+
+    #[test]
+    fn command_info_triplet_first() {
+        // GET: firstkey 1, lastkey 1, step 1.
+        assert_eq!(KeySpec::First.command_info_triplet(), (1, 1, 1, false));
+    }
+
+    #[test]
+    fn command_info_triplet_first_two() {
+        // RENAME: firstkey 1, lastkey 2, step 1.
+        assert_eq!(KeySpec::FirstTwo.command_info_triplet(), (1, 2, 1, false));
+    }
+
+    #[test]
+    fn command_info_triplet_all() {
+        // DEL: firstkey 1, lastkey -1, step 1.
+        assert_eq!(KeySpec::All.command_info_triplet(), (1, -1, 1, false));
+    }
+
+    #[test]
+    fn command_info_triplet_all_but_last() {
+        // BLPOP: firstkey 1, lastkey -2, step 1 (trailing timeout excluded).
+        assert_eq!(
+            KeySpec::AllButLast.command_info_triplet(),
+            (1, -2, 1, false)
+        );
+    }
+
+    #[test]
+    fn command_info_triplet_stride() {
+        // MSET: firstkey 1, lastkey -1, step 2.
+        assert_eq!(
+            KeySpec::Stride { step: 2 }.command_info_triplet(),
+            (1, -1, 2, false)
+        );
+        // step 0 is defensively treated as 1, matching `extract`.
+        assert_eq!(
+            KeySpec::Stride { step: 0 }.command_info_triplet(),
+            (1, -1, 1, false)
+        );
+    }
+
+    #[test]
+    fn command_info_triplet_skip() {
+        // BITOP: dest at extracted-key 0, source keys start at args[1] ->
+        // firstkey 2, lastkey -1, step 1.
+        assert_eq!(KeySpec::Skip(1).command_info_triplet(), (2, -1, 1, false));
+    }
+
+    #[test]
+    fn command_info_triplet_index() {
+        // XGROUP <subcommand> key ...: firstkey 2, lastkey 2, step 1.
+        assert_eq!(KeySpec::Index(1).command_info_triplet(), (2, 2, 1, false));
+    }
+
+    #[test]
+    fn command_info_triplet_numkeys_at() {
+        // SINTERCARD / EVAL-style numkeys layouts: no static key position at
+        // all, so (0, 0, 0) + movablekeys.
+        assert_eq!(
+            KeySpec::NumkeysAt {
+                numkeys: 0,
+                first: 1
+            }
+            .command_info_triplet(),
+            (0, 0, 0, true)
+        );
+    }
+
+    #[test]
+    fn command_info_triplet_dest_then_numkeys() {
+        // ZUNIONSTORE: the destination is a static key at position 1, but the
+        // numkeys-derived source keys are movable — Redis reports
+        // (1, 1, 1) + movablekeys for this family, not (0, 0, 0).
+        assert_eq!(
+            KeySpec::DestThenNumkeys {
+                numkeys: 1,
+                first: 2
+            }
+            .command_info_triplet(),
+            (1, 1, 1, true)
+        );
+    }
+
+    #[test]
+    fn command_info_triplet_dynamic() {
+        // EVAL: keys located by the command's own `dynamic_keys` hook, no
+        // static position at all.
+        assert_eq!(KeySpec::Dynamic.command_info_triplet(), (0, 0, 0, true));
     }
 
     #[test]

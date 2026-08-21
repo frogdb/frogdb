@@ -779,3 +779,45 @@ async fn error_reply_with_embedded_crlf_does_not_inject_frames() {
         frames[0]
     );
 }
+
+// ---------------------------------------------------------------------------
+// HELLO
+// ---------------------------------------------------------------------------
+
+// issue 06 (redis-feel): HELLO's `version` field advertises the compat
+// version (`frogdb_core::ADVERTISED_REDIS_VERSION`), not the product's own
+// crate version — and `server` stays `frogdb`, never `redis`.
+#[tokio::test]
+async fn tcl_hello_advertises_the_compat_version() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let resp = client.command(&["HELLO"]).await;
+    let items = unwrap_array(resp);
+    assert!(
+        items.len() % 2 == 0,
+        "HELLO reply must be an even-length array"
+    );
+
+    let mut fields = std::collections::HashMap::new();
+    for pair in items.chunks(2) {
+        let key = String::from_utf8_lossy(unwrap_bulk(&pair[0])).to_string();
+        fields.insert(key, pair[1].clone());
+    }
+
+    let server_field = fields.get("server").expect("HELLO missing `server` field");
+    assert_eq!(
+        unwrap_bulk(server_field),
+        b"frogdb",
+        "HELLO server field mismatch"
+    );
+
+    let version_field = fields
+        .get("version")
+        .expect("HELLO missing `version` field");
+    assert_eq!(
+        unwrap_bulk(version_field),
+        frogdb_core::ADVERTISED_REDIS_VERSION.as_bytes(),
+        "HELLO version field should advertise the compat version, not the crate version"
+    );
+}

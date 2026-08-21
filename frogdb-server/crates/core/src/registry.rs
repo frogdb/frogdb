@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::command::{Arity, Command, CommandFlags, ExecutionStrategy};
+use crate::command_spec::CommandSpec;
 use crate::conn_command::ConnectionCommand;
 
 /// The single executor a registered command carries — a tagged union so that a
@@ -63,6 +64,17 @@ impl CommandImpl {
         match self {
             CommandImpl::Shard(cmd) => cmd.flags(),
             CommandImpl::Connection(cmd) => cmd.spec().flags,
+        }
+    }
+
+    /// Get the command's full declarative spec — the single source of truth
+    /// `COMMAND INFO`/docs-gen read every mechanical fact (arity, key spec,
+    /// flags) from, rather than re-deriving each fact through its own
+    /// dedicated accessor.
+    pub fn spec(&self) -> &'static CommandSpec {
+        match self {
+            CommandImpl::Shard(cmd) => cmd.spec(),
+            CommandImpl::Connection(cmd) => cmd.spec(),
         }
     }
 
@@ -375,6 +387,9 @@ mod tests {
         assert!(entry.is_full());
         assert!(!entry.is_stub());
         assert_eq!(entry.name(), "TEST");
+        // `spec()` exposes the same static spec `name()`/`arity()`/`flags()`
+        // derive from — the single source `COMMAND INFO` reads.
+        assert_eq!(entry.spec().name, "TEST");
         assert_eq!(entry.execution_strategy(), ExecutionStrategy::Standard);
     }
 
@@ -445,6 +460,7 @@ mod tests {
         // level), never stubs.
         assert!(!entry.is_stub());
         assert_eq!(entry.name(), "TESTCONN");
+        assert_eq!(entry.spec().name, "TESTCONN");
         assert_eq!(
             entry.execution_strategy(),
             ExecutionStrategy::ConnectionLevel(ConnectionLevelOp::Admin)

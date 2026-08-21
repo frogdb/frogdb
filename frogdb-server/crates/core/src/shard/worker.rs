@@ -473,6 +473,7 @@ impl ShardWorker {
             snapshot_stats,
             bgsave_in_progress,
             recovery_stats,
+            eviction_policy: self.eviction.policy(),
             // Set by `run_script` alone: only a script invocation carries the
             // per-caller `WriteAdmission` the seam needs, and only a script
             // produces writes the connection's gauntlet never saw.

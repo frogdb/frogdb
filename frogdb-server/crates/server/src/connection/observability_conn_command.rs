@@ -724,12 +724,10 @@ async fn latency_history(ctx: &ConnCtx<'_>, args: &[Bytes]) -> Response {
     let event_str = String::from_utf8_lossy(&args[0]);
     let event = match LatencyEvent::from_str(&event_str) {
         Some(e) => e,
-        None => {
-            return Response::error(format!(
-                "ERR Unknown event type: {}. Valid events: command, fork, aof-fsync, expire-cycle, eviction-cycle, snapshot-io",
-                event_str
-            ));
-        }
+        // Redis returns an empty array for an event name it doesn't track,
+        // not an error — the history for that event genuinely is empty. See
+        // the Truthful-Inert Shim policy (ADR-0005).
+        None => return Response::Array(vec![]),
     };
 
     let history = gather_latency_history(ctx.shard_senders, event).await;
@@ -1194,12 +1192,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latency_history_unknown_event_errors() {
+    async fn latency_history_unknown_event_is_empty_array() {
+        // Redis returns an empty array for an event it doesn't track, not an
+        // error — the history for that event genuinely is empty (truthful,
+        // not fabricated). See ADR-0005.
         let fx = Fixture::new();
         let resp = LatencyConnCommand
             .execute(&mut fx.ctx(), &[arg("HISTORY"), arg("bogus-event")])
             .await;
-        assert!(matches!(resp, Response::Error(_)));
+        assert_eq!(resp, Response::Array(vec![]));
+    }
+
+    #[tokio::test]
+    async fn latency_history_known_event_with_no_samples_is_empty_array() {
+        let fx = Fixture::new();
+        let resp = LatencyConnCommand
+            .execute(&mut fx.ctx(), &[arg("HISTORY"), arg("command")])
+            .await;
+        assert_eq!(resp, Response::Array(vec![]));
     }
 
     #[tokio::test]

@@ -484,6 +484,12 @@ pub struct ConnectionState {
 
     /// Last sync time for stats.
     pub last_stats_sync: std::time::Instant,
+
+    /// High-water mark of the read (query) buffer size, sampled at each
+    /// memory sync (see [`crate::connection::lifecycle::ConnectionHandler::compute_client_memory`]).
+    /// Backs CLIENT INFO/LIST's `rbp` field — a real peak over sampled
+    /// points, not an instantaneous read, but never fabricated.
+    pub query_buf_peak: usize,
 }
 
 impl ConnectionState {
@@ -513,6 +519,7 @@ impl ConnectionState {
             readonly: false,
             local_stats: LocalClientStats::default(),
             last_stats_sync: now,
+            query_buf_peak: 0,
         }
     }
 

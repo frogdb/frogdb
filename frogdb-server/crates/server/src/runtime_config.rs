@@ -2546,6 +2546,14 @@ impl ConfigManager {
                 name: id.name(),
                 value: "64",
             }),
+            // Truthful-inert shim (ADR-0005, ruling 3 / issue 07a): FrogDB has
+            // no AOF, so `appendonly` truthfully reports "no" — never "yes",
+            // since there is nothing behind it. CONFIG SET accepts-and-ignores
+            // like the other Redis-compat no-ops above.
+            Appendonly => Box::new(NoopParam {
+                name: id.name(),
+                value: "no",
+            }),
             // === 13-01 Pass 2b: genuinely-live mutable param ===
             // The ACL log length is re-read on every append; apply/get reach it
             // through the already-injected `Arc<AclManager>`, so CONFIG SET
@@ -4214,6 +4222,34 @@ log-max-len = 128
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_config_get_appendonly_is_truthful_no() {
+        // Truthful-inert shim (ADR-0005, ruling 3 / issue 07a): FrogDB has no
+        // AOF, so `appendonly` truthfully reports "no" — never "yes", since
+        // there is nothing behind it to enable.
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        let results = manager.get("appendonly");
+        assert_eq!(results, vec![("appendonly".to_string(), "no".to_string())]);
+    }
+
+    #[test]
+    fn test_config_set_appendonly_accepts_and_ignores() {
+        // CONFIG SET appendonly follows the same accept-and-ignore convention
+        // as the other Redis-compat no-ops (`save`, `hz`, ...): it never
+        // errors, and GET keeps reporting the truthful "no" regardless of
+        // what was set, since FrogDB has no AOF to actually enable.
+        let config = test_config();
+        let manager = ConfigManager::new(&config);
+
+        assert!(manager.set("appendonly", "yes").is_ok());
+        assert_eq!(manager.get("appendonly")[0].1, "no");
+
+        assert!(manager.set("appendonly", "no").is_ok());
+        assert_eq!(manager.get("appendonly")[0].1, "no");
     }
 
     #[test]

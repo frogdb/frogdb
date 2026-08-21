@@ -136,8 +136,9 @@ impl Command for CommandCommand {
 
     fn execute(&self, ctx: &mut CommandContext, args: &[Bytes]) -> Result<Response, CommandError> {
         if args.is_empty() {
-            // COMMAND - return info about all commands
-            return Ok(Response::Array(vec![])); // Simplified for now
+            // COMMAND (no subcommand) - full command list, same structured
+            // info as a subcommand-less `COMMAND INFO`.
+            return Ok(Response::Array(all_commands_info(ctx)));
         }
 
         let subcommand = args[0].to_ascii_uppercase();
@@ -178,9 +179,11 @@ impl Command for CommandCommand {
                 }
             }
             b"INFO" => {
-                // COMMAND INFO [command-name ...] - return info for commands
+                // COMMAND INFO [command-name ...] - return info for commands.
+                // With no names, info for every registered command (matches
+                // bare `COMMAND`).
                 if args.len() == 1 {
-                    Ok(Response::Array(vec![]))
+                    Ok(Response::Array(all_commands_info(ctx)))
                 } else {
                     let mut results = Vec::new();
                     for cmd_name in &args[1..] {
@@ -192,63 +195,10 @@ impl Command for CommandCommand {
                         } else {
                             ctx.command_registry.and_then(|r| r.get_entry(&name_upper))
                         };
-                        if let Some(entry) = entry {
-                            // Build command flags array
-                            let cmd_flags = entry.flags();
-                            let mut flag_strs: Vec<Response> = Vec::new();
-                            if cmd_flags.contains(CommandFlags::WRITE) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"write")));
-                            }
-                            if cmd_flags.contains(CommandFlags::READONLY) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"readonly")));
-                            }
-                            if cmd_flags.contains(CommandFlags::FAST) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"fast")));
-                            }
-                            if cmd_flags.contains(CommandFlags::STALE) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"stale")));
-                            }
-                            if cmd_flags.contains(CommandFlags::LOADING) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"loading")));
-                            }
-                            if cmd_flags.contains(CommandFlags::ADMIN) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"admin")));
-                            }
-                            if cmd_flags.contains(CommandFlags::NOSCRIPT) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"noscript")));
-                            }
-                            if cmd_flags.contains(CommandFlags::BLOCKING) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"blocking")));
-                            }
-                            if cmd_flags.contains(CommandFlags::SKIP_SLOWLOG) {
-                                flag_strs
-                                    .push(Response::Simple(Bytes::from_static(b"skip_slowlog")));
-                            }
-                            if cmd_flags.contains(CommandFlags::NO_PROPAGATE) {
-                                flag_strs
-                                    .push(Response::Simple(Bytes::from_static(b"no-propagate")));
-                            }
-                            if cmd_flags.contains(CommandFlags::RANDOM) {
-                                flag_strs.push(Response::Simple(Bytes::from_static(b"random")));
-                            }
-                            if cmd_flags.contains(CommandFlags::MOVABLEKEYS) {
-                                flag_strs
-                                    .push(Response::Simple(Bytes::from_static(b"movablekeys")));
-                            }
-                            // Build basic command info
-                            // Format: [name, arity, [flags], first_key, last_key, step]
-                            let info = Response::Array(vec![
-                                Response::bulk(Bytes::from(name_upper.to_lowercase())),
-                                Response::Integer(-1), // Variable arity
-                                Response::Array(flag_strs),
-                                Response::Integer(0), // First key
-                                Response::Integer(0), // Last key
-                                Response::Integer(0), // Step
-                            ]);
-                            results.push(info);
-                        } else {
-                            results.push(Response::Bulk(None));
-                        }
+                        results.push(match entry {
+                            Some(entry) => build_command_info(entry.spec()),
+                            None => Response::Bulk(None),
+                        });
                     }
                     Ok(Response::Array(results))
                 }
@@ -549,7 +499,7 @@ impl Command for SetCommand {
                     && (cmp_val.len() != 16 || !cmp_val.iter().all(|b| b.is_ascii_hexdigit()))
                 {
                     return Err(CommandError::InvalidArgument {
-                        message: "ERR IFDEQ/IFDNE requires a 16 character hexadecimal digest"
+                        message: "IFDEQ/IFDNE requires a 16 character hexadecimal digest"
                             .to_string(),
                     });
                 }
@@ -831,6 +781,191 @@ impl Command for DelCommand {
     }
 }
 
+/// The `COMMAND INFO`/bare-`COMMAND` reply for every registered command —
+/// shared by both call sites so they can never drift.
+fn all_commands_info(ctx: &CommandContext) -> Vec<Response> {
+    ctx.command_registry
+        .map(|registry| {
+            registry
+                .iter()
+                .map(|(_, entry)| build_command_info(entry.spec()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Build the full 10-element `COMMAND INFO` reply for one command: name,
+/// arity, flags, first-key, last-key, key-step, ACL categories, tips,
+/// key-specs, subcommands. Matches the Redis 8.x reply shape.
+fn build_command_info(spec: &CommandSpec) -> Response {
+    let (first_key, last_key, key_step, dynamic_movable) = spec.keys.command_info_triplet();
+    // `CommandSpec::validate` only forces `CommandFlags::MOVABLEKEYS` to
+    // agree with `KeySpec::Dynamic`; `NumkeysAt`/`DestThenNumkeys` commands
+    // are movable too (see `command_info_triplet`) without necessarily
+    // carrying the bit themselves, so the wire fact is the union of both.
+    let movablekeys = spec.flags.contains(CommandFlags::MOVABLEKEYS) || dynamic_movable;
+
+    Response::Array(vec![
+        Response::bulk(Bytes::from(spec.name.to_lowercase())),
+        Response::Integer(command_info_arity(spec.arity)),
+        Response::Array(command_info_flags(spec.flags, movablekeys)),
+        Response::Integer(first_key),
+        Response::Integer(last_key),
+        Response::Integer(key_step),
+        Response::Array(command_info_categories(spec.name)),
+        // Tips: no per-command tip data source exists yet — an empty array
+        // is truthful, not a placeholder claiming knowledge we don't have.
+        Response::Array(vec![]),
+        Response::Array(command_info_key_specs(first_key, last_key, key_step)),
+        // Subcommands: no structured per-subcommand registry exists yet;
+        // same truthfulness rationale as tips.
+        Response::Array(vec![]),
+    ])
+}
+
+/// Redis's `firstkey`-relative arity encoding: exact arities (`CommandSpec::
+/// arity` min == max) are positive (including the command name itself, so
+/// `Arity::Fixed(1)` — one argument after the name — is wire arity `2`);
+/// open-ended/ranged arities are negative minimums, matching how Redis
+/// reports e.g. `SET` as `-3` and `PING` as `-1`.
+fn command_info_arity(arity: Arity) -> i64 {
+    match arity {
+        Arity::Fixed(n) => n as i64 + 1,
+        Arity::AtLeast(n) => -(n as i64 + 1),
+        Arity::Range { min, max } if min == max => min as i64 + 1,
+        Arity::Range { min, .. } => -(min as i64 + 1),
+    }
+}
+
+/// Redis-wire flag strings for a command's `CommandFlags`, plus the derived
+/// `movablekeys` fact (which may be true even when `CommandFlags::
+/// MOVABLEKEYS` itself is unset for this spec — see `build_command_info`).
+/// Only flags this registry actually tracks are emitted; flags Redis has but
+/// FrogDB's `CommandFlags` does not model (e.g. `deny-oom`) are never
+/// fabricated.
+fn command_info_flags(flags: CommandFlags, movablekeys: bool) -> Vec<Response> {
+    let mut flag_strs: Vec<Response> = Vec::new();
+    if flags.contains(CommandFlags::WRITE) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"write")));
+    }
+    if flags.contains(CommandFlags::READONLY) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"readonly")));
+    }
+    if flags.contains(CommandFlags::FAST) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"fast")));
+    }
+    if flags.contains(CommandFlags::STALE) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"stale")));
+    }
+    if flags.contains(CommandFlags::LOADING) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"loading")));
+    }
+    if flags.contains(CommandFlags::ADMIN) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"admin")));
+    }
+    if flags.contains(CommandFlags::NOSCRIPT) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"noscript")));
+    }
+    if flags.contains(CommandFlags::BLOCKING) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"blocking")));
+    }
+    if flags.contains(CommandFlags::PUBSUB) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"pubsub")));
+    }
+    if flags.contains(CommandFlags::SKIP_SLOWLOG) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"skip_slowlog")));
+    }
+    if flags.contains(CommandFlags::NO_PROPAGATE) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"no-propagate")));
+    }
+    if flags.contains(CommandFlags::RANDOM) {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"random")));
+    }
+    if movablekeys {
+        flag_strs.push(Response::Simple(Bytes::from_static(b"movablekeys")));
+    }
+    flag_strs
+}
+
+/// `@`-prefixed ACL category names for a command, from the real ACL registry
+/// (`frogdb_acl::CommandCategory`) rather than a re-derivation from
+/// `CommandFlags` — the two are joined only by the command's lowercase name,
+/// so a command absent from the ACL category table truthfully reports no
+/// categories rather than a guessed one.
+fn command_info_categories(name: &str) -> Vec<Response> {
+    frogdb_acl::CommandCategory::all_for_command(name)
+        .into_iter()
+        .map(|cat| Response::Simple(Bytes::from(format!("@{}", cat.name()))))
+        .collect()
+}
+
+/// Structured `COMMAND INFO` key-specs entries for a command whose key
+/// positions are statically known (`first_key != 0`). Movable-key commands
+/// (`first_key == 0`: `NumkeysAt`/`Dynamic`) and keyless commands report no
+/// entries — Redis's structured form for those relies on per-command
+/// `keynum`/`unknown` `begin_search`/`find_keys` metadata this registry does
+/// not carry, and fabricating it would not be truthful.
+fn command_info_key_specs(first_key: i64, last_key: i64, key_step: i64) -> Vec<Response> {
+    if first_key == 0 {
+        return Vec::new();
+    }
+    // `find_keys`'s `lastkey` is relative to `begin_search`'s index (0 means
+    // "the same key as first_key"); `-1` still means "to the last argument".
+    let relative_last_key = if last_key == -1 {
+        -1
+    } else {
+        last_key - first_key
+    };
+    vec![Response::Map(vec![
+        (
+            Response::bulk(Bytes::from_static(b"flags")),
+            Response::Array(vec![]),
+        ),
+        (
+            Response::bulk(Bytes::from_static(b"begin_search")),
+            Response::Map(vec![
+                (
+                    Response::bulk(Bytes::from_static(b"type")),
+                    Response::bulk(Bytes::from_static(b"index")),
+                ),
+                (
+                    Response::bulk(Bytes::from_static(b"spec")),
+                    Response::Map(vec![(
+                        Response::bulk(Bytes::from_static(b"index")),
+                        Response::Integer(first_key),
+                    )]),
+                ),
+            ]),
+        ),
+        (
+            Response::bulk(Bytes::from_static(b"find_keys")),
+            Response::Map(vec![
+                (
+                    Response::bulk(Bytes::from_static(b"type")),
+                    Response::bulk(Bytes::from_static(b"range")),
+                ),
+                (
+                    Response::bulk(Bytes::from_static(b"spec")),
+                    Response::Map(vec![
+                        (
+                            Response::bulk(Bytes::from_static(b"lastkey")),
+                            Response::Integer(relative_last_key),
+                        ),
+                        (
+                            Response::bulk(Bytes::from_static(b"keystep")),
+                            Response::Integer(key_step),
+                        ),
+                        (
+                            Response::bulk(Bytes::from_static(b"limit")),
+                            Response::Integer(0),
+                        ),
+                    ]),
+                ),
+            ]),
+        ),
+    ])]
+}
+
 /// Map `CommandFlags` to a Redis ACL category name.
 ///
 /// Redis COMMAND LIST FILTERBY ACLCAT returns commands whose flags match
@@ -887,6 +1022,236 @@ impl Command for ExistsCommand {
             }
         }
         Ok(Response::Integer(count))
+    }
+}
+
+#[cfg(test)]
+mod command_info_tests {
+    //! `COMMAND INFO`/bare-`COMMAND` reply-shape regression tests (issue
+    //! redis-feel/02): full 10-element wire replies for one representative
+    //! command per reachable-from-this-crate `KeySpec` variant, exercised
+    //! through the real `CommandCommand::execute` dispatch path (not just the
+    //! `command_info_triplet` mapping unit-tested in `frogdb_core::
+    //! command_spec`). GET/SET/MSET are the issue's named static-key cases;
+    //! SINTERCARD (`KeySpec::NumkeysAt`) is the movablekeys case — it lives in
+    //! this crate, unlike the issue's suggested EVAL example (a connection
+    //! command registered only in `frogdb-server`), so it is the in-crate
+    //! stand-in for "a `NumkeysAt`/`Dynamic` command reports `movablekeys` and
+    //! `(0,0,0)`".
+    use super::*;
+    use crate::set::SintercardCommand;
+    use crate::string::MsetCommand;
+    use frogdb_core::{CommandRegistry, HashMapStore};
+    use frogdb_protocol::ProtocolVersion;
+    use std::sync::Arc;
+
+    fn ctx_with_registry() -> CommandContext<'static> {
+        let mut registry = CommandRegistry::new();
+        registry.register(GetCommand);
+        registry.register(SetCommand);
+        registry.register(MsetCommand);
+        registry.register(SintercardCommand);
+        let registry: &'static Arc<CommandRegistry> = Box::leak(Box::new(Arc::new(registry)));
+
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        let mut c = CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2);
+        c.command_registry = Some(registry);
+        c
+    }
+
+    /// Run `COMMAND INFO <name>` through the real dispatch and return the
+    /// single reply entry (not the outer one-element array).
+    fn info(name: &str) -> Response {
+        let mut c = ctx_with_registry();
+        let reply = CommandCommand
+            .execute(
+                &mut c,
+                &[Bytes::from_static(b"INFO"), Bytes::from(name.to_string())],
+            )
+            .unwrap();
+        match reply {
+            Response::Array(mut entries) if entries.len() == 1 => entries.remove(0),
+            other => panic!("expected a single-entry Array, got {other:?}"),
+        }
+    }
+
+    fn flag(name: &'static str) -> Response {
+        Response::Simple(Bytes::from_static(name.as_bytes()))
+    }
+
+    fn category(name: &str) -> Response {
+        Response::Simple(Bytes::from(format!("@{name}")))
+    }
+
+    /// The structured key-specs array for a command with exactly one
+    /// statically-known key at wire position `index`, mirroring
+    /// `command_info_key_specs`'s own shape.
+    fn key_specs(index: i64, relative_last_key: i64, keystep: i64) -> Response {
+        Response::Array(vec![Response::Map(vec![
+            (
+                Response::bulk(Bytes::from_static(b"flags")),
+                Response::Array(vec![]),
+            ),
+            (
+                Response::bulk(Bytes::from_static(b"begin_search")),
+                Response::Map(vec![
+                    (
+                        Response::bulk(Bytes::from_static(b"type")),
+                        Response::bulk(Bytes::from_static(b"index")),
+                    ),
+                    (
+                        Response::bulk(Bytes::from_static(b"spec")),
+                        Response::Map(vec![(
+                            Response::bulk(Bytes::from_static(b"index")),
+                            Response::Integer(index),
+                        )]),
+                    ),
+                ]),
+            ),
+            (
+                Response::bulk(Bytes::from_static(b"find_keys")),
+                Response::Map(vec![
+                    (
+                        Response::bulk(Bytes::from_static(b"type")),
+                        Response::bulk(Bytes::from_static(b"range")),
+                    ),
+                    (
+                        Response::bulk(Bytes::from_static(b"spec")),
+                        Response::Map(vec![
+                            (
+                                Response::bulk(Bytes::from_static(b"lastkey")),
+                                Response::Integer(relative_last_key),
+                            ),
+                            (
+                                Response::bulk(Bytes::from_static(b"keystep")),
+                                Response::Integer(keystep),
+                            ),
+                            (
+                                Response::bulk(Bytes::from_static(b"limit")),
+                                Response::Integer(0),
+                            ),
+                        ]),
+                    ),
+                ]),
+            ),
+        ])])
+    }
+
+    #[test]
+    fn command_info_get_full_reply() {
+        assert_eq!(
+            info("get"),
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"get")),
+                Response::Integer(2),
+                Response::Array(vec![flag("readonly"), flag("fast")]),
+                Response::Integer(1),
+                Response::Integer(1),
+                Response::Integer(1),
+                Response::Array(vec![category("string"), category("read"), category("fast"),]),
+                Response::Array(vec![]),
+                key_specs(1, 0, 1),
+                Response::Array(vec![]),
+            ])
+        );
+    }
+
+    #[test]
+    fn command_info_set_full_reply() {
+        assert_eq!(
+            info("set"),
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"set")),
+                Response::Integer(-3),
+                Response::Array(vec![flag("write"), flag("fast")]),
+                Response::Integer(1),
+                Response::Integer(1),
+                Response::Integer(1),
+                Response::Array(vec![
+                    category("string"),
+                    category("write"),
+                    category("slow"),
+                ]),
+                Response::Array(vec![]),
+                key_specs(1, 0, 1),
+                Response::Array(vec![]),
+            ])
+        );
+    }
+
+    #[test]
+    fn command_info_mset_full_reply() {
+        assert_eq!(
+            info("mset"),
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"mset")),
+                Response::Integer(-3),
+                Response::Array(vec![flag("write")]),
+                Response::Integer(1),
+                Response::Integer(-1),
+                Response::Integer(2),
+                Response::Array(vec![
+                    category("string"),
+                    category("write"),
+                    category("slow"),
+                ]),
+                Response::Array(vec![]),
+                key_specs(1, -1, 2),
+                Response::Array(vec![]),
+            ])
+        );
+    }
+
+    /// SINTERCARD (`KeySpec::NumkeysAt`) — the movablekeys case: no static
+    /// key position exists, so first/last/step are all `0`, `movablekeys` is
+    /// asserted even though `SintercardCommand`'s own `CommandFlags` carry
+    /// only `READONLY` (see `build_command_info`'s flag/derived-fact union),
+    /// and the structured key-specs array is empty (nothing static to
+    /// describe).
+    #[test]
+    fn command_info_sintercard_reports_movablekeys() {
+        assert_eq!(
+            info("sintercard"),
+            Response::Array(vec![
+                Response::bulk(Bytes::from_static(b"sintercard")),
+                Response::Integer(-3),
+                Response::Array(vec![flag("readonly"), flag("movablekeys")]),
+                Response::Integer(0),
+                Response::Integer(0),
+                Response::Integer(0),
+                Response::Array(vec![category("set"), category("read"), category("slow")]),
+                Response::Array(vec![]),
+                Response::Array(vec![]),
+                Response::Array(vec![]),
+            ])
+        );
+    }
+
+    #[test]
+    fn command_info_unknown_command_is_nil() {
+        assert_eq!(info("nosuchcommand"), Response::Bulk(None));
+    }
+
+    #[test]
+    fn command_count_matches_registry_len() {
+        let mut c = ctx_with_registry();
+        let reply = CommandCommand
+            .execute(&mut c, &[Bytes::from_static(b"COUNT")])
+            .unwrap();
+        assert_eq!(reply, Response::Integer(4));
+    }
+
+    /// Bare `COMMAND` (no subcommand) returns the same structured info as
+    /// `COMMAND INFO` with no names — not the old empty-array placeholder.
+    #[test]
+    fn bare_command_returns_full_registry_info() {
+        let mut c = ctx_with_registry();
+        let reply = CommandCommand.execute(&mut c, &[]).unwrap();
+        match reply {
+            Response::Array(entries) => assert_eq!(entries.len(), 4),
+            other => panic!("expected Array, got {other:?}"),
+        }
     }
 }
 

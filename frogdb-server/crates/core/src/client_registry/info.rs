@@ -37,6 +37,8 @@ pub struct ClientInfo {
     pub in_multi: bool,
     /// Number of commands queued in MULTI.
     pub multi_queue_len: usize,
+    /// Number of keys currently watched (WATCH).
+    pub watch_count: usize,
     /// Library name (from CLIENT SETINFO).
     pub lib_name: Option<Bytes>,
     /// Library version (from CLIENT SETINFO).
@@ -80,8 +82,19 @@ impl ClientInfo {
 
         let cmd_str = self.current_cmd.as_deref().unwrap_or("NULL");
         let tot_mem = self.memory.total();
+        // tot-net-in/tot-net-out are cumulative per-client byte counters
+        // tracked in `ClientStats` (see `to_client_list_entry`'s caller in
+        // `client_conn_command.rs`, which is where `tot-cmds` comes from the
+        // same struct). `stats` is `None` only in contexts that never render
+        // (e.g. `KillFilter` matching), so 0 there is truthful — no client
+        // has ever seen those bytes reported as anything else.
+        let (tot_net_in, tot_net_out) = self
+            .stats
+            .as_ref()
+            .map(|s| (s.bytes_recv, s.bytes_sent))
+            .unwrap_or((0, 0));
         format!(
-            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} qbuf={} qbuf-free=0 argv-mem={} multi-mem={} obl={} oll={} omem={} tot-mem={} events=r cmd={} user=default redir=-1 resp=2 lib-name={} lib-ver={}",
+            "id={} addr={} laddr={} fd=0 name={} age={} idle={} flags={} db=0 sub={} psub={} ssub={} multi={} watch={} qbuf={} qbuf-free=0 argv-mem={} multi-mem={} tot-net-in={} tot-net-out={} rbs={} rbp={} obl={} oll={} omem={} tot-mem={} events=r cmd={} user=default redir=-1 resp=2 lib-name={} lib-ver={}",
             self.id,
             addr_str,
             laddr_str,
@@ -93,9 +106,14 @@ impl ClientInfo {
             self.psub_count,
             self.ssub_count,
             multi_qlen,
+            self.watch_count,
             self.memory.query_buf_size,
             self.memory.argv_mem,
             self.memory.multi_mem,
+            tot_net_in,
+            tot_net_out,
+            self.memory.query_buf_size,
+            self.memory.query_buf_peak,
             self.memory.output_buf_len,
             self.memory.output_list_len,
             self.memory.output_list_mem,

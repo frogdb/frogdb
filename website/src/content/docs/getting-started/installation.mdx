@@ -101,10 +101,14 @@ way the release pipeline does.
 </Aside>
 
 <Steps>
-1. **Build the binaries**:
+1. **Build the binaries.** Pass `--features frogdb-server/cmd-full` so the package carries the
+   full command surface (streams, JSON, search, probabilistic types, and the rest) — the same
+   feature set every other distributable artifact ships with. The plain default build,
+   `core-profile`, is a smaller, faster-iterating development tier that leaves those command
+   families out:
 
    ```bash
-   cargo build --release --bin frogdb-server --bin frogctl --bin frogdb-admin
+   cargo build --release --features frogdb-server/cmd-full --bin frogdb-server --bin frogctl --bin frogdb-admin
    ```
 
 2. **Regenerate the packaging files** (nfpm config, default `frogdb.toml`, systemd

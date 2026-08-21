@@ -163,13 +163,41 @@ async fn test_set_overwrites() {
     server.shutdown().await;
 }
 
+/// Bare `COMMAND` (no subcommand) returns the real, non-empty registry —
+/// one 10-element `COMMAND INFO`-shaped entry per registered command,
+/// matching `COMMAND COUNT` — not the old empty-array placeholder.
 #[tokio::test]
-async fn test_command_returns_empty() {
+async fn test_command_returns_registry_info() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
+    let count = client.command(&["COMMAND", "COUNT"]).await;
+    let Response::Integer(count) = count else {
+        panic!("expected COMMAND COUNT to return an Integer, got {count:?}");
+    };
+    assert!(count > 0, "registry should be non-empty");
+
     let response = client.command(&["COMMAND"]).await;
-    assert_eq!(response, Response::Array(vec![]));
+    match response {
+        Response::Array(entries) => {
+            assert_eq!(
+                entries.len(),
+                count as usize,
+                "bare COMMAND should list the same commands COMMAND COUNT counts"
+            );
+            for entry in &entries {
+                match entry {
+                    Response::Array(fields) => assert_eq!(
+                        fields.len(),
+                        10,
+                        "each COMMAND entry is the 10-element COMMAND INFO shape, got {entry:?}"
+                    ),
+                    other => panic!("expected each entry to be an Array, got {other:?}"),
+                }
+            }
+        }
+        other => panic!("expected bare COMMAND to return an Array, got {other:?}"),
+    }
 
     server.shutdown().await;
 }

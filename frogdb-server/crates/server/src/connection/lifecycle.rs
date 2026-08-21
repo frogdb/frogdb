@@ -228,15 +228,25 @@ impl ConnectionHandler {
             }
             // Always sync memory on the same schedule
             self.sync_memory_to_registry();
+            // WATCH count on the same schedule — real per-connection state,
+            // not otherwise visible to the registry between commands.
+            self.admin
+                .client_registry
+                .update_watch_count(self.state.id, self.state.watched_key_iter().count());
             // Check if client eviction is needed
             self.maybe_evict_clients();
         }
     }
 
     /// Compute the current memory usage of this connection.
-    pub(crate) fn compute_client_memory(&self) -> ClientMemoryUsage {
+    pub(crate) fn compute_client_memory(&mut self) -> ClientMemoryUsage {
         // Query buffer: access inner BytesMut length from Framed codec
         let query_buf_size = self.framed.read_buffer().len();
+        // High-water mark over sampled memory syncs — real peak of what we've
+        // actually observed, not a fabricated capacity figure. Backs CLIENT
+        // INFO/LIST's `rbp` field.
+        self.state.query_buf_peak = self.state.query_buf_peak.max(query_buf_size);
+        let query_buf_peak = self.state.query_buf_peak;
 
         // Argv: 0 between commands (transient during execution)
         let argv_mem = 0;
@@ -289,6 +299,7 @@ impl ConnectionHandler {
 
         ClientMemoryUsage {
             query_buf_size,
+            query_buf_peak,
             argv_mem,
             multi_mem,
             output_buf_len,

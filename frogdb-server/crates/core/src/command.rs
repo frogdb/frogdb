@@ -9,6 +9,7 @@ use crate::acl::KeyAccessType;
 use crate::cluster::{ClusterNetworkFactory, ClusterRaft, ClusterState};
 use crate::command_spec::{AccessSpec, CommandSpec, KeySpec};
 use crate::error::CommandError;
+use crate::eviction::EvictionPolicy;
 use crate::keyspace_event::KeyspaceEventFlags;
 use crate::persistence::{RecoveryStats, SnapshotStats};
 use crate::registry::CommandRegistry;
@@ -1479,6 +1480,16 @@ pub struct CommandContext<'a> {
     /// command the connection-level seam legitimately let through.
     pub write_seam: Option<crate::write_seam::ShardWriteSeam>,
 
+    /// This shard's current `maxmemory-policy`, read once per command context
+    /// from the shard's live eviction config.
+    ///
+    /// `OBJECT FREQ` gates on this: Redis only tracks (and reports) an LFU
+    /// access-frequency counter when an LFU policy is selected, and errors
+    /// otherwise (`object.c`'s `objectCommandGetKey` FREQ arm). Defaults to
+    /// [`EvictionPolicy::NoEviction`] (Redis's own default) in unit/test
+    /// contexts with no shard eviction config wired.
+    pub eviction_policy: EvictionPolicy,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1521,6 +1532,7 @@ impl<'a> CommandContext<'a> {
             snapshot_stats: SnapshotStats::default(),
             bgsave_in_progress: false,
             recovery_stats: Arc::new(RecoveryStats::default()),
+            eviction_policy: EvictionPolicy::default(),
             effects: CommandEffects::default(),
         }
     }

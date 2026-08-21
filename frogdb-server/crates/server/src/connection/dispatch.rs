@@ -551,7 +551,7 @@ impl ConnectionHandler {
             DispatchStage::CommandLookup => {
                 let err = self
                     .pre_dispatch_view()
-                    .command_lookup_check(cmd_name, &cmd.args);
+                    .command_lookup_check(cmd_name, &cmd.name, &cmd.args);
                 if let Some(err) = err {
                     return StageOutcome::ShortCircuit(vec![err]);
                 }

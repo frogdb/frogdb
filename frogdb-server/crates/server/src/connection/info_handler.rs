@@ -197,6 +197,13 @@ impl ConnectionHandler {
             load_functions_failed: self.admin.recovery_stats.functions_failed,
         };
 
+        // Truthfully empty when no detector is wired (Hotkeys section
+        // renders no fields rather than inventing shard-hotness data).
+        let hot_shards = match self.observability.collectors.hot_shard_handle() {
+            Some(detector) => Some(detector.collect_snapshot(None).await),
+            None => None,
+        };
+
         let baseline = crate::latency_test::get_global_baseline().map(|info| BaselineSnapshot {
             duration_secs: info.result.duration_secs,
             samples: info.result.samples,
@@ -229,6 +236,7 @@ impl ConnectionHandler {
             key_memory_enabled: config.key_memory_histograms_enabled(),
             shards,
             keyspace_stats: self.observability.keyspace_stats.clone(),
+            hot_shards,
         })
     }
 }

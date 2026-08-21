@@ -46,6 +46,7 @@ full = [
 
 [dependencies]
 frogdb-core.workspace = true
+frogdb-acl.workspace = true
 frogdb-protocol.workspace = true
 bytes.workspace = true
 rand.workspace = true

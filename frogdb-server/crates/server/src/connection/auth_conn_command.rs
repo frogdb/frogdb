@@ -454,7 +454,7 @@ fn build_hello_response(state: &dyn ConnStateMut) -> Response {
     reply.field(b"server", Response::bulk(Bytes::from_static(b"frogdb")));
     reply.field(
         b"version",
-        Response::bulk(Bytes::from(env!("CARGO_PKG_VERSION"))),
+        Response::bulk(Bytes::from(frogdb_core::ADVERTISED_REDIS_VERSION)),
     );
     reply.field(b"proto", Response::Integer(proto));
     reply.field(b"id", Response::Integer(state.id() as i64));

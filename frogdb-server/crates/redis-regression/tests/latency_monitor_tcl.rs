@@ -12,11 +12,13 @@
 //! * `LATENCY DOCTOR` → a canned "no latency problems" report string
 //! * `LATENCY RESET` → `0` (no events to reset)
 //!
-//! FrogDB also validates event names strictly against a fixed set
-//! (`command`, `fork`, `aof-fsync`, `expire-cycle`, `eviction-cycle`,
-//! `snapshot-io`) — unknown event names return
-//! `ERR Unknown event type: ...` whereas upstream Redis is lenient and
-//! returns an empty history. This is a deliberate FrogDB design choice.
+//! `LATENCY HISTORY` and `LATENCY RESET` accept any event name and return an
+//! empty history for one FrogDB doesn't track (matching upstream Redis's
+//! leniency; ADR-0005 truthful-inert-shim policy). `LATENCY GRAPH` still
+//! validates against the fixed event set (`command`, `fork`, `aof-fsync`,
+//! `expire-cycle`, `eviction-cycle`, `snapshot-io`) and errors on an unknown
+//! name — there is no truthful graph to draw for an event FrogDB has never
+//! heard of, so this remains a deliberate FrogDB design choice.
 //!
 //! Given these differences, this port file covers only the two tests
 //! whose assertions still hold against FrogDB's stub implementation
@@ -46,7 +48,6 @@
 //! - `LATENCY GRAPH can output the expire event graph` — intentional-incompatibility:observability — expire-cycle timing events not recorded
 //!
 //! Behavioral differences in argument validation:
-//! - `LATENCY HISTORY / RESET with wrong event name is fine` — intentional-incompatibility:observability — FrogDB strictly validates event names and errors on unknown events
 //! - `LATENCY HELP should not have unexpected options` — intentional-incompatibility:observability — FrogDB's LATENCY HELP accepts extra arguments without erroring
 //!
 //! Empty-result reset test:

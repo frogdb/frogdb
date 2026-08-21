@@ -488,10 +488,16 @@ impl PreDispatchView<'_> {
     /// Ordered *before* the pause gate so syntax errors bypass `CLIENT PAUSE`,
     /// and *after* the transaction-queuing stage so an unknown command inside a
     /// `MULTI` still aborts the transaction at queue time.
-    pub(crate) fn command_lookup_check(&self, cmd_name: &str, args: &[Bytes]) -> Option<Response> {
+    pub(crate) fn command_lookup_check(
+        &self,
+        cmd_name: &str,
+        original_name: &[u8],
+        args: &[Bytes],
+    ) -> Option<Response> {
         let Some(entry) = self.registry.get_entry(cmd_name) else {
             return Some(Response::error(format!(
-                "ERR unknown command '{cmd_name}', with args beginning with:"
+                "ERR {}",
+                frogdb_protocol::format_unknown_command_error(original_name, args)
             )));
         };
         if entry.arity().check(args.len()) {
@@ -552,8 +558,8 @@ impl PreDispatchView<'_> {
             Some(e) => e,
             None => {
                 let msg = format!(
-                    "ERR unknown command '{}', with args beginning with:",
-                    cmd_name_str
+                    "ERR {}",
+                    frogdb_protocol::format_unknown_command_error(&cmd.name, &cmd.args)
                 );
                 self.state.abort_transaction(Some(msg.clone()));
                 return Response::error(msg);
@@ -1407,7 +1413,7 @@ mod tests {
     fn test_command_lookup_check_rejects_wrong_argument_count() {
         let mut fx = ViewFixture::new(None);
         // GET takes exactly one argument; zero args is an arity error.
-        match fx.view().command_lookup_check("GET", &[]) {
+        match fx.view().command_lookup_check("GET", b"GET", &[]) {
             Some(Response::Error(msg)) => assert!(
                 msg.starts_with(b"ERR wrong number of arguments"),
                 "got: {}",
@@ -1418,7 +1424,7 @@ mod tests {
         // One argument is valid.
         assert!(
             fx.view()
-                .command_lookup_check("GET", &[Bytes::from_static(b"k")])
+                .command_lookup_check("GET", b"GET", &[Bytes::from_static(b"k")])
                 .is_none()
         );
     }
@@ -1429,9 +1435,35 @@ mod tests {
     #[test]
     fn test_command_lookup_check_rejects_unknown_command() {
         let mut fx = ViewFixture::new(None);
-        match fx.view().command_lookup_check("ASDFNOTACOMMAND", &[]) {
+        match fx
+            .view()
+            .command_lookup_check("ASDFNOTACOMMAND", b"ASDFNOTACOMMAND", &[])
+        {
             Some(Response::Error(msg)) => assert!(
                 msg.starts_with(b"ERR unknown command 'ASDFNOTACOMMAND'"),
+                "got: {}",
+                String::from_utf8_lossy(&msg)
+            ),
+            other => panic!("expected unknown-command error, got: {other:?}"),
+        }
+    }
+
+    /// The unknown-command error echoes the client's original-case spelling
+    /// (not the uppercase lookup key) and lists the offending args, matching
+    /// Redis's `commandCheckExistence` byte-for-byte (verified against a
+    /// locally built Redis 8.6.1).
+    #[test]
+    fn test_command_lookup_check_unknown_command_preserves_case_and_lists_args() {
+        let mut fx = ViewFixture::new(None);
+        let args = [Bytes::from_static(b"bar"), Bytes::from_static(b"baz")];
+        match fx
+            .view()
+            .command_lookup_check("NOTACOMMAND", b"notacommand", &args)
+        {
+            Some(Response::Error(msg)) => assert_eq!(
+                &msg[..],
+                b"ERR unknown command 'notacommand', with args beginning with: 'bar' 'baz' "
+                    as &[u8],
                 "got: {}",
                 String::from_utf8_lossy(&msg)
             ),

@@ -724,19 +724,16 @@ async fn test_latency_history_unknown_event() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
-    // LATENCY HISTORY with invalid event should return error
+    // LATENCY HISTORY with an event FrogDB doesn't track should return an
+    // empty array, matching Redis: the history for that event genuinely is
+    // empty, which is a truthful answer, not a fabrication (ADR-0005).
     let response = client.command(&["LATENCY", "HISTORY", "invalid"]).await;
-    match response {
-        Response::Error(e) => {
-            let err_str = String::from_utf8_lossy(&e);
-            assert!(
-                err_str.contains("Unknown event type"),
-                "Error should mention unknown event type, got: {}",
-                err_str
-            );
-        }
-        _ => panic!("Expected error response, got {:?}", response),
-    }
+    let entries = unwrap_array(response);
+    assert!(
+        entries.is_empty(),
+        "expected empty history for unknown event, got {:?}",
+        entries
+    );
 
     server.shutdown().await;
 }

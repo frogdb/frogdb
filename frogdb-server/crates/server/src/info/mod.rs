@@ -108,6 +108,14 @@ impl SectionWriter {
 // ============================================================================
 
 /// Sections included in `INFO` with no args and `INFO default`.
+///
+/// `server` through `keysizes` mirror Redis 8.6's own default list, in its
+/// exact order (`genInfoSectionDict`'s `default_sections`:
+/// server/clients/memory/persistence/stats/replication/threads/cpu/
+/// module_list/errorstats/cluster/keyspace/keysizes). `ratelimit` and
+/// `hotkeys` are FrogDB-only extras appended after — issue 08's "empty
+/// header diff vs Redis" acceptance criterion is about FrogDB not being
+/// *missing* any of Redis's defaults, not about withholding FrogDB's own.
 const DEFAULT_SECTIONS: &[&str] = &[
     "server",
     "clients",
@@ -115,20 +123,19 @@ const DEFAULT_SECTIONS: &[&str] = &[
     "persistence",
     "stats",
     "replication",
+    "threads",
     "cpu",
+    "modules",
+    "errorstats",
+    "cluster",
     "keyspace",
+    "keysizes",
     "ratelimit",
+    "hotkeys",
 ];
 
 /// Additional sections included only in `INFO all` / `INFO everything`.
-const EXTRA_SECTIONS: &[&str] = &[
-    "commandstats",
-    "errorstats",
-    "latencystats",
-    "latency_baseline",
-    "tiered",
-    "keysizes",
-];
+const EXTRA_SECTIONS: &[&str] = &["commandstats", "latencystats", "latency_baseline", "tiered"];
 
 /// Resolved, deduplicated, ordered list of requested section names.
 ///
@@ -716,6 +723,11 @@ pub struct InfoSources {
     /// The resettable keyspace hit/miss accumulator (proposal 24). Counted at
     /// the execution seam, so it is live even when metrics are disabled.
     pub(crate) keyspace_stats: Arc<frogdb_core::KeyspaceStats>,
+    /// Hot-shard load snapshot, when a [`frogdb_core::HotShardDetector`] is
+    /// wired (`ServerObservability::hot_shard_handle`). `None` when no
+    /// detector is configured — the Hotkeys section renders empty rather
+    /// than fabricating shard-hotness data.
+    pub(crate) hot_shards: Option<frogdb_core::HotShardSnapshot>,
 }
 
 impl InfoSources {
@@ -816,6 +828,12 @@ impl InfoSources {
     pub fn cluster_state(&self) -> Option<&ClusterState> {
         self.cluster_state.as_deref()
     }
+
+    /// Hot-shard load snapshot, when a detector is wired. See the
+    /// `hot_shards` field doc for the truthful-empty contract.
+    pub fn hot_shards(&self) -> Option<&frogdb_core::HotShardSnapshot> {
+        self.hot_shards.as_ref()
+    }
 }
 
 // ============================================================================
@@ -888,6 +906,7 @@ pub(crate) mod test_support {
             key_memory_enabled: true,
             shards: NodeStateSnapshot::default(),
             keyspace_stats: Arc::new(frogdb_core::KeyspaceStats::new()),
+            hot_shards: None,
         }
     }
 }

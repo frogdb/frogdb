@@ -4670,6 +4670,109 @@
                 "help": "Print help"
               }
             ]
+          },
+          {
+            "name": "checkpoint-verify",
+            "about": "Verify a checkpoint payload on disk against the manifest shipped inside it",
+            "args": [
+              {
+                "name": "dir",
+                "value_name": "DIR",
+                "help": "Directory holding the checkpoint payload"
+              },
+              {
+                "name": "quick",
+                "long": "quick",
+                "default": "false",
+                "help": "Check file sizes only, skipping the per-file checksum pass"
+              },
+              {
+                "name": "host",
+                "long": "host",
+                "short": "H",
+                "value_name": "HOST",
+                "default": "127.0.0.1",
+                "help": "Server hostname or IP"
+              },
+              {
+                "name": "port",
+                "long": "port",
+                "short": "p",
+                "value_name": "PORT",
+                "default": "6379",
+                "help": "RESP port"
+              },
+              {
+                "name": "auth",
+                "long": "auth",
+                "short": "a",
+                "value_name": "AUTH",
+                "help": "Password (AUTH <password>)"
+              },
+              {
+                "name": "user",
+                "long": "user",
+                "short": "u",
+                "value_name": "USER",
+                "help": "ACL username (AUTH <user> <password>)"
+              },
+              {
+                "name": "tls",
+                "long": "tls",
+                "default": "false",
+                "help": "Enable TLS for RESP connections"
+              },
+              {
+                "name": "tls_cert",
+                "long": "tls-cert",
+                "value_name": "TLS_CERT",
+                "help": "Client certificate path (mTLS)"
+              },
+              {
+                "name": "tls_key",
+                "long": "tls-key",
+                "value_name": "TLS_KEY",
+                "help": "Client private key path (mTLS)"
+              },
+              {
+                "name": "tls_ca",
+                "long": "tls-ca",
+                "value_name": "TLS_CA",
+                "help": "CA certificate path"
+              },
+              {
+                "name": "admin_url",
+                "long": "admin-url",
+                "value_name": "ADMIN_URL",
+                "help": "Admin HTTP base URL (e.g. http://127.0.0.1:6380)"
+              },
+              {
+                "name": "metrics_url",
+                "long": "metrics-url",
+                "value_name": "METRICS_URL",
+                "help": "Metrics/observability HTTP base URL (e.g. http://127.0.0.1:9090)"
+              },
+              {
+                "name": "output",
+                "long": "output",
+                "short": "o",
+                "value_name": "OUTPUT",
+                "default": "table",
+                "help": "Output format"
+              },
+              {
+                "name": "no_color",
+                "long": "no-color",
+                "default": "false",
+                "help": "Disable ANSI colors"
+              },
+              {
+                "name": "help",
+                "long": "help",
+                "short": "h",
+                "help": "Print help (see more with '--help')"
+              }
+            ]
           }
         ]
       },

@@ -244,6 +244,17 @@ pub const VIRTUAL_PARAMS: &[ConfigParamInfo] = &[
         mutable: true,
         noop: false,
     },
+    // Truthful-inert shim (ADR-0005, ruling 3 / issue 07a): FrogDB has no AOF,
+    // so `appendonly` truthfully reports "no" rather than erroring or
+    // fabricating a value. CONFIG SET accepts-and-ignores like the other
+    // Redis-compat no-ops above.
+    ConfigParamInfo {
+        name: "appendonly",
+        section: None,
+        field: None,
+        mutable: true,
+        noop: true,
+    },
 ];
 
 /// Look up a single derived row by CONFIG name within a section's `PARAMS`.
@@ -543,6 +554,13 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
             ClusterConfigSection::PARAMS,
             "cluster-promotion-max-lag-bytes",
         ));
+
+        // --- issue 07a (truthful-inert shims): `appendonly`, appended last so
+        // the golden snapshot's first 124 rows stay byte-identical. Virtual and
+        // noop: there is no serde-backed field because FrogDB has no AOF; GET
+        // always reports the truthful "no" and SET accepts-and-ignores, like
+        // the other Redis-compat no-ops spliced in above. ---
+        rows.extend_from_slice(&VIRTUAL_PARAMS[26..27]); // appendonly
 
         rows
     });
@@ -1438,6 +1456,13 @@ mod tests {
             mutable: true,
             noop: false,
         },
+        ConfigParamInfo {
+            name: "appendonly",
+            section: None,
+            field: None,
+            mutable: true,
+            noop: true,
+        },
     ];
 
     #[test]
@@ -1483,7 +1508,10 @@ mod tests {
         // Issue 11 (the wrong-data-dir guard) appended the immutable
         // `require-existing-data`, giving 123. Cluster-correctness issue 37
         // appended the mutable `cluster-promotion-max-lag-bytes`, giving 124.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 124);
+        // Issue 07a (truthful-inert shims) appended the virtual, mutable,
+        // noop `appendonly` (FrogDB has no AOF; GET always reports "no"),
+        // giving 125.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 125);
     }
 
     #[test]

@@ -133,8 +133,8 @@ impl ShardWorker {
             None => {
                 return (
                     Response::error(format!(
-                        "ERR unknown command '{}', with args beginning with:",
-                        cmd_name_str
+                        "ERR {}",
+                        frogdb_protocol::format_unknown_command_error(&command.name, &command.args)
                     )),
                     None,
                 );

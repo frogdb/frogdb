@@ -4,8 +4,8 @@
 //! by *mutability* — the one fact that decides which server-side lifecycle
 //! serves it:
 //!
-//! - [`MutableParamId`] — the 76 runtime-mutable parameters (62 real
-//!   `ConfigParam` lifecycles + 14 Redis-compat no-ops). Served by the server's
+//! - [`MutableParamId`] — the 78 runtime-mutable parameters (63 real
+//!   `ConfigParam` lifecycles + 15 Redis-compat no-ops). Served by the server's
 //!   `build_typed_params`.
 //! - [`ImmutableParamId`] — the 45 restart-required parameters. Served by the
 //!   server's `build_param_registry`.
@@ -139,6 +139,9 @@ param_id_enum! {
         ZsetMaxZiplistValue => "zset-max-ziplist-value",
         ZsetMaxListpackEntries => "zset-max-listpack-entries",
         ZsetMaxListpackValue => "zset-max-listpack-value",
+        // Truthful-inert shim (issue 07a): FrogDB has no AOF, so this reports
+        // the truthful "no" rather than erroring or fabricating a value.
+        Appendonly => "appendonly",
         // === 13-01 Pass 2b: 1 promote-mutable param (genuinely live) ===
         // The ACL log length is re-read per append; the apply path reaches it
         // through the already-injected `Arc<AclManager>`.
@@ -355,8 +358,10 @@ mod tests {
         // millisecond unit behind Redis's seconds-valued `min-replicas-max-lag`)
         // + 1 added by the cluster-correctness round's issue 37
         // (`cluster-promotion-max-lag-bytes`, the automatic-promotion staleness
-        // bound, spelled in offset bytes rather than disconnection seconds).
-        assert_eq!(MutableParamId::ALL.len(), 77);
+        // bound, spelled in offset bytes rather than disconnection seconds)
+        // + 1 added by issue 07a (`appendonly`, a truthful-inert Redis-compat
+        // no-op: FrogDB has no AOF, so GET always reports "no").
+        assert_eq!(MutableParamId::ALL.len(), 78);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params

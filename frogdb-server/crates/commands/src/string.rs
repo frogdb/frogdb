@@ -1362,7 +1362,7 @@ impl Command for DelexCommand {
                 // Validate digest format: exactly 16 hex chars
                 if cmp_val.len() != 16 || !cmp_val.iter().all(|b| b.is_ascii_hexdigit()) {
                     return Err(CommandError::InvalidArgument {
-                        message: "ERR IFDEQ/IFDNE requires a 16 character hexadecimal digest"
+                        message: "IFDEQ/IFDNE requires a 16 character hexadecimal digest"
                             .to_string(),
                     });
                 }

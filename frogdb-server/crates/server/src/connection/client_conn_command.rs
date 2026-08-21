@@ -118,13 +118,11 @@ fn conn_id(ctx: &ConnCtx<'_>) -> u64 {
 ///
 /// Redis includes `tot-cmds` in CLIENT LIST output. The base
 /// `ClientInfo::to_client_list_entry()` does not include it, so we append it
-/// here by looking up stats from the registry.
-fn client_list_entry_with_stats(info: &ClientInfo, registry: &ClientRegistry) -> String {
+/// here from the stats snapshot `ClientRegistry::list`/`get` already
+/// attached to `info` (same snapshot `tot-net-in`/`tot-net-out` read).
+fn client_list_entry_with_stats(info: &ClientInfo, _registry: &ClientRegistry) -> String {
     let base = info.to_client_list_entry();
-    let tot_cmds = registry
-        .get_stats(info.id)
-        .map(|s| s.commands_total)
-        .unwrap_or(0);
+    let tot_cmds = info.stats.as_ref().map(|s| s.commands_total).unwrap_or(0);
     format!("{base} tot-cmds={tot_cmds}")
 }
 

@@ -428,9 +428,12 @@ impl Command for ObjectCommand {
                         };
                         Ok(Response::bulk(Bytes::from(encoding)))
                     }
-                    None => Err(CommandError::InvalidArgument {
-                        message: "ERR no such key".to_string(),
-                    }),
+                    // A missing key is not an error for OBJECT ENCODING — Redis
+                    // 8.6's `kvobjCommandLookupOrReply` replies `shared.null`
+                    // for ENCODING/REFCOUNT/IDLETIME/FREQ alike (verified
+                    // against a locally built Redis 8.6.1), so this matches
+                    // the (already-correct) REFCOUNT/IDLETIME/FREQ arms below.
+                    None => Ok(Response::null()),
                 }
             }
             b"FREQ" => {
@@ -440,7 +443,24 @@ impl Command for ObjectCommand {
                 let key = &args[1];
 
                 match ctx.store.get_metadata(key) {
-                    Some(meta) => Ok(Response::Integer(meta.lfu_counter as i64)),
+                    Some(meta) => {
+                        // Redis only tracks (and reports) an LFU access
+                        // counter when an LFU `maxmemory-policy` is selected
+                        // (`object.c`'s FREQ arm); otherwise it errors with
+                        // this exact text (verified against a locally built
+                        // Redis 8.6.1) rather than answering from an untracked
+                        // counter.
+                        if !ctx.eviction_policy.uses_lfu() {
+                            return Err(CommandError::InvalidArgument {
+                                message: "An LFU maxmemory policy is not selected, access \
+                                          frequency not tracked. Please note that when \
+                                          switching between policies at runtime LRU and LFU \
+                                          data will take some time to adjust."
+                                    .to_string(),
+                            });
+                        }
+                        Ok(Response::Integer(meta.lfu_counter as i64))
+                    }
                     None => Ok(Response::null()),
                 }
             }
@@ -733,5 +753,102 @@ mod copy_noop_tests {
             c.effects.write_was_noop,
             "COPY from a missing source must be a no-op write"
         );
+    }
+}
+
+#[cfg(test)]
+mod object_tests {
+    //! `OBJECT ENCODING`/`FREQ` fidelity: a missing key is nil (not an
+    //! error) on every subcommand, and `FREQ` is gated on an LFU
+    //! `maxmemory-policy` — both verified against a locally built Redis
+    //! 8.6.1.
+    use super::*;
+    use frogdb_core::{EvictionPolicy, HashMapStore};
+    use frogdb_protocol::ProtocolVersion;
+
+    fn ctx() -> CommandContext<'static> {
+        let store = Box::leak(Box::new(HashMapStore::new()));
+        let shard_senders = Box::leak(Box::new(Arc::new(Vec::new())));
+        CommandContext::new(store, shard_senders, 0, 1, 0, ProtocolVersion::Resp2)
+    }
+
+    fn args(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|s| Bytes::from(s.to_string())).collect()
+    }
+
+    /// `OBJECT ENCODING` on a missing key is a null bulk reply, not an
+    /// error — the doubled-`ERR` bug this test guards against returned
+    /// `CommandError::InvalidArgument { message: "ERR no such key" }`,
+    /// which `Display`-rendered as `ERR ERR no such key`.
+    #[test]
+    fn encoding_missing_key_is_nil_not_error() {
+        let mut c = ctx();
+        let r = ObjectCommand
+            .execute(&mut c, &args(&["ENCODING", "nosuchkey"]))
+            .unwrap();
+        assert_eq!(r, Response::null());
+    }
+
+    /// `OBJECT ENCODING` on an existing key is unaffected by the fix.
+    #[test]
+    fn encoding_existing_key_still_reports_encoding() {
+        let mut c = ctx();
+        c.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let r = ObjectCommand
+            .execute(&mut c, &args(&["ENCODING", "k"]))
+            .unwrap();
+        assert_eq!(r, Response::bulk(Bytes::from_static(b"embstr")));
+    }
+
+    /// `OBJECT FREQ` on a missing key is nil regardless of policy — Redis
+    /// checks key existence before the LFU-policy gate.
+    #[test]
+    fn freq_missing_key_is_nil() {
+        let mut c = ctx();
+        c.eviction_policy = EvictionPolicy::NoEviction;
+        let r = ObjectCommand
+            .execute(&mut c, &args(&["FREQ", "nosuchkey"]))
+            .unwrap();
+        assert_eq!(r, Response::null());
+    }
+
+    /// `OBJECT FREQ` on an existing key errors, byte-for-byte matching
+    /// Redis, when the configured policy is not one of the LFU variants.
+    #[test]
+    fn freq_existing_key_without_lfu_policy_errors() {
+        let mut c = ctx();
+        c.eviction_policy = EvictionPolicy::NoEviction;
+        c.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let err = ObjectCommand
+            .execute(&mut c, &args(&["FREQ", "k"]))
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "ERR An LFU maxmemory policy is not selected, access frequency not tracked. \
+             Please note that when switching between policies at runtime LRU and LFU data \
+             will take some time to adjust."
+        );
+    }
+
+    /// `OBJECT FREQ` on an existing key answers with a real counter once an
+    /// LFU policy is selected.
+    #[test]
+    fn freq_existing_key_with_lfu_policy_returns_counter() {
+        let mut c = ctx();
+        c.eviction_policy = EvictionPolicy::AllkeysLfu;
+        c.store.set(
+            Bytes::from_static(b"k"),
+            Value::string(Bytes::from_static(b"v")),
+        );
+        let r = ObjectCommand
+            .execute(&mut c, &args(&["FREQ", "k"]))
+            .unwrap();
+        assert!(matches!(r, Response::Integer(_)));
     }
 }

@@ -140,6 +140,61 @@ async fn tcl_client_info() {
     );
 }
 
+// issue 09 (redis-feel): CLIENT INFO/LIST must carry the Redis 8.6 field set
+// FrogDB was previously missing entirely (watch/tot-net-in/tot-net-out/
+// rbs/rbp), and never fabricate `io-thread` (omitted — see the issue's
+// `## Comments`).
+#[tokio::test]
+async fn tcl_client_info_has_the_redis_8_6_field_set() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let r = client.command(&["CLIENT", "INFO"]).await;
+    let info = String::from_utf8(unwrap_bulk(&r).to_vec()).unwrap();
+    for field in [
+        "watch=",
+        "rbs=",
+        "rbp=",
+        "tot-net-in=",
+        "tot-net-out=",
+        "redir=-1",
+    ] {
+        assert!(info.contains(field), "CLIENT INFO missing {field}: {info}");
+    }
+    assert!(
+        !info.contains("io-thread"),
+        "io-thread has no honest FrogDB equivalent and must not be fabricated: {info}"
+    );
+}
+
+// issue 09: `watch` reports the connection's real WATCH count, synced on the
+// same periodic cadence as memory stats (see `ConnectionHandler::maybe_sync_stats`).
+#[tokio::test]
+async fn tcl_client_list_reports_real_watch_count() {
+    let server = TestServer::start_standalone().await;
+    let mut admin = server.connect().await;
+    let mut victim = server.connect().await;
+    assert_ok(&victim.command(&["CLIENT", "SETNAME", "watcher"]).await);
+    assert_ok(&victim.command(&["WATCH", "k1", "k2", "k3"]).await);
+
+    // Wait for the stats sync interval (1000ms) to elapse, then send one
+    // more command on the victim to trigger the sync.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    victim.command(&["PING"]).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let resp = admin.command(&["CLIENT", "LIST"]).await;
+    let list = String::from_utf8(unwrap_bulk(&resp).to_vec()).unwrap();
+    let victim_line = list
+        .lines()
+        .find(|l| l.contains("name=watcher"))
+        .unwrap_or_else(|| panic!("watcher client not found in CLIENT LIST: {list}"));
+    assert!(
+        victim_line.contains("watch=3"),
+        "expected watch=3 for a connection with 3 watched keys: {victim_line}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CLIENT KILL with illegal arguments
 // ---------------------------------------------------------------------------
@@ -777,9 +832,12 @@ async fn tcl_object_encoding_nonexistent_key() {
     let mut client = server.connect().await;
 
     let r = client.command(&["OBJECT", "ENCODING", "nosuchkey"]).await;
+    // Redis 8.6's `kvobjCommandLookupOrReply` replies a null bulk for a
+    // missing key on ENCODING (same as REFCOUNT/IDLETIME/FREQ) — not an
+    // error (verified against a locally built Redis 8.6.1).
     assert!(
-        matches!(&r, Response::Error(_)),
-        "OBJECT ENCODING on nonexistent key should error"
+        matches!(&r, Response::Bulk(None)),
+        "OBJECT ENCODING on nonexistent key should return nil, got {r:?}"
     );
 }
 

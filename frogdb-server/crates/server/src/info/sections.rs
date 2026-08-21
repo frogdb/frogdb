@@ -25,16 +25,34 @@ pub(super) fn all_sections() -> Vec<Box<dyn InfoSection>> {
         Box::new(PersistenceSection),
         Box::new(StatsSection),
         Box::new(ReplicationSection),
+        Box::new(ThreadsSection),
         Box::new(CpuSection),
-        Box::new(KeyspaceSection),
-        Box::new(RatelimitSection),
-        Box::new(CommandstatsSection),
+        Box::new(ModulesSection),
         Box::new(ErrorstatsSection),
+        Box::new(ClusterSection),
+        Box::new(KeyspaceSection),
+        Box::new(KeysizesSection),
+        Box::new(RatelimitSection),
+        Box::new(HotkeysSection),
+        Box::new(CommandstatsSection),
         Box::new(LatencystatsSection),
         Box::new(LatencyBaselineSection),
         Box::new(TieredSection),
-        Box::new(KeysizesSection),
     ]
+}
+
+/// Truthful `redis_mode` derivation, shared by [`ServerSection`]'s
+/// `redis_mode` field and [`ClusterSection`]'s `cluster_enabled` field so the
+/// two can never disagree about whether this node is running standalone or
+/// clustered (issue 08's explicit requirement). Matches the
+/// `cluster_state.is_some()` precedent already used by the admin debug
+/// handlers and the debug web UI's `cluster_enabled` fields.
+fn redis_mode(src: &InfoSources) -> &'static str {
+    if src.cluster_state().is_some() {
+        "cluster"
+    } else {
+        "standalone"
+    }
 }
 
 // ============================================================================
@@ -59,7 +77,7 @@ impl InfoSection for ServerSection {
             .field("redis_git_sha1", "00000000")
             .field("redis_git_dirty", 0)
             .field("redis_build_id", 0)
-            .field("redis_mode", "standalone")
+            .field("redis_mode", redis_mode(src))
             .field(
                 "os",
                 format!(
@@ -463,6 +481,30 @@ impl InfoSection for ReplicationSection {
 }
 
 // ============================================================================
+// Threads
+// ============================================================================
+
+/// Real shard-worker facts, not fabricated OS-thread stats: FrogDB has no
+/// per-connection I/O thread pool the way Redis does, so the truthful analog
+/// of Redis's Threads section is the shard-worker count this node actually
+/// runs — one row per [`frogdb_telemetry::NodeStateSnapshot::per_shard`]
+/// entry, exactly the count the fleet scatter (`gather_shard_snapshot`) just
+/// confirmed responded.
+struct ThreadsSection;
+
+impl InfoSection for ThreadsSection {
+    fn name(&self) -> &'static str {
+        "threads"
+    }
+
+    fn render(&self, src: &InfoSources) -> String {
+        let mut w = SectionWriter::new("Threads");
+        w.field("shard_worker_count", src.shards().per_shard.len());
+        w.finish()
+    }
+}
+
+// ============================================================================
 // CPU
 // ============================================================================
 
@@ -481,6 +523,45 @@ impl InfoSection for CpuSection {
             .field("used_cpu_user_children", "0.000000")
             .field("used_cpu_sys_main_thread", "0.000000")
             .field("used_cpu_user_main_thread", "0.000000");
+        w.finish()
+    }
+}
+
+// ============================================================================
+// Modules
+// ============================================================================
+
+/// FrogDB has no module system. An empty section (header + blank line, no
+/// fields) is the truthful answer — it's also exactly what Redis itself
+/// renders when no modules are loaded.
+struct ModulesSection;
+
+impl InfoSection for ModulesSection {
+    fn name(&self) -> &'static str {
+        "modules"
+    }
+
+    fn render(&self, _src: &InfoSources) -> String {
+        SectionWriter::new("Modules").finish()
+    }
+}
+
+// ============================================================================
+// Cluster
+// ============================================================================
+
+struct ClusterSection;
+
+impl InfoSection for ClusterSection {
+    fn name(&self) -> &'static str {
+        "cluster"
+    }
+
+    fn render(&self, src: &InfoSources) -> String {
+        let mut w = SectionWriter::new("Cluster");
+        // Same source as `ServerSection`'s `redis_mode` — see `redis_mode`
+        // above. Never independently derived, so the two fields can't drift.
+        w.field("cluster_enabled", u8::from(redis_mode(src) == "cluster"));
         w.finish()
     }
 }
@@ -526,6 +607,37 @@ impl InfoSection for RatelimitSection {
         w.field("ratelimit_users_configured", rl.users)
             .field("ratelimit_total_commands_rejected", rl.commands_rejected)
             .field("ratelimit_total_bytes_rejected", rl.bytes_rejected);
+        w.finish()
+    }
+}
+
+// ============================================================================
+// Hotkeys
+// ============================================================================
+
+/// Maps truthfully from the `hotshards` detector when one is wired
+/// (`ServerObservability::hot_shard_handle`); emits an empty section when it
+/// isn't. FrogDB tracks shard-level hotness, not individual key access
+/// frequency, so field names describe shards, never invented per-key data.
+struct HotkeysSection;
+
+impl InfoSection for HotkeysSection {
+    fn name(&self) -> &'static str {
+        "hotkeys"
+    }
+
+    fn render(&self, src: &InfoSources) -> String {
+        let mut w = SectionWriter::new("Hotkeys");
+        if let Some(snap) = src.hot_shards() {
+            w.field("hotshard_tracking_enabled", 1)
+                .field("hotshard_period_secs", snap.period_secs)
+                .field("hotshard_hot_count", snap.hot_count)
+                .field("hotshard_warm_count", snap.warm_count)
+                .field(
+                    "hotshard_imbalance_ratio",
+                    format!("{:.2}", snap.imbalance_ratio),
+                );
+        }
         w.finish()
     }
 }
@@ -1770,12 +1882,90 @@ mod tests {
         let clients = out.find("# Clients\r\n").expect("clients section");
         let keyspace = out.find("# Keyspace\r\n").expect("keyspace section");
         assert!(server < clients && clients < keyspace, "{out}");
-        // Extras excluded from default.
+        // issue 08: errorstats/keysizes are part of Redis 8's own default
+        // list, so they must render without asking; commandstats/
+        // latencystats remain `all`/`everything`-only extras.
+        assert!(out.contains("# Errorstats\r\n"), "{out}");
+        assert!(out.contains("# Keysizes\r\n"), "{out}");
         assert!(!out.contains("# Commandstats"), "{out}");
-        assert!(!out.contains("# Keysizes"), "{out}");
+        assert!(!out.contains("# Latencystats"), "{out}");
         // Rendered exactly once, straight from the accumulator — a duplicate
         // line would mean a stub anchor plus a patched copy survived.
         assert_eq!(out.matches("keyspace_hits:").count(), 1, "{out}");
+    }
+
+    // issue 08: Server/Cluster must never disagree about standalone-vs-cluster
+    // — both read the same `redis_mode()` helper off `cluster_state`.
+    #[test]
+    fn server_and_cluster_agree_on_standalone_mode() {
+        let src = sources();
+        let server_out = render(&ServerSection, &src);
+        let cluster_out = render(&ClusterSection, &src);
+        assert!(
+            server_out.contains("redis_mode:standalone\r\n"),
+            "{server_out}"
+        );
+        assert!(
+            cluster_out.contains("cluster_enabled:0\r\n"),
+            "{cluster_out}"
+        );
+    }
+
+    #[test]
+    fn server_and_cluster_agree_on_cluster_mode() {
+        let mut src = sources();
+        src.cluster_state = Some(std::sync::Arc::new(frogdb_core::ClusterState::new()));
+        let server_out = render(&ServerSection, &src);
+        let cluster_out = render(&ClusterSection, &src);
+        assert!(
+            server_out.contains("redis_mode:cluster\r\n"),
+            "{server_out}"
+        );
+        assert!(
+            cluster_out.contains("cluster_enabled:1\r\n"),
+            "{cluster_out}"
+        );
+    }
+
+    #[test]
+    fn modules_section_is_truthfully_empty() {
+        let src = sources();
+        assert_eq!(render(&ModulesSection, &src), "# Modules\r\n\r\n");
+    }
+
+    #[test]
+    fn threads_section_reports_real_shard_worker_count() {
+        let mut src = sources();
+        src.shards.per_shard = vec![Default::default(); 4];
+        let out = render(&ThreadsSection, &src);
+        assert!(out.contains("shard_worker_count:4\r\n"), "{out}");
+    }
+
+    #[test]
+    fn hotkeys_section_empty_without_a_detector_wired() {
+        // No fabricated shard-hotness data when nothing is configured.
+        let src = sources();
+        assert_eq!(render(&HotkeysSection, &src), "# Hotkeys\r\n\r\n");
+    }
+
+    #[test]
+    fn hotkeys_section_renders_the_real_snapshot_when_wired() {
+        let mut src = sources();
+        src.hot_shards = Some(frogdb_core::HotShardSnapshot {
+            period_secs: 60,
+            total_ops_per_sec: 100.0,
+            imbalance_ratio: 2.5,
+            hot_count: 1,
+            warm_count: 2,
+            shards: Vec::new(),
+            recommendations: Vec::new(),
+        });
+        let out = render(&HotkeysSection, &src);
+        assert!(out.contains("hotshard_tracking_enabled:1\r\n"), "{out}");
+        assert!(out.contains("hotshard_period_secs:60\r\n"), "{out}");
+        assert!(out.contains("hotshard_hot_count:1\r\n"), "{out}");
+        assert!(out.contains("hotshard_warm_count:2\r\n"), "{out}");
+        assert!(out.contains("hotshard_imbalance_ratio:2.50\r\n"), "{out}");
     }
     // FM-REPLICATION-061
     /// A stream that gave up says so in the field an operator reads, and names
