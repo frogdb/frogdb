@@ -579,20 +579,30 @@ mod spec_exhaustiveness {
     /// Ratcheting registry↔ACL-category parity gate (hardening-2 C5).
     ///
     /// `CommandSpec` carries no ACL field: the ~390-command registry and the
-    /// hand-written `COMMAND_ALL_CATEGORIES` table in `frogdb-acl` are joined
-    /// only by a lowercase string, and `CommandCategory::all_for_command` ends
-    /// in `.unwrap_or_default()` — a command with no category row yields an
-    /// empty set, so `permissions.rs`'s deny loop never matches and every
-    /// `-@category` rule is a **silent no-op** against it. `+@all -@admin` then
-    /// wrongly permits CLUSTER, MONITOR, MIGRATE, PSYNC, SYNC, REPLCONF,
-    /// FUNCTION, LATENCY, …. This is the live defect tracked by round2 issue 35
-    /// (`.scratch/testing-improvements-round2/issues/open/35-acl-category-enforcement-inert.md`);
-    /// fixing it (populating the rows / moving categories onto `CommandSpec`) is
-    /// wave-4 work, out of scope here.
+    /// hand-written category table in `frogdb-acl` are joined only by a
+    /// lowercase string, and `CommandCategory::all_for_command` ends in
+    /// `.unwrap_or_default()` — a command with no category row yields an empty
+    /// set, so `permissions.rs`'s deny loop never matches and every
+    /// `-@category` rule is a **silent no-op** against it. That was the live
+    /// defect of round2 issue 35, and it is what let `+@all -@admin` permit
+    /// CLUSTER, MONITOR, MIGRATE, PSYNC, SYNC, REPLCONF and FUNCTION.
     ///
-    /// This test does not fix the gap — it *pins* it so it can only shrink. The
-    /// allowlist below enumerates every command that currently has no category
-    /// row (a pre-existing gap). The test fails if:
+    /// The core-Redis half of that gap is **closed**: every registered command
+    /// upstream documents now has a row, checked against the vendored
+    /// `acl_categories` by
+    /// `upstream_metadata_tests::vendored_acl_categories_agree_with_our_table`
+    /// (`.scratch/redis-feel/issues/done/16-acl-category-table-gaps.md`).
+    ///
+    /// What remains is the module-family surface — FT.*, JSON.*, TS.*, BF.*,
+    /// CF.*, CMS.*, TOPK.*, TDIGEST.*, V* and FrogDB's own ES.*. Upstream
+    /// publishes no ACL categories for these: module `commands.json` files
+    /// carry no `acl_categories` field at all, because a module declares its
+    /// categories in C at `RedisModule_SetCommandACLCategories` time. Choosing
+    /// their rows is therefore a design act, not a vendoring act, and is left
+    /// as the residue of round2 issue 35 rather than guessed at here.
+    ///
+    /// This test does not fix that residue — it *pins* it so it can only
+    /// shrink. The test fails if:
     ///   (a) a command **not** on the allowlist has no category row (a newly
     ///       added command landed category-less — the omission this gate exists
     ///       to make un-mergeable), or
@@ -601,79 +611,16 @@ mod spec_exhaustiveness {
     ///       cannot carry dead weight. Fixing the last row deletes the whole
     ///       allowlist.
     ///
-    /// Feature-gating mirrors the sibling tests in this module: the
-    /// always-compiled core surface (core command profile plus the server-crate
-    /// commands registered unconditionally — FT.*, FROGDB.*, cluster/monitor/
-    /// replication verbs, …) is listed unconditionally; the exotic families
-    /// follow their `cmd-*` feature so the allowlist tracks `register_commands`
-    /// under both profiles the test is built with — `cmd-core` (80 of 256) via
-    /// `just test frogdb-server`, and `cmd-full` (189 of 391) via the
-    /// workspace-unified `cargo nextest run --all` in CI.
-    ///
-    /// All entries are pre-existing gaps tracked by round2 issue 35.
+    /// Feature-gating mirrors the sibling tests in this module: FT.* is
+    /// registered unconditionally by the server crate and so is listed
+    /// unconditionally; the exotic families follow their `cmd-*` feature so the
+    /// allowlist tracks `register_commands` under both profiles the test is
+    /// built with — `cmd-core` via `just test frogdb-server`, and `cmd-full`
+    /// via the workspace-unified `cargo nextest run --all` in CI.
     fn acl_category_gap_allowlist() -> std::collections::BTreeSet<&'static str> {
-        // Always-compiled surface (80 entries).
+        // Always-compiled surface (27 entries), all of them module-family.
         #[allow(unused_mut)]
         let mut set: std::collections::BTreeSet<&'static str> = [
-            // Cluster / connection routing verbs.
-            "ASKING",
-            "CLUSTER",
-            "READONLY",
-            "READWRITE",
-            // Replication / admin verbs.
-            "MIGRATE",
-            "MONITOR",
-            "PSYNC",
-            "REPLCONF",
-            "SYNC",
-            "WAIT",
-            "WAITAOF",
-            "LATENCY",
-            "FROGDB.FINALIZE",
-            "FROGDB.HOTSHARDS",
-            "FROGDB.VERSION",
-            "HOTKEYS",
-            "STATUS",
-            "DIGEST",
-            "LOLWUT",
-            // Scripting / functions.
-            "EVAL_RO",
-            "EVALSHA_RO",
-            "FCALL",
-            "FCALL_RO",
-            "FUNCTION",
-            // String / generic.
-            "LCS",
-            "SUBSTR",
-            "MSETEX",
-            "DELEX",
-            "MOVE",
-            "RPOPLPUSH",
-            // Hash field-TTL family.
-            "HEXPIRE",
-            "HEXPIREAT",
-            "HEXPIRETIME",
-            "HPEXPIRE",
-            "HPEXPIREAT",
-            "HPEXPIRETIME",
-            "HPTTL",
-            "HTTL",
-            "HPERSIST",
-            "HGETDEL",
-            "HGETEX",
-            "HSETEX",
-            // Sorted-set aggregates / range-delete family.
-            "BZMPOP",
-            "ZMPOP",
-            "ZDIFF",
-            "ZDIFFSTORE",
-            "ZINTER",
-            "ZINTERCARD",
-            "ZUNION",
-            "ZRANGESTORE",
-            "ZREMRANGEBYLEX",
-            "ZREMRANGEBYRANK",
-            "ZREMRANGEBYSCORE",
             // Search (FT.*) — registered unconditionally by the server crate.
             "FT.AGGREGATE",
             "FT.ALIASADD",
@@ -838,12 +785,6 @@ mod spec_exhaustiveness {
             "ES.REPLAY",
             "ES.SNAPSHOT",
         ]);
-        #[cfg(feature = "cmd-geo")]
-        set.extend(["GEORADIUSBYMEMBER_RO", "GEORADIUS_RO"]);
-        #[cfg(feature = "cmd-hyperloglog")]
-        set.extend(["PFDEBUG", "PFSELFTEST"]);
-        #[cfg(feature = "cmd-stream")]
-        set.extend(["XACKDEL", "XDELEX"]);
 
         set
     }

@@ -1290,3 +1290,275 @@ fn vendored_subcommand_key_specs_agree_with_key_extraction() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// ACL categories
+// ---------------------------------------------------------------------------
+
+/// Commands whose ACL category set deliberately differs from the one derived
+/// from the vendored rows, each with the reason. Same shrink-only discipline as
+/// `FLAG_EXEMPTIONS`: a stale entry fails just as loudly as a new divergence.
+///
+/// Empty today. It exists because the *next* upstream bump may introduce a
+/// category FrogDB cannot honestly claim, and the honest answer then is a named
+/// entry rather than a weakened comparison.
+const ACL_CATEGORY_DIVERGENCES: &[(&str, &str)] = &[];
+
+/// Categories Redis derives at registration time rather than writing into
+/// `src/commands/*.json` (`setImplicitACLCategories` in `server.c`).
+///
+/// `flags` are **FrogDB's** wire flags, not upstream's: per ADR-0005 the table
+/// has to describe what FrogDB's ACL engine gates, so a command we implement
+/// differently (`PFDEBUG` is a pure read here; `WAITAOF` never blocks) earns
+/// the categories its own behavior implies. The explicit half is upstream's
+/// verbatim, and is passed in because Redis's `@read` rule consults it —
+/// a `readonly` command already marked `@scripting` (`EVAL_RO`) does not also
+/// become `@read`.
+fn implied_acl_categories(
+    flags: &BTreeSet<String>,
+    explicit: &BTreeSet<&'static str>,
+) -> BTreeSet<&'static str> {
+    let mut out = BTreeSet::new();
+    if flags.contains("write") {
+        out.insert("write");
+    }
+    if flags.contains("readonly") && !explicit.contains("scripting") {
+        out.insert("read");
+    }
+    if flags.contains("admin") {
+        out.insert("admin");
+        out.insert("dangerous");
+    }
+    if flags.contains("pubsub") {
+        out.insert("pubsub");
+    }
+    if flags.contains("fast") {
+        out.insert("fast");
+    }
+    if flags.contains("blocking") {
+        out.insert("blocking");
+    }
+    if !out.contains("fast") && !explicit.contains("fast") {
+        out.insert("slow");
+    }
+    out
+}
+
+/// Upstream's explicit categories for one row, lowercased and interned against
+/// the category vocabulary FrogDB's ACL engine has. A category upstream
+/// declares that FrogDB's `CommandCategory` enum cannot express would be
+/// silently dropped, so it panics instead.
+fn explicit_acl_categories(cmd: &UpstreamCommand) -> BTreeSet<&'static str> {
+    cmd.acl_categories
+        .iter()
+        .map(|raw| {
+            let lower = raw.to_lowercase();
+            frogdb_core::CommandCategory::parse(&lower)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: upstream declares ACL category {raw:?}, which \
+                         `frogdb_acl::CommandCategory` cannot express — add the \
+                         variant before re-vendoring",
+                        cmd.name
+                    )
+                })
+                .name()
+        })
+        .collect()
+}
+
+/// The wire flags `COMMAND INFO` reports for a registered command, lowercase.
+fn our_wire_flags(spec: &frogdb_core::CommandSpec) -> BTreeSet<String> {
+    frogdb_commands::command_meta::command_info_flags(spec)
+        .iter()
+        .map(|flag| match flag {
+            frogdb_protocol::Response::Simple(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            other => panic!("expected a Simple flag, got {other:?}"),
+        })
+        .collect()
+}
+
+/// The category set the vendored data says a command should have.
+///
+/// Leaf commands are upstream's explicit list plus the half Redis derives, and
+/// the derivation runs off FrogDB's own flags (see [`implied_acl_categories`]).
+///
+/// Container commands are the union over the subcommands upstream documents:
+/// FrogDB registers one `CommandSpec` per container and its ACL engine gates
+/// the container as a whole, so the container's row has to cover everything it
+/// dispatches. Their implied half comes from *upstream's* subcommand flags,
+/// because FrogDB has no per-subcommand flag declaration outside the behavioral
+/// subset (`frogdb_core::BEHAVIORAL_FLAGS`) — `admin` in particular is declared
+/// once per container. Where FrogDB splits the container's admin-port surface
+/// (`split_admin_surface_commands`), `@admin`/`@dangerous` are added so
+/// `-@admin` covers the half FrogDB itself refuses on a plain client port.
+///
+/// Known cost, recorded rather than papered over: container granularity means
+/// `-@admin` denies `CLIENT SETNAME` too, which Redis — gating per subcommand —
+/// allows. Closing that needs per-subcommand ACL enforcement
+/// (`AclPermissions::is_command_allowed` consults only the container name), not
+/// a different table.
+fn expected_acl_categories(
+    cmd: &UpstreamCommand,
+    spec: &frogdb_core::CommandSpec,
+) -> BTreeSet<&'static str> {
+    if cmd.has_subcommands() {
+        let mut out = BTreeSet::new();
+        for sub in cmd.subcommands {
+            let explicit = explicit_acl_categories(sub);
+            let flags: BTreeSet<String> = sub
+                .command_flags
+                .unwrap_or(&[])
+                .iter()
+                .map(|flag| flag.to_lowercase())
+                .collect();
+            out.extend(implied_acl_categories(&flags, &explicit));
+            out.extend(explicit);
+        }
+        if frogdb_core::split_admin_surface_commands().any(|name| name == cmd.name) {
+            out.insert("admin");
+            out.insert("dangerous");
+        }
+        return out;
+    }
+    let explicit = explicit_acl_categories(cmd);
+    let mut out = implied_acl_categories(&our_wire_flags(spec), &explicit);
+    out.extend(explicit);
+    out
+}
+
+/// `COMMAND INFO`'s category array for a command, `@` stripped — the reply a
+/// client actually sees, which `command_meta::command_info_categories` builds
+/// from the same `frogdb_acl` table `ACL SETUSER +@category` enforces from.
+fn emitted_acl_categories(name: &str) -> BTreeSet<String> {
+    frogdb_commands::command_meta::command_info_categories(name)
+        .iter()
+        .map(|cat| match cat {
+            frogdb_protocol::Response::Simple(bytes) => {
+                let text = String::from_utf8_lossy(bytes).into_owned();
+                text.strip_prefix('@')
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| panic!("{name}: category {text:?} is not @-prefixed"))
+            }
+            other => panic!("{name}: expected a Simple category, got {other:?}"),
+        })
+        .collect()
+}
+
+/// The ACL category table agrees with the vendored rows for every core Redis
+/// command FrogDB registers.
+///
+/// This is the gate that keeps `+@read` / `-@dangerous` honest: the table and
+/// the registry are joined only by a lowercase string, so a command with a
+/// missing or wrong row is simultaneously a wrong `COMMAND INFO` reply and an
+/// ACL rule that silently fails to cover it (`.scratch/redis-feel/issues/done/
+/// 16-acl-category-table-gaps.md`).
+///
+/// Module-family commands are out of scope by construction: no module
+/// `commands.json` declares `acl_categories` — modules set theirs in C at
+/// `RedisModule_SetCommandACLCategories` time — so the vendored rows carry no
+/// evidence to check against. Their gap stays pinned by
+/// `register::tests::every_registered_command_has_acl_category_or_is_allowlisted`.
+#[test]
+fn vendored_acl_categories_agree_with_our_table() {
+    let registry = full_registry();
+    let divergences_allowed: BTreeMap<&str, &str> =
+        ACL_CATEGORY_DIVERGENCES.iter().copied().collect();
+    let mut used_exemptions = BTreeSet::new();
+    let mut checked = 0usize;
+    let mut divergences: Vec<String> = Vec::new();
+
+    for (name, entry) in registry.iter() {
+        let Some(cmd) = upstream::redis_command(name) else {
+            continue;
+        };
+        let expected = expected_acl_categories(cmd, entry.spec());
+        let ours = emitted_acl_categories(name);
+        let agrees = ours.iter().map(String::as_str).eq(expected.iter().copied());
+
+        match divergences_allowed.get(name) {
+            Some(reason) => {
+                if agrees {
+                    divergences.push(format!(
+                        "{name} is exempt from the ACL category check (\"{reason}\") \
+                         but now matches upstream ({expected:?}) — remove the exemption"
+                    ));
+                }
+                used_exemptions.insert(name);
+            }
+            None => {
+                if !agrees {
+                    let missing: Vec<&str> = expected
+                        .iter()
+                        .copied()
+                        .filter(|cat| !ours.contains(*cat))
+                        .collect();
+                    let extra: Vec<&str> = ours
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|cat| !expected.contains(cat))
+                        .collect();
+                    divergences.push(format!(
+                        "{name}: upstream-only {missing:?}, frogdb-only {extra:?}"
+                    ));
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        divergences.is_empty(),
+        "vendored ACL categories and FrogDB's category table disagree for {} \
+         command(s). Fix the `frogdb_acl` ALL_CATEGORIES row, or add an \
+         ACL_CATEGORY_DIVERGENCES entry with a reason.\n{}",
+        divergences.len(),
+        divergences.join("\n")
+    );
+    assert!(
+        checked > 100,
+        "only {checked} commands were ACL-category checked — the join looks broken"
+    );
+    for (name, _) in ACL_CATEGORY_DIVERGENCES {
+        assert!(
+            used_exemptions.contains(name) || registry.get_entry(name).is_none(),
+            "ACL_CATEGORY_DIVERGENCES lists {name}, which is registered but was never \
+             reached by the check — remove the stale entry"
+        );
+    }
+}
+
+/// Every registered core-Redis command carries exactly one of `@fast` / `@slow`
+/// in the reply, and it is the one its own `fast` flag earns. Redis assigns
+/// `@slow` to whatever is not `@fast`, so "both" and "neither" are states no
+/// command can legitimately be in — and the `@fast`/`@slow` half of the table
+/// was the sub-shape that drifted furthest (issue 16 found eight commands whose
+/// row contradicted their own `CommandFlags::FAST`).
+#[test]
+fn fast_and_slow_categories_follow_the_fast_flag() {
+    let registry = full_registry();
+
+    for (name, entry) in registry.iter() {
+        let Some(cmd) = upstream::redis_command(name) else {
+            continue;
+        };
+        let cats = emitted_acl_categories(name);
+        let fast = cats.contains("fast");
+        let slow = cats.contains("slow");
+        assert!(
+            fast ^ slow,
+            "{name} reports @fast={fast} @slow={slow} — exactly one must hold"
+        );
+        // Containers are excluded from the second half only: their row is the
+        // union over subcommands, so it answers "is any of this fast", while
+        // the container's own spec flag answers for the dispatch as a whole.
+        if cmd.has_subcommands() {
+            continue;
+        }
+        assert_eq!(
+            fast,
+            our_wire_flags(entry.spec()).contains("fast"),
+            "{name}: @fast must agree with the command's own `fast` flag"
+        );
+    }
+}

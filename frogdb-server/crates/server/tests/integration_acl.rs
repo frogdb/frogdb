@@ -647,6 +647,54 @@ async fn test_acl_command_denied_dangerous() {
     server.shutdown().await;
 }
 
+/// `-@dangerous` covers the replication and keyspace-exfiltration verbs, not
+/// just the obvious `FLUSHALL`/`DEBUG` pair.
+///
+/// Every command here used to have **no** row in the ACL category table, which
+/// made `-@dangerous` a silent no-op against it: the deny loop iterates the
+/// command's categories, and an empty set never matches. `+@all -@dangerous`
+/// therefore still handed out MIGRATE (copies arbitrary keys to an arbitrary
+/// host), MONITOR (streams every other client's traffic) and the replication
+/// handshake verbs. Regression test for
+/// `.scratch/redis-feel/issues/done/16-acl-category-table-gaps.md`; the table
+/// itself is kept in step with upstream by
+/// `upstream_metadata_tests::vendored_acl_categories_agree_with_our_table`.
+#[tokio::test]
+async fn test_acl_dangerous_covers_replication_and_migration_verbs() {
+    let (server, mut admin) = start_server_with_admin("admin").await;
+
+    let mut safe = create_and_auth_user(
+        &server,
+        &mut admin,
+        "safe",
+        "pass",
+        &["+@all", "-@dangerous", "~*"],
+    )
+    .await;
+
+    // Arguments are well-formed on purpose: a NOPERM here has to come from the
+    // category check, not from an arity or parse rejection that would mask a
+    // still-uncategorised command.
+    for argv in [
+        vec!["MIGRATE", "127.0.0.1", "6380", "key", "0", "100"],
+        vec!["MONITOR"],
+        vec!["PSYNC", "?", "-1"],
+        vec!["SYNC"],
+        vec!["REPLCONF", "listening-port", "6380"],
+        vec!["RESTORE", "key", "0", "payload"],
+    ] {
+        let response = safe.command(&argv).await;
+        assert_error_prefix(&response, "NOPERM");
+    }
+
+    // The complement: a command that is emphatically not @dangerous still runs,
+    // so the rule is denying by category rather than by breadth.
+    let response = safe.command(&["SET", "key", "val"]).await;
+    assert_ok(&response);
+
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn test_acl_nocommands_user() {
     // User with nocommands denied everything

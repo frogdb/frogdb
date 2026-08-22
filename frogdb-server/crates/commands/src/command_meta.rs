@@ -299,7 +299,11 @@ const ACL_CATEGORY_ORDER: &[&str] = &[
 /// The categories themselves come from our table; only their *order* is
 /// borrowed from Redis, so a client diffing the two replies sees the same
 /// sequence. A category FrogDB has that Redis does not sorts last.
-fn command_info_categories(name: &str) -> Vec<Response> {
+///
+/// Public so the server crate's parity gate
+/// (`upstream_metadata_tests::vendored_acl_categories_agree_with_our_table`)
+/// can check the reply clients actually see rather than the table behind it.
+pub fn command_info_categories(name: &str) -> Vec<Response> {
     let mut cats: Vec<&'static str> = frogdb_acl::CommandCategory::all_for_command(name)
         .into_iter()
         .map(|cat| cat.name())
