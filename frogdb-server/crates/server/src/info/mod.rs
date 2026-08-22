@@ -384,6 +384,25 @@ pub fn sync_counter_fields(sync: SyncCountersSnapshot) -> [(&'static str, u64); 
     ]
 }
 
+/// The FrogDB-only `full_sync_hold_breaches` field of `INFO stats`
+/// (FM-REPLICATION-066).
+///
+/// A one-element list rather than a fourth entry in [`sync_counter_fields`]:
+/// that list is Redis's `sync_*` triple in Redis's order, and this counter has
+/// neither Redis's fall-through rule nor Redis's `CONFIG RESETSTAT` semantics
+/// (see `ReplicationTrackerImpl::full_sync_hold_breaches`). It is still a
+/// shared list for the same reason the others are — both renderers consume it,
+/// so the field cannot be added to one and forgotten in the other.
+///
+/// Counts full syncs abandoned because a shard's flush hold lapsed before the
+/// checkpoint cut. A non-zero value that keeps climbing is a primary whose
+/// checkpoint cut cannot finish inside `FULL_SYNC_HOLD`, retrying forever and
+/// never handing a replica a payload — the one shape that is otherwise visible
+/// only in the logs.
+pub fn full_sync_hold_breach_fields(breaches: u64) -> [(&'static str, u64); 1] {
+    [("full_sync_hold_breaches", breaches)]
+}
+
 /// The two `total_net_repl_*_bytes` fields of `INFO stats` (hardening issue
 /// 29), in Redis's order.
 ///
@@ -563,6 +582,13 @@ pub struct ReplicationSnapshot {
     /// `INFO stats`, not `INFO replication`, matching where `sync` above is
     /// reported.
     pub net_bytes: NetByteCountersSnapshot,
+    /// Lifetime count of full syncs abandoned because a shard's flush hold
+    /// lapsed before the checkpoint cut (FM-REPLICATION-066). Read off the same
+    /// tracker as `sync` above, and reported in `INFO stats` next to it —
+    /// a FrogDB field with no Redis counterpart, so it is rendered from its own
+    /// list ([`full_sync_hold_breach_fields`]) rather than folded into the
+    /// Redis triple.
+    pub full_sync_hold_breaches: u64,
     /// The replication backlog's live shape — capacity, whether a resume window
     /// is open, and where it starts. Read off the tracker (which the backlog is
     /// published to at construction) in *both* roles: the configured capacity is

@@ -33,7 +33,9 @@ use std::time::UNIX_EPOCH;
 
 use frogdb_replication::{BacklogGeometry, NetByteCountersSnapshot, SyncCountersSnapshot};
 
-use crate::info::{backlog_geometry_fields, net_byte_fields, sync_counter_fields};
+use crate::info::{
+    backlog_geometry_fields, full_sync_hold_breach_fields, net_byte_fields, sync_counter_fields,
+};
 use crate::latency_test;
 use frogdb_cluster::version_gate;
 
@@ -164,7 +166,12 @@ fn append_section(
             let net_bytes = ctx
                 .replication_tracker
                 .map_or_else(Default::default, |tracker| tracker.net_bytes());
-            build_stats_info(sync, net_bytes)
+            // Same tracker, same instant, as the two above
+            // (FM-REPLICATION-066).
+            let full_sync_hold_breaches = ctx
+                .replication_tracker
+                .map_or(0, |tracker| tracker.full_sync_hold_breaches());
+            build_stats_info(sync, net_bytes, full_sync_hold_breaches)
         }
         b"replication" => build_replication_info(ctx),
         b"cpu" => build_cpu_info(),
@@ -368,6 +375,7 @@ fn build_persistence_info(ctx: &mut CommandContext) -> String {
 pub(crate) fn build_stats_info(
     sync: SyncCountersSnapshot,
     net_bytes: NetByteCountersSnapshot,
+    full_sync_hold_breaches: u64,
 ) -> String {
     let mut info = "# Stats\r\n\
      total_connections_received:1\r\n\
@@ -390,6 +398,11 @@ pub(crate) fn build_stats_info(
      rejected_connections:0\r\n",
     );
     for (name, value) in sync_counter_fields(sync) {
+        info.push_str(&format!("{name}:{value}\r\n"));
+    }
+    // The FrogDB-only full-sync abort tally, from its own shared list, next to
+    // the Redis triple it belongs beside (FM-REPLICATION-066).
+    for (name, value) in full_sync_hold_breach_fields(full_sync_hold_breaches) {
         info.push_str(&format!("{name}:{value}\r\n"));
     }
     info.push_str(

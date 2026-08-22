@@ -165,6 +165,14 @@ impl ConnectionHandler {
             .replication_tracker
             .as_ref()
             .map_or_else(Default::default, |tracker| tracker.backlog_geometry());
+        // Reported in every role for the same reason `sync` above is: a node
+        // demoted since is still the node whose cuts lost the race, and the
+        // tally is what an alert reads (FM-REPLICATION-066).
+        let full_sync_hold_breaches = self
+            .cluster
+            .replication_tracker
+            .as_ref()
+            .map_or(0, |tracker| tracker.full_sync_hold_breaches());
         let replication = ReplicationSnapshot {
             is_replica,
             node_id: self.cluster.node_id,
@@ -172,6 +180,7 @@ impl ConnectionHandler {
             primary,
             sync,
             net_bytes,
+            full_sync_hold_breaches,
             backlog,
             repl_offset,
             master_host: shards.master_host.clone(),

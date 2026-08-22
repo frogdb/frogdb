@@ -1482,6 +1482,16 @@ impl<'a> SessionDriver<'a> {
                     Some(cause) => tracing::error!(error = %cause, "{}", failure.log_message()),
                     None => tracing::error!("{}", failure.log_message()),
                 }
+                // The one alertable signal for a cut that is chronically losing
+                // the race against `FULL_SYNC_HOLD` (FM-REPLICATION-066).
+                // Counted here rather than at the breach report, because this
+                // is where the abort is *taken*: one count per abandoned sync,
+                // whatever the release said about how many shards lapsed.
+                // Without it a slow cut retries forever behind nothing but
+                // `WARN`/`ERROR` lines, which no alert rule reads.
+                if failure == SyncFailure::CoverageHoldBreached {
+                    self.handler.tracker.record_full_sync_hold_breach();
+                }
                 Err(io::Error::other(match cause {
                     Some(cause) => format!("{}: {cause}", failure.reason()),
                     None => failure.reason().to_string(),
@@ -3504,6 +3514,15 @@ mod tests {
             1,
             "a failed cut releases the hold exactly as a successful one does"
         );
+        // The negative half of the abort tally: this sync was abandoned too,
+        // but for a reason that is not a breach, and charging it to
+        // `full_sync_hold_breaches` would make an operator size a hold that was
+        // never the problem.
+        assert_eq!(
+            tracker.full_sync_hold_breaches(),
+            0,
+            "a cut that failed is not a hold that lapsed"
+        );
     }
 
     /// A hold that lapsed before the cut **fails the sync**: the cut itself
@@ -3611,6 +3630,16 @@ mod tests {
         assert!(
             !checkpoint_path.exists(),
             "the abandoned sync must not leak the directory it staged"
+        );
+        // The abort is counted, once, on the tracker that outlives the session
+        // — `INFO stats`'s `full_sync_hold_breaches`. Two shards' watermarks
+        // were captured and one lapsed; the tally counts the *sync*, not the
+        // shard, so an operator alerting on it reads "syncs are failing N
+        // times" and not a number that also moves with the shard count.
+        assert_eq!(
+            tracker.full_sync_hold_breaches(),
+            1,
+            "a breached hold must leave an alertable counter behind, not only logs"
         );
     }
 

@@ -122,6 +122,26 @@ pub struct ReplicationTrackerImpl {
     /// most recent one decides — a graceful departure from an hour ago must not
     /// disarm a fence armed by the replica lost since.
     last_streaming_departure: AtomicU8,
+
+    /// Lifetime tally of full syncs abandoned because a shard's flush hold
+    /// lapsed before the checkpoint cut — `INFO`'s `full_sync_hold_breaches`
+    /// (FM-REPLICATION-066).
+    ///
+    /// Cross-session for the same reason [`Self::sync_counters`] is: the
+    /// session that aborted is gone by the time an operator looks, and what
+    /// they need to know is how often the cut is losing the race. One count per
+    /// abandoned *sync*, not per breached shard — the shard identities are in
+    /// the release's `WARN`, and an alert fires on "the syncs are failing", not
+    /// on "how wide this one failed".
+    ///
+    /// Deliberately **not** a fourth [`SyncCounters`] field: those three are
+    /// Redis's `sync_*` triple, with Redis's fall-through rule and Redis's
+    /// `CONFIG RESETSTAT` semantics (FM-REPLICATION-050, FM-REPLICATION-058),
+    /// and this is a FrogDB abort tally with neither. That separation is also
+    /// why RESETSTAT does not reach it: an alert reading `increase()` over this
+    /// counter must not be silently rebased by an operator resetting statistics
+    /// ahead of an unrelated maintenance window.
+    full_sync_hold_breaches: AtomicU64,
 }
 
 impl Default for ReplicationTrackerImpl {
@@ -143,6 +163,7 @@ impl ReplicationTrackerImpl {
             net_bytes: Arc::new(NetByteCounters::default()),
             backlog: RwLock::new(None),
             last_streaming_departure: AtomicU8::new(ReplicaDeparture::NONE),
+            full_sync_hold_breaches: AtomicU64::new(0),
         }
     }
 
@@ -463,6 +484,25 @@ impl ReplicationTrackerImpl {
     /// consistent triple, for `INFO`.
     pub fn sync_counters(&self) -> SyncCountersSnapshot {
         self.sync_counters.snapshot()
+    }
+
+    /// Record one full sync abandoned because a shard's flush hold lapsed
+    /// before the checkpoint cut (FM-REPLICATION-066).
+    ///
+    /// Called once per abandoned sync, from the session's `FailSync` handler —
+    /// the single place the abort is actually taken, so a breach that is
+    /// reported but not acted on cannot move the counter, and an abort taken by
+    /// any future path cannot skip it.
+    pub fn record_full_sync_hold_breach(&self) {
+        self.full_sync_hold_breaches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read `full_sync_hold_breaches`, for `INFO`.
+    ///
+    /// Monotone for the life of the process: nothing resets it, deliberately —
+    /// see [`Self::full_sync_hold_breaches`] (the field).
+    pub fn full_sync_hold_breaches(&self) -> u64 {
+        self.full_sync_hold_breaches.load(Ordering::Relaxed)
     }
 
     /// Hand out the shared net-byte counters (hardening issue 29) so the

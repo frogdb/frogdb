@@ -12,8 +12,8 @@ use frogdb_cluster::version_gate;
 use frogdb_core::histogram::KeysizeType;
 
 use super::{
-    InfoSection, InfoSources, SectionWriter, backlog_geometry_fields, net_byte_fields,
-    replica_link_fields, sync_counter_fields,
+    InfoSection, InfoSources, SectionWriter, backlog_geometry_fields, full_sync_hold_breach_fields,
+    net_byte_fields, replica_link_fields, sync_counter_fields,
 };
 
 /// The standard section registry, in canonical order.
@@ -356,6 +356,12 @@ impl InfoSection for StatsSection {
         // renderer and the shard-local one in `crate::commands::info` cannot
         // report a different set (FM-REPLICATION-050).
         for (name, value) in sync_counter_fields(src.replication().sync) {
+            w.field(name, value);
+        }
+        // The FrogDB-only full-sync abort tally, from its own shared list, next
+        // to the Redis triple it belongs beside (FM-REPLICATION-066).
+        for (name, value) in full_sync_hold_breach_fields(src.replication().full_sync_hold_breaches)
+        {
             w.field(name, value);
         }
         w.field("expired_keys", sh.expired_keys)
@@ -1418,7 +1424,11 @@ mod tests {
         src.replication.sync = sync;
 
         let connection_level = render(&StatsSection, &src);
-        let shard_local = crate::commands::info::build_stats_info(sync, src.replication.net_bytes);
+        let shard_local = crate::commands::info::build_stats_info(
+            sync,
+            src.replication.net_bytes,
+            src.replication.full_sync_hold_breaches,
+        );
 
         let sync_lines = |section: &str| -> Vec<String> {
             section
@@ -1485,7 +1495,8 @@ mod tests {
         assert_eq!(
             sync_lines(&crate::commands::info::build_stats_info(
                 sync,
-                src.replication.net_bytes
+                src.replication.net_bytes,
+                src.replication.full_sync_hold_breaches
             )),
             expected
         );
@@ -1508,7 +1519,11 @@ mod tests {
         src.replication.net_bytes = net_bytes;
 
         let connection_level = render(&StatsSection, &src);
-        let shard_local = crate::commands::info::build_stats_info(src.replication.sync, net_bytes);
+        let shard_local = crate::commands::info::build_stats_info(
+            src.replication.sync,
+            net_bytes,
+            src.replication.full_sync_hold_breaches,
+        );
 
         let net_byte_lines = |section: &str| -> Vec<String> {
             section
@@ -1574,10 +1589,71 @@ mod tests {
         assert_eq!(
             net_byte_lines(&crate::commands::info::build_stats_info(
                 src.replication.sync,
-                net_bytes
+                net_bytes,
+                src.replication.full_sync_hold_breaches
             )),
             expected
         );
+    }
+
+    // FM-REPLICATION-066
+    /// The two INFO renderers report the same full-sync abort tally for the
+    /// same state, and the field is live rather than printed — the perturbation
+    /// is what separates a real counter from the hardcoded `0` both renderers
+    /// used to emit for every replication field they did not really have.
+    ///
+    /// The field is also pinned *outside* Redis's `sync_*` prefix: it has no
+    /// Redis counterpart, and a client enumerating that prefix must still see
+    /// exactly Redis's three.
+    #[test]
+    fn both_info_renderers_report_the_same_full_sync_hold_breaches() {
+        let breach_line = |section: &str| -> Vec<String> {
+            section
+                .split("\r\n")
+                .filter(|line| line.starts_with("full_sync_hold_breaches"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let src = sources();
+        assert_eq!(
+            breach_line(&render(&StatsSection, &src)),
+            vec!["full_sync_hold_breaches:0".to_string()],
+            "a node whose cuts have all won the race reports zero"
+        );
+
+        let mut src = sources();
+        src.replication.full_sync_hold_breaches = 3;
+        let connection_level = render(&StatsSection, &src);
+        let shard_local = crate::commands::info::build_stats_info(
+            src.replication.sync,
+            src.replication.net_bytes,
+            src.replication.full_sync_hold_breaches,
+        );
+
+        assert_eq!(
+            breach_line(&connection_level),
+            vec!["full_sync_hold_breaches:3".to_string()],
+            "{connection_level}"
+        );
+        assert_eq!(
+            breach_line(&connection_level),
+            breach_line(&shard_local),
+            "the two INFO renderers must agree for the same state"
+        );
+
+        // Redis's `sync_*` namespace stays exactly Redis's three.
+        for section in [&connection_level, &shard_local] {
+            let sync_prefixed: Vec<&str> = section
+                .split("\r\n")
+                .filter(|line| line.starts_with("sync_"))
+                .collect();
+            assert_eq!(
+                sync_prefixed,
+                vec!["sync_full:0", "sync_partial_ok:0", "sync_partial_err:0"],
+                "the FrogDB tally must not join Redis's sync_* prefix: {section}"
+            );
+        }
     }
 
     // FM-REPLICATION-050
