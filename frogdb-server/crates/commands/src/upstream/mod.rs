@@ -34,7 +34,9 @@
 //!   key-spec data *at all* (every module family — modules declare key
 //!   positions in C/Rust at `RedisModule_CreateCommand` time). `Some(&[])`
 //!   means the source does publish key specs as data and this command has
-//!   none, i.e. it genuinely takes no keys.
+//!   none, i.e. it genuinely takes no keys — *unless* the row is a container
+//!   ([`UpstreamCommand::has_subcommands`]), where the keys live on the
+//!   [`subcommands`](UpstreamCommand::subcommands) rows instead.
 
 pub mod generated;
 
@@ -175,15 +177,34 @@ pub struct UpstreamCommand {
     /// *reply determinism*, so unlike arity they are not automatically true of
     /// FrogDB — see [`crate::command_meta::TIP_AUDIT`] for which ones we repeat.
     pub command_tips: &'static [&'static str],
-    /// True when upstream documents this command's real key specs and argument
-    /// trees on subcommand rows the vendor step skips (`ACL`, `OBJECT`, `XINFO`
-    /// ...). Such a row's empty `key_specs` means "not vendored here", not
-    /// "takes no keys", so key-extraction checks have to skip it.
-    pub has_subcommands: bool,
     /// See the module docs on absent vs empty.
     pub key_specs: Option<&'static [UpstreamKeySpec]>,
     pub arguments: &'static [UpstreamArg],
     pub history: &'static [HistoryEntry],
+    /// This command's subcommand rows, sorted by name, for the container
+    /// commands (`ACL`, `OBJECT`, `XINFO`, ...). Upstream keeps a container's
+    /// real arity, command flags, key specs and argument trees here and leaves
+    /// the container row itself nearly empty, so a container's own `key_specs`
+    /// being `Some(&[])` means "described on these rows", not "takes no keys".
+    ///
+    /// Each row's [`name`](Self::name) is the bare subcommand (`"CREATE"`), not
+    /// the `XGROUP|CREATE` spelling `COMMAND INFO` replies with; its own
+    /// `subcommands` is always empty (upstream nests only one level).
+    pub subcommands: &'static [UpstreamCommand],
+}
+
+impl UpstreamCommand {
+    /// Whether upstream documents this command through subcommand rows — i.e.
+    /// whether it is a container.
+    pub fn has_subcommands(&self) -> bool {
+        !self.subcommands.is_empty()
+    }
+
+    /// Look up one of this command's subcommand rows. `name` must be
+    /// ASCII-uppercase.
+    pub fn subcommand(&self, name: &str) -> Option<&'static UpstreamCommand> {
+        self.subcommands.iter().find(|sub| sub.name == name)
+    }
 }
 
 /// One bundled-module family's table, with the upstream pin it was vendored
@@ -226,6 +247,12 @@ pub fn module_command(
 /// Look up a command in either snapshot. `name` must be ASCII-uppercase.
 pub fn command(name: &str) -> Option<&'static UpstreamCommand> {
     redis_command(name).or_else(|| module_command(name).map(|(_, cmd)| cmd))
+}
+
+/// Look up one subcommand row of a container command. Both names must be
+/// ASCII-uppercase.
+pub fn subcommand(container: &str, name: &str) -> Option<&'static UpstreamCommand> {
+    command(container)?.subcommand(name)
 }
 
 /// Whether `name` is a container command a module family documents only
@@ -293,6 +320,53 @@ mod tests {
                 step: 1
             }
         );
+    }
+
+    #[test]
+    fn containers_carry_their_subcommand_rows() {
+        let xgroup = redis_command("XGROUP").expect("XGROUP is vendored");
+        assert!(xgroup.has_subcommands());
+        assert_eq!(xgroup.arity, Some(-2));
+        assert_eq!(xgroup.key_specs, Some(&[][..]));
+
+        let create = xgroup
+            .subcommand("CREATE")
+            .expect("XGROUP CREATE is vendored");
+        assert_eq!(create.arity, Some(-5));
+        assert!(
+            create
+                .command_flags
+                .expect("core rows publish flags")
+                .contains(&"WRITE")
+        );
+        let specs = create.key_specs.expect("core rows publish key specs");
+        assert_eq!(specs[0].begin_search, BeginSearch::Index { pos: 2 });
+
+        // 8.6.1 added HOTKEYS HELP; it is the reason this vendoring stopped
+        // skipping subcommand rows.
+        let help = subcommand("HOTKEYS", "HELP").expect("HOTKEYS HELP is vendored");
+        assert_eq!(help.arity, Some(2));
+        assert_eq!(help.since, "8.6.1");
+    }
+
+    #[test]
+    fn subcommand_rows_are_sorted_and_one_level_deep() {
+        for cmd in REDIS_COMMANDS {
+            assert!(
+                cmd.subcommands.windows(2).all(|w| w[0].name < w[1].name),
+                "{} subcommand rows are not sorted",
+                cmd.name
+            );
+            for sub in cmd.subcommands {
+                assert!(
+                    sub.subcommands.is_empty(),
+                    "{} {} nests a third level, which upstream does not have",
+                    cmd.name,
+                    sub.name
+                );
+                assert_eq!(sub.source, MetadataSource::Redis);
+            }
+        }
     }
 
     #[test]

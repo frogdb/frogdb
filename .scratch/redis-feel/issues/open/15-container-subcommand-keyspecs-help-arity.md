@@ -41,6 +41,37 @@ registry change — needs a ruling on scope before implementation.
   assignable per subcommand where the container mixes allocating and freeing
   subcommands.
 
+## Ruling (2026-08-21)
+
+**Full subspec table.** Scope:
+
+1. **Registry support.** Containers gain per-subcommand spec rows — key spec +
+   arity + flags per subcommand — for all 17 container commands.
+   `CommandSpec::validate` / dispatch validation match against the resolved
+   subcommand row instead of demanding container-level key coverage (that is
+   what rejects `XGROUP HELP` / `XINFO HELP` today); container arity becomes
+   upstream's `-2` shape.
+2. **Vendor pipeline.** `website/scripts/vendor-redis-commands.py` keeps the
+   upstream subcommand rows it currently skips (158 of them);
+   `scripts/gen-command-metadata.py` emits them into
+   `frogdb-server/crates/commands/src/upstream/generated.rs`; the drift check
+   (`just command-metadata-gen-check`) stays green.
+3. **Truthfulness.** The join tests in
+   `frogdb-server/crates/server/src/server/upstream_metadata_tests.rs` cover
+   subcommand rows (key specs, arity, flags). The XGROUP/XINFO arity exemptions
+   are removed — the lists are shrink-only, so removal *is* the enforcement.
+4. **Per-subcommand admission.** DENYOOM is judged per subcommand (XGROUP CREATE
+   keeps it; XGROUP DESTROY/DELCONSUMER, which free memory, drop it). The OOM
+   gate in `core/src/shard/execution.rs` resolves the subcommand row for
+   containers. Upstream's per-subcommand flag values are the input to the
+   judgment.
+5. **Emission.** `COMMAND INFO` and `COMMAND DOCS` emit nested subcommand
+   entries under containers, matching Redis 8.6.1's reply shape.
+6. **`HOTKEYS HELP`.** Implemented, matching the standard container HELP shape
+   (upstream added `hotkeys-help.json` in 8.6.1, flags `LOADING`/`STALE`).
+7. **Behavior acceptance.** `XGROUP HELP` / `XINFO HELP` / `HOTKEYS HELP` return
+   help text like Redis.
+
 ## Comments
 
 **2026-08-21 (compat target 8.6.0 → 8.6.1).** Upstream 8.6.1 adds

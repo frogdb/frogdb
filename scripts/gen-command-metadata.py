@@ -198,6 +198,16 @@ def emit_history(history: list[list[str]], indent: str) -> str:
     return "&[\n" + "\n".join(rows) + f"\n{indent}]"
 
 
+def emit_subcommands(cmd: dict, source: str, publishes_key_specs: bool, indent: str) -> str:
+    """The container's nested subcommand rows, or `&[]` for a leaf command."""
+    subs = cmd.get("subcommands", [])
+    if not subs:
+        return "&[]"
+    pad = indent + "    "
+    rows = [emit_command(sub, source, publishes_key_specs, pad) for sub in subs]
+    return "&[\n" + "\n".join(rows) + f"\n{indent}]"
+
+
 def emit_command(cmd: dict, source: str, publishes_key_specs: bool, indent: str) -> str:
     pad = indent + "    "
     flags = cmd.get("command_flags")
@@ -218,10 +228,10 @@ def emit_command(cmd: dict, source: str, publishes_key_specs: bool, indent: str)
         + f"{pad}command_flags: "
         + (f"Some({rust_str_slice(flags)}),\n" if flags is not None else "None,\n")
         + f"{pad}command_tips: {rust_str_slice(cmd.get('command_tips', []))},\n"
-        + f"{pad}has_subcommands: {str(bool(cmd.get('has_subcommands'))).lower()},\n"
         + f"{pad}key_specs: {emit_key_specs(cmd, publishes_key_specs, pad)},\n"
         f"{pad}arguments: {emit_args(cmd.get('arguments', []), pad)},\n"
         f"{pad}history: {emit_history(cmd.get('history', []), pad)},\n"
+        f"{pad}subcommands: {emit_subcommands(cmd, source, publishes_key_specs, pad)},\n"
         f"{indent}}},"
     )
 

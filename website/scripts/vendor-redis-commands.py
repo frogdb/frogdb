@@ -61,22 +61,19 @@ upstream only moves a few times a year. `matrix-gen.py` checks the vendored
 `redis_version` against `REDIS_COMPAT_TARGET` on every run and fails loudly
 if they've drifted, so a version bump can't silently go un-vendored.
 
-Subcommands (core files with a `container` key, e.g. `ACL CAT`) are still
-skipped, and that stays true now that `key_specs` and `arguments` are kept:
-FrogDB's registry dispatches subcommands internally and only exposes the
-container command (`ACL`, `CONFIG`, ...) as a registry entry, so a
-subcommand row would never join against anything. Nothing is lost for the
-fields this script newly keeps — upstream container commands carry no
-`key_specs` of their own (the key-bearing specs live on the subcommand
-rows, which FrogDB's key extraction reaches through container-aware
-dispatch rather than through a registry entry), so keeping them would add
-phantom rows without adding a single checkable key spec. Revisit if
-`COMMAND DOCS` ever needs to emit per-subcommand argument trees.
+Subcommands (core files with a `container` key, e.g. `ACL CAT`) are kept,
+nested under their container's row as a `subcommands` list rather than
+promoted to top-level rows — `matrix-gen.py` and the coverage join both
+enumerate `commands` as "things FrogDB registers", and a container's
+subcommands are not registry entries. Upstream puts a container's real
+`arity`, `command_flags` and `key_specs` on those rows and leaves the
+container itself nearly empty, so they are the only place the checkable
+facts live: FrogDB's own per-subcommand spec rows
+(`frogdb_core::SubcommandSpec`) are joined against them.
 
-Container rows do carry `has_subcommands: true` so a consumer can tell
-"upstream says this command takes no keys" apart from "upstream's key specs
-sit on rows this script skipped" — the join tests need that distinction to
-avoid reporting every container as a divergence.
+A container row is therefore recognizable by a non-empty `subcommands`
+list, which is what lets a consumer tell "upstream says this command takes
+no keys" apart from "upstream's key specs sit on the subcommand rows".
 
 Usage:
     uv run website/scripts/vendor-redis-commands.py
@@ -233,36 +230,46 @@ def vendor_core(redis_version: str) -> dict:
         ) from exc
 
     commands: dict[str, dict] = {}
-    containers: set[str] = set()
-    skipped_subcommands = 0
+    subcommands: dict[str, dict[str, dict]] = {}
     for entry in listing:
         name = entry.get("name", "")
         if not name.endswith(".json"):
             continue
         data = fetch_json(entry["download_url"])
         for cmd_name, meta in data.items():
-            if "container" in meta:
-                skipped_subcommands += 1
-                containers.add(meta["container"])
-                continue  # subcommand (e.g. "ACL CAT") — not a registry entry
+            container = meta.get("container")
+            if container is not None:
+                # A subcommand (e.g. `ACL CAT`) — nested under its container
+                # below rather than promoted to a registry-entry row.
+                row = {"name": cmd_name, **trim(meta, CORE_FIELDS)}
+                subcommands.setdefault(container, {})[cmd_name] = row
+                continue
             commands[cmd_name] = {"name": cmd_name, **trim(meta, CORE_FIELDS)}
 
-    # Mark the rows whose key specs and argument trees live on the skipped
-    # subcommand rows, so the join tests can tell "upstream says this command
-    # takes no keys" apart from "upstream's key specs are on rows we skipped".
-    for container in sorted(containers):
+    # Nest each container's subcommand rows, immediately after `name` so the
+    # container shape is visible at the top of the row.
+    total_subcommands = 0
+    for container, rows in sorted(subcommands.items()):
         row = commands.get(container)
         if row is None:
-            continue
+            raise SystemExit(
+                f"upstream declares subcommands for {container!r} but no top-level "
+                f"{container}.json — the container/subcommand split changed upstream"
+            )
+        total_subcommands += len(rows)
         rest = {key: value for key, value in row.items() if key != "name"}
-        commands[container] = {"name": row["name"], "has_subcommands": True, **rest}
+        commands[container] = {
+            "name": row["name"],
+            "subcommands": [rows[name] for name in sorted(rows)],
+            **rest,
+        }
         if row.get("key_specs"):
             print(f"  note: container {container} carries its own key_specs")
 
     sorted_commands = [commands[name] for name in sorted(commands)]
     print(
         f"  core: {len(sorted_commands)} commands "
-        f"({len(containers)} containers, {skipped_subcommands} subcommands skipped)"
+        f"({len(subcommands)} containers, {total_subcommands} subcommands nested)"
     )
 
     return {

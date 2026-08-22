@@ -10,7 +10,310 @@
   "commands": [
     {
       "name": "ACL",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "CAT",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Lists the ACL categories, or the commands inside a category.",
+          "complexity": "O(1) since the categories and commands are a fixed set.",
+          "arity": -2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "category",
+              "type": "string",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "DELUSER",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Deletes ACL users, and terminates their connections.",
+          "complexity": "O(1) amortized time considering the typical user.",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "username",
+              "type": "string",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "DRYRUN",
+          "group": "server",
+          "since": "7.0.0",
+          "summary": "Simulates the execution of a command by a user, without executing the command.",
+          "complexity": "O(1).",
+          "arity": -4,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "username",
+              "type": "string"
+            },
+            {
+              "name": "command",
+              "type": "string"
+            },
+            {
+              "name": "arg",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ],
+          "history": []
+        },
+        {
+          "name": "GENPASS",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Generates a pseudorandom, secure password that can be used to identify ACL users.",
+          "complexity": "O(1)",
+          "arity": -2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "bits",
+              "type": "integer",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "GETUSER",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Lists the ACL rules of a user.",
+          "complexity": "O(N). Where N is the number of password, command and pattern rules that the user has.",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "username",
+              "type": "string"
+            }
+          ],
+          "history": [
+            [
+              "6.2.0",
+              "Added Pub/Sub channel patterns."
+            ],
+            [
+              "7.0.0",
+              "Added selectors and changed the format of key and channel patterns from a list to their rule representation."
+            ]
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "LIST",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Dumps the effective rules in ACL file format.",
+          "complexity": "O(N). Where N is the number of configured users.",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "LOAD",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Reloads the rules from the configured ACL file.",
+          "complexity": "O(N). Where N is the number of configured users.",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "LOG",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Lists recent security events generated due to ACL rules.",
+          "complexity": "O(N) with N being the number of entries shown.",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "operation",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "count",
+                  "type": "integer"
+                },
+                {
+                  "name": "reset",
+                  "type": "pure-token",
+                  "token": "RESET"
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "7.2.0",
+              "Added entry ID, timestamp created, and timestamp last updated."
+            ]
+          ]
+        },
+        {
+          "name": "SAVE",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Saves the effective ACL rules in the configured ACL file.",
+          "complexity": "O(N). Where N is the number of configured users.",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ]
+        },
+        {
+          "name": "SETUSER",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Creates and modifies an ACL user and its rules.",
+          "complexity": "O(N). Where N is the number of rules provided.",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "username",
+              "type": "string"
+            },
+            {
+              "name": "rule",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ],
+          "history": [
+            [
+              "6.2.0",
+              "Added Pub/Sub channel patterns."
+            ],
+            [
+              "7.0.0",
+              "Added selectors and key based permissions."
+            ]
+          ]
+        },
+        {
+          "name": "USERS",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Lists all ACL users.",
+          "complexity": "O(N). Where N is the number of configured users.",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "WHOAMI",
+          "group": "server",
+          "since": "6.0.0",
+          "summary": "Returns the authenticated username of the current connection.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        }
+      ],
       "group": "server",
       "since": "6.0.0",
       "summary": "A container for Access List Control commands.",
@@ -1149,7 +1452,701 @@
     },
     {
       "name": "CLIENT",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "CACHING",
+          "group": "connection",
+          "since": "6.0.0",
+          "summary": "Instructs the server whether to track the keys in the next request.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "mode",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "yes",
+                  "type": "pure-token",
+                  "token": "YES"
+                },
+                {
+                  "name": "no",
+                  "type": "pure-token",
+                  "token": "NO"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "GETNAME",
+          "group": "connection",
+          "since": "2.6.9",
+          "summary": "Returns the name of the connection.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "GETREDIR",
+          "group": "connection",
+          "since": "6.0.0",
+          "summary": "Returns the client ID to which the connection's tracking notifications are redirected.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "connection",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "ID",
+          "group": "connection",
+          "since": "5.0.0",
+          "summary": "Returns the unique client ID of the connection.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "INFO",
+          "group": "connection",
+          "since": "6.2.0",
+          "summary": "Returns information about the connection.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ]
+        },
+        {
+          "name": "KILL",
+          "group": "connection",
+          "since": "2.4.0",
+          "summary": "Terminates open connections.",
+          "complexity": "O(N) where N is the number of client connections",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "filter",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "old-format",
+                  "display": "ip:port",
+                  "type": "string",
+                  "deprecated_since": "2.8.12"
+                },
+                {
+                  "name": "new-format",
+                  "type": "oneof",
+                  "multiple": true,
+                  "arguments": [
+                    {
+                      "token": "ID",
+                      "name": "client-id",
+                      "type": "integer",
+                      "optional": true,
+                      "since": "2.8.12"
+                    },
+                    {
+                      "token": "TYPE",
+                      "name": "client-type",
+                      "type": "oneof",
+                      "optional": true,
+                      "since": "2.8.12",
+                      "arguments": [
+                        {
+                          "name": "normal",
+                          "type": "pure-token",
+                          "token": "normal"
+                        },
+                        {
+                          "name": "master",
+                          "type": "pure-token",
+                          "token": "master",
+                          "since": "3.2.0"
+                        },
+                        {
+                          "name": "slave",
+                          "type": "pure-token",
+                          "token": "slave"
+                        },
+                        {
+                          "name": "replica",
+                          "type": "pure-token",
+                          "token": "replica",
+                          "since": "5.0.0"
+                        },
+                        {
+                          "name": "pubsub",
+                          "type": "pure-token",
+                          "token": "pubsub"
+                        }
+                      ]
+                    },
+                    {
+                      "token": "USER",
+                      "name": "username",
+                      "type": "string",
+                      "optional": true
+                    },
+                    {
+                      "token": "ADDR",
+                      "name": "addr",
+                      "display": "ip:port",
+                      "type": "string",
+                      "optional": true
+                    },
+                    {
+                      "token": "LADDR",
+                      "name": "laddr",
+                      "display": "ip:port",
+                      "type": "string",
+                      "optional": true,
+                      "since": "6.2.0"
+                    },
+                    {
+                      "token": "SKIPME",
+                      "name": "skipme",
+                      "type": "oneof",
+                      "optional": true,
+                      "arguments": [
+                        {
+                          "name": "yes",
+                          "type": "pure-token",
+                          "token": "YES"
+                        },
+                        {
+                          "name": "no",
+                          "type": "pure-token",
+                          "token": "NO"
+                        }
+                      ]
+                    },
+                    {
+                      "token": "MAXAGE",
+                      "name": "maxage",
+                      "type": "integer",
+                      "optional": true,
+                      "since": "7.4.0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "2.8.12",
+              "Added new filter format."
+            ],
+            [
+              "2.8.12",
+              "`ID` option."
+            ],
+            [
+              "3.2.0",
+              "Added `master` type in for `TYPE` option."
+            ],
+            [
+              "5.0.0",
+              "Replaced `slave` `TYPE` with `replica`. `slave` still supported for backward compatibility."
+            ],
+            [
+              "6.2.0",
+              "`LADDR` option."
+            ],
+            [
+              "7.4.0",
+              "`MAXAGE` option."
+            ]
+          ]
+        },
+        {
+          "name": "LIST",
+          "group": "connection",
+          "since": "2.4.0",
+          "summary": "Lists open connections.",
+          "complexity": "O(N) where N is the number of client connections",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "arguments": [
+            {
+              "token": "TYPE",
+              "name": "client-type",
+              "type": "oneof",
+              "optional": true,
+              "since": "5.0.0",
+              "arguments": [
+                {
+                  "name": "normal",
+                  "type": "pure-token",
+                  "token": "normal"
+                },
+                {
+                  "name": "master",
+                  "type": "pure-token",
+                  "token": "master"
+                },
+                {
+                  "name": "replica",
+                  "type": "pure-token",
+                  "token": "replica"
+                },
+                {
+                  "name": "pubsub",
+                  "type": "pure-token",
+                  "token": "pubsub"
+                }
+              ]
+            },
+            {
+              "name": "client-id",
+              "token": "ID",
+              "type": "integer",
+              "optional": true,
+              "multiple": true,
+              "since": "6.2.0"
+            }
+          ],
+          "history": [
+            [
+              "2.8.12",
+              "Added unique client `id` field."
+            ],
+            [
+              "5.0.0",
+              "Added optional `TYPE` filter."
+            ],
+            [
+              "6.0.0",
+              "Added `user` field."
+            ],
+            [
+              "6.2.0",
+              "Added `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter."
+            ],
+            [
+              "7.0.0",
+              "Added `resp`, `multi-mem`, `rbs` and `rbp` fields."
+            ],
+            [
+              "7.0.3",
+              "Added `ssub` field."
+            ],
+            [
+              "7.2.0",
+              "Added `lib-name` and `lib-ver` fields."
+            ],
+            [
+              "7.4.0",
+              "Added `watch` field."
+            ],
+            [
+              "8.0.0",
+              "Added `io-thread` field."
+            ]
+          ]
+        },
+        {
+          "name": "NO-EVICT",
+          "group": "connection",
+          "since": "7.0.0",
+          "summary": "Sets the client eviction mode of the connection.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "enabled",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "on",
+                  "type": "pure-token",
+                  "token": "ON"
+                },
+                {
+                  "name": "off",
+                  "type": "pure-token",
+                  "token": "OFF"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "NO-TOUCH",
+          "group": "connection",
+          "since": "7.2.0",
+          "summary": "Controls whether commands sent by the client affect the LRU/LFU of accessed keys.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "enabled",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "on",
+                  "type": "pure-token",
+                  "token": "ON"
+                },
+                {
+                  "name": "off",
+                  "type": "pure-token",
+                  "token": "OFF"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "PAUSE",
+          "group": "connection",
+          "since": "3.0.0",
+          "summary": "Suspends commands processing.",
+          "complexity": "O(1)",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "timeout",
+              "type": "integer"
+            },
+            {
+              "name": "mode",
+              "type": "oneof",
+              "optional": true,
+              "since": "6.2.0",
+              "arguments": [
+                {
+                  "name": "write",
+                  "type": "pure-token",
+                  "token": "WRITE"
+                },
+                {
+                  "name": "all",
+                  "type": "pure-token",
+                  "token": "ALL"
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "6.2.0",
+              "`CLIENT PAUSE WRITE` mode added along with the `mode` option."
+            ]
+          ]
+        },
+        {
+          "name": "REPLY",
+          "group": "connection",
+          "since": "3.2.0",
+          "summary": "Instructs the server whether to reply to commands.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "action",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "on",
+                  "type": "pure-token",
+                  "token": "ON"
+                },
+                {
+                  "name": "off",
+                  "type": "pure-token",
+                  "token": "OFF"
+                },
+                {
+                  "name": "skip",
+                  "type": "pure-token",
+                  "token": "SKIP"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SETINFO",
+          "group": "connection",
+          "since": "7.2.0",
+          "summary": "Sets information specific to the client or connection.",
+          "complexity": "O(1)",
+          "arity": 4,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "attr",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "token": "lib-name",
+                  "name": "libname",
+                  "type": "string"
+                },
+                {
+                  "token": "lib-ver",
+                  "name": "libver",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SETNAME",
+          "group": "connection",
+          "since": "2.6.9",
+          "summary": "Sets the connection name.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "connection-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "TRACKING",
+          "group": "connection",
+          "since": "6.0.0",
+          "summary": "Controls server-assisted client-side caching for the connection.",
+          "complexity": "O(1). Some options may introduce additional complexity.",
+          "arity": -3,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "status",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "on",
+                  "type": "pure-token",
+                  "token": "ON"
+                },
+                {
+                  "name": "off",
+                  "type": "pure-token",
+                  "token": "OFF"
+                }
+              ]
+            },
+            {
+              "token": "REDIRECT",
+              "name": "client-id",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "token": "PREFIX",
+              "name": "prefix",
+              "type": "string",
+              "optional": true,
+              "multiple": true,
+              "multiple_token": true
+            },
+            {
+              "name": "BCAST",
+              "token": "BCAST",
+              "type": "pure-token",
+              "optional": true
+            },
+            {
+              "name": "OPTIN",
+              "token": "OPTIN",
+              "type": "pure-token",
+              "optional": true
+            },
+            {
+              "name": "OPTOUT",
+              "token": "OPTOUT",
+              "type": "pure-token",
+              "optional": true
+            },
+            {
+              "name": "NOLOOP",
+              "token": "NOLOOP",
+              "type": "pure-token",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "TRACKINGINFO",
+          "group": "connection",
+          "since": "6.2.0",
+          "summary": "Returns information about server-assisted client-side caching for the connection.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "UNBLOCK",
+          "group": "connection",
+          "since": "5.0.0",
+          "summary": "Unblocks a client blocked by a blocking command from a different connection.",
+          "complexity": "O(log N) where N is the number of client connections",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "client-id",
+              "type": "integer"
+            },
+            {
+              "name": "unblock-type",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "timeout",
+                  "type": "pure-token",
+                  "token": "TIMEOUT"
+                },
+                {
+                  "name": "error",
+                  "type": "pure-token",
+                  "token": "ERROR"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "UNPAUSE",
+          "group": "connection",
+          "since": "6.2.0",
+          "summary": "Resumes processing commands from paused clients.",
+          "complexity": "O(N) Where N is the number of paused clients",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        }
+      ],
       "group": "connection",
       "since": "2.4.0",
       "summary": "A container for client connection commands.",
@@ -1161,7 +2158,854 @@
     },
     {
       "name": "CLUSTER",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "ADDSLOTS",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Assigns new hash slots to a node.",
+          "complexity": "O(N) where N is the total number of hash slot arguments",
+          "arity": -3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "slot",
+              "type": "integer",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "ADDSLOTSRANGE",
+          "group": "cluster",
+          "since": "7.0.0",
+          "summary": "Assigns new hash slot ranges to a node.",
+          "complexity": "O(N) where N is the total number of the slots between the start slot and end slot arguments.",
+          "arity": -4,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "range",
+              "type": "block",
+              "multiple": true,
+              "arguments": [
+                {
+                  "name": "start-slot",
+                  "type": "integer"
+                },
+                {
+                  "name": "end-slot",
+                  "type": "integer"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "BUMPEPOCH",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Advances the cluster config epoch.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ]
+        },
+        {
+          "name": "COUNT-FAILURE-REPORTS",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the number of active failure reports active for a node.",
+          "complexity": "O(N) where N is the number of failure reports",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "arguments": [
+            {
+              "name": "node-id",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "COUNTKEYSINSLOT",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the number of keys in a hash slot.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "slot",
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "name": "DELSLOTS",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Sets hash slots as unbound for a node.",
+          "complexity": "O(N) where N is the total number of hash slot arguments",
+          "arity": -3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "slot",
+              "type": "integer",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "DELSLOTSRANGE",
+          "group": "cluster",
+          "since": "7.0.0",
+          "summary": "Sets hash slot ranges as unbound for a node.",
+          "complexity": "O(N) where N is the total number of the slots between the start slot and end slot arguments.",
+          "arity": -4,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "range",
+              "type": "block",
+              "multiple": true,
+              "arguments": [
+                {
+                  "name": "start-slot",
+                  "type": "integer"
+                },
+                {
+                  "name": "end-slot",
+                  "type": "integer"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "FAILOVER",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Forces a replica to perform a manual failover of its master.",
+          "complexity": "O(1)",
+          "arity": -2,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "options",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "force",
+                  "type": "pure-token",
+                  "token": "FORCE"
+                },
+                {
+                  "name": "takeover",
+                  "type": "pure-token",
+                  "token": "TAKEOVER"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "FLUSHSLOTS",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Deletes all slots information from a node.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ]
+        },
+        {
+          "name": "FORGET",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Removes a node from the nodes table.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "node-id",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "GETKEYSINSLOT",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the key names in a hash slot.",
+          "complexity": "O(N) where N is the number of requested keys",
+          "arity": 4,
+          "command_flags": [
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "arguments": [
+            {
+              "name": "slot",
+              "type": "integer"
+            },
+            {
+              "name": "count",
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "cluster",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "INFO",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns information about the state of a node.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ]
+        },
+        {
+          "name": "KEYSLOT",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the hash slot for a key.",
+          "complexity": "O(N) where N is the number of bytes in the key",
+          "arity": 3,
+          "command_flags": [
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "LINKS",
+          "group": "cluster",
+          "since": "7.0.0",
+          "summary": "Returns a list of all TCP links to and from peer nodes.",
+          "complexity": "O(N) where N is the total number of Cluster nodes",
+          "arity": 2,
+          "command_flags": [
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ]
+        },
+        {
+          "name": "MEET",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Forces a node to handshake with another node.",
+          "complexity": "O(1)",
+          "arity": -4,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "ip",
+              "type": "string"
+            },
+            {
+              "name": "port",
+              "type": "integer"
+            },
+            {
+              "name": "cluster-bus-port",
+              "type": "integer",
+              "optional": true,
+              "since": "4.0.0"
+            }
+          ],
+          "history": [
+            [
+              "4.0.0",
+              "Added the optional `cluster_bus_port` argument."
+            ]
+          ]
+        },
+        {
+          "name": "MIGRATION",
+          "group": "cluster",
+          "since": "8.4.0",
+          "summary": "Start, monitor and cancel slot migration.",
+          "complexity": "O(N) where N is the total number of the slots between the start slot and end slot arguments.",
+          "arity": -4,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "subcommand",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "import",
+                  "token": "IMPORT",
+                  "type": "block",
+                  "multiple": true,
+                  "arguments": [
+                    {
+                      "name": "start-slot",
+                      "type": "integer"
+                    },
+                    {
+                      "name": "end-slot",
+                      "type": "integer"
+                    }
+                  ]
+                },
+                {
+                  "name": "cancel",
+                  "token": "CANCEL",
+                  "type": "oneof",
+                  "arguments": [
+                    {
+                      "token": "ID",
+                      "name": "task-id",
+                      "type": "string"
+                    },
+                    {
+                      "name": "all",
+                      "token": "ALL",
+                      "type": "pure-token"
+                    }
+                  ]
+                },
+                {
+                  "name": "status",
+                  "token": "STATUS",
+                  "type": "oneof",
+                  "arguments": [
+                    {
+                      "token": "ID",
+                      "name": "task-id",
+                      "type": "string",
+                      "optional": true
+                    },
+                    {
+                      "name": "all",
+                      "token": "ALL",
+                      "type": "pure-token",
+                      "optional": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "MYID",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the ID of a node.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "STALE"
+          ]
+        },
+        {
+          "name": "MYSHARDID",
+          "group": "cluster",
+          "since": "7.2.0",
+          "summary": "Returns the shard ID of a node.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "history": []
+        },
+        {
+          "name": "NODES",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the cluster configuration for a node.",
+          "complexity": "O(N) where N is the total number of Cluster nodes",
+          "arity": 2,
+          "command_flags": [
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ]
+        },
+        {
+          "name": "REPLICAS",
+          "group": "cluster",
+          "since": "5.0.0",
+          "summary": "Lists the replica nodes of a master node.",
+          "complexity": "O(N) where N is the number of replicas.",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "arguments": [
+            {
+              "name": "node-id",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "REPLICATE",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Configure a node as replica of a master node.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "node-id",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "RESET",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Resets a node.",
+          "complexity": "O(N) where N is the number of known nodes. The command may execute a FLUSHALL as a side effect.",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "STALE",
+            "NOSCRIPT"
+          ],
+          "arguments": [
+            {
+              "name": "reset-type",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "hard",
+                  "type": "pure-token",
+                  "token": "HARD"
+                },
+                {
+                  "name": "soft",
+                  "type": "pure-token",
+                  "token": "SOFT"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SAVECONFIG",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Forces a node to save the cluster configuration to disk.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ]
+        },
+        {
+          "name": "SET-CONFIG-EPOCH",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Sets the configuration epoch for a new node.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "config-epoch",
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "name": "SETSLOT",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Binds a hash slot to a node.",
+          "complexity": "O(1)",
+          "arity": -4,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "slot",
+              "type": "integer"
+            },
+            {
+              "name": "subcommand",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "importing",
+                  "display": "node-id",
+                  "type": "string",
+                  "token": "IMPORTING"
+                },
+                {
+                  "name": "migrating",
+                  "display": "node-id",
+                  "type": "string",
+                  "token": "MIGRATING"
+                },
+                {
+                  "name": "node",
+                  "display": "node-id",
+                  "type": "string",
+                  "token": "NODE"
+                },
+                {
+                  "name": "stable",
+                  "type": "pure-token",
+                  "token": "STABLE"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SHARDS",
+          "group": "cluster",
+          "since": "7.0.0",
+          "summary": "Returns the mapping of cluster slots to shards.",
+          "complexity": "O(N) where N is the total number of cluster nodes",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "history": []
+        },
+        {
+          "name": "SLAVES",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Lists the replica nodes of a master node.",
+          "complexity": "O(N) where N is the number of replicas.",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "doc_flags": [
+            "DEPRECATED"
+          ],
+          "deprecated_since": "5.0.0",
+          "replaced_by": "`CLUSTER REPLICAS`",
+          "arguments": [
+            {
+              "name": "node-id",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "SLOT-STATS",
+          "group": "cluster",
+          "since": "8.2.0",
+          "summary": "Return an array of slot usage statistics for slots assigned to the current node.",
+          "complexity": "O(N) where N is the total number of slots based on arguments. O(N*log(N)) with ORDERBY subcommand.",
+          "arity": -4,
+          "command_flags": [
+            "STALE",
+            "LOADING"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_SHARDS"
+          ],
+          "arguments": [
+            {
+              "name": "filter",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "token": "SLOTSRANGE",
+                  "name": "slotsrange",
+                  "type": "block",
+                  "arguments": [
+                    {
+                      "name": "start-slot",
+                      "type": "integer"
+                    },
+                    {
+                      "name": "end-slot",
+                      "type": "integer"
+                    }
+                  ]
+                },
+                {
+                  "token": "ORDERBY",
+                  "name": "orderby",
+                  "type": "block",
+                  "arguments": [
+                    {
+                      "name": "metric",
+                      "type": "string"
+                    },
+                    {
+                      "token": "LIMIT",
+                      "name": "limit",
+                      "type": "integer",
+                      "optional": true
+                    },
+                    {
+                      "name": "order",
+                      "type": "oneof",
+                      "optional": true,
+                      "arguments": [
+                        {
+                          "name": "asc",
+                          "type": "pure-token",
+                          "token": "ASC"
+                        },
+                        {
+                          "name": "desc",
+                          "type": "pure-token",
+                          "token": "DESC"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SLOTS",
+          "group": "cluster",
+          "since": "3.0.0",
+          "summary": "Returns the mapping of cluster slots to nodes.",
+          "complexity": "O(N) where N is the total number of Cluster nodes",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "doc_flags": [
+            "DEPRECATED"
+          ],
+          "deprecated_since": "7.0.0",
+          "replaced_by": "`CLUSTER SHARDS`",
+          "history": [
+            [
+              "4.0.0",
+              "Added node IDs."
+            ],
+            [
+              "7.0.0",
+              "Added additional networking metadata field."
+            ]
+          ]
+        },
+        {
+          "name": "SYNCSLOTS",
+          "group": "cluster",
+          "since": "8.4.0",
+          "summary": "Internal command for atomic slot migration protocol between cluster nodes.",
+          "complexity": "O(1)",
+          "arity": -3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "arguments": [
+            {
+              "name": "subcommand",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "sync",
+                  "token": "SYNC",
+                  "type": "block",
+                  "arguments": [
+                    {
+                      "name": "task-id",
+                      "type": "string"
+                    },
+                    {
+                      "name": "slot-range",
+                      "type": "block",
+                      "multiple": true,
+                      "arguments": [
+                        {
+                          "name": "start-slot",
+                          "type": "integer"
+                        },
+                        {
+                          "name": "end-slot",
+                          "type": "integer"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "token": "RDBCHANNEL",
+                  "name": "task-id",
+                  "type": "string"
+                },
+                {
+                  "name": "snapshot-eof",
+                  "token": "SNAPSHOT-EOF",
+                  "type": "pure-token"
+                },
+                {
+                  "name": "stream-eof",
+                  "token": "STREAM-EOF",
+                  "type": "pure-token"
+                },
+                {
+                  "name": "ack",
+                  "token": "ACK",
+                  "type": "block",
+                  "arguments": [
+                    {
+                      "name": "state",
+                      "type": "string"
+                    },
+                    {
+                      "name": "offset",
+                      "type": "integer"
+                    }
+                  ]
+                },
+                {
+                  "token": "FAIL",
+                  "name": "error",
+                  "type": "string"
+                },
+                {
+                  "name": "conf",
+                  "token": "CONF",
+                  "type": "block",
+                  "arguments": [
+                    {
+                      "name": "option",
+                      "type": "string",
+                      "multiple": true
+                    },
+                    {
+                      "name": "value",
+                      "type": "string",
+                      "multiple": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
       "group": "cluster",
       "since": "3.0.0",
       "summary": "A container for Redis Cluster commands.",
@@ -1170,7 +3014,179 @@
     },
     {
       "name": "COMMAND",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "COUNT",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns a count of commands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "DOCS",
+          "group": "server",
+          "since": "7.0.0",
+          "summary": "Returns documentary information about one, multiple or all commands.",
+          "complexity": "O(N) where N is the number of commands to look up",
+          "arity": -2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+          ],
+          "arguments": [
+            {
+              "name": "command-name",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "GETKEYS",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Extracts the key names from an arbitrary command.",
+          "complexity": "O(N) where N is the number of arguments to the command",
+          "arity": -3,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "command",
+              "type": "string"
+            },
+            {
+              "name": "arg",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "GETKEYSANDFLAGS",
+          "group": "server",
+          "since": "7.0.0",
+          "summary": "Extracts the key names and access flags for an arbitrary command.",
+          "complexity": "O(N) where N is the number of arguments to the command",
+          "arity": -3,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "command",
+              "type": "string"
+            },
+            {
+              "name": "arg",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ]
+        },
+        {
+          "name": "INFO",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns information about one, multiple or all commands.",
+          "complexity": "O(N) where N is the number of commands to look up",
+          "arity": -2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+          ],
+          "arguments": [
+            {
+              "name": "command-name",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ],
+          "history": [
+            [
+              "7.0.0",
+              "Allowed to be called with no argument to get info on all commands."
+            ]
+          ]
+        },
+        {
+          "name": "LIST",
+          "group": "server",
+          "since": "7.0.0",
+          "summary": "Returns a list of command names.",
+          "complexity": "O(N) where N is the total number of Redis commands",
+          "arity": -2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+          ],
+          "arguments": [
+            {
+              "name": "filterby",
+              "token": "FILTERBY",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "module-name",
+                  "type": "string",
+                  "token": "MODULE"
+                },
+                {
+                  "name": "category",
+                  "type": "string",
+                  "token": "ACLCAT"
+                },
+                {
+                  "name": "pattern",
+                  "type": "pattern",
+                  "token": "PATTERN"
+                }
+              ]
+            }
+          ]
+        }
+      ],
       "group": "server",
       "since": "2.8.13",
       "summary": "Returns detailed information about all commands.",
@@ -1187,7 +3203,124 @@
     },
     {
       "name": "CONFIG",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "GET",
+          "group": "server",
+          "since": "2.0.0",
+          "summary": "Returns the effective values of configuration parameters.",
+          "complexity": "O(N) when N is the number of configuration parameters provided",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "parameter",
+              "type": "string",
+              "multiple": true
+            }
+          ],
+          "history": [
+            [
+              "7.0.0",
+              "Added the ability to pass multiple pattern parameters in one call"
+            ]
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "RESETSTAT",
+          "group": "server",
+          "since": "2.0.0",
+          "summary": "Resets the server's statistics.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ]
+        },
+        {
+          "name": "REWRITE",
+          "group": "server",
+          "since": "2.8.0",
+          "summary": "Persists the effective configuration to file.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ]
+        },
+        {
+          "name": "SET",
+          "group": "server",
+          "since": "2.0.0",
+          "summary": "Sets configuration parameters in-flight.",
+          "complexity": "O(N) when N is the number of configuration parameters provided",
+          "arity": -4,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "data",
+              "type": "block",
+              "multiple": true,
+              "arguments": [
+                {
+                  "name": "parameter",
+                  "type": "string"
+                },
+                {
+                  "name": "value",
+                  "type": "string"
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "7.0.0",
+              "Added the ability to set multiple parameters in one call."
+            ]
+          ]
+        }
+      ],
       "group": "server",
       "since": "2.0.0",
       "summary": "A container for server configuration commands.",
@@ -2366,7 +4499,223 @@
     },
     {
       "name": "FUNCTION",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "DELETE",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Deletes a library and its functions.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT",
+            "WRITE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "library-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "DUMP",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Dumps all libraries into a serialized binary payload.",
+          "complexity": "O(N) where N is the number of functions",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT"
+          ]
+        },
+        {
+          "name": "FLUSH",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Deletes all libraries and functions.",
+          "complexity": "O(N) where N is the number of functions deleted",
+          "arity": -2,
+          "command_flags": [
+            "NOSCRIPT",
+            "WRITE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "flush-type",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "async",
+                  "type": "pure-token",
+                  "token": "ASYNC"
+                },
+                {
+                  "name": "sync",
+                  "type": "pure-token",
+                  "token": "SYNC"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "KILL",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Terminates a function during execution.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "ALLOW_BUSY"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ONE_SUCCEEDED"
+          ]
+        },
+        {
+          "name": "LIST",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Returns information about all libraries.",
+          "complexity": "O(N) where N is the number of functions",
+          "arity": -2,
+          "command_flags": [
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+          ],
+          "arguments": [
+            {
+              "name": "library-name-pattern",
+              "type": "string",
+              "token": "LIBRARYNAME",
+              "optional": true
+            },
+            {
+              "name": "withcode",
+              "type": "pure-token",
+              "token": "WITHCODE",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "LOAD",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Creates a library.",
+          "complexity": "O(1) (considering compilation time is redundant)",
+          "arity": -3,
+          "command_flags": [
+            "NOSCRIPT",
+            "WRITE",
+            "DENYOOM"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "replace",
+              "type": "pure-token",
+              "token": "REPLACE",
+              "optional": true
+            },
+            {
+              "name": "function-code",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "RESTORE",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Restores all libraries from a payload.",
+          "complexity": "O(N) where N is the number of functions on the payload",
+          "arity": -3,
+          "command_flags": [
+            "NOSCRIPT",
+            "WRITE",
+            "DENYOOM"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "serialized-value",
+              "type": "string"
+            },
+            {
+              "name": "policy",
+              "type": "oneof",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "flush",
+                  "type": "pure-token",
+                  "token": "FLUSH"
+                },
+                {
+                  "name": "append",
+                  "type": "pure-token",
+                  "token": "APPEND"
+                },
+                {
+                  "name": "replace",
+                  "type": "pure-token",
+                  "token": "REPLACE"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "STATS",
+          "group": "scripting",
+          "since": "7.0.0",
+          "summary": "Returns information about a function during execution.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "ALLOW_BUSY"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        }
+      ],
       "group": "scripting",
       "since": "7.0.0",
       "summary": "A container for function commands.",
@@ -4924,7 +7273,143 @@
     },
     {
       "name": "HOTKEYS",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "GET",
+          "group": "server",
+          "since": "8.6.0",
+          "summary": "Returns lists of top K hotkeys depending on metrics chosen in HOTKEYS START command.",
+          "complexity": "O(K) where K is the number of hotkeys returned.",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:SPECIAL",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "8.6.1",
+          "summary": "Return helpful text about HOTKEYS command parameters.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "RESET",
+          "group": "server",
+          "since": "8.6.0",
+          "summary": "Release the resources used for hotkey tracking.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "START",
+          "group": "server",
+          "since": "8.6.0",
+          "summary": "Starts hotkeys tracking.",
+          "complexity": "O(1)",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:SPECIAL"
+          ],
+          "arguments": [
+            {
+              "token": "METRICS",
+              "name": "metrics",
+              "type": "block",
+              "optional": false,
+              "arguments": [
+                {
+                  "name": "count",
+                  "type": "integer"
+                },
+                {
+                  "token": "CPU",
+                  "name": "cpu",
+                  "type": "pure-token",
+                  "optional": true
+                },
+                {
+                  "token": "NET",
+                  "name": "net",
+                  "type": "pure-token",
+                  "optional": true
+                }
+              ]
+            },
+            {
+              "token": "COUNT",
+              "name": "k",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "token": "DURATION",
+              "name": "seconds",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "token": "SAMPLE",
+              "name": "ratio",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "token": "SLOTS",
+              "name": "slots",
+              "type": "block",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "count",
+                  "type": "integer"
+                },
+                {
+                  "name": "slot",
+                  "type": "integer",
+                  "multiple": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "STOP",
+          "group": "server",
+          "since": "8.6.0",
+          "summary": "Stops hotkeys tracking.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:SPECIAL"
+          ]
+        }
+      ],
       "group": "server",
       "since": "8.6.0",
       "summary": "A container for hotkeys tracking commands.",
@@ -5965,7 +8450,161 @@
     },
     {
       "name": "LATENCY",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "DOCTOR",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns a human-readable latency analysis report.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "GRAPH",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns a latency graph for an event.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:SPECIAL"
+          ],
+          "arguments": [
+            {
+              "name": "event",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "HISTOGRAM",
+          "group": "server",
+          "since": "7.0.0",
+          "summary": "Returns the cumulative distribution of latencies of a subset or all commands.",
+          "complexity": "O(N) where N is the number of commands with latency information being retrieved.",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:SPECIAL"
+          ],
+          "arguments": [
+            {
+              "name": "COMMAND",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "HISTORY",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns timestamp-latency samples for an event.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:SPECIAL"
+          ],
+          "arguments": [
+            {
+              "name": "event",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "LATEST",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Returns the latest latency samples for all events.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "RESET",
+          "group": "server",
+          "since": "2.8.13",
+          "summary": "Resets the latency data for one or more events.",
+          "complexity": "O(1)",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:AGG_SUM"
+          ],
+          "arguments": [
+            {
+              "name": "event",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        }
+      ],
       "group": "server",
       "since": "2.8.13",
       "summary": "A container for latency diagnostics commands.",
@@ -6764,7 +9403,114 @@
     },
     {
       "name": "MEMORY",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "DOCTOR",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Outputs a memory problems report.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "MALLOC-STATS",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Returns the allocator statistics.",
+          "complexity": "Depends on how much memory is allocated, could be slow",
+          "arity": 2,
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "PURGE",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Asks the allocator to release memory.",
+          "complexity": "Depends on how much memory is allocated, could be slow",
+          "arity": 2,
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ]
+        },
+        {
+          "name": "STATS",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Returns details about memory usage.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT",
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:SPECIAL"
+          ]
+        },
+        {
+          "name": "USAGE",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Estimates the memory usage of a key.",
+          "complexity": "O(N) where N is the number of samples.",
+          "arity": -3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "token": "SAMPLES",
+              "name": "count",
+              "type": "integer",
+              "optional": true
+            }
+          ]
+        }
+      ],
       "group": "server",
       "since": "4.0.0",
       "summary": "A container for memory diagnostics commands.",
@@ -6978,7 +9724,126 @@
     },
     {
       "name": "MODULE",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "LIST",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Returns all loaded modules.",
+          "complexity": "O(N) where N is the number of loaded modules.",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT_ORDER"
+          ]
+        },
+        {
+          "name": "LOAD",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Loads a module.",
+          "complexity": "O(1)",
+          "arity": -3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "NOSCRIPT",
+            "PROTECTED"
+          ],
+          "arguments": [
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "arg",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "LOADEX",
+          "group": "server",
+          "since": "7.0.0",
+          "summary": "Loads a module using extended parameters.",
+          "complexity": "O(1)",
+          "arity": -3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "NOSCRIPT",
+            "PROTECTED"
+          ],
+          "arguments": [
+            {
+              "name": "path",
+              "type": "string"
+            },
+            {
+              "name": "configs",
+              "token": "CONFIG",
+              "type": "block",
+              "multiple": true,
+              "multiple_token": true,
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "name",
+                  "type": "string"
+                },
+                {
+                  "name": "value",
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "name": "args",
+              "token": "ARGS",
+              "type": "string",
+              "multiple": true,
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "UNLOAD",
+          "group": "server",
+          "since": "4.0.0",
+          "summary": "Unloads a module.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "NOSCRIPT",
+            "PROTECTED"
+          ],
+          "arguments": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ],
       "group": "server",
       "since": "4.0.0",
       "summary": "A container for module commands.",
@@ -7272,7 +10137,180 @@
     },
     {
       "name": "OBJECT",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "ENCODING",
+          "group": "generic",
+          "since": "2.2.3",
+          "summary": "Returns the internal encoding of a Redis object.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            }
+          ]
+        },
+        {
+          "name": "FREQ",
+          "group": "generic",
+          "since": "4.0.0",
+          "summary": "Returns the logarithmic access frequency counter of a Redis object.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "generic",
+          "since": "6.2.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "IDLETIME",
+          "group": "generic",
+          "since": "2.2.3",
+          "summary": "Returns the time since the last access to a Redis object.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            }
+          ]
+        },
+        {
+          "name": "REFCOUNT",
+          "group": "generic",
+          "since": "2.2.3",
+          "summary": "Returns the reference count of a value of a key.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            }
+          ]
+        }
+      ],
       "group": "generic",
       "since": "2.2.3",
       "summary": "A container for object introspection commands.",
@@ -7921,7 +10959,115 @@
     },
     {
       "name": "PUBSUB",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "CHANNELS",
+          "group": "pubsub",
+          "since": "2.8.0",
+          "summary": "Returns the active channels.",
+          "complexity": "O(N) where N is the number of active channels, and assuming constant time pattern matching (relatively short channels and patterns)",
+          "arity": -2,
+          "command_flags": [
+            "PUBSUB",
+            "LOADING",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "pattern",
+              "type": "pattern",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "pubsub",
+          "since": "6.2.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "NUMPAT",
+          "group": "pubsub",
+          "since": "2.8.0",
+          "summary": "Returns a count of unique pattern subscriptions.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "PUBSUB",
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "NUMSUB",
+          "group": "pubsub",
+          "since": "2.8.0",
+          "summary": "Returns a count of subscribers to channels.",
+          "complexity": "O(N) for the NUMSUB subcommand, where N is the number of requested channels",
+          "arity": -2,
+          "command_flags": [
+            "PUBSUB",
+            "LOADING",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "channel",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "SHARDCHANNELS",
+          "group": "pubsub",
+          "since": "7.0.0",
+          "summary": "Returns the active shard channels.",
+          "complexity": "O(N) where N is the number of active shard channels, and assuming constant time pattern matching (relatively short shard channels).",
+          "arity": -2,
+          "command_flags": [
+            "PUBSUB",
+            "LOADING",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "pattern",
+              "type": "pattern",
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "SHARDNUMSUB",
+          "group": "pubsub",
+          "since": "7.0.0",
+          "summary": "Returns the count of subscribers of shard channels.",
+          "complexity": "O(N) for the SHARDNUMSUB subcommand, where N is the number of requested shard channels",
+          "arity": -2,
+          "command_flags": [
+            "PUBSUB",
+            "LOADING",
+            "STALE"
+          ],
+          "arguments": [
+            {
+              "name": "shardchannel",
+              "type": "string",
+              "optional": true,
+              "multiple": true
+            }
+          ]
+        }
+      ],
       "group": "pubsub",
       "since": "2.8.0",
       "summary": "A container for Pub/Sub commands.",
@@ -8805,7 +11951,155 @@
     },
     {
       "name": "SCRIPT",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "DEBUG",
+          "group": "scripting",
+          "since": "3.2.0",
+          "summary": "Sets the debug mode of server-side Lua scripts.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT"
+          ],
+          "arguments": [
+            {
+              "name": "mode",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "yes",
+                  "type": "pure-token",
+                  "token": "YES"
+                },
+                {
+                  "name": "sync",
+                  "type": "pure-token",
+                  "token": "SYNC"
+                },
+                {
+                  "name": "no",
+                  "type": "pure-token",
+                  "token": "NO"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "EXISTS",
+          "group": "scripting",
+          "since": "2.6.0",
+          "summary": "Determines whether server-side Lua scripts exist in the script cache.",
+          "complexity": "O(N) with N being the number of scripts to check (so checking a single script is an O(1) operation).",
+          "arity": -3,
+          "command_flags": [
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:AGG_LOGICAL_AND"
+          ],
+          "arguments": [
+            {
+              "name": "sha1",
+              "type": "string",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "FLUSH",
+          "group": "scripting",
+          "since": "2.6.0",
+          "summary": "Removes all server-side Lua scripts from the script cache.",
+          "complexity": "O(N) with N being the number of scripts in cache",
+          "arity": -2,
+          "command_flags": [
+            "NOSCRIPT"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "flush-type",
+              "type": "oneof",
+              "optional": true,
+              "since": "6.2.0",
+              "arguments": [
+                {
+                  "name": "async",
+                  "type": "pure-token",
+                  "token": "ASYNC"
+                },
+                {
+                  "name": "sync",
+                  "type": "pure-token",
+                  "token": "SYNC"
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "6.2.0",
+              "Added the `ASYNC` and `SYNC` flushing mode modifiers."
+            ]
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "scripting",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "KILL",
+          "group": "scripting",
+          "since": "2.6.0",
+          "summary": "Terminates a server-side Lua script during execution.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "NOSCRIPT",
+            "ALLOW_BUSY"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_SHARDS",
+            "RESPONSE_POLICY:ONE_SUCCEEDED"
+          ]
+        },
+        {
+          "name": "LOAD",
+          "group": "scripting",
+          "since": "2.6.0",
+          "summary": "Loads a server-side Lua script to the script cache.",
+          "complexity": "O(N) with N being the length in bytes of the script body.",
+          "arity": 3,
+          "command_flags": [
+            "NOSCRIPT",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ],
+          "arguments": [
+            {
+              "name": "script",
+              "type": "string"
+            }
+          ]
+        }
+      ],
       "group": "scripting",
       "since": "2.6.0",
       "summary": "A container for Lua scripts management commands.",
@@ -8938,7 +12232,481 @@
     },
     {
       "name": "SENTINEL",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "CKQUORUM",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Checks for a Redis Sentinel quorum.",
+          "complexity": null,
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "CONFIG",
+          "group": "sentinel",
+          "since": "6.2.0",
+          "summary": "Configures Redis Sentinel.",
+          "complexity": "O(N) when N is the number of configuration parameters provided",
+          "arity": -4,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "action",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "set",
+                  "token": "SET",
+                  "type": "block",
+                  "multiple": true,
+                  "arguments": [
+                    {
+                      "name": "parameter",
+                      "type": "string"
+                    },
+                    {
+                      "name": "value",
+                      "type": "string"
+                    }
+                  ]
+                },
+                {
+                  "token": "GET",
+                  "name": "parameter",
+                  "type": "string",
+                  "multiple": true
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "7.2.0",
+              "Added the ability to set and get multiple parameters in one call."
+            ]
+          ]
+        },
+        {
+          "name": "DEBUG",
+          "group": "sentinel",
+          "since": "7.0.0",
+          "summary": "Lists or updates the current configurable parameters of Redis Sentinel.",
+          "complexity": "O(N) where N is the number of configurable parameters",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "data",
+              "type": "block",
+              "optional": true,
+              "multiple": true,
+              "arguments": [
+                {
+                  "name": "parameter",
+                  "type": "string"
+                },
+                {
+                  "name": "value",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "FAILOVER",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Forces a Redis Sentinel failover.",
+          "complexity": null,
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "FLUSHCONFIG",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Rewrites the Redis Sentinel configuration file.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ]
+        },
+        {
+          "name": "GET-MASTER-ADDR-BY-NAME",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Returns the port and address of a master Redis instance.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "sentinel",
+          "since": "6.2.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ]
+        },
+        {
+          "name": "INFO-CACHE",
+          "group": "sentinel",
+          "since": "3.2.0",
+          "summary": "Returns the cached `INFO` replies from the deployment's instances.",
+          "complexity": "O(N) where N is the number of instances",
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "nodename",
+              "type": "string",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "IS-MASTER-DOWN-BY-ADDR",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Determines whether a master Redis instance is down.",
+          "complexity": "O(1)",
+          "arity": 6,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "ip",
+              "type": "string"
+            },
+            {
+              "name": "port",
+              "type": "integer"
+            },
+            {
+              "name": "current-epoch",
+              "type": "integer"
+            },
+            {
+              "name": "runid",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "MASTER",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Returns the state of a master Redis instance.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "MASTERS",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Returns a list of monitored Redis masters.",
+          "complexity": "O(N) where N is the number of masters",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ]
+        },
+        {
+          "name": "MONITOR",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Starts monitoring.",
+          "complexity": "O(1)",
+          "arity": 6,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "ip",
+              "type": "string"
+            },
+            {
+              "name": "port",
+              "type": "integer"
+            },
+            {
+              "name": "quorum",
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "name": "MYID",
+          "group": "sentinel",
+          "since": "6.2.0",
+          "summary": "Returns the Redis Sentinel instance ID.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ]
+        },
+        {
+          "name": "PENDING-SCRIPTS",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Returns information about pending scripts for Redis Sentinel.",
+          "complexity": null,
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ]
+        },
+        {
+          "name": "REMOVE",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Stops monitoring.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "REPLICAS",
+          "group": "sentinel",
+          "since": "5.0.0",
+          "summary": "Returns a list of the monitored Redis replicas.",
+          "complexity": "O(N) where N is the number of replicas",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "RESET",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Resets Redis masters by name matching a pattern.",
+          "complexity": "O(N) where N is the number of monitored masters",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "pattern",
+              "type": "pattern"
+            }
+          ]
+        },
+        {
+          "name": "SENTINELS",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Returns a list of Sentinel instances.",
+          "complexity": "O(N) where N is the number of Sentinels",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "SET",
+          "group": "sentinel",
+          "since": "2.8.4",
+          "summary": "Changes the configuration of a monitored Redis master.",
+          "complexity": "O(1)",
+          "arity": -5,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            },
+            {
+              "name": "data",
+              "type": "block",
+              "multiple": true,
+              "arguments": [
+                {
+                  "name": "option",
+                  "type": "string"
+                },
+                {
+                  "name": "value",
+                  "type": "string"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SIMULATE-FAILURE",
+          "group": "sentinel",
+          "since": "3.2.0",
+          "summary": "Simulates failover scenarios.",
+          "complexity": null,
+          "arity": -3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "arguments": [
+            {
+              "name": "mode",
+              "type": "oneof",
+              "optional": true,
+              "multiple": true,
+              "arguments": [
+                {
+                  "name": "crash-after-election",
+                  "type": "pure-token"
+                },
+                {
+                  "name": "crash-after-promotion",
+                  "type": "pure-token"
+                },
+                {
+                  "name": "help",
+                  "type": "pure-token"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "SLAVES",
+          "group": "sentinel",
+          "since": "2.8.0",
+          "summary": "Returns a list of the monitored replicas.",
+          "complexity": "O(N) where N is the number of replicas.",
+          "arity": 3,
+          "command_flags": [
+            "ADMIN",
+            "SENTINEL",
+            "ONLY_SENTINEL"
+          ],
+          "doc_flags": [
+            "DEPRECATED"
+          ],
+          "deprecated_since": "5.0.0",
+          "replaced_by": "`SENTINEL REPLICAS`",
+          "arguments": [
+            {
+              "name": "master-name",
+              "type": "string"
+            }
+          ]
+        }
+      ],
       "group": "sentinel",
       "since": "2.8.4",
       "summary": "A container for Redis Sentinel commands.",
@@ -9665,7 +13433,85 @@
     },
     {
       "name": "SLOWLOG",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "GET",
+          "group": "server",
+          "since": "2.2.12",
+          "summary": "Returns the slow log's entries.",
+          "complexity": "O(N) where N is the number of entries returned",
+          "arity": -2,
+          "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "arguments": [
+            {
+              "name": "count",
+              "type": "integer",
+              "optional": true
+            }
+          ],
+          "history": [
+            [
+              "4.0.0",
+              "Added client IP address, port and name to the reply."
+            ]
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "server",
+          "since": "6.2.0",
+          "summary": "Show helpful text about the different subcommands",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "LEN",
+          "group": "server",
+          "since": "2.2.12",
+          "summary": "Returns the number of entries in the slow log.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:AGG_SUM",
+            "NONDETERMINISTIC_OUTPUT"
+          ]
+        },
+        {
+          "name": "RESET",
+          "group": "server",
+          "since": "2.2.12",
+          "summary": "Clears all entries from the slow log.",
+          "complexity": "O(N) where N is the number of entries in the slowlog",
+          "arity": 2,
+          "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+          ],
+          "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:ALL_SUCCEEDED"
+          ]
+        }
+      ],
       "group": "server",
       "since": "2.2.12",
       "summary": "A container for slow log commands.",
@@ -11724,7 +15570,302 @@
     },
     {
       "name": "XGROUP",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "CREATE",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Creates a consumer group.",
+          "complexity": "O(1)",
+          "arity": -5,
+          "command_flags": [
+            "WRITE",
+            "DENYOOM"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RW",
+                "INSERT"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "group",
+              "type": "string"
+            },
+            {
+              "name": "id-selector",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "id",
+                  "type": "string"
+                },
+                {
+                  "name": "new-id",
+                  "type": "pure-token",
+                  "token": "$"
+                }
+              ]
+            },
+            {
+              "token": "MKSTREAM",
+              "name": "mkstream",
+              "type": "pure-token",
+              "optional": true
+            },
+            {
+              "name": "entriesread",
+              "display": "entries-read",
+              "token": "ENTRIESREAD",
+              "type": "integer",
+              "optional": true
+            }
+          ],
+          "history": [
+            [
+              "7.0.0",
+              "Added the `entries_read` named argument."
+            ]
+          ]
+        },
+        {
+          "name": "CREATECONSUMER",
+          "group": "stream",
+          "since": "6.2.0",
+          "summary": "Creates a consumer in a consumer group.",
+          "complexity": "O(1)",
+          "arity": 5,
+          "command_flags": [
+            "WRITE",
+            "DENYOOM"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RW",
+                "INSERT"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "group",
+              "type": "string"
+            },
+            {
+              "name": "consumer",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "DELCONSUMER",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Deletes a consumer from a consumer group.",
+          "complexity": "O(1)",
+          "arity": 5,
+          "command_flags": [
+            "WRITE"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RW",
+                "DELETE"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "group",
+              "type": "string"
+            },
+            {
+              "name": "consumer",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "DESTROY",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Destroys a consumer group.",
+          "complexity": "O(N) where N is the number of entries in the group's pending entries list (PEL).",
+          "arity": 4,
+          "command_flags": [
+            "WRITE"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RW",
+                "DELETE"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "group",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "SETID",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Sets the last-delivered ID of a consumer group.",
+          "complexity": "O(1)",
+          "arity": -5,
+          "command_flags": [
+            "WRITE"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RW",
+                "UPDATE"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "group",
+              "type": "string"
+            },
+            {
+              "name": "id-selector",
+              "type": "oneof",
+              "arguments": [
+                {
+                  "name": "id",
+                  "type": "string"
+                },
+                {
+                  "name": "new-id",
+                  "type": "pure-token",
+                  "token": "$"
+                }
+              ]
+            },
+            {
+              "name": "entriesread",
+              "display": "entries-read",
+              "token": "ENTRIESREAD",
+              "type": "integer",
+              "optional": true
+            }
+          ],
+          "history": [
+            [
+              "7.0.0",
+              "Added the optional `entries_read` argument."
+            ]
+          ]
+        }
+      ],
       "group": "stream",
       "since": "5.0.0",
       "summary": "A container for consumer groups commands.",
@@ -11733,7 +15874,189 @@
     },
     {
       "name": "XINFO",
-      "has_subcommands": true,
+      "subcommands": [
+        {
+          "name": "CONSUMERS",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Returns a list of the consumers in a consumer group.",
+          "complexity": "O(1)",
+          "arity": 4,
+          "command_flags": [
+            "READONLY"
+          ],
+          "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO",
+                "ACCESS"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "group",
+              "type": "string"
+            }
+          ],
+          "history": [
+            [
+              "7.2.0",
+              "Added the `inactive` field, and changed the meaning of `idle`."
+            ]
+          ]
+        },
+        {
+          "name": "GROUPS",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Returns a list of the consumer groups of a stream.",
+          "complexity": "O(1)",
+          "arity": 3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO",
+                "ACCESS"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            }
+          ],
+          "history": [
+            [
+              "7.0.0",
+              "Added the `entries-read` and `lag` fields"
+            ]
+          ]
+        },
+        {
+          "name": "HELP",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Returns helpful text about the different subcommands.",
+          "complexity": "O(1)",
+          "arity": 2,
+          "command_flags": [
+            "LOADING",
+            "STALE"
+          ]
+        },
+        {
+          "name": "STREAM",
+          "group": "stream",
+          "since": "5.0.0",
+          "summary": "Returns information about a stream.",
+          "complexity": "O(1)",
+          "arity": -3,
+          "command_flags": [
+            "READONLY"
+          ],
+          "key_specs": [
+            {
+              "flags": [
+                "RO",
+                "ACCESS"
+              ],
+              "begin_search": {
+                "index": {
+                  "pos": 2
+                }
+              },
+              "find_keys": {
+                "range": {
+                  "lastkey": 0,
+                  "step": 1,
+                  "limit": 0
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+            },
+            {
+              "name": "full-block",
+              "type": "block",
+              "optional": true,
+              "arguments": [
+                {
+                  "name": "full",
+                  "token": "FULL",
+                  "type": "pure-token"
+                },
+                {
+                  "token": "COUNT",
+                  "name": "count",
+                  "type": "integer",
+                  "optional": true
+                }
+              ]
+            }
+          ],
+          "history": [
+            [
+              "6.0.0",
+              "Added the `FULL` modifier."
+            ],
+            [
+              "7.0.0",
+              "Added the `max-deleted-entry-id`, `entries-added`, `recorded-first-entry-id`, `entries-read` and `lag` fields"
+            ],
+            [
+              "7.2.0",
+              "Added the `active-time` field, and changed the meaning of `seen-time`."
+            ],
+            [
+              "8.6.0",
+              "Added the `idmp-duration`, `idmp-maxsize`, `pids-tracked`, `iids-tracked`, `iids-added` and `iids-duplicates` fields for IDMP tracking."
+            ]
+          ]
+        }
+      ],
       "group": "stream",
       "since": "5.0.0",
       "summary": "A container for stream introspection commands.",
