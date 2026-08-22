@@ -2822,6 +2822,16 @@ mod oom_gate_tests {
         CommandFlags::READONLY.union(CommandFlags::FAST),
         EventSpec::NotApplicable
     );
+    // A container, whose declared flags are the conservative union of what its
+    // subcommands do. The gate must judge the *subcommand*, not this union:
+    // XGROUP CREATE allocates a consumer group, while DESTROY and DELCONSUMER
+    // only free one. See `CONTAINER_SUBCOMMANDS` in `command_spec.rs`.
+    mock_command!(
+        MockXgroup,
+        "XGROUP",
+        CommandFlags::WRITE.union(CommandFlags::DENYOOM),
+        EventSpec::Suppressed
+    );
 
     /// A single shard whose store is already over a 1-byte `maxmemory` limit,
     /// under `noeviction` (so the gate rejects rather than evicting).
@@ -2832,6 +2842,7 @@ mod oom_gate_tests {
         registry.register(MockFlushAll);
         registry.register(MockLpop);
         registry.register(MockGet);
+        registry.register(MockXgroup);
 
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_conn_tx, conn_rx) = mpsc::channel(16);
@@ -2864,12 +2875,24 @@ mod oom_gate_tests {
     }
 
     async fn execute(worker: &mut ShardWorker, name: &'static str) -> Response {
+        execute_with_args(worker, name, &[]).await
+    }
+
+    async fn execute_with_args(
+        worker: &mut ShardWorker,
+        name: &'static str,
+        args: &[&str],
+    ) -> Response {
+        let args = args
+            .iter()
+            .map(|a| Bytes::from(a.to_string()))
+            .collect::<Vec<_>>();
         let (tx, rx) = oneshot::channel();
         worker
             .dispatch_core(CoreMsg::Execute {
                 command: Arc::new(ParsedCommand::new(
                     Bytes::from_static(name.as_bytes()),
-                    vec![],
+                    args,
                 )),
                 conn_id: 1,
                 txid: None,
@@ -2934,6 +2957,31 @@ mod oom_gate_tests {
         let mut worker = over_limit_worker();
         let response = execute(&mut worker, "LPOP").await;
         assert_ok(&response, "LPOP");
+    }
+
+    /// A container is judged one subcommand at a time: the allocating
+    /// `XGROUP CREATE` is refused over the limit.
+    #[tokio::test]
+    async fn allocating_subcommand_is_rejected_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = execute_with_args(&mut worker, "XGROUP", &["CREATE", "s", "g", "$"]).await;
+        assert_oom(&response, "XGROUP CREATE");
+    }
+
+    /// …and the freeing halves of the same container still run, which the
+    /// container's `DENYOOM` union alone would have refused. Destroying a
+    /// consumer group is exactly the kind of reclamation an operator reaches
+    /// for at the limit.
+    #[tokio::test]
+    async fn memory_freeing_subcommands_are_admitted_over_the_limit() {
+        for args in [
+            &["DESTROY", "s", "g"][..],
+            &["DELCONSUMER", "s", "g", "c"][..],
+        ] {
+            let mut worker = over_limit_worker();
+            let response = execute_with_args(&mut worker, "XGROUP", args).await;
+            assert_ok(&response, args[0]);
+        }
     }
 
     /// Reads were never gated and still are not.

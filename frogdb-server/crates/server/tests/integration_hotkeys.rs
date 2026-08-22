@@ -142,3 +142,51 @@ async fn test_hotkeys_get_shape_with_conditional_fields() {
 
     server.shutdown().await;
 }
+
+/// `HOTKEYS HELP` answers with the subcommand summary Redis 8.6.1 added
+/// alongside the command, rather than the wrong-arity rejection a
+/// container-level arity used to produce for a one-argument invocation.
+#[tokio::test]
+async fn test_hotkeys_help_lists_subcommands() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let reply = client.command(&["HOTKEYS", "HELP"]).await;
+    let lines = match &reply {
+        Response::Array(items) => items
+            .iter()
+            .map(|line| match line {
+                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                Response::Simple(s) => s.to_string(),
+                other => panic!("expected a text line, got {other:?}"),
+            })
+            .collect::<Vec<_>>(),
+        other => panic!("HOTKEYS HELP must reply with an array, got {other:?}"),
+    };
+
+    assert!(
+        lines.first().is_some_and(|l| l.contains("HOTKEYS")),
+        "help text opens with the container name: {lines:?}"
+    );
+    for sub in ["START", "STOP", "RESET", "GET", "HELP"] {
+        assert!(
+            lines.iter().any(|l| l.contains(sub)),
+            "HOTKEYS HELP must document {sub}: {lines:?}"
+        );
+    }
+
+    // An unknown subcommand still points the caller at HELP.
+    let unknown = client.command(&["HOTKEYS", "NOPE"]).await;
+    match unknown {
+        Response::Error(e) => {
+            let text = String::from_utf8_lossy(&e).to_string();
+            assert!(
+                text.contains("HOTKEYS START|STOP|RESET|GET|HELP"),
+                "unknown-subcommand error points at HELP: {text}"
+            );
+        }
+        other => panic!("expected an error, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}

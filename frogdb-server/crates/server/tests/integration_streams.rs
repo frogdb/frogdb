@@ -1136,3 +1136,86 @@ async fn test_xclaim_time_option_sets_observable_idle() {
 
     server.shutdown().await;
 }
+
+// ============================================================================
+// Container subcommand acceptance (XGROUP/XINFO HELP)
+// ============================================================================
+
+fn help_lines(reply: &Response) -> Vec<String> {
+    match reply {
+        Response::Array(items) => items
+            .iter()
+            .map(|line| match line {
+                Response::Bulk(Some(b)) => String::from_utf8_lossy(b).to_string(),
+                Response::Simple(s) => s.to_string(),
+                other => panic!("expected a text line, got {other:?}"),
+            })
+            .collect(),
+        other => panic!("expected an array of help lines, got {other:?}"),
+    }
+}
+
+/// `XGROUP HELP` reaches its handler. It used to be rejected as the wrong
+/// number of arguments: the container declared one arity wide enough for
+/// `XGROUP CREATE`, so a one-argument invocation never got past the gate.
+#[tokio::test]
+async fn test_xgroup_help() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let lines = help_lines(&client.command(&["XGROUP", "HELP"]).await);
+    for sub in [
+        "CREATE",
+        "DESTROY",
+        "CREATECONSUMER",
+        "DELCONSUMER",
+        "SETID",
+    ] {
+        assert!(
+            lines.iter().any(|l| l.contains(sub)),
+            "XGROUP HELP must document {sub}: {lines:?}"
+        );
+    }
+
+    // The per-subcommand arity still rejects a short CREATE, and names it.
+    match client.command(&["XGROUP", "CREATE", "s"]).await {
+        Response::Error(e) => {
+            let text = String::from_utf8_lossy(&e).to_string();
+            assert!(
+                text.contains("xgroup|create"),
+                "short XGROUP CREATE names the subcommand: {text}"
+            );
+        }
+        other => panic!("expected a wrong-arity error, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}
+
+/// `XINFO HELP`, same story on the read-only container.
+#[tokio::test]
+async fn test_xinfo_help() {
+    let server = TestServer::start_standalone().await;
+    let mut client = server.connect().await;
+
+    let lines = help_lines(&client.command(&["XINFO", "HELP"]).await);
+    for sub in ["STREAM", "GROUPS", "CONSUMERS"] {
+        assert!(
+            lines.iter().any(|l| l.contains(sub)),
+            "XINFO HELP must document {sub}: {lines:?}"
+        );
+    }
+
+    match client.command(&["XINFO", "GROUPS"]).await {
+        Response::Error(e) => {
+            let text = String::from_utf8_lossy(&e).to_string();
+            assert!(
+                text.contains("xinfo|groups"),
+                "short XINFO GROUPS names the subcommand: {text}"
+            );
+        }
+        other => panic!("expected a wrong-arity error, got {other:?}"),
+    }
+
+    server.shutdown().await;
+}

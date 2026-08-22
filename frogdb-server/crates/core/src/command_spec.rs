@@ -2393,4 +2393,152 @@ mod tests {
         let surface = admin_surface("CLUSTER", CommandFlags::ADMIN);
         assert!(!surface.requires_admin(Some("SLOTS")));
     }
+
+    fn argv(parts: &[&str]) -> Vec<Bytes> {
+        parts.iter().map(|p| Bytes::from(p.to_string())).collect()
+    }
+
+    /// The bug this table was built for: a container had to declare one arity
+    /// wide enough for its widest subcommand, so `XGROUP HELP` — one argument —
+    /// was rejected as the wrong number of arguments before it ever reached the
+    /// handler that answers it.
+    #[test]
+    fn container_help_passes_arity() {
+        for container in ["XGROUP", "XINFO", "HOTKEYS", "OBJECT", "CLIENT", "SLOWLOG"] {
+            assert_eq!(
+                check_arity(container, Arity::AtLeast(1), &argv(&["HELP"])),
+                Ok(()),
+                "{container} HELP must survive the arity gate"
+            );
+        }
+    }
+
+    /// The matched row, not the container, decides — and names the rejection.
+    #[test]
+    fn subcommand_arity_rejection_names_the_subcommand() {
+        assert_eq!(
+            check_arity("XGROUP", Arity::AtLeast(1), &argv(&["CREATE", "s"])),
+            Err("ERR wrong number of arguments for 'xgroup|create' command".to_string())
+        );
+        assert_eq!(
+            check_arity("XGROUP", Arity::AtLeast(1), &argv(&["HELP", "extra"])),
+            Err("ERR wrong number of arguments for 'xgroup|help' command".to_string())
+        );
+        assert_eq!(
+            check_arity(
+                "XGROUP",
+                Arity::AtLeast(1),
+                &argv(&["CREATE", "s", "g", "$"])
+            ),
+            Ok(())
+        );
+    }
+
+    /// A subcommand we declare nothing about — and a non-container — falls back
+    /// to the container-level arity, worded the container's way.
+    #[test]
+    fn unknown_subcommand_falls_back_to_container_arity() {
+        assert_eq!(
+            check_arity("XGROUP", Arity::AtLeast(1), &argv(&["NOPE"])),
+            Ok(())
+        );
+        assert_eq!(
+            check_arity("XGROUP", Arity::AtLeast(1), &argv(&[])),
+            Err("ERR wrong number of arguments for 'xgroup' command".to_string())
+        );
+        assert_eq!(
+            check_arity("GET", Arity::Fixed(1), &argv(&["k", "extra"])),
+            Err("ERR wrong number of arguments for 'get' command".to_string())
+        );
+    }
+
+    /// Rows are matched however the client capitalised the token.
+    #[test]
+    fn subcommand_rows_match_case_insensitively() {
+        let row = subcommand_spec("xgroup", &argv(&["create", "s", "g", "$"]))
+            .expect("XGROUP CREATE must resolve");
+        assert_eq!(row.name, "CREATE");
+    }
+
+    /// Admission is judged per subcommand: `XGROUP CREATE` allocates a consumer
+    /// group and keeps `DENYOOM`, while `DESTROY`/`DELCONSUMER` only free memory
+    /// and must stay callable at `maxmemory` under `noeviction` — the container's
+    /// conservative union said otherwise.
+    #[test]
+    fn memory_freeing_subcommands_drop_denyoom() {
+        let container = CommandFlags::WRITE | CommandFlags::DENYOOM;
+        let denies = |sub: &str| {
+            subcommand_spec("XGROUP", &argv(&[sub]))
+                .expect("row must exist")
+                .flags_over(container)
+                .contains(CommandFlags::DENYOOM)
+        };
+        assert!(denies("CREATE"));
+        assert!(denies("CREATECONSUMER"));
+        assert!(!denies("DESTROY"));
+        assert!(!denies("DELCONSUMER"));
+        assert!(!denies("SETID"));
+        assert!(!denies("HELP"));
+    }
+
+    /// `flags_over` replaces only the behavioural flags, so container-level
+    /// `FAST`/`SKIP_SLOWLOG`/`PUBSUB`/`STALE` survive a row that declares none.
+    #[test]
+    fn flags_over_keeps_non_behavioural_container_flags() {
+        let container = CommandFlags::READONLY
+            | CommandFlags::FAST
+            | CommandFlags::SKIP_SLOWLOG
+            | CommandFlags::LOADING;
+        let row = SubcommandSpec {
+            name: "HELP",
+            arity: Arity::Fixed(1),
+            flags: CommandFlags::empty(),
+            keys: KeySpec::None,
+        };
+        let flags = row.flags_over(container);
+        assert!(flags.contains(CommandFlags::FAST));
+        assert!(flags.contains(CommandFlags::SKIP_SLOWLOG));
+        assert!(flags.contains(CommandFlags::LOADING));
+        assert!(!flags.contains(CommandFlags::READONLY));
+    }
+
+    /// Every declared row is internally coherent: its arity reaches the key its
+    /// `KeySpec` names, and it carries only behavioural flags. `CommandSpec::
+    /// validate` enforces the same thing per registered command; this walks the
+    /// table itself so a row on a feature-gated container is still checked.
+    #[test]
+    fn every_declared_row_is_coherent() {
+        let mut rows = 0;
+        for container in subcommand_container_names() {
+            let declared = container_subcommands(container).expect("container must resolve");
+            assert!(!declared.is_empty(), "{container} declares no rows");
+            let mut seen: Vec<&str> = Vec::new();
+            for row in declared {
+                rows += 1;
+                assert!(
+                    !seen.contains(&row.name),
+                    "{container} declares {} twice",
+                    row.name
+                );
+                seen.push(row.name);
+                assert!(
+                    BEHAVIORAL_FLAGS.contains(row.flags),
+                    "{container}|{} declares non-behavioural flags",
+                    row.name
+                );
+                if let Some(needs) = row.keys.min_required_args() {
+                    assert!(
+                        row.arity.min() >= needs,
+                        "{container}|{} accepts {} args but reads a key at {needs}",
+                        row.name,
+                        row.arity.min()
+                    );
+                }
+            }
+            let mut sorted = seen.clone();
+            sorted.sort_unstable();
+            assert_eq!(seen, sorted, "{container} rows must be sorted by name");
+        }
+        assert!(rows > 100, "only {rows} subcommand rows declared");
+    }
 }
