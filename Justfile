@@ -802,7 +802,7 @@ lint crate="": lint-gates lint-turmoil-features lint-turmoil lint-spec quint-che
 # second (see agents/seam-lints.md) and is cheap enough to run
 # unconditionally on every commit, unlike `lint` (clippy compiles the
 # workspace). Wired into lefthook pre-commit with no CLAUDECODE skip.
-lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-ship-cmd-full
+lint-gates: lint-info-seam lint-redirect-seam lint-pubsub-confirmation-seam lint-failover-atomicity lint-metrics-chokepoint lint-format-float lint-clock-seam lint-durable-ack lint-nested-config lint-error-sanitize lint-status-sanitize lint-no-typed-unwrap lint-keyspace-notify-routing lint-script-gate lint-continuation-lock lint-script-write-seam lint-command-admission lint-ship-cmd-full
     @echo "OK: seam-lint gates passed"
 
 # Gate: turmoil-featured test bodies (frogdb-server/crates/server/tests/simulation.rs)
@@ -1854,6 +1854,16 @@ lint-continuation-lock:
 # gauntleted declares an `admission`. See scripts/script-write-seam.py.
 lint-script-write-seam:
     ./scripts/script-write-seam.py
+
+# Gate: every command execution path reaches the one admission chokepoint,
+# `command_admission::admit_command` (redis-feel issue 13). The three executors
+# (shard dispatch, the script gate, the cross-shard script leg) are pinned and
+# each must admit *before* it runs anything; `DENYOOM` — the flag the maxmemory
+# gate keys off — has exactly one production reader; and the script-start
+# pre-admission that rejects a may-write script up front stays wired.
+# See scripts/command-admission.py.
+lint-command-admission:
+    ./scripts/command-admission.py
 
 # Gate: every distributable frogdb-server build (the self-built `just release`,
 # cross-compiled binaries, in-Docker release build, macOS release tarball, the deb

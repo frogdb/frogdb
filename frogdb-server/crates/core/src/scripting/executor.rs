@@ -74,6 +74,81 @@ fn parse_eval_shebang(source: &[u8]) -> Result<Option<EvalShebangFlags>, ScriptE
     }))
 }
 
+/// How an EVAL/EVALSHA invocation meets the `maxmemory` gate, decided from its
+/// shebang *before* the body runs — Redis's `scriptPrepareForRun` (`script.c`).
+///
+/// Two mutually exclusive regimes, and which one applies is decided entirely by
+/// whether the script carries a `#!lua` shebang:
+///
+/// - **Shebang** (`reject_at_start`): the invocation is admitted as a whole. A
+///   script that may write — i.e. one without `no-writes` — is rejected up front
+///   with OOM unless it declares `allow-oom`. Having paid that toll, its
+///   sub-commands are exempt from any further OOM check (Redis sets
+///   `SCRIPT_ALLOW_OOM` on the run context for exactly these).
+/// - **No shebang** (Redis's `SCRIPT_FLAG_EVAL_COMPAT_MODE`): no start-time
+///   rejection is possible — the server cannot know whether the body writes.
+///   The gate moves to each `DENYOOM` sub-command instead, against the memory
+///   state sampled at script start and only until the script's first write.
+///   This is why a shebang-less script that only reads, or only calls DEL, still
+///   runs while over the limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScriptOomPolicy {
+    /// Refuse the whole invocation with OOM when over `maxmemory` at start.
+    pub reject_at_start: bool,
+    /// The invocation's sub-commands skip the per-call OOM gate.
+    pub exempt_sub_commands: bool,
+}
+
+impl ScriptOomPolicy {
+    /// Redis's backwards-compatibility regime: a shebang-less EVAL body.
+    fn compat() -> Self {
+        Self {
+            reject_at_start: false,
+            exempt_sub_commands: false,
+        }
+    }
+
+    /// The regime for a script whose flags are declared up front — every
+    /// shebang EVAL and every function (FUNCTION LOAD requires a shebang).
+    ///
+    /// `may_write` is false when the script declares `no-writes` or was invoked
+    /// through an `_RO` variant: such a script cannot consume memory, so Redis
+    /// lets it run over the limit ("the no-writes flag implies allow-oom").
+    pub fn declared(may_write: bool, allow_oom: bool) -> Self {
+        Self {
+            reject_at_start: may_write && !allow_oom,
+            exempt_sub_commands: true,
+        }
+    }
+}
+
+/// The per-sub-command OOM state a script's [`super::gate::ScriptCommandGate`]
+/// carries, from the shebang flags (`None` = no shebang) and the memory state
+/// the shard sampled at script start.
+///
+/// The mirror image of [`ScriptOomPolicy`]: that one is what the shard worker
+/// checks *once*, this one is what the gate checks *per `redis.call`*, and the
+/// two are read from the same shebang so they cannot disagree about which
+/// regime the invocation is in.
+fn script_oom_state(
+    shebang_flags: Option<FunctionFlags>,
+    read_only: bool,
+    oom_at_start: bool,
+) -> crate::command_admission::ScriptOomState {
+    let policy = match shebang_flags {
+        Some(flags) => ScriptOomPolicy::declared(
+            !(read_only || flags.contains(FunctionFlags::NO_WRITES)),
+            flags.contains(FunctionFlags::ALLOW_OOM),
+        ),
+        None => ScriptOomPolicy::compat(),
+    };
+    crate::command_admission::ScriptOomState {
+        exempt: policy.exempt_sub_commands,
+        over_limit_at_start: oom_at_start,
+        write_dirty: false,
+    }
+}
+
 fn strip_shebang(src: &[u8]) -> &[u8] {
     src.iter()
         .position(|&b| b == b'\n')
@@ -140,11 +215,51 @@ impl ScriptExecutor {
         })
     }
 
+    /// The OOM regime of an EVAL invocation, read from its shebang.
+    ///
+    /// Called by the shard worker *before* the body runs, so it can refuse the
+    /// whole invocation (`reject_at_start`) the way Redis does. A malformed
+    /// shebang yields the compat regime: [`Self::eval`] raises the real parse
+    /// error a moment later, and refusing here would replace it with an OOM.
+    pub fn eval_oom_policy(&self, source: &[u8], read_only: bool) -> ScriptOomPolicy {
+        Self::oom_policy_for(source, read_only)
+    }
+
+    /// The OOM regime of an EVALSHA invocation. An unknown SHA yields the compat
+    /// regime — [`Self::evalsha`] owns the NOSCRIPT error.
+    pub fn evalsha_oom_policy(&self, sha_hex: &[u8], read_only: bool) -> ScriptOomPolicy {
+        let Some(sha) = hex_to_sha(sha_hex) else {
+            return ScriptOomPolicy::compat();
+        };
+        // `peek`, not `get`: deciding admission must not reorder the LRU.
+        match self.cache.peek(&sha) {
+            Some(script) => Self::oom_policy_for(&script.source.clone(), read_only),
+            None => ScriptOomPolicy::compat(),
+        }
+    }
+
+    fn oom_policy_for(source: &[u8], read_only: bool) -> ScriptOomPolicy {
+        match parse_eval_shebang(source) {
+            Ok(Some(sb)) => {
+                let no_writes = sb.flags.contains(FunctionFlags::NO_WRITES);
+                ScriptOomPolicy::declared(
+                    !(read_only || no_writes),
+                    sb.flags.contains(FunctionFlags::ALLOW_OOM),
+                )
+            }
+            Ok(None) | Err(_) => ScriptOomPolicy::compat(),
+        }
+    }
+
     /// Execute a script by source (EVAL / EVAL_RO).
     ///
     /// EVAL always (re)loads the script into the cache, so the disposition
     /// is unconditionally [`CacheDisposition::Miss`] regardless of whether
     /// execution itself succeeds.
+    ///
+    /// `oom_at_start` is the `maxmemory` state the shard worker sampled just
+    /// before this invocation (Redis's `server.pre_command_oom_state`); it is
+    /// what a shebang-less script's per-sub-command OOM gate is judged against.
     #[allow(clippy::too_many_arguments)]
     pub fn eval(
         &mut self,
@@ -155,6 +270,7 @@ impl ScriptExecutor {
         registry: &CommandRegistry,
         read_only: bool,
         is_cluster_mode: bool,
+        oom_at_start: bool,
     ) -> ScriptOutcome {
         let result = self.eval_result(
             source,
@@ -164,6 +280,7 @@ impl ScriptExecutor {
             registry,
             read_only,
             is_cluster_mode,
+            oom_at_start,
         );
         ScriptOutcome {
             disposition: CacheDisposition::Miss,
@@ -181,6 +298,7 @@ impl ScriptExecutor {
         registry: &CommandRegistry,
         read_only: bool,
         is_cluster_mode: bool,
+        oom_at_start: bool,
     ) -> Result<Response, ScriptError> {
         if self.running.load(Ordering::Relaxed) {
             return Err(ScriptError::NestedScript);
@@ -211,7 +329,17 @@ impl ScriptExecutor {
                 .is_some_and(|sb| sb.flags.contains(FunctionFlags::ALLOW_CROSS_SLOT_KEYS)),
             is_cluster_mode,
         };
-        self.execute_script(eff_src, &sha, keys, argv, ctx, registry, eff_ro, &skc)
+        self.execute_script(
+            eff_src,
+            &sha,
+            keys,
+            argv,
+            ctx,
+            registry,
+            eff_ro,
+            &skc,
+            script_oom_state(shebang.as_ref().map(|sb| sb.flags), read_only, oom_at_start),
+        )
     }
 
     /// Execute a script by SHA (EVALSHA / EVALSHA_RO).
@@ -230,6 +358,7 @@ impl ScriptExecutor {
         registry: &CommandRegistry,
         read_only: bool,
         is_cluster_mode: bool,
+        oom_at_start: bool,
     ) -> ScriptOutcome {
         let result = self.evalsha_result(
             sha_hex,
@@ -239,6 +368,7 @@ impl ScriptExecutor {
             registry,
             read_only,
             is_cluster_mode,
+            oom_at_start,
         );
         let disposition = match result {
             Err(ScriptError::NoScript) => CacheDisposition::Miss,
@@ -260,6 +390,7 @@ impl ScriptExecutor {
         registry: &CommandRegistry,
         read_only: bool,
         is_cluster_mode: bool,
+        oom_at_start: bool,
     ) -> Result<Response, ScriptError> {
         if self.running.load(Ordering::Relaxed) {
             return Err(ScriptError::NestedScript);
@@ -292,7 +423,17 @@ impl ScriptExecutor {
                 .is_some_and(|sb| sb.flags.contains(FunctionFlags::ALLOW_CROSS_SLOT_KEYS)),
             is_cluster_mode,
         };
-        self.execute_script(eff_src, &sha, keys, argv, ctx, registry, eff_ro, &skc)
+        self.execute_script(
+            eff_src,
+            &sha,
+            keys,
+            argv,
+            ctx,
+            registry,
+            eff_ro,
+            &skc,
+            script_oom_state(shebang.as_ref().map(|sb| sb.flags), read_only, oom_at_start),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -306,6 +447,7 @@ impl ScriptExecutor {
         registry: &CommandRegistry,
         read_only: bool,
         skc: &ScriptKeyContext,
+        oom: crate::command_admission::ScriptOomState,
     ) -> Result<Response, ScriptError> {
         let script_sha = sha_to_hex(sha);
         let start = crate::clock::now();
@@ -332,6 +474,7 @@ impl ScriptExecutor {
             read_only,
             enforce_cross_slot,
             CrossSlotTracker::new(seed),
+            oom,
             |vm| vm.execute(source),
         );
 
@@ -528,11 +671,19 @@ impl ScriptExecutor {
         // The invoker owns a real `&mut` store borrow for the scope's duration;
         // library load + function invocation both run through the safe seam.
         let invoker = ScriptInvoker::from_context(ctx, registry);
+        // A function's flags are declared at FUNCTION LOAD and checked by
+        // `handle_function_call` before we get here, so the whole invocation is
+        // already admitted — its sub-commands are not re-gated.
         let result = self.vm.execute_in_scope(
             &invoker,
             read_only,
             false,
             CrossSlotTracker::new(None),
+            crate::command_admission::ScriptOomState {
+                exempt: true,
+                over_limit_at_start: false,
+                write_dirty: false,
+            },
             |vm| {
                 // register_function is only callable during library load; the
                 // runtime environment is locked before the function is invoked.
@@ -779,6 +930,7 @@ mod tests {
             &registry,
             false,
             false,
+            false,
         );
 
         assert_eq!(outcome.disposition, CacheDisposition::Miss);
@@ -797,7 +949,16 @@ mod tests {
         let registry = crate::registry::CommandRegistry::new();
         let mut ctx = test_command_context(&mut store, &shard_senders);
 
-        let outcome = e.eval(b"return 1", &[], &[], &mut ctx, &registry, false, false);
+        let outcome = e.eval(
+            b"return 1",
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false,
+            false,
+        );
 
         assert_eq!(outcome.disposition, CacheDisposition::Miss);
         assert!(outcome.result.is_ok());
@@ -813,14 +974,23 @@ mod tests {
 
         {
             let mut ctx = test_command_context(&mut store, &shard_senders);
-            let outcome = e.eval(source, &[], &[], &mut ctx, &registry, false, false);
+            let outcome = e.eval(source, &[], &[], &mut ctx, &registry, false, false, false);
             assert_eq!(outcome.disposition, CacheDisposition::Miss);
             assert!(outcome.result.is_ok());
         }
 
         let sha = sha_to_hex(&compute_sha(source));
         let mut ctx = test_command_context(&mut store, &shard_senders);
-        let outcome = e.evalsha(sha.as_bytes(), &[], &[], &mut ctx, &registry, false, false);
+        let outcome = e.evalsha(
+            sha.as_bytes(),
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false,
+            false,
+        );
 
         assert_eq!(outcome.disposition, CacheDisposition::Hit);
         assert!(outcome.result.is_ok());
@@ -838,14 +1008,23 @@ mod tests {
 
         {
             let mut ctx = test_command_context(&mut store, &shard_senders);
-            let outcome = e.eval(source, &[], &[], &mut ctx, &registry, false, false);
+            let outcome = e.eval(source, &[], &[], &mut ctx, &registry, false, false, false);
             assert_eq!(outcome.disposition, CacheDisposition::Miss);
             assert!(outcome.result.is_err());
         }
 
         let sha = sha_to_hex(&compute_sha(source));
         let mut ctx = test_command_context(&mut store, &shard_senders);
-        let outcome = e.evalsha(sha.as_bytes(), &[], &[], &mut ctx, &registry, false, false);
+        let outcome = e.evalsha(
+            sha.as_bytes(),
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            false,
+            false,
+        );
 
         assert_eq!(outcome.disposition, CacheDisposition::Hit);
         assert!(outcome.result.is_err());
@@ -972,6 +1151,7 @@ mod tests {
             &registry,
             false,
             false,
+            false,
         );
 
         match outcome.result {
@@ -1001,6 +1181,7 @@ mod tests {
             &[],
             &mut ctx,
             &registry,
+            false,
             false,
             false,
         );
@@ -1036,6 +1217,7 @@ mod tests {
             &mut ctx,
             &registry,
             true,
+            false,
             false,
         );
         assert!(
@@ -1141,6 +1323,7 @@ mod tests {
             &registry,
             false,
             true, // is_cluster_mode
+            false,
         );
         assert!(
             outcome.result.is_ok(),
@@ -1171,6 +1354,7 @@ mod tests {
             &registry,
             false,
             true,
+            false,
         );
         match outcome.result {
             Err(ScriptError::Runtime(msg)) => {
@@ -1199,7 +1383,16 @@ mod tests {
             String::from_utf8_lossy(&first),
             String::from_utf8_lossy(&second),
         );
-        let outcome = e.eval(src.as_bytes(), &[], &[], &mut ctx, &registry, false, true);
+        let outcome = e.eval(
+            src.as_bytes(),
+            &[],
+            &[],
+            &mut ctx,
+            &registry,
+            false,
+            true,
+            false,
+        );
         match outcome.result {
             Err(ScriptError::Runtime(msg)) => {
                 assert!(
@@ -1236,6 +1429,7 @@ mod tests {
             &registry,
             false,
             true, // cluster mode, but no shebang -> no enforcement
+            false,
         );
         assert!(
             outcome.result.is_ok(),
@@ -1267,6 +1461,7 @@ mod tests {
             &registry,
             false,
             false, // standalone -> no enforcement
+            false,
         );
         assert!(
             outcome.result.is_ok(),

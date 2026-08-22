@@ -155,12 +155,24 @@ impl ShardWorker {
 
         let is_write = flags.contains(crate::command::CommandFlags::WRITE);
 
-        // The `maxmemory` gate keys off `DENYOOM`, not `WRITE`: a write that can
-        // only free memory (DEL, LPOP, SREM, FLUSHALL, the expiry family) must
-        // stay available precisely when the instance is over its limit under
-        // `noeviction`, which is when the operator needs it to recover. Redis
-        // makes the same distinction (`CMD_DENYOOM` in `processCommand`).
-        let denies_oom = flags.contains(crate::command::CommandFlags::DENYOOM);
+        // THE admission chokepoint (`crate::command_admission`). Plain dispatch,
+        // EXEC-queued commands and a script's `redis.call` all reach it, so the
+        // policy — today the `maxmemory` gate, tomorrow `noscript` — is decided
+        // in one place instead of once per execution path. It hands back which
+        // gates this caller must still clear: the memory check is `async` and
+        // may evict, so only the shard worker can run it.
+        let admission =
+            crate::command_admission::admit_command(&crate::command_admission::AdmissionRequest {
+                name: &cmd_name_str,
+                flags,
+                origin: crate::command_admission::ExecOrigin::Direct,
+            });
+        let denies_oom = match admission {
+            crate::command_admission::Admission::Refused(err) => {
+                return (err.to_response(), None);
+            }
+            crate::command_admission::Admission::Run { memory_gate } => memory_gate,
+        };
 
         // Per-shard windowed op-rate accounting for hot-shard detection. Counted
         // once the command is known and its arity accepted — i.e. for every
@@ -3016,5 +3028,199 @@ mod oom_gate_tests {
 
         let response = execute(&mut worker, "SET").await;
         assert_ok(&response, "SET");
+    }
+
+    // ---------------------------------------------------------------------
+    // The scripted half of the same gate (redis-feel issue 13).
+    //
+    // Before the chokepoint, a `redis.call` never met the `maxmemory` gate at
+    // all: a Lua body could `SET` unbounded while the instance sat over its
+    // limit under `noeviction`. Admission now has one home
+    // (`crate::command_admission`), reached by plain dispatch and by the script
+    // gate alike, plus the script-start pre-admission Redis performs in
+    // `scriptPrepareForRun`. These tests pin the resulting policy, which is
+    // Redis's, not a simplification of it:
+    //
+    // * a script **with** a shebang declares what it does, so it is judged once
+    //   at the start — refused outright unless it declares `no-writes` or
+    //   `allow-oom`;
+    // * a script **without** one (Redis's `SCRIPT_FLAG_EVAL_COMPAT_MODE`) can
+    //   not be judged up front, so each `DENYOOM` sub-command is gated instead
+    //   — which is why a shebang-less body that only reads, or only frees
+    //   memory, still runs over the limit.
+    // ---------------------------------------------------------------------
+
+    /// Install a Lua executor and run `source` as EVAL on this worker.
+    async fn eval(worker: &mut ShardWorker, source: &'static str) -> Response {
+        worker.set_scripting_config(crate::scripting::ScriptingConfig::default());
+        worker
+            .handle_eval_script(
+                &Bytes::from_static(source.as_bytes()),
+                &[],
+                &[],
+                1,
+                ProtocolVersion::Resp2,
+                false,
+                crate::write_seam::WriteAdmission::internal(),
+            )
+            .await
+    }
+
+    /// Lua returns the mock's `+OK` status unchanged.
+    fn assert_script_ok(response: &Response, what: &str) {
+        match response {
+            Response::Simple(s) => assert_eq!(&s[..], b"OK", "{what} replied {response:?}"),
+            other => panic!("{what} should have run, got {other:?}"),
+        }
+    }
+
+    /// The bug: a scripted allocating write must be refused over the limit,
+    /// exactly as the same command is when dispatched directly.
+    #[tokio::test]
+    async fn scripted_denyoom_write_is_rejected_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = eval(&mut worker, "return redis.call('SET', 'k', 'v')").await;
+        match &response {
+            Response::Error(msg) => {
+                let msg = String::from_utf8_lossy(msg);
+                assert!(
+                    msg.contains("OOM command not allowed when used memory > 'maxmemory'."),
+                    "a scripted SET over the limit must carry the -OOM message, got {msg}"
+                );
+            }
+            other => panic!("scripted SET should have been refused with -OOM, got {other:?}"),
+        }
+    }
+
+    /// `allow-oom` is the declared escape hatch: the script says it knows, and
+    /// its sub-commands stop being gated (Redis sets `SCRIPT_ALLOW_OOM`).
+    #[tokio::test]
+    async fn allow_oom_shebang_runs_a_write_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = eval(
+            &mut worker,
+            "#!lua flags=allow-oom\nreturn redis.call('SET', 'k', 'v')",
+        )
+        .await;
+        assert_script_ok(&response, "an allow-oom script's SET");
+    }
+
+    /// A shebang script that may write and does not declare `allow-oom` is
+    /// refused *before its body runs* — the script-start admission. It never
+    /// reaches a `redis.call`, so a body that would not have written is still
+    /// refused; that is Redis's `scriptPrepareForRun`, judging the declaration
+    /// rather than the behaviour.
+    #[tokio::test]
+    async fn a_may_write_shebang_script_is_refused_at_start() {
+        let mut worker = over_limit_worker();
+        let response = eval(&mut worker, "#!lua\nreturn 1").await;
+        match &response {
+            Response::Error(msg) => {
+                let msg = String::from_utf8_lossy(msg);
+                assert!(
+                    msg.contains("OOM command not allowed when used memory > 'maxmemory'."),
+                    "a may-write shebang script over the limit must be refused up front, got {msg}"
+                );
+            }
+            other => panic!("expected a start-time -OOM refusal, got {other:?}"),
+        }
+    }
+
+    /// …and `no-writes` clears that start-time gate, because the script has
+    /// promised not to allocate.
+    #[tokio::test]
+    async fn a_no_writes_shebang_script_runs_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = eval(
+            &mut worker,
+            "#!lua flags=no-writes\nreturn redis.call('GET', 'k')",
+        )
+        .await;
+        assert_script_ok(&response, "a no-writes script's GET");
+    }
+
+    /// The promise is enforced, not merely believed: a `no-writes` script that
+    /// calls a write is an error (Redis parity — the script is run read-only).
+    #[tokio::test]
+    async fn a_no_writes_shebang_script_may_not_write() {
+        let mut worker = over_limit_worker();
+        let response = eval(
+            &mut worker,
+            "#!lua flags=no-writes\nreturn redis.call('SET', 'k', 'v')",
+        )
+        .await;
+        match &response {
+            Response::Error(msg) => {
+                let msg = String::from_utf8_lossy(msg);
+                assert!(
+                    msg.contains("Write commands are not allowed from read-only scripts"),
+                    "a no-writes script calling SET must be refused as read-only, got {msg}"
+                );
+            }
+            other => panic!("expected a read-only refusal, got {other:?}"),
+        }
+    }
+
+    /// A shebang-less body is gated per sub-command, on `DENYOOM` — so the
+    /// memory-freeing call an operator scripts to climb back under the limit
+    /// still runs. This is Redis's behaviour (`scriptVerifyOOM` consults
+    /// `CMD_DENYOOM`), and the reason the compat path cannot simply refuse
+    /// every shebang-less script that might write.
+    #[tokio::test]
+    async fn a_shebang_less_script_may_still_free_memory_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = eval(&mut worker, "return redis.call('DEL', 'k')").await;
+        assert_script_ok(&response, "a scripted DEL");
+    }
+
+    /// The read half of the same rule.
+    #[tokio::test]
+    async fn a_shebang_less_script_may_still_read_over_the_limit() {
+        let mut worker = over_limit_worker();
+        let response = eval(&mut worker, "return redis.call('GET', 'k')").await;
+        assert_script_ok(&response, "a scripted GET");
+    }
+
+    /// Redis will not stop a script half-way: once the first write has landed,
+    /// the OOM gate stops applying for the rest of the body. Without this a
+    /// script could be aborted between two writes, leaving a partial effect
+    /// that the caller was told failed.
+    #[tokio::test]
+    async fn a_script_that_already_wrote_is_not_stopped_mid_way() {
+        let mut worker = over_limit_worker();
+        // DEL is a write (it marks the script write-dirty) but is not DENYOOM,
+        // so it is admitted; the SET that follows must then be admitted too.
+        let response = eval(
+            &mut worker,
+            "redis.call('DEL', 'k'); return redis.call('SET', 'k', 'v')",
+        )
+        .await;
+        assert_script_ok(&response, "a SET after a completed write");
+    }
+
+    /// Under the limit nothing is gated: the scripted write runs, so the gate
+    /// is not a blanket refusal of scripted writes.
+    #[tokio::test]
+    async fn a_scripted_write_runs_under_the_limit() {
+        let mut registry = CommandRegistry::new();
+        registry.register(MockSet);
+        let (msg_tx, msg_rx) = mpsc::channel(16);
+        let (_conn_tx, conn_rx) = mpsc::channel(16);
+        let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        let mut worker = ShardWorker::with_eviction(
+            0,
+            1,
+            ShardReceiver::new(msg_rx),
+            conn_rx,
+            shard_senders,
+            Arc::new(registry),
+            EvictionConfig::default(),
+            Arc::new(NoopMetricsRecorder::new()),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(NoopBroadcaster),
+        );
+
+        let response = eval(&mut worker, "return redis.call('SET', 'k', 'v')").await;
+        assert_script_ok(&response, "a scripted SET under the limit");
     }
 }

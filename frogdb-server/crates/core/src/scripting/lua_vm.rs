@@ -409,12 +409,18 @@ end
     /// while the seam is live. Errors from `body` (a [`ScriptError`]) are
     /// returned verbatim; only genuine scope/binding-setup failures map to
     /// [`ScriptError::Internal`].
+    ///
+    /// `oom` is the invocation-wide half of the admission chokepoint's OOM
+    /// decision (shebang exemption + the `maxmemory` state sampled at script
+    /// start); the gate combines it with the live write-dirty flag on every
+    /// `redis.call`. See [`crate::command_admission`].
     pub(crate) fn execute_in_scope<R>(
         &self,
         invoker: &dyn CommandInvoker,
         read_only: bool,
         enforce_cross_slot: bool,
         cross_slot: CrossSlotTracker,
+        oom: crate::command_admission::ScriptOomState,
         body: impl FnOnce(&LuaVm) -> Result<R, ScriptError>,
     ) -> Result<R, ScriptError> {
         // One gate owns validation + routing; `call` and `pcall` share the same
@@ -426,6 +432,7 @@ end
             read_only,
             enforce_cross_slot,
             cross_slot,
+            oom,
         );
         let mut out: Option<Result<R, ScriptError>> = None;
         self.lua

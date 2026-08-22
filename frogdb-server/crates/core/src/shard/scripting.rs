@@ -9,7 +9,7 @@ use frogdb_types::metrics::labels::{ScriptError as ScriptErrorLabel, ScriptKind}
 
 use crate::command::CommandContext;
 use crate::registry::CommandRegistry;
-use crate::scripting::{CacheDisposition, ScriptExecutor, ScriptOutcome};
+use crate::scripting::{CacheDisposition, ScriptExecutor, ScriptOomPolicy, ScriptOutcome};
 use crate::write_seam::WriteAdmission;
 
 use super::worker::ShardWorker;
@@ -34,7 +34,8 @@ impl ShardWorker {
             conn_id,
             protocol_version,
             admission,
-            |executor, ctx, registry| {
+            |executor| executor.eval_oom_policy(script_source, read_only),
+            |executor, ctx, registry, oom_at_start| {
                 executor.eval(
                     script_source,
                     keys,
@@ -43,6 +44,7 @@ impl ShardWorker {
                     registry,
                     read_only,
                     is_cluster_mode,
+                    oom_at_start,
                 )
             },
         )
@@ -67,7 +69,8 @@ impl ShardWorker {
             conn_id,
             protocol_version,
             admission,
-            |executor, ctx, registry| {
+            |executor| executor.evalsha_oom_policy(script_sha, read_only),
+            |executor, ctx, registry, oom_at_start| {
                 executor.evalsha(
                     script_sha,
                     keys,
@@ -76,6 +79,7 @@ impl ShardWorker {
                     registry,
                     read_only,
                     is_cluster_mode,
+                    oom_at_start,
                 )
             },
         )
@@ -91,13 +95,20 @@ impl ShardWorker {
     /// matching the formatted error string. This is the single place that
     /// owns cache-disposition + metric emission for both handlers above, so
     /// they only need to build the ctx and call into the executor.
+    #[allow(clippy::too_many_arguments)]
     async fn run_script(
         &mut self,
         kind: ScriptKind,
         conn_id: u64,
         protocol_version: ProtocolVersion,
         admission: WriteAdmission,
-        invoke: impl FnOnce(&mut ScriptExecutor, &mut CommandContext, &CommandRegistry) -> ScriptOutcome,
+        oom_policy: impl FnOnce(&ScriptExecutor) -> ScriptOomPolicy,
+        invoke: impl FnOnce(
+            &mut ScriptExecutor,
+            &mut CommandContext,
+            &CommandRegistry,
+            bool,
+        ) -> ScriptOutcome,
     ) -> Response {
         let shard_label = self.identity.shard_id().to_string();
 
@@ -118,13 +129,34 @@ impl ShardWorker {
             .scripting
             .take_executor()
             .expect("executor presence checked above");
+
+        // Script-start OOM admission (redis-feel issue 13, Redis's
+        // `scriptPrepareForRun`). The memory state is sampled ONCE here, after
+        // any eviction pass, and drives both halves of the policy: a shebang
+        // script that may write and does not declare `allow-oom` is refused
+        // outright, and a shebang-less script carries the sampled state into
+        // its per-sub-command gate (`crate::command_admission`). Sampling
+        // rather than `check_memory_for_write` so an EVAL we do not reject does
+        // not count an OOM rejection.
+        let policy = oom_policy(&executor);
+        let oom_at_start = self.sample_oom_state().await;
+        if policy.reject_at_start && oom_at_start {
+            self.scripting.set_executor(executor);
+            LuaScriptsErrors::inc(
+                self.observability.metrics(),
+                &shard_label,
+                ScriptErrorLabel::Execution,
+            );
+            return crate::error::CommandError::OutOfMemory.to_response();
+        }
+
         // The shard write seam every `redis.call` this script issues is admitted
         // through (`specs/txn.md` FM-TXN-051).
         let write_seam = self.write_seam(admission);
         let (outcome, script_writes) = {
             let mut ctx = self.command_context(conn_id, protocol_version);
             ctx.write_seam = Some(write_seam);
-            let outcome = invoke(&mut executor, &mut ctx, &registry);
+            let outcome = invoke(&mut executor, &mut ctx, &registry, oom_at_start);
             // Drain the effective writes the script's `redis.call`s recorded
             // before the context drops; the pipeline below consumes them.
             (outcome, std::mem::take(&mut ctx.effects.script_writes))
@@ -223,6 +255,25 @@ impl ShardWorker {
         let args = &parts[1..];
         if let Err(msg) = crate::command_spec::check_arity(handler.name(), handler.arity(), args) {
             return Response::error(msg);
+        }
+        // THE admission chokepoint. This leg is a *continuation*: the shard
+        // running the Lua VM already ruled on this `redis.call` (see
+        // `ScriptCommandGate::dispatch`), so re-deciding here would judge it
+        // against a different shard's memory and could refuse a call the script
+        // was already told would run. It still passes through the chokepoint so
+        // "every execution path reaches admission" holds literally, and so a
+        // future origin-specific gate lands here too.
+        let request = crate::command_admission::AdmissionRequest {
+            name: &cmd_name,
+            flags: handler.flags_for(args),
+            origin: crate::command_admission::ExecOrigin::FromScript(
+                crate::command_admission::ScriptOomState::already_admitted(),
+            ),
+        };
+        if let crate::command_admission::Admission::Refused(err) =
+            crate::command_admission::admit_command(&request)
+        {
+            return err.to_response();
         }
         // Route through the shared builder so a cross-shard script sub-command
         // sees the same cluster + replica identity as any other command on this

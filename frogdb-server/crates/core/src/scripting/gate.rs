@@ -54,6 +54,9 @@ use super::bindings::{
     extract_keys_from_command, is_forbidden_in_script, is_forbidden_subcommand, is_write_command,
 };
 use crate::command::{CommandContext, ExecutionStrategy, ScriptWriteRecord};
+use crate::command_admission::{
+    Admission, AdmissionRequest, ExecOrigin, ScriptOomState, admit_command,
+};
 use crate::persistence::{RecoveryStats, SnapshotStats};
 use crate::registry::CommandRegistry;
 use crate::replication::ReplicationTrackerImpl;
@@ -175,6 +178,12 @@ pub(crate) trait CommandInvoker {
     /// partial/wrong results. We deny it with a clean, catchable error instead.
     /// Returns `Ok(())` for every command that is safe to run shard-locally.
     fn reject_server_wide(&self, name: &str) -> Result<(), String>;
+    /// The flags governing *this* invocation of the sub-command, from the
+    /// registry (`Command::flags_for`, so a container command is judged by its
+    /// matched subcommand). An unknown command has no flags: [`Self::run_local`]
+    /// owns the unknown-command error, and inventing flags here would let the
+    /// admission chokepoint refuse it with a misleading reason.
+    fn command_flags(&self, parts: &[Bytes]) -> crate::command::CommandFlags;
     /// Admit a classified sub-command at the **shard write seam**.
     ///
     /// The gate decides *whether the command is legal for a script* and *where it
@@ -211,6 +220,11 @@ pub(crate) struct ScriptCommandGate {
     read_only: bool,
     enforce_cross_slot: bool,
     cross_slot: CrossSlotTracker,
+    /// The invocation-wide half of the OOM admission decision, fixed at script
+    /// start by the shard worker (shebang exemption + the memory state sampled
+    /// then). The per-call half — `write_dirty` — is read live from the flag
+    /// above, so it reflects what this script has done so far.
+    oom: ScriptOomState,
 }
 
 impl ScriptCommandGate {
@@ -219,12 +233,14 @@ impl ScriptCommandGate {
         read_only: bool,
         enforce_cross_slot: bool,
         cross_slot: CrossSlotTracker,
+        oom: ScriptOomState,
     ) -> Self {
         Self {
             write_dirty,
             read_only,
             enforce_cross_slot,
             cross_slot,
+            oom,
         }
     }
 
@@ -309,10 +325,11 @@ impl ScriptCommandGate {
         // from a shard worker, and the name-based `classify` cannot see a
         // command's `ExecutionStrategy` (it is store/registry-agnostic), so the
         // check goes through the invoker, which owns the registry handle.
-        if let Some(first) = parts.first() {
-            let name = String::from_utf8_lossy(first).to_uppercase();
-            invoker.reject_server_wide(&name)?;
-        }
+        let name = match parts.first() {
+            Some(first) => String::from_utf8_lossy(first).to_uppercase(),
+            None => String::new(),
+        };
+        invoker.reject_server_wide(&name)?;
         let Classification { plan, is_write } =
             self.classify(parts, invoker.num_shards(), invoker.shard_id())?;
         // The shard write seam: ACL, slot ownership, write-admission. Sits
@@ -322,6 +339,30 @@ impl ScriptCommandGate {
         // script is deliberately unkillable — see `run_script`'s notes — and a
         // command that never took effect must not buy that exemption).
         invoker.admit(parts, is_write)?;
+        // THE admission chokepoint (`crate::command_admission`) — the same one
+        // `execute_command_body` consults for a directly dispatched command, so
+        // a scripted `redis.call` cannot walk past a policy a direct call has
+        // to clear (redis-feel issue 13: scripts used to run `DENYOOM` commands
+        // unbounded while the instance sat over `maxmemory`). Placed with the
+        // write seam, after classification and *before* `mark_write` for the
+        // same reason: a refused command must neither run nor buy the
+        // write-dirty script's unkillable exemption.
+        let request = AdmissionRequest {
+            name: &name,
+            flags: invoker.command_flags(parts),
+            origin: ExecOrigin::FromScript(ScriptOomState {
+                write_dirty: self.write_dirty.load(Ordering::Relaxed),
+                ..self.oom
+            }),
+        };
+        match admit_command(&request) {
+            Admission::Refused(err) => return Err(err.to_string()),
+            // A scripted call's memory verdict is settled by the chokepoint
+            // itself: the shard-worker memory check that `memory_gate` asks for
+            // is `async` and may evict, neither of which is reachable from
+            // inside a running Lua VM.
+            Admission::Run { memory_gate: _ } => {}
+        }
         if is_write {
             self.mark_write();
         }
@@ -504,6 +545,17 @@ impl CommandInvoker for ScriptInvoker<'_> {
         Ok(())
     }
 
+    fn command_flags(&self, parts: &[Bytes]) -> crate::command::CommandFlags {
+        let Some(first) = parts.first() else {
+            return crate::command::CommandFlags::empty();
+        };
+        let name = String::from_utf8_lossy(first).to_uppercase();
+        match self.registry.get(&name) {
+            Some(entry) => entry.flags_for(&parts[1..]),
+            None => crate::command::CommandFlags::empty(),
+        }
+    }
+
     /// Authorize and admit the sub-command at the shard write seam.
     ///
     /// Derives the ACL inputs from the *registry* — per-key access flags and the
@@ -641,6 +693,7 @@ mod tests {
             read_only,
             enforce_cross_slot,
             CrossSlotTracker::new(seed),
+            ScriptOomState::default(),
         )
     }
 

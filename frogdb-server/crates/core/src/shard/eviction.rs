@@ -23,11 +23,47 @@ impl ShardWorker {
         self.store.memory_used() as u64 > self.eviction.memory_limit()
     }
 
+    /// The OOM outcome: logged and counted when this is a real refusal, silent
+    /// when it is only a [`Self::sample_oom_state`] probe.
+    fn oom_verdict(&self, rejecting: bool) -> CommandError {
+        if rejecting {
+            tracing::warn!(
+                shard_id = self.shard_id(),
+                memory_used = self.store.memory_used(),
+                memory_limit = self.eviction.memory_limit(),
+                "OOM rejected write"
+            );
+            let shard_label = self.shard_id().to_string();
+            EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
+        }
+        CommandError::OutOfMemory
+    }
+
+    /// Sample the OOM state the way Redis's `processCommand` does: run the
+    /// eviction pass the policy allows, then report whether we are *still* over
+    /// the limit — Redis's `server.pre_command_oom_state`.
+    ///
+    /// A *sample*, not a refusal: nothing is rejected and no OOM rejection is
+    /// counted. It exists for the script-start admission
+    /// (`crate::command_admission`), which has to know the memory state for
+    /// every EVAL — including the shebang-less ones it does not reject — and
+    /// must not inflate `frogdb_eviction_oom_total` by asking.
+    pub(crate) async fn sample_oom_state(&mut self) -> bool {
+        self.check_memory_for_write_inner(false).await.is_err()
+    }
+
     /// Check memory and evict if needed before a write operation.
     ///
     /// Returns Ok(()) if memory is available (or was freed via eviction),
     /// Returns Err(CommandError::OutOfMemory) if write should be rejected.
     pub(crate) async fn check_memory_for_write(&mut self) -> Result<(), CommandError> {
+        self.check_memory_for_write_inner(true).await
+    }
+
+    /// The shared body of [`Self::check_memory_for_write`] and
+    /// [`Self::sample_oom_state`]. `rejecting` distinguishes a real refusal
+    /// (logged and counted) from a sample taken to decide admission.
+    async fn check_memory_for_write_inner(&mut self, rejecting: bool) -> Result<(), CommandError> {
         // No limit configured
         if self.eviction.memory_limit() == 0 {
             return Ok(());
@@ -51,15 +87,7 @@ impl ShardWorker {
 
         // Try to evict if policy allows
         if self.eviction.is_no_eviction() {
-            tracing::warn!(
-                shard_id = self.shard_id(),
-                memory_used = self.store.memory_used(),
-                memory_limit = self.eviction.memory_limit(),
-                "OOM rejected write"
-            );
-            let shard_label = self.shard_id().to_string();
-            EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
-            return Err(CommandError::OutOfMemory);
+            return Err(self.oom_verdict(rejecting));
         }
 
         tracing::debug!(
@@ -83,29 +111,13 @@ impl ShardWorker {
                     policy = %self.eviction.policy(),
                     "No volatile keys for eviction"
                 );
-                tracing::warn!(
-                    shard_id = self.shard_id(),
-                    memory_used = self.store.memory_used(),
-                    memory_limit = self.eviction.memory_limit(),
-                    "OOM rejected write"
-                );
-                let shard_label = self.shard_id().to_string();
-                EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
-                return Err(CommandError::OutOfMemory);
+                return Err(self.oom_verdict(rejecting));
             }
         }
 
         // Still over limit after max attempts
         if self.is_over_memory_limit() {
-            tracing::warn!(
-                shard_id = self.shard_id(),
-                memory_used = self.store.memory_used(),
-                memory_limit = self.eviction.memory_limit(),
-                "OOM rejected write"
-            );
-            let shard_label = self.shard_id().to_string();
-            EvictionOomTotal::inc(self.observability.metrics(), &shard_label);
-            return Err(CommandError::OutOfMemory);
+            return Err(self.oom_verdict(rejecting));
         }
 
         Ok(())

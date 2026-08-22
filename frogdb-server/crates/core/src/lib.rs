@@ -25,6 +25,7 @@ pub use frogdb_cluster as cluster;
 pub use frogdb_acl as acl;
 pub mod client_registry;
 pub mod command;
+pub mod command_admission;
 pub mod command_spec;
 pub mod conn_command;
 pub mod error;
