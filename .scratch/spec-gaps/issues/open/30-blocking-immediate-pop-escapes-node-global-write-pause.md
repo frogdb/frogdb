@@ -1,6 +1,15 @@
 # A blocking command's immediate pop escapes node-global CLIENT PAUSE WRITE
 
-Status: needs-triage
+Status: ready-for-agent
+
+Size: S
+
+> **Ruling (2026-08-22, R9 in
+> [work-item rulings](../../../cluster-correctness/2026-08-22-work-item-rulings.md)):**
+> accepted as written. Park-with-live-deadline confirmed over Redis `BLOCKED_POSTPONE`
+> (one deadline regime, not two); nil-timeout during a long pause is the documented,
+> coherent outcome of issue 17's ruled deviation — the new spec row states it. Pause
+> check lands at the shard-side pop decision point.
 
 ## Parent
 

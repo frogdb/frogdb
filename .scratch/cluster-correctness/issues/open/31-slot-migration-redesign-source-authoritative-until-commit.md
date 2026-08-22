@@ -12,14 +12,24 @@ Status: ready-for-human
 > **Remaining to build**: the spec amendment + implementation campaign per the design doc's
 > `## Spec / impl blast radius — full verdicts` section (~40+ LOCKED-row rewrites/retires/adds in
 > `specs/cluster.md`, each landing spec-first with its forcing tests, plus the Rust
-> implementation). Needs decomposition into issues/waves and a human ruling on staging before
-> work starts. Of the dozen design-owner flags from Q2-Q4, **four were ruled 2026-08-19**
-> (M37 add-discard-leg, `inv_no_hold_during_staged_flip` stageFlip-answers-holds, M32
-> defect-ghost, arm 4b deleted — ledger in
-> [.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md](../../../formal-spec/2026-08-19-quint-completeness-campaign.md),
-> applied to the model in that campaign's W1, which also lands the detector-attribution text
-> corrections); M22/M06 stay accepted structural limits.
-> Do not start independent work on this issue or the slot-migration area.
+> implementation).
+>
+> **All design-owner flags RULED and staging RULED** (2026-08-22 grill,
+> [rulings ledger](../../2026-08-22-work-item-rulings.md)): the three semantics flags settled as
+> R3 (adoption-time invariant replaces `inv_no_hold_during_staged_flip`), R4 (refusal class
+> minted at verdict + carried in payload — arm 4b is reachable, **supersedes** the 2026-08-19
+> "arm 4b deleted" note), R5 (stale-never-admits replaces
+> `inv_no_record_outlives_its_registration`) — model work filed as
+> [issue 43](43-quint-model-semantics-fixes-from-rulings.md); attribution corrections +
+> accepted-limitation notes batched as
+> [issue 44](44-design-doc-attribution-corrections-batch.md). Staging ruled R1: conflict-clustered
+> sequential waves, one implementer per cluster, merge to main at wave boundaries; **wave-0
+> decomposition dispatched 2026-08-22** — drafts land under
+> `.scratch/cluster-correctness/campaign-31-decomposition/` for human review, with an approval
+> gate before any implementation wave. Q6 promotion-retry boundedness folded into the
+> decomposition brief as a candidate doc extension (R11).
+> Do not start independent implementation work on the slot-migration area outside the campaign
+> waves.
 
 ## Origin
 
