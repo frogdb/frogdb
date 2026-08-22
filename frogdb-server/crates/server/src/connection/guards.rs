@@ -11,7 +11,7 @@
 //!
 //! Guard predicates living here:
 //! - [`PreDispatchView::run_pre_checks`] — auth / replica-readonly / quorum-fence
-//!   / admin-port / ACL / pub-sub-mode gate
+//!   / admin-port / ACL / pub-sub-mode / stale-read gate
 //! - [`PreDispatchView::validate_cluster_slots`] — MOVED/ASK/CROSSSLOT routing
 //! - [`PreDispatchView::check_migrating_source`] — the MIGRATING-source presence
 //!   probe: serve / `ASK` / `TRYAGAIN` while a slot is being handed over
@@ -33,6 +33,7 @@
 //! ASK conversion, rate limiting) stay on [`ConnectionHandler`].
 
 use bytes::Bytes;
+use frogdb_core::command_admission::{ReplicaLink, stale_refusal};
 use frogdb_core::{
     AclManager, CommandFlags, CommandRegistry, ConnectionLevelOp, CoreMsg, ExecutionStrategy,
     RateLimitExceeded, ScatterOp, ShardSender, WatchEntry, admin_surface, shard_for_key,
@@ -377,6 +378,43 @@ impl PreDispatchView<'_> {
                 "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
                 cmd_name
             )));
+        }
+
+        // The `stale` gate (redis-feel issue 17): a replica whose link to its
+        // primary is down answers only STALE-flagged commands unless the
+        // operator opted into stale reads. Policy lives in
+        // `frogdb_core::command_admission::stale_refusal`; this rung supplies
+        // the two live inputs. Flags come from `Command::flags_for`, so the
+        // verdict is per-subcommand for containers.
+        //
+        // Last, matching Redis: `processCommand` runs its `-MASTERDOWN` check
+        // after the pub/sub-context gate, so a client parked in subscribe mode
+        // gets the context error for a forbidden command rather than a
+        // replication-state one. Rejecting here also flags an open MULTI dirty,
+        // which is what Redis's `rejectCommand` does via `flagTransaction`.
+        //
+        // `master_link_up()` is false for the whole pre-streaming window, not
+        // just a broken link — dialing, handshaking, and full-sync transfer all
+        // count as down. That is deliberate parity: Redis gates on
+        // `repl_state != REPL_STATE_CONNECTED`, which covers exactly the same
+        // window, and a replica that has not finished its first sync has no
+        // keyspace worth serving anyway.
+        //
+        // Replica *apply* traffic cannot reach this, for the same structural
+        // reason as the MISCONF gate above: the replication executor never
+        // builds a `PreDispatchView`.
+        if let Some(rc) = self.cluster.role_controller.as_ref()
+            && rc.primary_target().is_some()
+            && !rc.master_link_up()
+            && let Some(cmd_impl) = self.registry.get_entry(cmd_name)
+            && let Some(err) = stale_refusal(
+                ReplicaLink::Down {
+                    serve_stale_data: self.config_manager.replica_serve_stale_data(),
+                },
+                cmd_impl.flags_for(args),
+            )
+        {
+            return Some(Response::error(err.to_string()));
         }
 
         None

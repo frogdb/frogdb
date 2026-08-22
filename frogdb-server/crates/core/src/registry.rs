@@ -67,6 +67,28 @@ impl CommandImpl {
         }
     }
 
+    /// The flags governing *this* invocation, per-subcommand for containers.
+    ///
+    /// The union's counterpart to [`crate::command::Command::flags_for`]. A
+    /// `Shard` entry defers to the trait method, so an implementation that
+    /// overrides it keeps its answer; a `Connection` entry lays the matched
+    /// subcommand's row over its spec, which is exactly what the trait's
+    /// default does. Use this rather than [`Self::flags`] wherever a gate
+    /// judges a concrete invocation — `CONFIG GET` and `CONFIG RESETSTAT` are
+    /// not the same command as far as admission is concerned.
+    pub fn flags_for(&self, args: &[bytes::Bytes]) -> CommandFlags {
+        match self {
+            CommandImpl::Shard(cmd) => cmd.flags_for(args),
+            CommandImpl::Connection(cmd) => {
+                let spec = cmd.spec();
+                match crate::command_spec::subcommand_spec(spec.name, args) {
+                    Some(row) => row.flags_over(spec.flags),
+                    None => spec.flags,
+                }
+            }
+        }
+    }
+
     /// Get the command's full declarative spec — the single source of truth
     /// `COMMAND INFO`/docs-gen read every mechanical fact (arity, key spec,
     /// flags) from, rather than re-deriving each fact through its own

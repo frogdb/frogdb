@@ -8164,3 +8164,125 @@ async fn test_replica_read_monotonic_after_primary_writes() {
     replica.shutdown().await;
     primary.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// The stale-read gate (`replica-serve-stale-data`, redis-feel issue 17)
+// ---------------------------------------------------------------------------
+
+/// Poll `INFO replication` on `replica` until it reports the link down.
+///
+/// The break is asynchronous — the replica notices the primary is gone when its
+/// stream errors — so every stale-gate assertion has to wait for the state the
+/// gate reads, not for the shutdown that causes it.
+async fn wait_for_link_down(replica: &TestServer) {
+    for _ in 0..100 {
+        let info = parse_info_replication(&replica.send("INFO", &["replication"]).await)
+            .expect("INFO replication must parse");
+        if info.get("master_link_status").map(String::as_str) == Some("down") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("replica never reported master_link_status:down after its primary was shut down");
+}
+
+/// FrogDB's default is the deliberate deviation: a replica that has lost its
+/// primary refuses to answer from its now-unbounded-stale local keyspace, with
+/// Redis's own `-MASTERDOWN` error. Redis defaults the other way and serves.
+///
+/// The commands that stay available are the `STALE`-flagged ones — INFO, PING,
+/// CONFIG — which is what keeps the node diagnosable and re-pointable while the
+/// gate is closed. That set is the whole reason the gate is flag-driven rather
+/// than a blanket refusal.
+#[tokio::test]
+async fn a_link_down_replica_refuses_reads_by_default() {
+    let (primary, replica) = start_primary_replica_pair(TestServerConfig::default()).await;
+
+    assert_ok(&primary.send("SET", &["stale-key", "v1"]).await);
+    wait_for_replication(&primary, 5_000).await;
+    assert_bulk_eq(&replica.send("GET", &["stale-key"]).await, b"v1");
+
+    primary.shutdown().await;
+    wait_for_link_down(&replica).await;
+
+    let refused = replica.send("GET", &["stale-key"]).await;
+    assert!(
+        is_error(&refused),
+        "a link-down replica must refuse a non-STALE read by default, got: {refused:?}"
+    );
+    assert_eq!(
+        get_error_message(&refused).as_deref(),
+        Some("MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'."),
+        "the refusal must be Redis's verbatim MASTERDOWN error, got: {refused:?}"
+    );
+
+    // Writes were already refused with -READONLY, and that rung runs first: a
+    // replica must not be told its replication link is down when the real
+    // answer is that it is a replica at all.
+    let write = replica.send("SET", &["stale-key", "v2"]).await;
+    assert!(
+        get_error_message(&write)
+            .as_deref()
+            .is_some_and(|m| m.starts_with("READONLY")),
+        "the read-only rung must still win over the stale gate, got: {write:?}"
+    );
+
+    // STALE-flagged commands keep working — the node stays diagnosable.
+    assert!(
+        parse_simple_string(&replica.send("PING", &[]).await) == Some("PONG"),
+        "PING is STALE-flagged and must survive a down link"
+    );
+    assert!(
+        parse_info_replication(&replica.send("INFO", &["replication"]).await).is_some(),
+        "INFO is STALE-flagged and must survive a down link"
+    );
+    assert!(
+        !is_error(&replica.send("CONFIG", &["GET", "maxmemory"]).await),
+        "CONFIG is STALE-flagged and must survive a down link"
+    );
+
+    // The knob is live-mutable, which is the point: an operator reaches for it
+    // mid-incident, on a replica that is already refusing reads.
+    assert_ok(
+        &replica
+            .send("CONFIG", &["SET", "replica-serve-stale-data", "yes"])
+            .await,
+    );
+    assert_bulk_eq(&replica.send("GET", &["stale-key"]).await, b"v1");
+
+    replica.shutdown().await;
+}
+
+/// With the knob on at boot, FrogDB is Redis: the link-down replica serves its
+/// stale keyspace and the gate never fires.
+#[tokio::test]
+async fn the_serve_stale_data_knob_restores_redis_behaviour() {
+    let config = TestServerConfig {
+        replication_replica_serve_stale_data: Some(true),
+        ..Default::default()
+    };
+    let (primary, replica) = start_primary_replica_pair(config).await;
+
+    assert_ok(&primary.send("SET", &["stale-key", "v1"]).await);
+    wait_for_replication(&primary, 5_000).await;
+    assert_bulk_eq(&replica.send("GET", &["stale-key"]).await, b"v1");
+
+    primary.shutdown().await;
+    wait_for_link_down(&replica).await;
+
+    assert_bulk_eq(&replica.send("GET", &["stale-key"]).await, b"v1");
+
+    replica.shutdown().await;
+}
+
+/// The gate is replica-only: a primary has no link to lose, so the default
+/// must not touch a standalone node's reads.
+#[tokio::test]
+async fn a_primary_is_never_stale_gated() {
+    let server = TestServer::start_standalone().await;
+
+    assert_ok(&server.send("SET", &["k", "v"]).await);
+    assert_bulk_eq(&server.send("GET", &["k"]).await, b"v");
+
+    server.shutdown().await;
+}

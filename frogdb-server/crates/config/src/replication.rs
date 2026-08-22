@@ -178,6 +178,28 @@ pub struct ReplicationConfigSection {
     #[param(mutable)]
     pub replica_freshness_timeout_ms: u64,
 
+    /// Whether a replica whose link to its primary is down answers commands
+    /// from its (arbitrarily old) local keyspace — Redis's
+    /// `replica-serve-stale-data`.
+    ///
+    /// `false` (**FrogDB's default, and a deliberate deviation** — Redis
+    /// defaults to `true`) refuses every command that does not carry the
+    /// `STALE` flag with `-MASTERDOWN` while the link is down; INFO, CONFIG,
+    /// AUTH, REPLICAOF, SUBSCRIBE and the rest of the flagged set keep working,
+    /// so the node stays diagnosable and re-pointable. `true` restores Redis's
+    /// behaviour: serve whatever is local, however old.
+    ///
+    /// The deviation is deliberate. A link can stay down indefinitely — most
+    /// sharply in the stranded-promotion state, where a replica follows nobody
+    /// and applies nothing until an operator intervenes — and Redis's default
+    /// answers those reads silently, with no bound on their age and no signal
+    /// the client can act on. FrogDB fails fast instead, the way CockroachDB
+    /// and FoundationDB do, and leaves unbounded staleness as something an
+    /// operator asks for by name. See redis-feel issue 17.
+    #[serde(default = "default_replica_serve_stale_data")]
+    #[param(mutable)]
+    pub replica_serve_stale_data: bool,
+
     /// Seconds with zero connected replicas after which the replication backlog
     /// is freed and its resume window closed (Redis `repl-backlog-ttl`).
     /// 0 = keep the backlog forever.
@@ -239,6 +261,9 @@ pub const DEFAULT_BACKLOG_SIZE: usize = 10_000;
 pub const DEFAULT_BACKLOG_MAX_MB: usize = 64;
 pub const DEFAULT_SELF_FENCE_ON_REPLICA_LOSS: bool = true;
 pub const DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS: u64 = 3000;
+/// FrogDB refuses stale reads by default; Redis's `replica-serve-stale-data`
+/// defaults to `yes`. See [`ReplicationConfigSection::replica_serve_stale_data`].
+pub const DEFAULT_REPLICA_SERVE_STALE_DATA: bool = false;
 pub const DEFAULT_REPLICA_WRITE_TIMEOUT_MS: u64 = 5000;
 /// Redis's `repl-backlog-ttl` default: one hour with no replicas.
 pub const DEFAULT_BACKLOG_TTL_SECS: u64 = 3600;
@@ -307,6 +332,10 @@ fn default_replica_freshness_timeout_ms() -> u64 {
     DEFAULT_REPLICA_FRESHNESS_TIMEOUT_MS
 }
 
+fn default_replica_serve_stale_data() -> bool {
+    DEFAULT_REPLICA_SERVE_STALE_DATA
+}
+
 fn default_replica_write_timeout_ms() -> u64 {
     DEFAULT_REPLICA_WRITE_TIMEOUT_MS
 }
@@ -346,6 +375,7 @@ impl Default for ReplicationConfigSection {
             backlog_max_mb: default_backlog_max_mb(),
             self_fence_on_replica_loss: default_self_fence_on_replica_loss(),
             replica_freshness_timeout_ms: default_replica_freshness_timeout_ms(),
+            replica_serve_stale_data: default_replica_serve_stale_data(),
             replica_write_timeout_ms: default_replica_write_timeout_ms(),
             backlog_ttl_secs: default_backlog_ttl_secs(),
             replica_txn_max_commands: default_replica_txn_max_commands(),

@@ -197,6 +197,9 @@ param_id_enum! {
         // The opt-in MISCONF write-refusal latch: read by the pre-dispatch
         // write gauntlet on every WRITE-flagged command.
         StopWritesOnSaveError => "stop-writes-on-save-error",
+        // The stale-read gate: read by the pre-dispatch gauntlet on every
+        // command a link-down replica is asked to serve.
+        ReplicaServeStaleData => "replica-serve-stale-data",
     }
 }
 
@@ -360,8 +363,11 @@ mod tests {
         // (`cluster-promotion-max-lag-bytes`, the automatic-promotion staleness
         // bound, spelled in offset bytes rather than disconnection seconds)
         // + 1 added by issue 07a (`appendonly`, a truthful-inert Redis-compat
-        // no-op: FrogDB has no AOF, so GET always reports "no").
-        assert_eq!(MutableParamId::ALL.len(), 78);
+        // no-op: FrogDB has no AOF, so GET always reports "no")
+        // + 1 added by redis-feel issue 17 (`replica-serve-stale-data`, the
+        // stale-read gate; FrogDB defaults it to `no` where Redis defaults
+        // `yes`).
+        assert_eq!(MutableParamId::ALL.len(), 79);
         // 16 original immutable ids + 22 promote-immutable params added by 13-01
         // Pass 2a (26 classified, minus 4 metrics OTLP/bind rows downgraded to
         // justify as dead config) + 20 promote-immutable startup-consumed params

@@ -95,6 +95,11 @@ pub struct TestServerConfig {
     /// once a streaming replica has been seen and then goes stale/disconnects).
     /// `None` keeps the server default (currently `true`).
     pub replication_self_fence_on_replica_loss: Option<bool>,
+    /// Override `replication.replica-serve-stale-data` (whether a link-down
+    /// replica answers non-`STALE` commands or refuses them with
+    /// `-MASTERDOWN`). `None` keeps the server default (`false` — FrogDB
+    /// refuses, where Redis serves).
+    pub replication_replica_serve_stale_data: Option<bool>,
     /// Override `replication.replica-freshness-timeout-ms` (self-fence ACK
     /// freshness window). `None` keeps the server default.
     pub replication_replica_freshness_timeout_ms: Option<u64>,
@@ -240,6 +245,7 @@ impl Clone for TestServerConfig {
             replication_primary_host: self.replication_primary_host.clone(),
             replication_primary_port: self.replication_primary_port,
             replication_self_fence_on_replica_loss: self.replication_self_fence_on_replica_loss,
+            replication_replica_serve_stale_data: self.replication_replica_serve_stale_data,
             replication_replica_freshness_timeout_ms: self.replication_replica_freshness_timeout_ms,
             replication_ack_interval_ms: self.replication_ack_interval_ms,
             replication_replica_write_timeout_ms: self.replication_replica_write_timeout_ms,
@@ -513,6 +519,9 @@ impl TestServer {
         // Replication write-safety knobs (self-fence + min-replicas-to-write).
         if let Some(v) = test_config.replication_self_fence_on_replica_loss {
             config.replication.self_fence_on_replica_loss = v;
+        }
+        if let Some(v) = test_config.replication_replica_serve_stale_data {
+            config.replication.replica_serve_stale_data = v;
         }
         if let Some(v) = test_config.replication_replica_freshness_timeout_ms {
             config.replication.replica_freshness_timeout_ms = v;

@@ -562,6 +562,16 @@ pub fn config_param_registry() -> &'static [ConfigParamInfo] {
         // the other Redis-compat no-ops spliced in above. ---
         rows.extend_from_slice(&VIRTUAL_PARAMS[26..27]); // appendonly
 
+        // --- redis-feel issue 17 (the stale-read gate): appended last so the
+        // golden snapshot's first 125 rows stay byte-identical. Live-mutable:
+        // the pre-dispatch gauntlet reads it per command, so a SET opens or
+        // closes the gate for the very next command a link-down replica is
+        // asked to serve — the knob an operator reaches for mid-incident. ---
+        rows.push(pick(
+            ReplicationConfigSection::PARAMS,
+            "replica-serve-stale-data",
+        ));
+
         rows
     });
 
@@ -1463,6 +1473,13 @@ mod tests {
             mutable: true,
             noop: true,
         },
+        ConfigParamInfo {
+            name: "replica-serve-stale-data",
+            section: Some("replication"),
+            field: Some("replica-serve-stale-data"),
+            mutable: true,
+            noop: false,
+        },
     ];
 
     #[test]
@@ -1510,8 +1527,10 @@ mod tests {
         // appended the mutable `cluster-promotion-max-lag-bytes`, giving 124.
         // Issue 07a (truthful-inert shims) appended the virtual, mutable,
         // noop `appendonly` (FrogDB has no AOF; GET always reports "no"),
-        // giving 125.
-        assert_eq!(GOLDEN_SNAPSHOT.len(), 125);
+        // giving 125. Redis-feel issue 17 appended the mutable
+        // `replica-serve-stale-data` (the stale-read gate, defaulted to `no`
+        // where Redis defaults `yes`), giving 126.
+        assert_eq!(GOLDEN_SNAPSHOT.len(), 126);
     }
 
     #[test]

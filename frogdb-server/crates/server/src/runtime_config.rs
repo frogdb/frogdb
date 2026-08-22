@@ -868,6 +868,12 @@ pub struct ConfigManager {
     /// Authority for GET/REWRITE here, pushed into the live quorum checker.
     self_fence_on_replica_loss: Arc<AtomicBool>,
     replica_freshness_timeout_ms: Arc<AtomicU64>,
+    /// Whether a link-down replica serves its stale local keyspace, or refuses
+    /// every non-`STALE` command with `-MASTERDOWN` (redis-feel issue 17).
+    ///
+    /// Read straight off this cell by the pre-dispatch gauntlet — there is no
+    /// downstream handle to publish it into, because the gate *is* the reader.
+    replica_serve_stale_data: Arc<AtomicBool>,
     /// Live replication self-fence quorum checker. Published on every role, same
     /// reason as the lag thresholds above; it never fences until a replica has
     /// actually streamed from this node.
@@ -1039,6 +1045,9 @@ impl ConfigManager {
             replica_freshness_timeout_ms: Arc::new(AtomicU64::new(
                 config.replication.replica_freshness_timeout_ms,
             )),
+            replica_serve_stale_data: Arc::new(AtomicBool::new(
+                config.replication.replica_serve_stale_data,
+            )),
             replication_self_fence: std::sync::OnceLock::new(),
             set_lock: Mutex::new(()),
         }
@@ -1090,6 +1099,16 @@ impl ConfigManager {
                 .snapshot_coordinator
                 .get()
                 .is_some_and(|c| c.last_save_failed())
+    }
+
+    /// Whether a replica whose primary link is down may still serve its stale
+    /// local keyspace (`replica-serve-stale-data`, redis-feel issue 17).
+    ///
+    /// FrogDB's default is `false` — a deliberate deviation from Redis, which
+    /// serves stale data by default. The pre-dispatch gauntlet pairs this with
+    /// the live link state to decide `-MASTERDOWN`.
+    pub fn replica_serve_stale_data(&self) -> bool {
+        self.replica_serve_stale_data.load(Ordering::Relaxed)
     }
 
     /// Publish the live primary-side replication lag thresholds.
@@ -3179,6 +3198,28 @@ impl ConfigManager {
                         c.set_self_fence_enabled(v);
                     }
                     info!(enabled = v, "Replica-loss self-fencing toggled");
+                    Ok(())
+                },
+                render: |v| yes_no(*v),
+                propagation: Propagation::None,
+            }),
+            // No downstream handle to push into: the pre-dispatch gauntlet
+            // reads this cell per command, so a SET opens or closes the
+            // stale-read gate for the very next command — which is the whole
+            // point of the knob, since an operator reaches for it mid-incident
+            // on a replica that is already refusing reads.
+            ReplicaServeStaleData => Box::new(ConfigParam::<bool, ConfigManager> {
+                name: id.name(),
+                parse: |s| parse_yes_no("replica-serve-stale-data", s),
+                validate: ConfigParam::no_validate,
+                default: || frogdb_config::replication::DEFAULT_REPLICA_SERVE_STALE_DATA,
+                get: |mgr| mgr.replica_serve_stale_data.load(Ordering::Relaxed),
+                apply: |mgr, v| {
+                    mgr.replica_serve_stale_data.store(v, Ordering::Relaxed);
+                    info!(
+                        enabled = v,
+                        "Stale-read serving on a link-down replica toggled"
+                    );
                     Ok(())
                 },
                 render: |v| yes_no(*v),
