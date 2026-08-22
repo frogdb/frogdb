@@ -65,6 +65,30 @@ FrogDB coordinates cluster membership with Raft consensus rather than Redis Clus
 
 See [Clustering](/operations/clustering/) for bootstrap steps, the admin API, and failure modes.
 
+## Replication
+
+### Stale reads are refused by default
+
+`replica-serve-stale-data` defaults to **`no`** in FrogDB and `yes` in Redis. This is the one replication default FrogDB deliberately inverts.
+
+While a replica's link to its primary is down — broken, or not yet streaming — a FrogDB replica refuses every command that is not `stale`-flagged with Redis's own error:
+
+```
+MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.
+```
+
+`INFO`, `PING`, `CONFIG`, `AUTH`, `REPLICAOF`, `SHUTDOWN` and the rest of the `stale`-flagged set keep working, so the node stays diagnosable and re-pointable while the gate is closed. `COMMAND INFO` reports the flag, so a client can tell in advance which commands survive.
+
+The reasoning: a link can stay down indefinitely, and Redis's default answers those reads silently — no bound on their age, no signal a client can act on. FrogDB fails fast instead, the way CockroachDB and FoundationDB do, and leaves unbounded staleness as something an operator asks for by name. Everything else about the knob is Redis-compatible.
+
+To get Redis's behaviour back, at boot or live mid-incident:
+
+```
+CONFIG SET replica-serve-stale-data yes
+```
+
+The gate is replica-only — a primary or standalone node has no link to lose — and never applies to the replication stream itself.
+
 ## Cross-slot & multi-shard operations
 
 FrogDB partitions keys across internal shards even in standalone mode, so multi-key operations are subject to slot rules that plain single-node Redis does not enforce.

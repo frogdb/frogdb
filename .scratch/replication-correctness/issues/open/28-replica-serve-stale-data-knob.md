@@ -73,3 +73,45 @@ feasible. The user chose implement-now over doc-only.**
 
 To be added: a forcing test exercising `replica-serve-stale-data no` against a replica whose
 `master_link_status` is down, including via the stranded-promotion path from issue 16.
+
+## Amendment (2026-08-21) — the knob shipped under redis-feel issue 17, default inverted
+
+The knob, the gate and the live-mutability requirement were built by
+[redis-feel issue 17](../../../redis-feel/issues/done/17-unimplemented-admission-gates.md),
+which needed the same gate to give `CommandFlags::STALE` a reader. What landed:
+
+- `replication.replica-serve-stale-data`, live-mutable, in the config registry
+  and the golden snapshot.
+- The gate at the end of `PreDispatchView::run_pre_checks`, reading link state
+  through `RoleController` (`primary_target().is_some() && !master_link_up()`)
+  and policy through `frogdb_core::command_admission::stale_refusal`.
+- Redis's verbatim `-MASTERDOWN Link with MASTER is down and
+  replica-serve-stale-data is set to 'no'.`
+- The exemption set is **flag-driven** (`CommandFlags::STALE`) rather than a
+  hand-listed INFO/auth class, so `COMMAND INFO` and the gate cannot disagree.
+
+**This issue's 2026-08-13 ruling of `yes` (Redis parity) is superseded.** The
+2026-08-21 ruling on issue 17 sets FrogDB's default to **`no`** — a deliberate
+deviation, on the CockroachDB/FoundationDB precedent this issue's own analysis
+cites: fail fast rather than answer unbounded staleness silently. `yes` restores
+Redis behaviour.
+
+### Residue still owned by this issue
+
+1. `FM-REPLICATION-029`'s Invariant still says a stale-read gate deliberately
+   does not exist and no knob exists. It must be rewritten to describe the gate,
+   name its forcing tests, and record `master_link_status` as the client-side
+   detection signal. Not done under issue 17: `specs/replication.md` (and its
+   generated website mirror) were held by another session's uncommitted work at
+   the time, and `frogdb-replication` is locked.
+2. The stranded-promotion forcing case (issue 16's frozen applied gate) is not
+   yet exercised against the gate. Issue 17 landed the ordinary link-down cases
+   only (`a_link_down_replica_refuses_reads_by_default`,
+   `the_serve_stale_data_knob_restores_redis_behaviour`,
+   `a_primary_is_never_stale_gated` in
+   `frogdb-server/crates/server/tests/integration_replication.rs`, plus the
+   policy-level cases in `frogdb-core`'s `command_admission::tests`).
+3. The Redis-deviations table entry: the compatibility overview now documents
+   the inverted default
+   (`website/src/content/docs/compatibility/overview.mdx`, "Replication"), but
+   the spec-side deviations table has not been touched — same locked/WIP reason.

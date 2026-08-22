@@ -60,3 +60,30 @@ documents follower reads and their staleness bound precisely.
 ## Blocked by
 
 None — can start immediately.
+
+## Amendment (2026-08-21) — the replication half is absorbed; the cluster half is not
+
+[redis-feel issue 17](../../../redis-feel/issues/done/17-unimplemented-admission-gates.md)
+shipped `replication.replica-serve-stale-data` (live-mutable, default **`no`** —
+a deliberate deviation from Redis's `yes`) and the `-MASTERDOWN` gate behind it.
+Its exemption set is flag-driven (`CommandFlags::STALE`) rather than a
+hand-enumerated admin/introspection list, which satisfies this issue's
+"enumerate the exemption set" intent in a stronger form: the enumeration *is*
+what `COMMAND INFO` advertises, so the two cannot drift.
+
+Do **not** add a second `serve-stale-reads` knob in the cluster config family.
+One knob, one wire name, Redis's spelling. What this issue proposed as item 2
+is done.
+
+### What is still open here
+
+- Items 1 and 3 for the **cluster** case. The shipped gate keys on the
+  *replication* link (`RoleController::primary_target` +
+  `master_link_up`). A node that is fenced or partitioned at the **Raft** layer
+  while its replication link is healthy — or a primary with no link at all — is
+  not covered and still serves reads.
+- The `specs/cluster.md` read-consistency contract rows. Nothing spec-side was
+  written under issue 17.
+- Whether the cluster case should reuse `replica-serve-stale-data` (one knob,
+  two staleness sources) or gets its own row is the open design question; the
+  ruling above predates the shipped knob.

@@ -796,6 +796,14 @@
           "mutable": true
         },
         {
+          "name": "replica-serve-stale-data",
+          "type": "boolean",
+          "default": false,
+          "description": "Whether a replica whose link to its primary is down answers commands\nfrom its (arbitrarily old) local keyspace — Redis's\n`replica-serve-stale-data`.\n\n`false` (**FrogDB's default, and a deliberate deviation** — Redis\ndefaults to `true`) refuses every command that does not carry the\n`STALE` flag with `-MASTERDOWN` while the link is down; INFO, CONFIG,\nAUTH, REPLICAOF, SUBSCRIBE and the rest of the flagged set keep working,\nso the node stays diagnosable and re-pointable. `true` restores Redis's\nbehaviour: serve whatever is local, however old.\n\nThe deviation is deliberate. A link can stay down indefinitely — most\nsharply in the stranded-promotion state, where a replica follows nobody\nand applies nothing until an operator intervenes — and Redis's default\nanswers those reads silently, with no bound on their age and no signal\nthe client can act on. FrogDB fails fast instead, the way CockroachDB\nand FoundationDB do, and leaves unbounded staleness as something an\noperator asks for by name. See redis-feel issue 17.",
+          "config_param": "replica-serve-stale-data",
+          "mutable": true
+        },
+        {
           "name": "replica-txn-max-bytes",
           "type": "integer",
           "default": 1073741824,
