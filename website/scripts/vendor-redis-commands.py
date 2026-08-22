@@ -49,11 +49,22 @@ Two vendored snapshots come out of this script, both pinned to
 
 Trimming philosophy: keep what FrogDB actually consumes, drop the rest.
 Dropped from core: `reply_schema` (large, and FrogDB's replies are
-verified by the regression suite, not by a vendored schema), `function` /
+verified by the regression suite, not by a vendored schema) and `function` /
 `get_keys_function` (C symbol names — the `{"unknown": null}` marker inside
-`key_specs` already flags the specs a static check cannot verify), and
-`acl_categories` (FrogDB derives ACL categories from each `CommandSpec`'s
-real behavior per ADR-0005).
+`key_specs` already flags the specs a static check cannot verify).
+
+`acl_categories` is kept, but as evidence rather than as the answer: the
+ACL category table FrogDB enforces from (`frogdb_acl::CommandCategory`)
+stays hand-maintained per ADR-0005, and a join test in
+`frogdb-server/crates/server/src/server/upstream_metadata_tests.rs` holds
+it against these rows so a gap cannot go unnoticed. Note the field is only
+the *explicit* half of upstream's answer: Redis adds the rest at
+registration time from `command_flags` (`setImplicitACLCategories` — write
+implies `@write`, `admin` implies `@admin @dangerous`, anything not `fast`
+is `@slow`, …), so a consumer has to re-derive those. No module
+`commands.json` declares the field at all — modules set their categories
+in C at `RedisModule_SetCommandACLCategories` time — so module rows carry
+no ACL evidence either way.
 
 Neither file is regenerated on every `just docs-build` — both are
 point-in-time vendored snapshots requiring network access to GitHub, and
@@ -133,6 +144,7 @@ IN_TREE_MODULES = {
 CORE_FIELDS = (
     "arity",
     "command_flags",
+    "acl_categories",
     "command_tips",
     "key_specs",
     "doc_flags",
@@ -145,11 +157,14 @@ CORE_FIELDS = (
 # Per-command fields kept from each module's root `commands.json`, in emit
 # order. Same projection as the core one minus `key_specs`, which no module
 # publishes; `arity`/`command_flags` survive only for vector-sets, the one
-# in-tree module that declares them (see the module docstring above). Fields a
-# family does not publish are omitted from its rows rather than defaulted.
+# in-tree module that declares them (see the module docstring above).
+# `acl_categories` is projected for symmetry and has so far never been present:
+# no module declares it as data. Fields a family does not publish are omitted
+# from its rows rather than defaulted.
 MODULE_FIELDS = (
     "arity",
     "command_flags",
+    "acl_categories",
     "command_tips",
     "doc_flags",
     "deprecated_since",

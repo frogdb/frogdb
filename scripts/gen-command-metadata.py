@@ -227,6 +227,7 @@ def emit_command(cmd: dict, source: str, publishes_key_specs: bool, indent: str)
         + (f"Some({int(arity)}),\n" if arity is not None else "None,\n")
         + f"{pad}command_flags: "
         + (f"Some({rust_str_slice(flags)}),\n" if flags is not None else "None,\n")
+        + f"{pad}acl_categories: {rust_str_slice(cmd.get('acl_categories', []))},\n"
         + f"{pad}command_tips: {rust_str_slice(cmd.get('command_tips', []))},\n"
         + f"{pad}key_specs: {emit_key_specs(cmd, publishes_key_specs, pad)},\n"
         f"{pad}arguments: {emit_args(cmd.get('arguments', []), pad)},\n"

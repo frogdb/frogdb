@@ -171,6 +171,24 @@ pub struct UpstreamCommand {
     /// omits them (never `Some(&[])` for a command that simply has none —
     /// upstream omits the field in that case too).
     pub command_flags: Option<&'static [&'static str]>,
+    /// Upstream's **explicit** ACL categories, verbatim and uppercase
+    /// (`"KEYSPACE"`, `"DANGEROUS"`, ...); empty where upstream declares none.
+    ///
+    /// Only half of upstream's answer. Redis folds in the rest at registration
+    /// time from `command_flags` (`setImplicitACLCategories`: `write` implies
+    /// `@write`, `readonly` implies `@read` unless the command is `@scripting`,
+    /// `admin` implies `@admin` *and* `@dangerous`, `pubsub` implies `@pubsub`,
+    /// `fast` implies `@fast` and anything left over is `@slow`, `blocking`
+    /// implies `@blocking`), so the effective set is this list unioned with
+    /// that derivation. The parity gate in the server crate
+    /// (`upstream_metadata_tests::vendored_acl_categories_agree_with_our_table`)
+    /// re-derives the implied half from FrogDB's *own* flags, so the vendored
+    /// half is the only thing taken verbatim.
+    ///
+    /// Always empty for module rows: no module `commands.json` declares the
+    /// field, because modules set their categories in C at
+    /// `RedisModule_SetCommandACLCategories` time.
+    pub acl_categories: &'static [&'static str],
     /// Upstream command tips, verbatim and uppercase
     /// (`REQUEST_POLICY:ALL_SHARDS`, `NONDETERMINISTIC_OUTPUT`, ...); empty
     /// where upstream declares none. Tips are claims about *routing* and

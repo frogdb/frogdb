@@ -37,6 +37,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -54,6 +55,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -86,6 +88,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -118,6 +121,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -176,6 +180,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -208,6 +213,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -243,6 +249,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -261,6 +268,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -279,6 +287,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -297,6 +306,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -358,6 +368,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -376,6 +387,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -424,6 +436,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -442,6 +455,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -462,6 +476,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -509,6 +524,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["FAST"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -527,6 +543,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "NO_AUTH", "SENTINEL", "ALLOW_BUSY"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -574,6 +591,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -592,6 +610,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -626,6 +645,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -742,6 +762,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("This command allows both access and modification of the key"), flags: &["RW", "UPDATE", "ACCESS", "VARIABLE_FLAGS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -1017,6 +1038,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -1091,6 +1113,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -1257,6 +1280,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -1400,6 +1424,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(6),
         command_flags: Some(&["WRITE", "DENYOOM", "BLOCKING"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -1541,6 +1566,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "BLOCKING"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -1654,6 +1680,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "BLOCKING"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -2, step: 1, limit: 0 } },
@@ -1703,6 +1730,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "BLOCKING"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -2, step: 1, limit: 0 } },
@@ -1752,6 +1780,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`BLMOVE` with the `RIGHT` and `LEFT` arguments"),
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM", "BLOCKING"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -1815,6 +1844,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "BLOCKING"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -1928,6 +1958,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST", "BLOCKING"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -2, step: 1, limit: 0 } },
@@ -1977,6 +2008,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST", "BLOCKING"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -2, step: 1, limit: 0 } },
@@ -2026,6 +2058,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -2043,6 +2076,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2102,6 +2136,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -2120,6 +2155,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -2138,6 +2174,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -2156,6 +2193,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -2174,6 +2212,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -2192,6 +2231,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2443,6 +2483,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2551,6 +2592,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2610,6 +2652,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2669,6 +2712,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2743,6 +2787,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2815,6 +2860,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(4),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2874,6 +2920,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -2906,6 +2953,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3043,6 +3091,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3061,6 +3110,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3133,6 +3183,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3153,6 +3204,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -3170,6 +3222,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3202,6 +3255,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3261,6 +3315,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3279,6 +3334,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3311,6 +3367,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3343,6 +3400,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3375,6 +3433,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3434,6 +3493,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3493,6 +3553,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3511,6 +3572,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3543,6 +3605,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(4),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3588,6 +3651,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3606,6 +3670,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3624,6 +3689,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3656,6 +3722,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3674,6 +3741,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3734,6 +3802,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3887,6 +3956,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3905,6 +3975,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3923,6 +3994,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -3941,6 +4013,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -3973,6 +4046,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4005,6 +4079,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "STALE", "NOSCRIPT"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4064,6 +4139,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -4082,6 +4158,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4114,6 +4191,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4212,6 +4290,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -4230,6 +4309,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: Some("`CLUSTER REPLICAS`"),
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4262,6 +4342,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["STALE", "LOADING"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_SHARDS"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4415,6 +4496,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: Some("`CLUSTER SHARDS`"),
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -4436,6 +4518,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4670,6 +4753,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[]),
         arguments: &[],
@@ -4687,6 +4771,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -4705,6 +4790,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4737,6 +4823,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4782,6 +4869,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4827,6 +4915,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -4845,6 +4934,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4879,6 +4969,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+                acl_categories: &["CONNECTION"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -4953,6 +5044,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -4970,6 +5062,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -5004,6 +5097,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -5022,6 +5116,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -5040,6 +5135,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -5058,6 +5154,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -5121,6 +5218,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -5195,6 +5293,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:AGG_SUM"],
         key_specs: Some(&[]),
         arguments: &[],
@@ -5213,6 +5312,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "PROTECTED"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -5231,6 +5331,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -5265,6 +5366,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -5312,6 +5414,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD", "RESPONSE_POLICY:AGG_SUM"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RM", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -5346,6 +5449,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE", "VARIABLE_FLAGS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -5446,6 +5550,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -5480,6 +5585,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "ALLOW_BUSY"]),
+        acl_categories: &["TRANSACTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -5498,6 +5604,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -5532,6 +5639,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["LOADING", "STALE", "FAST"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -5564,6 +5672,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NOSCRIPT", "SKIP_MONITOR", "MAY_REPLICATE", "NO_MANDATORY_KEYS", "STALE"]),
+        acl_categories: &["SCRIPTING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("We cannot tell how the keys will be used so we assume the worst, RW and UPDATE"), flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -5637,6 +5746,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NOSCRIPT", "SKIP_MONITOR", "MAY_REPLICATE", "NO_MANDATORY_KEYS", "STALE"]),
+        acl_categories: &["SCRIPTING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -5710,6 +5820,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NOSCRIPT", "SKIP_MONITOR", "NO_MANDATORY_KEYS", "STALE", "READONLY"]),
+        acl_categories: &["SCRIPTING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -5783,6 +5894,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NOSCRIPT", "SKIP_MONITOR", "NO_MANDATORY_KEYS", "STALE", "READONLY"]),
+        acl_categories: &["SCRIPTING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("We cannot tell how the keys will be used so we assume the worst, RO and ACCESS"), flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -5856,6 +5968,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "SKIP_SLOWLOG"]),
+        acl_categories: &["TRANSACTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -5874,6 +5987,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD", "RESPONSE_POLICY:AGG_SUM"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -5910,6 +6024,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -6025,6 +6140,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -6140,6 +6256,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -6174,6 +6291,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["ADMIN", "NOSCRIPT", "STALE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -6272,6 +6390,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NOSCRIPT", "SKIP_MONITOR", "MAY_REPLICATE", "NO_MANDATORY_KEYS", "STALE"]),
+        acl_categories: &["SCRIPTING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("We cannot tell how the keys will be used so we assume the worst, RW and UPDATE"), flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -6345,6 +6464,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NOSCRIPT", "SKIP_MONITOR", "NO_MANDATORY_KEYS", "STALE", "READONLY"]),
+        acl_categories: &["SCRIPTING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("We cannot tell how the keys will be used so we assume the worst, RO and ACCESS"), flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -6418,6 +6538,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
         key_specs: Some(&[]),
         arguments: &[
@@ -6480,6 +6601,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
         key_specs: Some(&[]),
         arguments: &[
@@ -6542,6 +6664,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -6559,6 +6682,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT", "WRITE"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -6591,6 +6715,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -6609,6 +6734,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["NOSCRIPT", "WRITE"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -6668,6 +6794,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -6686,6 +6813,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "ALLOW_BUSY"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ONE_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -6704,6 +6832,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["NOSCRIPT"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -6749,6 +6878,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NOSCRIPT", "WRITE", "DENYOOM"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -6794,6 +6924,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NOSCRIPT", "WRITE", "DENYOOM"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -6879,6 +7010,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "ALLOW_BUSY"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -6899,6 +7031,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -7041,6 +7174,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -7167,6 +7301,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -7214,6 +7349,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -7261,6 +7397,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` argument"),
         arity: Some(-6),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -7564,6 +7701,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` and `FROMMEMBER` arguments"),
         arity: Some(-5),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -7854,6 +7992,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`GEOSEARCH` with the `BYRADIUS` and `FROMMEMBER` arguments"),
         arity: Some(-5),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -8102,6 +8241,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`GEOSEARCH` with the `BYRADIUS` argument"),
         arity: Some(-6),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -8363,6 +8503,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-7),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -8798,6 +8939,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-8),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["GEO"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9221,6 +9363,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9255,6 +9398,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9302,6 +9446,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9336,6 +9481,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("RW and UPDATE because it changes the TTL"), flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9449,6 +9595,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9509,6 +9656,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`SET` with the `!GET` argument"),
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9556,6 +9704,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9605,6 +9754,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "NO_AUTH", "SENTINEL", "ALLOW_BUSY"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -9706,6 +9856,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9753,6 +9904,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -9906,6 +10058,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10059,6 +10212,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10133,6 +10287,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10180,6 +10335,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10214,6 +10370,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10288,6 +10445,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("RW and UPDATE because it changes the TTL"), flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10441,6 +10599,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10501,6 +10660,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10561,6 +10721,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10595,6 +10756,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10629,6 +10791,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10676,6 +10839,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`HSET` with multiple field-value pairs"),
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -10750,6 +10914,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -10767,6 +10932,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:SPECIAL", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -10785,6 +10951,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -10803,6 +10970,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -10821,6 +10989,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -10972,6 +11141,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -10992,6 +11162,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11066,6 +11237,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11219,6 +11391,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11372,6 +11545,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11446,6 +11620,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11520,6 +11695,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11594,6 +11770,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11680,6 +11857,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11756,6 +11934,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -11976,6 +12155,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12036,6 +12216,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12083,6 +12264,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12157,6 +12339,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["HASH"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12191,6 +12374,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12225,6 +12409,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12272,6 +12457,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12319,6 +12505,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["LOADING", "STALE", "SENTINEL"]),
+        acl_categories: &["DANGEROUS"],
         command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:SPECIAL"],
         key_specs: Some(&[]),
         arguments: &[
@@ -12353,6 +12540,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[]),
         arguments: &[
@@ -12385,6 +12573,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["LOADING", "STALE", "FAST"]),
+        acl_categories: &["ADMIN", "DANGEROUS"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[]),
         arguments: &[],
@@ -12403,6 +12592,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -12420,6 +12610,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -12438,6 +12629,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -12470,6 +12662,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -12488,6 +12681,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -12520,6 +12714,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -12552,6 +12747,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -12570,6 +12766,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:AGG_SUM"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -12604,6 +12801,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 1, step: 1, limit: 0 } },
@@ -12703,6 +12901,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12750,6 +12949,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(5),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12850,6 +13050,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -12884,6 +13085,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(5),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13012,6 +13214,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -13112,6 +13315,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -13144,6 +13348,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13193,6 +13398,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13279,6 +13485,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13328,6 +13535,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13377,6 +13585,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13437,6 +13646,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13497,6 +13707,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13557,6 +13768,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13617,6 +13829,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -13634,6 +13847,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: None,
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -13652,6 +13866,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -13670,6 +13885,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: None,
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -13688,6 +13904,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: None,
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -13706,6 +13923,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: None,
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:SPECIAL"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -13724,6 +13942,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -13773,6 +13992,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -13807,6 +14027,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 3 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14032,6 +14253,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -14049,6 +14271,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -14067,6 +14290,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "NOSCRIPT"]),
+                acl_categories: &[],
                 command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -14085,6 +14309,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "PROTECTED"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -14130,6 +14355,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "PROTECTED"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -14215,6 +14441,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "PROTECTED"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -14249,6 +14476,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -14267,6 +14495,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14314,6 +14543,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD", "RESPONSE_POLICY:ALL_SUCCEEDED"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 2, limit: 0 } },
@@ -14375,6 +14605,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD", "RESPONSE_POLICY:ALL_SUCCEEDED"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 2 } },
@@ -14568,6 +14799,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 2, limit: 0 } },
@@ -14629,6 +14861,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "ALLOW_BUSY"]),
+        acl_categories: &["TRANSACTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -14647,6 +14880,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -14664,6 +14898,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["KEYSPACE"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14698,6 +14933,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["KEYSPACE"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14732,6 +14968,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &["KEYSPACE"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -14750,6 +14987,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["KEYSPACE"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14784,6 +15022,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["KEYSPACE"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14820,6 +15059,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14854,6 +15094,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -14969,6 +15210,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15084,6 +15326,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15118,6 +15361,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["HYPERLOGLOG"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15165,6 +15409,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY", "MAY_REPLICATE"]),
+        acl_categories: &["HYPERLOGLOG"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("RW because it may change the internal representation of the key, and propagate to replicas"), flags: &["RW", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -15199,6 +15444,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "ADMIN"]),
+        acl_categories: &["HYPERLOGLOG"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15246,6 +15492,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["HYPERLOGLOG"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15294,6 +15541,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["ADMIN"]),
+        acl_categories: &["HYPERLOGLOG"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15312,6 +15560,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["FAST", "SENTINEL"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ALL_SUCCEEDED"],
         key_specs: Some(&[]),
         arguments: &[
@@ -15344,6 +15593,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`SET` with the `PX` argument"),
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15404,6 +15654,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["PUBSUB", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -15436,6 +15687,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NO_MULTI", "NOSCRIPT"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -15481,6 +15733,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15517,6 +15770,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["PUBSUB", "LOADING", "STALE", "FAST", "MAY_REPLICATE", "SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -15562,6 +15816,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15579,6 +15834,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["PUBSUB", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -15611,6 +15867,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -15629,6 +15886,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["PUBSUB", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -15647,6 +15905,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["PUBSUB", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -15679,6 +15938,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["PUBSUB", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -15711,6 +15971,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["PUBSUB", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -15745,6 +16006,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["PUBSUB", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -15777,6 +16039,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("just closing the connection"),
         arity: Some(-1),
         command_flags: Some(&["ALLOW_BUSY", "NOSCRIPT", "LOADING", "STALE", "FAST", "NO_AUTH"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15795,6 +16058,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["READONLY", "TOUCHES_ARBITRARY_KEYS"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:SPECIAL", "NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15813,6 +16077,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["FAST", "LOADING", "STALE"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15831,6 +16096,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["FAST", "LOADING", "STALE"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15849,6 +16115,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15897,6 +16164,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -15947,6 +16215,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "ALLOW_BUSY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -15965,6 +16234,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "STALE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -16078,6 +16348,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "NO_AUTH", "ALLOW_BUSY"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -16096,6 +16367,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16212,6 +16484,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM", "ASKING"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16328,6 +16601,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "SENTINEL"]),
+        acl_categories: &["ADMIN", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -16346,6 +16620,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16395,6 +16670,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`LMOVE` with the `RIGHT` and `LEFT` arguments"),
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16443,6 +16719,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16492,6 +16769,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["LIST"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16541,6 +16819,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16590,6 +16869,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "NO_MULTI"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -16608,6 +16888,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY", "TOUCHES_ARBITRARY_KEYS"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["NONDETERMINISTIC_OUTPUT", "REQUEST_POLICY:SPECIAL", "RESPONSE_POLICY:SPECIAL"],
         key_specs: Some(&[]),
         arguments: &[
@@ -16681,6 +16962,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -16715,6 +16997,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -16732,6 +17015,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -16804,6 +17088,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["NOSCRIPT"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:AGG_LOGICAL_AND"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -16836,6 +17121,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["NOSCRIPT"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -16897,6 +17183,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -16915,6 +17202,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["NOSCRIPT", "ALLOW_BUSY"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:ONE_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -16933,6 +17221,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["NOSCRIPT", "STALE"]),
+                acl_categories: &["SCRIPTING"],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -16967,6 +17256,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -17001,6 +17291,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -17049,6 +17340,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["LOADING", "STALE", "FAST"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -17081,6 +17373,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -17098,6 +17391,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17130,6 +17424,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-4),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17218,6 +17513,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17277,6 +17573,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17309,6 +17606,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -17327,6 +17625,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17359,6 +17658,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -17377,6 +17677,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17409,6 +17710,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(6),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17480,6 +17782,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17512,6 +17815,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -17530,6 +17834,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(6),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17601,6 +17906,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -17619,6 +17925,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -17637,6 +17944,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17669,6 +17977,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17701,6 +18010,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17733,6 +18043,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17765,6 +18076,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-5),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17837,6 +18149,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17909,6 +18222,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: Some("`SENTINEL REPLICAS`"),
                 arity: Some(3),
                 command_flags: Some(&["ADMIN", "SENTINEL", "ONLY_SENTINEL"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -17943,6 +18257,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("RW and ACCESS due to the optional `GET` argument"), flags: &["RW", "ACCESS", "UPDATE", "VARIABLE_FLAGS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18180,6 +18495,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["BITMAP"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18240,6 +18556,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`SET` with the `EX` argument"),
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18300,6 +18617,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`SET` with the `NX` argument"),
         arity: Some(3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "INSERT"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18347,6 +18665,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18407,6 +18726,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "EXPERIMENTAL"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -18506,6 +18826,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["ADMIN", "NOSCRIPT", "LOADING", "STALE", "NO_MULTI", "SENTINEL", "ALLOW_BUSY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -18606,6 +18927,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -18640,6 +18962,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -18700,6 +19023,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18748,6 +19072,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -18795,6 +19120,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`REPLICAOF`"),
         arity: Some(3),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NOSCRIPT", "STALE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -18908,6 +19234,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -18925,6 +19252,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-2),
                 command_flags: Some(&["ADMIN", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[
@@ -18959,6 +19287,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -18977,6 +19306,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:AGG_SUM", "NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -18995,6 +19325,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["ADMIN", "LOADING", "STALE"]),
+                acl_categories: &[],
                 command_tips: &["REQUEST_POLICY:ALL_NODES", "RESPONSE_POLICY:ALL_SUCCEEDED"],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -19015,6 +19346,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19049,6 +19381,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19096,6 +19429,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19157,6 +19491,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SET", "SORTEDSET", "LIST", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19325,6 +19660,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET", "SORTEDSET", "LIST", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19479,6 +19815,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19528,6 +19865,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["PUBSUB", "LOADING", "STALE", "FAST", "MAY_REPLICATE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["NOT_KEY"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19575,6 +19913,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19624,6 +19963,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19673,6 +20013,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19746,6 +20087,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["PUBSUB", "NOSCRIPT", "LOADING", "STALE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["NOT_KEY"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -19780,6 +20122,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19814,6 +20157,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["PUBSUB", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -19846,6 +20190,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`GETRANGE`"),
         arity: Some(4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["STRING"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19906,6 +20251,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT_ORDER"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -19940,6 +20286,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -19988,6 +20335,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["PUBSUB", "NOSCRIPT", "LOADING", "STALE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["NOT_KEY"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -20022,6 +20370,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -20067,6 +20416,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NO_ASYNC_LOADING", "ADMIN", "NO_MULTI", "NOSCRIPT"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -20085,6 +20435,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["LOADING", "STALE", "FAST"]),
+        acl_categories: &[],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[]),
         arguments: &[],
@@ -20103,6 +20454,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD", "RESPONSE_POLICY:AGG_SUM"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -20137,6 +20489,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["KEYSPACE", "DANGEROUS"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -20223,6 +20576,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -20259,6 +20613,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -20293,6 +20648,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["KEYSPACE"],
         command_tips: &["REQUEST_POLICY:MULTI_SHARD", "RESPONSE_POLICY:AGG_SUM"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RM", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -20327,6 +20683,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-1),
         command_flags: Some(&["PUBSUB", "NOSCRIPT", "LOADING", "STALE", "SENTINEL"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[
@@ -20359,6 +20716,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(1),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "ALLOW_BUSY"]),
+        acl_categories: &["TRANSACTION"],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -20377,6 +20735,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["BLOCKING"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:AGG_MIN"],
         key_specs: Some(&[]),
         arguments: &[
@@ -20422,6 +20781,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["BLOCKING"]),
+        acl_categories: &["CONNECTION"],
         command_tips: &["REQUEST_POLICY:ALL_SHARDS", "RESPONSE_POLICY:AGG_MIN"],
         key_specs: Some(&[]),
         arguments: &[
@@ -20480,6 +20840,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["NOSCRIPT", "LOADING", "STALE", "FAST", "ALLOW_BUSY"]),
+        acl_categories: &["TRANSACTION"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 0 } },
@@ -20514,6 +20875,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -20574,6 +20936,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -20714,6 +21077,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: Some("UPDATE instead of INSERT because of the optional trimming feature"), flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21125,6 +21489,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21239,6 +21604,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21353,6 +21719,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-6),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21517,6 +21884,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21564,6 +21932,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21691,6 +22060,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -21708,6 +22078,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-5),
                 command_flags: Some(&["WRITE", "DENYOOM"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21823,6 +22194,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(5),
                 command_flags: Some(&["WRITE", "DENYOOM"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RW", "INSERT"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21883,6 +22255,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(5),
                 command_flags: Some(&["WRITE"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21943,6 +22316,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(4),
                 command_flags: Some(&["WRITE"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -21990,6 +22364,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -22008,6 +22383,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-5),
                 command_flags: Some(&["WRITE"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22112,6 +22488,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: Some(&[]),
         arguments: &[],
@@ -22129,6 +22506,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(4),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["STREAM"],
                 command_tips: &["NONDETERMINISTIC_OUTPUT"],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22178,6 +22556,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22214,6 +22593,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(2),
                 command_flags: Some(&["LOADING", "STALE"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[]),
                 arguments: &[],
@@ -22232,6 +22612,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
                 replaced_by: None,
                 arity: Some(-3),
                 command_flags: Some(&["READONLY"]),
+                acl_categories: &["STREAM"],
                 command_tips: &[],
                 key_specs: Some(&[
                     UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 2 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22313,6 +22694,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22347,6 +22729,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["STREAM"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22475,6 +22858,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22550,6 +22934,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["BLOCKING", "READONLY"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Keyword { keyword: "STREAMS", startfrom: 1 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 2 } },
@@ -22637,6 +23022,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-7),
         command_flags: Some(&["BLOCKING", "WRITE"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Keyword { keyword: "STREAMS", startfrom: 4 }, find_keys: FindKeys::Range { lastkey: -1, step: 1, limit: 2 } },
@@ -22790,6 +23176,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22865,6 +23252,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["STREAM"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -22940,6 +23328,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["STREAM"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23150,6 +23539,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23334,6 +23724,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23368,6 +23759,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23428,6 +23820,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -23488,6 +23881,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23549,6 +23943,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE", "DENYOOM", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23609,6 +24004,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -23735,6 +24131,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -23795,6 +24192,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23922,6 +24320,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -23982,6 +24381,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -24082,6 +24482,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24129,6 +24530,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24176,6 +24578,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "ACCESS", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24223,6 +24626,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24297,6 +24701,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24465,6 +24870,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`ZRANGE` with the `BYLEX` argument"),
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24565,6 +24971,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`ZRANGE` with the `BYSCORE` argument"),
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24680,6 +25087,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24847,6 +25255,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24909,6 +25318,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["WRITE", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -24958,6 +25368,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25018,6 +25429,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25078,6 +25490,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RW", "DELETE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25138,6 +25551,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`ZRANGE` with the `REV` argument"),
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25211,6 +25625,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`ZRANGE` with the `REV` and `BYLEX` arguments"),
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25311,6 +25726,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: Some("`ZRANGE` with the `REV` and `BYSCORE` arguments"),
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25426,6 +25842,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25488,6 +25905,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &["NONDETERMINISTIC_OUTPUT"],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25561,6 +25979,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25608,6 +26027,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["RO", "ACCESS"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Keynum { keynumidx: 0, firstkey: 1, step: 1 } },
@@ -25734,6 +26154,7 @@ pub static REDIS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &["SORTEDSET"],
         command_tips: &[],
         key_specs: Some(&[
             UpstreamKeySpec { notes: None, flags: &["OW", "UPDATE"], begin_search: BeginSearch::Index { pos: 1 }, find_keys: FindKeys::Range { lastkey: 0, step: 1, limit: 0 } },
@@ -25866,6 +26287,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -27487,6 +27909,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -27532,6 +27955,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -27564,6 +27988,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -27609,6 +28034,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -27706,6 +28132,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28254,6 +28681,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28299,6 +28727,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28344,6 +28773,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28376,6 +28806,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28435,6 +28866,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28493,6 +28925,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -28551,6 +28984,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -30703,6 +31137,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -30735,6 +31170,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -30846,6 +31282,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -31846,6 +32283,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -31997,6 +32435,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32097,6 +32536,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32142,6 +32582,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32241,6 +32682,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32273,6 +32715,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32305,6 +32748,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32376,6 +32820,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32421,6 +32866,7 @@ static REDISEARCH_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[],
@@ -32454,6 +32900,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32499,6 +32946,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32531,6 +32979,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32576,6 +33025,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32687,6 +33137,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32810,6 +33261,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32868,6 +33320,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32913,6 +33366,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -32958,6 +33412,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33042,6 +33497,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33087,6 +33543,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33132,6 +33589,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33177,6 +33635,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33222,6 +33681,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33267,6 +33727,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33312,6 +33773,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33344,6 +33806,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33428,6 +33891,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33512,6 +33976,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33570,6 +34035,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33615,6 +34081,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33699,6 +34166,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33744,6 +34212,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33816,6 +34285,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33848,6 +34318,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33906,6 +34377,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -33964,6 +34436,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34062,6 +34535,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34107,6 +34581,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34166,6 +34641,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34211,6 +34687,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34256,6 +34733,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34301,6 +34779,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34346,6 +34825,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34378,6 +34858,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34410,6 +34891,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34521,6 +35003,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34553,6 +35036,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34598,6 +35082,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34643,6 +35128,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34675,6 +35161,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34720,6 +35207,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34778,6 +35266,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34823,6 +35312,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34868,6 +35358,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34940,6 +35431,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -34972,6 +35464,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35017,6 +35510,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35062,6 +35556,7 @@ static REDISBLOOM_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35195,6 +35690,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35253,6 +35749,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35351,6 +35848,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35422,6 +35920,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35467,6 +35966,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35539,6 +36039,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35610,6 +36111,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35655,6 +36157,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[],
@@ -35673,6 +36176,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35718,6 +36222,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35763,6 +36268,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35847,6 +36353,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35905,6 +36412,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -35950,6 +36458,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36022,6 +36531,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36080,6 +36590,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36138,6 +36649,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36183,6 +36695,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36228,6 +36741,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36273,6 +36787,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36371,6 +36886,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36429,6 +36945,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36474,6 +36991,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36519,6 +37037,7 @@ static REDISJSON_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36581,6 +37100,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -36837,6 +37357,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37027,6 +37548,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37257,6 +37779,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37537,6 +38060,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37674,6 +38198,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37732,6 +38257,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37777,6 +38303,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37822,6 +38349,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -37959,6 +38487,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -38004,6 +38533,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -38076,6 +38606,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -38267,6 +38798,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -38904,6 +39436,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -39541,6 +40074,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -39652,6 +40186,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40077,6 +40612,7 @@ static REDISTIMESERIES_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: None,
         command_flags: None,
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40598,6 +41134,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-5),
         command_flags: Some(&["WRITE", "DENYOOM"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40828,6 +41365,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40860,6 +41398,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40892,6 +41431,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40950,6 +41490,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -40995,6 +41536,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(2),
         command_flags: Some(&["READONLY", "FAST"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41027,6 +41569,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41072,6 +41615,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-3),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41130,6 +41674,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-2),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41175,6 +41720,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41246,6 +41792,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(3),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41291,6 +41838,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(4),
         command_flags: Some(&["WRITE"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[
@@ -41349,6 +41897,7 @@ static VECTORSETS_COMMANDS: &[UpstreamCommand] = &[
         replaced_by: None,
         arity: Some(-4),
         command_flags: Some(&["READONLY"]),
+        acl_categories: &[],
         command_tips: &[],
         key_specs: None,
         arguments: &[

@@ -335,6 +335,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -376,6 +379,9 @@
       "arity": 1,
       "command_flags": [
         "FAST"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ]
     },
     {
@@ -393,6 +399,9 @@
         "NO_AUTH",
         "SENTINEL",
         "ALLOW_BUSY"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ],
       "arguments": [
         {
@@ -463,6 +472,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "BITMAP"
       ],
       "key_specs": [
         {
@@ -541,6 +553,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "BITMAP"
       ],
       "key_specs": [
         {
@@ -680,6 +695,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "BITMAP"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -736,6 +754,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "BITMAP"
       ],
       "key_specs": [
         {
@@ -845,6 +866,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "BITMAP"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -934,6 +958,9 @@
         "WRITE",
         "DENYOOM",
         "BLOCKING"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -1034,6 +1061,9 @@
         "WRITE",
         "BLOCKING"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -1105,6 +1135,9 @@
         "WRITE",
         "BLOCKING"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -1155,6 +1188,9 @@
       "command_flags": [
         "WRITE",
         "BLOCKING"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -1207,6 +1243,9 @@
         "WRITE",
         "DENYOOM",
         "BLOCKING"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -1286,6 +1325,9 @@
         "WRITE",
         "BLOCKING"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -1358,6 +1400,9 @@
         "FAST",
         "BLOCKING"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -1409,6 +1454,9 @@
         "WRITE",
         "FAST",
         "BLOCKING"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -1466,6 +1514,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "arguments": [
             {
               "name": "mode",
@@ -1497,6 +1548,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -1511,6 +1565,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -1524,6 +1581,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -1538,6 +1598,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -1552,6 +1615,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
@@ -1570,6 +1636,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "arguments": [
             {
@@ -1722,6 +1791,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
           ],
@@ -1817,6 +1889,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "arguments": [
             {
               "name": "enabled",
@@ -1847,6 +1922,9 @@
             "NOSCRIPT",
             "LOADING",
             "STALE"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "arguments": [
             {
@@ -1880,6 +1958,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "arguments": [
             {
@@ -1925,6 +2006,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "arguments": [
             {
               "name": "action",
@@ -1962,6 +2046,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "command_tips": [
             "REQUEST_POLICY:ALL_NODES",
             "RESPONSE_POLICY:ALL_SUCCEEDED"
@@ -1998,6 +2085,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "command_tips": [
             "REQUEST_POLICY:ALL_NODES",
             "RESPONSE_POLICY:ALL_SUCCEEDED"
@@ -2021,6 +2111,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "arguments": [
             {
@@ -2091,6 +2184,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -2106,6 +2202,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "arguments": [
             {
@@ -2144,6 +2243,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         }
       ],
@@ -3026,6 +3128,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -3039,6 +3144,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -3063,6 +3171,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "arguments": [
             {
@@ -3089,6 +3200,9 @@
             "STALE",
             "SENTINEL"
           ],
+          "acl_categories": [
+            "CONNECTION"
+          ],
           "arguments": [
             {
               "name": "command",
@@ -3113,6 +3227,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ]
         },
         {
@@ -3126,6 +3243,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -3156,6 +3276,9 @@
             "LOADING",
             "STALE",
             "SENTINEL"
+          ],
+          "acl_categories": [
+            "CONNECTION"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -3196,6 +3319,9 @@
         "LOADING",
         "STALE",
         "SENTINEL"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -3338,6 +3464,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -3412,6 +3541,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
         "RESPONSE_POLICY:AGG_SUM"
@@ -3446,6 +3578,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -3487,6 +3622,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -3531,6 +3669,9 @@
       "command_flags": [
         "WRITE"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD",
         "RESPONSE_POLICY:AGG_SUM"
@@ -3574,6 +3715,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -3642,6 +3786,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -3683,6 +3830,9 @@
         "STALE",
         "FAST",
         "ALLOW_BUSY"
+      ],
+      "acl_categories": [
+        "TRANSACTION"
       ]
     },
     {
@@ -3694,6 +3844,9 @@
       "arity": 2,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -3738,6 +3891,9 @@
         "STALE",
         "FAST"
       ],
+      "acl_categories": [
+        "CONNECTION"
+      ],
       "arguments": [
         {
           "name": "message",
@@ -3758,6 +3914,9 @@
         "MAY_REPLICATE",
         "NO_MANDATORY_KEYS",
         "STALE"
+      ],
+      "acl_categories": [
+        "SCRIPTING"
       ],
       "key_specs": [
         {
@@ -3819,6 +3978,9 @@
         "NO_MANDATORY_KEYS",
         "STALE"
       ],
+      "acl_categories": [
+        "SCRIPTING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -3878,6 +4040,9 @@
         "STALE",
         "READONLY"
       ],
+      "acl_categories": [
+        "SCRIPTING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -3936,6 +4101,9 @@
         "STALE",
         "READONLY"
       ],
+      "acl_categories": [
+        "SCRIPTING"
+      ],
       "key_specs": [
         {
           "notes": "We cannot tell how the keys will be used so we assume the worst, RO and ACCESS",
@@ -3993,6 +4161,9 @@
         "LOADING",
         "STALE",
         "SKIP_SLOWLOG"
+      ],
+      "acl_categories": [
+        "TRANSACTION"
       ]
     },
     {
@@ -4005,6 +4176,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD",
@@ -4054,6 +4228,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "key_specs": [
         {
@@ -4132,6 +4309,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -4208,6 +4388,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "key_specs": [
         {
@@ -4300,6 +4483,9 @@
         "NO_MANDATORY_KEYS",
         "STALE"
       ],
+      "acl_categories": [
+        "SCRIPTING"
+      ],
       "key_specs": [
         {
           "notes": "We cannot tell how the keys will be used so we assume the worst, RW and UPDATE",
@@ -4360,6 +4546,9 @@
         "STALE",
         "READONLY"
       ],
+      "acl_categories": [
+        "SCRIPTING"
+      ],
       "key_specs": [
         {
           "notes": "We cannot tell how the keys will be used so we assume the worst, RO and ACCESS",
@@ -4415,6 +4604,10 @@
       "command_flags": [
         "WRITE"
       ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
+      ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
         "RESPONSE_POLICY:ALL_SUCCEEDED"
@@ -4460,6 +4653,10 @@
       "arity": -1,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
       ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
@@ -4511,6 +4708,9 @@
             "NOSCRIPT",
             "WRITE"
           ],
+          "acl_categories": [
+            "SCRIPTING"
+          ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
             "RESPONSE_POLICY:ALL_SUCCEEDED"
@@ -4531,6 +4731,9 @@
           "arity": 2,
           "command_flags": [
             "NOSCRIPT"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ]
         },
         {
@@ -4543,6 +4746,9 @@
           "command_flags": [
             "NOSCRIPT",
             "WRITE"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
@@ -4578,6 +4784,9 @@
           "command_flags": [
             "LOADING",
             "STALE"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ]
         },
         {
@@ -4590,6 +4799,9 @@
           "command_flags": [
             "NOSCRIPT",
             "ALLOW_BUSY"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
@@ -4605,6 +4817,9 @@
           "arity": -2,
           "command_flags": [
             "NOSCRIPT"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -4636,6 +4851,9 @@
             "WRITE",
             "DENYOOM"
           ],
+          "acl_categories": [
+            "SCRIPTING"
+          ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
             "RESPONSE_POLICY:ALL_SUCCEEDED"
@@ -4664,6 +4882,9 @@
             "NOSCRIPT",
             "WRITE",
             "DENYOOM"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
@@ -4709,6 +4930,9 @@
             "NOSCRIPT",
             "ALLOW_BUSY"
           ],
+          "acl_categories": [
+            "SCRIPTING"
+          ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT",
             "REQUEST_POLICY:ALL_SHARDS",
@@ -4732,6 +4956,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "GEO"
       ],
       "key_specs": [
         {
@@ -4821,6 +5048,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "GEO"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -4894,6 +5124,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "GEO"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -4937,6 +5170,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "GEO"
       ],
       "key_specs": [
         {
@@ -4982,6 +5218,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "GEO"
       ],
       "key_specs": [
         {
@@ -5188,6 +5427,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "GEO"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -5387,6 +5629,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "GEO"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -5526,6 +5771,9 @@
       "arity": -6,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "GEO"
       ],
       "key_specs": [
         {
@@ -5671,6 +5919,9 @@
       "arity": -7,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "GEO"
       ],
       "key_specs": [
         {
@@ -5879,6 +6130,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "GEO"
       ],
       "key_specs": [
         {
@@ -6099,6 +6353,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6137,6 +6394,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "BITMAP"
       ],
       "key_specs": [
         {
@@ -6181,6 +6441,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6220,6 +6483,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -6293,6 +6559,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6340,6 +6609,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -6389,6 +6661,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -6445,6 +6720,9 @@
         "SENTINEL",
         "ALLOW_BUSY"
       ],
+      "acl_categories": [
+        "CONNECTION"
+      ],
       "arguments": [
         {
           "name": "arguments",
@@ -6498,6 +6776,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6539,6 +6820,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -6627,6 +6911,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6714,6 +7001,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6770,6 +7060,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -6812,6 +7105,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
@@ -6853,6 +7149,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -6910,6 +7209,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -7002,6 +7304,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7051,6 +7356,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7098,6 +7406,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
@@ -7140,6 +7451,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7177,6 +7491,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -7222,6 +7539,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -7427,6 +7747,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7482,6 +7805,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -7570,6 +7896,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7657,6 +7986,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7712,6 +8044,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -7771,6 +8106,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
       ],
@@ -7828,6 +8166,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -7894,6 +8235,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -7954,6 +8298,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "key_specs": [
         {
@@ -8070,6 +8417,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8117,6 +8467,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8158,6 +8511,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "HASH"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -8217,6 +8573,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "HASH"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
@@ -8260,6 +8619,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8300,6 +8662,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -8346,6 +8711,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8391,6 +8759,9 @@
         "STALE",
         "SENTINEL"
       ],
+      "acl_categories": [
+        "DANGEROUS"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT",
         "REQUEST_POLICY:ALL_SHARDS",
@@ -8421,6 +8792,10 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
+      ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
         "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -8443,6 +8818,10 @@
         "LOADING",
         "STALE",
         "FAST"
+      ],
+      "acl_categories": [
+        "ADMIN",
+        "DANGEROUS"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -8621,6 +9000,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8688,6 +9070,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8730,6 +9115,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -8794,6 +9182,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -8831,6 +9222,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -8926,6 +9320,9 @@
       "command_flags": [
         "WRITE"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9013,6 +9410,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9063,6 +9463,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -9126,6 +9529,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9177,6 +9583,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9226,6 +9635,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9271,6 +9683,9 @@
       "arity": 4,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -9319,6 +9734,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9364,6 +9782,9 @@
       "arity": 4,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -9528,6 +9949,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD"
       ],
@@ -9569,6 +9993,10 @@
       "arity": -6,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -9876,6 +10304,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -9919,6 +10350,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD",
@@ -9973,6 +10407,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD",
@@ -10081,6 +10518,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -10133,6 +10573,9 @@
         "STALE",
         "FAST",
         "ALLOW_BUSY"
+      ],
+      "acl_categories": [
+        "TRANSACTION"
       ]
     },
     {
@@ -10147,6 +10590,9 @@
           "arity": 3,
           "command_flags": [
             "READONLY"
+          ],
+          "acl_categories": [
+            "KEYSPACE"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
@@ -10188,6 +10634,9 @@
           "command_flags": [
             "READONLY"
           ],
+          "acl_categories": [
+            "KEYSPACE"
+          ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
           ],
@@ -10228,6 +10677,9 @@
           "command_flags": [
             "LOADING",
             "STALE"
+          ],
+          "acl_categories": [
+            "KEYSPACE"
           ]
         },
         {
@@ -10239,6 +10691,9 @@
           "arity": 3,
           "command_flags": [
             "READONLY"
+          ],
+          "acl_categories": [
+            "KEYSPACE"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
@@ -10279,6 +10734,9 @@
           "arity": 3,
           "command_flags": [
             "READONLY"
+          ],
+          "acl_categories": [
+            "KEYSPACE"
           ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
@@ -10328,6 +10786,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -10366,6 +10827,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "key_specs": [
         {
@@ -10444,6 +10908,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -10521,6 +10988,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -10560,6 +11030,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "HYPERLOGLOG"
       ],
       "key_specs": [
         {
@@ -10606,6 +11079,9 @@
         "READONLY",
         "MAY_REPLICATE"
       ],
+      "acl_categories": [
+        "HYPERLOGLOG"
+      ],
       "key_specs": [
         {
           "notes": "RW because it may change the internal representation of the key, and propagate to replicas",
@@ -10647,6 +11123,9 @@
         "WRITE",
         "DENYOOM",
         "ADMIN"
+      ],
+      "acl_categories": [
+        "HYPERLOGLOG"
       ],
       "key_specs": [
         {
@@ -10693,6 +11172,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "HYPERLOGLOG"
       ],
       "key_specs": [
         {
@@ -10758,6 +11240,9 @@
       "command_flags": [
         "ADMIN"
       ],
+      "acl_categories": [
+        "HYPERLOGLOG"
+      ],
       "doc_flags": [
         "SYSCMD"
       ]
@@ -10772,6 +11257,9 @@
       "command_flags": [
         "FAST",
         "SENTINEL"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
@@ -10795,6 +11283,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -10893,6 +11384,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -11112,6 +11606,9 @@
         "FAST",
         "NO_AUTH"
       ],
+      "acl_categories": [
+        "CONNECTION"
+      ],
       "doc_flags": [
         "DEPRECATED"
       ],
@@ -11128,6 +11625,9 @@
       "command_flags": [
         "READONLY",
         "TOUCHES_ARBITRARY_KEYS"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
@@ -11146,6 +11646,9 @@
         "FAST",
         "LOADING",
         "STALE"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ]
     },
     {
@@ -11159,6 +11662,9 @@
         "FAST",
         "LOADING",
         "STALE"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ]
     },
     {
@@ -11170,6 +11676,9 @@
       "arity": 3,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "key_specs": [
         {
@@ -11234,6 +11743,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "key_specs": [
         {
@@ -11377,6 +11889,9 @@
         "FAST",
         "NO_AUTH",
         "ALLOW_BUSY"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ]
     },
     {
@@ -11389,6 +11904,10 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
       ],
       "key_specs": [
         {
@@ -11479,6 +11998,10 @@
         "WRITE",
         "DENYOOM",
         "ASKING"
+      ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
       ],
       "key_specs": [
         {
@@ -11574,6 +12097,10 @@
         "STALE",
         "FAST",
         "SENTINEL"
+      ],
+      "acl_categories": [
+        "ADMIN",
+        "DANGEROUS"
       ]
     },
     {
@@ -11586,6 +12113,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -11638,6 +12168,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "LIST"
       ],
       "key_specs": [
         {
@@ -11708,6 +12241,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -11759,6 +12295,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "LIST"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -11809,6 +12348,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -11874,6 +12416,9 @@
         "READONLY",
         "TOUCHES_ARBITRARY_KEYS"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT",
         "REQUEST_POLICY:SPECIAL",
@@ -11922,6 +12467,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -11962,6 +12510,9 @@
           "command_flags": [
             "NOSCRIPT"
           ],
+          "acl_categories": [
+            "SCRIPTING"
+          ],
           "arguments": [
             {
               "name": "mode",
@@ -11996,6 +12547,9 @@
           "command_flags": [
             "NOSCRIPT"
           ],
+          "acl_categories": [
+            "SCRIPTING"
+          ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
             "RESPONSE_POLICY:AGG_LOGICAL_AND"
@@ -12017,6 +12571,9 @@
           "arity": -2,
           "command_flags": [
             "NOSCRIPT"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "REQUEST_POLICY:ALL_NODES",
@@ -12059,6 +12616,9 @@
           "command_flags": [
             "LOADING",
             "STALE"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ]
         },
         {
@@ -12071,6 +12631,9 @@
           "command_flags": [
             "NOSCRIPT",
             "ALLOW_BUSY"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",
@@ -12087,6 +12650,9 @@
           "command_flags": [
             "NOSCRIPT",
             "STALE"
+          ],
+          "acl_categories": [
+            "SCRIPTING"
           ],
           "command_tips": [
             "REQUEST_POLICY:ALL_NODES",
@@ -12115,6 +12681,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
@@ -12158,6 +12727,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -12222,6 +12794,9 @@
         "LOADING",
         "STALE",
         "FAST"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ],
       "arguments": [
         {
@@ -12729,6 +13304,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "notes": "RW and ACCESS due to the optional `GET` argument",
@@ -12883,6 +13461,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "BITMAP"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -12930,6 +13511,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "STRING"
       ],
       "key_specs": [
         {
@@ -12984,6 +13568,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -13032,6 +13619,9 @@
         "WRITE",
         "DENYOOM"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -13078,6 +13668,10 @@
       "command_flags": [
         "WRITE",
         "EXPERIMENTAL"
+      ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
       ],
       "command_tips": [],
       "arguments": [
@@ -13188,6 +13782,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
@@ -13229,6 +13826,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -13279,6 +13879,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -13342,6 +13945,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -13528,6 +14134,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
@@ -13569,6 +14178,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -13613,6 +14225,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -13680,6 +14295,12 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SET",
+        "SORTEDSET",
+        "LIST",
+        "DANGEROUS"
       ],
       "key_specs": [
         {
@@ -13809,6 +14430,12 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SET",
+        "SORTEDSET",
+        "LIST",
+        "DANGEROUS"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -13918,6 +14545,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
       ],
@@ -14016,6 +14646,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
       ],
@@ -14070,6 +14703,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -14118,6 +14754,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -14217,6 +14856,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -14277,6 +14919,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "STRING"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -14328,6 +14973,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SET"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT_ORDER"
       ],
@@ -14370,6 +15018,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SET"
       ],
       "key_specs": [
         {
@@ -14475,6 +15126,10 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
+      ],
       "arguments": [
         {
           "name": "index1",
@@ -14527,6 +15182,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD",
         "RESPONSE_POLICY:AGG_SUM"
@@ -14569,6 +15227,10 @@
       "command_flags": [
         "WRITE"
       ],
+      "acl_categories": [
+        "KEYSPACE",
+        "DANGEROUS"
+      ],
       "arguments": [
         {
           "name": "ranges",
@@ -14608,6 +15270,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -14657,6 +15322,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "KEYSPACE"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -14694,6 +15362,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "KEYSPACE"
       ],
       "command_tips": [
         "REQUEST_POLICY:MULTI_SHARD",
@@ -14764,6 +15435,9 @@
         "STALE",
         "FAST",
         "ALLOW_BUSY"
+      ],
+      "acl_categories": [
+        "TRANSACTION"
       ]
     },
     {
@@ -14775,6 +15449,9 @@
       "arity": 3,
       "command_flags": [
         "BLOCKING"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
@@ -14800,6 +15477,9 @@
       "arity": 4,
       "command_flags": [
         "BLOCKING"
+      ],
+      "acl_categories": [
+        "CONNECTION"
       ],
       "command_tips": [
         "REQUEST_POLICY:ALL_SHARDS",
@@ -14833,6 +15513,9 @@
         "STALE",
         "FAST",
         "ALLOW_BUSY"
+      ],
+      "acl_categories": [
+        "TRANSACTION"
       ],
       "key_specs": [
         {
@@ -14872,6 +15555,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "key_specs": [
         {
@@ -14920,6 +15606,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "key_specs": [
         {
@@ -15003,6 +15692,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -15216,6 +15908,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "STREAM"
+      ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
       ],
@@ -15292,6 +15987,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "STREAM"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -15362,6 +16060,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -15458,6 +16159,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "STREAM"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -15501,6 +16205,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "key_specs": [
         {
@@ -15582,6 +16289,9 @@
             "WRITE",
             "DENYOOM"
           ],
+          "acl_categories": [
+            "STREAM"
+          ],
           "key_specs": [
             {
               "flags": [
@@ -15659,6 +16369,9 @@
             "WRITE",
             "DENYOOM"
           ],
+          "acl_categories": [
+            "STREAM"
+          ],
           "key_specs": [
             {
               "flags": [
@@ -15704,6 +16417,9 @@
           "arity": 5,
           "command_flags": [
             "WRITE"
+          ],
+          "acl_categories": [
+            "STREAM"
           ],
           "key_specs": [
             {
@@ -15751,6 +16467,9 @@
           "command_flags": [
             "WRITE"
           ],
+          "acl_categories": [
+            "STREAM"
+          ],
           "key_specs": [
             {
               "flags": [
@@ -15793,6 +16512,9 @@
           "command_flags": [
             "LOADING",
             "STALE"
+          ],
+          "acl_categories": [
+            "STREAM"
           ]
         },
         {
@@ -15804,6 +16526,9 @@
           "arity": -5,
           "command_flags": [
             "WRITE"
+          ],
+          "acl_categories": [
+            "STREAM"
           ],
           "key_specs": [
             {
@@ -15885,6 +16610,9 @@
           "command_flags": [
             "READONLY"
           ],
+          "acl_categories": [
+            "STREAM"
+          ],
           "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
           ],
@@ -15936,6 +16664,9 @@
           "command_flags": [
             "READONLY"
           ],
+          "acl_categories": [
+            "STREAM"
+          ],
           "key_specs": [
             {
               "flags": [
@@ -15980,6 +16711,9 @@
           "command_flags": [
             "LOADING",
             "STALE"
+          ],
+          "acl_categories": [
+            "STREAM"
           ]
         },
         {
@@ -15991,6 +16725,9 @@
           "arity": -3,
           "command_flags": [
             "READONLY"
+          ],
+          "acl_categories": [
+            "STREAM"
           ],
           "key_specs": [
             {
@@ -16074,6 +16811,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "STREAM"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -16110,6 +16850,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -16193,6 +16936,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "STREAM"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -16251,6 +16997,9 @@
       "command_flags": [
         "BLOCKING",
         "READONLY"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "key_specs": [
         {
@@ -16316,6 +17065,9 @@
       "command_flags": [
         "BLOCKING",
         "WRITE"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "key_specs": [
         {
@@ -16408,6 +17160,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "STREAM"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -16467,6 +17222,9 @@
         "WRITE",
         "DENYOOM",
         "FAST"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "key_specs": [
         {
@@ -16529,6 +17287,9 @@
       "arity": -4,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "STREAM"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -16656,6 +17417,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -16774,6 +17538,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -16811,6 +17578,9 @@
       "command_flags": [
         "READONLY",
         "FAST"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -16857,6 +17627,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -16907,6 +17680,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -16976,6 +17752,9 @@
         "DENYOOM",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17022,6 +17801,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17102,6 +17884,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17151,6 +17936,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17249,6 +18037,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17294,6 +18085,9 @@
       "arity": -4,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17362,6 +18156,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17405,6 +18202,9 @@
       "command_flags": [
         "WRITE",
         "FAST"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17451,6 +18251,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17494,6 +18297,9 @@
       "arity": -2,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -17552,6 +18358,9 @@
       "arity": -4,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17653,6 +18462,9 @@
       "command_flags": [
         "READONLY"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17719,6 +18531,9 @@
       "arity": -4,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17800,6 +18615,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -17910,6 +18728,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -17965,6 +18786,9 @@
         "WRITE",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -18014,6 +18838,9 @@
       "command_flags": [
         "WRITE"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -18059,6 +18886,9 @@
       "arity": 4,
       "command_flags": [
         "WRITE"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -18106,6 +18936,9 @@
       "command_flags": [
         "WRITE"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -18151,6 +18984,9 @@
       "arity": -4,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -18208,6 +19044,9 @@
       "arity": -4,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -18275,6 +19114,9 @@
       "arity": -4,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -18356,6 +19198,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -18409,6 +19254,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "command_tips": [
         "NONDETERMINISTIC_OUTPUT"
@@ -18468,6 +19316,9 @@
         "READONLY",
         "FAST"
       ],
+      "acl_categories": [
+        "SORTEDSET"
+      ],
       "key_specs": [
         {
           "flags": [
@@ -18509,6 +19360,9 @@
       "arity": -3,
       "command_flags": [
         "READONLY"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
@@ -18589,6 +19443,9 @@
       "command_flags": [
         "WRITE",
         "DENYOOM"
+      ],
+      "acl_categories": [
+        "SORTEDSET"
       ],
       "key_specs": [
         {
