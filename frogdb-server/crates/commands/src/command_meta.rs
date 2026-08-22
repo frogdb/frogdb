@@ -20,10 +20,11 @@
 //! a judgment, never the answer. [`TIP_AUDIT`] records the judgment per command.
 
 use bytes::Bytes;
-use frogdb_core::{AccessSpec, Arity, CommandFlags, CommandSpec, KeyAccessFlag};
+use frogdb_core::command_spec::{admin_surface, container_subcommands};
+use frogdb_core::{AccessSpec, Arity, CommandFlags, CommandSpec, KeyAccessFlag, SubcommandSpec};
 use frogdb_protocol::{Response, SafeStatus};
 
-use crate::upstream::{self, BeginSearch, FindKeys, UpstreamArg, UpstreamKeySpec};
+use crate::upstream::{self, BeginSearch, FindKeys, UpstreamArg, UpstreamCommand, UpstreamKeySpec};
 
 fn field(name: &'static str) -> Response {
     Response::bulk(Bytes::from_static(name.as_bytes()))
@@ -57,10 +58,81 @@ pub fn build_command_info(spec: &CommandSpec) -> Response {
         Response::Array(command_info_categories(spec.name)),
         Response::Array(command_info_tips(spec.name)),
         Response::Array(command_info_key_specs(spec)),
-        // Subcommands: no structured per-subcommand registry exists yet, so an
-        // empty array is what we can say truthfully.
+        Response::Array(subcommand_infos(spec)),
+    ])
+}
+
+/// The nested `COMMAND INFO` entries a container reports at index 9.
+///
+/// One per declared [`SubcommandSpec`], in the order the registry declares
+/// them; a non-container reports an empty array. Redis nests exactly one level
+/// deep, so these entries never nest further.
+fn subcommand_infos(spec: &CommandSpec) -> Vec<Response> {
+    container_subcommands(spec.name)
+        .unwrap_or_default()
+        .iter()
+        .map(|row| subcommand_info(spec, row))
+        .collect()
+}
+
+/// One container subcommand's `COMMAND INFO` entry, in the same 10-element
+/// shape as a top-level command and named `container|sub`.
+///
+/// Arity, flags and the key positions come from the [`SubcommandSpec`] — they
+/// are claims about what FrogDB accepts and does. The structured key specs come
+/// from the vendored row when there is one, exactly as for a top-level command.
+/// ACL categories are the container's: FrogDB's ACL engine gates the container,
+/// so reporting anything narrower per subcommand would describe a gate that
+/// does not exist.
+fn subcommand_info(spec: &CommandSpec, row: &SubcommandSpec) -> Response {
+    let vendored = upstream::subcommand(spec.name, row.name);
+    let (first_key, last_key, key_step, _) = row.keys.command_info_triplet();
+    Response::Array(vec![
+        Response::bulk(Bytes::from(format!(
+            "{}|{}",
+            spec.name.to_lowercase(),
+            row.name.to_lowercase()
+        ))),
+        Response::Integer(command_info_arity(row.arity)),
+        Response::Array(subcommand_flags(spec, row)),
+        Response::Integer(first_key),
+        Response::Integer(last_key),
+        Response::Integer(key_step),
+        Response::Array(command_info_categories(spec.name)),
+        // Tips are an audited per-command judgment (see `TIP_AUDIT`); none has
+        // been made per subcommand, and inventing one would be a routing
+        // promise nobody checked.
+        Response::Array(vec![]),
+        Response::Array(subcommand_key_specs(row, vendored)),
         Response::Array(vec![]),
     ])
+}
+
+/// A subcommand's wire flags: the container's declaration with the row's
+/// access/admission class laid over it, plus the `admin` mark resolved through
+/// [`admin_surface`] — the single place FrogDB decides whether an invocation is
+/// admin-only, so a container with a split surface reports `admin` on exactly
+/// the half it refuses on a plain client port.
+fn subcommand_flags(spec: &CommandSpec, row: &SubcommandSpec) -> Vec<Response> {
+    let mut flags = row.flags_over(spec.flags);
+    if admin_surface(spec.name, spec.flags).requires_admin(Some(row.name)) {
+        flags.insert(CommandFlags::ADMIN);
+    } else {
+        flags.remove(CommandFlags::ADMIN);
+    }
+    wire_flags(flags)
+}
+
+/// Structured key specs for one subcommand: the vendored row's where it has
+/// them, otherwise derived from the row's own [`frogdb_core::KeySpec`].
+fn subcommand_key_specs(
+    row: &SubcommandSpec,
+    vendored: Option<&'static UpstreamCommand>,
+) -> Vec<Response> {
+    match vendored.and_then(|cmd| cmd.key_specs) {
+        Some(specs) if !specs.is_empty() => specs.iter().map(upstream_key_spec_reply).collect(),
+        _ => derived_key_specs_from(row.keys, row.flags.contains(CommandFlags::WRITE)),
+    }
 }
 
 /// The legacy `first_key`/`last_key`/`key_step` triplet `COMMAND INFO` reports
@@ -160,7 +232,11 @@ pub const EXTENSION_FLAGS: &[(&str, &str)] = &[(
 /// Only flags this registry actually tracks are emitted; flags Redis has but
 /// FrogDB's `CommandFlags` does not model are never fabricated.
 pub fn command_info_flags(spec: &CommandSpec) -> Vec<Response> {
-    let flags = effective_flags(spec);
+    wire_flags(effective_flags(spec))
+}
+
+/// The wire spelling of one flag set, in Redis's emission order.
+fn wire_flags(flags: CommandFlags) -> Vec<Response> {
     let mut out: Vec<Response> = WIRE_FLAGS
         .iter()
         .filter(|(bit, _)| flags.contains(*bit))
@@ -467,15 +543,9 @@ fn vendored_key_specs(name: &str) -> Option<&'static [UpstreamKeySpec]> {
     if KEY_SPEC_DIVERGENCES.contains(&name) {
         return None;
     }
-    let cmd = upstream::command(name)?;
-    if cmd.has_subcommands {
-        // Upstream keeps this container's real key specs on the subcommand rows
-        // the vendor step skips, so its empty list means "not vendored here".
-        // FrogDB models the container as one command with its own key spec, and
-        // that is the honest thing to describe.
-        return None;
-    }
-    cmd.key_specs
+    // A container's own list is genuinely empty — upstream keeps the real key
+    // specs on the subcommand rows, which `subcommand_key_specs` reads.
+    upstream::command(name)?.key_specs
 }
 
 /// Structured `COMMAND INFO` key-specs entries.
@@ -595,7 +665,25 @@ fn find_keys_reply(find: FindKeys) -> Response {
 /// per-command `keynum`/`unknown` metadata this registry does not carry, and
 /// inventing it would be a claim we cannot support.
 fn derived_key_specs(spec: &CommandSpec) -> Vec<Response> {
-    let (first_key, last_key, key_step, _) = spec.keys.command_info_triplet();
+    derived_key_specs_with(spec.keys, derived_flags(spec))
+}
+
+/// The same derivation for a container subcommand, whose access class is its
+/// own `WRITE` mark rather than a container-wide [`AccessSpec`].
+fn derived_key_specs_from(keys: frogdb_core::KeySpec, write: bool) -> Vec<Response> {
+    let access: &'static [&'static str] = if write {
+        &["OW", "UPDATE"]
+    } else {
+        &["RO", "ACCESS"]
+    };
+    derived_key_specs_with(keys, access)
+}
+
+fn derived_key_specs_with(
+    keys: frogdb_core::KeySpec,
+    access: &'static [&'static str],
+) -> Vec<Response> {
+    let (first_key, last_key, key_step, _) = keys.command_info_triplet();
     if first_key == 0 {
         return Vec::new();
     }
@@ -607,7 +695,7 @@ fn derived_key_specs(spec: &CommandSpec) -> Vec<Response> {
         last_key - first_key
     };
     vec![Response::Map(vec![
-        (field("flags"), key_spec_flags_reply(derived_flags(spec))),
+        (field("flags"), key_spec_flags_reply(access)),
         (
             field("begin_search"),
             typed_spec(
@@ -678,9 +766,9 @@ fn derived_flags(spec: &CommandSpec) -> &'static [&'static str] {
 /// commands with no vendored row (the module families and the FrogDB-only
 /// verbs) simply omit them.
 ///
-/// `module` and `subcommands` are never emitted: FrogDB implements the
-/// extension families natively rather than loading them as modules, and no
-/// structured per-subcommand registry exists.
+/// `module` is never emitted: FrogDB implements the extension families
+/// natively rather than loading them as modules. `subcommands` is emitted for
+/// containers, one nested docs map per declared [`SubcommandSpec`].
 pub fn build_command_docs(spec: &CommandSpec) -> Response {
     let mut fields = vec![
         (field("summary"), text(spec.docs.summary)),
@@ -693,6 +781,79 @@ pub fn build_command_docs(spec: &CommandSpec) -> Response {
     let Some(cmd) = upstream::command(spec.name) else {
         return Response::Map(fields);
     };
+    if !cmd.doc_flags.is_empty() {
+        fields.push((
+            field("doc_flags"),
+            Response::Array(
+                cmd.doc_flags
+                    .iter()
+                    .map(|flag| Response::Simple(SafeStatus::sanitized(flag.to_lowercase())))
+                    .collect(),
+            ),
+        ));
+    }
+    if let Some(since) = cmd.deprecated_since {
+        fields.push((field("deprecated_since"), text(since)));
+    }
+    if let Some(replaced_by) = cmd.replaced_by {
+        fields.push((field("replaced_by"), text(replaced_by)));
+    }
+    if !cmd.history.is_empty() {
+        fields.push((
+            field("history"),
+            Response::Array(
+                cmd.history
+                    .iter()
+                    .map(|entry| Response::Array(vec![text(entry.version), text(entry.change)]))
+                    .collect(),
+            ),
+        ));
+    }
+    if !cmd.arguments.is_empty() {
+        fields.push((field("arguments"), arguments_reply(cmd.arguments)));
+    }
+    let subcommands = subcommand_docs(spec);
+    if !subcommands.is_empty() {
+        fields.push((field("subcommands"), Response::Map(subcommands)));
+    }
+    Response::Map(fields)
+}
+
+/// The nested `subcommands` map a container reports in `COMMAND DOCS`, keyed
+/// `container|sub`.
+///
+/// Only the subcommands with a vendored upstream row get an entry: the rest of
+/// a docs map is prose — summary, argument grammar, version history — and
+/// FrogDB has no such prose for the subcommands it adds of its own
+/// (`CLIENT STATS`, `LATENCY BANDS`, `MEMORY MALLOC-SIZE`). Inventing it would
+/// be documentation nobody wrote.
+fn subcommand_docs(spec: &CommandSpec) -> Vec<(Response, Response)> {
+    container_subcommands(spec.name)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| {
+            let cmd = upstream::subcommand(spec.name, row.name)?;
+            let key = Response::bulk(Bytes::from(format!(
+                "{}|{}",
+                spec.name.to_lowercase(),
+                row.name.to_lowercase()
+            )));
+            Some((key, upstream_docs(cmd)))
+        })
+        .collect()
+}
+
+/// One vendored row rendered as a `COMMAND DOCS` map. Field order follows
+/// Redis's `addReplyCommandDocs`.
+fn upstream_docs(cmd: &'static UpstreamCommand) -> Response {
+    let mut fields = vec![
+        (field("summary"), text(cmd.summary)),
+        (field("since"), text(cmd.since)),
+        (field("group"), text(cmd.group)),
+    ];
+    if let Some(complexity) = cmd.complexity {
+        fields.push((field("complexity"), text(complexity)));
+    }
     if !cmd.doc_flags.is_empty() {
         fields.push((
             field("doc_flags"),

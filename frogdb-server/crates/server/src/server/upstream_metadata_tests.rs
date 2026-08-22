@@ -14,6 +14,10 @@
 //! 3. **Arity** — the vendored wire arity must equal what `COMMAND INFO`
 //!    reports for our `CommandSpec`.
 //!
+//! Container commands are gated the same three ways one subcommand at a time,
+//! joining each declared `SubcommandSpec` row to the vendored subcommand row of
+//! the same name — a container's own vendored row carries none of this.
+//!
 //! Per ADR-0005 the vendored data never becomes the answer FrogDB gives; it is
 //! only the thing our real behavior is checked against. Every divergence is
 //! either fixed or written down as a named exemption with a reason, and a
@@ -434,10 +438,14 @@ fn vendored_key_specs_agree_with_key_extraction() {
             // cannot support.
             continue;
         };
-        if cmd.has_subcommands {
-            // Upstream declares this container's real key specs on subcommand
-            // rows the vendor step skips, so its empty spec list means
-            // "not vendored here", not "takes no keys".
+        if cmd.has_subcommands() {
+            // Upstream declares a container's real key specs on its subcommand
+            // rows, so the container's own empty spec list means "described
+            // there", not "takes no keys" — and the argv this loop synthesizes
+            // (`OBJECT k1 k2 ...`) names no subcommand, so it is a shape the
+            // container rejects rather than extracts keys from. The rows are
+            // checked instead, one resolved subcommand at a time, by
+            // `vendored_subcommand_key_specs_agree_with_key_extraction`.
             continue;
         }
         let needs_keyword_argv = specs
@@ -548,27 +556,12 @@ fn every_keyword_argv_entry_is_live() {
 
 /// Commands whose wire arity deliberately differs from upstream's, each with
 /// the reason. Stale entries fail, same discipline as the key-spec list.
-const ARITY_EXEMPTIONS: &[(&str, &str)] = &[
-    (
-        "PSYNC",
-        "upstream's -3 admits the trailing options Redis 8 added (FAILOVER); \
+const ARITY_EXEMPTIONS: &[(&str, &str)] = &[(
+    "PSYNC",
+    "upstream's -3 admits the trailing options Redis 8 added (FAILOVER); \
          FrogDB's handshake accepts exactly `PSYNC <replid> <offset>` and rejects \
          anything longer, so `Fixed(2)` is the honest arity for what it implements",
-    ),
-    (
-        "XGROUP",
-        "upstream's -2 admits `XGROUP HELP` because upstream keeps its key specs on \
-         the subcommand rows; FrogDB models the container as one command with a key \
-         at index 1, and `CommandSpec::validate` requires the arity minimum to cover \
-         that index, so bare `XGROUP HELP` is rejected",
-    ),
-    (
-        "XINFO",
-        "same container shape as XGROUP: FrogDB's key-at-index-1 model forces \
-         `AtLeast(2)` where upstream's subcommand-level key specs let the container \
-         itself be -2",
-    ),
-];
+)];
 
 #[test]
 fn vendored_arity_agrees_with_spec_arity() {
@@ -868,4 +861,432 @@ fn key_spec_divergences_match_the_emitter_bypass() {
          (the emitter) disagree; they describe the same set of commands whose \
          vendored key specs do not describe FrogDB"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Container subcommands
+// ---------------------------------------------------------------------------
+//
+// A container's real surface — arity, flags, key positions — is per subcommand
+// on both sides: upstream keeps it on the subcommand rows vendored alongside
+// the container, FrogDB keeps it in `CONTAINER_SUBCOMMANDS`. The three gates
+// above are repeated here one resolved subcommand at a time, against the same
+// vendored data and the same real dispatch.
+
+/// Subcommands FrogDB declares on an otherwise-upstream container that upstream
+/// has no row for, spelled `CONTAINER|SUB` in full — no prefixes, no wildcards,
+/// same discipline as `frogdb_only_commands()`. A stale entry (upstream grew
+/// the subcommand, or FrogDB dropped it) fails.
+const SUBCOMMAND_EXTENSIONS: &[(&str, &str)] = &[
+    (
+        "CLIENT|STATS",
+        "FrogDB extension: per-connection command, byte and latency counters, \
+         which Redis exposes only in aggregate through INFO commandstats",
+    ),
+    (
+        "LATENCY|BANDS",
+        "FrogDB extension: inspects and reconfigures the latency-histogram bucket \
+         boundaries, which Redis fixes at compile time",
+    ),
+    (
+        "MEMORY|MALLOC-SIZE",
+        "FrogDB extension: reports the allocator's size class for one value. \
+         Redis 8.6.1 has MEMORY MALLOC-STATS, which is a different question \
+         (allocator-wide statistics) and is not implemented here",
+    ),
+];
+
+/// Subcommands whose emitted flags deliberately differ from upstream's, each
+/// with the reason. Same shrink-only discipline as `FLAG_EXEMPTIONS`.
+///
+/// Every entry here is a *container-level* FrogDB decision that upstream makes
+/// per subcommand. They became visible only with this join: a container's own
+/// vendored row carries no `command_flags` at all, so the whole-command flag
+/// gate skipped all three containers.
+const SUBCOMMAND_FLAG_EXEMPTIONS: &[(&str, &str)] = &[
+    ("HOTKEYS|HELP", WHOLE_ADMIN_HELP),
+    ("LATENCY|HELP", WHOLE_ADMIN_HELP),
+    (
+        "PUBSUB|HELP",
+        "FrogDB gates the whole PUBSUB container as `pubsub` (callable while the \
+         connection is in subscriber mode); upstream clears the bit on HELP alone. \
+         Ours describes what FrogDB accepts — `PUBSUB HELP` really is answered \
+         inside a subscription — and static help text discloses nothing",
+    ),
+    ("SLOWLOG|GET", SLOWLOG_CONTAINER_FLAGS),
+    (
+        "SLOWLOG|HELP",
+        "both of the container-level decisions at once — the whole-command admin \
+         gate (see the HOTKEYS|HELP and LATENCY|HELP entries) and the container's \
+         `fast`/`skip_slowlog` marks (see the SLOWLOG|GET entry)",
+    ),
+    ("SLOWLOG|LEN", SLOWLOG_CONTAINER_FLAGS),
+    ("SLOWLOG|RESET", SLOWLOG_CONTAINER_FLAGS),
+];
+
+/// Shared reason for the three containers FrogDB gates wholly admin, where
+/// upstream leaves `HELP` open.
+const WHOLE_ADMIN_HELP: &str = "FrogDB gates this container with the whole-command admin flag rather than a \
+     `SPLIT_ADMIN_SURFACES` entry, so HELP is admin-only here and open upstream. \
+     The flag is truthful — a plain client port really does refuse it — and \
+     opening HELP means moving the container into the split table, which is an \
+     admin-gate change rather than a metadata one";
+
+/// Shared reason for the SLOWLOG container's `fast`/`skip_slowlog` marks, which
+/// upstream sets on no `SLOWLOG` subcommand.
+const SLOWLOG_CONTAINER_FLAGS: &str = "FrogDB marks the whole SLOWLOG container `fast` and `skip_slowlog`; upstream \
+     sets neither on any SLOWLOG subcommand. `skip_slowlog` is true of FrogDB \
+     (slowlog administration is never itself logged), but `fast` overclaims — \
+     SLOWLOG GET is O(N) in the returned count — and the bit also decides `@fast` \
+     ACL membership, so narrowing it is an ACL-visible change rather than a \
+     metadata one";
+
+/// Subcommands whose vendored key specs deliberately do not describe FrogDB's
+/// key extraction, each with the reason. Same discipline as
+/// `KEY_SPEC_EXEMPTIONS`.
+const SUBCOMMAND_KEY_SPEC_EXEMPTIONS: &[(&str, &str)] = &[(
+    "MEMORY|USAGE",
+    "upstream declares the key at index 2; FrogDB's row declares no key, which is \
+     what it has always done. Declaring it would newly subject MEMORY USAGE to ACL \
+     key permissions and cluster slot redirection — both matching Redis, and both \
+     behavior changes rather than metadata ones",
+)];
+
+/// Every declared subcommand row of every registered container, paired with the
+/// vendored row it joins (`None` for a FrogDB extension), keyed `CONTAINER|SUB`.
+fn subcommand_rows(
+    registry: &CommandRegistry,
+) -> Vec<(
+    String,
+    &'static str,
+    &'static frogdb_core::SubcommandSpec,
+    Option<&'static UpstreamCommand>,
+)> {
+    let mut rows = Vec::new();
+    for container in frogdb_core::subcommand_container_names() {
+        if registry.get_entry(container).is_none() {
+            continue; // family not compiled into this build
+        }
+        for row in frogdb_core::container_subcommands(container).unwrap_or_default() {
+            rows.push((
+                format!("{container}|{}", row.name),
+                container,
+                row,
+                upstream::subcommand(container, row.name),
+            ));
+        }
+    }
+    rows
+}
+
+/// The nested `COMMAND INFO` entries a container reports at index 9, as
+/// `container|sub` name -> (arity, flags). Read out of the real emitter rather
+/// than recomputed, so what these gates check is what clients are told.
+fn emitted_subcommand_info(
+    registry: &CommandRegistry,
+    container: &str,
+) -> BTreeMap<String, (i64, BTreeSet<String>)> {
+    let entry = registry
+        .get_entry(container)
+        .expect("caller checked registration");
+    let frogdb_protocol::Response::Array(info) =
+        frogdb_commands::command_meta::build_command_info(entry.spec())
+    else {
+        panic!("{container}: COMMAND INFO entry is not an array");
+    };
+    let frogdb_protocol::Response::Array(subs) = &info[9] else {
+        panic!("{container}: COMMAND INFO slot 9 is not an array");
+    };
+    subs.iter()
+        .map(|sub| {
+            let frogdb_protocol::Response::Array(fields) = sub else {
+                panic!("{container}: nested subcommand entry is not an array");
+            };
+            let frogdb_protocol::Response::Bulk(Some(name)) = &fields[0] else {
+                panic!("{container}: nested subcommand name is not a bulk string");
+            };
+            let frogdb_protocol::Response::Integer(arity) = fields[1] else {
+                panic!("{container}: nested subcommand arity is not an integer");
+            };
+            let frogdb_protocol::Response::Array(flags) = &fields[2] else {
+                panic!("{container}: nested subcommand flags are not an array");
+            };
+            let flags = flags
+                .iter()
+                .map(|flag| match flag {
+                    frogdb_protocol::Response::Simple(bytes) => {
+                        String::from_utf8_lossy(bytes).into_owned()
+                    }
+                    other => panic!("{container}: expected a Simple flag, got {other:?}"),
+                })
+                .collect();
+            (String::from_utf8_lossy(name).to_uppercase(), (arity, flags))
+        })
+        .collect()
+}
+
+#[test]
+fn every_declared_subcommand_joins_vendored_metadata() {
+    let registry = full_registry();
+    let extensions: BTreeMap<&str, &str> = SUBCOMMAND_EXTENSIONS.iter().copied().collect();
+    let mut declared = BTreeSet::new();
+
+    let missing: Vec<String> = subcommand_rows(&registry)
+        .into_iter()
+        .inspect(|(key, ..)| {
+            declared.insert(key.clone());
+        })
+        .filter(|(key, _, _, vendored)| {
+            vendored.is_none() && !extensions.contains_key(key.as_str())
+        })
+        .map(|(key, ..)| key)
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "declared subcommands with no vendored upstream row: {missing:?}. Either \
+         the vendored snapshots are stale (`just redis-commands-vendor` then \
+         `just command-metadata-gen`), or these are FrogDB extensions that belong \
+         in SUBCOMMAND_EXTENSIONS."
+    );
+
+    for (key, reason) in SUBCOMMAND_EXTENSIONS {
+        let container = key.split('|').next().expect("key is CONTAINER|SUB");
+        if registry.get_entry(container).is_none() {
+            continue; // family not compiled into this build
+        }
+        assert!(
+            declared.contains(*key),
+            "SUBCOMMAND_EXTENSIONS lists {key} (\"{reason}\"), which this build \
+             declares no row for — remove the stale entry"
+        );
+    }
+}
+
+#[test]
+fn vendored_subcommand_arity_agrees_with_emitted_arity() {
+    let registry = full_registry();
+    let mut emitted: BTreeMap<&str, BTreeMap<String, (i64, BTreeSet<String>)>> = BTreeMap::new();
+    let mut checked = 0usize;
+    let mut divergences: Vec<String> = Vec::new();
+
+    for (key, container, _, vendored) in subcommand_rows(&registry) {
+        let Some(vendored) = vendored else {
+            continue; // FrogDB extension: nothing to compare against
+        };
+        let Some(theirs) = vendored.arity else {
+            continue;
+        };
+        let info = emitted
+            .entry(container)
+            .or_insert_with(|| emitted_subcommand_info(&registry, container));
+        let (ours, _) = info
+            .get(&key)
+            .unwrap_or_else(|| panic!("{key} is declared but COMMAND INFO does not nest it"));
+        if i64::from(theirs) != *ours {
+            divergences.push(format!("{key}: upstream {theirs}, frogdb {ours}"));
+        }
+        checked += 1;
+    }
+
+    assert!(
+        divergences.is_empty(),
+        "vendored subcommand arity and FrogDB's nested COMMAND INFO arity disagree \
+         for {} subcommand(s). Fix the SubcommandSpec row.\n{}",
+        divergences.len(),
+        divergences.join("\n")
+    );
+    assert!(
+        checked > 50,
+        "only {checked} subcommands were arity checked — the join looks broken"
+    );
+}
+
+#[test]
+fn vendored_subcommand_flags_agree_with_emitted_flags() {
+    let registry = full_registry();
+    let comparable = comparable_flags();
+    let exemptions: BTreeMap<&str, &str> = SUBCOMMAND_FLAG_EXEMPTIONS.iter().copied().collect();
+    let mut emitted: BTreeMap<&str, BTreeMap<String, (i64, BTreeSet<String>)>> = BTreeMap::new();
+    let mut used_exemptions = BTreeSet::new();
+    let mut checked = 0usize;
+    let mut divergences: Vec<String> = Vec::new();
+
+    for (key, container, _, vendored) in subcommand_rows(&registry) {
+        let Some(vendored) = vendored else {
+            continue; // FrogDB extension: nothing to compare against
+        };
+        let Some(their_flags) = vendored.command_flags else {
+            continue;
+        };
+        let theirs: BTreeSet<String> = their_flags
+            .iter()
+            .map(|flag| flag.to_lowercase())
+            .filter(|flag| comparable.contains(flag.as_str()))
+            .collect();
+        let info = emitted
+            .entry(container)
+            .or_insert_with(|| emitted_subcommand_info(&registry, container));
+        let (_, our_flags) = info
+            .get(&key)
+            .unwrap_or_else(|| panic!("{key} is declared but COMMAND INFO does not nest it"));
+        let ours: BTreeSet<String> = our_flags
+            .iter()
+            .filter(|flag| comparable.contains(flag.as_str()))
+            .cloned()
+            .collect();
+        let agrees = theirs == ours;
+
+        match exemptions.get(key.as_str()) {
+            Some(reason) => {
+                if agrees {
+                    divergences.push(format!(
+                        "{key} is exempt from the subcommand flag check (\"{reason}\") \
+                         but now matches upstream ({theirs:?}) — remove the exemption"
+                    ));
+                }
+                used_exemptions.insert(key.clone());
+            }
+            None => {
+                if !agrees {
+                    let missing: Vec<&String> = theirs.difference(&ours).collect();
+                    let extra: Vec<&String> = ours.difference(&theirs).collect();
+                    divergences.push(format!(
+                        "{key}: upstream-only {missing:?}, frogdb-only {extra:?}"
+                    ));
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        divergences.is_empty(),
+        "vendored subcommand flags and FrogDB's nested COMMAND INFO flags disagree \
+         for {} subcommand(s). Fix the SubcommandSpec row, or add a \
+         SUBCOMMAND_FLAG_EXEMPTIONS entry with a reason.\n{}",
+        divergences.len(),
+        divergences.join("\n")
+    );
+    assert!(
+        checked > 50,
+        "only {checked} subcommands were flag checked — the join looks broken"
+    );
+    for (key, _) in SUBCOMMAND_FLAG_EXEMPTIONS {
+        let container = key.split('|').next().expect("key is CONTAINER|SUB");
+        assert!(
+            used_exemptions.contains(*key) || registry.get_entry(container).is_none(),
+            "SUBCOMMAND_FLAG_EXEMPTIONS lists {key}, which is registered but was \
+             never reached by the check — remove the stale entry"
+        );
+    }
+}
+
+/// The synthetic argv for one subcommand invocation: upstream's subcommand rows
+/// index the *container's* argv (`XGROUP CREATE key group id` puts the key at
+/// index 2), so the argv is built from the subcommand row's own arity and then
+/// has the container and subcommand tokens written into slots 0 and 1.
+fn subcommand_argv(container: &str, vendored: &UpstreamCommand) -> Option<Vec<Bytes>> {
+    let mut argv = synthetic_argv(vendored);
+    if argv.len() < 2 {
+        // `CONTAINER SUB` is the shortest invocation that exists; anything
+        // shorter cannot carry a key for either side to disagree about.
+        return None;
+    }
+    argv[0] = Bytes::from(container.to_string());
+    argv[1] = Bytes::from(vendored.name.to_string());
+    Some(argv)
+}
+
+#[test]
+fn vendored_subcommand_key_specs_agree_with_key_extraction() {
+    let registry = full_registry();
+    let exemptions: BTreeMap<&str, &str> = SUBCOMMAND_KEY_SPEC_EXEMPTIONS.iter().copied().collect();
+    let mut used_exemptions = BTreeSet::new();
+    let mut checked = 0usize;
+    let mut divergences: Vec<String> = Vec::new();
+
+    for (key, container, row, vendored) in subcommand_rows(&registry) {
+        let Some(vendored) = vendored else {
+            continue; // FrogDB extension: nothing to compare against
+        };
+        if vendored.key_specs.is_none() {
+            continue;
+        }
+        let Some(argv) = subcommand_argv(container, vendored) else {
+            continue;
+        };
+        if vendored
+            .key_specs
+            .unwrap_or(&[])
+            .iter()
+            .any(|spec| matches!(spec.begin_search, BeginSearch::Keyword { .. }))
+        {
+            // No container subcommand has a keyword-based key spec today, and a
+            // placeholder argv cannot place the keyword where the grammar wants
+            // it — fail loudly rather than compare against a shape that cannot
+            // occur.
+            panic!(
+                "{key} has a keyword-based key spec; teach this test how to build \
+                 an argv for it (see KEYWORD_ARGV)"
+            );
+        }
+
+        let (expected, incomplete) =
+            upstream_key_indices(vendored, &argv).expect("synthetic argv is valid");
+        let actual = frogdb_key_indices(&registry, container, &argv);
+        let agrees = if incomplete {
+            actual.is_superset(&expected)
+        } else {
+            actual == expected
+        };
+
+        match exemptions.get(key.as_str()) {
+            Some(reason) => {
+                if agrees {
+                    divergences.push(format!(
+                        "{key} is exempt from the subcommand key-spec check \
+                         (\"{reason}\") but now agrees with upstream — remove the \
+                         exemption"
+                    ));
+                }
+                used_exemptions.insert(key.clone());
+            }
+            None => {
+                if !agrees {
+                    divergences.push(format!(
+                        "{key}: upstream {expected:?}{}, frogdb {actual:?} (row {:?}) \
+                         for argv {:?}",
+                        if incomplete { " (lower bound)" } else { "" },
+                        row.keys,
+                        argv.iter()
+                            .map(|a| String::from_utf8_lossy(a).into_owned())
+                            .collect::<Vec<_>>(),
+                    ));
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        divergences.is_empty(),
+        "vendored subcommand key specs and FrogDB key extraction disagree for {} \
+         subcommand(s). Fix the SubcommandSpec row, or add a \
+         SUBCOMMAND_KEY_SPEC_EXEMPTIONS entry with a reason.\n{}",
+        divergences.len(),
+        divergences.join("\n")
+    );
+    assert!(
+        checked > 50,
+        "only {checked} subcommands were key-spec checked — the join looks broken"
+    );
+    for (key, _) in SUBCOMMAND_KEY_SPEC_EXEMPTIONS {
+        let container = key.split('|').next().expect("key is CONTAINER|SUB");
+        assert!(
+            used_exemptions.contains(*key) || registry.get_entry(container).is_none(),
+            "SUBCOMMAND_KEY_SPEC_EXEMPTIONS lists {key}, which is registered but was \
+             never reached by the check — remove the stale entry"
+        );
+    }
 }
