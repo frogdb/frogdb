@@ -41,7 +41,9 @@ static ACL_SPEC: CommandSpec = CommandSpec {
     arity: Arity::AtLeast(1),
     // No whole-command ADMIN — see `SPLIT_ADMIN_SURFACES`; only the
     // self-directed subcommands (WHOAMI/CAT/GENPASS/HELP) are public.
-    flags: CommandFlags::empty(),
+    flags: CommandFlags::NOSCRIPT
+        .union(CommandFlags::LOADING)
+        .union(CommandFlags::STALE),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

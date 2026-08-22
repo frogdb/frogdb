@@ -211,7 +211,7 @@ not_supported_command!(
         complexity: Some("O(1)"),
     },
     Arity::Fixed(0),
-    CommandFlags::ADMIN,
+    CommandFlags::ADMIN.union(CommandFlags::NOSCRIPT),
     "FrogDB has no AOF. WAL compaction is handled automatically by RocksDB."
 );
 

@@ -825,6 +825,12 @@ const PUBSUB_FLAGS: CommandFlags = CommandFlags::PUBSUB
     .union(CommandFlags::LOADING)
     .union(CommandFlags::STALE);
 
+/// The subscribe/unsubscribe family adds `NOSCRIPT`: changing a connection's
+/// subscription state has no meaning for a script, which has no connection of
+/// its own. PUBLISH/SPUBLISH and the PUBSUB container stay script-callable,
+/// exactly as upstream declares them.
+const SUBSCRIBE_FLAGS: CommandFlags = PUBSUB_FLAGS.union(CommandFlags::NOSCRIPT);
+
 static SUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
     "SUBSCRIBE",
     frogdb_core::CommandDocs {
@@ -834,7 +840,7 @@ static SUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
         complexity: Some("O(N) where N is the number of channels to subscribe to."),
     },
     Arity::AtLeast(1),
-    PUBSUB_FLAGS,
+    SUBSCRIBE_FLAGS,
     KeySpec::None,
 );
 static UNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
@@ -846,7 +852,7 @@ static UNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
         complexity: Some("O(N) where N is the number of channels to unsubscribe."),
     },
     Arity::AtLeast(0),
-    PUBSUB_FLAGS,
+    SUBSCRIBE_FLAGS,
     KeySpec::None,
 );
 static PSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
@@ -858,7 +864,7 @@ static PSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
         complexity: Some("O(N) where N is the number of patterns to subscribe to."),
     },
     Arity::AtLeast(1),
-    PUBSUB_FLAGS,
+    SUBSCRIBE_FLAGS,
     KeySpec::None,
 );
 static PUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
@@ -870,7 +876,7 @@ static PUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
         complexity: Some("O(N) where N is the number of patterns to unsubscribe."),
     },
     Arity::AtLeast(0),
-    PUBSUB_FLAGS,
+    SUBSCRIBE_FLAGS,
     KeySpec::None,
 );
 static SSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
@@ -882,7 +888,7 @@ static SSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
         complexity: Some("O(N) where N is the number of shard channels to subscribe to."),
     },
     Arity::AtLeast(1),
-    PUBSUB_FLAGS,
+    SUBSCRIBE_FLAGS,
     KeySpec::All,
 );
 static SUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
@@ -898,7 +904,7 @@ static SUNSUBSCRIBE_SPEC: CommandSpec = pubsub_spec(
     // empty argument list, so the no-arg form is keyless — exactly as upstream's
     // `index: 1, lastkey: -1` spec is over a one-element argv.
     Arity::AtLeast(0),
-    PUBSUB_FLAGS,
+    SUBSCRIBE_FLAGS,
     // Same NOT_KEY shard-channel spec as SSUBSCRIBE: upstream calls these "not
     // keyspace keys" but still slot-routes them through key extraction, and so
     // does FrogDB. Declaring `KeySpec::None` here left unsubscribe the only half

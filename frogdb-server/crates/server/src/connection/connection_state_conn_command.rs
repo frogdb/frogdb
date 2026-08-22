@@ -176,7 +176,7 @@ static ASKING_SPEC: CommandSpec = connection_state_spec(
         complexity: Some("O(1)"),
     },
     Arity::Fixed(0),
-    CommandFlags::FAST.union(CommandFlags::STALE),
+    CommandFlags::FAST,
 );
 
 /// The registrable, `'static` ASKING executor.

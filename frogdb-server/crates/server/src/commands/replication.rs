@@ -606,7 +606,7 @@ impl Command for WaitCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(2),
-            flags: CommandFlags::NOSCRIPT.union(CommandFlags::BLOCKING),
+            flags: CommandFlags::BLOCKING,
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,

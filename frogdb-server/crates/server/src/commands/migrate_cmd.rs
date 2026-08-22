@@ -29,9 +29,7 @@ impl Command for MigrateCommand {
                 ),
             },
             arity: Arity::AtLeast(5),
-            flags: CommandFlags::WRITE
-                .union(CommandFlags::NOSCRIPT)
-                .union(CommandFlags::MOVABLEKEYS),
+            flags: CommandFlags::WRITE.union(CommandFlags::MOVABLEKEYS),
             keys: KeySpec::Dynamic,
             access: AccessSpec::UniformRW,
             wal: WalStrategy::NoOp,

@@ -91,7 +91,10 @@ static MONITOR_SPEC: CommandSpec = CommandSpec {
         complexity: None,
     },
     arity: Arity::Fixed(0),
-    flags: CommandFlags::ADMIN,
+    flags: CommandFlags::ADMIN
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::LOADING)
+        .union(CommandFlags::STALE),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

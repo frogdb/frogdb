@@ -738,19 +738,19 @@ async fn test_eval_ok_status_cannot_inject_a_second_frame() {
 /// Redis's own wording — and must keep working on a plain connection, which is
 /// the whole point of the flag.
 ///
-/// WAIT rather than SUBSCRIBE: the pub/sub family is turned away earlier, by
+/// ROLE rather than SUBSCRIBE: the pub/sub family is turned away earlier, by
 /// the script gate's own `is_forbidden_in_script` table, so it never reaches
-/// the admission chokepoint and would prove nothing about the flag. WAIT is
-/// `NOSCRIPT`-flagged, lives in the shard registry the gate consults, and is
-/// `ExecutionStrategy::Standard`, so the flag is the only thing that can
-/// refuse it.
+/// the admission chokepoint and would prove nothing about the flag. ROLE is
+/// `NOSCRIPT`-flagged (upstream agrees), lives in the shard registry the gate
+/// consults, and is `ExecutionStrategy::Standard`, so the flag is the only
+/// thing that can refuse it.
 #[tokio::test]
 async fn a_noscript_command_is_refused_from_a_script() {
     let server = TestServer::start_standalone().await;
     let mut client = server.connect().await;
 
     let response = client
-        .command(&["EVAL", "return redis.call('WAIT', '0', '0')", "0"])
+        .command(&["EVAL", "return redis.call('ROLE')", "0"])
         .await;
 
     let Response::Error(message) = &response else {
@@ -762,11 +762,11 @@ async fn a_noscript_command_is_refused_from_a_script() {
         "the refusal must carry Redis's wording, got: {message}"
     );
 
-    // The same command on a plain connection is untouched by the gate: no
-    // replicas, zero timeout, so WAIT answers 0 immediately.
-    let direct = client.command(&["WAIT", "0", "0"]).await;
+    // The same command on a plain connection is untouched by the gate: a
+    // standalone server answers ROLE with a `master` array.
+    let direct = client.command(&["ROLE"]).await;
     assert!(
-        matches!(direct, Response::Integer(0)),
+        matches!(&direct, Response::Array(items) if !items.is_empty()),
         "a direct call must be unaffected by the script gate, got: {direct:?}"
     );
 

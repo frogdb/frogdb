@@ -31,7 +31,7 @@ static BGSAVE_SPEC: CommandSpec = CommandSpec {
         complexity: Some("O(1)"),
     },
     arity: Arity::Range { min: 0, max: 1 },
-    flags: CommandFlags::ADMIN,
+    flags: CommandFlags::ADMIN.union(CommandFlags::NOSCRIPT),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

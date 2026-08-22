@@ -12,7 +12,11 @@
         "kind": "at_least",
         "min": 1
       },
-      "flags": [],
+      "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE"
+      ],
       "execution_strategy": "connection_level",
       "full": false,
       "is_stub": false
@@ -41,8 +45,7 @@
         "max": 0
       },
       "flags": [
-        "FAST",
-        "STALE"
+        "FAST"
       ],
       "execution_strategy": "connection_level",
       "full": false,
@@ -56,7 +59,10 @@
         "max": 2
       },
       "flags": [
-        "FAST"
+        "FAST",
+        "NOSCRIPT",
+        "LOADING",
+        "STALE"
       ],
       "execution_strategy": "connection_level",
       "full": false,
@@ -223,6 +229,7 @@
         "max": 0
       },
       "flags": [
+        "NOSCRIPT",
         "ADMIN"
       ],
       "execution_strategy": "standard",
@@ -237,6 +244,7 @@
         "max": 1
       },
       "flags": [
+        "NOSCRIPT",
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
@@ -898,6 +906,7 @@
       },
       "flags": [
         "FAST",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -927,7 +936,9 @@
         "max": 1
       },
       "flags": [
-        "FAST"
+        "FAST",
+        "LOADING",
+        "STALE"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -1030,6 +1041,8 @@
       },
       "flags": [
         "SCRIPT",
+        "NOSCRIPT",
+        "STALE",
         "NONDETERMINISTIC",
         "MOVABLEKEYS"
       ],
@@ -1045,6 +1058,8 @@
       },
       "flags": [
         "SCRIPT",
+        "NOSCRIPT",
+        "STALE",
         "NONDETERMINISTIC",
         "MOVABLEKEYS"
       ],
@@ -1061,6 +1076,8 @@
       "flags": [
         "READONLY",
         "SCRIPT",
+        "NOSCRIPT",
+        "STALE",
         "NONDETERMINISTIC",
         "MOVABLEKEYS"
       ],
@@ -1077,6 +1094,8 @@
       "flags": [
         "READONLY",
         "SCRIPT",
+        "NOSCRIPT",
+        "STALE",
         "NONDETERMINISTIC",
         "MOVABLEKEYS"
       ],
@@ -1092,6 +1111,7 @@
         "max": 0
       },
       "flags": [
+        "NOSCRIPT",
         "LOADING",
         "STALE",
         "SKIP_SLOWLOG"
@@ -2149,7 +2169,6 @@
       "flags": [
         "NOSCRIPT",
         "LOADING",
-        "STALE",
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
@@ -3005,7 +3024,6 @@
       },
       "flags": [
         "WRITE",
-        "NOSCRIPT",
         "MOVABLEKEYS"
       ],
       "execution_strategy": "server_wide",
@@ -3034,6 +3052,9 @@
         "max": 0
       },
       "flags": [
+        "NOSCRIPT",
+        "LOADING",
+        "STALE",
         "ADMIN"
       ],
       "execution_strategy": "connection_level",
@@ -3107,6 +3128,7 @@
       },
       "flags": [
         "FAST",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -3298,6 +3320,7 @@
       },
       "flags": [
         "PUBSUB",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -3375,6 +3398,7 @@
       },
       "flags": [
         "PUBSUB",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -3390,6 +3414,7 @@
       },
       "flags": [
         "FAST",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -3678,8 +3703,7 @@
       },
       "flags": [
         "NOSCRIPT",
-        "LOADING",
-        "STALE"
+        "LOADING"
       ],
       "execution_strategy": "connection_level",
       "full": false,
@@ -4059,6 +4083,7 @@
       },
       "flags": [
         "PUBSUB",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -4106,6 +4131,7 @@
       },
       "flags": [
         "PUBSUB",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -4162,6 +4188,7 @@
       },
       "flags": [
         "PUBSUB",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -4821,6 +4848,7 @@
       },
       "flags": [
         "PUBSUB",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -4837,6 +4865,7 @@
       },
       "flags": [
         "FAST",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -5026,8 +5055,7 @@
         "max": 2
       },
       "flags": [
-        "BLOCKING",
-        "NOSCRIPT"
+        "BLOCKING"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5055,6 +5083,7 @@
       },
       "flags": [
         "FAST",
+        "NOSCRIPT",
         "LOADING",
         "STALE"
       ],
@@ -5165,10 +5194,11 @@
       "name": "XGROUP",
       "arity": {
         "kind": "at_least",
-        "min": 2
+        "min": 1
       },
       "flags": [
-        "WRITE"
+        "WRITE",
+        "DENYOOM"
       ],
       "execution_strategy": "standard",
       "full": true,
@@ -5178,7 +5208,7 @@
       "name": "XINFO",
       "arity": {
         "kind": "at_least",
-        "min": 2
+        "min": 1
       },
       "flags": [
         "READONLY"

@@ -67,7 +67,9 @@ impl Command for EchoCommand {
                 complexity: Some("O(1)"),
             },
             arity: Arity::Fixed(1),
-            flags: CommandFlags::FAST,
+            flags: CommandFlags::FAST
+                .union(CommandFlags::LOADING)
+                .union(CommandFlags::STALE),
             keys: KeySpec::None,
             access: AccessSpec::Uniform,
             wal: WalStrategy::NoOp,
@@ -104,7 +106,8 @@ impl Command for QuitCommand {
             // so a client that sends `QUIT` with trailing junk still gets +OK
             // and a closed connection rather than a wrong-arity error.
             arity: Arity::AtLeast(0),
-            flags: CommandFlags::FAST
+            flags: CommandFlags::NOSCRIPT
+                .union(CommandFlags::FAST)
                 .union(CommandFlags::LOADING)
                 .union(CommandFlags::STALE),
             keys: KeySpec::None,

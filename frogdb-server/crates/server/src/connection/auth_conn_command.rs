@@ -193,7 +193,10 @@ static AUTH_SPEC: CommandSpec = CommandSpec {
         complexity: Some("O(N) where N is the number of passwords defined for the user"),
     },
     arity: Arity::Range { min: 1, max: 2 },
-    flags: CommandFlags::FAST,
+    flags: CommandFlags::NOSCRIPT
+        .union(CommandFlags::FAST)
+        .union(CommandFlags::LOADING)
+        .union(CommandFlags::STALE),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

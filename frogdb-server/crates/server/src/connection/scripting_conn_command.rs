@@ -85,6 +85,8 @@ static EVAL_SPEC: CommandSpec = CommandSpec {
     },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::STALE)
         .union(CommandFlags::NONDETERMINISTIC)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
@@ -133,6 +135,8 @@ static EVAL_RO_SPEC: CommandSpec = CommandSpec {
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::READONLY)
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::STALE)
         .union(CommandFlags::NONDETERMINISTIC)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
@@ -180,6 +184,8 @@ static EVALSHA_SPEC: CommandSpec = CommandSpec {
     },
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::STALE)
         .union(CommandFlags::NONDETERMINISTIC)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
@@ -228,6 +234,8 @@ static EVALSHA_RO_SPEC: CommandSpec = CommandSpec {
     arity: Arity::AtLeast(2),
     flags: CommandFlags::SCRIPT
         .union(CommandFlags::READONLY)
+        .union(CommandFlags::NOSCRIPT)
+        .union(CommandFlags::STALE)
         .union(CommandFlags::NONDETERMINISTIC)
         .union(CommandFlags::MOVABLEKEYS),
     keys: KeySpec::Dynamic,
@@ -278,9 +286,7 @@ static SCRIPT_SPEC: CommandSpec = CommandSpec {
         complexity: Some("Depends on subcommand."),
     },
     arity: Arity::AtLeast(1),
-    flags: CommandFlags::NOSCRIPT
-        .union(CommandFlags::LOADING)
-        .union(CommandFlags::STALE),
+    flags: CommandFlags::NOSCRIPT.union(CommandFlags::LOADING),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

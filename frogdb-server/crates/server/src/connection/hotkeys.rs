@@ -45,8 +45,7 @@ static HOTKEYS_SPEC: CommandSpec = CommandSpec {
     arity: Arity::AtLeast(1),
     flags: CommandFlags::ADMIN
         .union(CommandFlags::NOSCRIPT)
-        .union(CommandFlags::LOADING)
-        .union(CommandFlags::STALE),
+        .union(CommandFlags::LOADING),
     keys: KeySpec::None,
     access: AccessSpec::Uniform,
     wal: WalStrategy::NoOp,

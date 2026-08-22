@@ -657,11 +657,33 @@ const FLAG_EXEMPTIONS: &[(&str, &str)] = &[
          blocks would misdescribe it (same reason its upstream tips are dropped — see \
          `command_meta::TIP_AUDIT`)",
     ),
+    (
+        "PING",
+        "upstream leaves PING without `stale`; FrogDB carries it deliberately. \
+         `replica-serve-stale-data` defaults to `no` here (it defaults to `yes` \
+         upstream — see redis-feel issue 17), so a link-down replica refuses every \
+         command that is not `stale`-flagged. A health probe that cannot answer on \
+         exactly the node an operator is diagnosing is worse than useless, so PING \
+         answers and the *data* commands are what get refused",
+    ),
+    ("ACL", CONTAINER_UNION_VS_SENTINEL_ROW),
+    ("CLIENT", CONTAINER_UNION_VS_SENTINEL_ROW),
     ("VEMB", VECTOR_SET_FAST),
     ("VGETATTR", VECTOR_SET_FAST),
     ("VLINKS", VECTOR_SET_FAST),
     ("VSETATTR", VECTOR_SET_FAST),
 ];
+
+/// Shared reason for the two containers whose own vendored row carries nothing
+/// but `SENTINEL`, while every subcommand under it is `noscript stale`.
+const CONTAINER_UNION_VS_SENTINEL_ROW: &str = "the admission gates `noscript` and `stale` are container-level facts in \
+     FrogDB — `SubcommandSpec::flags_over` only lets a row refine the behavioral \
+     flags (`write`/`readonly`/`denyoom`), so the container carries the union of \
+     what its subcommands need. Upstream declares them per subcommand and leaves \
+     the container's own row holding `SENTINEL` alone, which says nothing about \
+     either gate. The union is what FrogDB actually enforces, and it matches \
+     every subcommand upstream declares except `HELP` (see the \
+     SUBCOMMAND_FLAG_EXEMPTIONS entry)";
 
 /// Shared reason for the four vector-set commands that carry `fast` here and
 /// not upstream.
@@ -685,23 +707,14 @@ const UNCOMPARED_FLAGS: &[(&str, &str)] = &[
          against real key extraction (`vendored_key_specs_agree_with_key_extraction`)",
     ),
     (
-        "noscript",
-        "an admission gate FrogDB does not implement: nothing consults \
-         `CommandFlags::NOSCRIPT`, and the Lua sandbox restricts globals rather \
-         than the command surface, so neither our value nor upstream's describes \
-         what FrogDB does with a script that calls the command",
-    ),
-    (
         "loading",
-        "an admission gate FrogDB does not implement: FrogDB serves every command \
-         during recovery, so upstream's per-command answer describes a refusal \
-         FrogDB never issues",
-    ),
-    (
-        "stale",
-        "an admission gate FrogDB does not implement: nothing consults \
-         `CommandFlags::STALE`, so a link-down replica applies no per-command \
-         refusal for upstream's value to agree or disagree with",
+        "the one admission gate FrogDB has no *state* for, rather than no code \
+         for: boot recovery is synchronous — the listeners bind after it \
+         finishes — so no client can reach an instance that is still loading and \
+         the refusal upstream's value describes can never be needed. The bit is \
+         emitted (vacuously truthful) but there is no behavior on our side for a \
+         comparison to be about. Revisited only if FrogDB ever serves while \
+         loading; see redis-feel issue 17",
     ),
 ];
 
@@ -904,6 +917,32 @@ const SUBCOMMAND_EXTENSIONS: &[(&str, &str)] = &[
 /// vendored row carries no `command_flags` at all, so the whole-command flag
 /// gate skipped all three containers.
 const SUBCOMMAND_FLAG_EXEMPTIONS: &[(&str, &str)] = &[
+    ("ACL|HELP", HELP_INHERITS_CONTAINER_GATES),
+    ("CLIENT|HELP", HELP_INHERITS_CONTAINER_GATES),
+    ("CONFIG|HELP", HELP_INHERITS_CONTAINER_GATES),
+    ("FUNCTION|HELP", HELP_INHERITS_CONTAINER_GATES),
+    ("SCRIPT|HELP", HELP_INHERITS_CONTAINER_GATES),
+    ("MEMORY|HELP", HELP_UNDER_STALE_LESS_CONTAINER),
+    ("OBJECT|HELP", HELP_UNDER_STALE_LESS_CONTAINER),
+    (
+        "CLUSTER|RESET",
+        "upstream marks CLUSTER RESET alone `noscript`; FrogDB gates the whole \
+         CLUSTER container without it, because the gates are container-level here \
+         (see the CONTAINER_UNION_VS_SENTINEL_ROW reason) and marking the container \
+         would refuse every other CLUSTER subcommand inside a script. The refusal \
+         itself is not missing — `is_forbidden_subcommand` names CLUSTER RESET (and \
+         CLUSTER FLUSHSLOTS) explicitly, so a script calling it is rejected before \
+         the flag is ever consulted",
+    ),
+    (
+        "SCRIPT|LOAD",
+        "upstream gives SCRIPT LOAD `stale` and no other non-HELP SCRIPT \
+         subcommand; FrogDB's container therefore carries no `stale` (matching \
+         DEBUG/EXISTS/FLUSH/KILL) and refuses SCRIPT LOAD on a link-down replica \
+         too. Loading a script onto a replica that cannot see its primary is not \
+         a read the client needs served, and admitting it would mean admitting the \
+         whole container",
+    ),
     ("HOTKEYS|HELP", WHOLE_ADMIN_HELP),
     ("LATENCY|HELP", WHOLE_ADMIN_HELP),
     (
@@ -924,13 +963,36 @@ const SUBCOMMAND_FLAG_EXEMPTIONS: &[(&str, &str)] = &[
     ("SLOWLOG|RESET", SLOWLOG_CONTAINER_FLAGS),
 ];
 
+/// Shared reason for the containers whose `HELP` inherits the container's
+/// `noscript` gate, which upstream clears on `HELP` alone (and, on the same
+/// row, gives `HELP` a `stale` the container does not carry).
+const HELP_INHERITS_CONTAINER_GATES: &str = "the admission gates are container-level in FrogDB: `SubcommandSpec::flags_over` \
+     only lets a row refine `write`/`readonly`/`denyoom`, so a subcommand cannot \
+     clear the container's `noscript` or add a `stale` of its own. Upstream clears \
+     `noscript` on every container's HELP and gives it `stale`; here HELP is judged \
+     by the container it lives in. Both bits are truthful about what FrogDB does — \
+     HELP really is refused from a script, and really is refused on a link-down \
+     replica when the container is — and changing either means changing the gate, \
+     not the metadata";
+
+/// Shared reason for the two `readonly` containers whose `HELP` upstream opens
+/// to stale replicas.
+const HELP_UNDER_STALE_LESS_CONTAINER: &str = "upstream gives this container's HELP `stale` and no other subcommand under it; \
+     FrogDB gates the container as the keyspace read it is, with no `stale`, and \
+     HELP inherits that (see the HELP_INHERITS_CONTAINER_GATES reason for why a row \
+     cannot carry the bit on its own). Marking the container would admit MEMORY \
+     USAGE / OBJECT ENCODING on a link-down replica — the exact stale keyspace read \
+     `replica-serve-stale-data: no` exists to refuse";
+
 /// Shared reason for the three containers FrogDB gates wholly admin, where
 /// upstream leaves `HELP` open.
 const WHOLE_ADMIN_HELP: &str = "FrogDB gates this container with the whole-command admin flag rather than a \
      `SPLIT_ADMIN_SURFACES` entry, so HELP is admin-only here and open upstream. \
      The flag is truthful — a plain client port really does refuse it — and \
      opening HELP means moving the container into the split table, which is an \
-     admin-gate change rather than a metadata one";
+     admin-gate change rather than a metadata one. The container's `noscript` and \
+     `stale` gates reach HELP the same way, for the same reason (see \
+     HELP_INHERITS_CONTAINER_GATES)";
 
 /// Shared reason for the SLOWLOG container's `fast`/`skip_slowlog` marks, which
 /// upstream sets on no `SLOWLOG` subcommand.

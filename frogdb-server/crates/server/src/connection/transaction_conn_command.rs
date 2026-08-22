@@ -84,7 +84,8 @@ static MULTI_SPEC: CommandSpec = transaction_spec(
         complexity: Some("O(1)"),
     },
     Arity::Fixed(0),
-    CommandFlags::FAST
+    CommandFlags::NOSCRIPT
+        .union(CommandFlags::FAST)
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     KeySpec::None,
@@ -141,7 +142,8 @@ static EXEC_SPEC: CommandSpec = transaction_spec(
         complexity: Some("Depends on commands in the transaction"),
     },
     Arity::Fixed(0),
-    CommandFlags::LOADING
+    CommandFlags::NOSCRIPT
+        .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE)
         .union(CommandFlags::SKIP_SLOWLOG),
     KeySpec::None,
@@ -200,7 +202,8 @@ static DISCARD_SPEC: CommandSpec = transaction_spec(
         complexity: Some("O(N), when N is the number of queued commands"),
     },
     Arity::Fixed(0),
-    CommandFlags::FAST
+    CommandFlags::NOSCRIPT
+        .union(CommandFlags::FAST)
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     KeySpec::None,
@@ -272,7 +275,8 @@ static WATCH_SPEC: CommandSpec = transaction_spec(
         complexity: Some("O(1) for every key."),
     },
     Arity::AtLeast(1),
-    CommandFlags::FAST
+    CommandFlags::NOSCRIPT
+        .union(CommandFlags::FAST)
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     KeySpec::All,
@@ -422,7 +426,8 @@ static UNWATCH_SPEC: CommandSpec = transaction_spec(
         complexity: Some("O(1)"),
     },
     Arity::Fixed(0),
-    CommandFlags::FAST
+    CommandFlags::NOSCRIPT
+        .union(CommandFlags::FAST)
         .union(CommandFlags::LOADING)
         .union(CommandFlags::STALE),
     KeySpec::None,
