@@ -1,6 +1,6 @@
 # Container commands need per-subcommand key specs (XGROUP/XINFO HELP rejected)
 
-Status: needs-triage
+Status: done
 
 ## Origin
 
@@ -71,6 +71,62 @@ registry change — needs a ruling on scope before implementation.
    (upstream added `hotkeys-help.json` in 8.6.1, flags `LOADING`/`STALE`).
 7. **Behavior acceptance.** `XGROUP HELP` / `XINFO HELP` / `HOTKEYS HELP` return
    help text like Redis.
+
+## Resolution
+
+Shipped as the full subspec table the ruling called for, in four commits
+(`77214635`, `69e23ddd`, `ba7aa08b`, `09eb19ca`).
+
+**Registry.** `CONTAINER_SUBCOMMANDS` in `frogdb-server/crates/core/src/command_spec.rs`
+is a side table — `&[(&str, &[SubcommandSpec])]`, 15 containers, 121 rows —
+keyed by container name, the same shape `SPLIT_ADMIN_SURFACES` uses for
+per-subcommand admin gating. A row carries `name`, `arity`, `flags`, `keys`,
+with indices in the container's own arg vector. Adding a `subcommands` field to
+`CommandSpec` instead would have touched ~600 struct literals for a property
+15 commands have. Three resolvers front it: `container_subcommands`,
+`subcommand_spec` and `check_arity`, the last now the single arity gate for all
+five sites that used to word the rejection themselves (shard execution, the
+script gate, shard scripting, connection routing, connection guards). A
+container's arity became upstream's `-2` shape and its `KeySpec` `None`; the
+rows carry the keys, and `CommandSpec::validate` enforces "arity reaches the
+key it reads" per row via `SubcommandArityTooSmallForKeys`.
+
+Rows override only `WRITE`/`READONLY`/`DENYOOM` (`BEHAVIORAL_FLAGS`);
+`flags_over` leaves the container's `FAST`/`SKIP_SLOWLOG`/`PUBSUB`/`LOADING`
+alone, so a row declaring nothing does not silently strip them. `ADMIN` stays
+out of the vocabulary — it is `SPLIT_ADMIN_SURFACES`'s answer, and having two
+tables answer it would be two sources of truth.
+
+**Admission.** `Command::flags_for` resolves the row, and the OOM gate in
+`shard/execution.rs` consults it. `XGROUP DESTROY`, `DELCONSUMER` and `SETID`
+lost `DENYOOM` (they free memory, and upstream's `xgroup-destroy.json` et al.
+carry `write` alone); `CREATE` and `CREATECONSUMER` keep it. The container's
+declared flags stay the conservative union, so anything reading `spec.flags`
+is unchanged.
+
+**Vendoring and emission.** `vendor-redis-commands.py` keeps the 158 subcommand
+rows it used to drop and `gen-command-metadata.py` emits them nested under
+their container, so `COMMAND INFO` slot 10 and `COMMAND DOCS`' `subcommands`
+map answer with real per-subcommand arity, flags and key specs instead of an
+empty array.
+
+**Truthfulness.** Four new join tests in `upstream_metadata_tests.rs` walk every
+declared row against the vendored row of the same name. The XGROUP and XINFO
+arity exemptions are gone (only `PSYNC` remains in `ARITY_EXEMPTIONS`). Four new
+exemptions were needed and are documented at the lists:
+`SUBCOMMAND_EXTENSIONS` (`CLIENT|STATS`, `LATENCY|BANDS`, `MEMORY|MALLOC-SIZE` —
+FrogDB subcommands upstream does not have), `SUBCOMMAND_FLAG_EXEMPTIONS`
+(7 rows: SLOWLOG/LATENCY/HOTKEYS `HELP` are admin here because those containers
+are wholly admin, `SLOWLOG GET/LEN/RESET` inherit the container's
+`fast`+`skip_slowlog`, `PUBSUB HELP` inherits `pubsub`) and
+`SUBCOMMAND_KEY_SPEC_EXEMPTIONS` (`MEMORY|USAGE`, whose argument FrogDB does not
+declare as a key). Each is a deliberate behavior difference, not a data gap:
+closing them would change admin gating, `@fast` ACL membership, or apply ACL key
+permissions and cluster redirection to `MEMORY USAGE`.
+
+**Behavior.** `HOTKEYS HELP` is implemented (`connection/hotkeys.rs`) and the
+unknown-subcommand hint now names it. `XGROUP HELP` and `XINFO HELP` already had
+handlers — only the container-level arity stood in front of them.
 
 ## Comments
 
