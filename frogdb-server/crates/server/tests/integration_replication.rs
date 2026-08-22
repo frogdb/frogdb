@@ -8211,7 +8211,7 @@ async fn a_link_down_replica_refuses_reads_by_default() {
         "a link-down replica must refuse a non-STALE read by default, got: {refused:?}"
     );
     assert_eq!(
-        get_error_message(&refused).as_deref(),
+        get_error_message(&refused),
         Some("MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'."),
         "the refusal must be Redis's verbatim MASTERDOWN error, got: {refused:?}"
     );
@@ -8221,9 +8221,7 @@ async fn a_link_down_replica_refuses_reads_by_default() {
     // answer is that it is a replica at all.
     let write = replica.send("SET", &["stale-key", "v2"]).await;
     assert!(
-        get_error_message(&write)
-            .as_deref()
-            .is_some_and(|m| m.starts_with("READONLY")),
+        get_error_message(&write).is_some_and(|m| m.starts_with("READONLY")),
         "the read-only rung must still win over the stale gate, got: {write:?}"
     );
 
