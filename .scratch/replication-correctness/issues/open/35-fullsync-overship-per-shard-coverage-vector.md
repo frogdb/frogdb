@@ -167,12 +167,27 @@ One mechanism, both payload paths, receiver-authoritative like issue 34:
 
 ## Residue
 
-- **Issue 36** owns the restart-flavored sibling. R16's rule is interim: a stint whose
-  offsets came from crash recovery refuses window grants *unconditionally*, because the
-  pair "offset, what sits above it" is not recovered atomically. Pairing them — and with
-  it the same-history restart bias — is issue 36's, and `WRITE_EFFECT_ORDER` was left
-  untouched here as that issue's subject.
+Issue 36 was ruled 2026-08-22 (PRD, ledger R17–R24) and settles this issue's interim
+machinery's retirement schedule:
+
+- **R15 plumbing retires via [issue 38](./38-replica-stamps-floors-unification.md).**
+  The staged `replication_metadata.json` coverage vector and
+  `ReplicationState.coverage_at_save` delete once floors live in the per-shard stamp
+  keys — an installed checkpoint *contains* the primary's stamps, so install adopts the
+  floors atomically with the data.
+- **R16's unconditional refusal retires via issue 38.** A crash-recovered replica stint
+  reconstructs exact floors and head from its stamps; `OffsetProvenance::Recovered`
+  stops being a refusal class. The `applyRestart` model gap noted below opens up then
+  (R24: real restart transitions).
+- **The flush hold + breach-abort + breach counter delete via
+  [issue 39](./39-flush-hold-deletion-sender-reads-artifact.md).** The sender reads
+  `Y_s` from the cut artifact's own stamps, so the artifact cannot disagree with its
+  claim by construction. The drain stays. The trailer `ShardCoverage` **stays** as the
+  wire form (live path has no artifact).
+- `WRITE_EFFECT_ORDER` restructuring (mint at persist) is
+  [issue 37](./37-mint-at-persist-and-primary-stamps.md)'s subject, as anticipated.
 - **Model gap (documented at `applyRestart`)**: `restartNodeAs` returns a Primary and
   `inv_primary_role_is_terminal` keeps it there, so no reachable state presents a
   *recovered replica* at a PSYNC. R16 is therefore checked over the pure decision
-  (`aRecoveredStintRefusesTheWindowGrantTest`) plus the Rust forcing tests.
+  (`aRecoveredStintRefusesTheWindowGrantTest`) plus the Rust forcing tests — acceptable
+  precisely because the rule is interim; 38/24 model restart properly (R24).

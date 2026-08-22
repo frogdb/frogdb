@@ -293,3 +293,101 @@ there. Until S lands, such a stint refuses window grants unconditionally (one ex
 resync in the rare crash+failover shape). The same-history restart bias itself — the
 offset stamped low against RocksDB contents — has no sound interim short of full resync
 on every restart and stays a documented gap owned by the S issue.
+
+## 2026-08-22 — issue-36 redesign grill: rulings R17–R24
+
+Grill session over issues 35/36 (post-landing). Investigation (read-only agent) found three
+structural facts that invalidated issue 36's original sketch: (1) the staged WAL entry is
+already owned by the flush thread by mint time (`writer.rs:110-135` sends a fully-owned
+entry at effect 6; mint is effect 8), so "single-threaded write-back" does not exist;
+(2) under sync durability the batch commits **before any write effect** — before the offset
+exists (`execution.rs:463-496`), so a same-batch stamp is impossible without reordering; and
+(3) `is_active()` gates minting entirely (`primary/mod.rs:1023`), so a never-had-a-replica
+primary mints nothing and stamps would be absent on standalone nodes. Additionally the
+restart path keeps the same replid at a rewound `offset_at_save` with an empty backlog, so
+exact stamps alone cannot make same-replid restart safe: the broadcast-but-unflushed tail
+under relaxed durability is unknowable at recovery, and its offsets were already shipped.
+
+### R17 — scope: full redesign, primary side included
+
+Not replica-only. The primary-side ordering problems are fixed at the root rather than
+guarded around.
+
+### R18 — mint+enqueue moves to the persist point (CRDB applied-index pattern)
+
+The replication stream is treated as a log: the offset is assigned *before* staging, and
+the per-shard "max offset flushed" stamp commits in the **same RocksDB WriteBatch** as the
+data it covers — the direct transliteration of CockroachDB's `RaftAppliedState`-in-the-
+apply-batch (position exists before application, rides the batch) and FDB's
+sequencer-before-durability. Mint and backlog-enqueue stay **fused** (they are one critical
+section today, which is what makes mint order = wire order); both move to the persist
+point. Under `should_confirm` the pre-effect Committed persist carries the stamp, so the
+client ack covers data+stamp atomically with no added latency. Effect 8
+(`ReplicationBroadcast`) shrinks to bookkeeping. Consequence accepted: replicas can receive
+a frame before primary-local effects (notifications, waiters) run — same exposure direction
+as today, earlier arrival, no cross-node invariant depends on it. The unified-log limit
+case (stream *is* the WAL) was considered and deliberately not taken — right invariant,
+disproportionate replumb.
+
+### R19 — count always, enqueue when active
+
+The offset counter advances for every replicable write on every node (form length is
+knowable at persist; suppressed/`NO_PROPAGATE` forms advance by 0 and stay outside the
+stream claim — their effects ship only via payloads). Backlog append and socket feed stay
+gated on activity, so standalone nodes pay no memory. Stamps are therefore exact on every
+node, and a late-attaching replica is consistent by construction (payload carries all
+effects up to the counter; the stream continues above it).
+
+### R20 — primary boot rotates the replid unless the shutdown was clean
+
+Refines issue 24's 2026-08-13 ruling ((a)+(b), Redis PSYNC2 shape) with the mechanism and
+the clean-shutdown carve-out: an unclean boot shifts the loaded id into `secondary_id`
+bounded at the recovered head (max over per-shard stamps) and mints a fresh primary id; a
+clean shutdown (drained + flushed + marker recording head == stamps) keeps the identity so
+rolling restarts do not force fleet-wide full resyncs. Rotation is what makes the
+unknowable shipped-but-unflushed tail harmless — offset reuse across distinct ids cannot
+divergently continue. A restarted primary has an empty backlog and can never serve
+`+CONTINUE` regardless, so rotation costs nothing at reconnect time.
+
+### R21 — the FlushHold dies
+
+With stamps in the batches, the cut artifact self-describes its coverage: the sender opens
+the checkpoint's CFs and reads each shard's stamp as `Y_s`. Any write that slips past the
+drain carries its own stamp, so the artifact and its claim cannot disagree. The hold, the
+breach-abort machinery, and the interim breach counter (ruled earlier this session as
+issue-35 polish) are all deleted. The drain stays (bounds payload staleness). The
+live-dataset path keeps issue-35's export-message capture — it has no artifact.
+
+### R22 — floors unify into the stamps; R15 plumbing and R16 refusal retire
+
+An installed checkpoint already *contains* the primary's stamp keys, so install adopts the
+floors automatically — in RocksDB, atomic with the data, crash-safe by construction.
+Replica-side per-frame stamping (the replica knows the frame's offset before applying;
+the persist seam takes the offset — primary mints there, replica supplies) keeps them
+current. The staged `replication_metadata.json` coverage vector and
+`ReplicationState.coverage_at_save` are deleted — one source of truth. A crash-recovered
+replica stint reconstructs exact floors and an exact applied head from the stamps, so the
+R16 unconditional window-grant refusal retires with it. The trailer `ShardCoverage` field
+**stays** as the wire representation (the live-dataset path has no artifact; install
+writes the trailer's values as stamps; the checkpoint path carries it for uniformity).
+
+### R23 — the stamp lives in a reserved per-shard metadata CF
+
+RocksDB WriteBatch atomicity spans column families, so the stamp does not need to live in
+the shard's Main CF to commit atomically with it. A reserved metadata CF (search_meta
+reserved-prefix precedent) keeps the user keyspace clean — no SCAN/RANDOMKEY/DBSIZE
+filtering hazard.
+
+### R24 — model the restart properly; PRD + four sequenced issues
+
+The fullsync model's documented `applyRestart` gap (no reachable recovered-node states) is
+opened up rather than widened: restart transitions (lose the unflushed tail, recover
+stamps, rotate-unless-clean) with invariants for no-offset-reuse-within-a-history and
+claim == coverage after recovery. Work lands as PRD (issue 36 rewritten) + four issues:
+**37** mint-at-persist + count-always + primary stamps; **38** replica stamps + floors
+unification + R15/R16 retirement; **24** (existing, amended) identity rotation +
+clean-shutdown marker + state-file demotion; **39** hold deletion + sender-reads-artifact.
+38/24/39 depend on 37.
+
+Interim note: the breach counter ruled at the top of this session (issue-35 close-out
+gate) still lands — it is real observability until 39 deletes the machinery it counts.

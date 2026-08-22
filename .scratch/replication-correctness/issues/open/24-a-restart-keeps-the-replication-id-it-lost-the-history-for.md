@@ -1,6 +1,6 @@
 # 24 — a restart keeps the replication id whose history it just lost
 
-Status: ready-for-agent
+Status: ready-for-agent (after issue 37 — see 2026-08-22 amendment)
 
 ## Parent
 
@@ -155,3 +155,38 @@ this issue's change set:
   is the RocksDB sequence at the checkpoint cut; whatever carries the restored `repl_offset`
   must be validated against it (same cut, same window) so a mismatch is detectable as
   corruption rather than silently adopted.
+
+## Amendment (2026-08-22, issue-36 redesign grill — rulings R18/R20/R23)
+
+This issue is now a sub-issue of [PRD 36](./36-offset-stamped-batches-restart-bias.md)
+and **depends on [issue 37](./37-mint-at-persist-and-primary-stamps.md)**, which supplies
+the mechanism the 2026-08-13 amendment's point 2 demanded:
+
+1. **The atomic pairing IS the per-shard stamps (R18/R23).** "The persisted offset must
+   commit in the same atomic unit as the write it names" is implemented by issue 37: the
+   mint moves to the persist point and each shard's `WriteBatch` carries a "max offset in
+   this batch" stamp key in a reserved per-shard metadata CF. This *replaces* the
+   manifest/sidecar-time offset write this amendment warned against — do not build a
+   second pairing mechanism here. The recovered head is `max` over the per-shard stamps;
+   the recovered coverage vector is the stamps themselves.
+2. **R20 sharpens the rotation rule: rotate unless *clean* shutdown.** The 2026-08-13
+   ruling rotated on "no intact dataset recovered"; R20 rotates on every **unclean** boot
+   even with an intact dataset, because exact stamps still cannot close the
+   shipped-but-unflushed tail under relaxed durability (frames broadcast, offsets
+   consumed, batch never committed — unknowable at recovery, and those offsets are on
+   the wire). Unclean boot: loaded id → `secondary_id` bounded at the recovered head
+   (max over stamps), fresh primary id minted — cheap, because a restarted primary's
+   backlog is empty so it could never serve `+CONTINUE` anyway. **Clean-shutdown
+   carve-out:** a shutdown that drained the feed, flushed every shard, and wrote a marker
+   proving head == max(stamps) keeps its identity, so rolling restarts don't force
+   fleet-wide resyncs. The marker is single-shot (consumed at boot).
+3. **R4's state-file demotion stands** and gets easier: with identity and coverage both
+   living in the dataset (stamps + dataset-metadata identity), `replication_state.json`
+   has nothing authoritative left to hold. Delete or demote per R4 in this issue's
+   change set.
+4. **Model (R24):** this issue owns the primary-restart transitions in
+   `replication_fullsync*.qnt` — lose unflushed tail, recover stamps, rotate-unless-clean
+   — and the `no offset reuse within a history` invariant. Issue 38 owns the
+   replica-side restart transitions. 37 lays the stamp state.
+
+Sequencing unchanged: still lands **before** issue 17; now also **after** issue 37.
