@@ -164,6 +164,21 @@ define_command_errors! {
     /// Out of memory.
     OutOfMemory => "OOM command not allowed when used memory > 'maxmemory'.",
 
+    /// The command carries `NOSCRIPT` and was issued from inside a script.
+    ///
+    /// Verbatim Redis (`script.c`, `scriptCall`): the `sds` there is
+    /// `"This Redis command is not allowed from script"`, and Lua's error
+    /// wrapper (`luaPushErrorBuff`) prepends `ERR ` because the message
+    /// carries no error code of its own.
+    NotAllowedFromScript => "ERR This Redis command is not allowed from script",
+
+    /// A non-`STALE` command on a link-down replica that may not serve stale
+    /// data.
+    ///
+    /// Verbatim Redis (`server.c`, `shared.masterdownerr`), trailing period
+    /// included: clients and proxies match this string.
+    MasterDown => "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.",
+
     /// Internal server error.
     Internal { message: String } => "ERR {message}",
 

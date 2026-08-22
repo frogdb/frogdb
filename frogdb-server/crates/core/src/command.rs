@@ -971,12 +971,30 @@ bitflags! {
         const SCRIPT = 0b0000_0100_0000;
 
         /// Command cannot be called from Lua scripts.
+        ///
+        /// Enforced at the admission chokepoint
+        /// ([`crate::command_admission::admit_command`]) for every
+        /// `ExecOrigin::FromScript` call.
         const NOSCRIPT = 0b0000_1000_0000;
 
         /// Command allowed during database loading (startup recovery).
+        ///
+        /// **Vacuous in FrogDB, deliberately.** Recovery is synchronous: the
+        /// listeners bind only after it finishes, so there is no state in which
+        /// a client can reach a serving instance that is still loading, and
+        /// therefore no gate for this flag to drive. The bits are still emitted
+        /// in `COMMAND INFO` — truthfully, because the refusal they describe can
+        /// never be needed — and the flag is left out of the `COMMAND INFO`
+        /// parity gate's comparison set for the same reason. Revisit only if
+        /// FrogDB ever serves while loading (an async fullsync apply, or online
+        /// loading). See redis-feel issue 17's Resolution.
         const LOADING = 0b0001_0000_0000;
 
-        /// Command allowed on stale replica.
+        /// Command allowed on a replica whose link to its primary is down.
+        ///
+        /// Enforced by [`crate::command_admission::stale_refusal`], read from
+        /// the connection gauntlet's pre-check ladder, under the
+        /// `replica-serve-stale-data` knob.
         const STALE = 0b0010_0000_0000;
 
         /// Command should not be logged to slowlog.
