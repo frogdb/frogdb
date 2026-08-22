@@ -89,8 +89,9 @@ pub use command::{
 };
 pub use command_spec::{
     AccessSpec, AdminSurface, CommandDocs, CommandSpec, EventSpec, IndexKind, KeySpec,
-    LookupOutcome, LookupSpec, ReindexAction, ReindexSpec, SpecError, admin_surface,
-    split_admin_surface_commands,
+    LookupOutcome, LookupSpec, ReindexAction, ReindexSpec, SpecError, SubcommandSpec,
+    admin_surface, check_arity, container_subcommands, split_admin_surface_commands,
+    subcommand_container_names, subcommand_spec,
 };
 pub use conn_command::{
     BoxFuture, ClientTrackingProvider, ConfigProvider, ConnCtx, ConnStateMut, ConnectionCommand,

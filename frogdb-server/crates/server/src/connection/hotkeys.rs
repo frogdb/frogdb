@@ -94,13 +94,41 @@ impl ConnectionCommand for HotkeysConnCommand {
                 "STOP" => hotkeys_stop(ctx),
                 "RESET" => hotkeys_reset(ctx),
                 "GET" => hotkeys_get(ctx),
+                "HELP" => hotkeys_help(),
                 _ => Response::error(format!(
-                    "ERR unknown subcommand '{}'. Try HOTKEYS START|STOP|RESET|GET.",
+                    "ERR unknown subcommand '{}'. Try HOTKEYS START|STOP|RESET|GET|HELP.",
                     subcommand_str
                 )),
             }
         })
     }
+}
+
+/// HOTKEYS HELP — the standard container help reply.
+///
+/// Redis 8.6.1 added `HOTKEYS HELP` (`src/commands/hotkeys-help.json`); the
+/// 8.6.0 container shipped without it. Shape follows every other container's
+/// help: a header line, then one line per subcommand and an indented
+/// description under each.
+fn hotkeys_help() -> Response {
+    let help = [
+        "HOTKEYS <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
+        "START METRICS <count> <metric> [<metric> ...] [COUNT <n>] [DURATION <ms>] [SAMPLE <ratio>] [SLOTS <count> <slot> ...]",
+        "    Start a sampling session for the named metrics.",
+        "STOP",
+        "    Stop the active sampling session, keeping its data.",
+        "RESET",
+        "    Discard a stopped session's data and return to idle.",
+        "GET",
+        "    Return the current session's hot keys.",
+        "HELP",
+        "    Print this help.",
+    ];
+    Response::Array(
+        help.into_iter()
+            .map(|line| Response::bulk(Bytes::from_static(line.as_bytes())))
+            .collect(),
+    )
 }
 
 /// HOTKEYS START — parse parameters and start a new session.

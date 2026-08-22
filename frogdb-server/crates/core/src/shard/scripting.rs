@@ -221,11 +221,8 @@ impl ShardWorker {
             None => return Response::error(format!("ERR unknown command '{}'", cmd_name)),
         };
         let args = &parts[1..];
-        if !handler.arity().check(args.len()) {
-            return Response::error(format!(
-                "ERR wrong number of arguments for '{}' command",
-                handler.name().to_ascii_lowercase()
-            ));
+        if let Err(msg) = crate::command_spec::check_arity(handler.name(), handler.arity(), args) {
+            return Response::error(msg);
         }
         // Route through the shared builder so a cross-shard script sub-command
         // sees the same cluster + replica identity as any other command on this

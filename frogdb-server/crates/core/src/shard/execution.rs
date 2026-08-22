@@ -142,28 +142,25 @@ impl ShardWorker {
         };
 
         // Validate arity
-        if !handler.arity().check(command.args.len()) {
-            return (
-                Response::error(format!(
-                    "ERR wrong number of arguments for '{}' command",
-                    handler.name().to_ascii_lowercase()
-                )),
-                None,
-            );
+        if let Err(msg) =
+            crate::command_spec::check_arity(handler.name(), handler.arity(), &command.args)
+        {
+            return (Response::error(msg), None);
         }
 
-        let is_write = handler
-            .flags()
-            .contains(crate::command::CommandFlags::WRITE);
+        // Container commands are judged per subcommand from here on: the flags
+        // that drive the write fence, the OOM gate and op-rate classification
+        // are the matched subcommand's, not the container's union of them.
+        let flags = handler.flags_for(&command.args);
+
+        let is_write = flags.contains(crate::command::CommandFlags::WRITE);
 
         // The `maxmemory` gate keys off `DENYOOM`, not `WRITE`: a write that can
         // only free memory (DEL, LPOP, SREM, FLUSHALL, the expiry family) must
         // stay available precisely when the instance is over its limit under
         // `noeviction`, which is when the operator needs it to recover. Redis
         // makes the same distinction (`CMD_DENYOOM` in `processCommand`).
-        let denies_oom = handler
-            .flags()
-            .contains(crate::command::CommandFlags::DENYOOM);
+        let denies_oom = flags.contains(crate::command::CommandFlags::DENYOOM);
 
         // Per-shard windowed op-rate accounting for hot-shard detection. Counted
         // once the command is known and its arity accepted — i.e. for every
@@ -172,7 +169,7 @@ impl ShardWorker {
         // the shared `OpClass`, the same rule the scatter path uses.
         self.observability
             .operation_counters_mut()
-            .record_op(super::counters::OpClass::from_flags(handler.flags()));
+            .record_op(super::counters::OpClass::from_flags(flags));
 
         // FM-PERSISTENCE-055: a poisoned WAL under a refusing policy fences the
         // shard. Checked here, at the single dispatch seam, rather than in the

@@ -48,11 +48,10 @@ impl ConnectionHandler {
         };
 
         // Validate arity
-        if !handler.arity().check(cmd.args.len()) {
-            return Response::error(format!(
-                "ERR wrong number of arguments for '{}' command",
-                handler.name().to_ascii_lowercase()
-            ));
+        if let Err(msg) =
+            frogdb_core::command_spec::check_arity(handler.name(), handler.arity(), &cmd.args)
+        {
+            return Response::error(msg);
         }
 
         // Extract keys for routing

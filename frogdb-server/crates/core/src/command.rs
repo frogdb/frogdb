@@ -824,9 +824,34 @@ pub trait Command: Send + Sync {
     /// Derived from the spec's [`KeySpec`]. Dynamic key layouts defer to
     /// [`Command::dynamic_keys`]. Returns empty for keyless commands.
     fn keys<'a>(&self, args: &'a [Bytes]) -> Vec<&'a [u8]> {
-        match self.spec().keys {
+        let spec = self.spec();
+        // A container command's key layout is a per-subcommand fact — XGROUP
+        // CREATE reads a key at index 1, XGROUP HELP reads none — so the
+        // matched subcommand row wins where one exists.
+        let shape = match crate::command_spec::subcommand_spec(spec.name, args) {
+            Some(row) => row.keys,
+            None => spec.keys,
+        };
+        match shape {
             KeySpec::Dynamic => self.dynamic_keys(args),
             shape => shape.extract(args),
+        }
+    }
+
+    /// The flags governing *this* invocation.
+    ///
+    /// Identical to [`Command::flags`] for every plain command. For a container
+    /// it is the matched subcommand's behavioral flags laid over the
+    /// container's declaration, which is what makes admission per-subcommand:
+    /// `XGROUP CREATE` allocates and keeps `DENYOOM`, `XGROUP DESTROY` frees
+    /// and drops it. An unrecognized subcommand falls back to the container's
+    /// flags — the conservative answer, since a container declares the union of
+    /// what its subcommands do.
+    fn flags_for(&self, args: &[Bytes]) -> CommandFlags {
+        let spec = self.spec();
+        match crate::command_spec::subcommand_spec(spec.name, args) {
+            Some(row) => row.flags_over(spec.flags),
+            None => spec.flags,
         }
     }
 

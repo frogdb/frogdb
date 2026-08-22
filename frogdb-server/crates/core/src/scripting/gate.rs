@@ -551,12 +551,7 @@ impl CommandInvoker for ScriptInvoker<'_> {
             .ok_or_else(|| format!("ERR unknown command '{}'", cmd_name))?;
 
         let args = &parts[1..];
-        if !handler.arity().check(args.len()) {
-            return Err(format!(
-                "ERR wrong number of arguments for '{}' command",
-                handler.name().to_ascii_lowercase()
-            ));
-        }
+        crate::command_spec::check_arity(handler.name(), handler.arity(), args)?;
 
         // Real, scoped `&mut dyn Store` — no `unsafe`, no aliased pointer.
         let mut store = self.store.borrow_mut();

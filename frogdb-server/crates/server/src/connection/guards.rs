@@ -500,13 +500,9 @@ impl PreDispatchView<'_> {
                 frogdb_protocol::format_unknown_command_error(original_name, args)
             )));
         };
-        if entry.arity().check(args.len()) {
-            return None;
-        }
-        Some(Response::error(format!(
-            "ERR wrong number of arguments for '{}' command",
-            entry.name().to_ascii_lowercase()
-        )))
+        frogdb_core::command_spec::check_arity(entry.name(), entry.arity(), args)
+            .err()
+            .map(Response::error)
     }
 
     /// If in transaction mode, queue the command instead of executing it
@@ -566,21 +562,17 @@ impl PreDispatchView<'_> {
             }
         };
 
-        // Validate arity. The name is lowercased to match Redis (`c->cmd->fullname`
-        // is stored lowercase) and to match every other arity rejection in the
-        // server — `command_lookup_check` above, `shard::execution`, and the
-        // scripting gate all render `name().to_ascii_lowercase()`. Registry entry
-        // names are the uppercase spec names, so skipping this leaks `'GET'`.
+        // Validate arity through the shared gate, so a queued command is judged
+        // and worded exactly as the live paths judge and word it (lowercase
+        // name, `container|sub` for a container's subcommand).
         //
         // Follow-up: FM-TXN-006's Observable only requires the EXECABORT outcome,
         // so the spec did not force the error *text*. Tightening that row to pin
         // the lowercase rendering would make this class of drift spec-visible; the
         // txn failure-mode spec is LOCKED, so that is a separate spec-first change.
-        if !entry.arity().check(cmd.args.len()) {
-            let msg = format!(
-                "ERR wrong number of arguments for '{}' command",
-                entry.name().to_ascii_lowercase()
-            );
+        if let Err(msg) =
+            frogdb_core::command_spec::check_arity(entry.name(), entry.arity(), &cmd.args)
+        {
             self.state.abort_transaction(Some(msg.clone()));
             return Response::error(msg);
         }

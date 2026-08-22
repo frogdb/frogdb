@@ -727,6 +727,392 @@ pub fn split_admin_surface_commands() -> impl Iterator<Item = &'static str> {
     SPLIT_ADMIN_SURFACES.iter().map(|(name, _)| *name)
 }
 
+// ---------------------------------------------------------------------------
+// Container subcommands
+// ---------------------------------------------------------------------------
+
+/// One subcommand of a container command, with the mechanical facts that vary
+/// between the container's subcommands.
+///
+/// A container is a single registered [`CommandSpec`] dispatching on `args[0]`,
+/// and one container-level description cannot be true of all of it: `XGROUP
+/// CREATE` reads a key at index 1 and may allocate, `XGROUP HELP` reads no key
+/// at all and allocates nothing. Redis says this by giving every subcommand its
+/// own command table entry; FrogDB says it here, and resolves it through
+/// [`subcommand_spec`] — the same side-table shape [`SPLIT_ADMIN_SURFACES`]
+/// uses for the admin half of the same problem.
+///
+/// Indices and counts are expressed in the **container's** argument vector —
+/// `args[0]` is the subcommand token itself — so `XGROUP CREATE key group id`
+/// is `arity: Arity::AtLeast(4)` with `keys: KeySpec::Index(1)`, and the values
+/// line up one-for-one with what `COMMAND INFO xgroup|create` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubcommandSpec {
+    /// The subcommand token, uppercase and bare (`"CREATE"`, never
+    /// `"XGROUP|CREATE"`). Matched case-insensitively.
+    pub name: &'static str,
+    /// Argument count accepted, counting the subcommand token.
+    pub arity: Arity,
+    /// The *behavioral* flags this subcommand carries — the
+    /// [`BEHAVIORAL_FLAGS`] subset. Everything else (LOADING, STALE, NOSCRIPT,
+    /// ADMIN, …) stays a container-level fact; see [`SubcommandSpec::flags_over`].
+    pub flags: CommandFlags,
+    /// Where this subcommand's keys sit in the container's argument vector.
+    pub keys: KeySpec,
+}
+
+/// The flags a [`SubcommandSpec`] may refine: the access class a subcommand
+/// exercises and whether it can grow memory. These are exactly the flags the
+/// shard's dispatch seam consults per invocation (the write fence, the OOM
+/// gate, op-rate classification), and exactly the ones that genuinely differ
+/// between subcommands of one container.
+///
+/// Everything else stays a container-level fact and carries through unchanged.
+/// `ADMIN` in particular is deliberately absent: FrogDB's per-subcommand admin
+/// surface is declared once, in [`SPLIT_ADMIN_SURFACES`], and resolved through
+/// [`admin_surface`]. A second per-subcommand copy here would be a second
+/// source of truth for the same question.
+pub const BEHAVIORAL_FLAGS: CommandFlags = CommandFlags::WRITE
+    .union(CommandFlags::READONLY)
+    .union(CommandFlags::DENYOOM);
+
+impl SubcommandSpec {
+    /// This subcommand's flags laid over its container's: the behavioral half
+    /// is replaced wholesale, the rest of the container's declaration carries
+    /// through unchanged.
+    pub fn flags_over(&self, container: CommandFlags) -> CommandFlags {
+        container.difference(BEHAVIORAL_FLAGS) | self.flags
+    }
+}
+
+/// Every container command's subcommand rows, keyed by container name.
+///
+/// Rows exist for the subcommands **FrogDB dispatches**, not for everything
+/// upstream documents: a row is a claim about this implementation, and the
+/// join tests in the server crate replay each one against the vendored Redis
+/// 8.6.1 command table. A subcommand with no row falls back to its container's
+/// declaration, which is the conservative answer (containers declare the union
+/// of what their subcommands do).
+/// Arities and flags follow Redis 8.6.1's per-subcommand command table, which
+/// the server's `upstream_metadata_tests` join replays row by row; where FrogDB
+/// dispatches a subcommand Redis does not have (`CLIENT STATS`,
+/// `LATENCY BANDS`, `MEMORY MALLOC-SIZE`) the row states what this
+/// implementation accepts and the join skips it for want of a counterpart.
+static CONTAINER_SUBCOMMANDS: &[(&str, &[SubcommandSpec])] = &[
+    (
+        "ACL",
+        &[
+            sub("CAT", Arity::AtLeast(1)),
+            sub("DELUSER", Arity::AtLeast(2)),
+            sub("DRYRUN", Arity::AtLeast(3)),
+            sub("GENPASS", Arity::AtLeast(1)),
+            sub("GETUSER", Arity::Fixed(2)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("LIST", Arity::Fixed(1)),
+            sub("LOAD", Arity::Fixed(1)),
+            sub("LOG", Arity::AtLeast(1)),
+            sub("SAVE", Arity::Fixed(1)),
+            sub("SETUSER", Arity::AtLeast(2)),
+            sub("USERS", Arity::Fixed(1)),
+            sub("WHOAMI", Arity::Fixed(1)),
+        ],
+    ),
+    (
+        "CLIENT",
+        &[
+            sub("CACHING", Arity::Fixed(2)),
+            sub("GETNAME", Arity::Fixed(1)),
+            sub("GETREDIR", Arity::Fixed(1)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("ID", Arity::Fixed(1)),
+            sub("INFO", Arity::Fixed(1)),
+            sub("KILL", Arity::AtLeast(2)),
+            sub("LIST", Arity::AtLeast(1)),
+            sub("NO-EVICT", Arity::Fixed(2)),
+            sub("NO-TOUCH", Arity::Fixed(2)),
+            sub("PAUSE", Arity::AtLeast(2)),
+            sub("REPLY", Arity::Fixed(2)),
+            sub("SETINFO", Arity::Fixed(3)),
+            sub("SETNAME", Arity::Fixed(2)),
+            // FrogDB extension: per-connection command/byte/latency counters.
+            sub("STATS", Arity::AtLeast(1)),
+            sub("TRACKING", Arity::AtLeast(2)),
+            sub("TRACKINGINFO", Arity::Fixed(1)),
+            sub("UNBLOCK", Arity::AtLeast(2)),
+            sub("UNPAUSE", Arity::Fixed(1)),
+        ],
+    ),
+    (
+        "CLUSTER",
+        &[
+            sub("ADDSLOTS", Arity::AtLeast(2)),
+            sub("COUNTKEYSINSLOT", Arity::Fixed(2)),
+            sub("DELSLOTS", Arity::AtLeast(2)),
+            sub("FAILOVER", Arity::AtLeast(1)),
+            sub("FORGET", Arity::Fixed(2)),
+            sub("GETKEYSINSLOT", Arity::Fixed(3)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("INFO", Arity::Fixed(1)),
+            sub("KEYSLOT", Arity::Fixed(2)),
+            sub("MEET", Arity::AtLeast(3)),
+            sub("MYID", Arity::Fixed(1)),
+            sub("NODES", Arity::Fixed(1)),
+            sub("REPLICATE", Arity::Fixed(2)),
+            sub("RESET", Arity::AtLeast(1)),
+            sub("SAVECONFIG", Arity::Fixed(1)),
+            sub("SET-CONFIG-EPOCH", Arity::Fixed(2)),
+            sub("SETSLOT", Arity::AtLeast(3)),
+            sub("SHARDS", Arity::Fixed(1)),
+            sub("SLOTS", Arity::Fixed(1)),
+        ],
+    ),
+    (
+        "COMMAND",
+        &[
+            sub("COUNT", Arity::Fixed(1)),
+            sub("DOCS", Arity::AtLeast(1)),
+            sub("GETKEYS", Arity::AtLeast(2)),
+            sub("GETKEYSANDFLAGS", Arity::AtLeast(2)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("INFO", Arity::AtLeast(1)),
+            sub("LIST", Arity::AtLeast(1)),
+        ],
+    ),
+    (
+        "CONFIG",
+        &[
+            sub("GET", Arity::AtLeast(2)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("RESETSTAT", Arity::Fixed(1)),
+            sub("REWRITE", Arity::Fixed(1)),
+            sub("SET", Arity::AtLeast(3)),
+        ],
+    ),
+    (
+        "FUNCTION",
+        &[
+            write("DELETE", Arity::Fixed(2)),
+            sub("DUMP", Arity::Fixed(1)),
+            write("FLUSH", Arity::AtLeast(1)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("KILL", Arity::Fixed(1)),
+            sub("LIST", Arity::AtLeast(1)),
+            allocating_write("LOAD", Arity::AtLeast(2)),
+            allocating_write("RESTORE", Arity::AtLeast(2)),
+            sub("STATS", Arity::Fixed(1)),
+        ],
+    ),
+    (
+        "LATENCY",
+        &[
+            // FrogDB extension: configurable latency-band histograms.
+            sub("BANDS", Arity::AtLeast(1)),
+            sub("DOCTOR", Arity::Fixed(1)),
+            sub("GRAPH", Arity::Fixed(2)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("HISTOGRAM", Arity::AtLeast(1)),
+            sub("HISTORY", Arity::Fixed(2)),
+            sub("LATEST", Arity::Fixed(1)),
+            sub("RESET", Arity::AtLeast(1)),
+        ],
+    ),
+    (
+        "MEMORY",
+        &[
+            sub("DOCTOR", Arity::Fixed(1)),
+            sub("HELP", Arity::Fixed(1)),
+            // FrogDB extension: Redis 8.6.1 has MEMORY MALLOC-STATS, not this.
+            sub("MALLOC-SIZE", Arity::AtLeast(2)),
+            sub("PURGE", Arity::Fixed(1)),
+            sub("STATS", Arity::Fixed(1)),
+            read("USAGE", Arity::AtLeast(2)),
+        ],
+    ),
+    (
+        "OBJECT",
+        &[
+            read_key("ENCODING", Arity::Fixed(2)),
+            read_key("FREQ", Arity::Fixed(2)),
+            sub("HELP", Arity::Fixed(1)),
+            read_key("IDLETIME", Arity::Fixed(2)),
+            read_key("REFCOUNT", Arity::Fixed(2)),
+        ],
+    ),
+    (
+        "PUBSUB",
+        &[
+            sub("CHANNELS", Arity::AtLeast(1)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("NUMPAT", Arity::Fixed(1)),
+            sub("NUMSUB", Arity::AtLeast(1)),
+            sub("SHARDCHANNELS", Arity::AtLeast(1)),
+            sub("SHARDNUMSUB", Arity::AtLeast(1)),
+        ],
+    ),
+    (
+        "SCRIPT",
+        &[
+            sub("EXISTS", Arity::AtLeast(2)),
+            sub("FLUSH", Arity::AtLeast(1)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("KILL", Arity::Fixed(1)),
+            sub("LOAD", Arity::Fixed(2)),
+        ],
+    ),
+    (
+        "SLOWLOG",
+        &[
+            sub("GET", Arity::AtLeast(1)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("LEN", Arity::Fixed(1)),
+            sub("RESET", Arity::Fixed(1)),
+        ],
+    ),
+    (
+        "HOTKEYS",
+        &[
+            sub("GET", Arity::Fixed(1)),
+            sub("HELP", Arity::Fixed(1)),
+            sub("RESET", Arity::Fixed(1)),
+            sub("START", Arity::AtLeast(1)),
+            sub("STOP", Arity::Fixed(1)),
+        ],
+    ),
+    (
+        "XGROUP",
+        &[
+            allocating_write_key("CREATE", Arity::AtLeast(4)),
+            allocating_write_key("CREATECONSUMER", Arity::Fixed(4)),
+            // DELCONSUMER and DESTROY only free memory, so they stay callable
+            // when the instance is at `maxmemory` under `noeviction` — which is
+            // exactly when an operator needs them.
+            write_key("DELCONSUMER", Arity::Fixed(4)),
+            write_key("DESTROY", Arity::Fixed(3)),
+            sub("HELP", Arity::Fixed(1)),
+            write_key("SETID", Arity::AtLeast(4)),
+        ],
+    ),
+    (
+        "XINFO",
+        &[
+            read_key("CONSUMERS", Arity::Fixed(3)),
+            read_key("GROUPS", Arity::Fixed(2)),
+            sub("HELP", Arity::Fixed(1)),
+            read_key("STREAM", Arity::AtLeast(2)),
+        ],
+    ),
+];
+
+// Row constructors. `sub` is the common case — a keyless subcommand whose
+// access class is whatever its container declares; the rest name the fact they
+// add. `_key` variants put the key at `args[1]`, immediately after the
+// subcommand token, which is where every keyed container subcommand Redis
+// documents puts it.
+
+const fn row(
+    name: &'static str,
+    arity: Arity,
+    flags: CommandFlags,
+    keys: KeySpec,
+) -> SubcommandSpec {
+    SubcommandSpec {
+        name,
+        arity,
+        flags,
+        keys,
+    }
+}
+
+const fn sub(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(name, arity, CommandFlags::empty(), KeySpec::None)
+}
+
+const fn read(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(name, arity, CommandFlags::READONLY, KeySpec::None)
+}
+
+const fn read_key(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(name, arity, CommandFlags::READONLY, KeySpec::Index(1))
+}
+
+const fn write(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(name, arity, CommandFlags::WRITE, KeySpec::None)
+}
+
+const fn write_key(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(name, arity, CommandFlags::WRITE, KeySpec::Index(1))
+}
+
+const fn allocating_write(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(
+        name,
+        arity,
+        CommandFlags::WRITE.union(CommandFlags::DENYOOM),
+        KeySpec::None,
+    )
+}
+
+const fn allocating_write_key(name: &'static str, arity: Arity) -> SubcommandSpec {
+    row(
+        name,
+        arity,
+        CommandFlags::WRITE.union(CommandFlags::DENYOOM),
+        KeySpec::Index(1),
+    )
+}
+
+/// The subcommand rows declared for `command`, if it is a container.
+pub fn container_subcommands(command: &str) -> Option<&'static [SubcommandSpec]> {
+    CONTAINER_SUBCOMMANDS
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(command))
+        .map(|(_, rows)| *rows)
+}
+
+/// The container command names carrying subcommand rows — for registry-walking
+/// coherence checks.
+pub fn subcommand_container_names() -> impl Iterator<Item = &'static str> {
+    CONTAINER_SUBCOMMANDS.iter().map(|(name, _)| *name)
+}
+
+/// Resolve the row describing *this* invocation of a container command.
+///
+/// The single entry point: `None` means "not a container, or a subcommand we
+/// declare nothing about", and every caller then falls back to the
+/// container-level [`CommandSpec`].
+pub fn subcommand_spec(command: &str, args: &[Bytes]) -> Option<&'static SubcommandSpec> {
+    let rows = container_subcommands(command)?;
+    let token = args.first()?;
+    let token = std::str::from_utf8(token).ok()?;
+    rows.iter().find(|row| row.name.eq_ignore_ascii_case(token))
+}
+
+/// The single arity gate, and the single place its rejection is worded.
+///
+/// A container is judged against the matched subcommand's row and named after
+/// it — `ERR wrong number of arguments for 'xgroup|create' command`, the way
+/// Redis words the same rejection — so the container's own arity only has to
+/// cover the shape every subcommand shares (`-2`: the subcommand token).
+pub fn check_arity(command: &str, arity: Arity, args: &[Bytes]) -> Result<(), String> {
+    let (arity, label) = match subcommand_spec(command, args) {
+        Some(row) => (
+            row.arity,
+            format!(
+                "{}|{}",
+                command.to_ascii_lowercase(),
+                row.name.to_ascii_lowercase()
+            ),
+        ),
+        None => (arity, command.to_ascii_lowercase()),
+    };
+    if arity.check(args.len()) {
+        return Ok(());
+    }
+    Err(format!(
+        "ERR wrong number of arguments for '{label}' command"
+    ))
+}
+
 /// A cross-field inconsistency detected by [`CommandSpec::validate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpecError {
@@ -739,6 +1125,18 @@ pub enum SpecError {
     DynamicKeysMovableMismatch,
     /// The arity minimum is too small to contain the keys the `KeySpec` reads.
     ArityTooSmallForKeys { needs: usize, min: usize },
+    /// The same invariant on a container's [`SubcommandSpec`] row: the row's
+    /// arity minimum does not reach the key its `KeySpec` reads.
+    SubcommandArityTooSmallForKeys {
+        subcommand: &'static str,
+        needs: usize,
+        min: usize,
+    },
+    /// A [`SubcommandSpec`] declared a flag outside [`BEHAVIORAL_FLAGS`].
+    /// Non-behavioral flags are container-level facts (and `ADMIN` in
+    /// particular is declared in [`SPLIT_ADMIN_SURFACES`]), so a row carrying
+    /// one would be a second, silently-ignored source of truth.
+    SubcommandFlagsNotBehavioral { subcommand: &'static str },
     /// A `ConnectionLevel` command declared a shard-side WAL effect. These
     /// commands are intercepted before shard routing, so they must be
     /// `WalStrategy::NoOp`.
@@ -794,6 +1192,22 @@ impl std::fmt::Display for SpecError {
                 write!(
                     f,
                     "KeySpec::Dynamic must coincide with CommandFlags::MOVABLEKEYS"
+                )
+            }
+            SpecError::SubcommandArityTooSmallForKeys {
+                subcommand,
+                needs,
+                min,
+            } => {
+                write!(
+                    f,
+                    "subcommand {subcommand} needs at least {needs} args to hold its keys, arity minimum is {min}"
+                )
+            }
+            SpecError::SubcommandFlagsNotBehavioral { subcommand } => {
+                write!(
+                    f,
+                    "subcommand {subcommand} declared a flag outside BEHAVIORAL_FLAGS"
                 )
             }
             SpecError::ArityTooSmallForKeys { needs, min } => {
@@ -897,6 +1311,30 @@ impl CommandSpec {
             let min = self.arity.min();
             if min < needs {
                 return Err(SpecError::ArityTooSmallForKeys { needs, min });
+            }
+        }
+
+        // A container's own arity only has to admit the subcommand token, so
+        // the "arity covers the keys" invariant moves to the rows that actually
+        // read keys. Checking it here keeps it a declaration-time error for
+        // containers exactly as it is for plain commands.
+        if let Some(rows) = container_subcommands(self.name) {
+            for row in rows {
+                if !BEHAVIORAL_FLAGS.contains(row.flags) {
+                    return Err(SpecError::SubcommandFlagsNotBehavioral {
+                        subcommand: row.name,
+                    });
+                }
+                if let Some(needs) = row.keys.min_required_args() {
+                    let min = row.arity.min();
+                    if min < needs {
+                        return Err(SpecError::SubcommandArityTooSmallForKeys {
+                            subcommand: row.name,
+                            needs,
+                            min,
+                        });
+                    }
+                }
             }
         }
 
