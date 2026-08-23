@@ -145,6 +145,13 @@ impl ReplicaCommandExecutor {
                 shard: shard_id,
                 detail: "transaction refused: routing generation changed".to_string(),
             }),
+            // Likewise unreachable: only a `WatchFenceRole::Mint` round-trip is
+            // answered with fences, and replica apply always sends the default
+            // `Verify(vec![])`. Named for the same reason.
+            TransactionResult::WatchesFenced(_) => Err(ApplyError::Rejected {
+                shard: shard_id,
+                detail: "transaction refused: unexpected watch-fence reply".to_string(),
+            }),
         }
     }
 }
