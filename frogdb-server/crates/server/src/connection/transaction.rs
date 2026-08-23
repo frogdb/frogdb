@@ -24,7 +24,9 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use frogdb_core::{CoreMsg, MetricsRecorder, RateLimitExceeded, ServerWideOp, WatchEntry};
+use frogdb_core::{
+    CoreMsg, MetricsRecorder, RateLimitExceeded, ServerWideOp, WatchEntry, WatchFenceRole,
+};
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_txn::{Deferral, ShardTxnReply, TxnHost};
 use tokio::sync::oneshot;
@@ -212,6 +214,7 @@ impl TxnHost for ConnectionHandler {
         target_shard: usize,
         commands: Vec<ParsedCommand>,
         watches: Vec<WatchEntry>,
+        watch_fences: WatchFenceRole,
     ) -> ShardTxnReply {
         let (response_tx, response_rx) = oneshot::channel();
         let msg = CoreMsg::ExecTransaction {
@@ -227,6 +230,11 @@ impl TxnHost for ConnectionHandler {
             // the shard can refuse the apply atomically if it moved on
             // (`specs/txn.md` TR-TXN-020).
             routing_fence: self.pending_slot_fence,
+            // Either "mint me a generation handle per watched key" (a
+            // watch-only probe of a shard that is not the target) or the
+            // handles a previous probe minted, for this shard to re-verify
+            // inside its commit step (`specs/txn.md` TR-TXN-028).
+            watch_fences,
             response_tx,
         };
 

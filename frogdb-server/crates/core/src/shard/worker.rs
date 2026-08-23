@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use bytes::Bytes;
 use frogdb_protocol::Response;
@@ -81,12 +81,89 @@ impl WatchAbortReason {
     }
 }
 
+/// A remote-readable handle on one watched slot's WATCH generation.
+///
+/// The generation itself lives on — and is only ever advanced by — the shard
+/// that owns the slot. A fence hands a *reader* out: the two counters behind it
+/// are the very cells the owner bumps, so `still_current` observes every write
+/// the owning shard has finished, from any thread, with no round-trip.
+///
+/// That is what closes TR-TXN-028's window. A watch on a shard other than the
+/// batch's target is verified there first (a cheap fail-fast), and the fence it
+/// mints then rides on the target's `ExecTransaction`: the target re-reads the
+/// foreign generation *inside its own atomic commit step*, before the first
+/// queued command runs. Any write to the watched slot that the coordinator
+/// could have missed between the two is therefore either visible to that read —
+/// and aborts the EXEC — or happened after the commit step began, at which
+/// point nothing on the target shard has observed the batch yet and the EXEC
+/// legitimately orders before it.
+#[derive(Debug, Clone)]
+pub struct WatchFence {
+    /// The owning shard's stamp cell for this slot.
+    slot_stamp: Arc<AtomicU64>,
+    /// The owning shard's epoch cell, folded in exactly as `version_for` does.
+    epoch: Arc<AtomicU64>,
+    /// The generation the watch was taken against.
+    observed: u64,
+}
+
+impl WatchFence {
+    /// Build a fence over caller-owned generation cells.
+    ///
+    /// Production fences come from the owning shard
+    /// ([`ShardWorker::watch_fence_for_key`]); this constructor is what lets a
+    /// test move a generation under a fence that has already been carried.
+    pub fn over(slot_stamp: Arc<AtomicU64>, epoch: Arc<AtomicU64>, observed: u64) -> Self {
+        Self {
+            slot_stamp,
+            epoch,
+            observed,
+        }
+    }
+
+    /// Whether the watched slot's generation still reads as it did at WATCH.
+    ///
+    /// The two loads are not one atomic read, and they do not need to be: both
+    /// counters only ever advance, so a torn pair reads *some* value at or above
+    /// the true current generation and can never coincide with an older
+    /// snapshot. A fence can therefore refuse a hair early under a concurrent
+    /// bump, but never miss one.
+    pub fn still_current(&self) -> bool {
+        self.slot_stamp
+            .load(Ordering::Acquire)
+            .wrapping_add(self.epoch.load(Ordering::Acquire))
+            == self.observed
+    }
+}
+
+/// Which side of the off-target watch protocol (TR-TXN-028) one
+/// `ExecTransaction` round-trip plays.
+#[derive(Debug, Clone)]
+pub enum WatchFenceRole {
+    /// Re-verify these carried fences before running anything, and abort the
+    /// whole batch if any generation moved. `Verify(vec![])` — the default — is
+    /// every EXEC that has no watch off its target shard.
+    Verify(Vec<WatchFence>),
+    /// Watch-only probe on a shard that is *not* the batch's target: answer a
+    /// clean verdict with one fence per watched key, so the target's commit can
+    /// re-verify them atomically.
+    Mint,
+}
+
+impl Default for WatchFenceRole {
+    fn default() -> Self {
+        Self::Verify(Vec::new())
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SlotVersions {
-    /// slot -> version; a slot absent from the map reads as 0 (never bumped).
-    versions: std::collections::HashMap<u16, u64>,
+    /// slot -> version cell; a slot absent from the map reads as 0 (never
+    /// bumped). The cell is shared rather than owned so a [`WatchFence`] can
+    /// hand the *reader* to another shard while this shard keeps bumping it.
+    versions: std::collections::HashMap<u16, Arc<AtomicU64>>,
     /// Shard-wide epoch folded into every key's effective version (see above).
-    global_epoch: u64,
+    global_epoch: Arc<AtomicU64>,
 }
 
 impl SlotVersions {
@@ -96,20 +173,32 @@ impl SlotVersions {
     pub(crate) fn version_for(&self, slot: u16) -> u64 {
         self.versions
             .get(&slot)
-            .copied()
+            .map(|cell| cell.load(Ordering::Acquire))
             .unwrap_or(0)
-            .wrapping_add(self.global_epoch)
+            .wrapping_add(self.global_epoch.load(Ordering::Acquire))
+    }
+
+    /// A fence over `slot`'s generation, pinned to the `observed` value.
+    ///
+    /// Materializes the slot's cell if this shard has never bumped it: a fence
+    /// over a never-written slot is exactly the interesting case (the dead
+    /// watch on an absent key), and it has to see the *creation* that bumps it.
+    pub(crate) fn fence_for(&mut self, slot: u16, observed: u64) -> WatchFence {
+        let cell = Arc::clone(self.versions.entry(slot).or_default());
+        WatchFence::over(cell, Arc::clone(&self.global_epoch), observed)
     }
 
     /// Advance a single slot's stamp by one.
     fn bump_slot(&mut self, slot: u16) {
-        let v = self.versions.entry(slot).or_insert(0);
-        *v = v.wrapping_add(1);
+        self.versions
+            .entry(slot)
+            .or_default()
+            .fetch_add(1, Ordering::Release);
     }
 
     /// Advance the shard-wide epoch (invalidates every outstanding watch).
     fn bump_global(&mut self) {
-        self.global_epoch = self.global_epoch.wrapping_add(1);
+        self.global_epoch.fetch_add(1, Ordering::Release);
     }
 
     /// Advance the slots of the given keys, each distinct slot at most once per
@@ -756,6 +845,27 @@ impl ShardWorker {
     /// `check_watches` discriminates keys by slot.
     pub fn get_key_version(&self, key: &[u8]) -> u64 {
         self.slot_versions.version_for(slot_for_key(key))
+    }
+
+    /// Mint a [`WatchFence`] over `key`'s slot, pinned to `observed`.
+    ///
+    /// Only this shard advances that generation, but the fence reads it from
+    /// anywhere — which is what lets the batch's *target* shard re-check a watch
+    /// this shard owns, inside the target's own commit step (TR-TXN-028).
+    pub(crate) fn watch_fence_for_key(&mut self, key: &[u8], observed: u64) -> WatchFence {
+        self.slot_versions.fence_for(slot_for_key(key), observed)
+    }
+
+    /// Mint one fence per watch, each pinned to that watch's *current* observed
+    /// generation on this shard.
+    ///
+    /// Called only after [`Self::watch_abort_reason`] came back clean, so each
+    /// key's live generation equals the version recorded at `WATCH` time.
+    pub(crate) fn mint_watch_fences(&mut self, watches: &[WatchEntry]) -> Vec<WatchFence> {
+        watches
+            .iter()
+            .map(|watch| self.watch_fence_for_key(&watch.key, watch.version))
+            .collect()
     }
 
     /// Check if watched keys have changed since they were watched.

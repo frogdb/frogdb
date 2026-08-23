@@ -12,7 +12,7 @@ use super::message::{ScatterOp, WatchEntry};
 use super::post_execution::{EffectScope, WalPhase, WriteSummary};
 use super::rollback::WriteSnapshot;
 use super::types::{CopyPayload, PartialResult, TransactionResult};
-use super::worker::ShardWorker;
+use super::worker::{ShardWorker, WatchAbortReason};
 use crate::command::{Command, CommandEffects, WriteRecord};
 use crate::store::Store;
 use crate::types::{KeyMetadata, Value};
@@ -599,6 +599,7 @@ impl ShardWorker {
         protocol_version: ProtocolVersion,
         admission: &crate::write_seam::WriteAdmission,
         routing_fence: Option<crate::write_seam::SlotFence>,
+        watch_fences: crate::WatchFenceRole,
     ) -> TransactionResult {
         // Routing-generation fence, first of everything (`specs/txn.md`
         // TR-TXN-020). The coordinator's EXEC-time slot verdict is taken from
@@ -651,6 +652,34 @@ impl ShardWorker {
         if let Some(reason) = self.watch_abort_reason(watches) {
             TransactionsWatchAborted::inc(self.observability.metrics(), reason.label());
             return TransactionResult::WatchAborted;
+        }
+
+        match watch_fences {
+            // A watch-only probe of a non-target shard. The verdict above is
+            // clean, so hand back a generation handle per watched key and stop:
+            // there are no commands, and the answer's whole purpose is to let
+            // the *target* shard ask this same question again at commit time
+            // (`specs/txn.md` TR-TXN-028).
+            crate::WatchFenceRole::Mint => {
+                return TransactionResult::WatchesFenced(self.mint_watch_fences(watches));
+            }
+            // The batch itself. Re-read every generation carried in from a
+            // non-target shard, at the last point before the first queued
+            // command runs — as with the routing fence above, refusing *here*
+            // is what makes the refusal atomic. A write to an off-target
+            // watched slot that landed after the coordinator's probe is
+            // therefore still seen; one that lands after this read cannot have
+            // been observed by anything ordered before this batch, because this
+            // shard has processed no other message since it dequeued the EXEC.
+            crate::WatchFenceRole::Verify(carried) => {
+                if carried.iter().any(|fence| !fence.still_current()) {
+                    TransactionsWatchAborted::inc(
+                        self.observability.metrics(),
+                        WatchAbortReason::WatchedSlotWrite.label(),
+                    );
+                    return TransactionResult::WatchAborted;
+                }
+            }
         }
 
         // Same two orthogonal gates as the single-command path above: the
@@ -2416,6 +2445,7 @@ mod deny_blocking_tests {
                 protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
                 admission: crate::write_seam::WriteAdmission::internal(),
                 routing_fence: None,
+                watch_fences: Default::default(),
                 response_tx: tx,
             })
             .await;
@@ -2589,6 +2619,7 @@ mod transaction_admission_tests {
                 protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
                 admission,
                 routing_fence: None,
+                watch_fences: Default::default(),
                 response_tx: tx,
             })
             .await;
@@ -2668,6 +2699,7 @@ mod transaction_admission_tests {
                 protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
                 admission: WriteAdmission::internal(),
                 routing_fence,
+                watch_fences: Default::default(),
                 response_tx: tx,
             })
             .await;
@@ -2714,6 +2746,136 @@ mod transaction_admission_tests {
             "an unchanged routing generation must commit, got {result:?}"
         );
         assert!(ran.load(Ordering::Relaxed), "the batch must have run");
+    }
+
+    /// Send one `__QUEUEDWRITE` batch under `watch_fences` and report the
+    /// shard's verdict. `watches` is what the *target* itself is watching, kept
+    /// empty here: the carried fences stand for a foreign shard's watches, and
+    /// this shard holds no stamp for them.
+    async fn exec_watch_fenced(
+        worker: &mut ShardWorker,
+        watch_fences: crate::WatchFenceRole,
+    ) -> TransactionResult {
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ExecTransaction {
+                commands: vec![ParsedCommand::new(
+                    Bytes::from_static(b"__QUEUEDWRITE"),
+                    vec![],
+                )],
+                watches: vec![],
+                conn_id: 1,
+                protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
+                admission: WriteAdmission::internal(),
+                routing_fence: None,
+                watch_fences,
+                response_tx: tx,
+            })
+            .await;
+        rx.await.expect("shard replied")
+    }
+
+    /// A foreign shard's generation cells, and a fence over them taken at the
+    /// value they currently read — the shape a clean watch-only probe answers
+    /// with.
+    fn foreign_fence() -> (Arc<AtomicU64>, crate::WatchFence) {
+        let slot_stamp = Arc::new(AtomicU64::new(4));
+        let epoch = Arc::new(AtomicU64::new(0));
+        let fence = crate::WatchFence::over(Arc::clone(&slot_stamp), epoch, 4);
+        (slot_stamp, fence)
+    }
+
+    /// The window TR-TXN-028 closes, at the shard that has to close it. The
+    /// off-target probe answered clean and handed over the watched key's
+    /// generation; a write to that key then landed *before* the batch reached
+    /// this shard. The carried generation is re-read here, and the refusal has
+    /// to be atomic for the same reason the routing fence's is — nothing undoes
+    /// a batch that already ran.
+    // FM-TXN-020
+    #[tokio::test]
+    async fn a_carried_watch_fence_that_moved_refuses_the_apply_before_any_command_runs() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let mut worker = worker(Arc::clone(&ran));
+        let (slot_stamp, fence) = foreign_fence();
+
+        // Another client writes the off-target watched key, after its check.
+        slot_stamp.fetch_add(1, Ordering::Release);
+
+        let result =
+            exec_watch_fenced(&mut worker, crate::WatchFenceRole::Verify(vec![fence])).await;
+
+        assert!(
+            matches!(result, TransactionResult::WatchAborted),
+            "a moved off-target generation must abort the EXEC, got {result:?}"
+        );
+        assert!(
+            !ran.load(Ordering::Relaxed),
+            "the refusal must be atomic: no queued command may have run"
+        );
+    }
+
+    /// The permissive half: an untouched off-target watch must not turn every
+    /// cross-shard dead watch into a spurious abort.
+    // FM-TXN-020
+    #[tokio::test]
+    async fn a_carried_watch_fence_that_still_reads_current_admits_the_apply() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let mut worker = worker(Arc::clone(&ran));
+        let (_slot_stamp, fence) = foreign_fence();
+
+        let result =
+            exec_watch_fenced(&mut worker, crate::WatchFenceRole::Verify(vec![fence])).await;
+
+        assert!(
+            matches!(result, TransactionResult::Success(_)),
+            "an untouched off-target generation must commit, got {result:?}"
+        );
+        assert!(ran.load(Ordering::Relaxed), "the batch must have run");
+    }
+
+    /// The minting half of the protocol: a watch-only probe answers with one
+    /// generation handle per watched key, and that handle tracks this shard's
+    /// own subsequent writes — which is what makes it worth carrying.
+    // FM-TXN-020
+    #[tokio::test]
+    async fn a_mint_probe_answers_fences_that_track_this_shards_writes() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let mut worker = worker(Arc::clone(&ran));
+        let key = Bytes::from_static(b"counter");
+        let version = worker.get_key_version(&key);
+
+        let (tx, rx) = oneshot::channel();
+        worker
+            .dispatch_core(CoreMsg::ExecTransaction {
+                commands: vec![],
+                watches: vec![crate::WatchEntry {
+                    key: key.clone(),
+                    version,
+                    live_at_watch: false,
+                }],
+                conn_id: 1,
+                protocol_version: frogdb_protocol::ProtocolVersion::Resp2,
+                admission: WriteAdmission::internal(),
+                routing_fence: None,
+                watch_fences: crate::WatchFenceRole::Mint,
+                response_tx: tx,
+            })
+            .await;
+
+        let fences = match rx.await.expect("shard replied") {
+            TransactionResult::WatchesFenced(fences) => fences,
+            other => panic!("a clean Mint probe must answer WatchesFenced, got {other:?}"),
+        };
+        assert_eq!(fences.len(), 1, "one fence per watched key");
+        assert!(fences[0].still_current(), "nothing has written the key yet");
+
+        // The creation the dead watch is watching for.
+        worker.bump_version_for_key(&key);
+
+        assert!(
+            !fences[0].still_current(),
+            "the fence must see a write this shard took after minting it"
+        );
     }
 }
 

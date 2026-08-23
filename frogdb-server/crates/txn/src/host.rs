@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use frogdb_core::{
-    MetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry,
+    MetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry, WatchFenceRole,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 
@@ -120,11 +120,20 @@ pub trait TxnHost {
 
     /// One EXEC shard round-trip: hand `commands` + `watches` to `target_shard`
     /// and await its answer.
+    ///
+    /// `watch_fences` says which side of the off-target watch protocol this
+    /// trip plays (`specs/txn.md` TR-TXN-028): [`WatchFenceRole::Mint`] on a
+    /// watch-only probe of a shard that is not the batch's target, so the reply
+    /// carries a generation handle per watched key; and
+    /// [`WatchFenceRole::Verify`] on the batch itself, carrying those handles
+    /// for the target to re-read inside its own commit step. The default,
+    /// `Verify(vec![])`, is every EXEC whose watches all live on its target.
     async fn send_shard_transaction(
         &mut self,
         target_shard: usize,
         commands: Vec<ParsedCommand>,
         watches: Vec<WatchEntry>,
+        watch_fences: WatchFenceRole,
     ) -> ShardTxnReply;
 
     /// The reply for a batch whose routing generation refused to settle.

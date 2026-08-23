@@ -93,4 +93,4 @@ pub use types::{
     WalLagStatsResponse,
 };
 pub use wait_queue::{ShardWaitQueue, WaitEntry, WaitRegistrationRecord, WaiterDump};
-pub use worker::ShardWorker;
+pub use worker::{ShardWorker, WatchFence, WatchFenceRole};

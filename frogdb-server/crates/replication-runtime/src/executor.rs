@@ -116,6 +116,7 @@ impl ReplicaCommandExecutor {
             // Replica apply carries no routing fence: the slot belongs to the
             // primary, so this node has no local generation to fence against.
             routing_fence: None,
+            watch_fences: Default::default(),
             response_tx,
         };
         self.sender_for(shard_id)?

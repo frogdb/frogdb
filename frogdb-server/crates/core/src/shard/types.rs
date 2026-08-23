@@ -1249,6 +1249,17 @@ pub enum TransactionResult {
     /// [`Self::Error`] precisely so it cannot be mistaken for a terminal answer
     /// and surfaced to the client as one.
     TopologyChanged,
+    /// Every watch on this shard still holds, and here is a generation handle
+    /// per watched key so the batch's target shard can say so again *at commit
+    /// time* (`specs/txn.md` TR-TXN-028).
+    ///
+    /// The answer to a [`WatchFenceRole::Mint`] round-trip, which carries no
+    /// commands — it is the coordinator asking a non-target shard about its
+    /// watches. A dirty verdict still comes back as [`Self::WatchAborted`]:
+    /// fences are only minted when there is nothing to abort on yet.
+    ///
+    /// [`WatchFenceRole::Mint`]: crate::WatchFenceRole
+    WatchesFenced(Vec<crate::WatchFence>),
     /// Transaction failed with an error.
     Error(String),
 }

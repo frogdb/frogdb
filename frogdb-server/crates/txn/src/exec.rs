@@ -11,7 +11,9 @@
 //! deferred-command merge. Every effect it needs goes through [`TxnHost`].
 
 use bytes::Bytes;
-use frogdb_core::{RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry};
+use frogdb_core::{
+    RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry, WatchFence, WatchFenceRole,
+};
 use frogdb_protocol::{ParsedCommand, Response};
 use tracing::debug;
 
@@ -332,12 +334,32 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
     // answer from an unrelated counter. Hence one extra watch-only round-trip
     // per off-target shard, taken before the batch so a broken CAS cannot leave
     // the target's commands committed behind it.
+    //
+    // Taking it before the batch is necessary but not sufficient: the probe and
+    // the target's commit are two separate shard messages, and a write to an
+    // off-target watched slot landing between them would be invisible to both.
+    // So the probe does not answer a bare clean/dirty verdict — it answers with
+    // a *generation handle* per watched key, and those handles ride on the
+    // target's batch, which re-reads them inside its own commit step
+    // (TR-TXN-028). The probe stays because it fails fast, on the shard that
+    // can name the abort reason; the carried handles are what make the verdict
+    // hold all the way to the commit.
     let (target_watches, off_target_watches) = partition_watches(watches, target_shard);
+    let mut carried_fences = Vec::new();
     for (shard, entries) in off_target_watches {
-        if let Err((outcome, reply)) =
-            run_shard_transaction(host, shard, vec![], entries, &queue, asking).await
+        match run_shard_transaction(
+            host,
+            shard,
+            vec![],
+            entries,
+            &queue,
+            asking,
+            WatchFenceRole::Mint,
+        )
+        .await
         {
-            return (outcome, vec![reply]);
+            Ok((_, fences)) => carried_fences.extend(fences),
+            Err((outcome, reply)) => return (outcome, vec![reply]),
         }
     }
 
@@ -346,9 +368,16 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
         // No shard commands, but watches still need a shard round-trip
         // (with an empty command list) to be checked and cleared.
         if !target_watches.is_empty()
-            && let Err((outcome, reply)) =
-                run_shard_transaction(host, target_shard, vec![], target_watches, &queue, asking)
-                    .await
+            && let Err((outcome, reply)) = run_shard_transaction(
+                host,
+                target_shard,
+                vec![],
+                target_watches,
+                &queue,
+                asking,
+                WatchFenceRole::Verify(carried_fences),
+            )
+            .await
         {
             return (outcome, vec![reply]);
         }
@@ -361,10 +390,11 @@ pub async fn execute_transaction<H: TxnHost + ?Sized>(
             target_watches,
             &queue,
             asking,
+            WatchFenceRole::Verify(carried_fences),
         )
         .await
         {
-            Ok(results) => results,
+            Ok((results, _)) => results,
             Err((outcome, reply)) => return (outcome, vec![reply]),
         }
     };
@@ -449,6 +479,9 @@ fn partition_watches(
 enum ShardStep {
     /// The shard ran the batch.
     Results(Vec<Response>),
+    /// A watch-only probe came back clean, with one generation handle per
+    /// watched key for the target's commit to re-verify (TR-TXN-028).
+    Fenced(Vec<WatchFence>),
     /// The shard refused *before running anything*: the routing generation the
     /// batch was validated against is no longer the live one.
     TopologyChanged,
@@ -474,6 +507,11 @@ enum ShardStep {
 /// `queue` and `asking` are the re-validation arguments; they are the whole
 /// batch, not `commands`, because the queue's verdict is a whole-batch fact and
 /// the deferred commands are part of it.
+///
+/// `role` decides what the trip is for (TR-TXN-028), so the success side is a
+/// pair: the batch's per-command replies, and the generation handles a
+/// [`WatchFenceRole::Mint`] probe answered with. Exactly one of the two is ever
+/// non-empty, and neither caller has to name the other.
 async fn run_shard_transaction<H: TxnHost + ?Sized>(
     host: &mut H,
     target_shard: usize,
@@ -481,18 +519,21 @@ async fn run_shard_transaction<H: TxnHost + ?Sized>(
     mut watches: Vec<WatchEntry>,
     queue: &[ParsedCommand],
     asking: bool,
-) -> Result<Vec<Response>, (TransactionOutcome, Response)> {
+    mut role: WatchFenceRole,
+) -> Result<(Vec<Response>, Vec<WatchFence>), (TransactionOutcome, Response)> {
     for attempt in 1..=ROUTING_ATTEMPTS {
         // Sending consumes the batch, so keep a copy back while another attempt
         // is still allowed. The payload is `Bytes`, so the copy is a refcount
         // bump per argument.
-        let held = (attempt < ROUTING_ATTEMPTS).then(|| (commands.clone(), watches.clone()));
+        let held =
+            (attempt < ROUTING_ATTEMPTS).then(|| (commands.clone(), watches.clone(), role.clone()));
 
-        match shard_step(host, target_shard, commands, watches).await {
-            ShardStep::Results(results) => return Ok(results),
+        match shard_step(host, target_shard, commands, watches, role).await {
+            ShardStep::Results(results) => return Ok((results, Vec::new())),
+            ShardStep::Fenced(fences) => return Ok((Vec::new(), fences)),
             ShardStep::Finished(outcome, reply) => return Err((outcome, reply)),
             ShardStep::TopologyChanged => {
-                let Some((held_commands, held_watches)) = held else {
+                let Some((held_commands, held_watches, held_role)) = held else {
                     break;
                 };
                 debug!(
@@ -504,6 +545,7 @@ async fn run_shard_transaction<H: TxnHost + ?Sized>(
                 }
                 commands = held_commands;
                 watches = held_watches;
+                role = held_role;
             }
         }
     }
@@ -520,13 +562,17 @@ async fn shard_step<H: TxnHost + ?Sized>(
     target_shard: usize,
     commands: Vec<ParsedCommand>,
     watches: Vec<WatchEntry>,
+    role: WatchFenceRole,
 ) -> ShardStep {
     let conn_id = host.conn_id();
     match host
-        .send_shard_transaction(target_shard, commands, watches)
+        .send_shard_transaction(target_shard, commands, watches, role)
         .await
     {
         ShardTxnReply::Replied(TransactionResult::Success(results)) => ShardStep::Results(results),
+        ShardTxnReply::Replied(TransactionResult::WatchesFenced(fences)) => {
+            ShardStep::Fenced(fences)
+        }
         ShardTxnReply::Replied(TransactionResult::WatchAborted) => {
             debug!(conn_id, "Transaction aborted due to WATCH conflict");
             ShardStep::Finished(TransactionOutcome::WatchAborted, Response::null())
