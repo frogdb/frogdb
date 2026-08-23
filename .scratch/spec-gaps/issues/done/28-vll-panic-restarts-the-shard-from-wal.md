@@ -1,6 +1,6 @@
 # A panic in a VLL write path escalates to process fail-stop
 
-Status: ready-for-agent
+Status: done
 
 Size: S
 
@@ -47,13 +47,44 @@ never completed.
 
 ## Acceptance criteria
 
-- [ ] A panic in a VLL write path triggers process fail-stop; a panic in a read path does not
-      (both directions forced)
-- [ ] FM-VLL-005 updated with the write/read split and the "partial writes surviving a panic"
-      NOT observable, forcing test named; `just lint-spec` green
-- [ ] TR-VLL-020's `Pending` field removed
-- [ ] `just mutants-diff frogdb-vll` triaged on touched code
+- A panic in a VLL write path triggers process fail-stop; a panic in a read path does not
+  (both directions forced)
+- FM-VLL-005 updated with the write/read split and the "partial writes surviving a panic"
+  NOT observable, forcing test named; `just lint-spec` green
+- TR-VLL-020's `Pending` field removed
+- `just mutants-diff frogdb-vll` triaged on touched code
 
 ## Blocked by
 
 None - can start immediately.
+
+## Outcome
+
+Built as ruled. The escalation lives in `frogdb-vll` so the forcing tests count toward that
+crate's mutation gate:
+
+- `frogdb-server/crates/vll/src/fail_stop.rs` (new) — `FailStopSink` (injectable),
+  `ProcessExitFailStop` (production: stderr line, then `std::process::exit(70)` =
+  `EX_SOFTWARE`, distinct from 101/134/0), `WritePathPanic`, `PanicEscalation`.
+- `VllShardState::release_after_panic` decides the split from the `LockMode` the op declared at
+  enqueue (`VllPendingOp`/`DequeuedOp` now carry `mode`): read → `Isolated`, write → fires the
+  sink → `FailStop`. Every `VllShardState` installs `ProcessExitFailStop` by default, so unwired
+  code fails closed; a test that deliberately panics a write op opts out with
+  `set_fail_stop_sink`.
+- `handle_vll_execute`'s panic arm (`frogdb-core`) calls it after the existing lock release.
+- No new recovery mechanism: startup WAL replay is the restart path, as ruled.
+
+Forcing tests (all tagged `// FM-VLL-005`):
+
+- `a_write_path_panic_escalates_to_process_fail_stop` (frogdb-vll, `shard.rs`)
+- `a_read_path_panic_is_isolated_without_fail_stop` (frogdb-vll, `shard.rs`)
+- `a_dequeued_op_carries_the_mode_it_declared` (frogdb-vll, `shard.rs`) — pins the input the
+  split reads
+- `a_panicking_vll_op_releases_its_locks_and_the_shard_keeps_serving` (frogdb-core,
+  `panic_guard.rs`) — extended to inject a recording sink and assert the escalation fired once
+
+Spec: FM-VLL-005 states the write/read split, exit code, and the new "partial writes surviving a
+panic" NOT observable; TR-VLL-020 restated as built and its `Pending` field removed.
+`ProcessExitFailStop::fail_stop` is excluded in `.cargo/mutants.toml` (a mutant of a body whose
+real effect is exiting the test process is unobservable by construction; the *decision* to call
+it is what the forcing tests pin).

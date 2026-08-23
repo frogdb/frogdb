@@ -117,8 +117,9 @@ txid, bounded by `MAX_WOUND_RETRIES`. `ScatterError::ResultTimeout` became
 in), FM-VLL-009 (phase-4 AMBIGUOUS), LV-VLL-001 (progress under collision); TR-VLL-013/014/015/019
 restated as built.
 
-Item 4 (panic → WAL restart) is **not** built and moved to
-[issue 28](../open/28-vll-panic-restarts-the-shard-from-wal.md): no single-shard restart mechanism
-exists anywhere in the tree to build it on (recovery is a process-startup path; the shard
-supervisor's only answer to a dead worker is `AbortFailStop`), so it is a design task rather than an
-increment on this package. TR-VLL-020 keeps a `Pending` field pointing there.
+Item 4 (panic → WAL restart) was **not** built here and moved to
+[issue 28](28-vll-panic-restarts-the-shard-from-wal.md): no single-shard restart mechanism exists
+anywhere in the tree to build it on (recovery is a process-startup path; the shard supervisor's only
+answer to a dead worker is `AbortFailStop`), so it was a design task rather than an increment on this
+package. Issue 28 (ruling R7) re-ruled it as process fail-stop on a write-path panic and is now done;
+TR-VLL-020 states the built behavior and no longer carries a `Pending` field.
