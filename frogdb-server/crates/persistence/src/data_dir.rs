@@ -128,10 +128,9 @@ impl DataDirLayout {
 
     /// Is `name` a top-level entry the *install* owns?
     ///
-    /// Used by [`contains_foreign_files`] to decide what is not evidence of
-    /// somebody else's data. Matches `staging` and its scratch variants
-    /// (`staging.incoming`, `staging.discarded`) by prefix, so a new scratch
-    /// suffix does not have to be enumerated here to avoid refusing a boot.
+    /// Matches `staging` and its scratch variants (`staging.incoming`,
+    /// `staging.discarded`) by prefix, so a new scratch suffix does not have to
+    /// be enumerated here to avoid refusing a boot.
     ///
     /// `db` is deliberately **not** in this set: a directory holding a real
     /// database but no marker is the shape FM-PERSISTENCE-051 exists to refuse,
@@ -142,6 +141,23 @@ impl DataDirLayout {
             || name
                 .strip_prefix(STAGING_DIR_NAME)
                 .is_some_and(|rest| rest.starts_with('.'))
+    }
+
+    /// Is `name` a top-level entry *FrogDB itself* owns?
+    ///
+    /// Used by [`foreign_files`] to decide what is not evidence of somebody
+    /// else's data: the install's scratch, plus the identity marker. The marker
+    /// only ever reaches the probe when it could not be *read* — a readable one
+    /// settles the verdict before the probe runs — and an unreadable marker is
+    /// still FrogDB's own byte, not a foreign one, so counting it would make
+    /// "re-stamp this directory" impossible on the very directory the flag
+    /// exists for (FM-PERSISTENCE-050).
+    ///
+    /// `frogdb_data_dir.tmp` is deliberately **not** excused: a scratch file a
+    /// failed publish left behind is content in an unmarked directory, and
+    /// FM-PERSISTENCE-049 rules that it refuses the next boot.
+    fn is_own_artifact(name: &str) -> bool {
+        name == MARKER_FILE_NAME || Self::is_install_scratch(name)
     }
 }
 
@@ -352,38 +368,82 @@ pub fn contains_files(dir: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
-/// [`contains_files`] over a data directory, ignoring the install's own scratch.
+/// [`contains_files`] over a data directory, ignoring FrogDB's own artifacts —
+/// and *naming* what it finds.
 ///
 /// This is the question phase 0 actually asks: *did somebody else write here?*
 /// Since staging moved inside the data directory ([`DataDirLayout`]), a plain
 /// [`contains_files`] would answer yes for the documented operator restore —
 /// place a checkpoint in `<data-dir>/staging`, start the server — and refuse the
-/// boot it is meant to enable. `staging*` and `backup` are FrogDB's own install
-/// artifacts, so they are skipped at the top level and *only* at the top level.
+/// boot it is meant to enable. `staging*`, `backup` and the identity marker are
+/// FrogDB's own, so they are skipped at the top level and *only* at the top
+/// level ([`DataDirLayout::is_own_artifact`]).
 ///
 /// `db` is not skipped: an unmarked directory holding a real database is what
 /// FM-PERSISTENCE-051 refuses, and that has not changed.
-pub fn contains_foreign_files(dir: &Path) -> io::Result<bool> {
+///
+/// Returned paths are relative to `dir`, so a refusal can print
+/// `db/important.txt` rather than a resolved path the operator has to re-read.
+/// The walk stops at `limit` names: the caller only needs enough to tell the
+/// operator *what* is in the way, and a first-`limit`-files probe keeps the cost
+/// bounded by the answer rather than by the size of somebody else's tree. A
+/// `limit` of 0 therefore answers "nothing is here" for every directory —
+/// callers deciding a boot must pass at least 1.
+///
+/// A directory that is not there contains no files; every other listing failure
+/// propagates, because a directory whose contents are unknown must not read as
+/// empty.
+pub fn foreign_files(dir: &Path, limit: usize) -> io::Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(found),
         Err(err) => return Err(err),
     };
     for entry in entries {
+        if found.len() >= limit {
+            break;
+        }
         let entry = entry?;
         let name = entry.file_name();
-        if DataDirLayout::is_install_scratch(&name.to_string_lossy()) {
+        if DataDirLayout::is_own_artifact(&name.to_string_lossy()) {
             continue;
         }
         if entry.file_type()?.is_dir() {
-            if contains_files(&entry.path())? {
-                return Ok(true);
-            }
+            collect_files(&entry.path(), Path::new(&name), limit, &mut found)?;
         } else {
-            return Ok(true);
+            found.push(PathBuf::from(name));
         }
     }
-    Ok(false)
+    Ok(found)
+}
+
+/// [`foreign_files`]' recursion: append the files under `dir` — named relative
+/// to the data directory via `prefix` — until `out` holds `limit` of them.
+fn collect_files(
+    dir: &Path,
+    prefix: &Path,
+    limit: usize,
+    out: &mut Vec<PathBuf>,
+) -> io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        if out.len() >= limit {
+            break;
+        }
+        let entry = entry?;
+        let path = prefix.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            collect_files(&entry.path(), &path, limit, out)?;
+        } else {
+            out.push(path);
+        }
+    }
+    Ok(())
 }
 
 /// 128 random bits, rendered as 32 lowercase hex characters (the shape Redis'
@@ -658,16 +718,19 @@ mod tests {
     /// Staging moved inside the data directory, so the emptiness question had to
     /// learn to ignore the install's own artifacts — otherwise the documented
     /// operator restore (drop a checkpoint in `<data-dir>/staging`, start the
-    /// server) refuses the very boot it exists to enable. A real `db/` is still
-    /// content, because an unmarked database is what FM-PERSISTENCE-051 refuses.
-    // FM-PERSISTENCE-048, FM-PERSISTENCE-057
+    /// server) refuses the very boot it exists to enable. The marker is excused
+    /// for the same reason: an unreadable one is still FrogDB's byte, and
+    /// counting it would leave no directory the fresh-start flag could re-stamp
+    /// (FM-PERSISTENCE-050). A real `db/` is still content, because an unmarked
+    /// database is what FM-PERSISTENCE-051 refuses.
+    // FM-PERSISTENCE-048, FM-PERSISTENCE-050, FM-PERSISTENCE-057
     #[test]
     fn foreign_files_ignores_the_install_scratch_but_not_the_database() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let layout = DataDirLayout::new(root);
 
-        assert!(!contains_foreign_files(root).unwrap(), "empty is empty");
+        assert!(foreign_files(root, 8).unwrap().is_empty(), "empty is empty");
 
         for dir in [
             layout.staging_dir(),
@@ -678,20 +741,67 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("CURRENT"), b"MANIFEST-000001\n").unwrap();
         }
+        std::fs::write(layout.marker_path(), b"{ truncated mid-writ").unwrap();
         assert!(
-            !contains_foreign_files(root).unwrap(),
-            "a staged restore and old backups are FrogDB's own artifacts, not somebody else's data"
+            foreign_files(root, 8).unwrap().is_empty(),
+            "a staged restore, old backups and the marker itself are FrogDB's own artifacts, \
+             not somebody else's data"
         );
         assert!(
             contains_files(root).unwrap(),
             "they are still files: the narrower question is the one phase 0 asks"
         );
 
+        std::fs::write(root.join(MARKER_TEMP_FILE_NAME), b"{").unwrap();
+        assert_eq!(
+            foreign_files(root, 8).unwrap(),
+            vec![PathBuf::from(MARKER_TEMP_FILE_NAME)],
+            "a scratch marker a failed publish left behind is content, not an excused artifact"
+        );
+        std::fs::remove_file(root.join(MARKER_TEMP_FILE_NAME)).unwrap();
+
         std::fs::create_dir_all(layout.db_dir()).unwrap();
         std::fs::write(layout.db_dir().join("CURRENT"), b"MANIFEST-000007\n").unwrap();
+        assert_eq!(
+            foreign_files(root, 8).unwrap(),
+            vec![Path::new(DB_DIR_NAME).join("CURRENT")],
+            "a live database with no marker must still refuse the boot, named relative to the \
+             data directory"
+        );
+    }
+
+    /// The refusal has to be actionable, which means naming entries rather than
+    /// answering yes/no — and it must not walk somebody else's whole tree to do
+    /// it. `limit` caps both the names and the walk.
+    // FM-PERSISTENCE-048, FM-PERSISTENCE-051
+    #[test]
+    fn foreign_files_names_entries_up_to_the_limit() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let nested = root.join("someone-elses").join("tree");
+        std::fs::create_dir_all(&nested).unwrap();
+        for i in 0..5 {
+            std::fs::write(nested.join(format!("part-{i}")), b"bytes").unwrap();
+        }
+
+        let capped = foreign_files(root, 3).unwrap();
+        assert_eq!(capped.len(), 3, "the walk stops once the limit is reached");
+        for path in &capped {
+            assert!(
+                path.starts_with(Path::new("someone-elses").join("tree")),
+                "names must be relative to the data directory: {}",
+                path.display()
+            );
+        }
+
+        assert_eq!(
+            foreign_files(root, 8).unwrap().len(),
+            5,
+            "a limit above the count reports every entry"
+        );
         assert!(
-            contains_foreign_files(root).unwrap(),
-            "a live database with no marker must still refuse the boot"
+            foreign_files(root, 0).unwrap().is_empty(),
+            "a zero limit collects nothing — which is why no boot decision may pass one"
         );
     }
 

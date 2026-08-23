@@ -43,18 +43,23 @@ pub struct PersistenceConfig {
     /// Set this once the node has been provisioned and a first boot is no
     /// longer expected. A production deployment that flips it turns "the volume
     /// did not mount" from a silently empty keyspace into a refused boot.
-    /// `--force-fresh-data-dir` overrides it for the one boot that really is
-    /// the first.
+    /// `--force-fresh-data-dir` is the provisioning path for the one boot that
+    /// really is the first.
     #[serde(default = "default_require_existing_data")]
     #[param(name = "require-existing-data")]
     pub require_existing_data: bool,
 
-    /// Adopt the data directory this boot even though it has no valid marker:
+    /// Start this data directory fresh even though it has no valid marker:
     /// stamp one and continue. Set only by `--force-fresh-data-dir`.
     ///
-    /// Never wipes anything — it suppresses the refusal and stamps the marker,
-    /// so a directory that already holds a FrogDB database (one written before
-    /// markers existed, or restored by hand) is recovered normally.
+    /// A fresh-start tool, not an override. It suppresses the unreadable-marker
+    /// refusal and `require-existing-data`'s empty-directory refusal, both of
+    /// which are about a directory holding nothing but FrogDB's own artifacts.
+    /// A directory holding entries FrogDB did not write still refuses, with the
+    /// offending entries named: "this really is my first boot" and "these bytes
+    /// are not mine" are indistinguishable to a flag, so the flag resolves only
+    /// the first. Nothing is ever deleted — the operator moves the foreign bytes
+    /// out and retries.
     #[serde(skip)]
     #[param(skip)]
     // skip: one-shot CLI override (--force-fresh-data-dir), deliberately not

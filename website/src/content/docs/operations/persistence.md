@@ -159,8 +159,8 @@ back and decides:
 | The marker | Normal startup. |
 | Nothing (missing, empty, or only empty subdirectories) | First boot: FrogDB initializes the database and writes the marker. |
 | Only a staged restore (`staging/`, `staging.incoming/`, `backup/`) | First boot: those are FrogDB's own install paths, so the staged checkpoint installs and the marker is written. |
-| Files, but no marker | **Startup fails.** |
-| A marker that cannot be read or parsed | **Startup fails.** |
+| Files, but no marker | **Startup fails**, naming the entries that are in the way. `--force-fresh-data-dir` does not override this. |
+| A marker that cannot be read or parsed | **Startup fails.** `--force-fresh-data-dir` re-stamps it, but only if the directory holds nothing else FrogDB did not write. |
 
 The refusal exists because a directory with no FrogDB data in it and a directory FrogDB
 is not supposed to be looking at are the same observation from the inside. A mistyped
@@ -173,20 +173,39 @@ Replicas refuse for the same reasons, and the check runs before the replication 
 dialed. A replica that noticed the problem only after a full resync would have replaced
 the directory's contents with the primary's before anyone could look at it.
 
-### Adopting a directory FrogDB did not stamp
+### A directory holding entries FrogDB did not write
 
-Start once with `--force-fresh-data-dir` to accept the directory as it is and write the
-marker:
+There is no adopt flag. The refusal names the entries it found — relative to the data
+directory, up to eight of them — and the way past it is the filesystem:
+
+```
+data directory /var/lib/frogdb holds entries FrogDB did not write and no FrogDB marker
+(frogdb_data_dir): db/CURRENT, db/MANIFEST-000005, notes.txt. Refusing to start ...
+```
+
+Point `persistence.data-dir` at the right directory, or move those entries somewhere else
+and restart. FrogDB deletes nothing on your behalf, and `--force-fresh-data-dir` does not
+override this case: "this really is my first boot" and "these bytes are not mine" look
+identical to a flag, so the flag resolves only the first. This includes a FrogDB database
+written before markers existed or reassembled by hand — move it aside, restore it through
+[the staged path](/operations/backup-restore/), and the install stamps the directory for
+you.
+
+### Repairing an unreadable marker
+
+Start once with `--force-fresh-data-dir` to re-stamp a directory whose *own* marker has
+become unreadable:
 
 ```bash
 frogdb-server --config /etc/frogdb/frogdb.toml --force-fresh-data-dir
 ```
 
-The flag deletes nothing — existing data is recovered normally — and one boot is enough,
-because the directory is marked afterwards. Use it for a database written before markers
-existed, for one restored by hand, or to repair an unreadable marker. It is a command-line
-flag with no configuration-file equivalent on purpose: a setting left in a config file
-would disable the check permanently, which is exactly the situation the check exists for.
+The flag is a fresh-start tool: it works when the directory holds nothing but FrogDB's own
+artifacts (the marker, `staging/`, `backup/`), and refuses beside anything else. It deletes
+nothing, and one boot is enough because the directory is marked afterwards. It is a
+command-line flag with no configuration-file equivalent on purpose: a setting left in a
+config file would disable the check permanently, which is exactly the situation the check
+exists for.
 
 ### Empty directories and failed mounts
 
