@@ -9,6 +9,7 @@
 //! - Continuation locks for MULTI/EXEC and Lua scripts
 
 mod coordinator;
+mod fail_stop;
 mod lock_table;
 mod queue;
 mod shard;
@@ -18,6 +19,9 @@ mod types;
 pub use coordinator::{
     ContinuationError, ContinuationGuard, DEFAULT_LOCK_ACQUISITION_TIMEOUT, ScatterError,
     ScatterOutcome, ScatterParticipant, ScatterRequest, VllCoordinator,
+};
+pub use fail_stop::{
+    FailStopSink, PanicEscalation, ProcessExitFailStop, WRITE_PATH_PANIC_EXIT_CODE, WritePathPanic,
 };
 pub use shard::{
     CONTINUATION_DRAIN_TIMEOUT, CONTINUATION_MAX_HOLD, ContinuationEvent, ContinuationLockSnapshot,

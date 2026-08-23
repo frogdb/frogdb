@@ -59,18 +59,25 @@ impl ShardWorker {
             super::panic_guard::caught(self.execute_scatter_part(&op.keys, &op.operation, 0)).await;
 
         let result = match outcome {
-            Ok(result) => result,
+            Ok(result) => {
+                self.vll.release_after_execution(op.txid, &op.keys);
+                result
+            }
             Err(panic_message) => {
                 let err = self.recover_from_panic(
                     super::panic_guard::PanicSite::VllExecute,
                     op.operation.name(),
                     &panic_message,
                 );
+                // Release *and* decide whether the node may keep serving. A
+                // read-path panic is isolated as before; a write-path one
+                // half-applied its mutation, so it escalates to a clean process
+                // exit and startup recovery replays the WAL (FM-VLL-005). In
+                // production the escalation does not return.
+                let _ = self.vll.release_after_panic(&op, &panic_message);
                 Self::scatter_error_reply(&op.operation, &op.keys, err)
             }
         };
-
-        self.vll.release_after_execution(op.txid, &op.keys);
 
         let _ = response_tx.send(result);
     }

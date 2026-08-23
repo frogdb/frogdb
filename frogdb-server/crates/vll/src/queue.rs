@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 // against a deadline the timer owns. See `frogdb_types::clock`.
 use tokio::time::Instant;
 
-use super::{PendingOpState, ShardReadyResult, VllError};
+use super::{LockMode, PendingOpState, ShardReadyResult, VllError};
 
 /// A pending VLL operation in the queue.
 ///
@@ -22,6 +22,10 @@ pub struct VllPendingOp<O: Debug = ()> {
     pub txid: u64,
     /// Keys involved in this operation.
     pub keys: Vec<Bytes>,
+    /// How this op declared its keys. Kept past the grant because it is what
+    /// tells a *write* path from a *read* path if the op panics mid-execution
+    /// (see [`VllShardState::release_after_panic`](crate::VllShardState::release_after_panic)).
+    pub mode: LockMode,
     /// The operation to execute.
     pub operation: O,
     /// Current state.
@@ -43,6 +47,7 @@ impl<O: Debug> VllPendingOp<O> {
     pub fn new(
         txid: u64,
         keys: Vec<Bytes>,
+        mode: LockMode,
         operation: O,
         ready_tx: oneshot::Sender<ShardReadyResult>,
         wound_tx: oneshot::Sender<VllError>,
@@ -50,6 +55,7 @@ impl<O: Debug> VllPendingOp<O> {
         Self {
             txid,
             keys,
+            mode,
             operation,
             state: PendingOpState::Pending,
             enqueued_at: Instant::now(),
@@ -214,6 +220,7 @@ mod tests {
         VllPendingOp::new(
             txid,
             vec![Bytes::from_static(b"key1")],
+            LockMode::Write,
             (),
             ready_tx,
             wound_tx,
@@ -307,8 +314,14 @@ mod tests {
     fn wounding_an_op_notifies_its_coordinator_exactly_once() {
         let (ready_tx, _ready_rx) = oneshot::channel();
         let (wound_tx, mut wound_rx) = oneshot::channel();
-        let mut op =
-            VllPendingOp::new(7, vec![Bytes::from_static(b"key1")], (), ready_tx, wound_tx);
+        let mut op = VllPendingOp::new(
+            7,
+            vec![Bytes::from_static(b"key1")],
+            LockMode::Write,
+            (),
+            ready_tx,
+            wound_tx,
+        );
 
         assert!(op.wound(), "the coordinator is listening");
         assert!(matches!(wound_rx.try_recv(), Ok(VllError::Wounded)));

@@ -11,12 +11,14 @@
 //! has finished, releasing locks and unblocking waiters).
 
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::fail_stop::{FailStopSink, PanicEscalation, ProcessExitFailStop, WritePathPanic};
 use super::lock_table::{GrantOutcome, LockTable};
 use super::queue::{ContinuationLock, TransactionQueue, VllPendingOp};
 use super::types::{LockMode, PendingOpState, ShardReadyResult, VllError};
@@ -119,6 +121,11 @@ pub struct VllShardState<O: Debug> {
     /// outstanding.
     executing_ops: usize,
     max_queue_depth: usize,
+    /// How a write-path panic is escalated ([`Self::release_after_panic`]).
+    /// Defaults to the production [`ProcessExitFailStop`] so an unwired host
+    /// fails closed; a test that deliberately panics a write op installs its
+    /// own through [`Self::set_fail_stop_sink`].
+    fail_stop: Arc<dyn FailStopSink>,
 }
 
 impl<O: Debug> Default for VllShardState<O> {
@@ -140,7 +147,16 @@ impl<O: Debug> VllShardState<O> {
             pending_continuation: None,
             executing_ops: 0,
             max_queue_depth,
+            fail_stop: Arc::new(ProcessExitFailStop),
         }
+    }
+
+    /// Replace the fail-stop sink a write-path panic escalates through.
+    ///
+    /// The only reason to call this is a test that panics a write op on
+    /// purpose and wants to observe the escalation rather than be ended by it.
+    pub fn set_fail_stop_sink(&mut self, sink: Arc<dyn FailStopSink>) {
+        self.fail_stop = sink;
     }
 
     fn ensure_initialized(&mut self) -> (&mut LockTable, &mut TransactionQueue<O>) {
@@ -214,7 +230,7 @@ impl<O: Debug> VllShardState<O> {
 
         lock_table.declare(&keys, txid, mode);
 
-        let pending_op = VllPendingOp::new(txid, keys.clone(), operation, ready_tx, wound_tx);
+        let pending_op = VllPendingOp::new(txid, keys.clone(), mode, operation, ready_tx, wound_tx);
         if let Err(_e) = tx_queue.enqueue(pending_op) {
             lock_table.release(&keys, txid);
             return EnqueueOutcome {
@@ -314,6 +330,7 @@ impl<O: Debug> VllShardState<O> {
         Some(DequeuedOp {
             txid: op.txid,
             keys: op.keys,
+            mode: op.mode,
             operation: op.operation,
         })
     }
@@ -335,6 +352,41 @@ impl<O: Debug> VllShardState<O> {
         }
         self.try_advance_pending_locks();
         self.try_grant_pending_continuation();
+    }
+
+    /// Release a dequeued op whose execution **panicked**, and decide whether
+    /// the node may keep serving.
+    ///
+    /// The release half is [`Self::release_after_execution`] unchanged: the
+    /// dequeue/release pairing has to survive an unwind or the dead op's locks
+    /// and its `executing_ops` slot are leaked to a command that no longer
+    /// exists.
+    ///
+    /// The decision half is the write/read split. A [`LockMode::Read`] op that
+    /// panics left nothing half-mutated, so it is isolated and the shard keeps
+    /// serving. A [`LockMode::Write`] op that panics did not finish its
+    /// mutation — this shard's structures may have broken invariants, and for a
+    /// cross-shard op the siblings may have applied writes this shard never
+    /// completed — so it escalates through the installed [`FailStopSink`],
+    /// which in production ends the process. Startup recovery replays the WALs;
+    /// there is no shard-level restart to fall back to and deliberately so (see
+    /// [`ProcessExitFailStop`]).
+    pub fn release_after_panic(
+        &mut self,
+        op: &DequeuedOp<O>,
+        panic_message: &str,
+    ) -> PanicEscalation {
+        self.release_after_execution(op.txid, &op.keys);
+        match op.mode {
+            LockMode::Read => PanicEscalation::Isolated,
+            LockMode::Write => {
+                self.fail_stop.fail_stop(&WritePathPanic {
+                    txid: op.txid,
+                    message: panic_message.to_string(),
+                });
+                PanicEscalation::FailStop
+            }
+        }
     }
 
     /// Abort a pending or ready operation, releasing any held locks and
@@ -710,6 +762,9 @@ pub struct EnqueueOutcome {
 pub struct DequeuedOp<O> {
     pub txid: u64,
     pub keys: Vec<Bytes>,
+    /// The mode the op declared its keys in — the write/read split
+    /// [`VllShardState::release_after_panic`] escalates on.
+    pub mode: LockMode,
     pub operation: O,
 }
 
@@ -1971,6 +2026,138 @@ mod tests {
 
         state.release_after_execution(dequeued.txid, &dequeued.keys);
         assert!(matches!(rr_old.await, Ok(ShardReadyResult::Ready)));
+    }
+
+    /// Run `f`, catching an unwind and rendering its payload the way the
+    /// host's `panic_guard::caught` does. The hook is silenced for the
+    /// duration so a deliberate panic does not look like a test failure in the
+    /// log.
+    fn caught_panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let payload = std::panic::catch_unwind(f).expect_err("the closure must panic");
+        std::panic::set_hook(previous);
+        match payload.downcast_ref::<&'static str>() {
+            Some(s) => (*s).to_string(),
+            None => payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_else(|| "<non-string panic payload>".to_string()),
+        }
+    }
+
+    /// A panic in a **write** path escalates to process fail-stop.
+    ///
+    /// The op was halfway through mutating when it unwound, so this shard's
+    /// structures may have broken invariants and a cross-shard sibling may hold
+    /// writes this shard never finished. Isolating and carrying on would serve
+    /// from that state; the node exits instead and startup recovery replays the
+    /// WAL. The sink is a recorder so the escalation is observable without the
+    /// test process going with it — in production it is
+    /// [`ProcessExitFailStop`].
+    ///
+    /// The release half of the contract is asserted alongside it: escalation
+    /// must not cost the dequeue/release pairing, or a fail-stop that a future
+    /// change downgrades would leave the locks leaked too.
+    // FM-VLL-005
+    #[tokio::test]
+    async fn a_write_path_panic_escalates_to_process_fail_stop() {
+        let sink = Arc::new(crate::fail_stop::testing::RecordingFailStop::default());
+        let mut state: VllShardState<()> = VllShardState::default();
+        state.set_fail_stop_sink(sink.clone());
+        let key = Bytes::from_static(b"k");
+
+        let (rt, rr) = channels();
+        state.enqueue_lock_request(7, vec![key.clone()], LockMode::Write, (), rt, dead_wound());
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+        let op = state.dequeue_for_execution(7).expect("op 7 ready");
+
+        let message = caught_panic_message(|| panic!("half-applied write"));
+        assert_eq!(
+            state.release_after_panic(&op, &message),
+            PanicEscalation::FailStop,
+            "a panic in a write path must escalate, not resume on the existing state"
+        );
+        assert_eq!(
+            sink.calls(),
+            vec![WritePathPanic {
+                txid: 7,
+                message: "half-applied write".to_string(),
+            }],
+            "the fail-stop sink must fire exactly once, naming the panicking transaction"
+        );
+
+        // The locks still released: the escalation is in addition to the
+        // pairing, not instead of it.
+        assert!(state.intent_snapshots().is_empty());
+        let (rt2, rr2) = channels();
+        state.enqueue_lock_request(8, vec![key], LockMode::Write, (), rt2, dead_wound());
+        assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
+    }
+
+    /// A panic in a **read** path does not escalate.
+    ///
+    /// Nothing was half-mutated, so the panic stays isolated: the locks
+    /// release, no fail-stop fires, and the shard answers the next request. The
+    /// negative direction matters as much as the positive one — an escalation
+    /// that fired for reads would turn every isolated read-side defect into a
+    /// node outage, which is precisely what the panic-isolation seam exists to
+    /// prevent.
+    // FM-VLL-005
+    #[tokio::test]
+    async fn a_read_path_panic_is_isolated_without_fail_stop() {
+        let sink = Arc::new(crate::fail_stop::testing::RecordingFailStop::default());
+        let mut state: VllShardState<()> = VllShardState::default();
+        state.set_fail_stop_sink(sink.clone());
+        let key = Bytes::from_static(b"k");
+
+        let (rt, rr) = channels();
+        state.enqueue_lock_request(7, vec![key.clone()], LockMode::Read, (), rt, dead_wound());
+        assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+        let op = state.dequeue_for_execution(7).expect("op 7 ready");
+
+        let message = caught_panic_message(|| panic!("read blew up"));
+        assert_eq!(
+            state.release_after_panic(&op, &message),
+            PanicEscalation::Isolated,
+            "a read-path panic has nothing half-mutated to fail-stop over"
+        );
+        assert!(
+            sink.calls().is_empty(),
+            "a read-path panic must not take the node down, got {:?}",
+            sink.calls()
+        );
+
+        // ...and the shard keeps serving.
+        assert!(state.intent_snapshots().is_empty());
+        let (rt2, rr2) = channels();
+        state.enqueue_lock_request(8, vec![key], LockMode::Write, (), rt2, dead_wound());
+        assert!(matches!(rr2.await, Ok(ShardReadyResult::Ready)));
+    }
+
+    /// The mode a request declared is what the panic split reads, so it has to
+    /// survive the grant and the dequeue rather than being dropped with the
+    /// enqueue call that carried it.
+    // FM-VLL-005
+    #[tokio::test]
+    async fn a_dequeued_op_carries_the_mode_it_declared() {
+        let mut state: VllShardState<()> = VllShardState::default();
+
+        for (txid, mode) in [(1u64, LockMode::Read), (2, LockMode::Write)] {
+            let (rt, rr) = channels();
+            state.enqueue_lock_request(
+                txid,
+                vec![Bytes::from(format!("k{txid}"))],
+                mode,
+                (),
+                rt,
+                dead_wound(),
+            );
+            assert!(matches!(rr.await, Ok(ShardReadyResult::Ready)));
+            let op = state.dequeue_for_execution(txid).expect("op ready");
+            assert_eq!(op.mode, mode, "txid {txid} must keep its declared mode");
+            state.release_after_execution(op.txid, &op.keys);
+        }
     }
 
     #[test]

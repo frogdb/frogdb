@@ -63,6 +63,13 @@ exclude_re = [
     # site, and `Disconnected` is only returned for an *empty* closed channel
     # (see the comment at the method). Unobservable, kept as depth-in-defence.
     "replace FlushEngine<S>::forget_flush_hold with \\(\\)",
+    # `ProcessExitFailStop::fail_stop` ends the process. No test can observe a
+    # mutant of a body whose unmutated effect is killing the test runner, so
+    # every mutation of it is unkillable by construction (see the comment at the
+    # impl). The *decision* to call a sink — write escalates, read does not — is
+    # what the FM-VLL-005 forcing tests pin, and those mutate freely in
+    # `VllShardState::release_after_panic`.
+    "ProcessExitFailStop::fail_stop",
     "::record_gauge",
     "::record_histogram",
     "::record_command_latency_ms",

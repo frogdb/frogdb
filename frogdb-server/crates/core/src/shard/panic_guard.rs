@@ -55,16 +55,23 @@
 //!
 //! **Escalation.** Repeated panics increment
 //! [`ShardPanicsIsolated`](frogdb_types::metrics::definitions::ShardPanicsIsolated)
-//! (labelled by shard and isolation site) and emit one `error!` each; nothing
-//! auto-kills the shard or the process. Rationale: an auto-kill converts a
-//! bounded per-query defect back into the exact availability loss this seam
-//! exists to prevent, and a shard that answers `-ERR internal error` for one
-//! command family while serving every other key is strictly better than a shard
-//! that is gone. A repeat-panic loop is not silent — it is a monotonically
-//! climbing counter operators can alert on. Fail-stop is retained for panics
-//! *outside* the guarded boundary (the maintenance arms of the event loop, the
-//! worker's own setup and teardown): those are not attributable to one client's
-//! message and the supervisor still aborts on them.
+//! (labelled by shard and isolation site) and emit one `error!` each. On a
+//! *read* path nothing further happens: an auto-kill there converts a bounded
+//! per-query defect back into the exact availability loss this seam exists to
+//! prevent, and a shard that answers `-ERR internal error` for one command
+//! family while serving every other key is strictly better than a shard that is
+//! gone. A repeat-panic loop is not silent — it is a monotonically climbing
+//! counter operators can alert on.
+//!
+//! A VLL **write** path is the one exception, and it is not an availability
+//! trade at all: continuing there means serving from structures a half-applied
+//! mutation may have left inconsistent, so the node fail-stops with a clean exit
+//! and startup WAL replay brings it back
+//! ([`vll::fail_stop`](frogdb_vll::ProcessExitFailStop), FM-VLL-005).
+//! Fail-stop is likewise retained for panics *outside* the guarded boundary (the
+//! maintenance arms of the event loop, the worker's own setup and teardown):
+//! those are not attributable to one client's message and the supervisor still
+//! aborts on them.
 //!
 //! **`panic = "abort"`.** Verified absent: no `panic` key appears in any
 //! `[profile.*]` section of any manifest in the workspace (the root
@@ -326,6 +333,25 @@ mod isolation_tests {
         }
     }
 
+    /// Records write-path fail-stop escalations instead of exiting, so a test
+    /// that deliberately panics a granted write op survives to assert on it.
+    #[derive(Debug, Default)]
+    struct RecordingFailStop {
+        calls: Mutex<Vec<crate::vll::WritePathPanic>>,
+    }
+
+    impl RecordingFailStop {
+        fn calls(&self) -> Vec<crate::vll::WritePathPanic> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::vll::FailStopSink for RecordingFailStop {
+        fn fail_stop(&self, panic: &crate::vll::WritePathPanic) {
+            self.calls.lock().unwrap().push(panic.clone());
+        }
+    }
+
     /// The process-wide panic hook, as `std::panic::take_hook` hands it back.
     type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
 
@@ -505,6 +531,13 @@ mod isolation_tests {
     /// `executing_ops` would stay incremented, permanently blocking every later
     /// request on that key. The second op below is what proves it did not: it
     /// can only be granted if the first op's locks were released.
+    ///
+    /// The op is a *write*, so releasing is only half the answer: the shard also
+    /// escalates to fail-stop rather than resuming on half-mutated state. The
+    /// recording sink stands in for the process exit so this test can assert the
+    /// escalation fired; the write/read split itself is forced in `frogdb-vll`
+    /// (`a_write_path_panic_escalates_to_process_fail_stop`,
+    /// `a_read_path_panic_is_isolated_without_fail_stop`).
     #[tokio::test]
     async fn a_panicking_vll_op_releases_its_locks_and_the_shard_keeps_serving() {
         let quiet = QuietPanics::install();
@@ -512,6 +545,8 @@ mod isolation_tests {
         let mut registry = CommandRegistry::new();
         registry.register(Fine);
         let mut worker = worker_with(registry, recorder.clone());
+        let fail_stop = Arc::new(RecordingFailStop::default());
+        worker.vll.set_fail_stop_sink(fail_stop.clone());
 
         let key = Bytes::from_static(b"k");
         worker.store.set(key.clone(), Value::string("v"));
@@ -543,6 +578,20 @@ mod isolation_tests {
             other => panic!("expected a keyed error reply, got {other:?}"),
         }
         assert_eq!(recorder.counter_value(PANICS_METRIC), Some(1));
+
+        // The write path escalated: in production this is a process exit, so
+        // the reply above is the last thing this node says about txid 7.
+        let escalations = fail_stop.calls();
+        assert_eq!(
+            escalations.len(),
+            1,
+            "a write-path panic must escalate to fail-stop exactly once, got {escalations:?}"
+        );
+        assert_eq!(escalations[0].txid, 7);
+        assert!(
+            !escalations[0].message.is_empty(),
+            "the escalation must carry the panic message for the operator"
+        );
 
         // The lock table is clean...
         assert!(
@@ -576,5 +625,6 @@ mod isolation_tests {
             Some(1),
             "the healthy op must not add to the panic counter"
         );
+        assert_eq!(fail_stop.calls().len(), 1, "a healthy op must not escalate");
     }
 }
