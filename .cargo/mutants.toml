@@ -69,7 +69,7 @@ exclude_re = [
     # impl). The *decision* to call a sink — write escalates, read does not — is
     # what the FM-VLL-005 forcing tests pin, and those mutate freely in
     # `VllShardState::release_after_panic`.
-    "ProcessExitFailStop::fail_stop",
+    "ProcessExitFailStop>::fail_stop",
     "::record_gauge",
     "::record_histogram",
     "::record_command_latency_ms",
