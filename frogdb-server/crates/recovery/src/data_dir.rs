@@ -16,9 +16,18 @@
 //! | Directory | Decision |
 //! |---|---|
 //! | marker present and readable | boot; the restore path and its existing guards are unchanged |
-//! | no marker, no files | genuine first boot: initialize and stamp |
-//! | no marker, but files present | **refuse** — name the resolved path and the override |
+//! | no marker, no foreign entries | genuine first boot: initialize and stamp |
+//! | no marker, but foreign entries present | **refuse** — name the resolved path and the entries |
 //! | marker present but unreadable | **refuse** — an unreadable marker is not an absent one |
+//!
+//! `--force-fresh-data-dir` is a *fresh-start tool, not an override*
+//! (FM-PERSISTENCE-051). It lets a boot past the unreadable-marker refusal and
+//! past `persistence.require-existing-data`, and both of those are about a
+//! directory that holds nothing but FrogDB's own artifacts. It has no power
+//! over the foreign-entries refusal: "this really is my first boot" and "these
+//! bytes are not mine" are indistinguishable to a flag, so the flag must not
+//! resolve both — CockroachDB refuses to init into a directory that is not its
+//! own for the same reason. The operator moves the bytes out and retries.
 //!
 //! Both halves of the phase run before the install, for two different reasons.
 //!
@@ -46,7 +55,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use frogdb_core::persistence::data_dir::{DataDirMarker, MARKER_FILE_NAME, contains_foreign_files};
+use frogdb_core::persistence::data_dir::{DataDirMarker, MARKER_FILE_NAME, foreign_files};
 use frogdb_core::persistence::rocks::staged::pending_install;
 use tracing::{info, warn};
 
@@ -65,11 +74,29 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
     let existing = match DataDirMarker::read(dir) {
         Ok(found) => found,
         Err(err) if force => {
+            // Fresh-start tool, not an override: re-stamping is a rewrite of
+            // FrogDB's own identity, which is only defensible on a directory
+            // that holds nothing but FrogDB's own artifacts. Beside somebody
+            // else's bytes it would mint an identity over them, which is the
+            // adoption R6 removed.
+            let foreign = foreign_entries(dir)?;
+            if !foreign.is_empty() {
+                bail!(
+                    "the FrogDB marker in data directory {} could not be read ({err}), and the \
+                     directory also holds entries FrogDB did not write: {}. Refusing to start. \
+                     --force-fresh-data-dir re-stamps a directory that is FrogDB's own; it is \
+                     not a way to claim one that is not. Restore the directory from a backup, or \
+                     move those entries out and restart.",
+                    resolved(dir).display(),
+                    describe(&foreign),
+                );
+            }
             warn!(
                 data_dir = %resolved(dir).display(),
                 error = %err,
-                "Data directory marker is unusable, but --force-fresh-data-dir was given: \
-                 re-stamping it and continuing"
+                "Data directory marker is unusable and the directory holds nothing but FrogDB's \
+                 own artifacts, and --force-fresh-data-dir was given: re-stamping it and \
+                 continuing"
             );
             None
         }
@@ -78,8 +105,8 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
                 "the FrogDB marker in data directory {} could not be read ({err}): refusing to \
                  start, because treating an unreadable marker as a missing one would initialize a \
                  fresh, empty database over whatever this directory holds. Restore the directory \
-                 from a backup, or restart once with --force-fresh-data-dir to adopt it as it is \
-                 and re-stamp the marker.",
+                 from a backup, or — if the directory holds nothing but FrogDB's own artifacts — \
+                 restart once with --force-fresh-data-dir to re-stamp the marker.",
                 resolved(dir).display(),
             );
         }
@@ -100,27 +127,23 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
     // checkpoint an operator placed in `<data-dir>/staging` to restore from is
     // exactly the boot this gate must let through, not refuse. A `db/` with no
     // marker still counts, which is the case the gate is for.
-    let has_files = contains_foreign_files(dir).with_context(|| {
-        format!(
-            "failed to inspect data directory {}",
-            resolved(dir).display()
-        )
-    })?;
+    let foreign = foreign_entries(dir)?;
 
-    if has_files && !force {
+    if !foreign.is_empty() {
         bail!(
-            "data directory {} holds files but no FrogDB marker ({MARKER_FILE_NAME}): refusing to \
-             start, because initializing a fresh database here would begin overwriting whatever \
-             is already in it. This is what a mistyped persistence.data-dir, a container that \
-             lost its bind mount, or a volume mounted somewhere else look like from the inside. \
-             Point data-dir at the right directory, or — if this directory really is FrogDB's \
-             (written before markers existed, or restored by hand) — restart once with \
-             --force-fresh-data-dir to adopt it. That flag never deletes anything.",
+            "data directory {} holds entries FrogDB did not write and no FrogDB marker \
+             ({MARKER_FILE_NAME}): {}. Refusing to start, because initializing a fresh database \
+             here would begin overwriting whatever is already in it. This is what a mistyped \
+             persistence.data-dir, a container that lost its bind mount, or a volume mounted \
+             somewhere else look like from the inside. Point data-dir at the right directory, or \
+             move those entries somewhere else and restart. --force-fresh-data-dir does not \
+             override this: it starts a directory FrogDB owns, it never adopts one it does not.",
             resolved(dir).display(),
+            describe(&foreign),
         );
     }
 
-    if !has_files && inputs.persistence.require_existing_data && !force {
+    if inputs.persistence.require_existing_data && !force {
         // An install this boot would finish is *data*, even though the probe
         // above cannot see it: `staging` and `backup` are skipped there because
         // they are FrogDB's own artifacts, so a directory holding nothing but an
@@ -157,9 +180,9 @@ pub(crate) fn verify(inputs: &RecoveryInputs<'_>) -> Result<DataDirMarker> {
     if force {
         warn!(
             data_dir = %resolved(dir).display(),
-            has_files,
-            "--force-fresh-data-dir: adopting this data directory without a marker check and \
-             stamping it. Nothing is deleted; existing data is recovered normally."
+            "--force-fresh-data-dir: this data directory holds nothing FrogDB did not write, so \
+             it is being stamped and initialized as a fresh one. Nothing is deleted; an install \
+             waiting in staging is finished normally."
         );
     }
 
@@ -193,6 +216,44 @@ pub(crate) fn stamp(dir: &Path, marker: &DataDirMarker) -> Result<()> {
         )
     })?;
     marker.stamp(dir).map_err(anyhow::Error::from)
+}
+
+/// How many foreign entries a refusal names before it says "and more".
+///
+/// A refusal exists to tell the operator *which* directory they are looking at;
+/// a handful of names does that, and a full listing of somebody else's tree in
+/// a startup error does not. The probe walks only far enough to fill it.
+const NAMED_FOREIGN_ENTRIES: usize = 8;
+
+/// The entries in `dir` that FrogDB did not write, at most
+/// [`NAMED_FOREIGN_ENTRIES`] of them plus one — the extra is how [`describe`]
+/// knows to say the list is truncated.
+///
+/// The probe's failures propagate rather than answering "empty": a directory
+/// whose contents are unknown must not read as one FrogDB may initialize.
+fn foreign_entries(dir: &Path) -> Result<Vec<PathBuf>> {
+    foreign_files(dir, NAMED_FOREIGN_ENTRIES + 1).with_context(|| {
+        format!(
+            "failed to inspect data directory {}",
+            resolved(dir).display()
+        )
+    })
+}
+
+/// Render [`foreign_entries`]' answer for the operator: paths relative to the
+/// data directory, comma-separated, truncated with a count of what is left.
+fn describe(entries: &[PathBuf]) -> String {
+    let named = entries
+        .iter()
+        .take(NAMED_FOREIGN_ENTRIES)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if entries.len() > NAMED_FOREIGN_ENTRIES {
+        format!("{named}, and more")
+    } else {
+        named
+    }
 }
 
 /// The data directory as an absolute path, for the operator reading the

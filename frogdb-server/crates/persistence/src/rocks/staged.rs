@@ -265,7 +265,7 @@ impl BackupCounter {
 /// - a `db_backup_*` directory exists under `<data-dir>/backup`: rename 1 of an
 ///   install ran, so a previous database is sitting there.
 ///
-/// The question exists because [`crate::data_dir::contains_foreign_files`]
+/// The question exists because [`crate::data_dir::foreign_files`]
 /// answers a *different* one — "did somebody else write here?" — and skips
 /// exactly these names. A directory holding only an unfinished install is
 /// therefore "empty" to that probe while holding a whole database, which is the

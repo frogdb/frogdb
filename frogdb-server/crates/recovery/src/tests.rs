@@ -1360,6 +1360,13 @@ fn persisted_functions_are_restored() {
 // Phase 0 — is this directory FrogDB's? (FM-PERSISTENCE-048..052)
 // ---------------------------------------------------------------------------
 
+/// How a refusal spells a path inside `<data-dir>/db`. Which of a RocksDB's
+/// files the probe reaches first is directory-order, so tests that seed a real
+/// database assert on the prefix rather than on one name.
+fn db_prefix() -> String {
+    format!("db{}", std::path::MAIN_SEPARATOR)
+}
+
 /// Boot a standalone, non-cluster node against `cfg`. Every data-directory test
 /// below varies only the persistence config, so the rest of the inputs are noise.
 fn boot_standalone(cfg: &PersistenceConfig) -> Result<crate::RecoveredState, crate::RecoveryError> {
@@ -1406,8 +1413,12 @@ fn an_unrelated_file_in_the_data_dir_refuses_the_boot() {
         "the refusal must name the marker it looked for: {msg}"
     );
     assert!(
-        msg.contains("--force-fresh-data-dir"),
-        "the refusal must name the override: {msg}"
+        msg.contains(&Path::new("db").join("important.txt").display().to_string()),
+        "the refusal must name the entry that is in the way: {msg}"
+    );
+    assert!(
+        msg.contains("--force-fresh-data-dir does not override this"),
+        "the refusal must not advertise the flag as an adopt path: {msg}"
     );
 
     // Refusing means refusing to *write*: the guard runs before anything can
@@ -1525,52 +1536,127 @@ fn require_existing_data_refuses_an_empty_data_dir() {
     boot_standalone(&cfg).expect("a marked directory satisfies require-existing-data");
 }
 
-/// The override adopts, it does not wipe. A database written before markers
-/// existed (or restored by hand) has to have a way in that keeps its data.
+/// The flag is a *fresh-start tool, not an override* (R6). "This really is my
+/// first boot" and "these bytes are not mine" are indistinguishable to a flag,
+/// so the flag must not resolve both: beside entries FrogDB did not write it
+/// refuses too, and the refusal names them so the operator knows what to move.
+/// Adopting would mint a FrogDB identity over somebody else's volume.
 // FM-PERSISTENCE-051
 #[test]
-fn force_fresh_data_dir_adopts_an_unmarked_directory() {
+fn force_fresh_data_dir_refuses_beside_foreign_entries() {
     let tmp = TempDir::new().unwrap();
+    let stray = tmp.path().join("somebody-elses.txt");
+    std::fs::write(&stray, b"not ours").unwrap();
+
+    let mut cfg = persistence_config(tmp.path(), true);
+    cfg.force_fresh_data_dir = true;
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("the flag starts a fresh directory; it never claims somebody else's");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("somebody-elses.txt"),
+        "the refusal must name the offending entry: {msg}"
+    );
+    assert!(
+        msg.contains("--force-fresh-data-dir does not override this"),
+        "the refusal must say the flag is not the way past it: {msg}"
+    );
+
+    // Refusing means refusing to write, flag or no flag.
+    assert!(
+        !DataDirMarker::path(tmp.path()).exists(),
+        "a refused boot must not stamp the directory it refused"
+    );
+    assert_eq!(
+        std::fs::read(&stray).unwrap(),
+        b"not ours",
+        "the entry the refusal is about must be untouched"
+    );
+
+    // The case the flag used to adopt: a whole database with no marker. Under R6
+    // that is not a first boot either, and the flag no longer mints over it.
+    std::fs::remove_file(&stray).unwrap();
     let db_dir = tmp.path().join("db");
     seed_db(&db_dir, 2, b"greeting", "hello");
     std::fs::remove_file(DataDirMarker::path(tmp.path())).unwrap();
 
-    let mut cfg = persistence_config(tmp.path(), true);
-    cfg.force_fresh_data_dir = true;
-    let mut recovered = boot_standalone(&cfg).expect("the override adopts an unmarked directory");
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("an unmarked database is bytes FrogDB did not write here either");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+    assert!(
+        err.to_string().contains(&db_prefix()),
+        "the database that has no marker is itself the entry in the way: {err}"
+    );
+    assert!(
+        !DataDirMarker::path(tmp.path()).exists(),
+        "and it is still not stamped"
+    );
 
-    let value = recovered
-        .shards
-        .iter_mut()
-        .filter_map(|(store, _)| store.get(b"greeting"))
-        .next()
-        .expect("adopting must recover the data normally, not start empty");
-    assert_eq!(value.as_string().unwrap().as_bytes().as_ref(), b"hello");
-
-    // One boot with the flag is enough: the directory is marked now. The first
-    // boot's RocksDB has to go first — it holds the directory's LOCK, and the
-    // second boot is standing in for the next process, not a second one.
-    drop(recovered);
-
-    let adopted = marker_of(tmp.path()).database_id;
-    cfg.force_fresh_data_dir = false;
-    boot_standalone(&cfg).expect("an adopted directory boots on its own afterwards");
-    assert_eq!(marker_of(tmp.path()).database_id, adopted);
+    // The way out is the filesystem, not a second flag: with the foreign bytes
+    // moved away the same command is the fresh start the flag advertises.
+    std::fs::remove_dir_all(&db_dir).unwrap();
+    boot_standalone(&cfg).expect("an excused-only directory is what the flag is for");
+    assert!(
+        DataDirMarker::path(tmp.path()).exists(),
+        "the fresh start stamps the directory it initialized"
+    );
 }
 
-/// The override covers the unreadable-marker refusal too, by replacing the
-/// marker rather than leaving the directory permanently unbootable.
+/// The unreadable-marker arm follows the same fail-closed rule: re-stamping
+/// rewrites FrogDB's own identity, which is only defensible on a directory that
+/// is FrogDB's own. Beside foreign entries the flag refuses there too.
 // FM-PERSISTENCE-050
 #[test]
-fn force_fresh_data_dir_re_stamps_a_corrupt_marker() {
+fn force_fresh_data_dir_refuses_to_re_stamp_beside_foreign_entries() {
     let tmp = TempDir::new().unwrap();
-    let db_dir = tmp.path().join("db");
-    seed_db(&db_dir, 2, b"greeting", "hello");
+    seed_db(&tmp.path().join("db"), 2, b"greeting", "hello");
     std::fs::write(DataDirMarker::path(tmp.path()), b"{ truncated mid-writ").unwrap();
 
     let mut cfg = persistence_config(tmp.path(), true);
     cfg.force_fresh_data_dir = true;
-    boot_standalone(&cfg).expect("the override re-stamps an unreadable marker");
+    let err = boot_standalone(&cfg)
+        .err()
+        .expect("an unreadable marker beside a database FrogDB never stamped must not be claimed");
+    assert_eq!(err.phase, RecoveryPhase::VerifyDataDir);
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("could not be read"),
+        "the refusal must still say why the marker failed: {msg}"
+    );
+    assert!(
+        msg.contains(&db_prefix()),
+        "and must name the entries that stop the re-stamp: {msg}"
+    );
+    assert_eq!(
+        std::fs::read(DataDirMarker::path(tmp.path())).unwrap(),
+        b"{ truncated mid-writ",
+        "a refused boot must not re-stamp the marker it refused"
+    );
+}
+
+/// The flag does cover the unreadable-marker refusal when the directory holds
+/// nothing but FrogDB's own artifacts — otherwise a corrupt marker would leave
+/// the directory permanently unbootable, which is the failure FM-PERSISTENCE-050
+/// rules out.
+// FM-PERSISTENCE-050
+#[test]
+fn force_fresh_data_dir_re_stamps_a_corrupt_marker() {
+    let tmp = TempDir::new().unwrap();
+    // Excused-only: the unreadable marker itself, plus install scratch. No `db/`
+    // and nothing foreign, so there is no data an identity could be minted over.
+    let discarded = tmp.path().join("staging.discarded");
+    std::fs::create_dir_all(&discarded).unwrap();
+    std::fs::write(discarded.join("CURRENT"), b"MANIFEST-000001\n").unwrap();
+    std::fs::write(DataDirMarker::path(tmp.path()), b"{ truncated mid-writ").unwrap();
+
+    let mut cfg = persistence_config(tmp.path(), true);
+    cfg.force_fresh_data_dir = true;
+    boot_standalone(&cfg).expect("the flag re-stamps a directory that is FrogDB's own");
 
     // Readable again — which is the whole point: the operator is not left with a
     // directory that needs the flag on every boot forever.
@@ -1582,12 +1668,15 @@ fn force_fresh_data_dir_re_stamps_a_corrupt_marker() {
     );
 }
 
-/// `require-existing-data` has to have the same escape hatch, or provisioning a
-/// new node into a deployment that sets it would be impossible.
+/// `require-existing-data` keeps its escape hatch, or provisioning a new node
+/// into a deployment that sets it would be impossible. The two are not in
+/// tension with R6: an empty directory — pre-created mount points and all — has
+/// no foreign entries to refuse.
 // FM-PERSISTENCE-052
 #[test]
 fn force_fresh_data_dir_overrides_require_existing_data() {
     let tmp = TempDir::new().unwrap();
+    std::fs::create_dir(tmp.path().join("lost+found")).unwrap();
     let mut cfg = persistence_config(tmp.path(), true);
     cfg.require_existing_data = true;
     cfg.force_fresh_data_dir = true;

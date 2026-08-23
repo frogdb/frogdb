@@ -115,7 +115,7 @@ adds the bound extension there and the model row follows.
 | --- | --- | --- |
 | R3+R4+R5 | `cluster-correctness/issues/open/43-quint-model-semantics-fixes-from-rulings.md` | ready-for-agent, M |
 | R2 (batch) | `cluster-correctness/issues/open/44-design-doc-attribution-corrections-batch.md` | ready-for-agent, S |
-| R6 | `spec-gaps/issues/open/32-force-fresh-data-dir-refuses-foreign-entries.md` | ready-for-agent, S |
+| R6 | `spec-gaps/issues/done/32-force-fresh-data-dir-refuses-foreign-entries.md` | done, S |
 | R7 | `spec-gaps/issues/open/28-vll-panic-restarts-the-shard-from-wal.md` (rewritten to fail-stop) | ready-for-agent, S |
 | R8 | `spec-gaps/issues/open/29-cross-shard-transaction-per-shard-undo.md` (rewritten to standalone design task) | ready-for-agent (design phase), L |
 | R9 | `spec-gaps/issues/open/30-blocking-immediate-pop-escapes-node-global-write-pause.md` | ready-for-agent, S |

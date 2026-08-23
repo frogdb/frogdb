@@ -149,7 +149,7 @@
         "name": "force_fresh_data_dir",
         "long": "force-fresh-data-dir",
         "default": "false",
-        "help": "Adopt a data directory that has no valid FrogDB marker: stamp one and continue instead of refusing to start. Deletes nothing — existing data is recovered normally. Use for the first boot of a directory FrogDB did not create (one written before markers existed, or restored by hand), and for a first boot under `persistence.require-existing-data`. It is a flag rather than a config key on purpose: a persisted override would disable the wrong-directory guard forever"
+        "help": "Start a data directory that has no valid FrogDB marker: stamp one and continue instead of refusing to start. A fresh-start tool, not an override — a directory holding entries FrogDB did not write still refuses, naming them, and nothing is ever deleted. Use it for a first boot under `persistence.require-existing-data`, and to re-stamp a directory whose own marker became unreadable. It is a flag rather than a config key on purpose: a persisted override would disable the wrong-directory guard forever"
       },
       {
         "name": "help",

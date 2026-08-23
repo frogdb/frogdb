@@ -130,9 +130,11 @@ The staged path above needs no extra flags: FrogDB stamps the installed director
 identity marker as part of recovery. Assembling a `data-dir` by hand is what needs attention — a
 snapshot's `checkpoint/` contents copied straight into `<data-dir>/db`, or a directory carried over
 from a version that predates the marker, holds files FrogDB did not stamp, and that fails the
-boot rather than being written over. Start once with `--force-fresh-data-dir` to adopt such a
-directory; a whole-directory copy of a live `data-dir` (the offline-replica backup above) brings
-the marker with it and starts normally. See
+boot rather than being written over. There is no flag that adopts such a directory:
+`--force-fresh-data-dir` refuses beside entries FrogDB did not write, and names them. Restore
+through the staged path above instead — move the hand-assembled `db/` into `<data-dir>/staging`
+and start the server, and the install stamps the directory. A whole-directory copy of a live
+`data-dir` (the offline-replica backup above) brings the marker with it and starts normally. See
 [Data directory identity](/operations/persistence/#data-directory-identity).
 
 ## Durability mode and backup consistency

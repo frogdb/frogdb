@@ -179,7 +179,7 @@ def main() -> int:
             "       A RESP simple string is framed `+<body>\\r\\n`, so an unsanitized\n"
             "       CR/LF in the body puts a second frame on the wire (redis-feel issue\n"
             "       18; Redis 8.6.1 `addReplyStatusSafe`). Build the payload as\n"
-            "         SafeStatus::from_static(\"OK\")       author-written literals\n"
+            '         SafeStatus::from_static("OK")       author-written literals\n'
             "         SafeStatus::sanitized(dynamic)      anything else",
             file=sys.stderr,
         )
