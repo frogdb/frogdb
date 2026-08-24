@@ -182,6 +182,14 @@ module cluster_migration_failover_machine {
     // TR-CLUSTER-025 / FM-CLUSTER-014 (anti-churn) — a FAIL-flag transition that moved
     // the config epoch. Health churn must never bump it.
     churnEpochBump: bool,
+    // ext-18 (R3, ruled 2026-08-22) — an **applied** whole-node flip to Replica that left
+    // work behind at the flipping node: an open migration it still sources, or a slot still
+    // in its hold region. Staging the flip alongside a latched hold is lawful; the applied
+    // write is the boundary.
+    adoptedFlipLeftWork: bool,
+    // ext-18 (R5, ruled 2026-08-22) — an applied adoption or admitted stamp that fired from
+    // a record whose `staged_reg_seq` does not name the live registration cell.
+    staleAdmit: bool,
   }
   // Coverage ghosts: set when a behaviour the witnesses care about actually happened.
   var coverage: {
@@ -357,7 +365,8 @@ module cluster_migration_failover_machine {
                  replicaSlot: false, boundAbort: false, sealCounter: false, overDelete: false,
                  discard: false, untracked: false, demotedExec: false, identityRegress: false,
                  spuriousCancel: false, staleDemote: false, disposition: false,
-                 crossShardSuccessor: false, churnEpochBump: false },
+                 crossShardSuccessor: false, churnEpochBump: false,
+                 adoptedFlipLeftWork: false, staleAdmit: false },
     coverage' = { gracefulPruned: false, forcedDemotedReplica: false, failoverDuringOpenMigration: false,
                   promotionRolledBack: false, reaped: false, emptyBatch: false,
                   healthyAborted: false, knobCompleted: false, planesConverged: false,
@@ -610,6 +619,7 @@ module cluster_migration_failover_machine {
         | None => residue
       }
     val postMigs = if (cancelled == Set()) migrations else cancelledBySource(migrations, n)
+    val postHeld = held.set(n, held.get(n).exclude(cancelled))
     val postStored = postNodes.get(n).stored_identity
     // The records this step actually took (an open migration that is gone in the
     // post-state) — the operand of the no-spurious-cancel claim.
@@ -632,19 +642,39 @@ module cluster_migration_failover_machine {
       // liveness obligation is dropped. Redis is the same rule: `CLUSTER REPLICATE`
       // refuses a non-master target ("I can only replicate a master, not a replica").
       kind == Boot or (optExists(ns.record, rec => isLivePrimary(nodes, rec.upstream))),
+      // **R5 (ruled 2026-08-22)**: an **applied** transition never fires from a record whose
+      // `staged_reg_seq` has stopped naming the live registration cell. Scoped to the
+      // applied path on purpose — a *refused* report from a stale record is not only
+      // allowed but load-bearing: it is how the forget-and-rejoin traces mint the refusal
+      // that later disposes of (or fails to bind) the record
+      // (`foreignRefusalDoesNotDisposeTest`, `delayedOrderingRefusalIsTerminalAfterRejoin
+      // Test`). Blocked rather than refused, like the repoint rule above: staleness is not
+      // one of ext-16's four classes, and the level-triggered `clearStaleRecord` is the
+      // exit, so no liveness obligation is dropped by declining to apply.
+      //
+      // Scoped off the `Boot` arm as well, and that scope is load-bearing rather than
+      // conservative: a `Boot` report applies *nothing the record supplies* — it stamps the
+      // identity cell and sets `booted`, and never reads `upstream`, `stage_id` or
+      // `staged_reg_seq` — so it is not an admission "from" the record at all. Blocking it
+      // would strand a rebooted node that is mute until it boots, behind a record only
+      // `clearStaleRecord` can remove, for no safety gain.
+      kind == Boot or not(admitted) or recordPairsWithRegistration(ns),
       nodes' = postNodes,
       refusals' =
         if (admitted) refusals
         else match ns.record {
           | Some(rec) => refusals.union(Set({
               node: n, stage_id: rec.stage_id, reg_seq: rec.staged_reg_seq,
-              class: cls, terminal: isRefusalTerminal(ns.stored_identity, cls) }))
+              // R4 (ruled 2026-08-22): the **class** is minted with the verdict and
+              // travels; whether it is terminal is decided where it lands, against the
+              // stored operand the observing node holds then (`observeRefusal`).
+              class: cls }))
           | None => refusals
         },
       migrations' = postMigs,
       barriers' = { ...barriers, armed: barriers.armed.exclude(cancelled),
                     disconnected: barriers.disconnected.exclude(cancelled) },
-      held' = held.set(n, held.get(n).exclude(cancelled)),
+      held' = postHeld,
       feed_bytes' = SLOTS.fold(feed_bytes, (acc, s) => if (cancelled.contains(s)) acc.set(s, 0) else acc),
       // ext-15's three ghosts, each recomputed here from **this step's post-state** rather
       // than from `refusalClassOf`'s verdict. Q3's mutation battery showed the earlier
@@ -672,6 +702,27 @@ module cluster_migration_failover_machine {
         staleDemote: latch(defects.staleDemote,
           admitted and kind == Demotion
           and (ns.role != obsRole or ns.epoch_own != obsEpoch)),
+        // R3 (ruled 2026-08-22) — this arm is the **applied write** of a staged whole-node
+        // flip to Replica, so it is one of the two boundaries the rule is stated at. The
+        // operands are this step's own post-state: the migrations it left open sourced here
+        // and the hold region it left standing. Deleting either release (`migrations' =
+        // postMigs`, `held' = postHeld`) trips it, and so does deleting `stageFlip`'s
+        // hold-emptying — V12-M1's half of the same closure, which is what makes the hold
+        // disjunct killable rather than decorative: staging is where the region is
+        // answered, adoption is where it must already be gone.
+        adoptedFlipLeftWork: latch(defects.adoptedFlipLeftWork,
+          admitted and kind == Demotion
+          and (slotsSourcedBy(postMigs, n) != Set() or postHeld.get(n) != Set())),
+        // R5 (ruled 2026-08-22) — read off the post-state rather than off the guard above:
+        // a record this step left `adopted` under a registration it does not name. The
+        // `admitted and kind == Demotion` prefix scopes it to the arm *this* step took, so
+        // a later refused report at a node still carrying an old adopted record does not
+        // re-latch someone else's outcome.
+        staleAdmit: latch(defects.staleAdmit,
+          admitted and kind == Demotion
+          and optExists(postNodes.get(n).record,
+                        rec => rec.adopted
+                          and postNodes.get(n).registration_seq != Some(rec.staged_reg_seq))),
       },
       residue' = postResidue,
       keepSlots, keepShadow, keepHistory, keepSpent, keepCoverage, keepCtl,
@@ -709,17 +760,48 @@ module cluster_migration_failover_machine {
   // crashed before its failover promotion took local effect would otherwise boot as a
   // replica of a primary that no longer exists, phrase a `Demotion` report against a role
   // it no longer has, and be refused forever.
+  //
+  // **R3 (ruled 2026-08-22)**, the second applied-write boundary. Coexistence of a latched
+  // drain-hold region and a *staged* (pending, unadopted) whole-node flip is **lawful** —
+  // the ruling rejects a guard at staging time, for the same reason V12-M1 did: it would
+  // wire demotion liveness to drain-release liveness. The boundary is the **applied
+  // write**. An adoption that turns this node's applied role into `Replica` therefore
+  // cancels the migrations it still sources and empties its hold region *in the same step*,
+  // exactly as the replicated demotion arm of `reportRunIdentity` does, and
+  // `inv_adopted_flip_leaves_no_sourced_work` says so of the post-state.
+  //
+  // The release is written as `exclude(cancelled)` rather than `held.set(n, Set())` on
+  // purpose: phrased that way it is killed *together with* the cancellation, instead of
+  // being an unfalsifiable "empty it anyway". A split is only ever produced by a replicated
+  // write landing at a node with `booted == false` (`writeParentPointer`), and every writer
+  // that takes a node down clears its hold region, so the hold half of this conjunct is a
+  // statement about the post-state rather than a live release path here.
   action adoptReplicatedRole(n: NodeId): bool = {
     val ns = nodes.get(n)
     val post = { ...ns, local_role: ns.role, local_parent: ns.parent }
+    // The flip this step *applies* in the node-local plane. Only the Primary -> Replica
+    // direction owes the releases: a node adopting a promotion keeps its work.
+    val flipsToReplica = ns.local_role == Primary and ns.role == Replica
+    val cancelled = if (flipsToReplica) slotsSourcedBy(migrations, n) else Set()
+    val postMigs = if (cancelled == Set()) migrations else cancelledBySource(migrations, n)
+    val postHeld = held.set(n, held.get(n).exclude(cancelled))
     all {
       canAdoptReplicatedRole(nodes, n),
       nodes' = nodes.set(n, post),
+      migrations' = postMigs,
+      barriers' = { ...barriers, armed: barriers.armed.exclude(cancelled),
+                    disconnected: barriers.disconnected.exclude(cancelled) },
+      held' = postHeld,
+      feed_bytes' = SLOTS.fold(feed_bytes, (acc, s) => if (cancelled.contains(s)) acc.set(s, 0) else acc),
       // Recomputed from the post-state: a mutation that adopts into the wrong plane (or
       // adopts nothing) leaves the difference test still true and sets nothing.
       coverage' = { ...coverage, planesConverged: latch(coverage.planesConverged,
         identityFactsDiffer(nodes, n) and not(identityFactsDiffer(nodes.set(n, post), n))) },
-      keepSlots, keepMigAll, keepBar, keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
+      defects' = { ...defects,
+        adoptedFlipLeftWork: latch(defects.adoptedFlipLeftWork,
+          post.local_role == Replica
+          and (slotsSourcedBy(postMigs, n) != Set() or postHeld.get(n) != Set())) },
+      keepSlots, keepShadow, keepResidue, keepHistory, keepRefusals, keepSpent, keepCtl,
     }
   }
 
@@ -747,7 +829,7 @@ module cluster_migration_failover_machine {
   //
   // Modelling note: the answers themselves are not materialised. `refusals` is the
   // run-identity refusal channel (ext-16/ext-18), typed over `{node, stage_id, reg_seq,
-  // class, terminal}`, and a client write refusal is not one of those; the coverage
+  // class}`, and a client write refusal is not one of those; the coverage
   // ghost below is what keeps the invariant from being vacuous.
   action stageFlip(n: NodeId, upstream: NodeId): bool = {
     val ns = nodes.get(n)
@@ -779,7 +861,15 @@ module cluster_migration_failover_machine {
     val ns = nodes.get(n)
     // Does this observation *dispose* of the record? Only when both halves of the pair
     // bind and the class is one of the declared terminal ones.
-    val disposes = optExists(ns.record, rec => refusalBinds(rec, r) and r.terminal)
+    //
+    // R4 (ruled 2026-08-22): the terminality split is evaluated **here**, from the class
+    // the payload carries and the stored identity this node holds *now* — arm 4a while a
+    // cell is present, arm 4b once it is gone. The payload used to carry the answer,
+    // frozen at mint time; that made arm 4b unreachable for the very trace the design
+    // cites for it (V27-M2: mint against a live cell, lose the cell, then deliver — see
+    // `delayedOrderingRefusalIsTerminalAfterRejoinTest`). The class is not recomputed.
+    val disposes = optExists(ns.record,
+      rec => refusalBinds(rec, r) and isRefusalTerminal(ns.stored_identity, r.class))
     val disp = match ns.record {
       | Some(rec) => Some({ refusal_stage_id: r.stage_id, refusal_reg_seq: r.reg_seq,
                             record_stage_id: rec.stage_id, record_reg_seq: rec.staged_reg_seq })
@@ -843,8 +933,19 @@ module cluster_migration_failover_machine {
                               keys: ns.keys.exclude(discarded) }),
       coverage' = { ...coverage,
         adoptionDiscardedKeys: latch(coverage.adoptionDiscardedKeys, discarded != Set()) },
+      // R5 (ruled 2026-08-22), the other applied-adoption site — watched, not guarded.
+      // `completeAdoption` reads the *stamp* (`admitted_stage`), and every action that can
+      // recreate the registration cell under a surviving record clears the stamp on the way
+      // through: `removeNode` and `resetCluster` both write the parent pointer with
+      // `admitted: None`, and a rejoin can only follow a departure. So a stale
+      // `completeAdoption` is structurally unreachable, and a guard here would be one no
+      // mutation could kill. The ghost records the claim instead: if some later edit opens
+      // the path (a field-level forget, a reset arm that keeps the stamp),
+      // `inv_stale_record_never_admits` fails rather than the hole going unnoticed.
+      defects' = { ...defects,
+        staleAdmit: latch(defects.staleAdmit, not(recordPairsWithRegistration(ns))) },
       keepSlots, keepMigAll, keepBar,
-      keepHistory, keepRefusals, keepSpent, keepDefects, keepCtl,
+      keepHistory, keepRefusals, keepSpent, keepCtl,
     }
   }
 
@@ -1797,7 +1898,7 @@ module cluster_migration_failover_machine {
   // `oneOf` needs a non-empty set; the placeholder never satisfies `observeRefusal`'s
   // membership conjunct, so it is a no-op arm rather than an extra behaviour.
   val refusalCands: Set[Refusal] =
-    if (refusals == Set()) Set({ node: 0, stage_id: 0, reg_seq: 0, class: Whole, terminal: false })
+    if (refusals == Set()) Set({ node: 0, stage_id: 0, reg_seq: 0, class: Whole })
     else refusals
 
   // --- Steering candidates ---------------------------------------------------

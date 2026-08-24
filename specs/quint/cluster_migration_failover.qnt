@@ -880,6 +880,41 @@ module cluster_migration_failover {
   val inv_no_hold_during_staged_flip: bool =
     NODES.forall(n => nodes.get(n).record != None implies held.get(n) == Set())
 
+  // **R3, ruled 2026-08-22** — the applied-write half of the same rule, and the reason the
+  // level rule above is safe to close *by effect*. The ruling: a latched drain-hold region
+  // coexisting with a **staged**, unadopted whole-node flip is lawful; the safety boundary
+  // is the **applied write**. So the claim is stated over the two actions that apply one —
+  // `reportRunIdentity`'s admitted `Demotion` arm (replicated plane) and
+  // `adoptReplicatedRole` (node-local plane) — and says: a step that leaves this node's
+  // applied role at `Replica` leaves behind no migration it still sources and no slot in
+  // its hold region. Cancellation and hold-release are atomic with the write.
+  //
+  // Off a ghost rather than a state predicate because the two planes flip at different
+  // instants and only the *step* knows which of them it just wrote; a whole-state reading
+  // ("no Replica sources a migration") would also be answering for slot-map arrangements
+  // this rule is not about. Both latches read their own post-state, so a mutant that drops
+  // `migrations' = postMigs` or the `held'` release at either site trips this — as does
+  // deleting `stageFlip`'s hold-emptying, which is what leaves a region standing to be
+  // caught at the adoption. Pinned by `adoptedFlipCancelsSourcedMigrationTest`.
+  val inv_adopted_flip_leaves_no_sourced_work: bool = not(defects.adoptedFlipLeftWork)
+
+  // **R5, ruled 2026-08-22** — stale-never-admits. The record is node-local and
+  // crash-durable, so it outlives the registration cell it was staged against (ext-18); the
+  // rule is that such a record never produces an **applied** effect while it is stranded.
+  // No adoption, no admitted stamp: a report from a stranded record is declined
+  // (`reportRunIdentity`'s R5 conjunct) and the level-triggered `clearStaleRecord` is its
+  // only exit.
+  //
+  // This is the invariant the withdrawn `inv_no_record_outlives_its_registration` was
+  // reaching for and could not state: *surviving* the registration is lawful and reachable
+  // (`recordOutlivesRegistrationTest`), so the property had to be moved off the record's
+  // existence and onto what the record is allowed to *do*. Stated over the ghost the two
+  // applied-adoption sites write from their post-state, so deleting the R5 conjunct in
+  // `reportRunIdentity` trips it (`staleRecordCannotAdmitAfterRejoinTest` is the walk that
+  // stands one step short of the applied write, and is where a mutant lands) rather than
+  // silently re-opening the window.
+  val inv_stale_record_never_admits: bool = not(defects.staleAdmit)
+
   // ext-12 (V9-C1), M32 ruled 2026-08-19: a demotion never hands a node's slots to a
   // successor outside its shard. Stated over the `crossShardSuccessor` ghost because the
   // fact has **no post-state trace** — `applyFailoverCommon` promotes the successor and
@@ -903,19 +938,15 @@ module cluster_migration_failover {
   // - `inv_no_replica_without_a_primary_pointer`: withdrawn by ext-17 (V15-C3) itself —
   //   `removeNode`'s detach writes `parent == None` at a Replica, a lawful state.
   // - `inv_abort_repatriates`: deleted with repatriation (MAJ-5).
-  // - `inv_no_hold_during_staged_flip`: **no longer here** — closed by the 2026-08-19
-  //   ruling (V12-M1) and asserted above. The action-semantics change this block declined
-  //   to make is exactly the one that was ruled: `stageFlip` answers and empties the hold
-  //   region it finds, and `prepareHandoff` will not latch a new one at a node carrying a
-  //   pending record.
-  // - `inv_no_record_outlives_its_registration`: its strict form is unsatisfiable by
-  //   construction, and its guarded form is a tautology. The record is node-local and
-  //   crash-durable, so it deliberately survives the loss of its registration cell
-  //   (ext-18) — that gap is precisely what `clearStaleRecord` exists to close, and that
-  //   clause is separately schedulable, so the gap state is reachable
-  //   (`recordOutlivesRegistrationTest`). Adding "…or the clearing clause is enabled" as
-  //   a disjunct restates `isRecordStale`, whose definition is exactly the negation of
-  //   the pairing — a vacuous invariant, which the brief forbids.
+  //
+  // The two entries this block used to carry for the staged-flip and record-lifetime rules
+  // are gone: both are now asserted above. `inv_no_hold_during_staged_flip` was closed by
+  // effect (V12-M1, 2026-08-19) and given its applied-write half by R3
+  // (`inv_adopted_flip_leaves_no_sourced_work`); the record-lifetime rule was restated by
+  // R5 as `inv_stale_record_never_admits`, moving the claim off "the record must not
+  // outlive its registration" — false of the design, since the record is node-local and
+  // crash-durable — and onto "a stranded record must not *act*", which is the checkable
+  // form. Both rulings are in `.scratch/cluster-correctness/2026-08-22-work-item-rulings.md`.
   // ---------------------------------------------------------------------------
 
   // ---------------------------------------------------------------------------
@@ -2555,10 +2586,16 @@ module cluster_migration_failover {
       })
   }
 
-  // The counter-state for `inv_no_record_outlives_its_registration`: the record is
-  // node-local and crash-durable, so it deliberately outlives the registration cell it was
-  // staged under. `clearStaleRecord` is the level-triggered clause that closes the gap,
-  // and it is separately schedulable — which is exactly why the gap state is reachable.
+  // R5 (ruled 2026-08-22) — the **lawful** half of the record-lifetime rule, and the reason
+  // the invariant is `inv_stale_record_never_admits` rather than "no record outlives its
+  // registration". The record is node-local and crash-durable, so it deliberately outlives
+  // the registration cell it was staged under; `clearStaleRecord` is the level-triggered
+  // clause that closes the gap, and it is separately schedulable — which is exactly why the
+  // gap state is reachable, and why the safety claim has to be about what the stranded
+  // record may *do*, not about whether it exists.
+  //
+  // This is the departure path. The three tests below it are the cell-*recreation* paths,
+  // where the node comes back with a live registration the surviving record does not name.
   run recordOutlivesRegistrationTest: bool = {
     init
       .then(stageFlip(3, 4))
@@ -2567,12 +2604,187 @@ module cluster_migration_failover {
         nodes.get(3).record != None,
         nodes.get(3).registration_seq == None,
         isRecordStale(nodes.get(3)),
+        not(recordPairsWithRegistration(nodes.get(3))),
       })
       .then(clearStaleRecord(3))
       .expect(and {
         nodes.get(3).record == None,
         not(nodes.get(3).node_fenced),
         nodes.get(3).reply_emitted,
+        inv_stale_record_never_admits,
+      })
+  }
+
+  // **R5**, cell-recreation path 1 of 3: **CLUSTER FORGET followed by a re-MEET**. The
+  // record survives the round trip (ext-18) and the rejoin mints a *new* registration, so
+  // the node stands in the window this rule is about — a member, with a live cell, carrying
+  // a record staged under a generation that is gone — and `clearStaleRecord` takes it out.
+  run staleRecordAfterForgetAndRejoinTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(optExists(nodes.get(3).record, rec => rec.staged_reg_seq == 3))
+      .then(removeNode(3, false, false))
+      .then(meetNode(3))
+      .expect(and {
+        // Recreated cell, surviving record, mismatched pair.
+        nodes.get(3).member,
+        nodes.get(3).registration_seq == Some(5),
+        optExists(nodes.get(3).record, rec => rec.staged_reg_seq == 3),
+        not(recordPairsWithRegistration(nodes.get(3))),
+      })
+      .then(clearStaleRecord(3))
+      .expect(and {
+        nodes.get(3).record == None,
+        not(nodes.get(3).node_fenced),
+        nodes.get(3).reply_emitted,
+        inv_stale_record_never_admits,
+      })
+  }
+
+  // **R5**, the kill-witness for the admission guard, walked over the same path. The
+  // `.fail()` is the point of the trace, and it is its terminal step (see the quint-lang
+  // tests guideline): re-deciding the model after a refused action is not meaningful.
+  //
+  // A `Boot` report is admitted in the stranded state — the node really did boot, and the
+  // Boot arm applies nothing the record supplies — and that admission is what sets up the
+  // danger: with a stored cell freshly written, the node's next `Demotion` re-proposal
+  // passes membership, ordering *and* the demotion fence, so nothing but R5's conjunct
+  // stands between the stranded record and an applied whole-node flip. Deleting that
+  // conjunct makes the last step succeed and trips `inv_stale_record_never_admits`. The
+  // exit is `clearStaleRecord`, enabled throughout and walked by the test above.
+  run staleRecordCannotAdmitAfterRejoinTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .then(removeNode(3, false, false))
+      .then(meetNode(3))
+      .expect(not(recordPairsWithRegistration(nodes.get(3))))
+      // The Boot arm is admitted: it applies nothing from the record, so R5 does not touch
+      // it, and it re-stamps the identity cell the Demotion arm would then order against.
+      .then(reportRunIdentity(3, Boot, Primary, 0, false))
+      .expect(and {
+        nodes.get(3).stored_identity != None,
+        nodes.get(3).record != None,
+        // The demotion fence and the ordering conjunct are both satisfied at this point,
+        // so the report is refusable on nothing: only the R5 guard declines it.
+        refusalClassOf(nodes, 3, Demotion, nodes.get(3).incarnation,
+                       nodes.get(3).identity_seq + 1, nodes.get(3).role,
+                       nodes.get(3).epoch_own) == Whole,
+        inv_stale_record_never_admits,
+      })
+      // The applied flip the stranded record would otherwise buy: declined.
+      .then(reportRunIdentity(3, Demotion, Primary, 0, false).fail())
+  }
+
+  // **R5**, cell-recreation path 2 of 3: the registration is recreated by **another
+  // member's `CLUSTER RESET`**. Node 2 resets, which deletes every other member's record
+  // (R10) and strands node 3's staged record exactly as a forget does — the difference is
+  // that node 3 never issued anything. It rejoins under a new generation and lands in the
+  // same window, and the clearing clause is again the exit.
+  run staleRecordAfterOtherMemberResetTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .then(resetCluster(2))
+      .expect(and {
+        not(nodes.get(3).member),
+        nodes.get(3).registration_seq == None,
+        // Node-local and crash-durable: the reset took the cell, not the record.
+        nodes.get(3).record != None,
+      })
+      .then(meetNode(3))
+      .expect(and {
+        nodes.get(3).member,
+        not(recordPairsWithRegistration(nodes.get(3))),
+      })
+      .then(clearStaleRecord(3))
+      .expect(and {
+        nodes.get(3).record == None,
+        nodes.get(3).reply_emitted,
+        inv_stale_record_never_admits,
+      })
+  }
+
+  // **R5**, cell-recreation path 3 of 3: the **node-local store loss across a reboot** —
+  // the model's stand-in for a HARD reset, which `resetCluster` deliberately does not
+  // encode (it would falsify `inv_epoch_never_decreases` by design, FM-CLUSTER-010). What a
+  // HARD reset contributes to *this* rule is a wiped node-local store under a surviving
+  // record, and `removeNode(..., wipe = true)` is exactly that: the stage counter rewinds
+  // while the record does not. The rejoin is then carried across an actual **reboot**, so
+  // the stranded record is shown surviving a process death as well as a registration
+  // change — ext-18's crash-durability claim, and the reason the window this rule closes is
+  // not merely a scheduling artefact.
+  //
+  // The collision this produces is the sharp one: with the counter back at 0 the rejoined
+  // node would mint a *second* stage carrying the **same stage id** under a new
+  // registration. Without the pairing the stranded record and the fresh one are
+  // indistinguishable, which is what makes both the clearing clause and R5's admission
+  // guard registration-scoped rather than stage-scoped.
+  run staleRecordAcrossWipeAndRebootTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 3))
+      // The node-local store loss: the stage counter rewinds, the record does not.
+      .then(removeNode(3, false, true))
+      .expect(and { nodes.get(3).stage_counter == 0, nodes.get(3).record != None })
+      .then(meetNode(3))
+      .expect(nodes.get(3).registration_seq == Some(5))
+      // ...and the stranded record crosses a reboot field-for-field.
+      .then(sourceRestart(3))
+      .expect(and {
+        not(nodes.get(3).booted),
+        nodes.get(3).registration_seq == Some(5),
+        nodes.get(3).stage_counter == 0,
+        // Same stage id would be minted next; only the registration tells them apart.
+        optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 3),
+        not(recordPairsWithRegistration(nodes.get(3))),
+      })
+      .then(clearStaleRecord(3))
+      .expect(and {
+        nodes.get(3).record == None,
+        nodes.get(3).reply_emitted,
+        inv_stale_record_never_admits,
+      })
+  }
+
+  // **R3 (ruled 2026-08-22)** — the applied-write boundary, walked. Node 1 sources an open
+  // migration and latches its hold region; the flip is then *staged* underneath both, which
+  // the ruling declares lawful and which the model permits (no guard at `stageFlip`). What
+  // must be true is stated one step later, at the **applied write**: the admitted `Demotion`
+  // report cancels the migration node 1 sources and leaves its hold region empty, in the
+  // same step that turns its role into `Replica`.
+  //
+  // Three mutations trip this: deleting `migrations' = postMigs` from `reportRunIdentity`
+  // (an adopted flip still sourcing a migration), deleting the `held'` release there, and
+  // deleting `stageFlip`'s hold-emptying (V12-M1's half — the region then survives staging
+  // and is still standing when the write applies).
+  run adoptedFlipCancelsSourcedMigrationTest: bool = {
+    init
+      .then(beginMigration(1, 1, 4, false))
+      .then(prepareHandoff(1))
+      .expect(and {
+        // Sourced work and a latched hold region, both at node 1.
+        slotsSourcedBy(migrations, 1) == Set(1),
+        held.get(1) == Set(1),
+        nodes.get(1).role == Primary,
+      })
+      // Lawful coexistence: staging is not refused over the outstanding hold. It answers it.
+      .then(stageFlip(1, 4))
+      .expect(and {
+        nodes.get(1).record != None,
+        witnessStagedFlipAnsweredHolds,
+        // Still sourcing — the migration is *not* taken at staging time.
+        slotsSourcedBy(migrations, 1) == Set(1),
+        inv_adopted_flip_leaves_no_sourced_work,
+      })
+      // The applied write.
+      .then(reportRunIdentity(1, Demotion, Primary, 0, false))
+      .expect(and {
+        nodes.get(1).role == Replica,
+        slotsSourcedBy(migrations, 1) == Set(),
+        held.get(1) == Set(),
+        not(barriers.armed.contains(1)),
+        feed_bytes.get(1) == 0,
+        inv_adopted_flip_leaves_no_sourced_work,
+        inv_no_hold_during_staged_flip,
       })
   }
 
@@ -2654,11 +2866,69 @@ module cluster_migration_failover {
       })
       .then(reportRunIdentity(3, Demotion, Primary, 0, false))
       .expect(and {
-        // Arm 4b, walked to: refused `Ordering` and classified terminal.
-        refusals.exists(r => r.node == 3 and r.class == Ordering and r.terminal),
+        // Arm 4b, walked to: refused `Ordering`, and terminal against the cell the node
+        // holds now (R4 — the split is read at delivery, not carried in the payload).
+        refusals.exists(r => r.node == 3 and r.class == Ordering),
+        isRefusalTerminal(nodes.get(3).stored_identity, Ordering),
         // Refused, so nothing was written and nothing was cancelled.
         nodes.get(3).stored_identity == None,
         nodes.get(3).role == Primary,
+      })
+  }
+
+  // **R4** (ruled 2026-08-22), the V27-M2 fixture: the arm-4a/4b split is decided **where
+  // the refusal lands**, against the stored operand the observing node holds then — not
+  // frozen into the payload at mint time.
+  //
+  // The trace is the one the design cites, and it is the negative control for the old
+  // model: node 3 loses its incarnation counter, so its `Demotion` re-proposal is refused
+  // `Ordering` *against a live cell* — non-terminal at that instant, arm 4a. Then the cell
+  // goes away (FORGET deletes the record, R10) and the node rejoins under a new
+  // registration. When the in-flight refusal finally lands, the operand is absent: arm 4b,
+  // terminal, and the record it binds to is disposed of — fence dropped, client paid.
+  //
+  // Under the superseded mint-time encoding the payload would have said "non-terminal"
+  // forever and this observation would have been a no-op, wedging the node behind a record
+  // no later refusal can dispose of (the whole point of the wedge exit). Reverting
+  // `observeRefusal` to a carried flag therefore fails this test at the last `.expect`.
+  run delayedOrderingRefusalIsTerminalAfterRejoinTest: bool = {
+    init
+      .then(stageFlip(3, 4))
+      .expect(optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 3))
+      // ext-15's store loss: the node-local counter rewinds below the replicated pair.
+      .then(loseIncarnationCounter(3))
+      .then(reportRunIdentity(3, Demotion, Replica, 0, false))
+      .expect(and {
+        // Minted `Ordering` — and against a cell that is still **present**, so at this
+        // instant the refusal is arm 4a, non-terminal.
+        refusals == Set({ node: 3, stage_id: 1, reg_seq: 3, class: Ordering }),
+        nodes.get(3).stored_identity != None,
+        not(isRefusalTerminal(nodes.get(3).stored_identity, Ordering)),
+        // Nothing disposed of yet: the record, the fence and the unpaid client stand.
+        nodes.get(3).record != None,
+        nodes.get(3).node_fenced,
+      })
+      // The cell disappears under the in-flight refusal, and the node comes back.
+      .then(removeNode(3, false, false))
+      .then(meetNode(3))
+      .expect(and {
+        nodes.get(3).member,
+        nodes.get(3).stored_identity == None,
+        nodes.get(3).registration_seq == Some(5),
+        // The record is node-local and crash-durable, so the refusal still has something
+        // to bind to — both halves of the pair are the ones it was minted against.
+        optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 3),
+      })
+      .then(observeRefusal(3, { node: 3, stage_id: 1, reg_seq: 3, class: Ordering }))
+      .expect(and {
+        // Arm 4b at delivery: the same class, now judged terminal against the absent cell.
+        isRefusalTerminal(nodes.get(3).stored_identity, Ordering),
+        nodes.get(3).record == None,
+        not(nodes.get(3).node_fenced),
+        nodes.get(3).reply_emitted,
+        nodes.get(3).last_disposition != None,
+        not(defects.disposition),
+        inv_no_live_record_disposed_by_a_foreign_refusal,
       })
   }
 
@@ -2696,9 +2966,9 @@ module cluster_migration_failover {
       .then(removeNode(3, false, false))
       .then(reportRunIdentity(3, Demotion, Replica, 0, false))
       .expect(refusals == Set({ node: 3, stage_id: 1, reg_seq: 3,
-                                class: Membership, terminal: true }))
+                                class: Membership }))
       .then(observeRefusal(3, { node: 3, stage_id: 1, reg_seq: 3,
-                                class: Membership, terminal: true }))
+                                class: Membership }))
       .expect(and {
         nodes.get(3).last_disposition != None,
         nodes.get(3).record == None,
@@ -2725,7 +2995,7 @@ module cluster_migration_failover {
       .then(removeNode(3, false, true))
       .then(reportRunIdentity(3, Demotion, Replica, 0, false))
       .expect(refusals == Set({ node: 3, stage_id: 1, reg_seq: 3,
-                                class: Membership, terminal: true }))
+                                class: Membership }))
       .then(clearStaleRecord(3))
       .then(meetNode(3))
       .expect(nodes.get(3).registration_seq == Some(5))
@@ -2733,7 +3003,7 @@ module cluster_migration_failover {
       .then(stageFlip(3, 4))
       .expect(optExists(nodes.get(3).record, rec => rec.stage_id == 1 and rec.staged_reg_seq == 5))
       .then(observeRefusal(3, { node: 3, stage_id: 1, reg_seq: 3,
-                                class: Membership, terminal: true }))
+                                class: Membership }))
       .expect(and {
         // Not disposed: the record, the fence and the unpaid client all survive, and no
         // disposition was recorded at all.

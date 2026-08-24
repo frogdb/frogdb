@@ -481,6 +481,16 @@ module cluster_migration_failover_logic {
   // `demotionAgainstAbsentCellAfterForgetTest`; the constructed view in
   // `demotionAgainstAbsentCellIsTerminalTest` stays as the direct statement of the rule.
   // There is no field-level forget in Rust to model — see `removeNode`'s comment.
+  //
+  // **R4 (ruled 2026-08-22)** fixes *when* this is evaluated. The class is minted with the
+  // verdict and travels in the refusal payload; the `stored` operand this function splits
+  // 4a from 4b on is read at **delivery**, from the cell the observing node holds then.
+  // The model used to freeze the split at mint time (a `terminal: bool` in the payload),
+  // which made 4b reachable only when the cell was already absent when the verdict was
+  // reached. It is not: the design's own V27-M2 negative control mints an `Ordering`
+  // refusal against a live cell, loses the cell to a FORGET, and delivers the refusal to
+  // the re-MEETed node — 4b, and terminal. Nothing recomputes the *class* at delivery:
+  // that would ask `identityOrderOk` about operands the verdict is no longer about.
   pure def isRefusalTerminal(stored: Option[RunIdentity], class: RefusalClass): bool =
     class == Membership or (class == Ordering and stored == None)
 
@@ -494,6 +504,21 @@ module cluster_migration_failover_logic {
   // registration no longer matches the live cell (or the node has left the membership).
   pure def isRecordStale(ns: NodeState): bool =
     optExists(ns.record, rec => ns.registration_seq != Some(rec.staged_reg_seq) or not(ns.member))
+
+  // **R5 (ruled 2026-08-22)**: the admission side of the same pair. A record whose
+  // `staged_registration_seq` no longer names the live registration cell is *stale*, and a
+  // stale record must never produce an **applied** effect — no adoption, no admitted stamp.
+  // Clearing it is level-triggered and therefore eventual (`clearStaleRecord`); the safety
+  // rule is what holds in the window before the clear runs, and it is this one.
+  //
+  // Deliberately not `not(isRecordStale(ns))`: the membership half of staleness is already
+  // a refusal class of its own (`Membership`, arm 5), and folding it in here would make the
+  // guard below shadow that classification instead of standing beside it. The two together
+  // are exactly `isRecordStale`'s negation — the pairing half is here, the membership half
+  // is `refusalClassOf`'s first conjunct. A node with no record pairs vacuously, which is
+  // what makes this safe to conjoin onto the `Boot` arm as well.
+  pure def recordPairsWithRegistration(ns: NodeState): bool =
+    optForall(ns.record, rec => ns.registration_seq == Some(rec.staged_reg_seq))
 
   // ---------------------------------------------------------------------------
   // Slot-map logic.
