@@ -1,6 +1,7 @@
 # 35: Full-sync overship — per-shard coverage vector, floors, and the window-grant refusal
 
-Status: ready-for-human
+Status: done (user sign-off 2026-08-22; breach-abort amendment + `full_sync_hold_breaches`
+counter both landed — the counter-first condition)
 
 Ruled 2026-08-21, campaign ledger R12–R16
 (`.scratch/formal-spec/2026-08-19-quint-completeness-campaign.md`). This issue owns two
@@ -170,7 +171,7 @@ One mechanism, both payload paths, receiver-authoritative like issue 34:
 Issue 36 was ruled 2026-08-22 (PRD, ledger R17–R24) and settles this issue's interim
 machinery's retirement schedule:
 
-- **R15 plumbing retires via [issue 38](./38-replica-stamps-floors-unification.md).**
+- **R15 plumbing retires via [issue 38](../open/38-replica-stamps-floors-unification.md).**
   The staged `replication_metadata.json` coverage vector and
   `ReplicationState.coverage_at_save` delete once floors live in the per-shard stamp
   keys — an installed checkpoint *contains* the primary's stamps, so install adopts the
@@ -180,12 +181,12 @@ machinery's retirement schedule:
   stops being a refusal class. The `applyRestart` model gap noted below opens up then
   (R24: real restart transitions).
 - **The flush hold + breach-abort + breach counter delete via
-  [issue 39](./39-flush-hold-deletion-sender-reads-artifact.md).** The sender reads
+  [issue 39](../open/39-flush-hold-deletion-sender-reads-artifact.md).** The sender reads
   `Y_s` from the cut artifact's own stamps, so the artifact cannot disagree with its
   claim by construction. The drain stays. The trailer `ShardCoverage` **stays** as the
   wire form (live path has no artifact).
 - `WRITE_EFFECT_ORDER` restructuring (mint at persist) is
-  [issue 37](./37-mint-at-persist-and-primary-stamps.md)'s subject, as anticipated.
+  [issue 37](../open/37-mint-at-persist-and-primary-stamps.md)'s subject, as anticipated.
 - **Model gap (documented at `applyRestart`)**: `restartNodeAs` returns a Primary and
   `inv_primary_role_is_terminal` keeps it there, so no reachable state presents a
   *recovered replica* at a PSYNC. R16 is therefore checked over the pure decision
