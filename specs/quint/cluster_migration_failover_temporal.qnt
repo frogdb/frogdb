@@ -47,6 +47,16 @@
 // Both halves are stated below as `temporal` properties, plus mutation-battery row M22
 // (step-unwiring), which the campaign doc records as needing a temporal operator.
 //
+// **Accepted limitation — row M22** (cluster issue 44 / R2, 2026-08-23). Unwiring
+// `retargetSlotResidue` from `step` while leaving its guard true is undetectable by the
+// safety module: `inv_residue_has_an_effective_remover` is a guard-level state predicate
+// (it asks whether *some* remover is admissible here), so removing a verb's
+// *schedulability* cannot falsify it, run tests invoke the action directly and so are
+// unaffected, and `quint run` has no liveness or temporal checking at all. Detecting it
+// requires a temporal operator the invariant set deliberately excludes — which is exactly
+// what this module's Apalache-only lane would supply if it converges at useful depth;
+// revisit only if campaign work makes the observable cheap.
+//
 // ---------------------------------------------------------------------------
 // FAIRNESS — stated explicitly, because a liveness property is only as meaningful as
 // the fairness it is asserted under.

@@ -10270,11 +10270,17 @@ Every touched row gets an explicit verdict in the spec change; summary:
       disjunct stays satisfied by the source. Measured, one half at a time:
       dropping the **unassign** violates `inv_slot_owner_valid` (500×20) and
       fails `orphanRehomeToSourceTest` / `removeNodeForceEvictsLiveOwnerTest`;
-      dropping the **mark** trips no invariant and is caught only by run tests
-      (`reapDeferredWhileTargetGoneTest`,
-      `failPromotionRefusedAfterSourceDepartedTest`, both orphan re-home tests).
+      dropping the **mark** trips no invariant and is caught only by run tests.
       Read this row as an ownership-validity kill on the unassign half and a
-      test-only kill on the mark half — not a copy-survival kill.*
+      test-only kill on the mark half — not a copy-survival kill.
+      **Re-measured 2026-08-23** (cluster issue 44 / R2) against the post-R3/R4/R5
+      model: the unassign half is unchanged (`inv_slot_owner_valid` at 500×20,
+      same two failing tests); the mark half now fails **three** tests —
+      `reapDeferredWhileTargetGoneTest`, `orphanRehomeToSourceTest`,
+      `orphanRehomeToAnotherPrimaryTest` — with the full 42-invariant conjunction
+      clean at 2000×40. `failPromotionRefusedAfterSourceDepartedTest`, named in
+      the 2026-08-20 measurement, no longer fails under the mark-half mutant and
+      is dropped from this row's detector list.*
       **Plus
       `demoteNode(n)`**
       (V6-C3 — the round's highest-leverage addition: role becomes a modelled
@@ -10381,7 +10387,18 @@ Every touched row gets an explicit verdict in the spec change; summary:
       kill is real and `inv_no_spurious_cancel` is the detector (Q4 row M34,
       CAUGHT-P), now that the ghost is postcondition-derived — Q3's guard-derived
       form made the antecedent a contradiction of the admitting guard and the
-      property vacuous.*
+      property vacuous. **Re-derived 2026-08-23** (cluster issue 44 / R2) against
+      the post-R3/R4/R5 model and carried as a comment at the model, on
+      `identityWritten` in `cluster_migration_failover_machine.qnt`:
+      `identityWritten = admitted ∧ stored_identity != Some(identity)`, and
+      `admitted` requires `identityOrderOk`, whose `Some` arm is `lexGt` on
+      `(incarnation, identity_seq)` — strict domination, so the proposed pair
+      differs from the stored one — and whose `None` arm makes
+      `Some(identity) != None` trivially true. Hence
+      `admitted ⟹ identityWritten`, and the converse holds by definition:
+      **`admitted ≡ identityWritten`** in this model, which is exactly why the
+      admission-bound mutation form is **equivalent** and no kill is expected
+      from it.*
       **Plus
       `loseIncarnationCounter(n)`** (V6-M2/M3) and the bootstrap/join proposal
       sequences (`AddNode` before `ReportRunIdentity` before anything else), with
@@ -10454,7 +10471,16 @@ Every touched row gets an explicit verdict in the spec change; summary:
       writes no keyspace at all and the node keeps exactly the copies it
       lawfully held before staging. Read these two rows as
       "`witnessStagedFlipCompletesAcrossCrash` must become unreachable", which
-      is what the forcing tests assert.*
+      is what the forcing tests assert.
+      **Re-measured 2026-08-23** (cluster issue 44 / R2) against the post-R3/R4/R5
+      model, both mutants run one at a time: the volatile-record mutant
+      (`record: None` in `restarted`) fails `stagedFlipSurvivesCrashReachableTest`
+      **and** R5's new `staleRecordAcrossWipeAndRebootTest`; the re-edged-adoption
+      mutant (the adoption effect folded into the `Demotion` arm of
+      `reportRunIdentity`) fails exactly the four tests named above. Neither trips
+      any of the 42 invariants at 2000×40 — `inv_member_keyspace_is_tracked`
+      included — so the correction stands as written, with
+      `staleRecordAcrossWipeAndRebootTest` added to the volatile-record row.*
       **Weakening the guard to two operands** (record ∧
       role Replica) and interleaving a `Failover{force: false}` toward an
       in-shard successor while the staged report is in flight must violate
@@ -10696,16 +10722,32 @@ Every touched row gets an explicit verdict in the spec change; summary:
       refusal minted for a cleared stage while a second stage is live →
       `witnessStagedFlipCompletesAcrossCrash` unreachable (the live record is
       cleared by the dead stage's refusal, V15-M1).
-      *Detector correction (2026-08-20, Q4 flag F7): against the Quint model the
-      operative detector is the **disposition**, not the witness. The stage-half
-      of the pair lives in `refusalBinds`, and dropping it lets a refusal minted
-      for a dead stage dispose of a live record — which
-      `inv_no_live_record_disposed_by_a_foreign_refusal` sees directly off
-      `last_disposition` (row M68's kill, `foreignRefusalDoesNotDisposeTest`).
-      The flip's own witness stays reachable, because the refusal that clears the
-      record is scheduled against a **different** record than the one the witness
-      completes. Read the row as "the disposition property must fail"; witness
-      unreachability is not the signal here.*
+      *Detector correction (2026-08-20, Q4 flag F7; **re-measured and amended
+      2026-08-23**, cluster issue 44 / R2). Two things are settled. First, the
+      witness attribution is wrong: `witnessStagedFlipCompletesAcrossCrash` stays
+      reachable, because the refusal that clears the record is scheduled against a
+      **different** record than the one the witness completes — witness
+      unreachability is not the signal here. Second, the 2026-08-20 replacement
+      detector was **the other half's**. `refusalBinds` is a *pair*
+      (`r.stage_id == rec.stage_id ∧ r.reg_seq == rec.staged_reg_seq`), and
+      `inv_no_live_record_disposed_by_a_foreign_refusal` /
+      `foreignRefusalDoesNotDisposeTest` are what row **M68** — dropping the
+      **registration** half, i.e. binding on the stage id alone — kills:
+      measured, that mutant fails exactly `foreignRefusalDoesNotDisposeTest`
+      (92 passing, 1 failing), because the fixture re-mints the same `stage_id`
+      under a new registration after a forget-and-rejoin. Dropping the
+      **stage-id** half alone (this row's mutation) is **not detected at all**
+      against the post-R3/R4/R5 model: 93/93 run tests pass and the full
+      42-invariant conjunction is clean at 2000×40. The reason is structural —
+      the surviving `reg_seq` half discriminates in every trace the battery and
+      the walk reach; distinguishing the stage-id half needs a record cleared and
+      **re-staged under the same registration** (via `completeAdoption`, not
+      `clearStaleRecord`) with a refusal for the dead stage still in flight, and
+      no fixture drives that schedule. Read this row as **MISSED** pending such a
+      fixture; the property that would see it is
+      `inv_no_live_record_disposed_by_a_foreign_refusal`, which is already stated
+      — only the reaching trace is absent. Adding that fixture is model work
+      (campaign / issue 43 territory), not a doc fix.*
       (10) **detach unmodelled** — remove the detach action (revision 14's
       state of the model) → every property still holds, which is the point:
       the mutation's *pass* is the signal, and it is asserted as a
@@ -10920,14 +10962,29 @@ Every touched row gets an explicit verdict in the spec change; summary:
     immortal no action ever drops `fenced[n]`: the wedge, witnessed as a state
     rather than argued.
     *Detector correction (2026-08-20, Q4 flag F6, ruled in the
-    [quint-completeness campaign](../formal-spec/2026-08-19-quint-completeness-campaign.md)):
-    only the **`witnessFenceClears` half** of this kill is operative against the
-    Quint model. `inv_no_record_outlives_its_registration` is deliberately **not
-    asserted** there (Q2): its strict form is unsatisfiable by construction — the
-    record is node-local and crash-durable, so it lawfully outlives the loss of
-    its registration cell — and its guarded form is a tautology. The named
-    invariant therefore cannot fail, "immediately" or otherwise; read the row as
-    "`witnessFenceClears` must become unreachable".*
+    [quint-completeness campaign](../formal-spec/2026-08-19-quint-completeness-campaign.md);
+    **re-measured and inverted 2026-08-23**, cluster issue 44 / R2). Neither half
+    of the doc's kill lands as written, and the 2026-08-20 correction had the two
+    halves the wrong way round. `inv_no_record_outlives_its_registration` is
+    deliberately **not asserted** in the Quint model (Q2): its strict form is
+    unsatisfiable by construction — the record is node-local and crash-durable, so
+    it lawfully outlives the loss of its registration cell — and its guarded form
+    is a tautology. R5 (2026-08-22, cluster issue 43) replaced it with
+    `inv_stale_record_never_admits`, which this mutation does not touch (it makes
+    the record immortal; the admission guard the invariant reads is elsewhere).
+    But the **`witnessFenceClears` half does not bite either**:
+    `completeAdoption` also drops `node_fenced`, so the bounded witness stays
+    reachable and `fenceClearsWithinThreeStepsTest` still **passes** under the
+    mutant — the Q3 finding that raised F6 in the first place. Measured against
+    the post-R3/R4/R5 model (neutered `clearStaleRecord`, effect dropped, guard
+    left intact): **no invariant violation** over the full 42-invariant
+    conjunction at 2000×40 on seeds `0x1` and `0x2`, and **five run tests fail** —
+    `recordOutlivesRegistrationTest`, `staleRecordAfterForgetAndRejoinTest`,
+    `staleRecordAfterOtherMemberResetTest`, `staleRecordAcrossWipeAndRebootTest`
+    (R5's three cell-recreation fixtures) and `foreignRefusalDoesNotDisposeTest`.
+    Read this row as **CAUGHT-T**: the operative detectors are those five
+    deterministic run tests, not the named invariant and not witness
+    unreachability.*
     (16) **arm-4b deletion** (V19-M1's other half) — restore the clause but
     dispose of an `ordering` refusal against an absent stored identity as a
     no-op (revision 18's single arm), and schedule the interleaving in which
