@@ -591,6 +591,7 @@ impl ShardWorker {
     /// applied as a single atomic batch after all commands complete.
     ///
     /// This prevents replicas from observing intermediate transaction state.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_transaction(
         &mut self,
         commands: Vec<ParsedCommand>,
