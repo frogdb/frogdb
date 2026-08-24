@@ -805,6 +805,62 @@ mod tests {
         );
     }
 
+    /// A directory that is not there contains no files — the probe answers
+    /// "empty", it does not error. Every other refusal path depends on the
+    /// converse staying false: only `NotFound` gets this treatment.
+    // FM-PERSISTENCE-048
+    #[test]
+    fn foreign_files_reports_a_missing_directory_as_empty() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("never-created");
+
+        assert_eq!(
+            foreign_files(&missing, 8).unwrap(),
+            Vec::<PathBuf>::new(),
+            "a directory that does not exist holds nothing"
+        );
+
+        let mut out = Vec::new();
+        collect_files(&missing, Path::new("gone"), 8, &mut out).unwrap();
+        assert!(
+            out.is_empty(),
+            "a subdirectory removed mid-walk contributes nothing"
+        );
+    }
+
+    /// A directory whose contents cannot be listed must not read as empty:
+    /// `Ok(vec![])` here would let `--force-fresh-data-dir` stamp an identity
+    /// over bytes nobody examined. Only `NotFound` maps to "empty"; every other
+    /// listing failure propagates.
+    // FM-PERSISTENCE-048, FM-PERSISTENCE-051
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_must_not_read_as_empty() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("data");
+        let locked = root.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("theirs"), b"bytes").unwrap();
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let direct = foreign_files(&locked, 8);
+        let nested = foreign_files(&root, 8);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            direct.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied,
+            "an unlistable data directory is unknown, not empty"
+        );
+        assert_eq!(
+            nested.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied,
+            "an unlistable subdirectory poisons the walk instead of vanishing from it"
+        );
+    }
+
     /// A symlink is content even when it points at a directory: resolving it
     /// would let `data-dir/link -> /somebody/elses/tree` read as empty.
     // FM-PERSISTENCE-048

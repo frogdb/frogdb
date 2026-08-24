@@ -1,8 +1,12 @@
 # Cross-shard MULTI/EXEC in standalone: design crash-atomicity across per-shard WALs
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Size: L
+
+Stage 1 delivered: design doc at
+[`.scratch/spec-gaps/2026-08-23-issue29-standalone-cross-shard-exec-design.md`](../../2026-08-23-issue29-standalone-cross-shard-exec-design.md)
+(covers points 1-5, nine open questions) — stage 2 implementation awaits HITL review of it.
 
 > **Ruling (2026-08-22, R8 in
 > [work-item rulings](../../../cluster-correctness/2026-08-22-work-item-rulings.md)):**
