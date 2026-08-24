@@ -19,6 +19,7 @@ use super::types::{
     BigKeysScanResponse, InfoShardSnapshot, PartialResult, PubSubLimitsInfo, ShardMemoryStats,
     TransactionResult, VllQueueInfo,
 };
+use super::worker::WatchFenceRole;
 
 /// A timestamped wrapper around [`ShardMessage`] for measuring queue latency.
 pub struct Envelope {
@@ -285,6 +286,17 @@ pub enum CoreMsg {
         /// whole point: the shard would derive the *current* generation, which
         /// is exactly the value the check must not use.
         routing_fence: Option<crate::write_seam::SlotFence>,
+        /// Which side of the off-target watch protocol this round-trip plays
+        /// (`specs/txn.md` TR-TXN-028).
+        ///
+        /// [`WatchFenceRole::Mint`] on the coordinator's watch-only probe of a
+        /// shard that is not the batch's target: answer the clean verdict with
+        /// a generation handle per watched key. [`WatchFenceRole::Verify`] on
+        /// the target's batch, carrying those handles so the target re-reads
+        /// the foreign generations inside its own commit step. The default —
+        /// `Verify(vec![])` — is every EXEC whose watches all live on its
+        /// target shard.
+        watch_fences: WatchFenceRole,
         response_tx: oneshot::Sender<TransactionResult>,
     },
 }

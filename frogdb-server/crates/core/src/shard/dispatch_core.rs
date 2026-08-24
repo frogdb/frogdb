@@ -144,6 +144,7 @@ impl ShardWorker {
                 protocol_version,
                 admission,
                 routing_fence,
+                watch_fences,
                 response_tx,
             } => {
                 // Panic isolation (c2-07), outer half. A panic in a *queued*
@@ -165,6 +166,7 @@ impl ShardWorker {
                             protocol_version,
                             &admission,
                             routing_fence,
+                            watch_fences.clone(),
                         )
                         .instrument(tracing::info_span!("shard_exec_txn", shard_id))
                         .await
@@ -176,6 +178,7 @@ impl ShardWorker {
                             protocol_version,
                             &admission,
                             routing_fence,
+                            watch_fences,
                         )
                         .await
                     }

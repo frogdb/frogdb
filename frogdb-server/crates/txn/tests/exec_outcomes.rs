@@ -9,11 +9,14 @@
 //! variant fails compilation until someone writes the test that forces it.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use frogdb_core::{
-    MetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry,
+    MetricsRecorder, RateLimitExceeded, ServerWideOp, TransactionResult, WatchEntry, WatchFence,
+    WatchFenceRole,
 };
 use frogdb_protocol::{ParsedCommand, Response};
 use frogdb_txn::{
@@ -123,8 +126,25 @@ struct MockTxnHost {
     watched_slots_local: VecDeque<bool>,
     /// What `wait_if_paused` reports (true = it actually blocked).
     paused: bool,
-    /// One reply per shard round-trip; exhausted = empty success.
+    /// One reply per shard round-trip; exhausted = the role's default answer
+    /// (see [`TxnHost::send_shard_transaction`] on the mock).
     shard_replies: VecDeque<ShardTxnReply>,
+    /// Stand-in for the owning shard's slot stamps: one generation cell per
+    /// watched key, seeded to the version the watch was taken at (a probe only
+    /// mints fences after answering clean, so the two agree by construction).
+    generations: HashMap<Bytes, Arc<AtomicU64>>,
+    /// The shard-wide epoch every fence folds in, exactly as `SlotVersions`
+    /// does. Never moved by these tests — a flush is not what TR-TXN-028 is
+    /// about — but present so the mock's fences have the production shape.
+    epoch: Arc<AtomicU64>,
+    /// Keys another client writes *immediately after* the Nth shard round-trip
+    /// answers: the injection hook for the interleaving TR-TXN-028 closes. One
+    /// entry is consumed per round-trip; exhausted = no concurrent write.
+    writes_after_trip: VecDeque<Vec<&'static [u8]>>,
+    /// How many fences each `Verify` round-trip carried in, in call order.
+    /// Kept off [`Effect`] so pinning the carry does not perturb the effect
+    /// sequences other tests assert verbatim.
+    carried_fences: Vec<usize>,
     connection_level_reply: (Response, Vec<Response>),
     server_wide_reply: Response,
     effects: Vec<Effect>,
@@ -144,6 +164,10 @@ impl Default for MockTxnHost {
             watched_slots_local: VecDeque::new(),
             paused: false,
             shard_replies: VecDeque::new(),
+            generations: HashMap::new(),
+            epoch: Arc::new(AtomicU64::new(0)),
+            writes_after_trip: VecDeque::new(),
+            carried_fences: Vec::new(),
             connection_level_reply: (Response::ok(), vec![]),
             server_wide_reply: Response::Integer(0),
             effects: Vec::new(),
@@ -155,6 +179,29 @@ impl MockTxnHost {
     /// How many times the batch limiter was charged for this transaction.
     fn charges(&self) -> usize {
         self.charges.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// This key's generation cell, created at `seed` if the mock has not seen
+    /// the key before.
+    fn generation_of(&mut self, key: &Bytes, seed: u64) -> Arc<AtomicU64> {
+        Arc::clone(
+            self.generations
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(AtomicU64::new(seed))),
+        )
+    }
+
+    /// Advance a key's generation — the mock's "another client wrote it".
+    fn write_key(&mut self, key: &'static [u8]) {
+        self.generation_of(&Bytes::from_static(key), 0)
+            .fetch_add(1, Ordering::Release);
+    }
+
+    /// Run the concurrent write scripted for the round-trip that just answered.
+    fn apply_writes_after_trip(&mut self) {
+        for key in self.writes_after_trip.pop_front().unwrap_or_default() {
+            self.write_key(key);
+        }
     }
 }
 
@@ -210,22 +257,55 @@ impl TxnHost for MockTxnHost {
         self.paused
     }
 
+    /// Answers as the real shard does, so the fence protocol is exercised
+    /// end to end rather than assumed:
+    ///
+    /// - a `Mint` probe answers `WatchesFenced`, one fence per watched key over
+    ///   this mock's generation cells;
+    /// - a `Verify` batch re-reads every carried fence and answers
+    ///   `WatchAborted` if any generation moved, *before* producing results;
+    /// - a scripted `shard_replies` entry overrides both, so a test can still
+    ///   force any verdict it likes on any trip.
     async fn send_shard_transaction(
         &mut self,
         target_shard: usize,
         commands: Vec<ParsedCommand>,
-        _watches: Vec<WatchEntry>,
+        watches: Vec<WatchEntry>,
+        watch_fences: WatchFenceRole,
     ) -> ShardTxnReply {
         self.effects.push(Effect::ShardRoundTrip {
             target_shard,
             commands: commands.len(),
         });
-        self.shard_replies.pop_front().unwrap_or_else(|| {
+        let scripted = self.shard_replies.pop_front();
+        let from_role = match watch_fences {
+            WatchFenceRole::Mint => {
+                let fences = watches
+                    .iter()
+                    .map(|watch| {
+                        let cell = self.generation_of(&watch.key, watch.version);
+                        WatchFence::over(cell, Arc::clone(&self.epoch), watch.version)
+                    })
+                    .collect();
+                Some(TransactionResult::WatchesFenced(fences))
+            }
+            WatchFenceRole::Verify(carried) => {
+                self.carried_fences.push(carried.len());
+                carried
+                    .iter()
+                    .any(|fence| !fence.still_current())
+                    .then_some(TransactionResult::WatchAborted)
+            }
+        };
+        let reply = scripted.unwrap_or_else(|| match from_role {
+            Some(result) => ShardTxnReply::Replied(result),
             // Default: one `+OK` per command, so the merge has something to zip.
-            ShardTxnReply::Replied(TransactionResult::Success(
+            None => ShardTxnReply::Replied(TransactionResult::Success(
                 commands.iter().map(|_| Response::ok()).collect(),
-            ))
-        })
+            )),
+        });
+        self.apply_writes_after_trip();
+        reply
     }
 
     fn routing_unsettled_reply(&self) -> Response {
@@ -1223,6 +1303,79 @@ async fn off_target_watches_are_grouped_one_round_trip_per_shard_in_shard_order(
                 commands: 1
             },
         ]
+    );
+}
+
+// FM-TXN-020
+#[tokio::test]
+async fn an_off_target_watch_written_after_its_check_still_aborts_the_commit() {
+    // The window TR-TXN-028 closes. Shard 3's probe answers clean, and only
+    // *then* does another client create `counter` — after the check, before the
+    // target's batch. A bare clean/dirty verdict would already have been spent,
+    // and the batch would commit against a watch that no longer holds.
+    //
+    // It does not, because the probe hands back the watched key's generation
+    // and the batch carries it: shard 7 re-reads that foreign generation inside
+    // its own commit step, sees it moved, and refuses before running anything.
+    let mut host = MockTxnHost {
+        // The interleaved write, injected the instant shard 3's probe answers.
+        writes_after_trip: VecDeque::from([vec![b"counter".as_slice()]]),
+        ..Default::default()
+    };
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Single(MOCK_SHARD);
+    s.watches = vec![watched_on(3, b"counter", 5, false)];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::WatchAborted);
+    assert_eq!(only(responses), Response::null());
+    assert_eq!(
+        host.carried_fences,
+        vec![1],
+        "the target's batch must carry the one fence the probe minted"
+    );
+    assert_eq!(
+        host.effects,
+        vec![
+            Effect::Validate { asking: false },
+            Effect::WatchCheck,
+            Effect::ShardRoundTrip {
+                target_shard: 3,
+                commands: 0
+            },
+            Effect::ShardRoundTrip {
+                target_shard: MOCK_SHARD,
+                commands: 1
+            },
+        ],
+        "the batch is still sent — the refusal is the target's, at commit time"
+    );
+}
+
+// FM-TXN-020
+#[tokio::test]
+async fn an_untouched_off_target_watch_commits_on_the_carried_fence() {
+    // The liveness half of the row above: carrying the generation must not turn
+    // every dead off-target watch into an abort. Nothing writes `counter`, so
+    // the fence the probe minted still reads current at commit time and the
+    // batch commits.
+    let mut host = MockTxnHost::default();
+    let mut s = summary(vec![cmd("SET")]);
+    s.target = TransactionTarget::Single(MOCK_SHARD);
+    s.watches = vec![
+        watched_on(3, b"counter", 5, false),
+        watched_on(4, b"other", 9, false),
+    ];
+
+    let (outcome, responses) = execute_transaction(&mut host, s).await;
+
+    assert_eq!(outcome, TransactionOutcome::Committed);
+    assert_eq!(only(responses), Response::Array(vec![Response::ok()]));
+    assert_eq!(
+        host.carried_fences,
+        vec![2],
+        "both probes' fences ride on the single batch round-trip"
     );
 }
 

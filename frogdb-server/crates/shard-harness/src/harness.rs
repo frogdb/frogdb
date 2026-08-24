@@ -198,6 +198,7 @@ impl ShardDriver {
             protocol_version: ProtocolVersion::Resp3,
             admission: frogdb_core::write_seam::WriteAdmission::internal(),
             routing_fence: None,
+            watch_fences: Default::default(),
             response_tx: tx,
         };
         self.dispatch(shard, msg).await;

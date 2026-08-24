@@ -116,6 +116,7 @@ impl ReplicaCommandExecutor {
             // Replica apply carries no routing fence: the slot belongs to the
             // primary, so this node has no local generation to fence against.
             routing_fence: None,
+            watch_fences: Default::default(),
             response_tx,
         };
         self.sender_for(shard_id)?
@@ -143,6 +144,13 @@ impl ReplicaCommandExecutor {
             TransactionResult::TopologyChanged => Err(ApplyError::Rejected {
                 shard: shard_id,
                 detail: "transaction refused: routing generation changed".to_string(),
+            }),
+            // Likewise unreachable: only a `WatchFenceRole::Mint` round-trip is
+            // answered with fences, and replica apply always sends the default
+            // `Verify(vec![])`. Named for the same reason.
+            TransactionResult::WatchesFenced(_) => Err(ApplyError::Rejected {
+                shard: shard_id,
+                detail: "transaction refused: unexpected watch-fence reply".to_string(),
             }),
         }
     }
