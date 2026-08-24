@@ -207,6 +207,12 @@ MODEL_EXEMPTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
             "cluster_migration_failover.qnt::inv_no_live_record_disposed_by_a_foreign_refusal",
             "cluster_migration_failover.qnt::inv_role_written_only_by_declared_writers",
             "cluster_migration_failover.qnt::inv_no_hold_during_staged_flip",
+            # R3 (adoption-time cancellation) and R5 (stale-never-admits) from
+            # the 2026-08-22 work-item rulings amend the same issue-31 family:
+            # the rows they would claim are the amended ones the campaign has
+            # not yet written.
+            "cluster_migration_failover.qnt::inv_adopted_flip_leaves_no_sourced_work",
+            "cluster_migration_failover.qnt::inv_stale_record_never_admits",
             "cluster_migration_failover.qnt::inv_no_cross_shard_successor",
         ),
     ),
