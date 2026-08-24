@@ -67,15 +67,24 @@ module cluster_migration_failover_types {
   // member; `Whole` = the refuse-whole class.
   type RefusalClass = Ordering | Fenced | Membership | Whole
 
-  // ext-18: a refusal in flight, carrying the pair the record-binding conjunct reads.
-  // `terminal` marks the classes the design declares terminal (arm 4b: `Ordering`
-  // against an absent stored identity; arm 5: `Membership`).
+  // ext-18: a refusal in flight, carrying the pair the record-binding conjunct reads and
+  // the **class the verdict minted**.
+  //
+  // R4, ruled 2026-08-22: the payload carries the *class* and nothing more. It used to
+  // carry a `terminal: bool` as well, decided at mint time from the stored identity the
+  // *verdict* saw — which froze the arm-4a/4b split at the wrong instant and made arm 4b
+  // (`Ordering` against an absent stored identity) reachable only for a refusal that was
+  // already minted against an empty cell. The design splits 4a/4b on the **current**
+  // stored operand at delivery: the class is a committed apply outcome and travels, the
+  // operand it is judged against is read where the refusal lands. `observeRefusal`
+  // therefore calls `isRefusalTerminal(nodes.get(n).stored_identity, r.class)`, and the
+  // V27-M2 trace (counter loss -> refusal -> FORGET + re-MEET -> delivery) reaches 4b —
+  // see `delayedOrderingRefusalIsTerminalAfterRejoinTest`.
   type Refusal = {
     node: NodeId,
     stage_id: int,
     reg_seq: int,
     class: RefusalClass,
-    terminal: bool,
   }
 
   // ext-18 (V28-M6): the auxiliary history value `inv_no_live_record_disposed_by_a_
