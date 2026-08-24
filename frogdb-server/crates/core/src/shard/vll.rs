@@ -132,17 +132,66 @@ mod tests {
         oneshot::channel().0
     }
 
+    /// A SET-shaped stand-in for the real handler (which lives in
+    /// `frogdb-commands`, out of reach of this crate's tests). The scatter
+    /// effect pipeline resolves `SET` by name to *represent* a scatter write in
+    /// the canonical post-execution path — it reads the spec, never `execute` —
+    /// and treats a missing entry as a server-construction bug (fail-stop on
+    /// the VLL write path). A test worker executing a `ScatterOp::MSet` must
+    /// therefore honor the registry premise a running server guarantees.
+    struct ScatterSetStub;
+
+    impl crate::command::Command for ScatterSetStub {
+        fn spec(&self) -> &'static crate::command_spec::CommandSpec {
+            static SPEC: crate::command_spec::CommandSpec = crate::command_spec::CommandSpec {
+                name: "SET",
+                docs: crate::command_spec::CommandDocs {
+                    summary: "Test-fixture command; not registered on a running server.",
+                    since: "1.0.0",
+                    group: "string",
+                    complexity: Some("O(1)"),
+                },
+                arity: crate::Arity::AtLeast(2),
+                flags: crate::CommandFlags::WRITE,
+                keys: crate::command_spec::KeySpec::First,
+                access: crate::command_spec::AccessSpec::UniformRW,
+                wal: crate::command::WalStrategy::PersistFirstKey,
+                wakes: crate::command::WaiterWake::All,
+                event: crate::command_spec::EventSpec::Emits {
+                    class: crate::keyspace_event::KeyspaceEventFlags::STRING,
+                    name: "set",
+                },
+                requires_same_slot: false,
+                reindex: crate::command_spec::ReindexSpec::None,
+                lookup: crate::command_spec::LookupSpec::None,
+                mutation: crate::command::ConnMutation::None,
+                strategy: crate::command::ExecutionStrategy::Standard,
+            };
+            &SPEC
+        }
+
+        fn execute(
+            &self,
+            _ctx: &mut crate::command::CommandContext,
+            _args: &[Bytes],
+        ) -> Result<frogdb_protocol::Response, crate::error::CommandError> {
+            unreachable!("the scatter pipeline reads this handler's spec, never executes it")
+        }
+    }
+
     fn test_worker() -> ShardWorker {
         let (msg_tx, msg_rx) = mpsc::channel(16);
         let (_, conn_rx) = mpsc::channel(16);
         let shard_senders = Arc::new(vec![ShardSender::new(msg_tx)]);
+        let mut registry = CommandRegistry::new();
+        registry.register(ScatterSetStub);
         ShardWorker::with_eviction(
             0,
             1,
             ShardReceiver::new(msg_rx),
             conn_rx,
             shard_senders,
-            Arc::new(CommandRegistry::new()),
+            Arc::new(registry),
             EvictionConfig::default(),
             Arc::new(NoopMetricsRecorder::new()),
             Arc::new(AtomicU64::new(0)),
