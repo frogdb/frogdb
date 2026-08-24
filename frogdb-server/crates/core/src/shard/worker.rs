@@ -317,6 +317,38 @@ pub struct ShardWorker {
     /// Whether active key expiry is paused (true during CLIENT PAUSE ALL).
     pub(crate) expiry_paused: Arc<AtomicBool>,
 
+    /// The node-global `CLIENT PAUSE`, as the shard sees it.
+    ///
+    /// Read at the blocking-pop decision point: while a node pause is armed a
+    /// blocking write command parks instead of taking an immediate pop, so the
+    /// pop cannot cross the drain window the pause exists to create
+    /// (`specs/blocking.md` TR-BLOCKING-026). The gate carries the pause's
+    /// deadline rather than a latch, so it lapses on its own even on a shard
+    /// that sees no traffic.
+    pub(crate) node_write_pause: Arc<crate::client_registry::NodeWritePauseGate>,
+
+    /// Whether this shard parked at least one blocking command that could have
+    /// popped, because [`Self::node_write_pause`] was armed.
+    ///
+    /// Such a waiter has no wake coming: the data was already there, so no
+    /// later write will drive the satisfaction pass. The 100 ms blocking sweep
+    /// checks this flag and, once the pause has lapsed, runs the pass itself
+    /// (`ShardWorker::resume_pops_deferred_by_pause`). Cleared by that pass.
+    pub(crate) pops_deferred_by_pause: bool,
+
+    /// Monotonic count of blocking waiters this shard has served store data
+    /// to, bumped in the satisfaction driver's committed-delivery arm (and
+    /// only there — a rejection or a restored pop is not a delivery).
+    ///
+    /// Read as a *delta* around a satisfaction pass by
+    /// `resume_pops_deferred_by_pause`, which needs to know whether a pass
+    /// actually consumed store data. The wait queue's own waiter count cannot
+    /// answer that: a waiter also leaves the queue on a rejection
+    /// (`WRONGTYPE`/`NOGROUP` drain) or an elapsed deadline, neither of which
+    /// touches the keyspace and neither of which may drag a write's effects
+    /// (a WATCH-invalidating version bump, a WAL record) along behind it.
+    pub(crate) waiters_served_total: u64,
+
     /// Shared keyspace notification event flags (from CONFIG notify-keyspace-events).
     /// Zero means disabled. Read atomically from the shard worker on every write.
     pub(crate) notify_keyspace_events: Arc<AtomicU32>,
@@ -432,6 +464,15 @@ impl ShardWorker {
     /// Replace this shard's expiry_paused flag with a shared one from the ClientRegistry.
     pub fn set_expiry_paused_flag(&mut self, flag: Arc<AtomicBool>) {
         self.expiry_paused = flag;
+    }
+
+    /// Replace this shard's node-global write-pause gate with the shared one
+    /// from the `ClientRegistry` (`specs/blocking.md` TR-BLOCKING-026).
+    pub fn set_node_write_pause_gate(
+        &mut self,
+        gate: Arc<crate::client_registry::NodeWritePauseGate>,
+    ) {
+        self.node_write_pause = gate;
     }
 
     /// Replace this shard's WAL failure policy flag with a shared one from ConfigManager.
@@ -598,8 +639,48 @@ impl ShardWorker {
             // per-caller `WriteAdmission` the seam needs, and only a script
             // produces writes the connection's gauntlet never saw.
             write_seam: None,
+            // Set by `execute_command_body` alone, and only for a write-flagged
+            // blocking command: it is the one seam that knows both the handler
+            // and the originating connection (`specs/blocking.md`
+            // TR-BLOCKING-026).
+            blocking_pop_paused: false,
             effects: Default::default(),
         }
+    }
+
+    /// Whether a blocking write command dispatched on `conn_id` must park
+    /// rather than take an immediate pop (`specs/blocking.md`
+    /// TR-BLOCKING-026).
+    ///
+    /// Three conjuncts, each load-bearing:
+    ///
+    /// - **write-flagged**: only a pop is a write. A read-only blocker
+    ///   (`XREAD`) observes the keyspace without mutating it, so neither
+    ///   `PAUSE WRITE` nor the drain window it opens has anything to protect
+    ///   against — and gating it would newly park readers that `PAUSE ALL`
+    ///   already handles at the connection.
+    /// - **[`ExecutionStrategy::Blocking`]**: the canonical
+    ///   blocking-capable predicate, the same one the connection's pause
+    ///   bypass keys off. A command with nowhere to park must not be gated
+    ///   here — it would have to be refused instead, which is the connection
+    ///   gate's job.
+    /// - **not replica apply**: the connection-side pause gate never sees the
+    ///   replica apply path, so gating it here would newly hold writes the
+    ///   primary already committed and diverge the two keyspaces.
+    pub(crate) fn blocking_pop_paused(
+        &self,
+        handler: &dyn crate::command::Command,
+        conn_id: u64,
+    ) -> bool {
+        conn_id != super::helpers::REPLICA_INTERNAL_CONN_ID
+            && handler
+                .flags()
+                .contains(crate::command::CommandFlags::WRITE)
+            && matches!(
+                handler.execution_strategy(),
+                crate::command::ExecutionStrategy::Blocking { .. }
+            )
+            && self.node_write_pause.active()
     }
 
     /// Create a new shard worker without persistence.

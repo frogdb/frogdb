@@ -1543,6 +1543,25 @@ pub struct CommandContext<'a> {
     /// contexts with no shard eviction config wired.
     pub eviction_policy: EvictionPolicy,
 
+    /// Whether a blocking write command must park rather than take an
+    /// immediate pop, because a node-global `CLIENT PAUSE` is armed
+    /// (`specs/blocking.md` TR-BLOCKING-026).
+    ///
+    /// A pop is a write, so it may not cross the drain window the pause
+    /// exists to create — but parking is what issue 17's ruled deviation
+    /// deliberately lets through, so the command becomes a plain waiter with
+    /// its normal (live) deadline instead of being held at the connection.
+    /// The decision has to be made here, at the pop decision point, because
+    /// only the shard knows whether the data is already present; the
+    /// connection-side gate cannot ask that question without a race.
+    ///
+    /// Set by the execution seam (`ShardWorker::execute_command_body`) for
+    /// write-flagged [`ExecutionStrategy::Blocking`] commands only, exactly
+    /// like `write_seam` above is set by `run_script` alone. `false`
+    /// everywhere else — including replica apply, which must never diverge
+    /// from the primary's decision.
+    pub blocking_pop_paused: bool,
+
     /// Everything this execution *produces* besides the [`Response`] — the
     /// command's out-buffer, drained as one value by the execution seam via
     /// `std::mem::take(&mut ctx.effects)`. See [`CommandEffects`].
@@ -1586,6 +1605,7 @@ impl<'a> CommandContext<'a> {
             bgsave_in_progress: false,
             recovery_stats: Arc::new(RecoveryStats::default()),
             eviction_policy: EvictionPolicy::default(),
+            blocking_pop_paused: false,
             effects: CommandEffects::default(),
         }
     }

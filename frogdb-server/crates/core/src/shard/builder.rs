@@ -508,6 +508,9 @@ impl ShardWorkerBuilder {
             pending_serve_propagations: Vec::new(),
             per_request_spans,
             expiry_paused: Arc::new(AtomicBool::new(false)),
+            node_write_pause: crate::client_registry::NodeWritePauseGate::open(),
+            pops_deferred_by_pause: false,
+            waiters_served_total: 0,
             notify_keyspace_events: Arc::new(AtomicU32::new(0)),
             debug_active_expire_disabled: false,
             #[cfg(any(test, feature = "shard-driver"))]

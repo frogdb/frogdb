@@ -118,7 +118,7 @@ adds the bound extension there and the model row follows.
 | R6 | `spec-gaps/issues/done/32-force-fresh-data-dir-refuses-foreign-entries.md` | done, S |
 | R7 | `spec-gaps/issues/open/28-vll-panic-restarts-the-shard-from-wal.md` (rewritten to fail-stop) | ready-for-agent, S |
 | R8 | `spec-gaps/issues/open/29-cross-shard-transaction-per-shard-undo.md` (rewritten to standalone design task) | ready-for-agent (design phase), L |
-| R9 | `spec-gaps/issues/open/30-blocking-immediate-pop-escapes-node-global-write-pause.md` | ready-for-agent, S |
+| R9 | `spec-gaps/issues/done/30-blocking-immediate-pop-escapes-node-global-write-pause.md` | done, S |
 | R10 | `spec-gaps/issues/open/31-dead-watch-generation-carry-into-exec-commit.md` | ready-for-agent, M |
 | R1+R11 | issue 31 banner updated; wave-0 decomposition dispatched to `campaign-31-decomposition/` | — |
 

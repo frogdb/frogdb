@@ -786,3 +786,98 @@ async fn tcl_blocking_satisfaction_still_respects_write_pause() {
     assert_eq!(unwrap_bulk(&items[0]), b"mylist");
     assert_eq!(unwrap_bulk(&items[1]), b"elem");
 }
+
+/// A blocking pop whose data is *already there* must not pop through a
+/// node-global `CLIENT PAUSE WRITE` (TR-BLOCKING-026 / spec-gaps issue 30).
+/// Issue 17's bypass exempts blocking commands from the connection-side pause
+/// gate so they can *park*; before this row that exemption also let their
+/// immediate-pop path write straight through the drain window the pause exists
+/// to open. The pop is now refused at the shard-side decision point — the only
+/// place that knows whether there is data — so the command parks like any
+/// other waiter and is served by the shard's own sweep once the pause lifts.
+#[tokio::test]
+async fn tcl_a_data_present_blocking_pop_waits_out_the_write_pause() {
+    let server = TestServer::start_standalone().await;
+    let mut control = server.connect().await;
+    let mut rd = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+    assert_integer_eq(&control.command(&["LPUSH", "mylist", "elem"]).await, 1);
+
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "100000", "WRITE"])
+            .await,
+    );
+
+    // Data is available, so pre-TR-BLOCKING-026 this popped synchronously.
+    rd.send_only(&["BLPOP", "mylist", "0"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    let early = rd.read_response(Duration::from_millis(500)).await;
+    assert!(
+        early.is_none(),
+        "BLPOP must not pop through an armed node-global write pause, got {early:?}"
+    );
+
+    // Reads are not gated, so this observes the store during the pause: the
+    // element is still there, i.e. nothing was popped-but-unsent either.
+    assert_integer_eq(&control.command(&["LLEN", "mylist"]).await, 1);
+
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
+
+    let resp = rd
+        .read_response(Duration::from_secs(2))
+        .await
+        .expect("BLPOP should be served once the pause lifts and the data is still there");
+    let items = unwrap_array(resp);
+    assert_eq!(items.len(), 2, "expected [key, element] array");
+    assert_eq!(unwrap_bulk(&items[0]), b"mylist");
+    assert_eq!(unwrap_bulk(&items[1]), b"elem");
+
+    // The serve really consumed the element (exactly-once, not a copy).
+    assert_integer_eq(&control.command(&["LLEN", "mylist"]).await, 0);
+}
+
+/// The deferred pop keeps the client's *own* deadline running through the
+/// pause (TR-BLOCKING-026, the half that pins the deviation from Redis's
+/// `BLOCKED_POSTPONE`): one deadline regime, not two. A pause that outlasts
+/// the requested timeout therefore yields the ordinary FM-BLOCKING-002 nil
+/// while the pause is still fully armed — never a late pop measured from
+/// `CLIENT UNPAUSE`.
+#[tokio::test]
+async fn tcl_a_data_present_blocking_pop_still_times_out_on_its_own_deadline() {
+    let server = TestServer::start_standalone().await;
+    let mut control = server.connect().await;
+    let mut rd = server.connect().await;
+
+    control.command(&["DEL", "mylist"]).await;
+    assert_integer_eq(&control.command(&["LPUSH", "mylist", "elem"]).await, 1);
+
+    // Long enough that a pause-relative deadline would hang the read below.
+    assert_ok(
+        &control
+            .command(&["CLIENT", "PAUSE", "10000000000000", "WRITE"])
+            .await,
+    );
+
+    let start = std::time::Instant::now();
+    rd.send_only(&["BLPOP", "mylist", "1"]).await;
+    server.wait_for_blocked_clients(1).await;
+
+    let resp = rd
+        .read_response(Duration::from_secs(3))
+        .await
+        .expect("BLPOP should time out on its own 1s deadline while still paused");
+    assert_nil(&resp);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(2500),
+        "BLPOP should honor its own 1s timeout, took {elapsed:?}"
+    );
+
+    // The timeout consumed nothing: the element the pop was refused is intact.
+    assert_integer_eq(&control.command(&["LLEN", "mylist"]).await, 1);
+
+    assert_ok(&control.command(&["CLIENT", "UNPAUSE"]).await);
+}

@@ -63,8 +63,8 @@ pub use acl::{
 };
 pub use client_registry::{
     ClientEdge, ClientFlags, ClientHandle, ClientInfo, ClientMemoryUsage, ClientRegistry,
-    ClientStats, ClientStatsDelta, CommandTypeStats, ErrorStats, KillFilter, PauseMode,
-    PauseOverview, ServerCommandStats, UnblockMode, extract_error_prefix,
+    ClientStats, ClientStatsDelta, CommandTypeStats, ErrorStats, KillFilter, NodeWritePauseGate,
+    PauseMode, PauseOverview, ServerCommandStats, UnblockMode, extract_error_prefix,
 };
 pub use cluster::{
     BusRpc, CLUSTER_SLOTS, ClusterBusStats, ClusterBusStatsSnapshot, ClusterCommand, ClusterConfig,

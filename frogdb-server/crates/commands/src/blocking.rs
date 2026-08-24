@@ -13,6 +13,37 @@ use frogdb_protocol::{BlockingOp, Direction, Response};
 
 use crate::utils::{parse_i64, parse_usize, score_response};
 
+/// The reply that parks this invocation as a blocking waiter.
+///
+/// One construction site for the two paths that park, so they cannot drift:
+/// the ordinary "no data yet" one, and the node-global-pause one
+/// ([`pop_paused`]). The wait queue must not be able to tell them apart —
+/// same keys, same op, and the same timeout, which becomes the same live
+/// deadline.
+fn park(keys: Vec<Bytes>, timeout: f64, op: BlockingOp) -> Response {
+    Response::BlockingNeeded { keys, timeout, op }
+}
+
+/// Whether this invocation must park rather than take an immediate pop,
+/// because a node-global `CLIENT PAUSE` covering it is armed
+/// (`specs/blocking.md` TR-BLOCKING-026).
+///
+/// A pop is a write, so it may not cross the drain window the pause exists to
+/// open — but issue 17's ruled deviation deliberately lets a blocking command
+/// *park* through a pause, so that is what it does: an ordinary waiter with an
+/// ordinary, live deadline, served by the sweep that follows the pause lift if
+/// the data is still there, and answered with the ordinary timeout nil if the
+/// pause outlasts it.
+///
+/// Checked *before* each command's immediate-availability scan. That is the
+/// whole point of siting the decision here rather than at the connection: only
+/// this side of the seam knows whether there is data to pop, and the
+/// connection cannot learn it without racing the very writes the pause is
+/// draining.
+fn pop_paused(ctx: &CommandContext) -> bool {
+    ctx.blocking_pop_paused
+}
+
 // ============================================================================
 // BLPOP - Blocking left pop
 // ============================================================================
@@ -66,6 +97,10 @@ impl Command for BlpopCommand {
         let timeout = parse_timeout(timeout_bytes)?;
         let keys = &args[..args.len() - 1];
 
+        if pop_paused(ctx) {
+            return Ok(park(keys.to_vec(), timeout, BlockingOp::BLPop));
+        }
+
         // Try immediate pop from left
         for key in keys {
             if let Some(value) = ctx.store.get(key) {
@@ -96,11 +131,7 @@ impl Command for BlpopCommand {
 
         // No data available - signal that blocking is needed
         // Return a special response that the connection handler recognizes
-        Ok(Response::BlockingNeeded {
-            keys: keys.to_vec(),
-            timeout,
-            op: BlockingOp::BLPop,
-        })
+        Ok(park(keys.to_vec(), timeout, BlockingOp::BLPop))
     }
 }
 
@@ -153,6 +184,10 @@ impl Command for BrpopCommand {
         let timeout = parse_timeout(timeout_bytes)?;
         let keys = &args[..args.len() - 1];
 
+        if pop_paused(ctx) {
+            return Ok(park(keys.to_vec(), timeout, BlockingOp::BRPop));
+        }
+
         // Try immediate pop from right
         for key in keys {
             if let Some(value) = ctx.store.get(key) {
@@ -182,11 +217,7 @@ impl Command for BrpopCommand {
         }
 
         // No data available - signal that blocking is needed
-        Ok(Response::BlockingNeeded {
-            keys: keys.to_vec(),
-            timeout,
-            op: BlockingOp::BRPop,
-        })
+        Ok(park(keys.to_vec(), timeout, BlockingOp::BRPop))
     }
 }
 
@@ -246,6 +277,18 @@ impl Command for BlmoveCommand {
         let src_dir = Direction::parse(&args[2]).ok_or(CommandError::SyntaxError)?;
         let dest_dir = Direction::parse(&args[3]).ok_or(CommandError::SyntaxError)?;
         let timeout = parse_timeout(&args[4])?;
+
+        if pop_paused(ctx) {
+            return Ok(park(
+                vec![source.clone()],
+                timeout,
+                BlockingOp::BLMove {
+                    dest: dest.clone(),
+                    src_dir,
+                    dest_dir,
+                },
+            ));
+        }
 
         // Try immediate operation
         if let Some(value) = ctx.store.get(source) {
@@ -307,15 +350,15 @@ impl Command for BlmoveCommand {
         }
 
         // No data available - signal that blocking is needed
-        Ok(Response::BlockingNeeded {
-            keys: vec![source.clone()],
+        Ok(park(
+            vec![source.clone()],
             timeout,
-            op: BlockingOp::BLMove {
+            BlockingOp::BLMove {
                 dest: dest.clone(),
                 src_dir,
                 dest_dir,
             },
-        })
+        ))
     }
 }
 
@@ -410,6 +453,14 @@ impl Command for BlmpopCommand {
             }
         }
 
+        if pop_paused(ctx) {
+            return Ok(park(
+                keys.to_vec(),
+                timeout,
+                BlockingOp::BLMPop { direction, count },
+            ));
+        }
+
         // Try immediate pop
         for key in keys {
             if let Some(value) = ctx.store.get(key) {
@@ -456,11 +507,11 @@ impl Command for BlmpopCommand {
         }
 
         // No data available - signal that blocking is needed
-        Ok(Response::BlockingNeeded {
-            keys: keys.to_vec(),
+        Ok(park(
+            keys.to_vec(),
             timeout,
-            op: BlockingOp::BLMPop { direction, count },
-        })
+            BlockingOp::BLMPop { direction, count },
+        ))
     }
 }
 
@@ -518,6 +569,10 @@ impl Command for BzpopminCommand {
         let timeout = parse_timeout(timeout_bytes)?;
         let keys = &args[..args.len() - 1];
 
+        if pop_paused(ctx) {
+            return Ok(park(keys.to_vec(), timeout, BlockingOp::BZPopMin));
+        }
+
         // Try immediate pop
         for key in keys {
             if let Some(value) = ctx.store.get(key) {
@@ -549,11 +604,7 @@ impl Command for BzpopminCommand {
         }
 
         // No data available - signal that blocking is needed
-        Ok(Response::BlockingNeeded {
-            keys: keys.to_vec(),
-            timeout,
-            op: BlockingOp::BZPopMin,
-        })
+        Ok(park(keys.to_vec(), timeout, BlockingOp::BZPopMin))
     }
 }
 
@@ -611,6 +662,10 @@ impl Command for BzpopmaxCommand {
         let timeout = parse_timeout(timeout_bytes)?;
         let keys = &args[..args.len() - 1];
 
+        if pop_paused(ctx) {
+            return Ok(park(keys.to_vec(), timeout, BlockingOp::BZPopMax));
+        }
+
         // Try immediate pop
         for key in keys {
             if let Some(value) = ctx.store.get(key) {
@@ -623,6 +678,7 @@ impl Command for BzpopmaxCommand {
                         ctx.store.get_mut(key).and_then(|v| v.as_sorted_set_mut())
                 {
                     let popped = zset_mut.pop_max(1);
+
                     if let Some((member, score)) = popped.into_iter().next() {
                         // Delete empty zset
                         if zset_mut.is_empty() {
@@ -642,11 +698,7 @@ impl Command for BzpopmaxCommand {
         }
 
         // No data available - signal that blocking is needed
-        Ok(Response::BlockingNeeded {
-            keys: keys.to_vec(),
-            timeout,
-            op: BlockingOp::BZPopMax,
-        })
+        Ok(park(keys.to_vec(), timeout, BlockingOp::BZPopMax))
     }
 }
 
@@ -747,6 +799,14 @@ impl Command for BzmpopCommand {
             }
         }
 
+        if pop_paused(ctx) {
+            return Ok(park(
+                keys.to_vec(),
+                timeout,
+                BlockingOp::BZMPop { min, count },
+            ));
+        }
+
         // Try immediate pop
         for key in keys {
             if let Some(value) = ctx.store.get(key) {
@@ -794,11 +854,11 @@ impl Command for BzmpopCommand {
         }
 
         // No data available - signal that blocking is needed
-        Ok(Response::BlockingNeeded {
-            keys: keys.to_vec(),
+        Ok(park(
+            keys.to_vec(),
             timeout,
-            op: BlockingOp::BZMPop { min, count },
-        })
+            BlockingOp::BZMPop { min, count },
+        ))
     }
 }
 
@@ -858,6 +918,19 @@ impl Command for BrpoplpushCommand {
         let dest = &args[1];
         let timeout = parse_timeout(&args[2])?;
 
+        // BRPOPLPUSH is equivalent to BLMOVE source dest RIGHT LEFT.
+        if pop_paused(ctx) {
+            return Ok(park(
+                vec![source.clone()],
+                timeout,
+                BlockingOp::BLMove {
+                    dest: dest.clone(),
+                    src_dir: Direction::Right,
+                    dest_dir: Direction::Left,
+                },
+            ));
+        }
+
         // Try immediate operation
         if let Some(value) = ctx.store.get(source) {
             if value.key_type() != frogdb_core::KeyType::List {
@@ -905,15 +978,15 @@ impl Command for BrpoplpushCommand {
 
         // No data available - signal that blocking is needed
         // BRPOPLPUSH is equivalent to BLMOVE source dest RIGHT LEFT
-        Ok(Response::BlockingNeeded {
-            keys: vec![source.clone()],
+        Ok(park(
+            vec![source.clone()],
             timeout,
-            op: BlockingOp::BLMove {
+            BlockingOp::BLMove {
                 dest: dest.clone(),
                 src_dir: Direction::Right,
                 dest_dir: Direction::Left,
             },
-        })
+        ))
     }
 }
 

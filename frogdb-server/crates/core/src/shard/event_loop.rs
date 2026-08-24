@@ -101,6 +101,12 @@ impl ShardWorker {
                 // `DriveTick` message instead (see `ShardWorker::set_driven_ticks`).
                 _ = waiter_timeout_interval.tick(), if timer_sweeps => {
                     self.check_waiter_timeouts();
+                    // Same tick serves the pops that parked behind a node-global
+                    // `CLIENT PAUSE` and have no waking write coming
+                    // (`specs/blocking.md` TR-BLOCKING-026). Coarse by design,
+                    // like the timeout sweep above: the pause lift is observed
+                    // within one tick, not at the instant the deadline passes.
+                    self.resume_pops_deferred_by_pause().await;
                 }
 
                 // 3. Active expiry task (100ms) — proactive reclaim; reads
@@ -468,7 +474,9 @@ impl ShardWorker {
             ShardMessage::DriveTick(kind) => {
                 match kind {
                     super::message::TickKind::Expiry => self.drive_expiry_tick().await,
-                    super::message::TickKind::WaiterTimeout => self.drive_waiter_timeout_tick(),
+                    super::message::TickKind::WaiterTimeout => {
+                        self.drive_waiter_timeout_tick().await
+                    }
                 }
                 false
             }
@@ -503,14 +511,17 @@ impl ShardWorker {
         self.run_active_expiry().await;
     }
 
-    /// Shard-driver harness seam: fire one blocking-waiter timeout sweep,
-    /// without waiting on the event loop's 100 ms timer. Wraps
-    /// [`Self::check_waiter_timeouts`].
+    /// Shard-driver harness seam: fire one 100 ms blocking sweep, without
+    /// waiting on the event loop's timer. Wraps both halves of that tick —
+    /// [`Self::check_waiter_timeouts`] and
+    /// [`Self::resume_pops_deferred_by_pause`] — so a driven run exercises the
+    /// same work the timer branch does.
     #[cfg(any(test, feature = "shard-driver"))]
     #[doc(hidden)]
     #[allow(dead_code)]
-    pub fn drive_waiter_timeout_tick(&mut self) {
+    pub async fn drive_waiter_timeout_tick(&mut self) {
         self.check_waiter_timeouts();
+        self.resume_pops_deferred_by_pause().await;
     }
 
     /// Shard-driver harness seam mirroring the event loop's continuation-event
